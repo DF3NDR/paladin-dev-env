@@ -769,7 +769,7 @@ impl WarGraph {
     /// this check rejects strandedness, a node that could NEVER become
     /// ready, not cycles.
     ///
-    /// A THIRD clause -- [`WarGraph::validate_schedulable`], D-03's
+    /// A THIRD clause -- the crate-private `WarGraph::validate_schedulable`, D-03's
     /// unschedulable-cycle guard (BUG-03) -- runs after the eligible-set
     /// clause, for the same "more specific error stays first" reason: a
     /// component fed only from within itself IS statically reachable from
@@ -1372,7 +1372,7 @@ impl WarGraph {
     /// immediately after [`WarGraph::validate`], since only the engine knows
     /// whether a backend is configured; a child node is named
     /// `{battalion node}/{child node}`. Collects EVERY offender, sorted,
-    /// mirroring [`WarGraph::validate_aegis_undeclared_nodes`]'s discipline.
+    /// mirroring the crate-private `WarGraph::validate_aegis_undeclared_nodes`'s discipline.
     /// Recursion is bounded by the `Arc` identity of each child graph, so a
     /// self-embedding graph (which [`WarGraph::validate`] rejects anyway) can
     /// never loop here.
@@ -2255,7 +2255,8 @@ impl WarGraph {
     /// changes scheduling or merge -- `kind`, `output_field`, `choices`
     /// and the `on_expire` DISCRIMINANT kind (never its `ResumeWithDefault`
     /// payload value, which does not change routing) -- sorted by node id,
-    /// walked in `node_order` and written through [`push_field`], the same
+    /// walked in `node_order` and written through the crate-private
+    /// `push_field` helper, the same
     /// discipline as every prior section. Deliberately NOT covered:
     /// `prompt_template`, `payload_template` and `expires_in` -- matching
     /// how a Paladin's prompt and `InputMapping` templates are already
@@ -2284,7 +2285,8 @@ impl WarGraph {
     /// (RESEARCH.md Pitfall 5).
     ///
     /// **Length-prefixed encoding (Phase 22.1 CR-01, D-17, `v2`).** Every
-    /// variable-length field ([`push_field`]) is preceded by its byte length
+    /// variable-length field (through the crate-private `push_field` helper)
+    /// is preceded by its byte length
     /// as a fixed-width 8-byte little-endian integer before its bytes are
     /// written, so no byte sequence can be reinterpreted as a different
     /// split across a field or node/edge boundary. The prior `v1` encoding
@@ -2300,7 +2302,8 @@ impl WarGraph {
     /// silently reinterpreted under the new one.
     ///
     /// The three `v3` sections above follow the exact same discipline: every
-    /// variable-length field goes through [`push_field`], and the two
+    /// variable-length field goes through the crate-private `push_field`
+    /// helper, and the two
     /// variable-length `StateMap` lists are each preceded by their own
     /// element COUNT as a fixed-width 8-byte little-endian integer (written
     /// directly, matching the "has output field" tag byte's existing
@@ -2334,7 +2337,8 @@ impl WarGraph {
     /// field (Phase 23 D-18). Both `on_error` and `cache` are read from each
     /// node's OWN [`WarGraph::set_aegis`] sidecar entry ONLY -- never the
     /// [`WarGraph::aegis_for`]-RESOLVED value -- sorted by node id and
-    /// written through [`push_field`] exactly like every other section; the
+    /// written through the crate-private `push_field` helper exactly like
+    /// every other section; the
     /// graph's own `default_aegis` is hashed SEPARATELY, as its own
     /// length-prefixed sub-section. Reading the raw sidecar rather than the
     /// resolved value is deliberate: it is what makes a graph that sets a
@@ -2355,7 +2359,8 @@ impl WarGraph {
     /// section above it: a "has output_schema" tag byte, then, when
     /// present, the canonical serde JSON of the `SchemaRef` itself -- the
     /// schema value for `Inline`, the registered name for `Registered` --
-    /// length-prefixed through [`push_field`], sorted by node id via
+    /// length-prefixed through the crate-private `push_field` helper, sorted
+    /// by node id via
     /// `node_order` (already `HashMap`-independent).
     pub fn fingerprint(&self) -> GraphFingerprint {
         let mut node_ids: Vec<&NodeId> = self.nodes.keys().collect();

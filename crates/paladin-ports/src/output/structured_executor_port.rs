@@ -55,6 +55,8 @@ pub use paladin_core::platform::container::structured::{SchemaRef, Structured, S
 /// `StructuredExecutorPort` is object-safe at the JSON level -- the generic,
 /// typed extension lives on the facade side, not on this trait.
 ///
+/// # Examples
+///
 /// ```
 /// use std::sync::Arc;
 /// use paladin_ports::output::structured_executor_port::StructuredExecutorPort;
@@ -155,7 +157,8 @@ fn repair_prompt(
 /// then [`shape_check`](paladin_core::platform::container::structured::shape_check);
 /// on either failure, if attempts remain (`opts.max_repair_attempts`),
 /// `execute_fn` is called again with a re-prompt carrying the failure AND
-/// the offending output verbatim (via [`repair_prompt`]). On exhaustion,
+/// the offending output verbatim (via the crate-private `repair_prompt`
+/// helper). On exhaustion,
 /// returns [`PaladinError::StructuredOutputInvalid`] with `raw_output`
 /// being the LAST response, verbatim.
 ///

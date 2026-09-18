@@ -27,14 +27,17 @@ Comprehensive guide for optimizing Paladin performance across different workload
 
 ### Benchmark Results
 
-**Dated, unverified against the current tree (corrected 2026-08-24):** `benches/` today
-contains only `config_benchmarks.rs` (benchmarking `Settings::new()` and domain config
-accessors) — no Garrison, Battalion, or Herald benchmark file exists to reproduce the figures
-below (`benches/BENCHMARK_FIXES.md` records that `garrison_benchmarks.rs`,
+**Unverified against the current tree.** `benches/` today contains two real benchmark files:
+`config_benchmarks.rs` (benchmarking `Settings::new()` and domain config accessors) and
+`engine_benchmarks.rs` (the `WarEngine` superstep-cost and `SqliteWaypointStore::save` overhead
+benchmarks — ENG-NFR-01/02, see the [Superstep Engine guide](../user-guides/superstep-engine.md)
+for what it measures). No Garrison, Battalion, or Herald benchmark file exists to reproduce the
+figures below (`benches/BENCHMARK_FIXES.md` records that `garrison_benchmarks.rs`,
 `battalion_benchmarks.rs`, `paladin_benchmarks.rs`, and `arsenal_benchmarks.rs` were drafted for
-a past task but never fixed to compile, and are absent from the tree now). The figures are left
-in place as a historical measurement claim, not re-derived or invented; see this task's
-`config_benchmarks.rs` results instead for benchmarks reproducible today.
+a past task but never fixed to compile, and are absent from the tree now — that part of the
+record still holds). The figures below are left in place as a historical measurement claim, not
+re-derived or invented; see `config_benchmarks.rs` and `engine_benchmarks.rs` for benchmarks
+reproducible today.
 
 **Garrison Memory Operations (Measured - January 2026):**
 

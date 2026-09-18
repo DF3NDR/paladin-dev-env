@@ -638,7 +638,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// [`RunEventBusSink`]/[`super::events::map_trace_event`] alone, now
     /// that the engine's own `ParleyRaised`/`RunFinished` records carry
     /// enough information to produce them (the ONE exception,
-    /// [`Self::record_engine_failure`]'s own retained publish, is
+    /// `record_engine_failure`'s own retained publish, is
     /// documented at that method). Has no effect on the shared-engine ("no
     /// factory") path's own trace bridging -- attach `bus`'s own
     /// [`RunEventBusSink`] to that engine directly at construction (mirrors

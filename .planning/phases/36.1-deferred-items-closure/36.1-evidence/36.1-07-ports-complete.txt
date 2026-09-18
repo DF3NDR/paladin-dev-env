@@ -1,0 +1,59 @@
+Plan 36.1-07 — paladin-ports crate re-measurement (all twelve ports satisfied)
+Captured: 2026-09-18 (after adding # Examples to RunRepositoryPort,
+RunScheduleRepositoryPort, WaypointPort)
+
+===============================================================================
+$ cargo test -p paladin-ports --doc
+===============================================================================
+
+test result: ok. 148 passed; 0 failed; 94 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+all doctests ran in 3.60s; merged doctests compilation took 3.54s
+
+The three new sections added by this plan all appear in the passed set:
+  test crates/paladin-ports/src/output/run_repository_port.rs - output::run_repository_port::RunRepositoryPort (line 147) ... ok
+  test crates/paladin-ports/src/output/run_schedule_repository_port.rs - output::run_schedule_repository_port::RunScheduleRepositoryPort (line 86) ... ok
+  test crates/paladin-ports/src/output/waypoint_port.rs - output::waypoint_port::WaypointPort (line 169) ... ok
+
+Also re-confirmed against the module-filtered runs used per-task:
+  cargo test -p paladin-ports --doc run_repository_port          -> 1 passed; 0 failed; 0 ignored
+  cargo test -p paladin-ports --doc run_schedule_repository_port -> 1 passed; 0 failed; 0 ignored
+  cargo test -p paladin-ports --doc waypoint_port                -> 1 passed; 0 failed; 0 ignored
+
+===============================================================================
+$ cargo doc -p paladin-ports --no-deps
+===============================================================================
+
+ Documenting paladin-ports v0.10.0 (/workspace/crates/paladin-ports)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.79s
+   Generated /workspace/target/doc/paladin_ports/index.html
+
+Warning line count (`grep -c 'warning:'`): 0
+
+===============================================================================
+$ bash scripts/check-public-api-examples.sh --list  (relevant rows + summary)
+===============================================================================
+
+Port	RunRepositoryPort	crates/paladin-ports/src/output/run_repository_port.rs:265	OK
+Port	RunScheduleRepositoryPort	crates/paladin-ports/src/output/run_schedule_repository_port.rs:191	OK
+Port	WaypointPort	crates/paladin-ports/src/output/waypoint_port.rs:284	OK
+
+TOTAL: 101 entry points -- 94 OK, 7 MISSING, 0 SINGULAR
+
+Starting-point MISSING count for this plan was 10 (per dispatch context, after
+plans 36.1-05/06 closed six of the original sixteen). This plan closes exactly
+the remaining three port traits, landing the script's MISSING count at 7 --
+matching the plan's contract exactly. The seven remaining MISSING rows are all
+`Service` kind and none is a `Port`:
+
+Service	ScheduleService	src/application/services/run/schedule/service.rs:143	MISSING
+Service	WebhookDeliveryService	src/application/services/run/webhook/service.rs:103	MISSING
+Service	RunInspectorService	src/application/services/run/inspector.rs:75	MISSING
+Service	RunEventStreamService	src/application/services/run/events.rs:764	MISSING
+Service	RunSubmissionService	src/application/services/run/submission.rs:105	MISSING
+Service	AssistantService	src/application/services/assistant/service.rs:29	MISSING
+Service	WaypointRetentionService	src/application/services/waypoint_retention.rs:73	MISSING
+
+All twelve port traits in the crate now satisfy the D-00d/D-09/D-10 rule. The
+remaining gap is exactly the seven facade services listed above -- the number
+the closing plan's (36.1-11) snapshot reconciles against.

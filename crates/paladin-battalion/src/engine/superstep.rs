@@ -54,6 +54,7 @@ use paladin_core::platform::container::parley::{
 };
 use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::structured::SchemaRef;
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeExecutionRecord,
@@ -491,10 +492,10 @@ async fn race_attempt(
         biased;
         result = attempt => result,
         _ = deadline_or_pending(deadline) => {
-            (None, 0, Err(NodeFailure::Timeout(deadline_kind)))
+            (None, TokenUsage::default(), Err(NodeFailure::Timeout(deadline_kind)))
         }
         _ = idle_or_pending(heartbeat, bounds.idle, node_id, trace, heartbeat_last_emitted, heartbeat_interval) => {
-            (None, 0, Err(NodeFailure::Timeout(TimeoutKind::Idle)))
+            (None, TokenUsage::default(), Err(NodeFailure::Timeout(TimeoutKind::Idle)))
         }
     }
 }
@@ -823,10 +824,10 @@ fn next_step_arm_name(next: &NextStep) -> &'static str {
     }
 }
 
-/// [`execute_vanguard_node`]'s per-node result: `paladin_id`/`token_count`
-/// (`None`/`0` for a `Function` or `Battalion` node) plus the resolved
-/// `Directive` or [`NodeFailure`].
-type NodeDispatchResult = (Option<Uuid>, u64, Result<Directive, NodeFailure>);
+/// [`execute_vanguard_node`]'s per-node result: `paladin_id`/`usage`
+/// (`None`/`TokenUsage::default()` for a `Function` or `Battalion` node)
+/// plus the resolved `Directive` or [`NodeFailure`].
+type NodeDispatchResult = (Option<Uuid>, TokenUsage, Result<Directive, NodeFailure>);
 
 /// Executes a [`NodeSpec::Gate`] node's no-`run`-body-of-its-own contract
 /// (HITL-01, D-05), dispatched exactly like a `Function` node
@@ -975,9 +976,10 @@ impl StateNode for GateDispatchNode {
 
 /// Execute one vanguard node's dispatch against `snapshot`.
 ///
-/// Returns `(paladin_id, token_count, result)`: `paladin_id`/`token_count`
-/// are `None`/`0` for a `Function` node (it never carries either), and are
-/// populated from the executed `Paladin` and its `PaladinResult` for a
+/// Returns `(paladin_id, usage, result)`: `paladin_id`/`usage`
+/// are `None`/`TokenUsage::default()` for a `Function` node (it never
+/// carries either), and are populated from the executed `Paladin` and its
+/// `PaladinResult` for a
 /// `NodeSpec::Paladin` node. An `InputMapping::render` failure (an
 /// undeclared field, or a declared field with no value and no default) and a
 /// `PaladinPort::execute` error both become a `StateNodeError` here, so a Paladin
@@ -1008,7 +1010,11 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
         match dispatch {
             NodeDispatch::Function(node) => {
                 let result = node.run(snapshot, ctx).await;
-                (None, 0, result.map_err(NodeFailure::Node))
+                (
+                    None,
+                    TokenUsage::default(),
+                    result.map_err(NodeFailure::Node),
+                )
             }
             NodeDispatch::Paladin {
                 paladin,
@@ -1039,7 +1045,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     Err(e) => {
                         return (
                             paladin_id,
-                            0,
+                            TokenUsage::default(),
                             Err(NodeFailure::Node(StateNodeError(e.to_string()))),
                         );
                     }
@@ -1072,7 +1078,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     let Some(executor) = structured_executor else {
                         return (
                             paladin_id,
-                            0,
+                            TokenUsage::default(),
                             Err(NodeFailure::Node(StateNodeError(format!(
                                 "node has output_schema but no structured executor is wired -- \
                                  WarGraph::validate_structured_executor_backend should have \
@@ -1092,10 +1098,10 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         .await
                     {
                         Ok(structured) => {
-                            let token_count = u64::from(structured.raw.token_count);
+                            let usage = structured.raw.usage.clone();
                             let mut delta = StateDelta::new();
                             delta.set_raw(output_field, structured.value);
-                            (paladin_id, token_count, Ok(delta.into()))
+                            (paladin_id, usage, Ok(delta.into()))
                         }
                         // --- D-29, Phase 25 D-05: exhaustion is ALWAYS
                         // `Transience::Unknown` here -- never delegated to
@@ -1107,14 +1113,18 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         // StructuredOutputInvalid`'s own rustdoc for why.
                         Err(err @ PaladinError::StructuredOutputInvalid { .. }) => (
                             paladin_id,
-                            0,
+                            TokenUsage::default(),
                             Err(NodeFailure::StructuredOutputInvalid(err)),
                         ),
                         // Any OTHER underlying failure (e.g. an LLM call
                         // failure inside the repair loop) keeps its own
                         // natural classification via the ordinary
                         // `NodeFailure::Paladin` path.
-                        Err(other) => (paladin_id, 0, Err(NodeFailure::Paladin(other))),
+                        Err(other) => (
+                            paladin_id,
+                            TokenUsage::default(),
+                            Err(NodeFailure::Paladin(other)),
+                        ),
                     };
                 }
 
@@ -1137,20 +1147,22 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     .await
                 {
                     Ok(result) => {
-                        let token_count = u64::from(result.token_count);
+                        let usage = result.usage.clone();
                         // --- CF-02, D-11: the `DirectiveParser` call replacing
                         // the prior unconditional `delta.set(output_field,
                         // result.output.clone())` write. `PlainOutput`
                         // reproduces that write verbatim; `StructuredDirective`
                         // parses D-11's envelope and applies only its `delta`.
                         match directive_parser.parse(&result.output, &output_field) {
-                            Ok(directive) => (paladin_id, token_count, Ok(directive)),
-                            Err(e) => {
-                                (paladin_id, token_count, Err(NodeFailure::DirectiveParse(e)))
-                            }
+                            Ok(directive) => (paladin_id, usage, Ok(directive)),
+                            Err(e) => (paladin_id, usage, Err(NodeFailure::DirectiveParse(e))),
                         }
                     }
-                    Err(e) => (paladin_id, 0, Err(NodeFailure::Paladin(e))),
+                    Err(e) => (
+                        paladin_id,
+                        TokenUsage::default(),
+                        Err(NodeFailure::Paladin(e)),
+                    ),
                 }
             }
             NodeDispatch::Battalion {
@@ -1207,7 +1219,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     Err(e) => {
                         return (
                             None,
-                            0,
+                            TokenUsage::default(),
                             Err(NodeFailure::Node(StateNodeError(format!(
                                 "battalion node {}: failed to derive child thread id: {e}",
                                 ctx.node_id
@@ -1256,7 +1268,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         Err(e) => {
                             return (
                                 None,
-                                0,
+                                TokenUsage::default(),
                                 Err(NodeFailure::Node(StateNodeError(format!(
                                     "battalion node {}: failed to read child thread history: {e}",
                                     ctx.node_id
@@ -1280,7 +1292,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             delta.set_raw(parent_field.clone(), value.clone());
                         }
                     }
-                    return (None, 0, Ok(delta.into()));
+                    return (None, TokenUsage::default(), Ok(delta.into()));
                 }
 
                 let (
@@ -1315,7 +1327,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                 Err(e) => {
                                     return (
                                         None,
-                                        0,
+                                        TokenUsage::default(),
                                         Err(NodeFailure::Node(StateNodeError(format!(
                                             "battalion node {}: failed to initialize child \
                                          battlefield: {e}",
@@ -1327,7 +1339,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         if let Err(e) = fresh_battlefield.validate_required() {
                             return (
                                 None,
-                                0,
+                                TokenUsage::default(),
                                 Err(NodeFailure::Node(StateNodeError(format!(
                                     "battalion node {}: child battlefield missing required \
                                      field(s): {e}",
@@ -1435,7 +1447,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                                 delta.set_raw(parent_field.clone(), value.clone());
                             }
                         }
-                        (None, 0, Ok(delta.into()))
+                        (None, TokenUsage::default(), Ok(delta.into()))
                     }
                     Ok(RunOutcome::Halted { .. }) => {
                         // --- D-21: the child observed the shared
@@ -1445,11 +1457,11 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         // PARENT's own top-of-loop cancellation check -- the
                         // SAME token -- halts the parent at its own next
                         // boundary.
-                        (None, 0, Ok(StateDelta::new().into()))
+                        (None, TokenUsage::default(), Ok(StateDelta::new().into()))
                     }
                     Ok(RunOutcome::AwaitingInput { .. }) => (
                         None,
-                        0,
+                        TokenUsage::default(),
                         Err(NodeFailure::Battalion(
                             EngineError::ParleyInChildUnsupported {
                                 node: ctx.node_id.clone(),
@@ -1459,7 +1471,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     ),
                     Ok(RunOutcome::Failed { error, .. }) => (
                         None,
-                        0,
+                        TokenUsage::default(),
                         Err(NodeFailure::Battalion(EngineError::BattalionChildFailed {
                             node: ctx.node_id.clone(),
                             child_thread,
@@ -1468,7 +1480,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     ),
                     Err(error) => (
                         None,
-                        0,
+                        TokenUsage::default(),
                         Err(NodeFailure::Battalion(EngineError::BattalionChildFailed {
                             node: ctx.node_id.clone(),
                             child_thread,
@@ -1553,7 +1565,7 @@ struct NodeTaskOutput {
     started_at: chrono::DateTime<chrono::Utc>,
     duration_ms: u64,
     paladin_id: Option<Uuid>,
-    token_count: u64,
+    usage: TokenUsage,
     outcome: NodeRunOutcome,
     attempt: u32,
     /// Every FAILED attempt before the final one, ascending by attempt
@@ -2552,7 +2564,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             // (FT-FR-18, D-29) -- never `Ended`/`Parleyed`.
                             outcome: NodeOutcomeKind::Succeeded,
                             duration_ms,
-                            token_count: 0,
+                            usage: TokenUsage::default(),
                             cache_hit: true,
                         });
                         return NodeTaskOutput {
@@ -2560,7 +2572,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             started_at,
                             duration_ms,
                             paladin_id,
-                            token_count: 0,
+                            usage: TokenUsage::default(),
                             outcome: NodeRunOutcome::Succeeded(Directive {
                                 delta: cached.delta,
                                 next: NextStep::Edges,
@@ -2627,13 +2639,15 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             }
                         }
 
-                        let (paladin_id, token_count, outcome) = match decision {
+                        let (paladin_id, usage, outcome) = match decision {
                             InterceptDecision::Skip(reason) => {
-                                (None, 0u64, NodeRunOutcome::Skipped(reason))
+                                (None, TokenUsage::default(), NodeRunOutcome::Skipped(reason))
                             }
-                            InterceptDecision::Fail(err) => {
-                                (None, 0u64, NodeRunOutcome::Failed(NodeFailure::Node(err)))
-                            }
+                            InterceptDecision::Fail(err) => (
+                                None,
+                                TokenUsage::default(),
+                                NodeRunOutcome::Failed(NodeFailure::Node(err)),
+                            ),
                             InterceptDecision::Proceed => match Arc::clone(&sem)
                                 .acquire_owned()
                                 .await
@@ -2645,7 +2659,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                     // DROPPED (its partial work never becomes
                                     // a Directive, T-25-41) and the failure
                                     // names the bound by typed `TimeoutKind`.
-                                    let (paladin_id, token_count, result) = race_attempt(
+                                    let (paladin_id, usage, result) = race_attempt(
                                         execute_vanguard_node(
                                             dispatch.clone(),
                                             &snap,
@@ -2696,13 +2710,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                             }
                                             (
                                                 paladin_id,
-                                                token_count,
+                                                usage,
                                                 NodeRunOutcome::Succeeded(directive),
                                             )
                                         }
-                                        Err(e) => {
-                                            (paladin_id, token_count, NodeRunOutcome::Failed(e))
-                                        }
+                                        Err(e) => (paladin_id, usage, NodeRunOutcome::Failed(e)),
                                     }
                                 }
                                 // Semaphore is never `.close()`d anywhere in this
@@ -2715,7 +2727,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 // panicking inside a detached `tokio::spawn`ed task.
                                 Err(_) => (
                                     None,
-                                    0u64,
+                                    TokenUsage::default(),
                                     NodeRunOutcome::Failed(NodeFailure::Node(StateNodeError(
                                         "internal error: superstep semaphore closed unexpectedly"
                                             .to_string(),
@@ -2731,7 +2743,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             attempt,
                             outcome: node_outcome_kind(&outcome),
                             duration_ms,
-                            token_count,
+                            usage: usage.clone(),
                             // Plan 25-13 is the only plan that sets this
                             // `true` (a served-from-cache outcome).
                             cache_hit: false,
@@ -2792,7 +2804,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                 started_at,
                                 duration_ms,
                                 paladin_id,
-                                token_count,
+                                usage,
                                 outcome: NodeRunOutcome::Interrupted,
                                 attempt,
                                 failed_attempts,
@@ -2824,7 +2836,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             started_at,
                             duration_ms,
                             paladin_id,
-                            token_count,
+                            usage,
                             outcome,
                             attempt,
                             failed_attempts,
@@ -2974,7 +2986,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 started_at,
                 duration_ms,
                 paladin_id,
-                token_count,
+                usage,
                 outcome,
                 attempt,
                 failed_attempts,
@@ -2993,7 +3005,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     paladin_id: None,
                     started_at: Utc::now(),
                     duration_ms: 0,
-                    token_count: 0,
+                    usage: TokenUsage::default(),
                     outcome: NodeOutcomeKind::Skipped {
                         reason: "shutdown".to_string(),
                     },
@@ -3087,7 +3099,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             paladin_id,
                             started_at,
                             duration_ms,
-                            token_count,
+                            usage,
                             outcome: NodeOutcomeKind::Failed,
                             attempt,
                             attempts: failed_attempts,
@@ -3188,7 +3200,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         paladin_id,
                         started_at,
                         duration_ms,
-                        token_count,
+                        usage,
                         // Plan 25-10: a handler-compensated failure is
                         // still recorded as the failure it was (D-21).
                         outcome: if handled_failure {
@@ -3259,7 +3271,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         paladin_id,
                         started_at,
                         duration_ms,
-                        token_count,
+                        usage,
                         outcome: NodeOutcomeKind::Skipped { reason },
                         attempt,
                         attempts: failed_attempts,
@@ -3279,7 +3291,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         paladin_id,
                         started_at,
                         duration_ms,
-                        token_count,
+                        usage,
                         outcome: NodeOutcomeKind::Skipped {
                             reason: "shutdown".to_string(),
                         },
@@ -3299,7 +3311,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         paladin_id,
                         started_at,
                         duration_ms,
-                        token_count,
+                        usage,
                         outcome: NodeOutcomeKind::Failed,
                         attempt,
                         attempts: failed_attempts,
@@ -13780,7 +13792,7 @@ mod tests {
         assert_eq!(records[0].outcome, NodeOutcomeKind::Succeeded);
         assert_eq!(records[0].attempt, 1);
         assert!(records[0].cache_hit);
-        assert_eq!(records[0].token_count, 0);
+        assert_eq!(records[0].usage, TokenUsage::default());
     }
 
     /// Task 2, Test 8: a hit emits exactly `NodeStarted { attempt: 1 }` and

@@ -137,6 +137,18 @@ struct DeepSeekRequest {
     /// -identical to a pre-0.10 request (X-03).
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<DeepSeekResponseFormat>,
+    /// Requests the trailing `usage` frame on a streaming call (D-13/D-15).
+    /// `Some({"include_usage": true})` on every streaming request; omitted
+    /// entirely on a non-streaming one, keeping that body byte-identical to
+    /// a pre-0.10 request (X-03).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<DeepSeekStreamOptions>,
+}
+
+/// `DeepSeekRequest.stream_options`'s only shape this adapter sends (D-15).
+#[derive(Debug, Serialize)]
+struct DeepSeekStreamOptions {
+    include_usage: bool,
 }
 
 /// The provider-agnostic `response_format` hint, compiled down to
@@ -198,16 +210,43 @@ struct DeepSeekUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
     total_tokens: u32,
+    /// `prompt_cache_hit_tokens` (D-20, confirmed field name). Absent on a
+    /// response that reports no cache split -- `None` in that case (D-03),
+    /// never a fabricated `Some(0)`.
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<u32>,
+    /// `completion_tokens_details.reasoning_tokens` (D-20). RESEARCH.md
+    /// flags this field name as **assumed, not confirmed** against a live
+    /// fixture; because it is optional behind `#[serde(default)]`, a wrong
+    /// name degrades to `None` rather than to a wrong value. A later
+    /// live-fixture check should confirm the exact wire name before relying
+    /// on this figure for pricing.
+    #[serde(default)]
+    completion_tokens_details: Option<DeepSeekCompletionTokensDetails>,
+}
+
+/// `DeepSeekUsage.completion_tokens_details` (D-20; assumed field name, see
+/// `DeepSeekUsage.completion_tokens_details`'s own rustdoc).
+#[derive(Debug, Deserialize)]
+struct DeepSeekCompletionTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: Option<u32>,
 }
 
 // ── DeepSeek streaming response structures ───────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 struct DeepSeekStreamResponse {
-    #[serde(rename = "id")]
+    /// `#[serde(default)]` because the trailing empty-`choices` usage frame
+    /// (D-14/D-15) is not guaranteed to repeat the stream's `id`.
+    #[serde(rename = "id", default)]
     #[allow(dead_code)]
     _id: String,
     choices: Vec<DeepSeekStreamChoice>,
+    /// Present only on the trailing empty-`choices` frame a
+    /// `stream_options: {"include_usage": true}` request elicits (D-14/D-15).
+    #[serde(default)]
+    usage: Option<DeepSeekUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -247,6 +286,25 @@ fn detect_empty_completion(content: &str, finish_reason: &FinishReason) -> Optio
     }
 }
 
+/// Map a wire-reported [`DeepSeekUsage`] into [`TokenUsage`], applying the
+/// D-20 cache/reasoning sub-count builders only when the payload actually
+/// carried the figure (D-03: an absent figure is `None`, never a fabricated
+/// `Some(0)`). Shared by both the non-streaming usage-construction site and
+/// the streaming terminal-chunk usage, so the two paths cannot drift.
+fn map_usage(usage: DeepSeekUsage) -> TokenUsage {
+    let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
+    if let Some(cached) = usage.prompt_cache_hit_tokens {
+        mapped = mapped.with_cache_read(cached);
+    }
+    if let Some(reasoning) = usage
+        .completion_tokens_details
+        .and_then(|details| details.reasoning_tokens)
+    {
+        mapped = mapped.with_reasoning(reasoning);
+    }
+    mapped
+}
+
 /// Annotate an [`LlmError::EmptyCompletion`] with the provider's own reported
 /// `usage` so a caller's error message names `prompt_tokens`,
 /// `completion_tokens`, and `total_tokens` instead of discarding them.
@@ -265,12 +323,11 @@ fn detect_empty_completion(content: &str, finish_reason: &FinishReason) -> Optio
 /// change [`detect_empty_completion`]'s own signature — five existing tests
 /// call it with two arguments and are left untouched.
 ///
-/// **Known, deliberate limitation.** The reasoning/content token SPLIT stays
-/// unobservable: [`DeepSeekUsage`] does not deserialize
-/// `completion_tokens_details.reasoning_tokens`. Recording `prompt_tokens`
-/// here is a strictly smaller, separately-scoped change — splitting
-/// reasoning from content is a distinct upstream change left for its own
-/// task, not silently implied as solved by this one.
+/// Recording `prompt_tokens`/`completion_tokens`/`total_tokens` here is a
+/// strictly smaller, separately-scoped change from full [`TokenUsage`]
+/// mapping — see [`map_usage`], which is now responsible for the full
+/// D-20 cache/reasoning sub-count split (including
+/// `completion_tokens_details.reasoning_tokens`).
 fn annotate_with_usage(err: LlmError, usage: &DeepSeekUsage) -> LlmError {
     match err {
         LlmError::EmptyCompletion(msg) => LlmError::EmptyCompletion(format!(
@@ -376,6 +433,11 @@ impl DeepSeekAdapter {
             presence_penalty: params.presence_penalty,
             stream: request.stream,
             response_format,
+            // Set unconditionally to `None` here; `generate_stream` forces
+            // it to `Some` right after building this request, mirroring the
+            // existing defensive `api_request.stream = true` override below
+            // (D-15).
+            stream_options: None,
         })
     }
 
@@ -651,17 +713,16 @@ impl LlmPort for DeepSeekAdapter {
                 return Err(annotate_with_usage(err, &api_response.usage));
             }
 
+            let content = choice.message.content.clone();
+            let usage = map_usage(api_response.usage);
+
             Ok(LlmResponse {
                 id: Uuid::new_v4(),
                 request_id: request.id,
                 model: api_response.model,
-                content: choice.message.content.clone(),
+                content,
                 finish_reason,
-                usage: TokenUsage {
-                    prompt_tokens: api_response.usage.prompt_tokens,
-                    completion_tokens: api_response.usage.completion_tokens,
-                    total_tokens: api_response.usage.total_tokens,
-                },
+                usage,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
@@ -677,6 +738,9 @@ impl LlmPort for DeepSeekAdapter {
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
         let mut api_request = self.build_request(&request)?;
         api_request.stream = true;
+        api_request.stream_options = Some(DeepSeekStreamOptions {
+            include_usage: true,
+        });
 
         let url = format!("{}/chat/completions", self.config.base_url);
 
@@ -711,51 +775,72 @@ impl LlmPort for DeepSeekAdapter {
 
         let stream = response.bytes_stream();
 
-        let llm_stream = stream.map(|chunk_result| match chunk_result {
-            Ok(bytes) => {
-                let text = String::from_utf8_lossy(&bytes);
+        // `flat_map` rather than `map` (D-14/plan 31-03 Task 1): a single
+        // network chunk can carry more than one complete SSE `data: {...}`
+        // event, so every `data:` line found is emitted as its own stream
+        // item, mirroring `CompatEngine::generate_stream`.
+        //
+        // Hold-and-emit terminal-chunk contract: the `finish_reason` frame
+        // and the trailing empty-`choices` usage frame can arrive on
+        // separate SSE frames, both strictly before `[DONE]`. Both are held
+        // in state captured by this `move` closure (`Stream::flat_map`'s
+        // closure is `FnMut`, so ordinary mutable locals persist correctly
+        // across calls) and emitted together on the ONE `[DONE]` terminal
+        // chunk.
+        let mut held_finish_reason: Option<FinishReason> = None;
+        let mut held_usage: Option<TokenUsage> = None;
 
-                for line in text.lines() {
-                    if let Some(json_str) = line.strip_prefix("data: ") {
+        let llm_stream = stream.flat_map(move |chunk_result| {
+            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    let mut items = Vec::new();
+
+                    for line in text.lines() {
+                        let Some(json_str) = line.strip_prefix("data: ") else {
+                            continue;
+                        };
+
                         if json_str.trim() == "[DONE]" {
-                            return Ok(StreamingResponse {
-                                id: Uuid::new_v4(),
-                                delta: String::new(),
-                                finish_reason: Some(FinishReason::Stop),
-                            });
+                            let mut terminal = StreamingResponse::terminal(
+                                held_finish_reason.take().unwrap_or(FinishReason::Stop),
+                            );
+                            if let Some(usage) = held_usage.take() {
+                                terminal = terminal.with_usage(usage);
+                            }
+                            items.push(Ok(terminal));
+                            continue;
                         }
 
                         match serde_json::from_str::<DeepSeekStreamResponse>(json_str) {
                             Ok(response) => {
+                                if let Some(usage) = response.usage {
+                                    held_usage = Some(map_usage(usage));
+                                }
                                 if let Some(choice) = response.choices.first() {
+                                    if let Some(reason) = &choice.finish_reason {
+                                        held_finish_reason =
+                                            Some(Self::map_finish_reason(Some(reason.clone())));
+                                    }
                                     let content = choice.delta.content.clone().unwrap_or_default();
-                                    return Ok(StreamingResponse {
-                                        id: Uuid::new_v4(),
-                                        delta: content,
-                                        finish_reason: choice
-                                            .finish_reason
-                                            .as_ref()
-                                            .map(|r| Self::map_finish_reason(Some(r.clone()))),
-                                    });
+                                    items.push(Ok(StreamingResponse::delta(content)));
                                 }
                             }
                             Err(e) => {
-                                return Err(LlmError::ProcessingError(format!(
+                                items.push(Err(LlmError::ProcessingError(format!(
                                     "Failed to parse streaming response: {}",
                                     e
-                                )));
+                                ))));
                             }
                         }
                     }
-                }
 
-                Ok(StreamingResponse {
-                    id: Uuid::new_v4(),
-                    delta: String::new(),
-                    finish_reason: None,
-                })
-            }
-            Err(e) => Err(LlmError::NetworkError(format!("Stream error: {}", e))),
+                    items
+                }
+                Err(e) => vec![Err(LlmError::NetworkError(format!("Stream error: {}", e)))],
+            };
+
+            futures::stream::iter(items)
         });
 
         Ok(Box::new(llm_stream))
@@ -891,6 +976,8 @@ mod tests {
             prompt_tokens: 31_000,
             completion_tokens: 32_000,
             total_tokens: 63_000,
+            prompt_cache_hit_tokens: None,
+            completion_tokens_details: None,
         };
 
         let annotated = annotate_with_usage(err, &usage);
@@ -921,6 +1008,8 @@ mod tests {
             prompt_tokens: 1,
             completion_tokens: 2,
             total_tokens: 3,
+            prompt_cache_hit_tokens: None,
+            completion_tokens_details: None,
         };
 
         let annotated = annotate_with_usage(err, &usage);
@@ -1471,5 +1560,220 @@ mod tests {
             body.as_object().unwrap().get("response_format").is_none(),
             "absent response_format must not appear on the wire, got: {body:?}"
         );
+    }
+
+    // ── Phase 31 (D-13, D-14, D-15, D-20): streaming usage terminal-chunk
+    //    contract, and cache/reasoning sub-count mapping on both paths ────
+
+    fn test_adapter_at(base_url: &str) -> DeepSeekAdapter {
+        let config = DeepSeekConfig::new(
+            "test-key".to_string(),
+            base_url.to_string(),
+            "deepseek-chat".to_string(),
+        );
+        DeepSeekAdapter::new(config).expect("test config must build a valid adapter")
+    }
+
+    /// Direct unit test on the shared mapping function -- no network needed
+    /// (matches this file's own pre-existing style: `build_request`/
+    /// `map_error`/`annotate_with_usage` are all tested this way, never
+    /// through a real HTTP round trip). Distinct, non-round figures so a
+    /// swapped or dropped field cannot pass by coincidence.
+    #[test]
+    fn map_usage_maps_cache_hit_and_reasoning_when_the_payload_carries_them() {
+        let usage = DeepSeekUsage {
+            prompt_tokens: 800,
+            completion_tokens: 900,
+            total_tokens: 1700,
+            prompt_cache_hit_tokens: Some(64),
+            completion_tokens_details: Some(DeepSeekCompletionTokensDetails {
+                reasoning_tokens: Some(320),
+            }),
+        };
+
+        let mapped = map_usage(usage);
+
+        assert_eq!(mapped.cache_read_tokens, Some(64));
+        assert_eq!(mapped.reasoning_tokens, Some(320));
+        assert_eq!(mapped.cache_write_tokens, None);
+    }
+
+    #[test]
+    fn map_usage_leaves_optionals_none_when_the_payload_omits_them() {
+        let usage = DeepSeekUsage {
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            total_tokens: 2,
+            prompt_cache_hit_tokens: None,
+            completion_tokens_details: None,
+        };
+
+        let mapped = map_usage(usage);
+
+        assert_eq!(mapped.cache_read_tokens, None);
+        assert_eq!(mapped.cache_write_tokens, None);
+        assert_eq!(mapped.reasoning_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn generate_stream_request_carries_stream_options_include_usage() {
+        let mut server = mockito::Server::new_async().await;
+        let captured: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body_from_request(move |req| {
+                let body_text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                *captured_clone.lock().unwrap() = Some(body_text);
+                b"data: [DONE]\n\n".to_vec()
+            })
+            .create_async()
+            .await;
+
+        let adapter = test_adapter_at(&server.url());
+        let request = build_response_format_request(None);
+        let stream = adapter.generate_stream(request).await.unwrap();
+        let mut stream = Box::into_pin(stream);
+        while stream.next().await.is_some() {}
+
+        let body_text = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("request must have been captured");
+        let body: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+        assert_eq!(
+            body.get("stream_options"),
+            Some(&serde_json::json!({"include_usage": true}))
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_holds_finish_reason_and_usage_for_the_one_terminal_chunk() {
+        let mut server = mockito::Server::new_async().await;
+        let usage_json = serde_json::json!({
+            "prompt_tokens": 800,
+            "completion_tokens": 900,
+            "total_tokens": 1700,
+            "prompt_cache_hit_tokens": 64
+        });
+        let sse_body = format!(
+            "data: {{\"id\":\"1\",\"choices\":[{{\"delta\":{{\"content\":\"Hel\"}},\"finish_reason\":null}}]}}\n\n\
+             data: {{\"id\":\"1\",\"choices\":[{{\"delta\":{{\"content\":\"lo\"}},\"finish_reason\":null}}]}}\n\n\
+             data: {{\"id\":\"1\",\"choices\":[{{\"delta\":{{\"content\":\"\"}},\"finish_reason\":\"stop\"}}]}}\n\n\
+             data: {{\"id\":\"1\",\"choices\":[],\"usage\":{}}}\n\n\
+             data: [DONE]\n\n",
+            usage_json
+        );
+
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter_at(&server.url());
+        let request = build_response_format_request(None);
+        let stream = adapter.generate_stream(request).await.unwrap();
+        let mut stream = Box::into_pin(stream);
+
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.next().await {
+            chunks.push(item.unwrap());
+        }
+
+        let finish_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.finish_reason.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        let usage_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.usage.is_some())
+            .map(|(i, _)| i)
+            .collect();
+
+        assert_eq!(finish_indices.len(), 1);
+        assert_eq!(usage_indices.len(), 1);
+        assert_eq!(
+            finish_indices, usage_indices,
+            "the finish-reason chunk and the usage chunk must be the SAME chunk"
+        );
+        assert_eq!(
+            chunks[usage_indices[0]]
+                .usage
+                .as_ref()
+                .and_then(|u| u.cache_read_tokens),
+            Some(64)
+        );
+
+        let assembled: String = chunks.iter().map(|c| c.delta.as_str()).collect();
+        assert_eq!(assembled, "Hello");
+    }
+
+    // ── Shared conformance suite (D-19, plan 31-04) ──
+    //
+    // Nested in its own module (rather than inline in `mod tests`) so every generated test's
+    // full path contains "conformance" -- `cargo test --lib conformance` (the plan's own
+    // acceptance criterion) selects it by that substring.
+    mod conformance_suite {
+        use super::*;
+        use serde_json::json;
+
+        struct DeepSeekFixture;
+
+        impl crate::conformance::ConformanceFixture for DeepSeekFixture {
+            const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
+
+            fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
+                let config = DeepSeekConfig::new(
+                    "test-key".to_string(),
+                    base_url.to_string(),
+                    "deepseek-chat".to_string(),
+                );
+                Arc::new(DeepSeekAdapter::new(config).expect("test config must build"))
+            }
+
+            fn success_body() -> String {
+                json!({
+                    "id": "cmpl-1",
+                    "model": "deepseek-chat",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+                })
+                .to_string()
+            }
+
+            fn stream_body() -> String {
+                // D-19: the trailing empty-`choices` usage frame carries the SAME figures as
+                // `success_body()` above -- the shared parity case asserts equality.
+                concat!(
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"lo \"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n",
+                    "data: [DONE]\n\n",
+                )
+                .to_string()
+            }
+
+            fn error_body(status: u16) -> String {
+                json!({"error": {"message": format!("mock error for status {status}"), "type": "mock_error"}})
+                    .to_string()
+            }
+        }
+
+        crate::llm_conformance_suite!(DeepSeekFixture);
     }
 }

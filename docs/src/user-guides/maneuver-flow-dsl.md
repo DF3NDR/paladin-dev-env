@@ -52,7 +52,7 @@ Maneuver is included in `paladin-battalion`. Add it to your workspace:
 
 ```toml
 [dependencies]
-paladin-battalion = { version = "0.8.0", path = "crates/paladin-battalion" }
+paladin-battalion = { version = "0.10.0", path = "crates/paladin-battalion" }
 tokio = { version = "1.0", features = ["full"] }
 ```
 
@@ -1151,5 +1151,5 @@ let config = ManeuverConfig::new()
 ---
 
 **Last Updated**: February 2026
-**Version**: 0.8.0
+**Version**: 0.10.0
 **Status**: Production Ready

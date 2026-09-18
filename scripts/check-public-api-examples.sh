@@ -7,8 +7,9 @@
 # a #[cfg(test)] region and items in an unpublished crate (`publish = false`) -- must
 # carry an `# Examples` heading (plural, D-06) in its own preceding `///` doc block or
 # the file's leading `//!` module doc. See
-# .planning/phases/16-documentation-currency-the-architecture-gap/16-DOCS-03-ENTRY-POINTS.md
-# for the full enumeration this script re-derives.
+# .planning/phases/36.1-deferred-items-closure/36.1-ENTRY-POINTS.md
+# for the 101-item snapshot at Phase 36.1 close (D-11) -- a point-in-time record, not
+# an input: this script re-derives the enumeration live on every run.
 #
 # No stable-Rust lint performs this check. `rustdoc::missing_doc_code_examples` exists
 # only behind `#![feature(rustdoc_missing_doc_code_examples)]` on nightly, and every

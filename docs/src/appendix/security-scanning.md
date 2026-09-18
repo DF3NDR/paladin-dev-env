@@ -78,12 +78,21 @@ Each exception **must** include a comment stating:
 When adding or removing an exception, update **both** files so the two scanners
 do not contradict each other.
 
-Current tracked exceptions:
+Current tracked exceptions (the full `.cargo/audit.toml` `[advisories].ignore` array):
 
 - `RUSTSEC-2023-0071` — RSA timing side-channel via `rsa 0.9.x` (transitive
   dev/test dep of `sqlx-mysql`; no upstream fix).
 - `RUSTSEC-2025-0111` — `tokio-tar` path traversal (transitive dev/test dep of
   `testcontainers`; no upstream fix).
+- `RUSTSEC-2026-0187` — stack overflow in `lopdf` via deeply nested PDF objects
+  (transitive via `pdf-extract`, an unconditional dependency of `paladin-content`;
+  reachability is gated by whether the facade's optional `paladin-content` dependency
+  is enabled, ADR-0032. Fix requires a breaking `pdf-extract` >= 0.12 jump; deferred).
+- `RUSTSEC-2026-0194` — `quick-xml` quadratic attribute parsing (DoS); the remaining
+  < 0.41 instance is transitive via `rust-s3`/`aws-creds` (optional `s3` feature); no
+  `rust-s3` release uses `quick-xml` >= 0.41 yet.
+- `RUSTSEC-2026-0195` — `quick-xml` unbounded namespace allocation (DoS); same
+  transitive path and revisit condition as `RUSTSEC-2026-0194`.
 
 ## OSV-Scanner Policy
 
@@ -94,32 +103,58 @@ assessed. It may be promoted to a blocking gate later (see PRD Open Question 1).
 
 ## Snyk Evaluation & Decision
 
-**Decision: Deferred.**
+**Decision: evaluated and removed (2026-08-18).** Do not reintroduce a Snyk scan
+step, and do not record a phase as blocked on one.
 
-Snyk's free tier was evaluated against the combined coverage of `cargo audit`
-(RustSec), OSV-Scanner (OSV database), and `cargo deny` (licenses + bans +
-duplicates):
+Snyk was evaluated against the combined coverage of `cargo audit` (RustSec),
+OSV-Scanner (OSV database), and `cargo deny` (licenses + bans + duplicates), and
+measured directly against this workspace rather than assumed:
 
-| Capability | cargo audit + OSV + cargo deny | Snyk free tier |
-|------------|--------------------------------|----------------|
-| RustSec advisories | Yes (`cargo audit`) | Yes |
-| Broad OSV coverage | Yes (OSV-Scanner) | Partial |
-| License compliance | Yes (`cargo deny`) | Limited on free tier |
-| Dependency bans / duplicates | Yes (`cargo deny`) | No |
-| Reachability analysis | No | Yes (added value) |
-| Automated fix PRs | No | Yes (added value) |
-| Requires external account/secret | No | Yes (`SNYK_TOKEN`) |
-| Maintenance cost | Low (all in-repo config) | Medium (account + secret rotation) |
+- **Snyk Code (SAST)** ingests `.rs` files but has no meaningful Rust rules. A probe
+  carrying a hardcoded credential, command injection via `sh -c`, path traversal and
+  SQL injection returned **0 findings**. The same four probes in JavaScript returned
+  3 findings (HIGH/MEDIUM/LOW), confirming the scanner and credentials worked — the
+  zero-Rust-findings result is a genuine coverage gap, not a broken evaluation.
+- **Snyk Open Source (SCA)** has no Cargo support; `snyk test` exits
+  `SNYK-CLI-0008 — no supported target files` on this workspace.
 
-**Rationale:** The existing three tools already cover advisories and license
-compliance with no external account, no secret management, and fully
-version-controlled policy (`.cargo/audit.toml`, `deny.toml`). Snyk's incremental value
-(reachability analysis, automated fix PRs) does not currently justify the added
-account/secret-management overhead.
+A "clean" Snyk result on this workspace means *nothing was analysed*, not *the code
+is clean* — worse than no scan at all, because it reads as assurance the project does
+not have.
 
-**Revisit when:** the project needs reachability-based prioritization of
-advisories, wants automated dependency-bump PRs beyond Dependabot, or an
-enterprise compliance requirement mandates Snyk specifically.
+**Rationale:** The existing three tools (`cargo audit`, OSV-Scanner, `cargo deny`)
+already cover advisories and license compliance with no external account, no secret
+management, and fully version-controlled policy (`.cargo/audit.toml`, `deny.toml`).
+Snyk provides zero incremental Rust coverage on this workspace, so its
+account/secret-management overhead (`SNYK_TOKEN`) is not justified.
+
+**Standing instruction:** Snyk was evaluated and removed; it is not reintroduced, and
+no phase should be recorded as blocked pending a Snyk step.
+
+## Known Gap: No Rust SAST
+
+CodeQL was evaluated as a Rust-capable SAST candidate and **disqualified** as a
+required-check-grade Rust SAST at the tested version — CodeQL CLI `2.26.3`,
+`rust-queries` `0.1.40`, `security-extended` query suite, evaluated 2026-08-25.
+`.github/workflows/codeql.yml` is **retained, advisory-only**: it runs on every
+push/PR/schedule and reports findings in the code-scanning UI, but it is not pinned
+in any ruleset and does not gate a merge.
+
+Measured, not assumed: across four independent fixture measurements, SQL injection,
+path traversal and regex injection built from a `reqwest` remote source never fired
+under any tested condition; only `rust/hard-coded-cryptographic-value` fired
+reliably, and it carries a real false-positive cost on this codebase's own code
+(alert #28, a test-fixture literal, not a leaked secret). Coverage is not the gap —
+`analysed_rs_files` read 100% of the file denominator on every run — the gap is a
+measured detection gap in the rule classes that matter for credential-handling code.
+
+There is still no static taint analysis of first-party Rust that gates a merge.
+`cargo-audit` and `cargo-deny` scan dependencies; `clippy` is a lint. The manual
+credential-handling review (response bodies redacted before truncation, no API key
+interpolated into logs, HTTP clients carrying a credential header never following
+redirects) remains the **primary control** for credential-handling code — this is
+stated plainly rather than letting CodeQL's retained advisory scan read as coverage
+it does not provide.
 
 ## SBOM
 

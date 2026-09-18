@@ -2,13 +2,17 @@
 //! context window, without ever splitting an entry or failing the run
 //! (Doc 05 RT-FR-08/10/11/12, D-14, D-15).
 //!
-//! # Limit resolution is a fixed three-step order (D-14)
+//! # Limit resolution goes through the shared resolver (D-14)
 //!
-//! `config.model_context_limits.get(model)` -> the constructor's own
-//! `llm_port.get_capabilities().max_context_tokens` -> `config.default_context_tokens`.
-//! The resolved value AND which step produced it are logged at debug --
-//! naming the source is how an operator diagnoses "why did my history get
-//! trimmed at 8192" rather than guessing.
+//! `resolve_limit` is a thin call-through to
+//! [`paladin_llm::window::resolve_context_window`] -- the config table
+//! (`config.model_context_limits.get(model)`), then the constructor's own
+//! `llm_port.get_capabilities().max_context_tokens`, then
+//! `config.default_context_tokens` under the lenient
+//! [`paladin_llm::window::WindowFallbackPolicy::Default`] policy, which
+//! always resolves. The resolved value AND which step produced it are
+//! logged at debug -- naming the source is how an operator diagnoses "why
+//! did my history get trimmed at 8192" rather than guessing.
 //!
 //! `llm_port` here is the SERVICE's own configured port, read once per
 //! `before_model` call -- never a per-run override
@@ -52,35 +56,11 @@ use log::{debug, warn};
 use crate::application::services::paladin::error::PaladinError;
 use crate::config::agent_runtime::HistoryTrimmerConfig;
 use crate::core::platform::container::garrison::GarrisonEntry;
+use paladin_llm::window::{WindowFallbackPolicy, WindowSource, resolve_context_window};
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 
 use super::{ExecutionMiddleware, MiddlewareFlow, ModelCallContext};
-
-/// Which of D-14's three resolution steps produced a limit -- named so the
-/// debug log can say exactly which one, rather than just the number.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LimitSource {
-    /// `config.model_context_limits.get(model)` had an entry.
-    ConfigTable,
-    /// The constructor's `llm_port.get_capabilities().max_context_tokens`
-    /// had a value.
-    ProviderCapabilities,
-    /// Neither of the above -- `config.default_context_tokens`.
-    Default,
-}
-
-impl LimitSource {
-    fn as_str(self) -> &'static str {
-        match self {
-            LimitSource::ConfigTable => "model_context_limits config table",
-            LimitSource::ProviderCapabilities => {
-                "provider capabilities (get_capabilities().max_context_tokens)"
-            }
-            LimitSource::Default => "default_context_tokens",
-        }
-    }
-}
 
 /// Keeps a run's conversation history within a model's context window
 /// (`KeepSystemAndRecent`, D-15), resolving the context-token limit through
@@ -110,16 +90,27 @@ impl HistoryTrimmer {
         }
     }
 
-    /// D-14's three-step resolution order, returning both the resolved
-    /// limit and which step produced it.
-    fn resolve_limit(&self, model: &str) -> (u32, LimitSource) {
-        if let Some(&limit) = self.config.model_context_limits.get(model) {
-            return (limit, LimitSource::ConfigTable);
+    /// D-14's resolution order, returning both the resolved limit and which
+    /// step produced it -- a thin call-through to the shared
+    /// [`resolve_context_window`] under the lenient
+    /// [`WindowFallbackPolicy::Default`] policy, which always resolves.
+    fn resolve_limit(&self, model: &str) -> (u32, WindowSource) {
+        let capabilities = self.llm_port.get_capabilities();
+        match resolve_context_window(
+            model,
+            Some(&self.config.model_context_limits),
+            &capabilities,
+            WindowFallbackPolicy::Default(self.config.default_context_tokens),
+        ) {
+            Ok(resolved) => (resolved.tokens, resolved.source),
+            Err(_unreachable) => {
+                // Unreachable under WindowFallbackPolicy::Default, which always
+                // resolves -- handled explicitly (never unwrapped, CLAUDE.md
+                // library-code rule) by falling back to this trimmer's own
+                // configured default, paired with the framework-default source.
+                (self.config.default_context_tokens, WindowSource::Default)
+            }
         }
-        if let Some(max_context_tokens) = self.llm_port.get_capabilities().max_context_tokens {
-            return (max_context_tokens, LimitSource::ProviderCapabilities);
-        }
-        (self.config.default_context_tokens, LimitSource::Default)
     }
 
     /// Sum of `counter.count(_, model)` over every fixed (non-history) part
@@ -291,6 +282,18 @@ mod tests {
 
     fn entry(role: ConversationRole, content: &str) -> GarrisonEntry {
         GarrisonEntry::new(role, content.to_string())
+    }
+
+    /// Builds one of the ten distinguishable, EXACTLY 2_468-character entries the D-13
+    /// equivalence snapshot below uses. 2_468 characters is exactly 617 tokens under the
+    /// heuristic counter's chars-divided-by-4-rounded-up rule (2_468 / 4 == 617 with no
+    /// remainder), so the resolved limits below divide evenly with no rounding to reason
+    /// about. Distinguishable by an index prefix so the kept set can be asserted by
+    /// content, not just length.
+    fn fixed_length_entry(index: usize) -> String {
+        let prefix = format!("entry-{index}-");
+        let filler = "x".repeat(2_468 - prefix.chars().count());
+        format!("{prefix}{filler}")
     }
 
     /// Test 1: with `model_context_limits: {"gpt-4": 1000}` and a port
@@ -618,5 +621,103 @@ mod tests {
         trimmer.before_model(&mut cx).await.unwrap();
 
         assert!(cx.assembly.history.is_empty());
+    }
+
+    /// Equivalence snapshot (D-13): committed green against the PRE-RESOLVER
+    /// `HistoryTrimmer::resolve_limit` three-step walk. Plan 32-02 introduces
+    /// `paladin_llm::window::resolve_context_window` as the single shared precedence
+    /// walk, and plan 32-04 rewires `resolve_limit` to call it — these three cases and
+    /// their asserted resolved numbers and kept sets must stay byte-identical across
+    /// that rewire. The CONTINUITY, not just the numbers, is the proof (D-13): this
+    /// test is never edited to make a later refactor pass.
+    #[tokio::test]
+    async fn kept_set_equivalence_snapshot_pre_resolver() {
+        let history: Vec<GarrisonEntry> = (0..10)
+            .map(|i| entry(ConversationRole::User, &fixed_length_entry(i)))
+            .collect();
+        let paladin = make_paladin("gpt-4");
+
+        // Case 1: config table `{"gpt-4": 1_234}`, port reporting `Some(8_765)` --
+        // resolved 1_234, exactly the two newest entries survive.
+        {
+            let mut config = base_config();
+            config.reserve_for_response = 0;
+            config
+                .model_context_limits
+                .insert("gpt-4".to_string(), 1_234);
+            let trimmer = HistoryTrimmer::new(config, make_counter(), make_llm_port(Some(8_765)));
+            let (limit, _source) = trimmer.resolve_limit("gpt-4");
+            assert_eq!(limit, 1_234);
+
+            let assembly = PromptAssembly::new("", "", "", history.clone(), None);
+            let mut cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+            trimmer.before_model(&mut cx).await.unwrap();
+
+            let kept: Vec<String> = cx
+                .assembly
+                .history
+                .iter()
+                .map(|e| e.content.clone())
+                .collect();
+            assert_eq!(
+                kept,
+                vec![fixed_length_entry(8), fixed_length_entry(9)],
+                "config-table case must keep exactly the two newest entries"
+            );
+        }
+
+        // Case 2: empty config table, port reporting `Some(8_765)` -- resolved 8_765,
+        // all ten survive.
+        {
+            let mut config = base_config();
+            config.reserve_for_response = 0;
+            let trimmer = HistoryTrimmer::new(config, make_counter(), make_llm_port(Some(8_765)));
+            let (limit, _source) = trimmer.resolve_limit("gpt-4");
+            assert_eq!(limit, 8_765);
+
+            let assembly = PromptAssembly::new("", "", "", history.clone(), None);
+            let mut cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+            trimmer.before_model(&mut cx).await.unwrap();
+
+            let kept: Vec<String> = cx
+                .assembly
+                .history
+                .iter()
+                .map(|e| e.content.clone())
+                .collect();
+            let expected: Vec<String> = (0..10).map(fixed_length_entry).collect();
+            assert_eq!(
+                kept, expected,
+                "provider-capability case must keep all ten entries"
+            );
+        }
+
+        // Case 3: empty config table, port reporting `None`,
+        // `default_context_tokens: 4_321` -- resolved 4_321, exactly the seven newest
+        // entries survive.
+        {
+            let mut config = base_config();
+            config.reserve_for_response = 0;
+            config.default_context_tokens = 4_321;
+            let trimmer = HistoryTrimmer::new(config, make_counter(), make_llm_port(None));
+            let (limit, _source) = trimmer.resolve_limit("gpt-4");
+            assert_eq!(limit, 4_321);
+
+            let assembly = PromptAssembly::new("", "", "", history.clone(), None);
+            let mut cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+            trimmer.before_model(&mut cx).await.unwrap();
+
+            let kept: Vec<String> = cx
+                .assembly
+                .history
+                .iter()
+                .map(|e| e.content.clone())
+                .collect();
+            let expected: Vec<String> = (3..10).map(fixed_length_entry).collect();
+            assert_eq!(
+                kept, expected,
+                "default-fallback case must keep exactly the seven newest entries"
+            );
+        }
     }
 }

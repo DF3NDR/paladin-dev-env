@@ -216,7 +216,7 @@ impl Herald for TableHerald {
                 .iter()
                 .position(|(_, time, tokens)| {
                     *time == paladin_result.execution_time_ms
-                        && *tokens == paladin_result.token_count
+                        && *tokens == paladin_result.usage.total_tokens
                 })
                 .map(|pos| name_pool.remove(pos).0)
                 .unwrap_or_else(|| format!("Paladin {}", idx + 1));
@@ -227,7 +227,7 @@ impl Herald for TableHerald {
                 self.format_status(&status_str),
                 Cell::new(format!("{}ms", paladin_result.execution_time_ms))
                     .set_alignment(CellAlignment::Right),
-                Cell::new(paladin_result.token_count.to_string())
+                Cell::new(paladin_result.usage.total_tokens.to_string())
                     .set_alignment(CellAlignment::Right),
             ]);
         }
@@ -361,7 +361,7 @@ mod tests {
         let herald = TableHerald::default();
         let result = paladin_core::platform::container::herald::PaladinResult {
             output: "Test output".to_string(),
-            token_count: 100,
+            usage: paladin_core::platform::container::battalion::TokenUsage::new(100, 0),
             execution_time_ms: 1500,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -400,12 +400,15 @@ mod tests {
             per_paladin_times.insert((*name).to_string(), execution_time_ms);
             per_paladin_tokens.insert(
                 (*name).to_string(),
-                paladin_core::platform::container::battalion::TokenUsage::from_total(token_count),
+                paladin_core::platform::container::battalion::TokenUsage::new(token_count, 0),
             );
             total_tokens += u64::from(token_count);
             paladin_results.push(paladin_core::platform::container::herald::PaladinResult {
                 output: format!("{} output", name),
-                token_count,
+                usage: paladin_core::platform::container::battalion::TokenUsage::new(
+                    token_count,
+                    0,
+                ),
                 execution_time_ms,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,
@@ -590,11 +593,7 @@ mod tests {
             .execution_id(uuid::Uuid::new_v4())
             .start_time(chrono::Utc::now())
             .model_used("test-model".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 300,
-                completion_tokens: 200,
-                total_tokens: 500,
-            })
+            .token_usage(TokenUsage::new(300, 200))
             .duration_ms(1000)
             .build()
             .unwrap();
@@ -904,11 +903,7 @@ mod tests {
             .execution_id(uuid::Uuid::new_v4())
             .start_time(chrono::Utc::now())
             .model_used("test-model".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 240,
-                completion_tokens: 160,
-                total_tokens: 400,
-            })
+            .token_usage(TokenUsage::new(240, 160))
             .duration_ms(2000)
             .build()
             .unwrap();

@@ -7,8 +7,8 @@
 //! - **Garrison** (`garrison` module): Conversation history storage adapters.
 //!   - [`garrison::InMemoryGarrison`] — always available, zero-dependency in-process store.
 //!   - `garrison::SqliteGarrison` — persistent SQLite-backed store (requires feature `sqlite`).
-//!   - `garrison::TiktokenCounter` / `garrison::TokenCounter` — token counting utilities
-//!     (requires feature `content-processing`).
+//!   - `garrison::TiktokenCounter` — exact, BPE-based token counting (requires feature
+//!     `content-processing`).
 //!
 //! - **Sanctum** (`sanctum` module): Vector / semantic memory adapters.
 //!   - [`sanctum::InMemorySanctum`] — always available, in-process vector store.
@@ -37,9 +37,14 @@
 //! |----------------------|--------------------------------------------------|
 //! | `sqlite`             | `SqliteGarrison`, `SqliteVault` (depends on `sqlx`) |
 //! | `qdrant`             | `QdrantSanctumAdapter` (depends on `qdrant-client`) |
-//! | `content-processing` | `TiktokenCounter`, `TokenCounter`, `TokenCounterFactory` (depends on `tiktoken-rs`) |
+//! | `content-processing` | `TiktokenCounter` (depends on `tiktoken-rs`) |
 //!
 //! No features are enabled by default.
+//!
+//! This crate depends unconditionally on `paladin-llm` (`default-features = false`) so
+//! [`services::RagRetrievalService`] can ration its RAG injection budget through
+//! `paladin_llm::services::commissary::Commissary::dispense` — the workspace's first
+//! unconditional production lateral adapter dependency (Phase 33, COMM-01).
 
 #![deny(unsafe_code)]
 #![warn(missing_docs)]

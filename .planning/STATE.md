@@ -2,33 +2,43 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 29
-status: completed
-stopped_at: Phase 29 context gathered
-last_updated: "2026-09-10T16:51:41.135Z"
-last_activity: 2026-09-10
-last_activity_desc: Phase 29 complete
+current_phase: 37
+current_phase_name: v0.10.0 Crate Release
+status: executing
+stopped_at: Completed 37-05-PLAN.md (acceptance-audit section 12 re-seal, pointer paragraph)
+last_updated: "2026-09-18T18:36:30.047Z"
+last_activity: 2026-09-18
+last_activity_desc: Phase 37 execution started
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 137
-  completed_plans: 137
-current_phase_name: Program Gates & Release
+  total_phases: 18
+  completed_phases: 17
+  total_plans: 215
+  completed_plans: 209
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-10 after Phase 29)
+See: .planning/PROJECT.md (updated 2026-09-17 after Phase 34 completion)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** v0.10.0 milestone complete (all 9 phases) — next: `/gsd-complete-milestone v0.10.0`
-`.planning/REQUIREMENTS.md` is removed and opened fresh there).
+**Current focus:** Phase 37 — v0.10.0 Crate Release
+Phase 34 was verified 2026-09-17: `34-UAT.md` 47/47 passed (all nine SUMMARYs coverage-mode, every
+deliverable automated and the list confirmed by the maintainer; `34-check.sh --final` 8/8 re-run at UAT
+time), `34-VERIFICATION.md` `passed` 5/5, `34-SECURITY.md` `verified` with `threats_open: 0`.
+`0.10.0` tag is not yet cut. Phases 30-33 (Token Economy) are closed. Phase 33 was verified 2026-09-17:
+`33-UAT.md` 23/23 passed (22 coverage-mode automated passes + the maintainer's human acceptance of corpus
+audit §11 and `33-CI-EVIDENCE.md`), `33-SECURITY.md` `verified` with `threats_open: 0`, `33-VALIDATION.md`
+`validated`, `33-VERIFICATION.md` `passed`. The §11 sign-off box itself stays unticked in the corpus file
+until the maintainer ticks it by hand at tag time (Phase 29 D-17). Next: `/gsd-complete-milestone v0.10.0`.
+Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job supplies the one gate this
+devcontainer cannot measure and a real pre-merge run is appended to `37-CI-EVIDENCE.md`'s CI-run table;
+the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [████████████████████] v0.10.0 — 9 of 9 phases complete (22, 22.1, 23, 24, 25, 26, 27, 28, 29); 137/137 plans (100%)
+**Progress:** [██████████] 97%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -51,16 +61,19 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 29
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
+Phase: 37 (v0.10.0 Crate Release) — EXECUTING
+Plan: 6 of 11
+Status: Ready to execute
+Last activity: 2026-09-18 — Phase 37 execution started
+Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
+Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
+Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 324
+- Total plans completed: 391
 - Average duration: —
 - Total execution time: —
 
@@ -96,6 +109,14 @@ Last activity: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now 
 | 27 | 26 | - | - |
 | 28 | 17 | - | - |
 | 29 | 9 | - | - |
+| 30 | 3 | - | - |
+| 31 | 7 | - | - |
+| 32 | 5 | - | - |
+| 33 | 6 | - | - |
+| 34 | 9 | - | - |
+| 35 | 10 | - | - |
+| 36 | 13 | - | - |
+| 36.1 | 14 | - | - |
 
 *Updated after each plan completion*
 
@@ -124,10 +145,94 @@ Last activity: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now 
 | Phase 12 P03 | ~20min | 2 tasks | 3 files |
 | Phase 12 P04 | ~25min | 2 tasks | 3 files |
 | Phase 20 P07 | 35min | 3 tasks | 3 files |
+| Phase 34 P01 | 17min | 2 tasks | 9 files |
+| Phase 34 P02 | 15min | 1 tasks | 3 files |
+| Phase 34 P03 | 18min | 2 tasks | 3 files |
+| Phase 34 P04 | 28min | 2 tasks | 3 files |
+| Phase 34 P05 | ~60min | 2 tasks | 2 files |
+| Phase 34 P06 | ~18min | 2 tasks | 5 files |
+| Phase 34 P07 | 16min | 2 tasks | 16 files |
+| Phase 34 P08 | ~90min | 2 tasks | 3 files |
+| Phase 34 P09 | ~75min | 2 tasks | 4 files |
+| Phase 36 P01 | ~45min | 2 tasks | 9 files |
+| Phase 36 P02 | ~55min | 3 tasks | 10 files |
+| Phase 36 P03 | ~20min | 2 tasks | 5 files |
+| Phase 36 P04 | ~25min | 2 tasks | 8 files |
+| Phase 36 P05 | 35min | 2 tasks | 8 files |
+| Phase 36 P06 | 30min | 2 tasks | 3 files |
+| Phase 36 P07 | ~55min | 2 tasks | 3 files |
+| Phase 36 P08 | ~2h10min | 3 tasks | 4 files |
+| Phase 36 P09 | ~1h30min | 3 tasks | 6 files |
+| Phase 36 P10 | ~1h50min | 3 tasks | 6 files |
+| Phase 36 P11 | ~1h10min | 3 tasks | 2 files |
+| Phase 36 P12 | ~1h | 2 tasks | 8 files |
+| Phase 36 P13 | 25min | 3 tasks | 4 files |
+| Phase 36.1 P01 | 20min | 2 tasks | 3 files |
+| Phase 36.1 P02 | 15min | 2 tasks | 2 files |
+| Phase 36.1 P03 | 20min | 3 tasks | 4 files |
+| Phase 36.1 P04 | ~35min | 3 tasks | 9 files |
+| Phase 36.1 P05 | ~15min | 3 tasks | 7 files |
+| Phase 36.1 P06 | 6min | 3 tasks | 4 files |
+| Phase 36.1 P07 | ~15min | 3 tasks | 4 files |
+| Phase 36.1 P08 | ~20min | 2 tasks | 3 files |
+| Phase 36.1 P09 | ~35min | 2 tasks | 3 files |
+| Phase 36.1 P10 | ~15min | 2 tasks | 3 files |
+| Phase 36.1 P11 | ~11min | 2 tasks | 7 files |
+| Phase 36.1 P12 | ~20min | 3 tasks | 6 files |
+| Phase 36.1 P13 | ~28min | 3 tasks | 3 files |
+| Phase 36.1 P14 | ~20min | 2 tasks | 1 files |
+| Phase 37 P01 | 35min | 3 tasks | 2 files |
+| Phase 37 P02 | 50min | 1 tasks | 2 files |
+| Phase 37 P03 | 53min | 2 tasks | 1 files |
+| Phase 37 P04 | 7min | 2 tasks | 5 files |
+| Phase 37 P05 | 14min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
 ### Decisions
+
+**Phase 33 (closed 2026-09-16, verified 2026-09-17) — recorded as D-01 … D-20 in `33-CONTEXT.md`; the ones
+later phases most need:**
+
+- D-01/D-03: `paladin-memory` takes `paladin-llm` (`default-features = false`) as an unconditional production
+  dependency — the workspace's first lateral adapter-to-adapter edge; `reqwest` never enters the normal graph.
+
+- D-12: `RagRetrievalService::retrieve_context` / `format_for_prompt` break their published return type to
+  `RagRetrievalResult` with no forwarding shim (ADR-0051 clean break); `retrieve_context_with_timeout` follows.
+
+- D-08/D-09: `ConsignmentItem` priority is rank order (`u8::try_from(rank)`), label is the memory UUID —
+  never content — so "highest score retained" is structural and no memory body reaches a shed record or log.
+
+- D-15/D-16: one shared `rag_omission_marker` helper in `paladin-memory` is the only place the omission line
+  is built; both renderers read the budget from `RagRetrievalResult::allotted_tokens`; the facade's
+  RAG-success `info!` gains only `shed=`.
+
+- D-10(a)/D-05: a single memory larger than the whole budget is retained truncated (never dropped);
+  `rag.max_tokens` beyond `u32::MAX` is a typed `BudgetTooLarge` error, never an `as` cast or clamp.
+
+**Phase 32 (closed 2026-09-16) — recorded as D-01 … D-16 in `32-CONTEXT.md`; the ones later
+phases must honor:**
+
+- D-01/D-02: the context window is resolved by exactly one function, `paladin_llm::window::
+  resolve_context_window`, with a `WindowFallbackPolicy` enum (`Default(n)` / `Strict`) — never a
+  `bool` — and a labelled `WindowSource`; the facade's duplicate `LimitSource` is gone.
+
+- D-04/D-05: `Commissary::new` calls the resolver once under `Strict` (no config table, so the
+  "no invented window" refusal survives as `CommissaryError::UndeclaredContextWindow`, byte-identical);
+  `HistoryTrimmer::resolve_limit` is a thin call under `Default(config.default_context_tokens)`.
+
+- D-06/D-08: exactness is a property of the counter instance — `TokenCounterPort::is_exact`
+  defaults `false`, tiktoken returns `true`, and `Commissary` reads it live from the port; the
+  `is_exact_counter` constructor argument is a clean break with no forwarding shim.
+
+- D-09/D-10: the legacy `garrison::TokenCounter` trait and `TokenCounterFactory` were deleted
+  outright (the `#[deprecated]` escape hatch was not needed); `TiktokenCounter`'s only counting
+  path is its port impl.
+
+- D-13/D-14: equivalence is proven by TDD-ordered fixture tests committed green before the
+  resolver existed (not `insta`); semver discovery is empirical per feature set — `cargo-semver-checks`
+  0.50.0 has no lint for an inherent method's parameter count, so the `Commissary::new` break is
+  recorded in `CHANGELOG.md` only, with `MIGRATION.md` §9.2 rows for the two lints that did fire.
 
 **Phase 29 (closed 2026-09-10) — recorded as D-01 … D-25 in `29-CONTEXT.md`; the ones later
 milestones must honor:**
@@ -407,12 +512,102 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 13 / ORCH-01 hand-off written carrying Milestone 10's verdict class in both halves: 100% complete and one acceptance criterion false, and as of 2026-08-08 no longer false
 - [Phase ?]: Recorded both v0.8.1-rc.3 and v0.8.1-rc.4 rehearsals in full — rc.4 is the only live proof of Phase 20's own gate and recovery scripts, and it found and fixed two real gate bugs (Findings 5, 6)
 - [Phase ?]: Assumption A3 (OIDC token exchange survives a same-tag re-run) proven twice, independently re-verified against crates.io trustpub_data.run_id rather than transcribed from workflow self-reports
+- [Phase ?]: CURR-01…05 minted 1:1 against ROADMAP Phase 34's five success criteria; SC5 read-only gate diffs against the fixed Phase 34 start SHA, not git merge-base HEAD main, since main is 7 phases behind
+- [Phase ?]: Compiled the D-08 shipped-surface checklist (91 SS-nn rows, 13 phase tables) into 34-AUDIT.md §1 before any mdBook/rustdoc/examples page is judged; confirmed the three D-10 ubiquitous-language lists by line-anchored grep and recorded a genuine fourth partial list at docs/src/introduction.md for a later sweep
+- [Phase ?]: Phase 34 plan 03: measured the mdBook build/linkcheck/gate baseline green; settled 18 root/getting-started/architecture/api-reference page verdicts (12 stale via MB-04..MB-17, 6 current); confirmed upgrading.md agrees with MIGRATION.md §9.1/§9.8 4/4 and 7/7 with zero disagreements; both crate-map.md pages and architecture/overview.md found missing paladin-eval/paladin-herald and the Phase 33 paladin-memory->paladin-llm edge
+- [Phase ?]: Phase 34 plan 04: settled 40 mdBook page verdicts (26 current, 14 stale via MB-18..MB-36) plus the Phase 22 superstep-engine missing-page decision (row 94, MB-30, deferred in Phase 23, never picked up); genuine live-code-verified defects included control-flow.md still describing Parley as unimplemented (Phase 24 shipped it), fault-tolerance.md's stale fingerprint version (v5 vs live v6), sanctum-vector-memory.md's entirely absent Phase 33 RAG surface, cicd.md's fabricated CI/Release Pipeline job samples, and testing-guide.md's coverage command missing the ,llm-all feature flag scripts/coverage.sh actually runs
+- [Phase ?]: Phase 34 plan 05: settled all 34 remaining appendix page verdicts, closing the 93-page mdBook partition (current 38, stale 55, missing 1); disproved an initial pre-hexagonal-import-path staleness assumption empirically (paladin::core::/paladin::application::services:: style imports are maintained backward-compatible re-exports and compile fine); found a systemic paladin::paladin_ports:: double-nesting import defect across 5 pages, integration-tests.md missing 26 of 60 live test files, and security-scanning.md's Snyk framing contradicting the project's own dated decision record
+- [Phase ?]: Phase 34 plan 06: enumerated 65 default-feature rustdoc warnings as RD-02..RD-66 (36 location-less, recovered by full quoted-snippet grep, zero ambiguous fallbacks); wrote 34-rustdoc-rows.sh (crate attribution by summary-line chunking, not stream position) for plan 34-07 reuse; recorded the workspace all-features run's 17-error/4-crate floor (paladin-memory 1, paladin-web 8, paladin-storage 1, paladin-ai facade 7), correcting D-14's single-crate abort prose with a third independent measurement (no paladin-ai-core in this run's abort set at all)
+- [Phase ?]: 34-07: per-crate all-features sweep is the true rustdoc floor - 77 content errors across 8 red crates, not 14 (paladin-ai-core alone) or 17 (workspace partial view); 63-item undersizing corrected for Phase 36
+- [Phase ?]: 34-07: extended 34-rustdoc-rows.sh with a crate-override argument since a single-crate -p <crate> capture never prints the summary line the default attribution pass depends on
+- [Phase ?]: 34-07: entry-point # Examples-heading gate scope drift (76->101) and its 19 violations routed to deferred-items.md per D-00e, not fixed or minted as RD-nn/EX-nn/MB-nn rows
+- [Phase ?]: Examples build/currency sweep (plan 34-08): all 60 examples/doc-examples programs build green under the exact CI feature sets; zero obsolete-API hits; two http_service_host rows marked stale on a server-router-parity claim; examples/README.md carries two new stale findings (11 undocumented programs, stale PaladinResult code-snippet fields); 59-row capability gap list for Phase 22-33 items no example demonstrates
+- [Phase ?]: Phase 34 plan 34-09: assembled the Phase 35 work list (60 MB-nn, missing superstep-engine page MB-30 leading) and Phase 36 work list (143 RD-nn grouped by crate with same-source-line cross-references, 64 EX-nn work items + 58 confirmed-current listed separately); both-directions reconciliation proven by diff; closed deferred-items.md (5 entries, 4 plans) and 34-AUDIT.md §7; proved SC5 over the whole phase range against the pinned Phase 34 start SHA (main lags 7 phases behind); fixed a 34-check.sh assertion (b) bug that treated the designed §5/§6 double-reference as a duplicate-ID error
+- [Phase ?]: Phase 36 plan 36-01: proved the bare-shorthand intra-doc link technique -- rustdoc resolves a //! module doc's link scope to the CRATE ROOT, not the enclosing submodule, so a same-file pub-use re-export needs the full crate-relative path (crate::token_counter::heuristic::HeuristicTokenCounter), not a bare shorthand or self::-prefixed path; closed RD-01/66/126 (paladin-memory), RD-51/127 (paladin-ports), RD-46/128 (paladin-storage) via D-05/D-06; added examples/token_economy_commissary.rs (EX-109,111,112,113,114,115) and its README section; seeded 36-EVIDENCE.md + 36-evidence/ for the rest of the phase; zero drift against the 73-line/65-diagnostic default baseline and the 101-exit all-features bar; make api-surface unchanged across all 6 commits
+- [Phase ?]: Phase 36 plan 36-02: closed all 72 paladin-battalion rustdoc rows (34 location groups) -- confirmed the 36-01 crate-root //! link-scope finding generalizes to engine/mod.rs (a non-leaf mod.rs, not just a leaf submodule); zero visibility widened, zero lint suppressions, one atomic commit 9994eed5
+- [Phase ?]: Phase 36 plan 36-03: closed all 28 paladin-ai-core rustdoc rows (14 location groups) -- confirmed a cross-crate unresolved link (directive.rs's StateNode::run, owned by paladin-battalion) is a D-05 de-link situation, not a D-06 dependency-adding one; trace.rs's ten-target //! header confirmed the crate-root link-scope rule at its densest single doc block; webhook.rs's security-invariant prose verified byte-identical; one atomic commit 71a47dc9
+- [Phase ?]: 36-04: http_status.rs unclosed-HTML-tag pair fixed by reflowing the code span onto one source line -- a code span crossing a //! doc-comment line break is not treated as continuous by rustdoc's HTML-tag scanner even when backticks balance across the two lines
+- [Phase ?]: 36-04: dev_ui_controller.rs's RunInspectorPort/InspectorView::supersteps/dev_ui_inspector_page links resolved with explicit crate-relative paths (D-06), not de-linked -- all three are public and reachable
+- [Phase ?]: Every fix in plan 36-05 is a plain [`ident`] -> `ident` de-link; all seven targets are genuinely private (no pub/pub(crate)), confirmed by grep before editing each one
+- [Phase ?]: Both RD-137 (cli) and RD-142 (otel) feature-gated rows confirmed co-gated with their doc'd item before editing, closing D-07 in place with no gate annotation
+- [Phase ?]: war_engine_configuration.rs/control_flow_dynamic_routing.rs headers avoid literally naming provider-key env vars to satisfy the plan's own 0-count acceptance grep while still stating D-29's no-key-needed claim generically
+- [Phase ?]: control_flow_dynamic_routing.rs EX-70 runs an actual mustering graph against the overridden APP_ENGINE_MAX_MUSTER_TASKS limit, not just before/after prints, so the cap-in-force truth is independently verifiable from stdout
+- [Phase ?]: 36-07: Replay-then-resume-with-the-opposite-decision (not fork-with-an-edit) demonstrates the Gate example's divergent result, since a Gate's own dispatch reads no pre-existing state.
+- [Phase ?]: 36-07: A withheld response substituted with an unrelated ParleyId (not an empty responses vec) demonstrates resume_with's typed rejection, since an empty submission with one outstanding parley is a valid partial AwaitingInput, not an error.
+- [Phase ?]: 36-07: graceful_shutdown.rs mirrors paladin-server.rs's own graceful_shutdown ? shutdown_grace_secs : 0 derivation so the toggle's exit-immediately vs. wait-and-drain contrast is observable through the same ShutdownCoordinator API.
+- [Phase ?]: 36-08: HistoryTrimmer's model-context-limit resolver tries the config table before the LLM port's own declared capabilities -- a standalone-trimmer demo must name the model explicitly and override model_context_limits for it, or MockLlmAdapter's 4096-token reported window silently shadows a smaller default_context_tokens
+- [Phase ?]: 36-08: InMemorySanctum's HashMap-backed storage has per-process randomized iteration order -- a RAG example seeding several memories at tied similarity scores needs a deterministic, content-hash-derived embedding (not one constant vector) for reproducible ranking across runs
+- [Phase ?]: 36-08: Discovered (not fixed, D-18 docs-only boundary): PaladinError::ArmamentFailed's FailRun arms in paladin_execution_service.rs build reason from raw e.to_string(), bypassing ToolResultFormatter's redact-then-bound sanitizer their own doc comment promises -- recorded as WINDOWS.md #38
+- [Phase ?]: http_service_host.rs/doc-examples: mount ThreadApiState/RunApiState unwired (matches server's off-by-default behavior) rather than wiring a working backend, closing EX-33/EX-55 without duplicating platform_api_client.rs's demonstration
+- [Phase ?]: platform_api_client.rs bypasses build_run_api (which needs a real provider credential via paladin_port_from_settings) and hand-wires the same collaborators with a local MockEnginePort, using paladin_storage in-memory adapters for every store
+- [Phase ?]: Thread state/resume/history and the dev-ui inspector are demonstrated against a Waypoint-less thread (Agent-kind assistant never touches the waypoint store) and documented as a scope deviation rather than building a full Workflow-based paused-thread demo
+- [Phase ?]: Phase 36 plan 36-10: closed EX-81/82 (node-result cache + enable toggle, gated redis-cache, build-only), EX-100/101/102/108 (trace envelope, TraceConfig via build_run_sink, PALADIN_TRACE_OTEL_ENABLED toggle, persisted trace history), EX-103 (OTLP export sink, gated otel, build-only) and EX-105/106/107 (eval scenario declaration, PALADIN_EVAL_LIVE toggle via check_live_mode's typed refusal, CLI eval-run form) -- ten more of the fifty-nine Phase 34 gap rows closed, fifty-four of fifty-nine now closed; zero make api-surface drift across four commits
+- [Phase ?]: Phase 36 Plan 11: all three tasks' README edits landed in one commit per D-26; fixed a pre-existing Demonstrates-line-count defect in cli_configs/maneuver.yaml (Rule 1) so the plan's own cross-check invariant could pass.
+- [Phase ?]: Both ADR-0033 rustdoc bars + doctests wired into make clean-code, pre-push, and CI lint job (D-11/D-12/D-13); per-crate all-features sweep deliberately excluded from doc-check (workspace command already gates).
+- [Phase ?]: scripts/check-all-examples.sh rewritten to mirror CI's Example Muster 7-invocation feature split exactly (D-14); webhook_receiver folded into the existing web-server step rather than given its own, since acceptance criteria count distinct required-features lists, not targets.
+- [Phase ?]: Phase 36 closure: all 207 audit rows (143 RD-nn + 64 EX-nn) traced by ID to a commit in 36-EVIDENCE.md; no row omitted or invented
+- [Phase ?]: WINDOWS.md rows 36 and 37 resolved to fixed via gsd-tools only; CHANGELOG.md [0.10.0] Documentation section gained four reader-facing Phase 36 bullets
+- [Phase ?]: Real pushed-branch CI run 35290763563 recorded proving the new all-features rustdoc documentation gate (D-12); every CI figure matched the local closing measurement exactly, no D-03 disagreement to arbitrate
+- [Phase ?]: D-15 rewrite: cli_isolation guard now asserts Cargo.toml's [features] default array via toml crate instead of build cfg
+- [Phase ?]: D-20 closure table: 36.1-EVIDENCE.md seeded with all 17 lines; line 1 (cli_isolation) completed, 16 pending for plan 36.1-13
+- [Phase ?]: D-16 sweep confirmed RESEARCH.md assumption A2: zero non-cli_isolation failing targets under --all-features --no-fail-fast
+- [Phase ?]: Phase 36.1 plan 02: both run-failing tool-error arms (handoff and regular Arsenal-tool) sanitize PaladinError::ArmamentFailed's reason via ToolResultFormatter::sanitize_tool_text (widened to pub(crate) only, make api-surface unchanged); pinning test fail_run_redacts_a_secret_in_the_reason covers the regular arm, handoff arm covered by the Task 1 two-call-site source guarantee (commits 979f2a1d, e7284987)
+- [Phase ?]: 36.1-03: contributing-providers.md's module-declaration line (pub mod myprovider_adapter;) left unfixed per nine-signal class-4 verdict — not the same relocated-path class as the two import-path fixes; no WINDOWS.md row minted (D-17's 12-row mapping has no slot)
+- [Phase ?]: Phase 36.1 plan 04: rebuilt testing-guide.md tests/ tree against ls -p tests truth (D-05), swept eleven OpenAiAdapter->OpenAIAdapter casing hits across seven pages (D-07), probed all four flagged battalion-patterns-guide.md bodies (all fail to compile, recorded for 36.1-13 to mint 4 waived unmet-truth ledger rows), and ran the docs.yml gate clean (zero broken links).
+- [Phase ?]: 36.1-05: closed six of the nineteen # Examples MISSING items (StructuredExecutorPort, NodeCachePort, RunSubmissionPort, ScheduleAdminPort, RunQueuePort, WebhookDeliveryRepositoryPort) with real executing doctests; re-measured paladin-ports at 142 passed doctests / 0 cargo doc warnings; MISSING count 19 -> 13
+- [Phase ?]: RunTracePort/AssistantAdminPort/AssistantRepositoryPort # Examples sections use inline Mutex<HashMap>-backed local structs implementing every trait method, never a storage-crate adapter
+- [Phase ?]: Phase 36.1 plan 36.1-07: closed the last three port-trait # Examples gaps (RunRepositoryPort 11 methods, RunScheduleRepositoryPort 8 methods, WaypointPort 7 methods, inline in-memory adapters); plan's read_first undercounted method totals for the first two (stale relative to trait growth) -- implemented all required methods per D-10's compile-and-pass bar; public-API examples script now reports exactly 7 MISSING, all Service kind, zero Port
+- [Phase ?]: 36.1-08: ScheduleService/WebhookDeliveryService # Examples built from shipped in-memory adapters (schedule/webhook/run repos) plus an inline RunSubmissionPort fixture copied from that port's own doctest; WebhookDeliveryService's fallible constructor propagated via ? in a wrapping fn rather than unwrapped. MISSING count 7 -> 5 (D-09, D-10).
+- [Phase ?]: Phase 36.1 plan 09: RunSubmissionService and RunInspectorService # Examples sections both settled the unverified AssistantResolver collaborator (RESEARCH.md A1) by reusing the shipped, in-tree CodeWorkflowResolver::new() -- no inline resolver impl was needed; both doctests construct from real shipped in-memory adapters and pass under cargo test -p paladin-ai --doc
+- [Phase ?]: Phase 36.1 plan 10: RunEventStreamService's example stops at construction (never calls stream/awaits an event, per T-36.1-39); wiring proven via Arc::strong_count(&bus)==2 instead of a stream call
+- [Phase ?]: Phase 36.1 plan 10: AssistantService's unverified registries collaborator turned out to have a real zero-argument constructor (EngineRegistries::new()/Default) -- no not-run fence or fabricated constructor was needed; missing count after this plan is exactly 1 (WaypointRetentionService), handed to plan 36.1-11
+- [Phase ?]: 36.1-11: wired the public-API # Examples gate in three places (make/pre-push/CI) in the same commit as the 19th fix (D-12); CURR-17 stays pending until 36.1-12's PROJECT.md correction lands
+- [Phase ?]: Phase 36.1 Plan 12: PROJECT.md's stale examples figures corrected in place at both occurrences (62 .rs files, 8 declared [[example]] targets, paladin-llm as the sole crate with its own examples/ dir), verified against the tree before writing
+- [Phase ?]: Phase 36.1 Plan 12: ADR-0033 amended with the eight kept crate-level rustdoc suppressions (309 hidden diagnostics across 5 crates), owner v0.11.0 rustdoc-suppressions phase, re-check 2026-10-16; no .rs file changed, cargo doc stays zero warnings
+- [Phase ?]: Phase 36.1 Plan 13: WINDOWS.md reconciled with every open Phase 31/32/34/35/36 deferred-item register — sixteen new rows (ids 40-55: 11 fixed, 5 waived) plus row 38 resolved; open_count: 0, total_count: 55 (one row higher than expected because an accidental probe row, id 39, was minted while verifying the ledger CLI's syntax and waived transparently rather than hidden).
+- [Phase ?]: Phase 36.1 Plan 13: all seven D-25 closing gates ran on the closing commit; cargo test --workspace failed transiently on its first attempt (3 unrelated tests, 30s timeouts, environmental resource contention after two CPU-heavy gates) and was recorded verbatim per D-25, then a full unfiltered re-run confirmed 0 failures. make api-surface unchanged (3959 items).
+- [Phase ?]: 36.1-14: recorded live-read CI run 35329107346 proving the public-API # Examples heading step (D-12); independently cross-checked via gh api job logs, no disagreement requiring reconciliation, row 7 doctests recorded on its own merits
+- [Phase ?]: D-17 checkpoint: maintainer reply classified as deferred (verbatim recorded in 37-CI-EVIDENCE.md); runbook owed before plan 37-08's tag hand-off
+- [Phase ?]: D-13 dry-run dispatch confirmed not attempted per traced Q1 conclusion; no rc/shadow tag created
+- [Phase ?]: Environment addendum: maintainer ran cargo clean; free space re-baselined at 135G for plan 37-02/37-03 preconditions (Task 1's 18G figure preserved, not edited)
+- [Phase ?]: 37-02: Interrupted semver-checks run (host DNS outage + reboot) classified not-measured, not red; maintainer authorized exactly one full 11-package re-run of the unmodified semver-loop.sh (verbatim: 'Record, then full re-run (Recommended)'); MSRV recorded from the pre-outage log, not re-run
+- [Phase ?]: Gate row 6 (make publish-dry-run) and Task 2's adjacent checks (make security, make api-surface) hosted detached with real exit codes, polled with repeated foreground waits, never run in foreground (33m32s > 600s ceiling)
+- [Phase ?]: Local sweep closed: 31 numbered rows, 29 unconditional local passes, 2 named carried conditions, 0 CI-attributed rows; 82% ADR-0006 coverage floor named CI-attributed in an appended (not replacing) Summary addendum
+- [Phase ?]: 37-04: Traceability table's 'Complete' status column tracks trace completeness (row populated), not requirement satisfaction — SHIP-05's traceability row reads Complete while its definition-row checkbox stays unchecked until the crates ship.
+- [Phase ?]: Section 12 cites the provenance block's literally-labeled Local re-seal head SHA (522ab1d4), listing the later per-gate doc-only commit SHAs alongside with their source-tree identity to it stated explicitly
+- [Phase ?]: Gate row 7's evidence pointer cites 37-CI-EVIDENCE.md rows 3-13 (not the tally's shorthand 4-13), matching the more precise prose naming row 3's check-changelogs sub-target as a hard assertion
+- [Phase ?]: DNS-outage semver re-run and zero-valued CHANGELOG topic readings are recorded in-row (gate rows 4 and 7), separate from the four-item Findings list the plan's action text names
 
 ### Pending Todos
 
 - `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md` — evaluate RustFS as the dev/test object store; the quay.io MinIO pin from quick task 260913-15w is terminal (no newer community tags will exist).
 
 ### Blockers/Concerns
+
+**Phase 33 close (verified 2026-09-17): no blockers.** 6 plans in 4 waves; verification `passed`; UAT 23/23
+(`33-UAT.md`: 22 coverage-mode automated passes + one human acceptance of corpus audit §11 /
+`33-CI-EVIDENCE.md`); `33-SECURITY.md` `verified`, `threats_open: 0`; `33-VALIDATION.md` `validated`;
+`33-REVIEW.md` 0 critical / 3 advisory warnings, IN-01 fixed in `33-REVIEW-FIX.md`. Carried, pre-existing,
+none introduced here: (a) `cargo doc --workspace --no-deps` at 73 warnings (up 1 from Phase 32's 72, zero in
+files this phase touched) — not a gate per SHIP-04; (b) the 82 % coverage floor is CI-attributed, not locally
+measurable (no Docker) — read from the CI `coverage` job once `feature/phase-33` is pushed; (c) the
+`cargo-semver-checks` 0.50.0 coverage gap for inherent-method return-type changes (`33-05-SUMMARY.md`),
+covered by `MIGRATION.md` §9.2 rows instead. Note for milestone close: the corpus audit §11 tag box is
+deliberately still unticked — the maintainer ticks it by hand at tag time (Phase 29 D-17).
+
+**Phase 32 close (2026-09-16): no blockers.** 5 plans in 4 waves; verification `passed` 5/5
+roadmap truths; UAT 22/22 (`32-UAT.md`: 21 coverage-mode automated passes + one human confirmation
+of the gate evidence); `32-SECURITY.md` `verified`, `threats_open: 0`; `32-VALIDATION.md` and
+`32-REVIEW.md` present. Release gates (`32-05-SUMMARY.md`): `make clean-code`, `make security`,
+mdbook, doctests green; coverage 90.25 % local; workspace tests 6771 passed / 1 pre-existing
+`cli_isolation` failure. Carried, all pre-existing and none introduced here: (a) `RUSTDOCFLAGS="-D
+warnings" cargo doc --workspace --all-features --no-deps` stays RED (14 unresolved intra-doc links in
+`paladin-ai-core`'s graph-fingerprinting and webhook-delivery docs — a subset of the 77 warnings
+Phase 31 measured; accepted at UAT Test 22 as the Phase 31 precedent); (b) the `--all-features`
+`cli_isolation` test conflict; (c) the broken `[HeuristicTokenCounter]` intra-doc link logged by plan
+32-03 in `deferred-items.md`. Note for Phase 33: the api-coverage gate detected one `consume api`
+signal that `COVERAGE.md` overrides as "no external API" — re-check that declaration when RAG
+retrieval gains a production caller.
 
 **Phase 29 close (2026-09-10): no blockers.** 9 plans in 5 waves; verification `passed` 4/4 roadmap
 truths (18/18 plan-level must-haves reproduced); UAT 3/3 human checkpoints passed (`29-UAT.md`,
@@ -835,6 +1030,7 @@ requirement.
 | 260912-whj | Regenerate API surface snapshot so ci.yml API Surface Tracking check passes on feature/v0.10.0-web3sec-dogfooding | 2026-09-12 | 786a3ba5 | [260912-whj-regenerate-api-surface-snapshot-so-ci-ym](./quick/260912-whj-regenerate-api-surface-snapshot-so-ci-ym/) |
 | 260913-15w | Pin MinIO service image to quay.io last known-good release after Docker Hub minio/minio removal | 2026-09-13 | 06765765 | [260913-15w-pin-minio-service-image-to-quay-io-last-](./quick/260913-15w-pin-minio-service-image-to-quay-io-last-/) |
 | 260913-h7l | Replace dl.min.io mc download in ci.yml with checksum-verified pinned GitHub release asset after MinIO retired community downloads | 2026-09-13 | 9d0aa7a0 | [260913-h7l-replace-dl-min-io-mc-download-in-ci-yml-](./quick/260913-h7l-replace-dl-min-io-mc-download-in-ci-yml-/) |
+| 260916-h40 | Regenerate API surface baseline for Phase 32 window exports and add a local pre-push API surface gate | 2026-09-16 | cd185c9b | [260916-h40-regenerate-api-surface-baseline-for-phas](./quick/260916-h40-regenerate-api-surface-baseline-for-phas/) |
 
 ### Roadmap Evolution
 
@@ -846,6 +1042,15 @@ requirement.
 - Phase 21 added: Release Artifacts — Curated Release Notes and Attached Distributables (v0.9.0; ARTIFACT-01..06 minted, twenty-second prefix)
 - Phase 22.1 inserted after Phase 22: Engine readiness defect and MSRV follow-up (readiness defect from 22-16 audit; MSRV 1.85 vs rmcp-pinned process-wrap decision; green postgres-integration run confirmation) (URGENT)
 - Phase ? changed: Phase 22.1 scope grew on 2026-09-03: BUG-04 (resume rebuilds the Frontier from scratch, losing pre-crash edge resolutions) promoted from CONTEXT.md deferred ideas into the phase at the 22.1-05 checkpoint by developer decision; ENG-04 re-opened for the phase; CI evidence to be re-captured on the final head.
+- Phase 30 added: Token-Economy Vocabulary & Commissary Anchoring — vocabulary rule, Commissary ADR + mdBook page, Treasurer reservation ADR, `max_tokens` table, Quartermaster purge, clean-break versioning ADR (VOCAB-01..07 minted, twenty-seventh prefix; docs only; source `.project/Milestone_13-Token-Economy/Epic_1`)
+- Phase 31 added: Lossless Token Accounting — full `TokenUsage` carried port→`RunFinished`→herald, optional cache/reasoning fields, `from_total` removed from the battalion path, streaming parity (ACCT-01..05, twenty-eighth prefix; keystone; clean break under the X-03 supersession)
+- Phase 32 added: Unified Token Primitives — `TokenCounterPort::is_exact`, `Commissary::new` without `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired, one shared window resolver with strict mode (PRIM-01..05, twenty-ninth prefix; clean break)
+- Phase 33 added: Commissary In-Tree Adoption — RAG through `Commissary::dispense` with shed records + marker, integration-tested production caller, Phase 29 release gates re-sealed (COMM-01..04, thirtieth prefix). Milestone 14 Treasurer (`.project/Milestone_14-Treasurer/`) reserved, not roadmapped.
+- Phase 34 added: Documentation Currency Audit — read-only inventory of mdBook / rustdoc / examples gaps against Phases 22-33 (and any v0.9.0 leftovers); scopes Phases 35-36 (2026-09-17, pre-tag release readiness)
+- Phase 35 added: mdBook Currency — close every Phase 34 mdBook gap; `mdbook build` + linkcheck green (2026-09-17)
+- Phase 36 added: Rustdoc Zero-Warning Bar & Examples Currency — `cargo doc` 73→0 warnings so CI "Check documentation" is green, 14 `--all-features` intra-doc links resolved, `examples/` + `doc-examples` current (2026-09-17)
+- Phase 37 added: v0.10.0 Crate Release — re-seal the Phase 29 gates on the final commit, merge to `main`, `release.yml` tags `v0.10.0`, all publishable crates on crates.io at `0.10.0` (2026-09-17)
+- Phase 36.1 inserted after Phase 36: Deferred Items Closure — walk the Phase 31/32/34/35 deferred-items registers, WINDOWS.md #36-37 and the two pending todos; fix, waive with reason, or re-home each; bring WINDOWS.md back into agreement with the registers before Phase 37 tags v0.10.0 (URGENT)
 
 ## Deferred Items
 
@@ -939,14 +1144,13 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Stopped at:** Phase 29 complete — v0.10.0 milestone 9/9 phases, 137/137 plans; ready for `/gsd-complete-milestone v0.10.0`
+**Last session:** 2026-09-18T18:36:29.933Z
+**Stopped at:** Completed 37-05-PLAN.md (acceptance-audit section 12 re-seal, pointer paragraph)
+**Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
 See the milestone-boundary note under Project Reference before planning Phase 12.
-
-Last session: 2026-09-10T16:53:47Z
-Resume file: None
 
 **Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
 THE INGEST IS COMPLETE.**
@@ -1007,6 +1211,12 @@ plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candi
 
 ## Operator Next Steps
 
+- Phase 36 UAT + security closed 2026-09-18 (retroactively, after execution): `36-UAT.md` 59/59 passed (all 13 SUMMARYs coverage-mode, every deliverable automated and the maintainer confirmed the roll-up, `3b38037a`), `36-SECURITY.md` `verified` (`threats_open: 0`, 64/64 — 51 mitigate + 13 accept, L1 grep-depth per ASVS level 1, `b349f331`). ROADMAP/STATE were already transitioned to Phase 36.1 by `/gsd-execute-phase`'s inline transition (`ebc54cdf`) before this UAT session ran — no further transition needed.
+- Next: `/gsd-plan-phase 36.1` (0 plans on disk yet — Deferred Items Closure) to break down the deferred-items registers, the two open `WINDOWS.md` rows, and the two `todos/pending/` items before `/gsd-complete-milestone v0.10.0`.
+- Phase 32 closed 2026-09-16: UAT 22/22 passed (`32-UAT.md`, `edaf690b`), `32-VERIFICATION.md` `passed` (5/5), `32-SECURITY.md` `verified` (`threats_open: 0`), `32-VALIDATION.md` and `32-REVIEW.md` present. The `cargo doc -D warnings` RED gate is carried forward as pre-existing (Phase 31 precedent), not fixed.
+- Next: `/gsd-discuss-phase 33` (no `33-CONTEXT.md` yet) then `/gsd-plan-phase 33` — Commissary In-Tree Adoption (COMM-*, RAG rations via `Commissary::dispense`; re-seal the Phase 29 release gates on the final commit). `/gsd-complete-milestone v0.10.0` stays deferred to after that re-seal.
+- Phase 30 closed 2026-09-14: UAT 10/10 passed (`30-UAT.md`, `19a28185` — nine coverage-mode automated passes + one human confirmation), `30-VERIFICATION.md` `passed` (scoped re-verification `bc275c1c` after a one-field SUMMARY metadata fix), `30-SECURITY.md` `verified` (`threats_open: 0`, 11/11). Three non-threat doc-precision observations (O-30-01..03: `configuration.md` Anthropic row says "required" but `ANTHROPIC_MAX_TOKENS` defaults to 4096; Garrison/RAG owner column says `src/config/` but the structs live in `crates/paladin-memory/src/config/`; `vision.*.max_tokens` is an unlisted fifth surface) recorded in `30-SECURITY.md` for a docs follow-up.
+- Next: `/gsd-discuss-phase 31` (no `31-CONTEXT.md` yet) then `/gsd-plan-phase 31` — Lossless Token Accounting (keystone; breaking under ADR-0051). `/gsd-complete-milestone v0.10.0` stays deferred to after Phase 33's release re-seal (COMM-04).
 - Phase 29 closed 2026-09-10: UAT 3/3 passed (`29-UAT.md`, `640570eb`), `29-VERIFICATION.md` `passed`, `29-SECURITY.md` `verified` (`threats_open: 0`, 37/37). **v0.10.0 milestone: all 9 phases complete.**
 - Next: `/gsd-complete-milestone v0.10.0` — archive the milestone; then `/gsd-ship 29` for the feature-branch PR (the `v0.10.0` tag is cut on the `main` merge commit by `release.yml`, never on this branch).
 - Housekeeping before the PR: tick the seven maintainer sign-off boxes in `.project/v0.10.0/09-program-acceptance-audit.md` if the file should carry them (accepted at UAT but still `- [ ]` on disk), and refresh `29-CI-EVIDENCE.md` with the post-push run identifiers.

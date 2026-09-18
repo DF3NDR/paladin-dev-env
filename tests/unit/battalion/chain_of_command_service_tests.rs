@@ -57,7 +57,7 @@ mod helpers {
 
             Ok(PaladinResult {
                 output: response,
-                token_count: 0,
+                usage: paladin_ports::output::llm_port::TokenUsage::new(0, 0),
                 execution_time_ms: 100,
                 loop_count: 1,
                 stop_reason: paladin_ports::output::paladin_port::StopReason::Completed,

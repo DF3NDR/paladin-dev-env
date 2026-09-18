@@ -56,7 +56,7 @@ impl PaladinPort for LoadTestMockPort {
 
         Ok(PaladinResult {
             output: format!("Processed: {} by {}", input, paladin.node.name),
-            token_count: 100,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(100, 0),
             execution_time_ms: self.latency_ms,
             loop_count: 1,
             stop_reason: StopReason::Completed,

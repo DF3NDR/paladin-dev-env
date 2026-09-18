@@ -576,11 +576,7 @@ mod tests {
                 model: "test-model".to_string(),
                 content: self.response.clone(),
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsage {
-                    prompt_tokens: 10,
-                    completion_tokens: 20,
-                    total_tokens: 30,
-                },
+                usage: TokenUsage::new(10, 20),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,

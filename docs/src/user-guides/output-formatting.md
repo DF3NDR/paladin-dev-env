@@ -165,12 +165,21 @@ println!("Key points: {:?}", json["key_points"]);
 ```
 
 **Output example** (the Herald's own JSON envelope around a Paladin result, per
-`crates/paladin-herald/src/json_herald.rs:119-135` -- `output`/`token_count`/`execution_time_ms`/
-`loop_count`/`stop_reason`, plus a `metadata.timestamp` when `include_metadata` is true):
+`crates/paladin-herald/src/json_herald.rs` -- `output`/`usage`/`execution_time_ms`/
+`loop_count`/`stop_reason`, plus a `metadata.timestamp` when `include_metadata` is true).
+`usage` is the full `TokenUsage` split: a stable six-key object where the three
+cache/reasoning sub-counts are `null` when the provider did not report them (ACCT-04, D-21):
 ```json
 {
   "output": "Highly positive sentiment expressing enthusiasm...",
-  "token_count": 42,
+  "usage": {
+    "prompt_tokens": 30,
+    "completion_tokens": 12,
+    "total_tokens": 42,
+    "cache_read_tokens": null,
+    "cache_write_tokens": null,
+    "reasoning_tokens": null
+  },
   "execution_time_ms": 850,
   "loop_count": 1,
   "stop_reason": "Completed",

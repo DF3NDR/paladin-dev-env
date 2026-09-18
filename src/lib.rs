@@ -192,13 +192,23 @@ pub use paladin_llm::deepseek::{DeepSeekAdapter, DeepSeekConfig};
 pub use paladin_llm::mock::{MockLlmAdapter, MultiStepMockLlmPort};
 
 // Commissary (prompt-budgeting) service types (from paladin-llm crate) -- the
-// v0.10.0-native re-port of the removed Quartermaster/Convoy/apportion capability
-// (D-01/D-02): a fail-loud pre-flight guard plus a bounded, priority-ordered allocator
-// with explicit truncation markers. Not feature-gated -- `services` compiles
-// unconditionally in paladin-llm.
+// v0.10.0-native Commissary prompt-budgeting service (D-01/D-02): a fail-loud
+// verify_fits pre-flight guard plus a bounded, priority-ordered dispense
+// allocator with explicit truncation markers. Not feature-gated -- `services`
+// compiles unconditionally in paladin-llm. See
+// .planning/decisions/0049-commissary-design-and-rename.md for the rename record.
 pub use paladin_llm::services::commissary::{
     Commissary, CommissaryError, CommissaryPlan, Consignment, ConsignmentItem, DispensedItem,
     ShedItem, Stockpile,
+};
+
+// Shared context-window resolution types (from paladin-llm crate) -- the
+// PRIM-04 precedence resolver (D-01/D-02) both Commissary and HistoryTrimmer
+// call through instead of each keeping its own config-table/capability/
+// fallback walk. Facade users see one surface for window resolution.
+pub use paladin_llm::window::{
+    ResolvedWindow, UnknownContextWindow, WindowFallbackPolicy, WindowSource,
+    resolve_context_window,
 };
 
 // Paladin (Agent) Types

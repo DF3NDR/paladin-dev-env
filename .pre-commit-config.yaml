@@ -118,3 +118,39 @@ repos:
         stages: [pre-push]
         pass_filenames: false
         always_run: true
+
+      # This sits at pre-push, not pre-commit, for two reasons: GSD executor
+      # commits bypass commit-stage hooks entirely, and the check costs ~95s,
+      # which is tolerable once per push alongside the build + lib tests above
+      # but not on every commit.
+      - id: check-api-surface
+        name: check public API surface vs baseline
+        entry: ./scripts/check-api-surface.sh .project/current-exports.txt
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        files: ^(src|crates)/.*\.rs$|^Cargo\.toml$
+
+      # Same reasoning as check-api-surface above: GSD executor commits bypass
+      # commit-stage hooks entirely, and the rustdoc zero-warning bar (ADR-0033)
+      # -- two full workspace `cargo doc` builds plus the doctest run -- costs
+      # real time, tolerable once per push but not on every commit.
+      - id: doc-check
+        name: check rustdoc zero-warning bar (ADR-0033) + doctests
+        entry: make doc-check
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        files: ^(src|crates)/.*\.rs$|^Cargo\.toml$
+
+      # Same reasoning as doc-check above: GSD executor commits bypass
+      # commit-stage hooks entirely, and this gate rebuilds the doctest
+      # suite it depends on, so it rides at pre-push once per push rather
+      # than on every commit.
+      - id: check-api-examples
+        name: check public API '# Examples' headings
+        entry: make check-api-examples
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        files: ^(src|crates)/.*\.rs$|^Cargo\.toml$

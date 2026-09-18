@@ -61,14 +61,49 @@ paladin agent run -c my-agent.yaml -i "Hello, Paladin!"
 
 ## Installation
 
+The `paladin-cli` binary carries `required-features = ["cli"]` and is not produced by a default
+`cargo build`; the `cli` feature must be passed explicitly.
+
 ```bash
 # Build from source
-cargo build --release --bin paladin-cli
+cargo build --release --features cli --bin paladin-cli
 
 # Binary will be at: target/release/paladin-cli
 
 # Add to PATH (optional)
 sudo ln -s $(pwd)/target/release/paladin-cli /usr/local/bin/paladin
+```
+
+### Command Overview
+
+The top-level `--help` output lists every subcommand and the two global flags:
+
+```text
+$ paladin-cli --help
+Paladin Multi-Agent Orchestration CLI
+
+Usage: paladin-cli [OPTIONS] <COMMAND>
+
+Commands:
+  agent        Paladin agent operations (create, run)
+  battalion    Battalion multi-agent operations (create, run)
+  arsenal      Arsenal tool management (list, test)
+  maneuver     Maneuver flow DSL operations (visualize, validate, execute)
+  onboarding   Interactive onboarding wizard for initial setup
+  setup-check  Check environment setup and configuration
+  features     Discover available features and commands
+  muster       Generate battalion configuration from task description
+  eval         Evaluation harness operations (run scripted scenarios)
+  graph        Graph document operations (export to Mermaid/DOT)
+  run          Run/thread execution overlay operations (export to Mermaid)
+  council      Run a council discussion
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+      --quiet    Enable quiet mode (minimal output)
+      --verbose  Enable verbose mode (detailed output)
+  -h, --help     Print help
+  -V, --version  Print version
 ```
 
 ## Environment Setup
@@ -157,7 +192,7 @@ paladin setup-check [OPTIONS]
 ```
 
 **Options:**
-- `-v, --verbose` - Show detailed version strings and response times
+- `--verbose` - Show detailed version strings and response times
 - `--quiet` - Minimal output, only show failures
 
 **What it checks:**
@@ -189,7 +224,7 @@ paladin setup-check --quiet
 
 System:
   ✓ Paladin CLI: v0.1.0
-  ✓ Rust Toolchain: 1.75.0
+  ✓ Rust Toolchain: 1.88.0
 
 Environment:
   ✓ .env file: Found
@@ -228,9 +263,9 @@ paladin features [OPTIONS]
 ```
 
 **Options:**
-- `-c, --category <CATEGORY>` - Filter by category
+- `--category <CATEGORY>` - Filter by category
   - Valid values: `agent`, `battalion`, `orchestration`, `memory`, `utilities`
-- `-f, --format <FORMAT>` - Output format (default: table)
+- `--format <FORMAT>` - Output format (default: table)
   - Valid values: `table`, `json`
 
 **Examples:**
@@ -389,25 +424,25 @@ Execute a Battalion from a configuration file.
 
 **Syntax:**
 ```bash
-paladin battalion run -c <config> [-i <input>] [-o <output>] [-v]
+paladin battalion run -c <config> -t <type> [-o <output>] [-v]
 ```
 
 **Options:**
 - `-c, --config <PATH>` - Configuration file path (required)
-- `-i, --input <TEXT>` - Input text (optional, prompts if omitted)
+- `-t, --type <TYPE>` - Battalion type; must match the type in the config file (required)
 - `-o, --output <PATH>` - Save JSON output to file (optional)
 - `-v, --verbose` - Show detailed execution logs (optional)
 
 **Examples:**
 ```bash
 # Run formation
-paladin battalion run -c formation.yaml -i "Process this text"
+paladin battalion run -c formation.yaml -t formation
 
 # Run phalanx with verbose output
-paladin battalion run -c phalanx.yaml -i "Analyze this" --verbose
+paladin battalion run -c phalanx.yaml -t phalanx --verbose
 
 # Run campaign and save results
-paladin battalion run -c campaign.yaml -i "Input" -o results.json
+paladin battalion run -c campaign.yaml -t campaign -o results.json
 ```
 
 ---
@@ -422,11 +457,11 @@ paladin muster [OPTIONS]
 ```
 
 **Options:**
-- `-t, --task <DESCRIPTION>` - Task description (prompts if omitted)
+- `--task <DESCRIPTION>` - Task description (prompts if omitted)
 - `-o, --output <PATH>` - Output file path (default: muster_<name>_<timestamp>.yaml)
-- `-p, --provider <PROVIDER>` - LLM provider for analysis (default: openai)
+- `--provider <PROVIDER>` - LLM provider for analysis (default: openai)
   - Valid values: `openai`, `deepseek`, `anthropic`
-- `-m, --model <MODEL>` - Specific model to use (optional)
+- `--model <MODEL>` - Specific model to use (optional)
 - `--no-review` - Skip interactive review (non-interactive mode)
 - `--execute` - Run the generated battalion immediately (experimental)
 
@@ -453,7 +488,7 @@ paladin muster --task "Code review workflow" -o code-review.yaml
 paladin muster --task "Data pipeline" --no-review -o pipeline.yaml
 
 # Use specific provider and model
-paladin muster --task "Research summary" -p anthropic -m claude-3-opus
+paladin muster --task "Research summary" --provider anthropic --model claude-3-opus
 ```
 
 **Task Examples:**
@@ -493,12 +528,12 @@ paladin council [OPTIONS]
 
 **Options:**
 - `--topic <TOPIC>` - Discussion topic (prompts if omitted)
-- `-p, --participants <COUNT>` - Number of participants (default: 3, min: 2, max: 10)
+- `--participants <COUNT>` - Number of participants (default: 3, min: 2, max: 10)
 - `--roles <ROLES>` - Custom roles (comma-separated, overrides default assignment)
 - `--max-rounds <COUNT>` - Maximum discussion rounds (default: 5)
 - `--save <PATH>` - Save transcript to file (markdown format)
-- `-m, --model <MODEL>` - LLM model to use (optional)
-- `-t, --temperature <TEMP>` - LLM temperature (optional)
+- `--model <MODEL>` - LLM model to use (optional)
+- `--temperature <TEMP>` - LLM temperature (optional)
 
 **Default Role Assignment:**
 - 2 participants: Advocate, Critic
@@ -881,7 +916,7 @@ paladin battalion new -n Analysis -t formation -o analysis.yaml
 # 2. Edit to add analyzer → summarizer → validator stages
 
 # 3. Run
-paladin battalion run -c analysis.yaml -i "$(cat document.txt)"
+paladin battalion run -c analysis.yaml -t formation
 ```
 
 ### Example 3: Agent with Web Search

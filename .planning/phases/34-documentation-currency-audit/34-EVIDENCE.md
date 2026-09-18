@@ -1,0 +1,436 @@
+# Phase 34 Documentation Currency Audit — Evidence Record (plan 34-01)
+
+**Phase:** 34-documentation-currency-audit
+**Branch:** `feature/phase-33`
+**HEAD SHA at sweep time:** `ee1fb160f8e743e638b32beb6c4e32be4ede9325` — the Phase 34 start SHA
+(D-23), recorded before this plan's first commit; every commit in this phase touches only
+`.planning/`, so the source tree every row measures stays identical across every Phase 34 SHA.
+**Written:** 2026-09-17
+
+This record follows the `33-CI-EVIDENCE.md` shape: a numbered table of exact command → result →
+verdict, verbatim captures referenced by number below. Its verdict column distinguishes a gate
+this phase enforces from a baseline it merely carries — per D-00c, this phase's fix set is empty
+by construction, so almost every row here is a **CARRIED** measurement, not a gate this plan
+itself passes or fails (the one exception is the SC5 read-only proof, rows 10-11, which this
+plan's own commits must satisfy).
+
+**Toolchain block (repeated from `34-AUDIT.md`'s Measurement Header for this record's
+self-containment):**
+
+```
+$ cargo --version
+cargo 1.97.1 (c980f4866 2026-06-30)
+$ rustc --version
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+$ mdbook --version
+mdbook v0.4.40
+$ mdbook-linkcheck --version
+mdbook-linkcheck 0.7.7
+$ mdbook-mermaid --version
+mdbook-mermaid 0.13.0
+```
+
+## Numbered command → result → verdict table
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 1 | `git rev-parse HEAD` | `ee1fb160f8e743e638b32beb6c4e32be4ede9325` | ✅ RECORDED — D-23 measured SHA |
+| 2 | `cargo --version && rustc --version` (compared against `rust-toolchain.toml` `channel = "1.97.1"`) | `cargo 1.97.1 (c980f4866 2026-06-30)` / `rustc 1.97.1 (8bab26f4f 2026-07-14)` | ✅ PASS — matches pin exactly, no drift (D-12 closed per RESEARCH.md Finding F-12) |
+| 3 | `mdbook --version && mdbook-linkcheck --version && mdbook-mermaid --version` (compared against `docs.yml:46,50,54`) | `mdbook v0.4.40` / `mdbook-linkcheck 0.7.7` / `mdbook-mermaid 0.13.0` | ✅ PASS — all three match `docs.yml` pins exactly |
+| 4 | `find docs/src -name '*.md' \| sort \| wc -l` | `93` | ✅ RECORDED — D-05 scope; live-counted, not copied from CONTEXT.md/RESEARCH.md |
+| 5 | `bash 34-signals.sh docs/src/introduction.md` (method self-test — a `pending` page) | Nine labelled class blocks printed, classes 1/2/4/5/6/7/8 = `none`, class 3 = 5 `paladin-*` hits, class 9 = `SKIPPED — 34-shipped-tokens.txt not yet written by plan 34-02`; exit 0 | ✅ PASS — script runs against an arbitrary page and degrades class 9 correctly |
+| 6 | `bash 34-signals.sh docs/src/appendix/doc-coverage-report.md` (the MB-01 worked-row input) | Nine labelled class blocks printed, class 3 = 9 `paladin-*` hits (`paladin-core`, `paladin-ports`, `paladin-battalion`, `paladin-llm`, `paladin-memory`, `paladin-web`, `paladin-notifications`, `paladin-content`, `paladin-storage`); classes 1/2/4/5/6/7/8 = `none`; class 9 = SKIPPED; exit 0 | ✅ PASS — feeds the §2 MB-01 row's Findings cell |
+| 7 | `cargo doc --workspace --no-deps 2>&1 \| tee 34-evidence/34-01-cargo-doc-default.txt` (the exact `ci.yml:63` "Check documentation" command, D-12) | **73** `warning:` lines (`grep -c '^warning:' 34-evidence/34-01-cargo-doc-default.txt`); includes the `HeuristicTokenCounter` unresolved-link warning at line 9 of the capture (no `-->` span — see row 9); exit 0, 32.8s wall time | ⚠️ CARRIED, pre-existing, **not a gate this plan enforces** — feeds the §2 MB-01 row and the §3 note connecting it to RD-01; matches the 73-count baseline `33-CI-EVIDENCE.md` row 26 and 34-RESEARCH.md already recorded — no drift since Phase 33 close |
+| 8 | `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-memory --all-features --no-deps 2>&1 \| tee 34-evidence/34-01-rustdoc-memory.txt` (D-12/D-14, per-crate sweep, `paladin-memory` only) | `error: unresolved link to \`HeuristicTokenCounter\`` (no `-->` span); `error: could not document \`paladin-memory\`` — exit 101, 1 content error | ⚠️ CARRIED, pre-existing, **not a gate this plan enforces** — feeds §3 RD-01 |
+| 9 | `grep -n "HeuristicTokenCounter" crates/paladin-memory/src/token_counter/mod.rs` (P-01 grep-recovery method — no `-->` span exists for a `//!`-comment link) | `3://! [\`HeuristicTokenCounter\`] is the phase-wide default: a synchronous,` | ✅ PASS — reproduces `crates/paladin-memory/src/token_counter/mod.rs:3`, matching `.planning/WINDOWS.md` row 37 exactly; validates the P-01 method plans 34-06/34-07 depend on |
+| 10 | `grep -n 'Rust 1.70' examples/README.md` and `grep -A1 '\[workspace.package\]' Cargo.toml \| grep rust-version` (D-17, the EX-01 worked row) | `examples/README.md:24: - Rust 1.70 or later` vs `Cargo.toml:18: rust-version = "1.88"` | ✅ PASS — reproduces the known MSRV mismatch (Pitfall P-04); feeds §4 EX-01 |
+| 11 | `git status --porcelain -- . ':!.planning'` (SC5 proof, D-22, run before this plan's every commit) | (empty) | ✅ PASS — no file outside `.planning/` is modified, created or deleted |
+| 12 | `git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- . ':!.planning'` (SC5 proof, D-22 — base is the Phase 34 start SHA, not `main`; see `34-check.sh`'s deviation comment for why `git merge-base HEAD main` as literally specified in the plan text would always be non-empty on this branch, 196 files, since `main` is merged only through Phase 26) | (empty) | ✅ PASS — no non-`.planning` diff has accumulated since Phase 34 began |
+| 13 | `bash 34-check.sh --seed` | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS — the mechanical completeness/read-only gate is green |
+
+| 14 | `awk '/^## \[0\.10\.0\]/,/^## \[0\.9\.0\]/' CHANGELOG.md \| wc -l` (D-08 precedence source 2, the primary readable source) | `427` | ✅ RECORDED — every entry in this 427-line, 6-headed-subsection block was read end-to-end and turned into a §1 row or subsumed by one |
+| 15 | `grep -n '^## 9\.' MIGRATION.md` (D-08 precedence source 3, locating §9.1-§9.8) | Eight headings at lines 14, 162, 287, 311, 336, 418, 671, 677 | ✅ RECORDED — every subsection read in full per the plan's `read_first` list |
+| 16 | `grep -nE '^\- \[x\] \*\*(ENG\|CF\|HITL\|FT\|RT\|PLAT\|OBS\|SHIP\|VOCAB\|ACCT\|PRIM\|COMM)-[0-9]+' .planning/REQUIREMENTS.md` (D-08 precedence source 4, the capability axis) | 47 requirement bullets across the twelve v0.10.0 prefixes | ✅ RECORDED — read for the capability axis; every ID cited in a §1 row's Req ID cell traces to one of these bullets |
+| 17 | `git diff v0.9.0..HEAD -- .project/current-exports.txt \| grep -c '^+'` minus the `+++` header line | `4376` | ✅ RECORDED — matches CONTEXT.md's own figure exactly; confirms the diff was measured, not copied |
+| 18 | Eighteen-plus identifier-token cross-check: `for t in WarEngine PaladinError ExecutionMiddleware GarrisonEntry PaladinResult StructuredExecutorPort TokenCounterPort StopReason TokenUsage Commissary ShedItem VaultPort RagRetrievalResult resolve_context_window WindowSource BattalionError Aegis FallbackLlmAdapter StreamingResponse ChunkMetadata LlmError NodeError; do grep -cF "$t" <diff>; done` (D-08's own fifteen-token-minimum cross-check) | 16 of 22 tokens present (1-171 hits each); 6 (`Aegis`, `FallbackLlmAdapter`, `StreamingResponse`, `ChunkMetadata`, `LlmError`, `NodeError`) show 0 hits | ✅ PASS — every 0-hit token traced to `.project/current-exports.txt`'s own documented `paladin::`-facade-only scope (`grep -c '^pub paladin::' .project/current-exports.txt` = 1095 of 7924 lines, confirmed by header read), never a D-00g tree/document disagreement; recorded verbatim in `34-AUDIT.md`'s exports-diff cross-check note |
+| 19 | `grep -n 'Commissary' .github/copilot-instructions.md`; `grep -n 'Commissary' .planning/PROJECT.md`; `grep -n 'Commissary' docs/src/architecture/domain-model.md` (D-10 confirmation, line-anchored) | Line 36 (naming table); line 1324 (ubiquitous-language bullet); line 30 (domain-model table) | ✅ PASS — confirms the three D-10-named lists by direct content match |
+| 20 | `grep -rlni 'medieval military' docs/src/` (D-10 fourth-list search) | `docs/src/introduction.md` (plus mentions in `commissary.md`/`overview.md`/`development-setup.md`/`contributing-legacy.md` that point at the three named lists, not independent tables) | ✅ RECORDED — `introduction.md` lines 78-91 carry a genuine fourth, 12-term partial list (no `Commissary`); recorded in `34-AUDIT.md`, not judged for currency here (§2 sweep scope) |
+| 21 | `bash 34-signals.sh docs/src/architecture/commissary.md` (post-token-file write, method self-test re-run) | Class 9 now prints real `grep -nFf` hits (`# Commissary`, the `Commissary` definition line), no `SKIPPED` marker; exit 0 | ✅ PASS — confirms `34-shipped-tokens.txt`'s leading `#`-prefixed comment line is correctly ignored by `grep -nFf` (it never matches page content) and class 9's degrade path has closed as D-07 requires |
+| 22 | `grep -c '^\| SS-[0-9]' 34-AUDIT.md`; `grep -vc '^#' 34-shipped-tokens.txt`; `grep -oE 'SS-[0-9]+' 34-AUDIT.md \| sort \| uniq -d`; `grep -c '^#### Phase ' 34-AUDIT.md` | `91`; `91`; (empty — no duplicates); `13` | ✅ PASS — row count matches token-line count exactly, every `SS-nn` is unique, all 13 phase tables present |
+| 23 | `for t in WarEngine Commissary resolve_context_window WindowSource RagRetrievalResult TokenUsage; do grep -qxF "$t" 34-shipped-tokens.txt \|\| echo MISSING $t; done` (Rule 1 deviation — see 34-02-SUMMARY.md; the plan's own literal `grep -q "\| $t \|"` command cannot match a no-markup token file) | (empty — no `MISSING` lines) | ✅ PASS — all six required tokens present as exact lines |
+| 24 | `bash 34-check.sh --seed` (post-§1-write re-run) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS — completeness/read-only gate still green after this plan's edits |
+| 25 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this plan's commit) | (empty) | ✅ PASS — no file outside `.planning/` modified, created or deleted |
+
+## Plan 34-03, Task 1 — build baseline, orphan check, vocabulary sweep, object-store sweep
+
+**HEAD SHA at sweep time:** `7ed822b13fbf1ffbfcf7ef6c5f682d7e9f589cde` — Phase 34 has advanced since
+plan 34-01's SHA (`ee1fb160f8e743e638b32beb6c4e32be4ede9325`) through the intervening plan 34-01/
+34-02 commits, all `.planning/`-only per D-23's invariance argument; the source tree these rows
+measure is unchanged from the recorded Phase 34 start SHA.
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 26 | `mdbook --version && mdbook-linkcheck --version && mdbook-mermaid --version` (D-11 precondition) | `mdbook v0.4.40` / `mdbook-linkcheck 0.7.7` / `mdbook-mermaid 0.13.0` | ✅ PASS — all three match `docs.yml` pins exactly |
+| 27 | `mdbook-mermaid install docs/` then `git status --porcelain -- docs` (D-22, T-34-01) | (empty) | ✅ PASS — mermaid install did not mutate `docs/`; no `git checkout -- docs/` restoration needed |
+| 28 | `mdbook build docs/` (linkcheck backend active, `warning-policy = "error"`) teed to `34-evidence/34-03-mdbook-build.txt` | exit 0, 3s wall time; `Found 1006 links (0 incomplete links)`; `No broken links found` | ⚠️ CARRIED baseline (not a gate this plan enforces) — green this run; 515 fragment-resolution WARN lines are a documented mdbook-linkcheck limitation, not failures |
+| 29 | `bash scripts/check-doc-examples.sh` teed to the same evidence file | exit 0; Layer 1 "All included examples compile"; Layer 1b "README Quick Example is in sync"; Layer 2 "0 checked, 616 skipped, 0 failed" | ✅ PASS |
+| 30 | `bash scripts/check-doc-config.sh` teed to the same evidence file | exit 0; "154 YAML block(s) checked, 0 failed" | ✅ PASS |
+| 31 | Orphan check: extract `docs/src/SUMMARY.md` link targets, `comm -23` against `find docs/src -name '*.md' \| sort` | on-disk 93, nav-reachable 93 (incl. `SUMMARY.md` itself), `comm -23` output empty | ✅ PASS — zero orphans, confirms 34-RESEARCH.md's claim by direct measurement (D-00b) |
+| 32 | `grep -rniE '\bQuartermaster\b' docs/src` (D-10) | 1 hit: `docs/src/architecture/commissary.md:7` (ADR-0049 rename-rationale pointer sentence) | ⚠️ RECORDED — literal match per D-10's must-be-empty grep; classified stale content, MB-02 minted; Phase 35 decides if the ADR-pointer sentence is an intentional exception (D-00c) |
+| 33 | Phase 31 D-29 `token_count`/`TokenUsage` re-check, 10 pages: `grep -n 'token_count' <page>` and `grep -n 'TokenUsage' <page>` per page | 8/10 pages clean (TokenUsage present, no bare token_count); `domain-model.md` offending (bare `token_count: usize` at line 102, no adjacent split); `memory-management.md` clean (18 `GarrisonEntry.token_count: Option<u32>` hits, a page-confirmed separate concern from the ACCT carriers, type matches live code) | ⚠️ RECORDED — MB-03 minted for `domain-model.md`'s stale `GarrisonEntry` snippet (type mismatch + 3 missing fields incl. Phase 26 `is_summary`); `memory-management.md` recorded clean with its disposition note |
+| 34 | Live `GarrisonEntry` struct read: `sed -n '55,76p' crates/paladin-core/src/platform/container/garrison.rs` (proves MB-03's live-vs-doc diff) | 7 fields: `id: Uuid`, `role: ConversationRole`, `content: String`, `timestamp: DateTime<Utc>`, `metadata: HashMap<String, Value>`, `token_count: Option<u32>`, `is_summary: bool`; `#[non_exhaustive]` | ✅ RECORDED — feeds MB-03's Note cell |
+| 35 | `grep -rniE 'minio\|dl\.min\.io\|quay\.io' docs/src examples` (Folded Todos, MinIO slice) | 247 hits across 27 files, full list in `34-evidence/34-03-mdbook-build.txt` | ⚠️ RECORDED — every image-pin occurrence already `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772` (9 occurrences, 6 files); zero hits name a retired Docker Hub image or `dl.min.io` |
+| 36 | `grep -rniE 'dl\.min\.io' docs/src examples`; `grep -rniE '(^\|[^./])minio/minio' docs/src examples \| grep -v 'quay.io/minio/minio'` | both empty | ✅ PASS — confirms zero MB-nn items from the object-store slice; RustFS evaluation stays a pending todo, unchanged |
+| 37 | `bash 34-check.sh --seed` (post-Task-1 re-run) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS — completeness/read-only gate still green |
+| 38 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS — no file outside `.planning/` modified, created or deleted |
+
+## Plan 34-03, Task 2 — 18 page verdicts (root, getting-started, architecture, api-reference)
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 39 | `bash 34-signals.sh` over all 18 target pages (SUMMARY.md, introduction.md, 3 getting-started, 6 architecture, 7 api-reference) | nine labelled class blocks per page; class 9 non-`SKIPPED` for every page (token file present since plan 34-02) | ✅ RECORDED — headline per-page results feed each row's Findings cell above |
+| 40 | Live-code cross-checks: `sed -n '344,349p' crates/paladin-llm/src/services/commissary.rs` (Commissary::new arity); `grep -n 'pub struct GarrisonEntry' -A20 crates/paladin-core/.../garrison.rs`; `grep -n 'pub trait LlmPort' -A20 crates/paladin-ports/src/output/llm_port.rs`; `sed -n '340,393p' src/application/services/paladin/paladin_execution_service.rs` (PaladinExecutionService::new arity) | `Commissary::new` 4-arg, no `is_exact_counter` (matches `commissary.md`); `GarrisonEntry` 7 fields incl. `is_summary` (contradicts `domain-model.md`'s 4-field `usize` snippet); `LlmPort::generate(request: LlmRequest)` single-arg (contradicts `hexagonal-design.md`'s 2-arg sample); `PaladinExecutionService::new(llm_port, circuit_breaker, garrison, arsenal)` (contradicts `design-patterns.md`'s `herald` 4th param, matches `quickstart.md`'s call site) | ⚠️ RECORDED — four confirmed live-vs-doc mismatches, one confirmed match |
+| 41 | `ls crates/` (D-03 crate-graph check, both `crate-map.md` pages) | 11 library crates + `doc-examples`: `paladin-battalion`, `paladin-content`, `paladin-core`, `paladin-eval`, `paladin-herald`, `paladin-llm`, `paladin-memory`, `paladin-notifications`, `paladin-ports`, `paladin-storage`, `paladin-web` | ⚠️ RECORDED — both `crate-map.md` pages (architecture and api-reference) claim "nine" crates and omit `paladin-eval`/`paladin-herald`; the Phase 33 `mem --> llm` edge (COMM-01) is absent from both mermaid diagrams |
+| 42 | D-09 row-for-row: `grep -c '^\| M-B-' MIGRATION.md`; `sed -n '/^## 9\.8/,$p' MIGRATION.md \| grep -cE '^[0-9]+\.'` | 4 §9.1 rows; 7 §9.8 steps | ✅ RECORDED — entry counts for the D-09 subsection in `34-AUDIT.md` |
+| 43 | D-09 comparison: `sed -n '/^## 9\.1/,/^## 9\.2/p'` and `/^## 9\.8/,$p' MIGRATION.md` read in full against `upgrading.md`'s table (lines 19-24) and checklist (lines 26-63) | 4/4 and 7/7 entries carried, 0 contradicted, 0 omitted | ✅ PASS — `upgrading.md` settled `current`; no `MB-nn` from this comparison |
+| 44 | Feature-flag currency: `grep -n '^\[features\]' -A60 Cargo.toml`; `grep -n '^\[features\]' -A15 crates/paladin-llm/Cargo.toml` compared against `api-reference/crate-map.md`, `architecture/crate-map.md`, `api-reference/feature-flags.md`, `getting-started/installation.md` | live root `[features]` has 20+ flags (`otel`, `dev-ui`, `redis-cache`, `storage-postgres`, `llm-kimi/qwen/grok/ollama/gemini/openai-compatible` among them); each of the four pages above is missing a distinct subset | ⚠️ RECORDED — feeds MB-06, MB-13, MB-14, MB-15 |
+| 45 | MSRV/version currency: `grep -n 'rust-version' Cargo.toml rust-toolchain.toml`; `grep -n '^version = ' Cargo.toml` | `rust-version = "1.88"`; `version = "0.10.0"` | ⚠️ RECORDED — contradicts `installation.md` (1.85.0 / 0.5.0), `stable-api.md`/`crate-map.md` (both pages, 0.5.0), `feature-flags.md` (0.5/0.8), `quickstart.md` (0.7.0), `migration-guide.md`'s framing line |
+| 46 | `bash 34-check.sh --seed` (post-Task-2 re-run, after fixing 6 duplicate-ID false positives from repeated MB-nn mentions in prose — same class of Rule 1 deviation 34-01/34-02 already hit) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+| 47 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+
+## Plan 34-04, Task 1 — 20 user-guides page verdicts + superstep-engine decision
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 48 | `bash 34-signals.sh` over all 20 `docs/src/user-guides/*.md` pages (teed to scratchpad, per-page class 1-9 blocks) | nine labelled class blocks per page; class 9 non-`SKIPPED` for every page | ✅ RECORDED — headline per-page results feed each row's Findings cell above |
+| 49 | Superstep-engine token sweep: `grep -c 'superstep' docs/src/user-guides/*.md`; `grep -c 'WarEngine' ...`; `grep -c 'Battlefield' ...`; `grep -c 'Waypoint' ...`; `grep -n 'max_supersteps' ...`; `grep -c 'Vanguard' ...` (D-06 missing-page decision) | `superstep`: 36 hits/6 pages; `WarEngine`: 19 hits/5 pages; `Battlefield`: 23 hits/5 pages; `Waypoint`: 45 hits/5 pages; `max_supersteps`: 2 hits (1 each on `control-flow.md` line 29, `fault-tolerance.md` line 399); `Vanguard`: 1 hit (`fault-tolerance.md` line 228, an unrelated compensation-routing table cell) | ⚠️ RECORDED — every hit inspected and confirmed a passing mention inside a page about a different capability, never the engine's own mechanics as primary subject; feeds the missing-page verdict, row 94, MB-30 |
+| 50 | `grep -n 'full engine guide is future documentation' docs/src/user-guides/control-flow.md`; `sed -n '525,535p' .planning/phases/23-control-flow-dynamic-routing-fan-out-subgraphs/23-CONTEXT.md` | `control-flow.md:29-30` quotes the deferral verbatim; `23-CONTEXT.md:529-531` confirms "No mdBook page for the WarEngine exists... a Phase 22 residual... belongs to a docs pass or SHIP-01 (Phase 29)" | ✅ PASS — the in-tree deferral admission and its origin, reproduced verbatim in the superstep-engine decision subsection |
+| 51 | `grep -n 'Since:' docs/src/user-guides/*.md docs/src/operations/*.md` (D-06 Since-marker re-check, the 5 pages CONTEXT.md names) | 3 of the 5 named pages fall in this plan's scope: `eval-harness.md:3`, `graph-visualization.md:3`, `operations/observability.md:3`, all `**Since:** v0.10.0 (Phase 28, PRD 07)` | ✅ PASS — all 3 markers' claims checked against the tree and confirmed accurate (rows 80, 83; `observability.md` settled in Task 2) |
+| 52 | Live-code cross-checks: `crates/paladin-core/src/platform/container/directive.rs:40-88` (`NextStep::Parley` rustdoc); `crates/paladin-battalion/src/engine/mod.rs:662-668` (`ParleyNotSupported` "Superseded" doc comment); `crates/paladin-core/src/platform/container/waypoint.rs:389` (`GRAPH_FINGERPRINT_VERSION = "v6"`); `git log -S GRAPH_FINGERPRINT_VERSION` (v6 bump commit) | `Parley` fully implemented since Phase 24 HITL-01, `ParleyNotSupported` explicitly "no longer reachable"; fingerprint is `v6` (Phase 26 D-29), bumped by commit `d17a505f` | ⚠️ RECORDED — feeds MB-22 (`control-flow.md`'s stale Parley description) and MB-23 (`fault-tolerance.md`'s stale `v5` claim) |
+| 53 | Live-code cross-checks: `crates/paladin-core/src/platform/container/arsenal/core.rs:36-93` (`ArmamentCall`/`ArmamentResult` field lists); `src/application/services/paladin/paladin_builder.rs:859` (`with_handoffs` arity); `crates/paladin-memory/src/garrison/in_memory_garrison.rs:79` (`InMemoryGarrison::new` arity); `crates/paladin-core/src/platform/container/herald.rs:49-153` (`Herald` trait, 7 methods); `crates/paladin-memory/src/services/rag_retrieval_service.rs:179` (`RagRetrievalService` naming) | `ArmamentResult` is a 5-field, non-`#[non_exhaustive]` struct (`call_id`, `success`, `output`, `error`, `execution_time_ms`); `with_handoffs(Vec<Arc<Paladin>>)` not `with_specialist(Arc<Paladin>)`; `InMemoryGarrison::new(config: GarrisonConfig)` takes 1 required arg; `Herald` has 7 methods not 3; struct is `RagRetrievalService` (camelCase Rag) not `RAGRetrievalService` | ⚠️ RECORDED — feeds MB-19 (`arsenal-tools.md`), MB-24 (`herald-output.md`), MB-27 (`paladin-agents.md`), MB-28 (`sanctum-vector-memory.md`) |
+| 54 | `src/application/services/paladin/paladin_execution_service.rs:1933-1995` (`format_retrieved_context`/`rag_omission_marker` read) | `PaladinExecutionService::format_retrieved_context(&self, results: &RagRetrievalResult)` appends `rag_omission_marker` when memories are shed for budget reasons | ⚠️ RECORDED — confirms the Phase 33 RAG truncation-marker behavior `sanctum-vector-memory.md` never documents (MB-28) |
+| 55 | `git log -1 --format='%H %ad %s' --date=short -S 'with_handoffs' -- src/application/services/paladin/paladin_builder.rs`; `git log -1 ... -S 'fn finalize_stream' -- crates/paladin-core/src/platform/container/herald.rs` | `with_handoffs` introduced 2026-05-30 (`ae3cd8d5`, "epic-21"); `finalize_stream` introduced 2026-05-13 (`b83325b7`, pre-`paladin-core` extraction) | ✅ PASS — confirms both mismatches predate v0.10.0 (D-00g), no Phase 22-33 REQ-ID applies to either |
+| 56 | Version-pin sweep: `grep -nE 'v?[0-9]+\.[0-9]+\.[0-9]+'` over all 20 pages, cross-checked against `grep -n '^version = ' Cargo.toml` (`0.10.0`) | 8 pages carry a stale pin: `agent-orchestrator-bridge.md` (v0.5.0), `battalion-patterns.md`/`paladin-agents.md` (0.5.0), `content-processing.md` (v0.5.0 ×2), `maneuver-flow-dsl.md` (0.8.0 ×2), `orchestration.md` (v0.8.0); 12 pages carry no version pin at all | ⚠️ RECORDED — feeds MB-18, MB-20, MB-21, MB-25, MB-26, MB-27's version-pin findings |
+| 57 | Phase 32 deleted-type re-check on the three memory pages: `grep -n 'TokenCounter\b\|TokenCounterFactory\|garrison::TokenCounter' docs/src/user-guides/{garrison-memory,memory-management,sanctum-vector-memory}.md` | zero hits on all three (each page's only `TokenCounter*` references, where present, name the live `TokenCounterPort`/`TiktokenCounter`/`HeuristicTokenCounter`, never the deleted trait/factory) | ✅ PASS — explicit deleted-type disposition recorded on all three rows (82, 86, 92) per the plan's acceptance criterion |
+| 58 | `bash 34-check.sh --seed` (post-Task-1 re-run, after fixing 6 duplicate-ID false positives from cross-referencing sibling rows' MB-nn IDs in prose — same class of Rule 1 deviation 34-01/34-02/34-03 already hit) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+| 59 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+
+## Plan 34-04, Task 2 — 20 deployment/operations/contributing page verdicts + coverage comparison
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 60 | `bash 34-signals.sh` over all 20 target pages | nine labelled class blocks per page; class 9 non-`SKIPPED` for every page | ✅ RECORDED — headline per-page results feed each row's Findings cell above |
+| 61 | `ls .github/workflows/` vs `docs/src/deployment/cicd.md`'s "Workflow Structure" file listing | live: `benchmarks.yml`, `ci.yml`, `codeql.yml`, `docs.yml`, `feature-flags.yml`, `pre-commit.yml`, `release.yml` (7 files); page lists 6, omitting `codeql.yml` | ⚠️ RECORDED — feeds MB-31, first finding |
+| 62 | `grep -n '^  [a-z][a-z_-]*:$' .github/workflows/ci.yml` (real job enumeration) vs `cicd.md`'s "CI Pipeline" YAML sample | live: ~26 jobs (`lint`, `actionlint`, `security-audit`, `cargo-deny`, `osv-scanner`, `api-surface`, `msrv`, `semver`, `test`, `examples`, `crate-isolation`, `integration-tests`, `docker-integration`, `ollama-integration`, `postgres-integration`, `redis-cache-integration`, `redis-queue`, `sdk-clients`, `coverage`, `cli-tests`, `bench-check`, `docker`, `kubernetes-smoke`, `benchmark-regression-signal`, `publish-dry-run`, plus 2 unnamed matrix jobs); page's sample shows only 3 (`lint`, `test`, `coverage`), no `--fail-under-lines` shown | ⚠️ RECORDED — feeds MB-31, second finding |
+| 63 | `grep -n '^  [a-z][a-z_-]*:$' .github/workflows/release.yml` vs `cicd.md`'s "Release Pipeline" YAML sample | live: `verify-tag-source`, `test`, `create-release`, `build-docker`, `build-binaries`, `check-release-consistency`, `sbom`, `finalize-release-body`, `publish-crates`; page's sample shows `build-release`/`create-release`, no `build-release` job exists, `verify-tag-source` never mentioned | ⚠️ RECORDED — feeds MB-31, third finding |
+| 64 | `sed -n '1604,1650p' .github/workflows/ci.yml` (real `docker` job body) vs `docker.md`'s claim | `push: false`, `platforms: linux/amd64,linux/arm64` — matches exactly | ✅ PASS — `docker.md` settled `current` |
+| 65 | `ls k8s/` and `ls k8s/server/` vs `kubernetes.md`'s "Scope note" manifest listing | live: `namespace.yaml`, `deployment.yaml`, `service.yaml`, `configmap.yaml`, `secret.yaml.example`, `redis.yaml`, `minio.yaml`, `server/` (with `worker-deployment.yaml` inside) — matches page's listing exactly | ✅ PASS — `kubernetes.md` settled `current` |
+| 66 | `sed -n '9,22p' crates/paladin-llm/src/config/llm.rs` vs `production.md`'s `LlmProviderConfig` field claim | 6 fields (`api_key`, `base_url`, `default_model`, `default_temperature`, `timeout_seconds`, `max_retries`) — matches exactly, no caching-knob field | ✅ PASS — `production.md` settled `current` |
+| 67 | `grep -rn 'RemoteAgentPort' crates/paladin-ports/src/`; `grep -rn 'APP_RUN_QUEUE_BACKEND\|APP_RUN_WORKER_CONCURRENCY\|RunWorkerPool\|CancellationProbe' src/ crates/paladin-web/src/` | `RemoteAgentPort`: 0 hits (confirms `sidecar.md`'s "ships no IPC/RPC transport" claim); `RunWorkerPool`/`CancellationProbe`/`DbCancellationProbe`/`LocalRunTokens` all confirmed present in `src/application/services/run/{mod,cancel,worker}.rs` | ✅ PASS — feeds `sidecar.md`/`queue-worker.md` `current` verdicts |
+| 68 | `grep -c '^opentelemetry' Cargo.toml`; `grep -c '^prometheus' Cargo.toml`; `grep -n 'opentelemetry_jaeger\|tracing-opentelemetry' Cargo.toml crates/*/Cargo.toml` (Phase 28 dependency cross-check, per this task's action text) | `opentelemetry`: 5 hits (Phase 28's `otel` feature); `prometheus`: 0 hits; `opentelemetry_jaeger`/`tracing-opentelemetry`: 0 hits | ⚠️ RECORDED — feeds MB-32 (`monitoring.md`) and MB-34 (`troubleshooting.md`), both of which state "`opentelemetry` [is] not a dependency," now false |
+| 69 | `ls benches/`; `git log --diff-filter=A --format='%ad %H' --date=short -- benches/engine_benchmarks.rs` | live: `BENCHMARK_FIXES.md`, `config_benchmarks.rs`, `engine_benchmarks.rs`; `engine_benchmarks.rs` added 2026-09-02 (`ca4c4448`) | ⚠️ RECORDED — feeds MB-33 (`performance-tuning.md`'s 2026-08-24 correction is now one file stale) |
+| 70 | `awk '/pub trait Herald...'`-style enum-body read of `crates/paladin-core/src/platform/container/trace.rs`; TraceEvent variant count | 12 variants (`RunStarted` … `MiddlewareEvent`) | ✅ PASS — confirms `observability.md`'s "twelve variants" table exactly; settled `current` |
+| 71 | `28-BENCH-EVIDENCE.md`/`.project/v0.10.0/09-program-acceptance-audit.md` cross-check against `observability.md`'s "Known limitations" overhead figures | `log_sink` +22.18%, `composite` +18.46% — both quoted verbatim on the page, correctly marked FAILED and correctly citing the v0.10.0 accepted-deviation disposition | ✅ PASS — no discrepancy with the Phase 28/29 D-16 record; feeds `observability.md` `current` |
+| 72 | `grep -ic 'ADR\|architectural decision' docs/src/contributing/architecture-decisions.md`; `grep -n 'architecture-decisions' docs/src/SUMMARY.md` | 0 hits for ADR/architectural-decision content; nav titles the page "Architecture Decisions" (`SUMMARY.md:81`) though its own title is "# Adapter Development Guide" | ⚠️ RECORDED — feeds MB-35 |
+| 73 | `sed -n '250,258p' Makefile`; `sed -n '1344,1400p' .github/workflows/ci.yml`; `cat scripts/coverage.sh` (the 3-way coverage comparison, CONTEXT.md Folded Todos) | `Makefile`'s `coverage` target delegates to `scripts/coverage.sh` (no inline cargo command); `ci.yml`'s `coverage` job likewise delegates; `scripts/coverage.sh:100-101` runs `cargo llvm-cov --workspace --features integration-tests,llm-all --lcov --output-path lcov.info --fail-under-lines "$FLOOR" -- --test-threads=1` (`FLOOR` defaults `82`) | ⚠️ RECORDED — the real, shared command adds `,llm-all` to the feature list; `testing-guide.md`'s shown command lacks it — feeds MB-36 |
+| 74 | `git log -1 -S 'measure all nine adapters' -- scripts/coverage.sh` (llm-all fix provenance) | commit `6aaf0743`, "fix(ci): measure all nine adapters in coverage", 2026-08-19; comment states the pre-fix gate "passed at 84.32% over 49209 lines while ignoring 5117 lines of shipped adapter code... With llm-all: 85.01% over 54326 lines" | ✅ RECORDED — quantifies the measurement gap `testing-guide.md`'s stale command carries forward |
+| 75 | `test -f .github/workflows/test.yml` (the fabricated "CI Integration" workflow `testing-guide.md` shows) | does not exist | ⚠️ RECORDED — feeds MB-36, second finding (fabricated sample using deprecated `actions-rs/toolchain@v1`, no `--fail-under-lines` shown) |
+| 76 | Docker-machine coverage walk routing (CONTEXT.md Folded Todos, the non-documentation remainder) | written to `.planning/phases/34-documentation-currency-audit/deferred-items.md` as a pointer, not absorbed into MB-36 or invented as a separate `MB-nn` | ✅ RECORDED — per the plan's explicit instruction |
+| 77 | `bash 34-check.sh --seed` (post-Task-2 re-run, after fixing 2 duplicate-ID false positives from a literal `MB-36` mention in the coverage-comparison subsection's own prose — same class of Rule 1 deviation every plan in this phase has hit) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+| 78 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+
+## Plan 34-05, Task 1 — 17 appendix page verdicts (battalion-benchmarks through flow-dsl-guide)
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 79 | `bash 34-signals.sh` over all 17 target pages (teed to scratchpad, per-page class 1-9 blocks) | nine labelled class blocks per page; class 9 non-`SKIPPED` for every page | ✅ RECORDED — headline per-page results feed each row's Findings cell above |
+| 80 | Throwaway-example compile checks (`examples/_scratch_*.rs` + `cargo check --example _scratch --features cli`, deleted immediately after each check, `git status --porcelain -- . ':!.planning'` re-confirmed empty after each) for every `use paladin::...` import cited on `battalion-patterns-guide.md`, `battalion-vision-support.md`, `council.md`, `flow-dsl-guide.md` | `paladin::battalion::*` (battalion-patterns-guide.md) → `error[E0432]: unresolved import \`paladin::battalion\`` — **broken**; `paladin::application::services::battalion::formation_service::FormationExecutionService` + `paladin::core::platform::container::battalion::{formation::Formation,BattalionConfig}` (battalion-vision-support.md) → compiles (unused-import warnings only); `paladin::core::platform::container::battalion::council::{...}` + `paladin::application::services::battalion::council_service::CouncilExecutionService` (council.md) → compiles; `paladin::core::platform::container::battalion::maneuver::{...}` + `paladin::application::services::battalion::flow_visualizer::FlowVisualizer` + `paladin::core::platform::container::battalion::parser::FlowParser` + `paladin::core::platform::container::paladin::Paladin` (flow-dsl-guide.md) → all compile | ⚠️ RECORDED — confirms `paladin::battalion::*` is the one broken import shape (MB-38); the pre-hexagonal `paladin::core::...`/`paladin::application::services::...` style is a maintained backward-compatible re-export elsewhere and is NOT by itself evidence of staleness (corrects an initial assumption formed before this empirical check) |
+| 81 | `grep -n "pub fn new" -A5 crates/paladin-battalion/src/council_service.rs`; `grep -n "pub struct CouncilResult" -A15 crates/paladin-battalion/src/council_service.rs` (council.md API-shape check) | `CouncilExecutionService::new(paladin_port, garrison_port, registry)` — 3 args; `CouncilResult { transcript, conclusion, rounds_completed, termination_reason }` | ⚠️ RECORDED — feeds MB-48: council.md's 2-arg constructor call and `result.conversation_history`/`result.final_output` field accessors both contradict the live shape |
+| 82 | `grep -n "pub fn new" -A5 crates/paladin-battalion/src/conclave_execution_service.rs`; `grep -n "pub struct ConclaveResult" -A20 crates/paladin-core/src/platform/container/battalion/conclave.rs` (conclave-pattern.md API-shape check) | `ConclaveExecutionService::new(paladin_port)` — 1 arg, matches page exactly; `ConclaveResult { expert_outputs, aggregated_output, execution_time_ms, expert_execution_times, retry_counts, status }` — matches every `result.*` accessor on the page | ✅ PASS — conclave-pattern.md settled `current` |
+| 83 | `python3 -c "import json; ..."` reading `.github/rulesets/protect-main-branch.json`'s `required_status_checks` array, `required_approving_review_count`, `bypass_actors`; same for `protect-release-branches.json`/`protect-release-tags.json` (branch-protection.md verification) | 44/44 required-status-check contexts match the page's list exactly, in order; `required_approving_review_count: 0` on both branch rulesets; `bypass_actors: []` on both branch rulesets, `[{actor_id:5, actor_type:RepositoryRole, bypass_mode:always}]` on the tag ruleset | ✅ PASS — branch-protection.md settled `current`; `grep -n "verify-tag-source\|is-ancestor" .github/workflows/release.yml` and `sed -n '581,601p' Makefile` also reproduced exactly |
+| 84 | Live CLI enumeration: full read of `src/bin/paladin-cli.rs` (`Commands` enum, all fields and `#[arg(...)]` attributes); `Cargo.toml:469-472` (`[[bin]] name = "paladin-cli" required-features = ["cli"]`); `Cargo.toml:492` (`default = [...]`, `cli` absent) | `Council`/`Muster`/`SetupCheck`/`Onboarding` variants' exact field/flag lists captured; `cli` confirmed not in the default feature set | ⚠️ RECORDED — this is the one live-surface capture the whole CLI cluster (rows 14-20) cross-checks against; feeds MB-40..MB-46 |
+| 85 | `grep -rn 'TODO.*scheduler\|scheduler.*TODO' src/ crates/` (cli-configuration.md scheduler-wiring re-check) | zero hits | ⚠️ RECORDED — feeds MB-40: the page's troubleshooting note ("no TODO at line 297") is now stale since Phase 27 wired `/v1/schedules*` |
+| 86 | `grep -rn 'PALADIN_ENV_FILE\|PALADIN_SKIP_VALIDATION' src/` (cli-onboarding.md env-var re-check) | zero hits; `run_onboarding()` (`src/application/cli/commands/onboarding.rs:644`) takes no arguments | ⚠️ RECORDED — feeds MB-43: both env vars are fabricated |
+| 87 | `grep -c '#\[test\]\|#\[tokio::test\]'` on `tests/cli/environment_tests.rs`, `tests/integration/cli_real_services_test.rs`, `tests/integration/cli_real_providers_test.rs`, `tests/integration/llm_live_api_tests.rs` (cli-testing.md Test Counts table re-check) | `45`; `6`; `5`; `13` | ⚠️ RECORDED — Tier 1/2/3 match the page's claimed `45`/`6`/`5` exactly; Tier 4 claimed `12`, live is `13` — feeds MB-45 |
+| 88 | `grep -n 'rust-version' Cargo.toml rust-toolchain.toml`; `cargo --version && rustc --version` (MSRV/toolchain re-check across battalion-benchmarks.md, build-baselines.md, contributing-legacy.md) | `rust-version = "1.88"`; live `cargo 1.97.1`/`rustc 1.97.1` | ⚠️ RECORDED — contradicts battalion-benchmarks.md ("1.85+"), build-baselines.md ("1.95.0", plus a stale 10-crate count), contributing-legacy.md ("1.70+") — feeds MB-37, MB-39, MB-47 |
+| 89 | `ls crates/` (crate-count re-check, build-baselines.md and contributing-legacy.md) | 11 library crates + `doc-examples` | ⚠️ RECORDED — build-baselines.md's "M7 Current (10-crate)" framing and contributing-legacy.md's `src/{core,application,infrastructure}`-only "Project Structure" both predate the current 11-crate tree |
+| 90 | `grep -n 'repository = ' Cargo.toml` (contributing-legacy.md placeholder-URL re-check) | `repository = "https://github.com/DF3NDR/paladin-dev-env"` | ⚠️ RECORDED — contradicts the page's `git clone https://github.com/your-org/paladin.git` placeholder |
+| 91 | `bash 34-check.sh --seed` (post-Task-1 re-run, after adding a third formal `class N` citation to 2 rows — cli-onboarding.md, design-and-architecture.md — that initially named only 2, the same acceptance-criteria-wording issue 34-03 hit) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+| 92 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+
+## Plan 34-05, Task 2 — last 17 appendix page verdicts (grove through user-system) + partition closure
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 93 | `bash 34-signals.sh` over all 17 target pages (teed to scratchpad, per-page class 1-9 blocks) | nine labelled class blocks per page; class 9 non-`SKIPPED` for every page | ✅ RECORDED — headline per-page results feed each row's Findings cell above |
+| 94 | `ls tests/integration/*.rs \| wc -l`; file-name-mention diff against `integration-tests.md`'s "Main test files" table | live: **60** top-level integration test files; page's table: **30**; diff surfaces 26 live files entirely absent, including all three Phase 29 named E2E scenarios (`e2e_approval_gate_test.rs`, `e2e_crash_resume_test.rs`, `e2e_muster_defer_order_test.rs`), `e2e_platform_api_test.rs`, `rag_commissary_test.rs` (Phase 33 F6), `vault_confinement_test.rs` (Phase 26), `otel_transport_test.rs` (Phase 28), `v0_9_config_boot_test.rs` (Phase 29 D-07) | ⚠️ RECORDED — feeds MB-49, the largest single-page finding this plan records |
+| 95 | Throwaway-example compile checks (`examples/_scratch_*.rs` + `cargo check --example`, deleted immediately after each, `git status --porcelain -- . ':!.planning'` re-confirmed empty after each) for `paladin::paladin_ports::output::...` imports cited on `minio-file-repository-setup.md`, `port-trait-template.md`, `provider-expansion.md`, `redis-queue-adapter-setup.md`, `sanctum-migration.md` | all five reproduce `error[E0433]: cannot find \`paladin_ports\` in \`paladin\`` — the live crate is a top-level sibling crate (`paladin_ports::output::...`), never nested under the facade | ⚠️ RECORDED — the single most-recurring broken-import root cause this plan found, feeding MB-50, MB-51, MB-52, MB-53, MB-56 |
+| 96 | Throwaway-example compile checks for `paladin::infrastructure::adapters::llm::openai_adapter::OpenAILlmAdapter` (provider-expansion.md) and `paladin::infrastructure::adapters::llm::{OpenAiAdapter,AnthropicAdapter}` (sentinel.md) | both `error[E0432]: unresolved import`/`no ... in infrastructure::adapters::llm` — **broken**; `src/infrastructure/adapters/llm/mod.rs`'s own doc comment confirms only `config_bridge` remains there, all adapter impls relocated to `paladin-llm` with no re-export shim kept | ⚠️ RECORDED — feeds MB-52, MB-58; contrasts with the file_storage/sanctum modules, which DO keep a shim (`paladin::infrastructure::adapters::{file_storage,sanctum}::...` both confirmed compiling) |
+| 97 | `python3 -c "import json; ..."` reading `.github/rulesets/protect-main-branch.json` was reused for row 83; `awk '/^  [a-z_-]+:$/{job=$1} /^    name:/{print job, $0}'` over `.github/workflows/release.yml` (release-checklist.md/release-automation.md/release-recovery.md verification) | 9 job/`name:` display-string pairs reproduced exactly (`verify-tag-source`→"Verify Tag From Main" … `publish-crates`→"Publish to crates.io"); `publish-crates:` job's `needs:` array read directly: `[test, create-release, check-release-consistency]` | ⚠️ RECORDED — confirms release-checklist.md/release-recovery.md `current`; feeds MB-54 (release-automation.md's incomplete 2-of-3 dependency claim) |
+| 98 | `grep -c "^\[\[advisories" .cargo/audit.toml` style re-count: `sed -n '37,40p' .cargo/audit.toml` (the `ignore = [...]` array) vs `security-scanning.md`'s "Current tracked exceptions" list (lines 81-86) | live: 5 ignored advisories (`RUSTSEC-2023-0071`, `RUSTSEC-2025-0111`, `RUSTSEC-2026-0187`, `RUSTSEC-2026-0194`, `RUSTSEC-2026-0195`); page lists only 2 | ⚠️ RECORDED — feeds MB-57 |
+| 99 | Full read of `.github/instructions/security.instructions.md`'s "Snyk was evaluated and removed (2026-08-18)" section, cross-checked against `security-scanning.md`'s own "Snyk Evaluation & Decision" section (lines 95-122) | live decision: Snyk Code (SAST) 0 findings on a 4-class probe, Snyk Open Source (SCA) 0 supported target files (`SNYK-CLI-0008`), evaluated-and-removed; page states "Decision: Deferred" with a table rating Snyk "Partial"/"Limited on free tier" | ⚠️ RECORDED — the page's own stated decision directly contradicts the project's authoritative, dated, measured record; feeds MB-57 alongside the page's complete omission of the CodeQL/Rust-SAST question |
+| 100 | Full read of `src/bin/paladin-cli.rs`'s `Commands` enum (12 variants) for a `User` subcommand (user-rest-api.md, user-system.md verification) | no `User` variant exists among `Agent`, `Battalion`, `Arsenal`, `Maneuver`, `Onboarding`, `SetupCheck`, `Features`, `Muster`, `Eval`, `Graph`, `Run`, `Council` | ⚠️ RECORDED — feeds MB-59 and MB-60: both pages' entire `paladin user ...` CLI surface is undocumented-because-unshipped, not merely stale |
+| 101 | `grep -rln "pub struct SqliteUserRepository\|pub trait UserServiceTrait" src/ crates/` (user-system.md domain-layer sanity check, distinguishing "the CLI claim is false" from "the whole User system is vaporware") | `crates/paladin-storage/src/sqlite_user_repository.rs`, `crates/paladin-core/src/platform/manager/user_service.rs` both present | ✅ RECORDED — the domain/repository layers genuinely exist; only the CLI-integration claim (lines 37-49) is false against the shipped binary |
+| 102 | `grep -n 'clap = ' Cargo.toml` (user-system.md's one accurate claim, cross-checked) | `clap = { version = "4.5.40", features = ["derive", "cargo", "env"], optional = true }` | ✅ PASS — matches the page's `clap = { version = "4.5.40", features = ["derive"] }` claim exactly |
+| 103 | `ls .github/decisions/ 2>/dev/null; test -f .planning/decisions/0047-architecture-appendix-disposition.md` (design-and-architecture.md's already-current archival framing, re-confirmed for this plan's own row) | ADR-0047 present; `SUMMARY.md:112` nav title already reads "(Archived)" | ✅ PASS — design-and-architecture.md settled `current`, consistent with the 34-04 precedent for already-dispositioned pages |
+| 104 | Closing subsection distribution count: `python3` script iterating every `^\| \d+ \| docs/src/` row, splitting on `\|`, tallying column-3 verdicts (teed inline in the closing subsection itself, per D-00b "counted, not recalled") | `current 38, stale 55, missing 1, total 94` | ✅ RECORDED — matches `find docs/src -name '*.md' \| wc -l` (93) plus the one `missing` row; feeds the "mdBook partition closure" subsection |
+| 105 | `grep -oE 'MB-[0-9]+' 34-AUDIT.md \| sort -u \| wc -l`; `grep -oE 'MB-[0-9]+' 34-AUDIT.md \| sort \| uniq -d` | `60`; (empty) | ✅ PASS — 60 total MB IDs, no gaps, no duplicates |
+| 106 | `bash 34-check.sh --seed` (post-Task-2 re-run, after fixing 5 duplicate-ID false positives from cross-referencing sibling rows' MB-nn IDs in prose, plus a distinct collision class: the Method section's own literal quotation of the seed-time placeholder text tripped this task's own `grep -q 'not yet swept' ... && exit 1` verify line — reworded per the deviation note now recorded in-line at 34-AUDIT.md's Method section) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+| 107 | Full Task 2 `<verify>` block, run verbatim as specified in `34-05-PLAN.md` | `MDBOOK-PARTITION-CLOSED` printed; no non-zero exit at any stage | ✅ PASS — the partition-closure condition, the completeness `comm -23` check, and `34-check.sh --seed` all pass in one composite run |
+| 108 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+
+## Notes
+
+- Rows 7-8's raw captures are teed verbatim to `34-evidence/34-01-cargo-doc-default.txt` and
+  `34-evidence/34-01-rustdoc-memory.txt` respectively (D-02 discretion: raw logs live in a
+  `34-evidence/` subdirectory rather than being pasted inline, since the default-feature capture
+  alone is 73 warnings long).
+- No command in this record touches anything outside `.planning/` or the gitignored `target/`
+  directory; `cargo doc`'s output lands in `target/doc/`, already `.gitignore`d.
+- Class 9 of `34-signals.sh` (rows 5-6) is expected to read SKIPPED until plan 34-02 writes
+  `34-shipped-tokens.txt` — this is the documented degrade path (D-07), not a defect.
+- **Rows 14-25 (plan 34-02):** `34-shipped-tokens.txt` now exists (91 lines, one per §1 `SS-nn`
+  row) and class 9's degrade path closes as row 21 proves — no row here retroactively edits the
+  plan 34-01 verdict on rows 1-13, which were correctly `SKIPPED` at the time they were captured.
+
+## Plan 34-06, Task 1 — default-feature rustdoc enumeration
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 109 | Precondition check: `cargo --version && rustc --version`, compared against `rust-toolchain.toml`'s `channel = "1.97.1"` | `cargo 1.97.1 (c980f4866 2026-06-30)`, `rustc 1.97.1 (8bab26f4f 2026-07-14)` — matches exactly | ✅ PASS — precondition met, measurement trusted |
+| 110 | The `lint` job's "Check documentation" step, quoted byte-identical from `.github/workflows/ci.yml:62-63`, teed to `34-evidence/34-06-cargo-doc-default.txt` instead of `/tmp`: `cargo doc --workspace --no-deps 2>&1 \| tee 34-evidence/34-06-cargo-doc-default.txt && ! grep -q "warning:" 34-evidence/34-06-cargo-doc-default.txt` | `cargo doc` exit `0`; trailing negation exit `1` (composite gate RED); wall time 6s (warm `target/`); 578-line capture | ⚠️ RECORDED — carried baseline per ADR-0033, not a gate this phase enforces (SHIP-04 precedent) |
+| 111 | `grep -c '^warning:' 34-evidence/34-06-cargo-doc-default.txt` | `73` total `warning:`-prefixed lines | ✅ RECORDED — matches Phase 33's carried figure exactly (unchanged since Phase 33 close, +1 vs Phase 29's 72) |
+| 112 | Per-crate summary-line count: `grep -cE '^warning: \`[a-zA-Z0-9_-]+\` \(lib doc\) generated [0-9]+ warnings?$' 34-evidence/34-06-cargo-doc-default.txt`, and the 8 lines' own stated counts summed | `8` summary lines; `paladin-ai` 5, `paladin-web` 3, `paladin-battalion` 36, `paladin-storage` 1, `paladin-llm` 4, `paladin-ports` 1, `paladin-ai-core` 14, `paladin-memory` 1 — sum `65` | ✅ PASS — 73 total − 8 summaries = 65 content diagnostics, matching the sum of the 8 crates' own counts exactly |
+| 113 | `diff 34-evidence/34-01-cargo-doc-default.txt 34-evidence/34-06-cargo-doc-default.txt` (independent re-run of the identical command, 6 days apart in session terms, same HEAD-tree per D-23) | Differs only in `Documenting <crate>` progress-line presence/order (cargo's own incremental-cache artifact); `grep -c '^warning:'` is `73` in both captures; no diagnostic content, location, or message differs | ✅ PASS — reproducibility confirmed independently of plan 34-01's own capture |
+| 114 | `bash 34-rustdoc-rows.sh 34-evidence/34-06-cargo-doc-default.txt default` (new script, this plan) | 65 pipe-table rows printed to stdout; stderr: `RECONCILED: 65 content diagnostics == 65 rows emitted`; exit `0` | ✅ PASS — content-diagnostic count and emitted-row count reconcile exactly |
+| 115 | Kind-classification tally over the 65 emitted rows (`awk -F' \| ' '{print $4}' \| sort \| uniq -c`, column re-verified positionally against the header) | `24` private intra-doc link, `36` unresolved link, `3` redundant explicit link, `2` unclosed HTML tag, `0` missing docs, `0` other | ✅ RECORDED — every row's Kind cell holds a named D-13 class; nothing fell through to `other` |
+| 116 | Location-source split: `grep -c 'rustdoc span' \| grep -c 'grep recovery'` over the emitted rows | `29` rustdoc span, `36` grep recovery (34 `unresolved link` + 2 `unclosed HTML tag`) | ✅ PASS — the P-01 grep-recovery path is exercised on the majority of rows, not just the tracer's one worked case |
+| 117 | Snippet-based disambiguation spot-check: two independent `TraceRecord` warnings (identical bracket identifier, different source lines) and two `unclosed HTML tag` warnings with no snippet note at all (`<status>`/`<body>`) | `TraceRecord` warnings resolve to two distinct lines, `crates/paladin-core/src/platform/container/trace.rs:6` and `:17` (confirmed by direct file read — both lines genuinely contain a `[`TraceRecord`]` link); the two HTML-tag warnings both resolve to `crates/paladin-llm/src/http_status.rs:6` and `:7` (confirmed live: `grep -rn '<status>\|<body>' crates/paladin-llm/src/http_status.rs` finds both on adjacent lines of one `//!` doc comment) — in every one of the 36 grep-recovered rows exactly one candidate match remained after crate-scoping, with zero ambiguous "first taken" fallbacks | ✅ PASS — the full quoted-snippet grep (not the bare bracket identifier alone) is what disambiguates same-identifier, different-location warnings; crate-scoped search (derived from the summary-line chunking algorithm, not stream position) is what let a workspace-wide, multi-match identifier resolve to a single crate-local hit every time |
+| 118 | WINDOWS.md rows 36 and 37 read (never edited) and cross-checked against the enumeration | Row 36: workspace-wide observation, stays `open`, its own count (16) stale against this run's 65/73 but not claimed current by this phase; Row 37: `crates/paladin-memory/src/token_counter/mod.rs:3` matches the enumeration's own last row (`RD-66`) exactly, same file/line, stays `open` | ✅ PASS — both rows remain `open`; `git status --porcelain -- .planning/WINDOWS.md` confirmed empty after this task's commit |
+| 119 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+| 120 | `bash 34-check.sh --seed` (post-task re-run, after fixing 3 duplicate-ID false positives — `RD-01`/`RD-66` cited by their literal string in this task's own new prose, the same recurring collision class every prior plan in this phase has hit and fixed) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+
+## Notes (plan 34-06)
+
+- `34-rustdoc-rows.sh` is written generically (crate/src-dir map built live from `Cargo.toml`
+  `[package] name` fields, never hardcoded) so plan 34-07's per-crate `-D warnings --all-features`
+  sweep can reuse it unmodified against an `error:`-prefixed capture (its `<run-label>` argument
+  switches the diagnostic prefix it walks).
+- The crate-attribution algorithm (summary-line chunking, front-to-back against the pending
+  diagnostic queue) is a finding of this plan, not assumed from RESEARCH.md: RESEARCH.md's Pitfall
+  P-01 documents the grep-recovery method for a *single* known-answer case but does not address how
+  to attribute a location-less diagnostic to a crate in a workspace-wide, concurrently-scheduled
+  run. This plan measured and validated the chunking approach live (row 117 above) before trusting
+  it for all 36 grep-recovered rows.
+
+## Plan 34-06, Task 2 — workspace all-features run recorded as a partial view
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 121 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`, teed to `34-evidence/34-06-cargo-doc-allfeatures-workspace.txt` | exit `101`; wall time 34s; 183-line capture | ⚠️ RECORDED — carried baseline per ADR-0033/D-14, not a gate this phase enforces |
+| 122 | `grep -c '^error:'` vs `grep -c '^error: could not document'` on the capture | `21` total, `4` `could not document` boundary lines → `17` content errors | ✅ PASS — arithmetic reconciles with the per-crate table below |
+| 123 | Per-error crate attribution: `-->` path read directly where present; for the 4 carrying none, `grep -rnF` for the exact quoted snippet restricted to doc-comment lines, tried against each candidate crate's own `src/` in turn (`RunInspectorPort` → `crates/paladin-web/src`; `dev_ui_inspector_page` → same; `InspectorView::supersteps` → same; `HeuristicTokenCounter` → `crates/paladin-memory/src`, the already-known case) | all 4 location-less errors resolve to exactly one doc-comment match each: `crates/paladin-web/src/dev_ui_controller.rs:3`, `:20`, `:28` (three separate `paladin-web` errors, not `paladin-memory` as stream position alone would suggest) and `crates/paladin-memory/src/token_counter/mod.rs:3` | ✅ PASS — confirms the abort-boundary ordering is not crate-reliable (this run's biggest single finding) |
+| 124 | Full per-crate tally: `paladin-memory` 1, `paladin-web` 8 (3 location-less + 5 `-->`-bearing), `paladin-storage` 1, `paladin-ai` (facade) 7, all `-->`-bearing under `src/` | `1 + 8 + 1 + 7 = 17`, matching row 122's content-error count exactly | ✅ PASS |
+| 125 | Cross-check: does this run's abort set include `paladin-ai-core`, the single crate `32-05-SUMMARY.md` named? | No — `paladin-ai-core` is absent from this run's 4-crate abort set (`paladin-memory`, `paladin-web`, `paladin-storage`, `paladin-ai`) entirely; a different job never got scheduled before the overall abort | ⚠️ RECORDED — third independent measurement (after Phase 32's 1-crate and RESEARCH.md's 3-crate) to find a *different* abort set, confirming the floor is scheduling-dependent rather than reproducible per D-14's original single-crate prose |
+| 126 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+| 127 | `bash 34-check.sh --seed` (post-task re-run, after fixing 3 further duplicate-ID false positives — `RD-01`/`RD-66` again cited by literal string in this task's own new prose) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+
+## Notes (plan 34-06, Task 2)
+
+- No `RD-nn` row is minted from this run (per the plan's own instruction) — its 17 content errors
+  are a strict subset of what plan 34-07's per-crate sweep will enumerate with full rows; recording
+  a count here and rows there later would double-count the same diagnostics under two different run
+  labels.
+- This subsection's crate-attribution table reuses the same content-based recovery method
+  `34-rustdoc-rows.sh` already implements (Task 1), applied by hand here since no rows are being
+  emitted — the same snippet-grep precision that resolved two same-identifier `TraceRecord`
+  warnings to two different lines in Task 1 is what caught `RunInspectorPort`/`dev_ui_inspector_page`/
+  `InspectorView::supersteps` as `paladin-web`, not `paladin-memory`, despite printing before
+  `paladin-memory`'s own abort line in the raw stream.
+
+## Plan 34-07, Task 1 — per-crate `-D warnings --all-features` sweep, the true floor
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 128 | Precondition dry run: `bash 34-rustdoc-rows.sh 34-evidence/34-06-cargo-doc-default.txt default` (re-run against the already-committed default-feature capture, unmodified) | `RECONCILED: 65 content diagnostics == 65 rows emitted`, byte-identical to the already-committed §3 rows | ✅ PASS — parser's existing default-feature code path unaffected by the extension below |
+| 129 | Precondition dry run (extended): `RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-memory --all-features --no-deps`, teed to `34-evidence/34-07-percrate/paladin-memory.txt`, then `bash 34-rustdoc-rows.sh <capture> "all-features -p paladin-memory"` (no crate-override arg) | `FATAL: 1 diagnostic block(s) never attributed to a crate` | ❌ FAIL as expected — confirms the precondition's own warning: a single-crate capture never prints the per-crate summary line the attribution pass depends on (verified again against a green capture, `paladin-herald`, exit 0, no summary line either) |
+| 130 | Rule 3 fix: `34-rustdoc-rows.sh` extended with an optional third `<crate-override>` argument that bypasses summary-line attribution and assigns every parsed block directly to the named crate (correct by construction for a `-p <crate>` invocation); the Run-cell text and the evidence-anchor path were corrected in the same edit (per-crate invocation quoted instead of the workspace command; anchor recovers the full `34-evidence/...` suffix instead of assuming a fixed depth) | `bash 34-rustdoc-rows.sh 34-evidence/34-07-percrate/paladin-memory.txt "all-features -p paladin-memory" paladin-memory` → `RECONCILED: 1 content diagnostics == 1 rows emitted`, row resolves to `crates/paladin-memory/src/token_counter/mod.rs:3` | ✅ PASS — known-answer case (CONTEXT.md's own method self-test) confirmed before the remaining ten crates were swept |
+| 131 | Regression check: re-ran `bash 34-rustdoc-rows.sh 34-evidence/34-06-cargo-doc-default.txt default` (no crate-override) after the script edit | `RECONCILED: 65 content diagnostics == 65 rows emitted`, output byte-identical to row 128's pre-edit run | ✅ PASS — the default-feature code path plan 34-06 exercised is unchanged by the extension |
+| 132 | Remaining eleven-crate sweep: `RUSTDOCFLAGS="-D warnings" cargo doc -p <crate> --all-features --no-deps` for `paladin-battalion`, `paladin-content`, `paladin-ai-core`, `paladin-eval`, `paladin-herald`, `paladin-llm`, `paladin-notifications`, `paladin-ports`, `paladin-storage`, `paladin-web`, `paladin-ai`, each teed to its own `34-evidence/34-07-percrate/<crate>.txt` | 8 of 12 crates total (including `paladin-memory` from row 130) exit `101`: `paladin-battalion` 36, `paladin-ai-core` 14, `paladin-llm` 9, `paladin-memory` 1, `paladin-ports` 1, `paladin-storage` 1, `paladin-web` 8, `paladin-ai` 7; the other 4 (`paladin-content`, `paladin-eval`, `paladin-herald`, `paladin-notifications`) exit `0`. Combined wall time 68s (warm `target/`) | ✅ PASS — matches RESEARCH.md Pattern 2's table exactly, crate-for-crate and error-for-error, **77 total content errors** |
+| 133 | Parsed all twelve captures with `bash 34-rustdoc-rows.sh <capture> "all-features -p <crate>" <crate>`, renumbered `PLACEHOLDER-RD` sequentially `RD-67`..`RD-143` in crate order (continuing from the existing high-water mark `RD-66`), pasted into `34-AUDIT.md` §3 under twelve per-crate subheadings plus a summary table and comparison prose | Every crate's parser run printed `RECONCILED: N content diagnostics == N rows emitted`, exit 0; `67+77=144` next-free ID confirmed by script output | ✅ PASS |
+| 134 | `test "$(ls 34-evidence/34-07-percrate/*.txt \| wc -l)" -ge 12` | `12` | ✅ PASS |
+| 135 | `grep -q 'crates/paladin-memory/src/token_counter/mod.rs:3' 34-AUDIT.md` | found (as `RD-126`) | ✅ PASS |
+| 136 | `grep -c '^\| RD-[0-9]' 34-AUDIT.md` vs `grep -cE '^\| RD-[0-9]+ \|[^\|]*\|[^\|]*\| [A-Za-z0-9_./-]+\.rs:[0-9]+ ' 34-AUDIT.md` | both `143` | ✅ PASS — every RD row ends its File:line cell with a real `.rs:<line>` |
+| 137 | `grep -oE 'RD-[0-9]+' 34-AUDIT.md \| sort \| uniq -d` | (empty) | ✅ PASS — no duplicate RD ID, and no newly-minted `RD-nn` string repeated in prose outside its own row |
+| 138 | Per-crate row-count reconciliation stated in-line under each crate's subheading (`Row count check: N rows above == N content errors...`) | all twelve crates reconcile exactly (36, 0, 14, 0, 0, 9, 1, 0, 1, 1, 8, 7 = 77) | ✅ PASS |
+| 139 | Comparison against the carried "14 unresolved intra-doc links" figure (`ROADMAP.md`, `34-CONTEXT.md` D-14, `STATE.md` Phase 32 close note) | 77 / 14 ≈ 5.5x undercount; 63-item undersizing of Phase 36's `RD-nn` work list stated in `34-AUDIT.md` | ✅ PASS — recorded, not corrected elsewhere (D-00c) |
+| 140 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+| 141 | `bash 34-check.sh --seed` (post-task re-run) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+
+## Notes (plan 34-07, Task 1)
+
+- The precondition check itself surfaced the deviation: `34-rustdoc-rows.sh`'s crate-attribution
+  mechanism (plan 34-06) depends entirely on a per-crate "generated N warnings/errors" summary
+  line that a single-crate `-p <crate>` invocation never prints — under `-D warnings` the job
+  aborts before reaching one, and a clean crate's own closing line is a different pattern
+  entirely. This is exactly the shape of blocking issue Rule 3 covers: extend the tool rather than
+  hand-transcribe 77 rows across twelve captures by hand.
+- The known-answer check (row 130) was verified *before* the remaining ten-crate sweep ran, per
+  the plan's own instruction to stop and fix rather than continue past a mismatch — the method
+  self-test gates the rest of the task, not just its own row.
+- This run's 77-error, 8-red-crate total matches RESEARCH.md's Pattern 2 table exactly at a HEAD
+  several commits later — the D-22 invariance argument (every intervening Phase 34 commit touches
+  only `.planning/`) holds in practice, not just in principle.
+
+## Plan 34-07, Task 2 — doctest baseline and the entry-point `# Examples`-heading gate
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 142 | `cargo test --workspace --doc`, teed to `34-evidence/34-07-doctests.txt` (default features only, per RESEARCH.md Pitfall P-08's warning against widening the feature set for this invocation) | exit `0`; 462 passed, 0 failed, 210 ignored (summed across 13 per-crate `test result:` lines); wall time 32s | ✅ PASS — matches RESEARCH.md's own independent measurement exactly |
+| 143 | `bash scripts/check-public-api-examples.sh` (gate mode) and `bash scripts/check-public-api-examples.sh --list` (report mode), both teed to `34-evidence/34-07-public-api-examples.txt` | gate mode exit `1`; report mode's own closing line: `TOTAL: 101 entry points -- 82 OK, 19 MISSING, 0 SINGULAR`; gate mode's own 19-row MISSING listing verbatim | ⚠️ RECORDED — RED, as RESEARCH.md Pitfall P-06 predicted |
+| 144 | Drift check: derived count (101) vs `16-DOCS-03-ENTRY-POINTS.md`'s frozen count (76) | +25 items, ≈33% growth | ✅ PASS — reconciles with RESEARCH.md's own figure |
+| 145 | CI/make wiring check: `grep -rn check-public-api-examples .github/workflows/*.yml Makefile` | (no output, grep's own exit 1) | ✅ PASS — confirms no CI job or make target runs this script |
+| 146 | `grep -q 'cargo test --workspace --doc' 34-AUDIT.md` and `! grep -q 'cargo test --workspace --all-features --doc' 34-AUDIT.md` | first matches, second does not match | ✅ PASS |
+| 147 | Deferred-register routing: appended a numbered entry under a new `## Plan 34-07, Task 2` heading in `deferred-items.md` (never recreated the file), pointing to `34-AUDIT.md`'s own subsection for the full 19-row listing; no `RD-nn`/`EX-nn`/`MB-nn` row minted for the drift or any individual violation | entry appended, file's existing `## Plan 34-04, Task 2` heading and content untouched | ✅ PASS |
+| 148 | `git status --porcelain -- crates src scripts` (proves no violation was fixed and no script was edited) | (empty) | ✅ PASS |
+| 149 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+| 150 | `bash 34-check.sh --seed` (post-task re-run, after rewording three §3-close bullet points that repeated already-minted `RD-nn` literal IDs in prose — the same recurring false-positive class every prior plan in this phase has hit) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+
+## Notes (plan 34-07, Task 2)
+
+- The doctest run's 462/0/210 figures reproduce RESEARCH.md's own independent measurement exactly,
+  giving high confidence the doctest baseline is stable at this HEAD.
+- The entry-point gate's 101/19/0 figures likewise reproduce RESEARCH.md's own independent
+  measurement exactly (101 items, 19 MISSING, 0 SINGULAR, exit 1) — RESEARCH.md's Pitfall P-06 and
+  Open Question 1 recommendation were followed as written: record the drift, route it to the
+  deferred register, fix nothing, extend nothing.
+- §3 is now closed: the default-feature enumeration (plan 34-06), the per-crate all-features
+  sweep (this plan, Task 1), the doctest baseline and the entry-point gate record (this plan, Task
+  2) together give Phase 36 every figure ROADMAP Success Criterion 2 requires, all measured live
+  at this phase's own HEAD rather than carried from an earlier phase.
+
+---
+
+*Phase: 34-documentation-currency-audit*
+*Evidence recorded: 2026-09-17, plan 34-01*
+
+## Plan 34-08, Task 1 — examples build/currency sweep, build status
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 151 | `cargo build --examples --offline` (ci.yml:548, Invocation 1 — bulk selector), teed to `34-evidence/34-08-examples-builds.txt` | exit `0`; `Finished` in ~1s (warm `target/`); covers the 44 of 48 `examples/*.rs` files with no unmet `required-features` | ✅ PASS — green |
+| 152 | `cargo build --example vision_analysis --example vision_battalion --features "vision,llm-openai" --offline` (ci.yml:551, Invocation 2) | exit `0`; ~1s | ✅ PASS — green |
+| 153 | `cargo build --example document_processing --features "content-processing" --offline` (ci.yml:554, Invocation 3) | exit `0`; ~1s | ✅ PASS — green |
+| 154 | `cargo build --example http_service_host --features "web-server" --offline` (ci.yml:557, Invocation 4) | exit `0`; ~1s | ✅ PASS — green |
+| 155 | `bash scripts/check-doc-examples.sh` (D-16 extra target 1 — Layer 1 `cargo check --manifest-path crates/doc-examples/Cargo.toml`, Layer 1b README quick-example mirror, Layer 2 inline fenced-block scan) | exit `0`; "All included examples compile.", "README Quick Example is in sync.", "Results: 0 checked, 616 skipped, 0 failed"; ~6s | ✅ PASS — green, all three layers |
+| 156 | `cargo build -p paladin-llm --example live_vendor_smoke --features "kimi,qwen,grok,gemini" --offline` (D-16 extra target 2 — `required-features` names all four vendor flags at once) | exit `0`; built only, **not run** — no vendor credential env var read or exported | ✅ PASS — green, built-not-run confirmed |
+| 157 | Live surface re-count: `find examples -name '*.rs' \| wc -l` → 48; `ls crates/doc-examples/src/*.rs` excl. `lib.rs` → 11; `ls crates/paladin-llm/examples/*.rs` → 1 (total 60). Compared against `ci.yml:538`'s own comment ("holds 47 .rs files") | live count 48 vs. comment's stated 47 — one-file drift; comment is neither documentation nor an example (D-19), routed to `deferred-items.md` under `## Plan 34-08, Task 1`, no `EX-nn` minted | ⚠️ RECORDED — routed, not fixed |
+| 158 | `git status --porcelain -- examples crates Cargo.toml` and `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | both empty | ✅ PASS |
+
+## Notes (plan 34-08, Task 1)
+
+- All four `ci.yml:548-558` invocations plus both D-16 extra targets (`doc-examples` three-layer
+  gate, `live_vendor_smoke` build) are green at this HEAD — no example, module, or the
+  `paladin-llm`-crate example fails to build under the feature set CI actually splits on.
+- The `[[example]]` declaration cross-check (both directions, `34-AUDIT.md` §4) found zero
+  declared-with-no-file gaps and confirmed the 43 undeclared-but-present files need no
+  `required-features` (cargo auto-discovers them under the bulk selector) — not itself a finding.
+- `34-AUDIT.md` §4 now carries 60 new `EX-nn` rows (`EX-02..EX-61`) covering every
+  `examples/*.rs` file, every `crates/doc-examples/src/*.rs` module (excl. `lib.rs`), and
+  `crates/paladin-llm/examples/live_vendor_smoke.rs` — each seeded with the exact pending marker
+  `pending - not yet assessed (plan 34-08 task 2)` in its Currency verdict, Obsolete-API hits and
+  Claimed-capability cells, per this task's own acceptance criteria (the examples-table analogue
+  of the §2 mdBook placeholder — an unswept row must never read as a clean one).
+
+## Plan 34-08, Task 2 — currency verdicts, doc-examples include map, capability gap list
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 159 | Obsolete-API target-set sweep: `grep -rn "TokenUsage::from_total\|\btoken_count\b\|Quartermaster\|\bTokenCounter\b\|TokenCounterFactory\|LimitSource\|memory\.content\|\.entry\.memory\.content" examples/ crates/doc-examples/src/ crates/paladin-llm/examples/` | 21 raw hits across 3 tokens (`token_count` 15, `TokenUsage::new`/`token_count` local-var 1, `memory.content` 6); 0 hits for `TokenUsage::from_total`, `Quartermaster`, `TokenCounterFactory`, `LimitSource`, bare `TokenCounter` | ✅ PASS — every hit individually resolved to a distinct, currently-shipped API (see §4 D-17(a) subsection); zero genuine obsolete-API references |
+| 160 | Spot check: `grep -n "fn token_count" crates/paladin-core/src/platform/container/herald.rs` | `328:    pub fn token_count(mut self, token_count: u32) -> Self {` — a `StreamChunk` builder method | ✅ PASS — confirms the 15 `herald_streaming.rs`/`herald_custom_formatter.rs` hits are a different, current API, not the removed `PaladinResult` field |
+| 161 | Spot check: `grep -n "pub fn new" crates/paladin-core/src/platform/container/token_usage.rs` and reading `commander_with_metadata_export.rs:61` | `TokenUsage::new(prompt_tokens: u32, completion_tokens: u32) -> Self` (2-arg, exact match); the example's `TokenUsage::new(token_count, 0)` call matches this signature exactly | ✅ PASS — confirms the example correctly demonstrates the post-Phase-31 `TokenUsage` shape, not an obsolete pattern |
+| 162 | Spot check: `grep -n "use paladin_ports::output::sanctum_port" examples/paladin_with_sanctum.rs examples/sanctum_basic_inmemory.rs` and `grep -n "RagRetrievalService\|retrieve_context" examples/paladin_with_sanctum.rs examples/sanctum_basic_inmemory.rs` | both files call `SanctumPort::search` directly; neither calls `RagRetrievalService::retrieve_context` | ✅ PASS — confirms the `.entry.memory.content` hits are `SanctumSearchResult`'s own untouched field path, not the pre-Phase-33 RAG rendering pattern MIGRATION.md warns against |
+| 163 | Capability-mapping spot check: `grep -n "agent_router\|thread_router\|run_router\|\.merge(" src/bin/paladin-server.rs` | lines 230-233: `agent_router(state).merge(thread_router(...)).merge(run_router(...))` — three routers merged | ⚠️ FOUND — `examples/http_service_host.rs` and `crates/doc-examples/src/http_service_host.rs` both claim to assemble the app "exactly as"/"the same router" the `paladin-server` binary uses, but both mount only `agent_router` — two `EX-nn` rows marked `stale` (server-parity claim, not an obsolete-API finding; both still build and correctly demonstrate the agent-router surface) |
+| 164 | `examples/README.md` listed-vs-on-disk cross-check: `grep -oE '^### \[[a-zA-Z0-9_]+\.rs\]' examples/README.md` (37 headers) diffed against `find examples -name '*.rs'` (48 files) via `comm -23`, then `grep -c <name> examples/README.md` run individually per candidate | 11 programs with zero mentions anywhere in the file: `commander_council.rs`, `commander_grove.rs`, `conclave_expert_panel.rs`, `council_discussion.rs`, `document_processing.rs`, `grove_routing.rs`, `http_service_host.rs`, `paladin_with_rag.rs`, `vision_analysis.rs`, `vision_battalion.rs`, `war_engine_memory_baseline.rs`; reverse direction (listed, not on disk) — 0 dangling listings | ⚠️ FOUND — one new `stale` `EX-nn` row for `examples/README.md` (11-program gallery gap); reverse direction clean |
+| 165 | `examples/README.md` code-snippet field-name check: `grep -n "response\.content\|response\.token_usage\|response\.execution_time" examples/README.md` vs. `grep -n "pub output\|pub usage\|pub execution_time_ms" crates/paladin-core/src/platform/container/execution_result.rs` | README lines 71, 1328, 1329 use `response.content`/`response.token_usage.total_tokens`/`response.execution_time`; the real `PaladinResult` struct fields are `output`, `usage: TokenUsage`, `execution_time_ms: u64` — none of the three README field names exist on the shipped type | ⚠️ FOUND — one new `stale` `EX-nn` row for `examples/README.md` (stale code-snippet field names); the real `basic_paladin.rs` build row already uses the correct current shape |
+| 166 | D-17(c) gap-list walk: all 91 §1 `SS-nn` rows' Grep-token column run as `grep -rlF '<token>' examples/ crates/doc-examples/src/`, filtered to the 62 rows carrying a requirement ID, then to the 59 with zero hits after excluding removed/tooling/governance items (see §4's own exclusion-rationale prose) | 59 requirement-attributed, requirement-ID-bearing capabilities with zero demonstrating example, spanning 8 of the 12 phases the checklist covers | ⚠️ FOUND — 59-row gap-list table, `EX-62..EX-120`, each sized `L` |
+| 167 | D-18 include map: `grep -roE '\{\{#include \.\./\.\./\.\./crates/doc-examples/src/[a-z_]+\.rs:[a-z_]+\}\}' docs/src/ -r`, cross-referenced against `ls crates/doc-examples/src/*.rs` (excl. `lib.rs`) | 10 of 11 modules matched to at least one page/anchor; `support.rs` matched to zero pages (confirmed as a shared Rust-module dependency of the other ten via `grep -rl 'mod support\|support::' crates/doc-examples/src/*.rs`, not itself an `{{#include}}` target) | ⚠️ FOUND — `support.rs` recorded as a D-18 finding (no page includes it) rather than omitted |
+| 168 | `grep -ci 'not yet assessed' 34-AUDIT.md` (post-fill check) | `0` | ✅ PASS |
+| 169 | `grep -oE 'EX-[0-9]+' 34-AUDIT.md \| sort \| uniq -d` (post-reword check, after fixing 21 literal-ID-collision cross-references — the same recurring false-positive class every prior plan in this phase has hit) | (empty) | ✅ PASS |
+| 170 | `git status --porcelain -- examples crates Cargo.toml` and `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | both empty | ✅ PASS |
+| 171 | `bash 34-check.sh --seed` (post-task) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+
+## Notes (plan 34-08, Task 2)
+
+- The obsolete-API sweep found zero genuine hits across all 60 programs/modules — every
+  coincidental grep match resolved to a distinct, currently-shipped API, confirmed by reading the
+  actual call site against the actual current type definition (`StreamChunk::token_count`,
+  `TokenUsage::new`'s 2-arg constructor, `SanctumPort::search`'s untouched result shape) rather
+  than trusting the grep count alone.
+- The two `stale` `http_service_host` rows are a capability-mapping (D-17 check b) finding, not an
+  obsolete-API (check a) finding — both programs build clean and correctly demonstrate the agent
+  API; the divergence is a claim about scope ("exactly"/"the same router") that Phase 24's
+  `thread_router` and Phase 27's `run_router` additions to `paladin-server.rs` made stale without
+  either example or `docs/src/deployment-topologies/http-service-host.md`'s including text being
+  updated.
+- `examples/README.md` now carries three findings total, each its own row: the pre-existing MSRV
+  mismatch (plan 34-01), the 11-program gallery gap, and the stale `PaladinResult` code-snippet
+  field names — the third is notable because it is the same shape MIGRATION.md's `ACCT-02` row
+  describes (`token_count: u32` → `usage: TokenUsage`) landing in illustrative prose rather than
+  compiled code, where no compiler catches the drift.
+- §4 is now fully closed: build status (plan 34-08 Task 1), currency verdicts and the
+  obsolete-API/capability-mapping/gap-list three-check method (this task), the `doc-examples`
+  include map (D-18), and a counted-totals close subsection — 122 total `EX-nn` rows, every one
+  ending in a real Currency verdict (no seeded placeholder survives), no duplicate ID.
+
+## Plan 34-09, Task 1 — Phase 35/36 work-list assembly and reconciliation
+
+**HEAD SHA at sweep time:** `ee1fb160f8e743e638b32beb6c4e32be4ede9325` — unchanged from plan 34-01's
+recorded Phase 34 start SHA (D-23 invariance argument); this task adds no source-tree measurement,
+only transcribes §2/§3/§4 rows into §5/§6, so no new HEAD is captured.
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 172 | Extraction method: every `MB-nn` row parsed from §2's main verdict table (Page/Verdict/Cites/MB-ID(s)/Size columns) plus the two standalone D-10/D-04 mini-tables (`MB-02`, `MB-03`); every `RD-nn` row parsed from §3's `RD ID \| Run \| Crate \| File:line \| Kind \| ... \| Size` rows (`awk -F' \| '` column split, verified 9 columns on all 143 rows before trusting the split); every `EX-nn` row parsed from §4's two table shapes (63 Program/module rows, 59 Capability/gap rows, verified 9 and 6 columns respectively on every row before trusting the split) | 60 MB, 143 RD, 122 EX rows parsed with zero unparsed/malformed rows; zero duplicate IDs in the parsed sets | ✅ PASS — matches the phase's own high-water marks (MB-60, RD-143, EX-122) exactly |
+| 173 | `for i in $(seq 1 60); do printf 'MB-%02d\n' $i; done` diffed against the parsed MB ID set | (empty diff) | ✅ PASS — no gap in the MB-01..MB-60 sequence |
+| 174 | RD-nn location-grouping: `by_loc` dict keyed on the parsed `File:line` field, grouped across all 143 rows regardless of which run (`D-12/D-13` default-feature vs `D-12/D-14` per-crate all-features) found them | 75 distinct locations; 63 locations hold exactly 1 RD row (no follower), 12 locations hold 2-4 RD rows (found by more than one run) — every multi-row location's rows share byte-identical `File:line` text, confirming the "same source line, different measurement run" identity claim mechanically, not by inspection | ✅ PASS — feeds §6's `Blocks` column: each location's lowest-numbered ID leads, the rest are named as followers |
+| 175 | EX-nn currency split: of the 63 Program/module rows, `grep`-derived currency-column tally | 58 `current`, 5 `stale` | ✅ RECORDED — the 58 `current` rows are excluded from the Order-numbered work-item sequence (phase_specific_rules point 5: "current rows are not work items") and listed instead in §6's "EX-nn confirmed current" subsection, for ID-completeness only |
+| 176 | §5 nav-order derivation: `grep -oE '\([a-zA-Z0-9_./-]+\.md\)' docs/src/SUMMARY.md` | 92 nav-linked pages, in nav order | ✅ RECORDED — every MB-nn row's page mapped to its nav position; `MB-30`'s proposed page (not on disk) placed immediately before `user-guides/control-flow.md`'s nav position, the page whose own text (§2 row 94's Findings cell) points forward to it |
+| 177 | §6 crate-order derivation: `grep -c '^warning: \`[a-zA-Z0-9_-]+\` (lib doc) generated'` summary-line order from the default-feature capture (34-EVIDENCE.md row 112) | `paladin-ai, paladin-web, paladin-battalion, paladin-storage, paladin-llm, paladin-ports, paladin-ai-core, paladin-memory` | ✅ PASS — reused verbatim as §6's RD-nn crate ordering, rather than an invented order |
+| 178 | Task 1 `<verify>` block, run verbatim as specified in `34-09-PLAN.md`: `grep -q 'gsd-plan-phase 35' && grep -q 'gsd-plan-phase 36' && UNROUTED=$(for i in ...; do test "$(grep -c "$i" $A)" -ge 2 \|\| echo $i; done) && test -z "$UNROUTED" && test -z "$(git status --porcelain -- . ':!.planning')"` | `WORKLISTS-OK` printed; `UNROUTED` empty | ✅ PASS |
+| 179 | Bidirectional reconciliation, run against the finished §5/§6 (commands reproduced verbatim in `34-AUDIT.md`'s own "Reconciliation" subsection): `diff` of the MB-ID set in §2 vs §5; `diff` of the RD-ID set in §3 vs §6; `diff` of the EX-ID set in §4 vs §6 | all three `diff`s empty (60/60, 143/143, 122/122 exact set equality) | ✅ PASS — both directions hold: every minted ID is routed, and every routed ID resolves to a minted row |
+| 180 | No-cross-contamination check: `awk '/^## §5/,/^## §6/'` grepped for `(RD\|EX)-[0-9]+`; `awk '/^## §6/,/^## §7/'` grepped for `MB-[0-9]+` | both empty | ✅ PASS — no `MB-nn` leaked into §6, no `RD-nn`/`EX-nn` leaked into §5 |
+| 181 | Deviation (Rule 1 — bug): `34-check.sh --seed` re-run after §5/§6 were written | initial run: `FAIL: (b) duplicate IDs: <all 265 IDs>` — assertion (b) scanned the whole file for a second occurrence of any ID, which is exactly what §5/§6 are designed to produce (D-03's citability guarantee requires a second, work-list occurrence); this is not a duplicate-mint bug, it is the phase working as designed. Fixed by scoping assertion (b) to `awk '/^## §5/{exit} {print}'` (everything before the first `## §5` heading, i.e. §1-§4, the ID-minting sections) — a genuine duplicate mint still fails this narrower check exactly as before | ✅ PASS after fix — `34-check.sh --seed` all 5 assertions PASS; `34-check.sh --final` all 8 assertions PASS (re-run below) |
+| 182 | `bash 34-check.sh --seed` (post-fix re-run) | `PASS` on all five seed-mode assertions (a, b, c, d1, d2); exit 0 | ✅ PASS |
+| 183 | `bash 34-check.sh --final` (post-fix re-run, before §7/deferred-items.md are populated — Task 2's own job) | `PASS` on assertions (a)-(d), (f), (g); assertion (e) PASS (no seeded placeholder remains, closed by plan 34-05); exit 0 | ✅ PASS — every cited ID is already routed to §5 or §6 before Task 2 even starts, since no `MB-nn`/`RD-nn`/`EX-nn` is deferred (D-19: only non-documentation, non-example findings go to `deferred-items.md`) |
+| 184 | `git status --porcelain -- . ':!.planning'` (SC5 proof, run before this task's commit) | (empty) | ✅ PASS |
+
+## Plan 34-09, Task 2 — deferred register, audit close-out, phase-range read-only proof
+
+| # | Command | Result | Verdict |
+|---|---------|--------|---------|
+| 185 | `deferred-items.md` extended with a new `## Plan 34-09, Task 2` heading, two entries: the PROJECT.md "no crate ships its own examples/" contradiction (`test -f crates/paladin-llm/examples/live_vendor_smoke.rs`), and the object-store (MinIO→RustFS) evaluation remainder distinct from plan 34-03's zero-`MB-nn` documentation-currency slice | both entries written with concrete command+result evidence and an explicit "neither MB nor RD/EX" disposition sentence per D-19 | ✅ RECORDED |
+| 186 | `grep -c '^## Plan 34-0' deferred-items.md` | `4` | ✅ PASS — meets Task 2's own `<verify>` `-ge 3` bar |
+| 187 | `34-AUDIT.md` §7 written: one pointer line per deferred-items.md entry (5 total across 4 headings), naming the register heading and lead-in phrase, no evidence duplicated | 5 pointer lines, count row confirms 5 entries / 4 plans | ✅ PASS |
+| 188 | Close-out counted totals: `sed -n '/^## §2/,/^## §3/p' 34-AUDIT.md \| grep -E '^\| [0-9]+ \| docs/src/' \| awk -F'\|' '{...}' \| sort \| uniq -c` (verdict tally) | `38 current, 1 missing, 55 stale` — sums to 94 (93 on-disk + 1 proposed missing page) | ✅ PASS — matches plan 34-05's own recorded closure count (row 104) exactly |
+| 189 | Close-out counted totals: RD-nn run tally via the parsed `run` field (`'workspace --no-deps'` vs `'all-features --no-deps'` substring match) | `65` default-feature, `78` per-crate all-features, sum `143` | ✅ PASS — 65 matches plan 34-06's own reconciliation (row 114); 78 = 143 − 65 |
+| 190 | Close-out counted totals: EX-nn build-status and currency tallies (parsed `build_status`/`currency` fields, 63 Program/module rows) | build status: `59` green, `1` green-built-not-run, `3` n/a; currency: `58` current, `5` stale | ✅ PASS |
+| 191 | `git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- .planning/WINDOWS.md` (D-00d verification) | (empty) | ✅ PASS — no WINDOWS.md row touched anywhere in this phase's range |
+| 192 | `git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- . ':!.planning'` (SC5 phase-range proof, D-22) | (empty) | ✅ PASS |
+| 193 | `git status --porcelain -- . ':!.planning'` (SC5 phase-range proof, D-22) | (empty) | ✅ PASS |
+| 194 | `bash 34-check.sh --final` (phase close-out run) | see full verbatim output below | ✅ PASS — exit 0 |
+
+**Row 194 full verbatim output:**
+
+```
+$ bash .planning/phases/34-documentation-currency-audit/34-check.sh --final
+PASS: (a) every docs/src/*.md path appears in a §2 row
+PASS: (b) every MB-/RD-/EX- ID is unique at mint time (§1-§4)
+PASS: (c) no settled verdict row has an empty/seeded findings cell
+PASS: (d1) git status --porcelain -- . ':!.planning' is empty
+PASS: (d2) git diff --stat ee1fb160f8e743e638b32beb6c4e32be4ede9325..HEAD -- . ':!.planning' is empty
+PASS: (e) no §2 row still carries the seeded placeholder
+PASS: (f) every examples/*.rs and doc-examples/src/*.rs (non-lib.rs) appears in §4
+PASS: (g) every cited MB-/RD-/EX- ID is routed to §5, §6 or deferred-items.md
+--- 34-check.sh --final: all assertions PASSED ---
+```

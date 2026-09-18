@@ -384,7 +384,7 @@ impl StreamChunkBuilder {
 /// * `duration_ms` - Calculated execution duration in milliseconds
 /// * `model_used` - LLM model identifier (e.g., "gpt-4", "claude-3")
 /// * `token_usage` - Token consumption statistics (prompt, completion, total)
-/// * `cost_estimate` - Estimated cost in USD based on token usage and model pricing
+/// * `cost_estimate` - Reserved for the Treasurer (Milestone 14 / FUT-08); no in-tree producer yet
 /// * `error_count` - Number of errors encountered during execution
 /// * `metadata` - Extensible HashMap for custom telemetry and provider-specific data
 ///
@@ -410,11 +410,7 @@ impl StreamChunkBuilder {
 ///     .execution_id(Uuid::new_v4())
 ///     .start_time(Utc::now())
 ///     .model_used("gpt-4".to_string())
-///     .token_usage(TokenUsage {
-///         prompt_tokens: 100,
-///         completion_tokens: 50,
-///         total_tokens: 150,
-///     })
+///     .token_usage(TokenUsage::new(100, 50))
 ///     .build()
 ///     .expect("Valid metadata");
 /// ```
@@ -436,11 +432,7 @@ impl StreamChunkBuilder {
 ///     .start_time(start)
 ///     .end_time(Utc::now())
 ///     .model_used("gpt-4".to_string())
-///     .token_usage(TokenUsage {
-///         prompt_tokens: 250,
-///         completion_tokens: 500,
-///         total_tokens: 750,
-///     })
+///     .token_usage(TokenUsage::new(250, 500))
 ///     .build()
 ///     .unwrap();
 ///
@@ -463,12 +455,8 @@ impl StreamChunkBuilder {
 ///     .end_time(Utc::now())
 ///     .duration_ms(2500)
 ///     .model_used("gpt-4".to_string())
-///     .token_usage(TokenUsage {
-///         prompt_tokens: 1000,
-///         completion_tokens: 2000,
-///         total_tokens: 3000,
-///     })
-///     .cost_estimate(0.045)  // $0.045 based on GPT-4 pricing
+///     .token_usage(TokenUsage::new(1000, 2000))
+///     .cost_estimate(0.045)  // illustrative value; reserved for the Treasurer (Milestone 14 / FUT-08)
 ///     .error_count(2)        // Encountered 2 retryable errors
 ///     .build()
 ///     .unwrap();
@@ -491,11 +479,7 @@ impl StreamChunkBuilder {
 ///     .execution_id(Uuid::new_v4())
 ///     .start_time(Utc::now())
 ///     .model_used("gpt-4".to_string())
-///     .token_usage(TokenUsage {
-///         prompt_tokens: 150,
-///         completion_tokens: 300,
-///         total_tokens: 450,
-///     })
+///     .token_usage(TokenUsage::new(150, 300))
 ///     .add_metadata("user_id".to_string(), json!("user_123"))
 ///     .add_metadata("request_source".to_string(), json!("api"))
 ///     .add_metadata("cache_hit".to_string(), json!(false))
@@ -517,7 +501,7 @@ pub struct ExecutionMetadata {
     pub model_used: String,
     /// Token usage statistics
     pub token_usage: TokenUsage,
-    /// Estimated cost in USD (based on token usage)
+    /// Reserved for the Treasurer (Milestone 14 / FUT-08); no in-tree producer yet.
     pub cost_estimate: Option<f64>,
     /// Number of errors encountered during execution
     pub error_count: u32,
@@ -543,10 +527,11 @@ impl ExecutionMetadata {
         }
     }
 
-    /// Get total cost estimate based on token usage
+    /// Get the reserved cost estimate
     ///
-    /// Returns the cost estimate if available, otherwise calculates
-    /// a basic estimate based on token usage.
+    /// Returns the `cost_estimate` field as stored. The field is reserved for the
+    /// Treasurer (Milestone 14 / FUT-08); it has no in-tree producer yet, so this
+    /// returns `None` in this tree.
     pub fn total_cost(&self) -> Option<f64> {
         self.cost_estimate
     }
@@ -603,7 +588,7 @@ impl ExecutionMetadataBuilder {
         self
     }
 
-    /// Set the cost estimate
+    /// Set the cost estimate (reserved for the Treasurer, Milestone 14 / FUT-08 — no in-tree producer yet)
     pub fn cost_estimate(mut self, cost_estimate: f64) -> Self {
         self.cost_estimate = Some(cost_estimate);
         self
@@ -704,7 +689,7 @@ mod tests {
         let herald = MockHerald;
         let result = PaladinResult {
             output: "Test output".to_string(),
-            token_count: 100,
+            usage: crate::platform::container::token_usage::TokenUsage::new(100, 0),
             execution_time_ms: 1500,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -779,11 +764,7 @@ mod tests {
             .execution_id(Uuid::new_v4())
             .start_time(Utc::now())
             .model_used("test-model".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 300,
-                completion_tokens: 200,
-                total_tokens: 500,
-            })
+            .token_usage(TokenUsage::new(300, 200))
             .duration_ms(1234)
             .build()
             .unwrap();

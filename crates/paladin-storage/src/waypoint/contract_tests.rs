@@ -21,6 +21,7 @@ use paladin_core::platform::container::node_error::{AttemptRecord, NodeError, No
 use paladin_core::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::transience::Transience;
 use paladin_core::platform::container::waypoint::{
     FrontierEdgeState, FrontierSnapshot, GraphFingerprint, MusterProgress, NodeExecutionRecord,
@@ -669,7 +670,7 @@ fn muster_progress_fixture() -> MusterProgress {
 }
 
 /// A `Waypoint` whose `muster_progress` is `Some` with a fully populated
-/// [`muster_progress_fixture`] (two completed tasks with distinct keys and
+/// `muster_progress_fixture` (two completed tasks with distinct keys and
 /// non-trivial deltas, plus a pending task) round-trips through
 /// `save` -> `latest` -> `get`, byte-identical after a serde round trip and
 /// equal field-for-field (CF-FR-12, D-14).
@@ -953,7 +954,7 @@ fn record_with_two_failed_attempts() -> NodeExecutionRecord {
         paladin_id: None,
         started_at,
         duration_ms: 7,
-        token_count: 0,
+        usage: TokenUsage::default(),
         outcome: NodeOutcomeKind::Succeeded,
         attempt: 3,
         attempts: vec![

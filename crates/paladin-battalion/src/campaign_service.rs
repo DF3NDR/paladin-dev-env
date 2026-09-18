@@ -351,7 +351,7 @@ impl CampaignExecutionService {
 
             debug!(
                 "Paladin {} completed: {} tokens, {} loops",
-                paladin.node.name, result.token_count, result.loop_count
+                paladin.node.name, result.usage.total_tokens, result.loop_count
             );
 
             // Store output for edge condition evaluation
@@ -530,7 +530,7 @@ impl CampaignExecutionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paladin_core::platform::container::battalion::BattalionConfig;
+    use paladin_core::platform::container::battalion::{BattalionConfig, TokenUsage};
     use paladin_core::platform::container::paladin::Paladin;
 
     #[test]
@@ -550,7 +550,7 @@ mod tests {
             ) -> Result<PaladinResult, PaladinError> {
                 Ok(PaladinResult {
                     output: "test".to_string(),
-                    token_count: 0,
+                    usage: TokenUsage::new(0, 0),
                     execution_time_ms: 0,
                     loop_count: 1,
                     stop_reason: StopReason::Completed,
@@ -648,7 +648,7 @@ mod tests {
             ) -> Result<PaladinResult, PaladinError> {
                 Ok(PaladinResult {
                     output: "campaign output".to_string(),
-                    token_count: 10,
+                    usage: TokenUsage::new(10, 0),
                     execution_time_ms: 5,
                     loop_count: 1,
                     stop_reason: StopReason::Completed,
@@ -751,7 +751,7 @@ mod tests {
             self.calls.lock().unwrap().push(paladin.node.name.clone());
             Ok(PaladinResult {
                 output: "the situation is urgent".to_string(),
-                token_count: 0,
+                usage: TokenUsage::new(0, 0),
                 execution_time_ms: 0,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,

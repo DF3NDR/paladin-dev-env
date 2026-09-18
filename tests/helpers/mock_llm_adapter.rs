@@ -185,11 +185,7 @@ impl LlmPort for MockLlmAdapter {
                 model: request.model,
                 content,
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsage {
-                    prompt_tokens: 10,
-                    completion_tokens: 20,
-                    total_tokens: 30,
-                },
+                usage: TokenUsage::new(10, 20),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
@@ -203,11 +199,7 @@ impl LlmPort for MockLlmAdapter {
                 model: request.model,
                 content: format!("Calling tool: {}", tool_name),
                 finish_reason: FinishReason::FunctionCall,
-                usage: TokenUsage {
-                    prompt_tokens: 10,
-                    completion_tokens: 15,
-                    total_tokens: 25,
-                },
+                usage: TokenUsage::new(10, 15),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall {
@@ -224,11 +216,7 @@ impl LlmPort for MockLlmAdapter {
                     model: request.model,
                     content,
                     finish_reason: FinishReason::Stop,
-                    usage: TokenUsage {
-                        prompt_tokens: 10,
-                        completion_tokens: 20,
-                        total_tokens: 30,
-                    },
+                    usage: TokenUsage::new(10, 20),
                     created_at: Utc::now(),
                     metadata: HashMap::new(),
                     function_call: None,
@@ -258,44 +246,32 @@ impl LlmPort for MockLlmAdapter {
 
         match mock_response {
             MockResponse::Text(content) => {
-                // Create single chunk stream
-                let response = StreamingResponse {
-                    id: request.id,
-                    delta: content,
-                    finish_reason: Some(FinishReason::Stop),
-                };
-                Ok(Box::new(stream::once(async move { Ok(response) })))
+                // Delta chunk followed by a terminal chunk (D-13/D-14).
+                let chunks = vec![
+                    Ok(StreamingResponse::delta(content)),
+                    Ok(StreamingResponse::terminal(FinishReason::Stop)),
+                ];
+                Ok(Box::new(stream::iter(chunks)))
             }
             MockResponse::Streaming(chunks) => {
-                // Create multi-chunk stream
-                let request_id = request.id;
-                let num_chunks = chunks.len();
-                let responses: Vec<Result<StreamingResponse, LlmError>> = chunks
+                // Every scripted chunk as a delta, then one terminal chunk.
+                let mut responses: Vec<Result<StreamingResponse, LlmError>> = chunks
                     .into_iter()
-                    .enumerate()
-                    .map(|(i, chunk)| {
-                        Ok(StreamingResponse {
-                            id: request_id,
-                            delta: chunk,
-                            finish_reason: if i == num_chunks - 1 {
-                                Some(FinishReason::Stop)
-                            } else {
-                                None
-                            },
-                        })
-                    })
+                    .map(|chunk| Ok(StreamingResponse::delta(chunk)))
                     .collect();
+                responses.push(Ok(StreamingResponse::terminal(FinishReason::Stop)));
 
                 Ok(Box::new(stream::iter(responses)))
             }
             MockResponse::ToolCall { .. } => {
-                // For streaming, tool calls return as text
-                let response = StreamingResponse {
-                    id: request.id,
-                    delta: "Tool call not supported in streaming".to_string(),
-                    finish_reason: Some(FinishReason::Stop),
-                };
-                Ok(Box::new(stream::once(async move { Ok(response) })))
+                // For streaming, tool calls return as text.
+                let chunks = vec![
+                    Ok(StreamingResponse::delta(
+                        "Tool call not supported in streaming",
+                    )),
+                    Ok(StreamingResponse::terminal(FinishReason::Stop)),
+                ];
+                Ok(Box::new(stream::iter(chunks)))
             }
             MockResponse::Error(error) => Err(error),
         }

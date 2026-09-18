@@ -792,6 +792,7 @@ impl GroveExecutionService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::battalion::TokenUsage;
     use paladin_core::platform::container::battalion::grove::{GroveBuilder, Tree, TreeAgent};
     use paladin_ports::output::embedding_port::Embedding;
 
@@ -979,7 +980,7 @@ mod tests {
             {
                 Ok(PaladinResult {
                     output: format!("[{}] Analyzed: {}", paladin.node.name, input),
-                    token_count: 100,
+                    usage: TokenUsage::new(100, 0),
                     execution_time_ms: 10,
                     loop_count: 1,
                     ..Default::default()
@@ -1207,11 +1208,7 @@ mod tests {
                     model: "mock-model".to_string(),
                     content: response_json.to_string(),
                     finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
-                    usage: paladin_ports::output::llm_port::TokenUsage {
-                        prompt_tokens: 100,
-                        completion_tokens: 50,
-                        total_tokens: 150,
-                    },
+                    usage: paladin_ports::output::llm_port::TokenUsage::new(100, 50),
                     created_at: chrono::Utc::now(),
                     metadata: std::collections::HashMap::new(),
                     function_call: None,
@@ -1311,11 +1308,7 @@ mod tests {
                     model: "mock-model".to_string(),
                     content: response_json.to_string(),
                     finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
-                    usage: paladin_ports::output::llm_port::TokenUsage {
-                        prompt_tokens: 100,
-                        completion_tokens: 50,
-                        total_tokens: 150,
-                    },
+                    usage: paladin_ports::output::llm_port::TokenUsage::new(100, 50),
                     created_at: chrono::Utc::now(),
                     metadata: std::collections::HashMap::new(),
                     function_call: None,
@@ -1413,11 +1406,7 @@ mod tests {
                     model: "mock-model".to_string(),
                     content: response_json.to_string(),
                     finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
-                    usage: paladin_ports::output::llm_port::TokenUsage {
-                        prompt_tokens: 100,
-                        completion_tokens: 50,
-                        total_tokens: 150,
-                    },
+                    usage: paladin_ports::output::llm_port::TokenUsage::new(100, 50),
                     created_at: chrono::Utc::now(),
                     metadata: std::collections::HashMap::new(),
                     function_call: None,
@@ -1513,11 +1502,7 @@ mod tests {
                     model: "mock-model".to_string(),
                     content: response_json.to_string(),
                     finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
-                    usage: paladin_ports::output::llm_port::TokenUsage {
-                        prompt_tokens: 100,
-                        completion_tokens: 50,
-                        total_tokens: 150,
-                    },
+                    usage: paladin_ports::output::llm_port::TokenUsage::new(100, 50),
                     created_at: chrono::Utc::now(),
                     metadata: std::collections::HashMap::new(),
                     function_call: None,
@@ -1650,11 +1635,7 @@ mod tests {
                 model: request.model,
                 content: response_json.to_string(),
                 finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
-                usage: paladin_ports::output::llm_port::TokenUsage {
-                    prompt_tokens: 100,
-                    completion_tokens: 50,
-                    total_tokens: 150,
-                },
+                usage: paladin_ports::output::llm_port::TokenUsage::new(100, 50),
                 created_at: chrono::Utc::now(),
                 metadata: std::collections::HashMap::new(),
                 function_call: None,

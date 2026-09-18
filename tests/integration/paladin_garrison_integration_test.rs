@@ -42,11 +42,7 @@ impl LlmPort for MockLlmPort {
             request_id: request.id,
             content: self.response_content.clone(),
             model: "gpt-4".to_string(),
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 20,
-                total_tokens: 30,
-            },
+            usage: TokenUsage::new(10, 20),
             finish_reason: FinishReason::Stop,
             created_at: Utc::now(),
             metadata: HashMap::new(),

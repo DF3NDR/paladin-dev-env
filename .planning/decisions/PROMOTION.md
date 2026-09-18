@@ -66,8 +66,24 @@ the plans that follow in this same phase):
 | 0046 | `facade-llm-feature-flag-wiring` | The facade's `llm-*` provider flags wired for real, with the default build preserved (D-11 amended, option-b) — a `Fixed` CHANGELOG entry, not `BREAKING` (Phase 17, plan 17-06) |
 | 0047 | `architecture-appendix-disposition` | `docs/src/appendix/design-and-architecture.md` recorded historical, superseded by `docs/src/architecture/` plus `docs/src/appendix/sentinel.md`; FR-26.1's metric re-anchored to 18 of 19 → 19 of 19 against the live chapter, naming Sentinel; three of the four named Mermaid diagrams withdrawn as genuinely unanswered by the existing SVG inventory, the fourth mapped to existing artifacts (Phase 16, plan 16-06) |
 | 0048 | `paladin-eval-composition-crate` | `paladin-eval` classified a composition crate (not an extracted crate) under ADR-0031's own extracted-crate scope language, published with a `cli`-gated upward facade edge and a deliberate `semver` job exclusion (Phase 28, plan 28-17) |
+| 0049 | `commissary-design-and-rename` | `Commissary` design (`verify_fits` guard + `dispense` allocator, fail-loud/never-silent) and the Quartermaster→Commissary rename rationale, with the nine-name rejected list, reconstructed from the abandoned-branch historical record and the port commits (Phase 30, plan 30-01) |
+| 0050 | `treasurer-reservation` | `Treasurer` reserved for cross-run spend governance (allowances, pricing, `cost_estimate` production, pacing), installs rather than replaces the per-run `TokenBudget`, built in Milestone 14, with the downstream `GarrisonTreasury` guardrail (Phase 30, plan 30-02) |
+| 0051 | `token-economy-versioning-x03-supersession` | Token-economy Phases 31-33 land as clean breaks inside the untagged v0.10.0, superseding corpus rule X-03 for those three phases only, on the operator's 2026-09-14 decision (Phase 30, plan 30-02) |
 
-**Next free ADR number: 0049**
+**Next free ADR number: 0052**
+
+*Dated note, 2026-09-14 (plan 30-02):* the line advances by **two**, from 0050 to 0052, because
+Phase 30 plan 30-02 authored ADR-0050 (the `Treasurer` reservation, with the downstream guardrail,
+VOCAB-04) and ADR-0051 (the X-03 clean-break supersession for Phases 31-33, VOCAB-07) — plan 30-01
+having already advanced 0049 → 0050 for ADR-0049. `ls .planning/decisions/00{49,50,51}-*.md`
+(re-run before writing this note) confirms all three files exist with contiguous numbers, none
+skipped or reused, and no existing index row above was renumbered, reworded or reordered.
+
+*Dated note, 2026-09-14 (plan 30-01):* the line advances by **one**, from 0049 to 0050, because
+Phase 30 plan 30-01 authored ADR-0049 (the `Commissary` design, rename rationale and rejected-name
+record, VOCAB-02). `ls .planning/decisions/0049-*.md` (re-run before writing this note) confirms
+the file exists with the expected number, not skipped or reused, and no existing index row above
+was renumbered, reworded or reordered.
 
 *Dated note, 2026-09-09 (plan 28-17):* the line advances by **one**, from 0048 to 0049, because
 Phase 28 plan 28-17 authored ADR-0048 (the `paladin-eval` composition-crate classification,

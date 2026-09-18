@@ -41,7 +41,7 @@
 //! // Execute
 //! let result = service.execute(&paladin, "What is Rust?").await?;
 //! println!("Output: {}", result.output);
-//! println!("Loops: {}, Tokens: {}", result.loop_count, result.token_count);
+//! println!("Loops: {}, Tokens: {}", result.loop_count, result.usage.total_tokens);
 //! # Ok(())
 //! # }
 //! ```
@@ -60,7 +60,9 @@ use crate::application::services::paladin::vault_confined::ConfinedVault;
 use crate::application::services::sanctum::memory_extraction_service::{
     MemoryExtractionService, MemoryExtractionStrategy,
 };
-use crate::application::services::sanctum::rag_retrieval_service::RagRetrievalService;
+use crate::application::services::sanctum::rag_retrieval_service::{
+    RagRetrievalResult, RagRetrievalService, rag_omission_marker,
+};
 use crate::config::agent_runtime::{ToolErrorConfig, ToolErrorMode};
 use crate::core::base::entity::node::Node;
 use crate::core::platform::container::arsenal::{ArmamentCall, ArsenalError};
@@ -89,7 +91,7 @@ use paladin_ports::output::llm_port::{FunctionCall, LlmPort, LlmRequest, Respons
 use paladin_ports::output::orchestrator_port::OrchestratorPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::paladin_port::{
-    PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
+    ChunkMetadata, PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
 };
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_ports::output::structured_executor_port::{
@@ -1009,7 +1011,7 @@ impl PaladinExecutionService {
     /// same reasoning loop, same timeout wrapper -- resolving `scope`'s
     /// Vault grant via [`PaladinExecutionService::confined_vault`] before
     /// dispatching. `heartbeat` is `Some` only on the observed path,
-    /// exactly like [`Self::execute_bounded`]'s own contract.
+    /// exactly like `execute_bounded`'s own contract.
     ///
     /// # Examples
     ///
@@ -1213,7 +1215,10 @@ impl PaladinExecutionService {
         Ok(PaladinResult {
             output: vision_result.content,
             loop_count: 1, // Vision is single-shot
-            token_count: vision_result.token_usage.total_tokens,
+            usage: paladin_core::platform::container::token_usage::TokenUsage::new(
+                vision_result.token_usage.prompt_tokens,
+                vision_result.token_usage.completion_tokens,
+            ),
             stop_reason: StopReason::Completed,
             execution_time_ms: 0, // Will be set by caller if needed
             ..Default::default()
@@ -1254,7 +1259,7 @@ impl PaladinExecutionService {
         confined_vault: Option<ConfinedVault>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
-        let mut total_tokens = 0u32;
+        let mut usage = paladin_core::platform::container::token_usage::TokenUsage::default();
         let mut accumulated_output = String::new();
         let mut _retrieval_latency_ms = 0u64;
         let mut _memories_retrieved_count = 0usize;
@@ -1313,8 +1318,11 @@ impl PaladinExecutionService {
                     };
 
                     info!(
-                        "RAG retrieval succeeded: execution_id={}, memories={}, latency_ms={}",
-                        execution_id, _memories_retrieved_count, _retrieval_latency_ms
+                        "RAG retrieval succeeded: execution_id={}, memories={}, shed={}, latency_ms={}",
+                        execution_id,
+                        _memories_retrieved_count,
+                        results.shed.len(),
+                        _retrieval_latency_ms
                     );
                     Some(context)
                 }
@@ -1465,7 +1473,7 @@ impl PaladinExecutionService {
 
                     return Ok(PaladinResult {
                         output: accumulated_output,
-                        token_count: total_tokens,
+                        usage: usage.clone(),
                         execution_time_ms: start_time.elapsed().as_millis() as u64,
                         loop_count: loop_num,
                         stop_reason: effective_result.stop_reason,
@@ -1497,9 +1505,12 @@ impl PaladinExecutionService {
 
             // Update accumulated token count -- BEFORE after_model, so a
             // built-in like TokenBudget reads the run's true running sum
-            // (D-08).
-            total_tokens += response.usage.total_tokens;
-            middleware_cx.cumulative_tokens = total_tokens;
+            // (D-08). Accumulates through TokenUsage::AddAssign (D-06,
+            // D-12) rather than a hand-rolled sum, so the three optional
+            // cache/reasoning sub-counts merge under the same saturating
+            // rule every other accumulator in the tree uses.
+            usage += response.usage.clone();
+            middleware_cx.cumulative_tokens = usage.total_tokens;
             if let Some(provider) = response.metadata.get(SERVED_BY_METADATA_KEY) {
                 served_by = Some(provider.clone());
             }
@@ -1530,7 +1541,7 @@ impl PaladinExecutionService {
 
                 return Ok(PaladinResult {
                     output: accumulated_output,
-                    token_count: total_tokens,
+                    usage: usage.clone(),
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     loop_count: loop_num,
                     stop_reason: final_result.stop_reason,
@@ -1636,7 +1647,9 @@ impl PaladinExecutionService {
                                         ToolErrorMode::FailRun => {
                                             return Err(PaladinError::ArmamentFailed {
                                                 tool: effective_function_call.name.clone(),
-                                                reason: e.to_string(),
+                                                reason: ToolResultFormatter::sanitize_tool_text(
+                                                    &e.to_string(),
+                                                ),
                                             });
                                         }
                                     }
@@ -1757,7 +1770,10 @@ impl PaladinExecutionService {
                                                 ToolErrorMode::FailRun => {
                                                     return Err(PaladinError::ArmamentFailed {
                                                         tool: effective_call.tool_name.clone(),
-                                                        reason: e.to_string(),
+                                                        reason:
+                                                            ToolResultFormatter::sanitize_tool_text(
+                                                                &e.to_string(),
+                                                            ),
                                                     });
                                                 }
                                             }
@@ -1811,7 +1827,7 @@ impl PaladinExecutionService {
                 // Return result with autonomous metadata (Phase 2 enhancement)
                 return Ok(PaladinResult {
                     output: accumulated_output,
-                    token_count: total_tokens,
+                    usage: usage.clone(),
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     loop_count: loop_num,
                     stop_reason: StopReason::MaxLoops,
@@ -1838,7 +1854,7 @@ impl PaladinExecutionService {
 
         Ok(PaladinResult {
             output: accumulated_output,
-            token_count: total_tokens,
+            usage: usage.clone(),
             execution_time_ms: start_time.elapsed().as_millis() as u64,
             loop_count: paladin.node.max_loops.as_u32(),
             stop_reason: StopReason::Completed,
@@ -1919,7 +1935,7 @@ impl PaladinExecutionService {
         paladin: &Paladin,
         query: &str,
         execution_id: uuid::Uuid,
-    ) -> Result<Vec<paladin_ports::output::sanctum_port::SanctumSearchResult>, PaladinError> {
+    ) -> Result<RagRetrievalResult, PaladinError> {
         if let Some(ref rag_service) = self.rag_retrieval_service {
             let paladin_id = paladin.uuid.to_string();
 
@@ -1960,23 +1976,33 @@ impl PaladinExecutionService {
     }
 
     /// Formats retrieved search results into a context string for injection
-    fn format_retrieved_context(
-        &self,
-        results: &[paladin_ports::output::sanctum_port::SanctumSearchResult],
-    ) -> String {
+    ///
+    /// When `results.shed` is non-empty, appends the shared RAG omission marker
+    /// (`rag_omission_marker`, D-15) so this renderer and
+    /// `RagRetrievalService::format_for_prompt` can never emit a byte-different line
+    /// for the same result.
+    fn format_retrieved_context(&self, results: &RagRetrievalResult) -> String {
         if results.is_empty() {
             return String::new();
         }
 
         let mut context = String::new();
-        for (i, result) in results.iter().enumerate() {
+        for (i, m) in results.memories.iter().enumerate() {
             context.push_str(&format!(
                 "{}. [Score: {:.2}] {}\n",
                 i + 1,
-                result.score,
-                result.entry.memory.content
+                m.result.score,
+                m.body
             ));
         }
+
+        if !results.shed.is_empty() {
+            context.push_str(&rag_omission_marker(
+                results.shed.len(),
+                results.allotted_tokens,
+            ));
+        }
+
         context
     }
 
@@ -3062,7 +3088,7 @@ impl PaladinExecutionService {
 
         Ok(PaladinResult {
             output: response.content,
-            token_count: response.usage.total_tokens,
+            usage: response.usage.clone(),
             loop_count: call_num,
             stop_reason: StopReason::Completed,
             ..Default::default()
@@ -3208,6 +3234,11 @@ impl PaladinExecutionService {
             .clone()
             .or_else(current_trace_emitter);
 
+        // D-17: captured before the spawn (the spawned task never touches
+        // `self`) purely to name the provider in the no-usage warning below
+        // -- never any request/response content.
+        let provider_name = self.llm_port.get_provider_name();
+
         tokio::spawn(async move {
             use futures::StreamExt;
             let mut stream = Box::into_pin(provider_stream);
@@ -3220,10 +3251,35 @@ impl PaladinExecutionService {
                         if let Some(emitter) = &stream_trace_emitter {
                             Self::emit_stream_chunk_progress(emitter, resp.delta.len() as u64);
                         }
+                        // D-18: the terminal chunk's usage rides on
+                        // `ChunkMetadata.usage`; every non-final chunk
+                        // leaves it `None`. D-17: when the terminal chunk
+                        // reports no usage, this never calls
+                        // `self.token_counter()` (or any other estimator)
+                        // to fill the gap -- an estimate must never be
+                        // reported in the same field as a provider-billed
+                        // figure. Deferring an opt-in estimate is the
+                        // recorded decision (Milestone 14); do not "fix"
+                        // this by wiring the counter in.
+                        let metadata = if is_final {
+                            match resp.usage.clone() {
+                                Some(usage) => Some(ChunkMetadata::new().with_usage(usage)),
+                                None => {
+                                    warn!(
+                                        "streamed call to provider \"{provider_name}\" ended \
+                                         without a reported usage; recording a default usage \
+                                         rather than a TokenCounterPort estimate (D-17)"
+                                    );
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
                         let chunk = PaladinStreamChunk {
                             text: resp.delta,
                             is_final,
-                            metadata: None,
+                            metadata,
                         };
                         // --- FT-FR-09, D-19: a chunk arrived -- progress.
                         // Beaten BEFORE the send so a slow consumer never
@@ -3754,19 +3810,11 @@ mod tests {
             LlmError,
         > {
             let mut items: Vec<Result<StreamingResponse, LlmError>> = (0..self.chunks)
-                .map(|i| {
-                    Ok(StreamingResponse {
-                        id: Uuid::new_v4(),
-                        delta: format!("c{i}"),
-                        finish_reason: None,
-                    })
-                })
+                .map(|i| Ok(StreamingResponse::delta(format!("c{i}"))))
                 .collect();
-            items.push(Ok(StreamingResponse {
-                id: Uuid::new_v4(),
-                delta: String::new(),
-                finish_reason: Some(paladin_ports::output::llm_port::FinishReason::Stop),
-            }));
+            items.push(Ok(StreamingResponse::terminal(
+                paladin_ports::output::llm_port::FinishReason::Stop,
+            )));
             Ok(Box::new(futures::stream::iter(items)))
         }
 
@@ -4433,13 +4481,36 @@ mod tests {
         SanctumSearchResult { entry, score }
     }
 
+    /// Wraps already-retrieved `SanctumSearchResult`s directly into a
+    /// `RagRetrievalResult` for renderer tests that do not go through a real
+    /// Commissary dispense.
+    fn wrap_rag_result(results: Vec<SanctumSearchResult>) -> RagRetrievalResult {
+        use crate::application::services::sanctum::rag_retrieval_service::RagRetainedMemory;
+
+        let memories = results
+            .into_iter()
+            .map(|result| {
+                let body = result.entry.memory.content.clone();
+                RagRetainedMemory {
+                    result,
+                    body,
+                    truncated: false,
+                }
+            })
+            .collect();
+        RagRetrievalResult {
+            memories,
+            ..RagRetrievalResult::default()
+        }
+    }
+
     #[tokio::test]
     async fn test_format_retrieved_context() {
         // Arrange
-        let results = vec![
+        let results = wrap_rag_result(vec![
             create_mock_search_result("First memory", 0.95),
             create_mock_search_result("Second memory", 0.85),
-        ];
+        ]);
 
         let llm_port: Arc<dyn LlmPort> = Arc::new(MockLlmPort);
         let circuit_breaker = Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60)));
@@ -4461,10 +4532,60 @@ mod tests {
         let service = PaladinExecutionService::new(llm_port, circuit_breaker, None, None);
 
         // Act
-        let formatted = service.format_retrieved_context(&[]);
+        let formatted = service.format_retrieved_context(&RagRetrievalResult::default());
 
         // Assert
         assert!(formatted.is_empty());
+    }
+
+    /// Byte-identity assertion (Phase 33, COMM-02, D-15): the facade renderer's
+    /// omission marker must be produced by the same shared helper the crate renderer
+    /// uses, sourced from the same `allotted_tokens` on the result, so the two
+    /// renderers can never drift for the same result.
+    #[tokio::test]
+    async fn test_format_retrieved_rag_context_ends_with_shared_omission_marker() {
+        use crate::application::services::sanctum::rag_retrieval_service::ShedItem;
+
+        // Arrange
+        let mut results = wrap_rag_result(vec![
+            create_mock_search_result("First memory", 0.95),
+            create_mock_search_result("Second memory", 0.85),
+        ]);
+        results.shed = vec![ShedItem {
+            label: Uuid::new_v4().to_string(),
+            priority: 2,
+            original_bytes: 256,
+        }];
+        results.allotted_tokens = 1_234;
+
+        let llm_port: Arc<dyn LlmPort> = Arc::new(MockLlmPort);
+        let circuit_breaker = Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60)));
+        let service = PaladinExecutionService::new(llm_port, circuit_breaker, None, None);
+
+        // Act
+        let formatted = service.format_retrieved_context(&results);
+
+        // Assert: ends with exactly what the shared helper renders for the same inputs
+        assert!(formatted.ends_with(&rag_omission_marker(1, 1_234)));
+    }
+
+    #[tokio::test]
+    async fn test_format_retrieved_rag_context_no_marker_when_shed_empty() {
+        // Arrange
+        let results = wrap_rag_result(vec![create_mock_search_result("Kept memory", 0.9)]);
+        assert!(results.shed.is_empty());
+
+        let llm_port: Arc<dyn LlmPort> = Arc::new(MockLlmPort);
+        let circuit_breaker = Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60)));
+        let service = PaladinExecutionService::new(llm_port, circuit_breaker, None, None);
+
+        // Act
+        let formatted = service.format_retrieved_context(&results);
+
+        // Assert: exactly the per-memory line, nothing appended after it — an empty
+        // shed means no marker text of any kind (D-15). Byte-exact rather than a
+        // substring check so this file never needs to re-type the marker's wording.
+        assert_eq!(formatted, "1. [Score: 0.90] Kept memory\n");
     }
 
     #[tokio::test]
@@ -5133,7 +5254,7 @@ mod tests {
         assert!(result.is_ok());
         let paladin_result = result.unwrap();
         assert_eq!(paladin_result.output, "Mock vision analysis result");
-        assert_eq!(paladin_result.token_count, 150);
+        assert_eq!(paladin_result.usage.total_tokens, 150);
         assert_eq!(paladin_result.loop_count, 1);
         assert_eq!(paladin_result.stop_reason, StopReason::Completed);
     }
@@ -5849,6 +5970,70 @@ mod middleware_wiring_tests {
         );
     }
 
+    /// D-03 (ledger row 38): under the run-failing tool-error policy, a
+    /// credential embedded in a failing tool's error text must never reach
+    /// the structured `PaladinError::ArmamentFailed` error's `reason`
+    /// unredacted -- mirroring `a_secret_in_a_tool_error_never_reaches_the_
+    /// model` above, but for `ToolErrorMode::FailRun` rather than the
+    /// default `FeedToModel`. Covers the regular Arsenal-tool arm, which
+    /// `FailingArsenal` drives directly; the handoff arm's coverage is the
+    /// source-level guarantee from Task 1 (`sanitize_tool_text` is called
+    /// in exactly two places, one per arm) -- see this plan's SUMMARY for
+    /// why a handoff-arm pinning test was not added here (driving a
+    /// caller-controlled message through that arm would require either new
+    /// production scaffolding or exploiting `HandoffService`'s recursive
+    /// self-execution retry path, both out of this plan's bounded scope).
+    #[tokio::test]
+    async fn fail_run_redacts_a_secret_in_the_reason() {
+        let llm = Arc::new(
+            MockLlmAdapter::new().with_script(vec![MockScriptEntry::ToolCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            }]),
+        );
+        let arsenal = Arc::new(FailingArsenal::new(
+            "upstream rejected: Authorization: Bearer sk-live-abcdef0123456789",
+        ));
+        let service = make_service_with_arsenal(llm, arsenal.clone() as Arc<dyn ArsenalPort>)
+            .with_tool_error_config(ToolErrorConfig {
+                mode: ToolErrorMode::FailRun,
+                per_tool: HashMap::new(),
+            });
+        let paladin = make_paladin(1);
+
+        let err = service.execute(&paladin, "hi").await.unwrap_err();
+
+        match err {
+            PaladinError::ArmamentFailed { tool, reason } => {
+                assert_eq!(tool, "lookup");
+                assert!(
+                    !reason.contains("abcdef0123456789"),
+                    "credential leaked in reason, got {reason}"
+                );
+                // `paladin_llm::redaction::CREDENTIAL_PLACEHOLDER` is
+                // `pub(crate)` to that crate, so this asserts the literal
+                // it is defined as rather than importing it.
+                assert!(
+                    reason.contains("[REDACTED]"),
+                    "expected redaction placeholder, got {reason}"
+                );
+                // Proves the sanitizer was called directly, not the
+                // model-facing `format_error` block (which would prefix
+                // "Tool Execution" / "Result: FAILED" and double the
+                // structured error's own "tool `{tool}` failed: " prefix).
+                assert!(
+                    !reason.contains("Tool Execution"),
+                    "reason carries the model-facing block, got {reason}"
+                );
+                assert!(
+                    !reason.contains("Result: FAILED"),
+                    "reason carries the model-facing block, got {reason}"
+                );
+            }
+            other => panic!("expected PaladinError::ArmamentFailed, got {other:?}"),
+        }
+    }
+
     /// D-34: the handoff arm routes through the SAME tool-error policy and
     /// the same shared formatter as the Arsenal arm -- proven end to end by
     /// forcing a handoff to fail via `HandoffConfig.max_depth = 0` (an
@@ -6044,6 +6229,170 @@ mod token_counter_and_recall_limit_tests {
 
         let service = service.with_token_counter(Arc::new(AlwaysOneCounter));
         assert_eq!(service.token_counter().name(), "always-one-test-counter");
+    }
+}
+
+/// Phase 31 (ACCT-03, D-17/D-18): the streaming consumer carries the
+/// provider's terminal-chunk usage out to `ChunkMetadata`, with no
+/// `TokenCounterPort` estimate substituted when the provider reports
+/// nothing.
+#[cfg(test)]
+mod streamed_usage_tests {
+    use super::*;
+    use crate::core::base::entity::node::Node;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_llm::mock::MockLlmAdapter;
+    use std::sync::Mutex;
+
+    fn make_paladin() -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            ..Default::default()
+        };
+        Node::new(data, None)
+    }
+
+    fn make_service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+    }
+
+    /// A `TokenCounterPort` that records how many times it was consulted --
+    /// distinct from `HeuristicTokenCounter`/`AlwaysOneCounter` so a test can
+    /// assert it was NEVER called (D-17).
+    #[derive(Default)]
+    struct CountingTokenCounter {
+        calls: Mutex<u32>,
+    }
+
+    impl CountingTokenCounter {
+        fn calls(&self) -> u32 {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    impl paladin_ports::output::token_counter_port::TokenCounterPort for CountingTokenCounter {
+        fn count(&self, _text: &str, _model: &str) -> u32 {
+            *self.calls.lock().unwrap() += 1;
+            1
+        }
+
+        fn name(&self) -> &str {
+            "counting-test-counter"
+        }
+    }
+
+    async fn drain_stream(
+        service: &PaladinExecutionService,
+        paladin: &Paladin,
+    ) -> (Vec<PaladinStreamChunk>, Option<PaladinError>) {
+        let mut stream = service.execute_stream(paladin, "hi").await.unwrap();
+        let mut chunks = Vec::new();
+        let mut error = None;
+        while let Some(item) = stream.recv().await {
+            match item {
+                Ok(chunk) => {
+                    let is_final = chunk.is_final;
+                    chunks.push(chunk);
+                    if is_final {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error = Some(e);
+                    break;
+                }
+            }
+        }
+        (chunks, error)
+    }
+
+    /// A streamed run whose terminal chunk reports usage produces a final
+    /// `PaladinStreamChunk` carrying that same usage on `ChunkMetadata`, and
+    /// `execute()` against the identical mock configuration reports the
+    /// identical `TokenUsage` on `PaladinResult.usage` -- field-for-field,
+    /// including the three optionals (D-18).
+    #[tokio::test]
+    async fn streamed_final_chunk_usage_equals_the_non_streamed_result_usage() {
+        let usage = TokenUsage::new(11, 7).with_cache_read(3).with_reasoning(2);
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(usage.clone()),
+        );
+        let service = make_service(llm);
+        let paladin = make_paladin();
+
+        let (chunks, error) = drain_stream(&service, &paladin).await;
+        assert!(error.is_none(), "unexpected stream error: {error:?}");
+
+        let final_chunk = chunks.last().expect("at least one chunk must be emitted");
+        assert!(final_chunk.is_final);
+        let final_usage = final_chunk
+            .metadata
+            .as_ref()
+            .and_then(|m| m.usage.clone())
+            .expect("the final chunk must carry usage when the provider reported one");
+        assert_eq!(final_usage, usage);
+
+        // Every non-final chunk must leave `metadata.usage` `None`.
+        for chunk in chunks.iter().filter(|c| !c.is_final) {
+            assert!(
+                chunk
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.usage.clone())
+                    .is_none(),
+                "a non-final chunk must never carry usage"
+            );
+        }
+
+        let buffered = service.execute(&paladin, "hi").await.unwrap();
+        assert_eq!(
+            buffered.usage, usage,
+            "execute() and execute_stream() must report the identical usage for the same call"
+        );
+    }
+
+    /// When the provider's terminal chunk reports no usage at all, the final
+    /// `PaladinStreamChunk`'s `metadata.usage` is `None` (never a fabricated
+    /// or estimated value), and the configured `TokenCounterPort` is never
+    /// consulted (D-17).
+    #[tokio::test]
+    async fn streamed_final_chunk_with_no_reported_usage_never_consults_the_token_counter() {
+        let counter = Arc::new(CountingTokenCounter::default());
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_no_streamed_usage(),
+        );
+        let service = make_service(llm).with_token_counter(counter.clone());
+        let paladin = make_paladin();
+
+        let (chunks, error) = drain_stream(&service, &paladin).await;
+        assert!(error.is_none(), "unexpected stream error: {error:?}");
+
+        let final_chunk = chunks.last().expect("at least one chunk must be emitted");
+        assert!(final_chunk.is_final);
+        assert!(
+            final_chunk
+                .metadata
+                .as_ref()
+                .and_then(|m| m.usage.clone())
+                .is_none(),
+            "the final chunk must carry no usage when the provider reported none"
+        );
+        assert_eq!(
+            counter.calls(),
+            0,
+            "the streaming no-usage path must never consult TokenCounterPort (D-17)"
+        );
     }
 }
 

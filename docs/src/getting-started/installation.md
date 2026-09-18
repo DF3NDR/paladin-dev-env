@@ -9,14 +9,14 @@ Paladin workspace for development.
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| **Rust** | 1.85.0 | Latest stable (1.95+) |
+| **Rust** | 1.88.0 | Latest stable (1.95+) |
 | **Cargo** | Included with Rust | - |
 | **Edition** | 2024 | 2024 |
 | **LLM API Key** | At least one | - |
 
-> **Why Rust >= 1.85?** Paladin uses edition 2024 features. Verify your toolchain:
+> **Why Rust >= 1.88?** Paladin uses edition 2024 features. Verify your toolchain:
 > ```bash
-> rustc --version   # should print >= 1.85.0
+> rustc --version   # should print >= 1.88.0
 > ```
 > Update with `rustup update stable`.
 
@@ -45,25 +45,25 @@ Windows users should use [rustup-init.exe](https://rustup.rs/) or WSL 2.
 
 ### Cargo.toml -- choose your crates
 
-Paladin v0.5.0 is published as a workspace of focused crates. Add only what you need:
+Paladin v0.10.0 is published as a workspace of focused crates. Add only what you need:
 
 ```toml
 [dependencies]
 # Core framework -- always required
-paladin-ai-core   = "0.5.0"
-paladin-ports     = "0.5.0"
+paladin-ai-core   = "0.10.0"
+paladin-ports     = "0.10.0"
 
 # LLM providers (pick one or more)
-paladin-llm       = { version = "0.5.0", features = ["llm-openai"] }
+paladin-llm       = { version = "0.10.0", features = ["llm-openai"] }
 
 # Multi-agent orchestration (optional)
-paladin-battalion = "0.5.0"
+paladin-battalion = "0.10.0"
 
 # Memory / Garrison (optional)
-paladin-memory    = "0.5.0"
+paladin-memory    = "0.10.0"
 
 # Storage adapters (optional)
-paladin-storage   = "0.5.0"
+paladin-storage   = "0.10.0"
 
 # Async runtime (required)
 tokio = { version = "1", features = ["full"] }
@@ -71,23 +71,68 @@ tokio = { version = "1", features = ["full"] }
 
 ### Umbrella crate
 
-The `paladin-ai` umbrella crate (v0.5.0) re-exports everything and accepts workspace feature flags:
+The `paladin-ai` umbrella crate (v0.10.0) re-exports everything and accepts workspace feature flags:
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5.0", features = ["redis-queue", "s3-storage"] }
+paladin-ai = { version = "0.10.0", features = ["redis-queue", "s3-storage"] }
 tokio      = { version = "1", features = ["full"] }
 ```
 
 ### Feature Flag Profiles
 
+A minimal profile for the common getting-started case -- the three default LLM providers plus
+the adapters most guides exercise:
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `llm-openai` | yes | OpenAI GPT adapter |
+| `llm-anthropic` | yes | Anthropic Claude adapter |
+| `llm-deepseek` | yes | DeepSeek adapter |
 | `redis-queue` | no | Redis async task queue |
 | `s3-storage` | no | MinIO / AWS S3 file storage |
 | `openai-embeddings` | no | OpenAI embedding API |
 | `qdrant` | no | Qdrant vector database for Sanctum |
+
+#### Full feature inventory
+
+Regenerated from the facade `Cargo.toml` `[features]` block -- every shipped flag, the crate it
+forwards into, and what it gates. `default = ["llm-openai", "llm-anthropic", "llm-deepseek"]`.
+
+| Flag | Crate | Gates |
+|------|-------|-------|
+| `llm-openai` | paladin-llm | OpenAI adapter (default) |
+| `llm-anthropic` | paladin-llm | Anthropic adapter (default) |
+| `llm-deepseek` | paladin-llm | DeepSeek adapter (default) |
+| `llm-kimi` | paladin-llm | Kimi adapter |
+| `llm-qwen` | paladin-llm | Qwen adapter |
+| `llm-grok` | paladin-llm | Grok adapter |
+| `llm-ollama` | paladin-llm | Ollama adapter |
+| `llm-gemini` | paladin-llm | Gemini adapter |
+| `llm-openai-compatible` | paladin-llm | Generic OpenAI-compatible adapter |
+| `llm-all` | paladin-llm | Aggregate: all nine LLM provider adapters above |
+| `vision` | paladin-llm | Vision / multimodal support (forwards into `paladin-llm/vision`, requires `llm-openai`) |
+| `content-processing` | paladin-content, paladin-memory | Content ingestion: PDF, HTTP, RSS, news, summarization, LLM bridge |
+| `web-server` | paladin-web | HTTP/REST API surface (Axum) |
+| `notifications` | paladin-notifications | Email, push, and system notification adapters |
+| `storage-mysql` | paladin-storage | MySQL repository adapters |
+| `storage-postgres` | paladin-storage | PostgreSQL `WaypointPort` adapter |
+| `storage` | paladin-storage | Aggregate: `storage-mysql` + `storage-postgres` |
+| `redis-queue` | paladin-storage | Redis async task queue |
+| `redis-cache` | paladin-storage | Redis-backed `NodeCachePort` adapter |
+| `s3-storage` | paladin-storage | MinIO / AWS S3 file storage |
+| `openai-embeddings` | paladin-llm | OpenAI embedding API |
+| `qdrant` | paladin-memory | Qdrant vector database for Sanctum |
+| `otel` | facade (`paladin-ai`) | OTLP trace export |
+| `dev-ui` | paladin-web | Admin-only `dev-ui` run inspector page |
+| `cli` | facade, binary only | Builds the `paladin-cli` binary and its dependencies (clap, dialoguer, indicatif, ...) |
+| `integration-tests` | facade | Gate for integration test suites that require backing services |
+| `live-api-tests` | facade | Gate for tests that require real provider API keys |
+| `full` | facade | Aggregate: `llm-all` + `content-processing` + `web-server` + `notifications` + `storage` + `vision` + `redis-queue` + `s3-storage` + `openai-embeddings` + `qdrant` + `cli` -- deliberately excludes `otel`, `dev-ui`, and `redis-cache` |
+
+The `paladin-cli` binary carries `required-features = ["cli"]` in `Cargo.toml`, so it is **not**
+built by a default `cargo build` -- pass `--features cli` (or `--bin paladin-cli --features cli`)
+to build it.
 
 ### Verification
 

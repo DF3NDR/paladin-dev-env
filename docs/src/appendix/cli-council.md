@@ -8,7 +8,7 @@ Execute quick multi-agent discussions without writing configuration files. Get d
 - [Quick Start](#quick-start)
 - [Command Syntax](#command-syntax)
 - [Agent Roles](#agent-roles)
-- [Discussion Modes](#discussion-modes)
+- [Discussion Rounds](#discussion-rounds)
 - [Output Options](#output-options)
 - [Best Practices](#best-practices)
 - [Examples](#examples)
@@ -19,8 +19,8 @@ Execute quick multi-agent discussions without writing configuration files. Get d
 The `council` command enables:
 - **Ad-hoc** multi-agent discussions without configuration files
 - **Diverse perspectives** from multiple AI personas
-- **Parallel or sequential** execution modes
-- **Structured output** with synthesis and analysis
+- **Multi-round** discussions bounded by `--max-rounds`
+- **Transcript saving** to a file with `--save`
 - **Quick iterations** for brainstorming and decision-making
 
 ### When to Use Council
@@ -44,75 +44,45 @@ The `council` command enables:
 
 ```bash
 # Simple discussion with default agents
-paladin council "What are the best practices for API design?"
+paladin council --topic "What are the best practices for API design?"
 
-# Specify number of agents
-paladin council -n 5 "Should we migrate to microservices?"
+# Specify number of participants
+paladin council --topic "Should we migrate to microservices?" --participants 5
 
-# Use specific discussion mode
-paladin council --mode sequential "Analyze this business proposal..."
+# Bound the number of discussion rounds
+paladin council --topic "Analyze this business proposal..." --max-rounds 2
 
-# Save results to file
-paladin council -o results.md "Security implications of cloud migration"
+# Save the transcript to a file
+paladin council --topic "Security implications of cloud migration" --save results.md
 ```
 
 ## Command Syntax
 
-```bash
-paladin council [OPTIONS] <QUESTION>
+The `council` subcommand takes no positional argument; the discussion topic is passed with
+`--topic`. Build the binary with the `cli` feature before capturing this output yourself:
+`cargo build --release --features cli --bin paladin-cli` (the binary carries
+`required-features = ["cli"]` and is not produced by a default `cargo build`).
 
-Arguments:
-  <QUESTION>
-      The question, topic, or problem to discuss
-      Can be a question, statement, or detailed scenario
+```text
+$ paladin-cli council --help
+Run a council discussion
+
+Usage: paladin-cli council [OPTIONS]
 
 Options:
-  -n, --num-agents <N>
-      Number of agents to participate (2-10)
-      Default: 3
-
-  -m, --mode <MODE>
-      Discussion mode: parallel, sequential, or debate
-      Default: parallel
-
-  -r, --roles <ROLES>
-      Comma-separated agent roles
-      Example: "technical,business,security,ux"
-      If not specified, uses default diverse roles
-
-  -o, --output <FILE>
-      Save discussion results to file
-      Supports: .md, .txt, .json
-
-  -f, --format <FORMAT>
-      Output format: markdown (default), json, or plain
-
-  --synthesize
-      Generate a synthesis/summary of all perspectives
-      Enabled by default, use --no-synthesize to disable
-
-  --provider <PROVIDER>
-      LLM provider to use (openai, deepseek, anthropic)
-
-  --model <MODEL>
-      Specific LLM model for all agents
-      Example: gpt-4, deepseek-chat, claude-3-sonnet
-
-  --temperature <TEMP>
-      Temperature for agent responses (0.0-2.0)
-      Default: 0.7
-
-  --max-tokens <N>
-      Maximum tokens per agent response
-      Default: 500
-
-  --timeout <SECONDS>
-      Timeout for the entire council session
-      Default: 120 seconds
-
-  -v, --verbose
-      Show detailed execution information
+      --topic <TOPIC>                Discussion topic
+      --participants <PARTICIPANTS>  Number of participants (2-10) [default: 3]
+      --roles <ROLES>                Custom roles (comma-separated)
+      --max-rounds <MAX_ROUNDS>      Maximum discussion rounds [default: 5]
+      --save <SAVE>                  Save transcript to file
+      --model <MODEL>                Model to use
+      --temperature <TEMPERATURE>    Temperature setting
+      --quiet                        Enable quiet mode (minimal output)
+      --verbose                      Enable verbose mode (detailed output)
+  -h, --help                         Print help
 ```
+
+`--quiet` and `--verbose` are global flags shared by every subcommand.
 
 ## Agent Roles
 
@@ -128,16 +98,16 @@ When roles aren't specified, council uses diverse default perspectives:
 
 ```bash
 # Technical perspectives
-paladin council --roles "architect,security,devops,qa" "System design question"
+paladin council --topic "System design question" --roles "architect,security,devops,qa"
 
 # Business perspectives
-paladin council --roles "ceo,cfo,cmo,product" "Product launch strategy"
+paladin council --topic "Product launch strategy" --roles "ceo,cfo,cmo,product"
 
 # Creative perspectives
-paladin council --roles "creative,pragmatic,critic,synthesizer" "Marketing campaign"
+paladin council --topic "Marketing campaign" --roles "creative,pragmatic,critic,synthesizer"
 
 # Domain-specific
-paladin council --roles "legal,compliance,privacy,security" "Data governance policy"
+paladin council --topic "Data governance policy" --roles "legal,compliance,privacy,security"
 ```
 
 ### Role Examples
@@ -155,74 +125,31 @@ paladin council --roles "legal,compliance,privacy,security" "Data governance pol
 | **optimist** | Opportunities, benefits, positives | Opportunity discovery |
 | **analyst** | Data, metrics, evidence-based | Data-driven decisions |
 
-## Discussion Modes
+## Discussion Rounds
 
-### Parallel Mode (Default)
-
-All agents respond simultaneously without seeing each other's responses.
-
-```bash
-paladin council --mode parallel "What are the pros and cons of NoSQL?"
-```
-
-**Characteristics:**
-- ✅ Fastest execution
-- ✅ Independent perspectives
-- ✅ No groupthink
-- ❌ No interaction between agents
-- ❌ May have redundant points
-
-**Best for:**
-- Quick diverse input
-- Independent perspectives needed
-- Time-sensitive discussions
-
-### Sequential Mode
-
-Agents respond one after another, each seeing previous responses.
+The live `council` subcommand has no discussion-mode flag — there is no parallel, sequential or
+debate mode to select. Instead, `--participants` sets how many agents join the discussion and
+`--max-rounds` bounds how many rounds the discussion runs for (default: 5 rounds, 3 participants).
 
 ```bash
-paladin council --mode sequential "How should we approach this technical debt?"
+# Fewer rounds for a quick read
+paladin council --topic "What are the pros and cons of NoSQL?" --max-rounds 2
+
+# More rounds for a deeper discussion
+paladin council --topic "How should we approach this technical debt?" --max-rounds 8
+
+# More participants for broader coverage
+paladin council --topic "Should we use serverless architecture?" --participants 6
 ```
-
-**Characteristics:**
-- ✅ Builds on previous ideas
-- ✅ More coherent discussion
-- ✅ Can challenge/refine points
-- ❌ Slower execution
-- ❌ May create groupthink
-
-**Best for:**
-- Building consensus
-- Iterative refinement
-- Complex problem-solving
-
-### Debate Mode
-
-Agents present opposing viewpoints and counter-arguments.
-
-```bash
-paladin council --mode debate "Should we use serverless architecture?"
-```
-
-**Characteristics:**
-- ✅ Explores trade-offs deeply
-- ✅ Identifies weaknesses
-- ✅ Structured pro/con analysis
-- ❌ Slower than parallel
-- ❌ May be adversarial
-
-**Best for:**
-- Decision between alternatives
-- Risk/benefit analysis
-- Evaluating trade-offs
 
 ## Output Options
 
-### Markdown (Default)
+The `council` subcommand has one output flag, `--save <FILE>`, which writes the discussion
+transcript to a file. There is no `--format` flag — the live subcommand exposes no JSON or plain
+text output option.
 
 ```bash
-paladin council -o discussion.md "Cloud strategy"
+paladin council --topic "Cloud strategy" --save discussion.md
 ```
 
 ```markdown
@@ -279,66 +206,13 @@ What cloud strategy should we adopt?
 3. Create migration plan
 ```
 
-### JSON Format
-
-```bash
-paladin council -f json -o discussion.json "API design"
-```
-
-```json
-{
-  "question": "What are best practices for API design?",
-  "mode": "parallel",
-  "participants": [
-    {
-      "role": "technical",
-      "model": "gpt-4"
-    },
-    {
-      "role": "business",
-      "model": "gpt-4"
-    },
-    {
-      "role": "ux",
-      "model": "gpt-4"
-    }
-  ],
-  "responses": [
-    {
-      "role": "technical",
-      "perspective": "Technical Implementation",
-      "response": "...",
-      "key_points": ["...", "..."],
-      "duration_ms": 1250
-    }
-  ],
-  "synthesis": {
-    "summary": "...",
-    "recommendations": ["...", "..."],
-    "action_items": ["...", "..."]
-  },
-  "metadata": {
-    "timestamp": "2024-01-15T10:30:00Z",
-    "total_duration_ms": 3500
-  }
-}
-```
-
-### Plain Text
-
-```bash
-paladin council -f plain "Design patterns discussion"
-```
-
-Simple text output without formatting, useful for piping to other tools.
-
 ## Best Practices
 
-### 1. Frame Questions Clearly
+### 1. Frame Topics Clearly
 
 ✅ **Good:**
 ```bash
-paladin council "
+paladin council --topic "
 Should we adopt GraphQL for our public API?
 
 Context:
@@ -351,57 +225,54 @@ Context:
 
 ❌ **Avoid:**
 ```bash
-paladin council "graphql?"
+paladin council --topic "graphql?"
 ```
 
 ### 2. Choose Appropriate Roles
 
 ```bash
 # For technical decisions
-paladin council --roles "architect,security,devops" "Kubernetes vs. ECS"
+paladin council --topic "Kubernetes vs. ECS" --roles "architect,security,devops"
 
 # For product decisions
-paladin council --roles "product,ux,engineering,business" "Feature prioritization"
+paladin council --topic "Feature prioritization" --roles "product,ux,engineering,business"
 
 # For strategic decisions
-paladin council --roles "ceo,cto,cfo,cmo" "Market expansion strategy"
+paladin council --topic "Market expansion strategy" --roles "ceo,cto,cfo,cmo"
 ```
 
-### 3. Select the Right Mode
+### 3. Tune Participants and Rounds
 
 ```bash
-# Quick diverse input → parallel
-paladin council --mode parallel "Initial thoughts on blockchain integration"
+# Quick diverse input → fewer participants, fewer rounds
+paladin council --topic "Initial thoughts on blockchain integration" --participants 3 --max-rounds 2
 
-# Building on ideas → sequential  
-paladin council --mode sequential "Refine our architecture approach"
+# Building on ideas over more rounds
+paladin council --topic "Refine our architecture approach" --max-rounds 8
 
-# Evaluating options → debate
-paladin council --mode debate "Build vs. buy for authentication"
+# Broader coverage for evaluating alternatives
+paladin council --topic "Build vs. buy for authentication" --participants 6
 ```
 
-### 4. Synthesize Results
+### 4. Save the Transcript
 
 ```bash
-# Always get synthesis (default)
-paladin council "Complex decision" --synthesize
-
-# Review synthesis for action items
-paladin council "Decision" -o results.md
-# Then extract action items from results.md
+# Save the discussion transcript
+paladin council --topic "Complex decision" --save results.md
+# Then review results.md for the discussion history
 ```
 
 ### 5. Iterate and Refine
 
 ```bash
 # First pass - broad input
-paladin council "App architecture options" -o round1.md
+paladin council --topic "App architecture options" --save round1.md
 
 # Review results, then deep dive
-paladin council "Microservices concerns from round 1" -o round2.md
+paladin council --topic "Microservices concerns from round 1" --save round2.md
 
-# Final decision
-paladin council "Final architecture decision" --mode debate -o final.md
+# Final decision, more rounds for depth
+paladin council --topic "Final architecture decision" --max-rounds 8 --save final.md
 ```
 
 ## Examples
@@ -409,7 +280,7 @@ paladin council "Final architecture decision" --mode debate -o final.md
 ### Example 1: Quick Technical Decision
 
 ```bash
-paladin council -n 4 "
+paladin council --participants 4 --topic "
 Should we use TypeScript or JavaScript for our new service?
 
 Context:
@@ -423,7 +294,7 @@ Context:
 ### Example 2: Security Review
 
 ```bash
-paladin council --roles "security,privacy,compliance,devops" --mode sequential "
+paladin council --roles "security,privacy,compliance,devops" --max-rounds 6 --topic "
 Review our authentication approach:
 
 Current:
@@ -439,10 +310,10 @@ Concerns:
 "
 ```
 
-### Example 3: Architecture Debate
+### Example 3: Architecture Trade-off Discussion
 
 ```bash
-paladin council --mode debate --roles "monolith-advocate,microservices-advocate" "
+paladin council --roles "monolith-advocate,microservices-advocate" --max-rounds 6 --topic "
 Should we migrate from monolith to microservices?
 
 Current state:
@@ -457,7 +328,7 @@ Current state:
 ### Example 4: Product Strategy
 
 ```bash
-paladin council --roles "product,marketing,sales,engineering,support" -o strategy.md "
+paladin council --roles "product,marketing,sales,engineering,support" --save strategy.md --topic "
 Should we build a mobile app or focus on responsive web?
 
 Data:
@@ -471,7 +342,7 @@ Data:
 ### Example 5: Incident Post-Mortem
 
 ```bash
-paladin council --mode sequential --roles "sre,security,engineering,management" "
+paladin council --roles "sre,security,engineering,management" --topic "
 Post-mortem for database outage:
 
 Incident:
@@ -490,7 +361,7 @@ Questions:
 ### Example 6: Code Review Perspectives
 
 ```bash
-paladin council --roles "security,performance,maintainability,testing" "
+paladin council --roles "security,performance,maintainability,testing" --topic "
 Review this architecture decision:
 
 Plan to use Redis for:
@@ -512,58 +383,49 @@ Is this appropriate?
 **Solution:**
 ```bash
 # Provide more context
-paladin council "Question with detailed context: ..."
+paladin council --topic "Question with detailed context: ..."
 
 # Use more specific roles
-paladin council --roles "senior-architect,principal-engineer" "..."
+paladin council --roles "senior-architect,principal-engineer" --topic "..."
 
-# Try sequential mode for depth
-paladin council --mode sequential "..."
+# Increase rounds for depth
+paladin council --max-rounds 8 --topic "..."
 ```
 
 #### Issue: Conflicting perspectives without resolution
 
 **Solution:**
 ```bash
-# Ensure synthesis is enabled (default)
-paladin council --synthesize "..."
-
-# Use debate mode for structured comparison
-paladin council --mode debate "..."
+# Increase participants for more coverage
+paladin council --participants 6 --topic "..."
 
 # Do a follow-up round
-paladin council "Based on previous discussion, recommend best approach"
+paladin council --topic "Based on previous discussion, recommend best approach"
 ```
 
-#### Issue: Timeout before completion
+#### Issue: Discussion runs too long
 
 **Solution:**
 ```bash
-# Increase timeout
-paladin council --timeout 300 "complex question"
+# Reduce the number of discussion rounds
+paladin council --max-rounds 2 --topic "complex question"
 
-# Reduce number of agents
-paladin council -n 3 "..."
-
-# Use parallel mode (faster)
-paladin council --mode parallel "..."
-
-# Reduce max tokens per response
-paladin council --max-tokens 300 "..."
+# Reduce the number of participants
+paladin council --participants 2 --topic "..."
 ```
 
 #### Issue: Not enough detail in responses
 
 **Solution:**
 ```bash
-# Increase max tokens
-paladin council --max-tokens 1000 "detailed analysis needed"
+# Increase the number of discussion rounds
+paladin council --max-rounds 8 --topic "detailed analysis needed"
 
-# Ask more specific questions
-paladin council "Specific aspect of broader topic"
+# Ask more specific topics
+paladin council --topic "Specific aspect of broader topic"
 
 # Use higher temperature for creativity
-paladin council --temperature 1.0 "creative problem-solving"
+paladin council --temperature 1.0 --topic "creative problem-solving"
 ```
 
 #### Issue: Agent perspectives are too similar
@@ -571,29 +433,26 @@ paladin council --temperature 1.0 "creative problem-solving"
 **Solution:**
 ```bash
 # Use more diverse roles
-paladin council --roles "conservative,progressive,radical,pragmatic" "..."
+paladin council --roles "conservative,progressive,radical,pragmatic" --topic "..."
 
-# Try debate mode
-paladin council --mode debate "..."
+# Increase rounds so agents can diverge
+paladin council --max-rounds 6 --topic "..."
 
 # Increase temperature
-paladin council --temperature 1.2 "diverse viewpoints needed"
+paladin council --temperature 1.2 --topic "diverse viewpoints needed"
 ```
 
 ### Debugging
 
 ```bash
 # Enable verbose mode to see execution details
-paladin council --verbose "..."
+paladin council --verbose --topic "..."
 
-# Test with simpler question first
-paladin council "Hello, how are you?" -n 2
+# Test with a simpler topic first
+paladin council --participants 2 --topic "Hello, how are you?"
 
 # Check provider configuration
 paladin setup-check
-
-# Try different provider
-paladin council --provider deepseek "..."
 ```
 
 ## Advanced Usage
@@ -602,82 +461,48 @@ paladin council --provider deepseek "..."
 
 ```bash
 # Generate config, then discuss it
-paladin muster "workflow" -o workflow.yaml
-paladin council "Review this workflow config: $(cat workflow.yaml)"
+paladin muster --task "workflow" --output workflow.yaml
+paladin council --topic "Review this workflow config: $(cat workflow.yaml)"
 
-# Council for planning, then execute
-paladin council "Best approach for task X" -o plan.md
-# Review plan.md
-paladin run -c final_approach.yaml
+# Council for planning, then generate and execute the resulting config
+paladin council --topic "Best approach for task X" --save plan.md
+# Review plan.md, then generate and run the battalion config in one step
+paladin muster --task "$(cat plan.md)" --execute
 ```
 
 ### Batch Processing
 
 ```bash
-# Multiple questions from file
-while IFS= read -r question; do
-    paladin council "$question" -o "output_$(echo "$question" | md5sum | cut -c1-8).md"
-done < questions.txt
+# Multiple topics from file
+while IFS= read -r topic; do
+    paladin council --topic "$topic" --save "output_$(echo "$topic" | md5sum | cut -c1-8).md"
+done < topics.txt
 
 # Different role combinations
 for roles in "tech,security" "business,legal" "ux,product"; do
-    paladin council --roles "$roles" "Same question" -o "perspective_${roles}.md"
+    paladin council --roles "$roles" --topic "Same topic" --save "perspective_${roles}.md"
 done
 ```
 
-### Custom Synthesis
+### Reviewing the Saved Transcript
 
 ```bash
-# Get detailed JSON output
-paladin council -f json -o raw.json "Complex decision"
+# Save the transcript
+paladin council --topic "Complex decision" --save transcript.md
 
-# Process with jq or custom script
-jq '.responses[].key_points[]' raw.json > all_points.txt
-
-# Feed back for meta-analysis
-paladin council "Synthesize these points: $(cat all_points.txt)"
-```
-
-### Integration with Scripts
-
-```python
-#!/usr/bin/env python3
-import subprocess
-import json
-
-def council_discussion(question, roles, mode="parallel"):
-    result = subprocess.run([
-        "paladin", "council",
-        "--format", "json",
-        "--mode", mode,
-        "--roles", roles,
-        question
-    ], capture_output=True, text=True)
-
-    return json.loads(result.stdout)
-
-# Use in automation
-discussion = council_discussion(
-    "Should we proceed with migration?",
-    "technical,business,security",
-    mode="sequential"
-)
-
-# Extract recommendations
-recommendations = discussion["synthesis"]["recommendations"]
-print(f"Recommendations: {recommendations}")
+# Feed it back for a follow-up discussion
+paladin council --topic "Follow up on this discussion: $(cat transcript.md)"
 ```
 
 ## Performance Tips
 
 | Scenario | Recommended Settings |
 |----------|---------------------|
-| **Quick input** | `-n 3 --mode parallel --max-tokens 300` |
-| **Detailed analysis** | `-n 5 --mode sequential --max-tokens 1000` |
-| **Fast iteration** | `-n 2 --mode parallel --no-synthesize` |
-| **Deep dive** | `-n 4 --mode sequential --synthesize` |
-| **Cost-effective** | `--provider deepseek --max-tokens 400` |
-| **High quality** | `--provider anthropic --model claude-3-opus` |
+| **Quick input** | `--participants 3 --max-rounds 2` |
+| **Detailed analysis** | `--participants 5 --max-rounds 8` |
+| **Fast iteration** | `--participants 2 --max-rounds 2` |
+| **Deep dive** | `--participants 4 --max-rounds 8` |
+| **High quality** | `--model claude-3-opus` |
 
 ## See Also
 

@@ -23,11 +23,7 @@ impl LlmPort for MockLlmPort {
             model: request.model,
             content: "Mock response".to_string(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 20,
-                total_tokens: 30,
-            },
+            usage: TokenUsage::new(10, 20),
             created_at: chrono::Utc::now(),
             metadata: std::collections::HashMap::new(),
             function_call: None,

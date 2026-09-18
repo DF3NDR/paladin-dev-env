@@ -278,7 +278,7 @@ async fn run_repeat_sweep(
 }
 
 /// The first `(run_index, seq_from, seq_to)` at which some run's captured
-/// record stream diverges from run 0's, comparing [`stabilized_fingerprints`]
+/// record stream diverges from run 0's, comparing `stabilized_fingerprints`
 /// (never the raw record: `TraceRecord::at` and several per-attempt
 /// `duration_ms`/generated-id fields are wall-clock or UUID noise that
 /// legitimately differs run-to-run even under a fully deterministic
@@ -453,9 +453,12 @@ fn record_fingerprint(record: &TraceRecord) -> String {
         TraceEvent::RunFinished {
             status,
             total_supersteps,
-            total_tokens,
+            usage,
             ..
-        } => format!("run_finished:{status:?}:{total_supersteps}:{total_tokens}"),
+        } => format!(
+            "run_finished:{status:?}:{total_supersteps}:{}",
+            usage.total_tokens
+        ),
         TraceEvent::FallbackHop {
             node_id,
             from_provider,

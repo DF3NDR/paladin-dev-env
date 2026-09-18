@@ -76,6 +76,21 @@ dev-ui = []
 # X-10 break -- the type did not exist at the baseline -- but the crate-level
 # lint suppression covers the case regardless. No `.cargo/semver-checks-allowlist.toml`
 # entry is required (MIGRATION.md §9.2 marks this row N/A, not `Y`).
+#
+# X-10.6 deliberate-breaking suppression (D-24, MIGRATION.md §9.2, ACCT-02/ACCT-05,
+# Phase 31 plan 31-06/31-07): `ExecuteResponse`'s bare `token_count: u32` field
+# was replaced by `usage: TokenUsageResponse` -- a rename on a struct with no
+# `Default` and no `#[non_exhaustive]` marking, which fires both
+# `constructible_struct_adds_field` (the new `usage` field) and
+# `struct_pub_field_missing` (the removed `token_count` field), empirically
+# confirmed via `cargo semver-checks check-release --package paladin-web
+# --default-features --baseline-version 0.9.0` (D-27, not guessed). Register/
+# remove this suppression only in the same commit as the matching
+# MIGRATION.md §9.2 row and the two matching
+# `.cargo/semver-checks-allowlist.toml` entries (kept set-equal by CI's
+# `semver` job).
 [package.metadata.cargo-semver-checks.lints]
 function_requires_different_generic_type_params = "allow"
 struct_marked_non_exhaustive = "allow"
+constructible_struct_adds_field = "allow"
+struct_pub_field_missing = "allow"

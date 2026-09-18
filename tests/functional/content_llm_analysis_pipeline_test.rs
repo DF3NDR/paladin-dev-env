@@ -200,11 +200,7 @@ impl LlmPort for MockLlmPort {
             model: request.model,
             content: response_content,
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 150,
-                completion_tokens: 200,
-                total_tokens: 350,
-            },
+            usage: TokenUsage::new(150, 200),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -217,17 +213,15 @@ impl LlmPort for MockLlmPort {
     ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
     {
         let response = self.generate(request).await?;
+        let midpoint = response.content.len() / 2;
         let chunks = vec![
-            Ok(StreamingResponse {
-                id: response.id,
-                delta: response.content[..response.content.len() / 2].to_string(),
-                finish_reason: None,
-            }),
-            Ok(StreamingResponse {
-                id: response.id,
-                delta: response.content[response.content.len() / 2..].to_string(),
-                finish_reason: Some(FinishReason::Stop),
-            }),
+            Ok(StreamingResponse::delta(
+                response.content[..midpoint].to_string(),
+            )),
+            Ok(StreamingResponse::delta(
+                response.content[midpoint..].to_string(),
+            )),
+            Ok(StreamingResponse::terminal(FinishReason::Stop).with_usage(response.usage)),
         ];
 
         Ok(Box::new(stream::iter(chunks)))

@@ -419,11 +419,10 @@ impl VisionCapableLlm for AnthropicAdapter {
             model: api_response.model,
             content,
             finish_reason,
-            usage: TokenUsage {
-                prompt_tokens: api_response.usage.input_tokens,
-                completion_tokens: api_response.usage.output_tokens,
-                total_tokens: api_response.usage.input_tokens + api_response.usage.output_tokens,
-            },
+            usage: TokenUsage::new(
+                api_response.usage.input_tokens,
+                api_response.usage.output_tokens,
+            ),
             created_at: Utc::now(),
             metadata: Default::default(),
             function_call: None,

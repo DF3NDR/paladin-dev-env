@@ -16,9 +16,11 @@
 //!
 //! # Schema versioning (X-04)
 //!
-//! Every persisted [`WebhookDelivery`] carries
-//! [`WEBHOOK_DELIVERY_SCHEMA_VERSION`] in its own `schema_version` field,
-//! mirroring the `Run`/`RunSchedule`/`Waypoint` precedent.
+//! Every persisted
+//! [`WebhookDelivery`](crate::platform::container::webhook::WebhookDelivery)
+//! carries
+//! [`WEBHOOK_DELIVERY_SCHEMA_VERSION`](crate::platform::container::webhook::WEBHOOK_DELIVERY_SCHEMA_VERSION)
+//! in its own `schema_version` field, mirroring the `Run`/`RunSchedule`/`Waypoint` precedent.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

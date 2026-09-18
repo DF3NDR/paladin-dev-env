@@ -1,0 +1,106 @@
+Phase 36.1 Plan 13 — Closing Gate Sequence
+Run 2026-09-18, on the closing commit stack (56434114 and onward).
+
+=== Gate 1: make clean-code (fmt lint lint-shell check doc-check check-api-examples) ===
+Command: make clean-code
+Exit status: 0 (no error markers in the 821-line capture; final three lines below)
+Full capture: target/36.1-13-clean-code.log (not committed — ephemeral build log)
+Tail:
+[0;32m✅ doc-check passed (ADR-0033)[0m
+[0;36mChecking public API '# Examples' headings...[0m
+All 101 D-05 public API entry points carry a plural '# Examples' heading.
+
+=== Gate 2: make lint-shell (after confirming no unstaged .sh changes) ===
+Command: make lint-shell
+Exit status: 0
+Output:
+[0;36mRunning shellcheck...[0m
+[0;32m✅ shellcheck clean[0m
+
+=== Gate 3: make security (audit + deny) ===
+Command: make security
+Exit status: 0 (no `make[1]: ***`/`Error N` line in the 6526-line capture)
+cargo-audit: fetched RustSec advisory db (1247 advisories), scanned 692 crate dependencies.
+  6 unmaintained warnings, 2 unsound warnings, 2 yanked warnings -- pre-existing accepted
+  posture (SEC-01/.cargo/audit.toml exception set); zero unignored vulnerabilities reported.
+cargo-deny: "advisories ok, bans ok, licenses ok, sources ok" -- 2 pre-existing duplicate-version
+  warnings for thiserror/thiserror-impl (1.0.69 + 2.0.18), non-blocking.
+Full capture: target/36.1-13-security.log (not committed — ephemeral)
+
+=== Gate 4: cargo test --workspace ===
+Command: cargo test --workspace
+FIRST run — Exit status: 1 (FAILED)
+  test result: FAILED. 979 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.12s
+  Failures (all "must finish within 30s: Elapsed(())" panics, immediately after Gates 1-3's
+  heavy CPU load -- clean-code's full workspace clippy build plus cargo-audit's advisory-db
+  fetch and cargo-deny, run back to back):
+    application::services::run::cancel_tests::cross_instance_cancel_probe
+    application::services::run::cancel_tests::local_cancel_signals_token
+    application::services::run::stream_tests::degraded_stream_follows_remote_progress
+  None of these three files (src/application/services/run/cancel_tests.rs,
+  src/application/services/run/stream_tests.rs) are in this phase's files_modified (D-27); the
+  timeouts are resource-contention symptoms, not assertion failures, consistent with this
+  devcontainer's documented history of resource-exhaustion flakes (WINDOWS.md rows 5, 6, 13, 27).
+  Recorded as observed, per D-25 ("record it as failing... a recorded green that was not
+  observed is worse than a recorded failure") -- this run is not hidden or edited.
+SECOND run (full, unfiltered re-run of the identical command, for flake classification only —
+not a selective re-run of the three failing tests) — Exit status: 0
+  test result: ok. 982 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.23s
+  (main library target; every other workspace target also reported 0 failed — grep -c FAILED
+  across the full 6800+ line capture: 0)
+Verdict: environmental flake under back-to-back heavy-CPU gates in this devcontainer, not a
+regression from this phase's changes. Both runs recorded verbatim; full captures at
+target/36.1-13-test-workspace.log and target/36.1-13-test-workspace-run2.log (not committed —
+ephemeral build logs).
+
+=== Gate 5: cargo test --workspace --all-features --no-fail-fast (D-16) ===
+Command: cargo test --workspace --all-features --no-fail-fast
+Exit status: 0
+  65 "test result: ok" lines, 0 failed anywhere in the 8025-line capture, 0 literal "FAILED"
+  occurrences. cli_isolation (tests/cli_isolation_test.rs) reports
+  "test result: ok. 9 passed; 0 failed" under the full feature union, confirming SC3 holds.
+Comparison against plan 36.1-01's baseline capture
+  (36.1-evidence/36.1-01-all-features-sweep.txt, commit a90c5f0d): baseline also recorded 65
+  "test result: ok" lines and 0 failing targets. No difference -- the failing-target count is
+  identical (0) between the entry baseline and this closing run.
+Full capture: target/36.1-13-test-all-features.log (not committed — ephemeral)
+
+=== Gate 6: mdBook documentation build sequence (D-00f / docs.yml order) ===
+Step 6a — Command: mdbook-mermaid install docs/
+  Exit status: 0. "Files & configuration for mdbook-mermaid are installed."
+Step 6b — Command: mdbook build docs/ (warning-policy = "error" linkcheck backend)
+  Exit status: 0. "[INFO mdbook_linkcheck] No broken links found" — 0 broken links.
+  (numerous "fragment resolution isn't implemented" WARN lines are the linkcheck backend's
+  documented limitation on same-page anchor checks, not a broken-link finding — pre-existing,
+  unrelated to this phase.)
+Step 6c — Command: bash scripts/check-doc-examples.sh
+  Exit status: 0. "All included examples compile." "README Quick Example is in sync."
+  "Results: 0 checked, 622 skipped, 0 failed. All doc code examples pass validation."
+Step 6d — Command: bash scripts/check-doc-config.sh
+  Exit status: 0. "Results: 151 YAML block(s) checked, 0 failed"
+Post-check — Command: git status --porcelain -- docs
+  Output: (empty). The documentation tree is clean after the full sequence.
+Full captures: target/36.1-13-mermaid-install.log, target/36.1-13-mdbook-build.log,
+  target/36.1-13-check-doc-examples.log, target/36.1-13-check-doc-config.log (not committed —
+  ephemeral)
+
+=== Gate 7: make api-surface (last, per D-25) ===
+Command: make api-surface
+Exit status: 0
+  "Extracting public API surface using cargo-public-api..."
+  "API surface extracted to /tmp/tmp.V6V8iNA9wO (3959 items)"
+  "API surface unchanged"
+Expected result confirmed: unchanged. Every change in this phase is documentation, a test body,
+a make/hook/CI line, a private/pub(crate) match arm, or planning corpus — none moved the public
+surface (D-25, D-27, CURR-21).
+Full capture: target/36.1-13-api-surface.log (not committed — ephemeral)
+
+=== Summary ===
+All seven closing gates ran in the decided order on the closing commit stack. Gate 4's first
+attempt recorded a genuine transient failure (3 timeouts, environmental resource contention
+after Gates 1-3's heavy CPU load); the failure is recorded verbatim above, not hidden, and a
+full unfiltered re-run of the identical command confirmed 0 failures, consistent with this
+devcontainer's documented history of resource-exhaustion flakes. All other gates passed on the
+first attempt. The public API baseline is unchanged (3959 items). The documentation tree is
+clean. `make check-api-examples` / `bash scripts/check-public-api-examples.sh` report 101/101
+OK, 0 MISSING, 0 SINGULAR.

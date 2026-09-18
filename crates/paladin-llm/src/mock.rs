@@ -64,6 +64,12 @@ struct MockState {
     /// order (Phase 26 D-02: the golden equivalence test inspects the exact
     /// rendered prompt bytes a real run produced).
     requests: Vec<LlmRequest>,
+    /// D-16: when `true`, the default (non-scripted) `generate_stream`
+    /// path's terminal chunk omits `usage` entirely -- simulating a
+    /// provider whose streaming endpoint never reports token usage. Has no
+    /// effect on `with_stream_items`-scripted streams, which never attach a
+    /// finish reason or usage to begin with.
+    omit_streamed_usage: bool,
 }
 
 impl Default for MockState {
@@ -72,11 +78,7 @@ impl Default for MockState {
             responses: vec![MockEntry::Success("Mock LLM response".to_string())],
             response_index: 0,
             delay: None,
-            token_usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 20,
-                total_tokens: 30,
-            },
+            token_usage: TokenUsage::new(10, 20),
             finish_reason: FinishReason::Stop,
             available_models: vec!["mock-model".to_string()],
             call_count: 0,
@@ -84,6 +86,7 @@ impl Default for MockState {
             stream_script: None,
             model_query_error: None,
             requests: Vec::new(),
+            omit_streamed_usage: false,
         }
     }
 }
@@ -152,18 +155,19 @@ impl MockLlmAdapter {
         self
     }
 
-    /// Configure the token usage returned with each response (prompt, completion, total).
+    /// Configure the token usage returned with each response (prompt, completion).
+    ///
+    /// `total` is accepted for source compatibility with existing call sites
+    /// but is otherwise ignored: `TokenUsage::new` recomputes `total_tokens`
+    /// as `prompt_tokens + completion_tokens` (D-02), so a caller cannot
+    /// configure a mock response with an inconsistent total.
     pub fn with_token_usage(
         self,
         prompt_tokens: u32,
         completion_tokens: u32,
-        total_tokens: u32,
+        _total_tokens: u32,
     ) -> Self {
-        self.state.lock().unwrap().token_usage = TokenUsage {
-            prompt_tokens,
-            completion_tokens,
-            total_tokens,
-        };
+        self.state.lock().unwrap().token_usage = TokenUsage::new(prompt_tokens, completion_tokens);
         self
     }
 
@@ -217,6 +221,17 @@ impl MockLlmAdapter {
     /// answer `Err(error)` instead of consulting the configured model list.
     pub fn with_model_query_error(self, error: LlmError) -> Self {
         self.state.lock().unwrap().model_query_error = Some(error);
+        self
+    }
+
+    /// Make the default (non-scripted) [`LlmPort::generate_stream`] path's
+    /// terminal chunk omit `usage` entirely (D-16, D-17): simulates a
+    /// provider whose streaming endpoint never reports token usage, so a
+    /// consumer test can exercise the "no estimate, default usage plus one
+    /// warning" fallback without a network mock. Has no effect on
+    /// [`Self::with_stream_items`]-scripted streams.
+    pub fn with_no_streamed_usage(self) -> Self {
+        self.state.lock().unwrap().omit_streamed_usage = true;
         self
     }
 
@@ -395,32 +410,28 @@ impl LlmPort for MockLlmAdapter {
             script
         };
         if let Some(items) = scripted {
+            // No finish reason and no usage on any scripted item (unchanged
+            // by D-13/D-16 -- see `with_stream_items`'s own rustdoc): a
+            // scripted stream has no terminal chunk to attach usage to.
             let chunks: Vec<Result<StreamingResponse, LlmError>> = items
                 .into_iter()
-                .map(|item| {
-                    item.map(|delta| StreamingResponse {
-                        id: Uuid::new_v4(),
-                        delta,
-                        finish_reason: None,
-                    })
-                })
+                .map(|item| item.map(StreamingResponse::delta))
                 .collect();
             return Ok(Box::new(stream::iter(chunks)));
         }
 
+        let omit_usage = self.state.lock().unwrap().omit_streamed_usage;
         let response = self.generate(request).await?;
-        // Emit the full response as a single streaming chunk, then stop.
+        // Emit the full response as a delta chunk, then a terminal chunk
+        // carrying the response's finish reason and (unless the test opted
+        // out via `with_no_streamed_usage`) its configured usage (D-15).
+        let mut terminal = StreamingResponse::terminal(response.finish_reason);
+        if !omit_usage {
+            terminal = terminal.with_usage(response.usage.clone());
+        }
         let chunks = vec![
-            Ok(StreamingResponse {
-                id: Uuid::new_v4(),
-                delta: response.content.clone(),
-                finish_reason: None,
-            }),
-            Ok(StreamingResponse {
-                id: Uuid::new_v4(),
-                delta: String::new(),
-                finish_reason: Some(response.finish_reason),
-            }),
+            Ok(StreamingResponse::delta(response.content.clone())),
+            Ok(terminal),
         ];
         Ok(Box::new(stream::iter(chunks)))
     }
@@ -520,11 +531,7 @@ impl LlmPort for MultiStepMockLlmPort {
             model: request.model.clone(),
             content,
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 10,
-                completion_tokens: 20,
-                total_tokens: 30,
-            },
+            usage: TokenUsage::new(10, 20),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -537,11 +544,10 @@ impl LlmPort for MultiStepMockLlmPort {
     ) -> Result<Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
     {
         let response = self.generate(request).await?;
-        let chunks = vec![Ok(StreamingResponse {
-            id: Uuid::new_v4(),
-            delta: response.content,
-            finish_reason: Some(FinishReason::Stop),
-        })];
+        let chunks = vec![
+            Ok(StreamingResponse::delta(response.content)),
+            Ok(StreamingResponse::terminal(FinishReason::Stop).with_usage(response.usage)),
+        ];
         Ok(Box::new(stream::iter(chunks)))
     }
 
@@ -660,6 +666,50 @@ mod tests {
         );
     }
 
+    // ── Phase 31 (D-13..D-17): streaming terminal-chunk usage contract ────
+
+    #[tokio::test]
+    async fn default_stream_terminal_chunk_carries_the_configured_usage() {
+        let adapter = MockLlmAdapter::new()
+            .with_response("streamed")
+            .with_token_usage_struct(TokenUsage::new(11, 7).with_cache_read(3));
+
+        let mut stream = Box::into_pin(adapter.generate_stream(make_request()).await.unwrap());
+        let mut chunks = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            chunks.push(item.unwrap());
+        }
+
+        let terminal = chunks
+            .iter()
+            .find(|c| c.finish_reason.is_some())
+            .expect("a terminal chunk must exist");
+        assert_eq!(
+            terminal.usage,
+            Some(TokenUsage::new(11, 7).with_cache_read(3))
+        );
+        assert!(
+            chunks.iter().filter(|c| c.usage.is_some()).count() == 1,
+            "exactly one chunk carries usage"
+        );
+    }
+
+    #[tokio::test]
+    async fn with_no_streamed_usage_omits_usage_but_keeps_the_finish_reason() {
+        let adapter = MockLlmAdapter::new()
+            .with_response("streamed")
+            .with_no_streamed_usage();
+
+        let mut stream = Box::into_pin(adapter.generate_stream(make_request()).await.unwrap());
+        let mut chunks = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            chunks.push(item.unwrap());
+        }
+
+        assert!(chunks.iter().all(|c| c.usage.is_none()));
+        assert!(chunks.iter().any(|c| c.finish_reason.is_some()));
+    }
+
     #[tokio::test]
     async fn mock_behaviour_is_otherwise_unchanged() {
         // Pins that the response_format accessor is strictly additive:
@@ -705,5 +755,64 @@ mod tests {
         }
         assert_eq!(deltas, vec!["a".to_string(), "b".to_string()]);
         assert_eq!(streaming.call_count(), 1);
+    }
+
+    // ── Plan 31-04 (D-19): mock adapter streaming-usage parity ────────────
+    //
+    // `MockLlmAdapter` has no network wire shape to speak -- per its own module doc, it is "an
+    // in-process LLM adapter without real API calls" -- so it cannot meaningfully instantiate
+    // `crate::llm_conformance_suite!`: five of that macro's nine cases
+    // (`stream_error_before_the_first_chunk`, `dedicated_status_mappings`,
+    // `transience_by_value`, `credential_never_appears_in_a_rendered_error`,
+    // `redirect_is_not_followed_with_a_credential_header`) require the adapter to actually issue
+    // an HTTP request that a `mockito` server answers with a specific status, routed through
+    // `crate::http_status::map_http_status` -- exactly the real network path this adapter exists
+    // to avoid. Forcing it to grow one just to satisfy the shared macro would be test theater,
+    // not an audit. D-19's own text anticipates this: "the execution-service parity test runs
+    // offline" -- this dedicated test IS that offline stand-in, asserting the identical three
+    // properties the shared `streaming_usage_equals_non_streaming_usage` case asserts, directly
+    // against the DEFAULT (non-scripted) `generate_stream` path.
+    #[tokio::test]
+    async fn streaming_usage_equals_non_streaming_usage_for_the_default_stream_path() {
+        let usage = TokenUsage::new(37, 29).with_reasoning(11);
+        let adapter = MockLlmAdapter::new()
+            .with_response("Hello world")
+            .with_token_usage_struct(usage);
+
+        let non_streaming = adapter.generate(make_request()).await.unwrap();
+
+        let mut stream = Box::into_pin(adapter.generate_stream(make_request()).await.unwrap());
+        let mut chunks = Vec::new();
+        while let Some(item) = futures::StreamExt::next(&mut stream).await {
+            chunks.push(item.unwrap());
+        }
+
+        let finish_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.finish_reason.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        let usage_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.usage.is_some())
+            .map(|(i, _)| i)
+            .collect();
+
+        assert_eq!(
+            usage_indices.len(),
+            1,
+            "exactly one chunk must carry a usage"
+        );
+        assert_eq!(
+            finish_indices, usage_indices,
+            "the finish-reason chunk and the usage chunk must be the SAME chunk"
+        );
+        assert_eq!(
+            chunks[usage_indices[0]].usage,
+            Some(non_streaming.usage),
+            "streamed terminal usage must equal the non-streaming usage field-for-field"
+        );
     }
 }

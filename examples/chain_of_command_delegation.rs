@@ -64,7 +64,7 @@ impl PaladinPort for ExampleMockPort {
 
         Ok(PaladinResult {
             output,
-            token_count: 100,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(100, 0),
             execution_time_ms: 50,
             loop_count: 1,
             stop_reason: StopReason::Completed,

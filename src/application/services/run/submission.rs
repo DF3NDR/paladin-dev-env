@@ -102,6 +102,48 @@ fn map_cancel_error(err: RunRepositoryError) -> RunSubmissionError {
 
 /// Implements [`RunSubmissionPort`] over a [`RunRepositoryPort`], a
 /// [`RunQueuePort`] and an [`AssistantResolver`] (D-11, D-12).
+///
+/// # Examples
+///
+/// Constructing a `RunSubmissionService` from its port dependencies: the
+/// shipped in-memory run repository, the shipped in-memory run queue, and
+/// the shipped [`CodeWorkflowResolver`](super::resolver::CodeWorkflowResolver)
+/// -- no separate `AssistantResolver` implementation needs writing here,
+/// since this slice's own code-registered resolver already satisfies the
+/// constructor's third argument.
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use paladin::application::services::run::{CodeWorkflowResolver, RunSubmissionService};
+/// use paladin_ports::input::run_submission_port::{RunSubmissionError, RunSubmissionPort, SubmitRun};
+/// use paladin_storage::run::in_memory::InMemoryRunRepository;
+/// use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let repository = Arc::new(InMemoryRunRepository::new());
+///     let queue = Arc::new(InMemoryRunQueue::new());
+///     let resolver = Arc::new(CodeWorkflowResolver::new());
+///     let service = RunSubmissionService::new(repository, queue, resolver);
+///
+///     // No assistant is registered with the resolver, so `submit` fails
+///     // fast at the resolve step -- proving the service is fully wired
+///     // without a live backend.
+///     let err = service
+///         .submit(SubmitRun {
+///             assistant_id: "unregistered-assistant".to_string(),
+///             version: None,
+///             thread_id: None,
+///             input: serde_json::json!({}),
+///             webhook: None,
+///             requested_by: None,
+///         })
+///         .await
+///         .unwrap_err();
+///     assert!(matches!(err, RunSubmissionError::UnknownAssistant { .. }));
+/// }
+/// ```
 pub struct RunSubmissionService {
     repository: Arc<dyn RunRepositoryPort>,
     queue: Arc<dyn RunQueuePort>,

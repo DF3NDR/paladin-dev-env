@@ -70,6 +70,23 @@ pub fn protected_waypoints(_thread: &ThreadId, history: &[WaypointSummary]) -> H
 /// retention::prune` over the SAME threads and the SAME configured bounds
 /// when a [`RunTracePort`] is wired via [`with_run_trace_port`](Self::with_run_trace_port)
 /// -- one config, one routine, two ports.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use paladin::application::services::waypoint_retention::WaypointRetentionService;
+/// use paladin::config::WaypointRetentionConfig;
+/// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+///
+/// let port = Arc::new(InMemoryWaypointStore::new());
+/// let config = WaypointRetentionConfig {
+///     enabled: true,
+///     max_age_days: Some(30),
+///     max_waypoints_per_thread: Some(50),
+/// };
+/// let _service = WaypointRetentionService::new(port, config);
+/// ```
 pub struct WaypointRetentionService {
     port: Arc<dyn WaypointPort>,
     config: WaypointRetentionConfig,

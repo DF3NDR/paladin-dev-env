@@ -6,7 +6,7 @@ and delivers the result. This guide covers the **ingestion adapters**, the **pro
 use cases**, the **content → agent bridge**, and **delivery** — documenting only what is wired
 into the compiled crate today.
 
-> Every code example targets the current **v0.5.0** workspace. The substantive examples are real,
+> Every code example targets the current **v0.10.0** workspace. The substantive examples are real,
 > compiled code pulled from the `paladin-doc-examples` crate via mdBook `{{#include}}` (a few
 > illustrative fragments are `rust,ignore`). The API forms are verified against
 > `crates/paladin-content/src/`.
@@ -159,7 +159,7 @@ bridge — see the [bridge recipes](agent-orchestrator-bridge.md#use-case-recipe
 ## Capabilities and Limitations
 
 The crate's manifest declares some features whose adapters are **not yet implemented** in
-v0.5.0. To keep this guide honest:
+v0.10.0. To keep this guide honest:
 
 | Capability | Status |
 |------------|--------|

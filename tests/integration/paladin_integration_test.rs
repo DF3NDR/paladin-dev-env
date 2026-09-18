@@ -40,7 +40,7 @@ async fn test_end_to_end_paladin_execution() {
     let paladin_result = result.unwrap();
     assert_eq!(paladin_result.output, "Hello! I can help you with that.");
     assert_eq!(paladin_result.loop_count, 1);
-    assert!(paladin_result.token_count > 0);
+    assert!(paladin_result.usage.total_tokens > 0);
 }
 
 #[tokio::test]
@@ -349,7 +349,7 @@ async fn test_paladin_with_custom_configuration() {
     // Verify execution result
     assert_eq!(paladin_result.output, "Custom configured response");
     // Token count is accumulated across all loops, so 2 loops * 250 tokens = 500
-    assert_eq!(paladin_result.token_count, 500);
+    assert_eq!(paladin_result.usage.total_tokens, 500);
 }
 
 #[tokio::test]
@@ -378,7 +378,7 @@ async fn test_paladin_metadata_tracking() {
 
     // Verify all metadata fields are populated
     assert_eq!(paladin_result.output, "Metadata test response");
-    assert_eq!(paladin_result.token_count, 125);
+    assert_eq!(paladin_result.usage.total_tokens, 125);
     assert_eq!(paladin_result.loop_count, 1);
     // Execution time should be reasonable (not checking specific value due to timing variability)
 

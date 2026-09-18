@@ -43,8 +43,8 @@
 //! `paladin-battalion::engine::superstep`, 24-01) and `created_at`
 //! (`Utc::now()`), and computes `expires_at` from `expires_in_secs`. An
 //! `on_expire: ResumeWithDefault` value is validated against its own `kind`
-//! at RAISE time, through the SAME
-//! [`crate::engine::graph::validate_parley_value_for_kind`] a
+//! at RAISE time, through the SAME crate-private
+//! `graph::validate_parley_value_for_kind` helper a
 //! [`crate::engine::graph::NodeSpec::Gate`]'s own `on_expire` default is
 //! checked against at graph-validate time (T-24-06) — never a second,
 //! weaker check. This validation failure is a hard [`DirectiveParseError`],

@@ -1,11 +1,14 @@
-//! The one `LlmError` -> [`PaladinError::LlmFailure`] conversion (D-02, X-06).
+//! The one `LlmError` ->
+//! [`PaladinError::LlmFailure`](paladin_core::platform::container::paladin_error::PaladinError::LlmFailure)
+//! conversion (D-02, X-06).
 //!
 //! Before Phase 25 every site that held a real
 //! [`LlmError`](paladin_ports::output::llm_port::LlmError) erased it into
 //! `PaladinError::LlmError(e.to_string())` one line before the engine needed
 //! to know whether the failure was worth retrying. This module replaces those
 //! eight erasures with a single conversion into the structured
-//! [`PaladinError::LlmFailure`] variant so `transience`, the HTTP `status` and
+//! [`PaladinError::LlmFailure`](paladin_core::platform::container::paladin_error::PaladinError::LlmFailure)
+//! variant so `transience`, the HTTP `status` and
 //! the `provider` survive the crossing into the core error taxonomy.
 //!
 //! # Why this lives in `paladin-battalion`
@@ -35,7 +38,8 @@
 //!   message, and a variant without a status converts with `None`, never a
 //!   sentinel such as `0`.
 //! - **Retryability is unchanged (T-25-25).**
-//!   [`PaladinError::is_retryable`] answers `true` for `LlmFailure` exactly
+//!   [`PaladinError::is_retryable`](paladin_core::platform::container::paladin_error::PaladinError::is_retryable)
+//!   answers `true` for `LlmFailure` exactly
 //!   as it did for the legacy variant, so
 //!   `src/infrastructure/resilience/circuit_breaker.rs` is not edited and its
 //!   accounting does not drift.

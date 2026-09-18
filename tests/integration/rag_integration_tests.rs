@@ -320,9 +320,7 @@ mod qdrant_rag_tests {
         // Assert: Should retrieve both memories
         assert!(!results.is_empty(), "Should retrieve at least one memory");
         assert!(
-            results
-                .iter()
-                .any(|r| r.entry.memory.content.contains("Rust")),
+            results.memories.iter().any(|m| m.body.contains("Rust")),
             "Retrieved memories should mention Rust"
         );
     }

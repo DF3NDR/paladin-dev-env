@@ -1,0 +1,109 @@
+# Plan 36-06 evidence: war_engine_configuration.rs, control_flow_dynamic_routing.rs
+
+## Task 1: examples/war_engine_configuration.rs
+
+Command: `env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY cargo run --example war_engine_configuration`
+Exit code: 0
+
+First lines of stdout:
+```
+WarEngine Configuration & Checkpoints
+
+1. Inject a Waypoint backend (EX-62)
+
+   Injected InMemoryWaypointStore as this run's WaypointPort implementor.
+   A SqliteWaypointStore or PostgresWaypointStore backend satisfies the exact same
+    WaypointPort trait -- this program only swaps the injection point, never the
+    WarEngine's own logic.
+
+2. Configure the WarEngine (EX-64)
+
+   max_supersteps      = 20
+   max_node_visits     = 10
+   run_timeout_secs    = Some(60)
+   waypoint_durability = Strict
+   max_muster_tasks    = 50
+
+3. Override the superstep cap from the environment (EX-65)
+
+   before APP_ENGINE_MAX_SUPERSTEPS: max_supersteps = 20
+   after  APP_ENGINE_MAX_SUPERSTEPS: max_supersteps = 5
+```
+
+Full stdout also showed (Part 4-6): a 3-waypoint checkpoint history (superstep 1/2/3,
+each naming node "looper"), the retention service pruning 2 waypoints and leaving 1
+(the thread's protected latest), and the graph fingerprint version `v6` plus the full
+`v6:<hex>` fingerprint string with the GraphMismatch explanation.
+
+Also verified:
+- `cargo build --example war_engine_configuration` -- exit 0, no `--features` flag.
+- `cargo fmt --all -- --check` -- exit 0.
+- `cargo check --workspace --all-targets --all-features` -- exit 0.
+- `make api-surface` -- "API surface unchanged".
+- `grep -c 'Quartermaster' examples/war_engine_configuration.rs` -- 0.
+- `grep -cE '\.unwrap\(\)|\.expect\(' examples/war_engine_configuration.rs` -- 0.
+- `grep -cE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY' examples/war_engine_configuration.rs` -- 0.
+- `grep -q 'cargo run --example war_engine_configuration' examples/war_engine_configuration.rs` -- found.
+
+## Task 2: examples/control_flow_dynamic_routing.rs
+
+Command: `env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY cargo run --example control_flow_dynamic_routing`
+Exit code: 0
+
+Full stdout:
+```
+Control Flow: Custom Edges, Nested Subgraphs, LLM Routing, Muster Caps
+
+1. Custom edge condition: fail closed when unregistered, then registered (EX-67)
+
+   Unregistered "gate_check": engine.start failed closed -> unregistered custom edge condition(s): gate_check
+   Registered "gate_check": edge taken, gate_status = Some("opened")
+
+2. Nested subgraph composition (EX-68)
+
+   outer.outer_result (mapped from the child via StateMap) = Some("child-completed")
+   inner.inner_result (the child's own final checkpoint) = Some("child-completed")
+
+3. LLM-driven dynamic routing (EX-69)
+
+   MockLlmAdapter answered "escalate" -> handled_by = Some("escalate_handler")
+   (The Commander-level equivalent of this same capability is
+    paladin_battalion::commander::StrategySelection::Semantic -- an LLM picks the
+    Battalion STRATEGY itself, rather than a WarGraph edge target.)
+
+4. Cap the Muster fan-out from the environment (EX-70)
+
+   before APP_ENGINE_MAX_MUSTER_TASKS: max_muster_tasks = 100
+   after  APP_ENGINE_MAX_MUSTER_TASKS: max_muster_tasks = 2
+   Muster cap enforced against a running engine: node planner returned NextStep::Muster requesting 3 task(s), exceeding max_muster_tasks (2)
+
+Done -- fully offline, no provider API key was read.
+```
+
+Also verified:
+- `cargo build --example control_flow_dynamic_routing` -- exit 0, no `--features` flag.
+- `cargo build --examples` -- exit 0; both `war_engine_configuration` and
+  `control_flow_dynamic_routing` binaries present under `target/debug/examples/`.
+- `cargo fmt --all -- --check` -- exit 0.
+- `cargo clippy --example control_flow_dynamic_routing --all-features -- -D warnings` -- exit 0.
+- `cargo check --workspace --all-targets --all-features` -- exit 0.
+- `make api-surface` -- "API surface unchanged" (3959 items, same as Task 1's run).
+- `grep -c 'Quartermaster' examples/control_flow_dynamic_routing.rs` -- 0.
+- `grep -cE '\.unwrap\(\)|\.expect\(' examples/control_flow_dynamic_routing.rs` -- 0.
+- `grep -cE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY' examples/control_flow_dynamic_routing.rs` -- 0.
+- `git diff --stat -- src/ crates/` -- empty (no library source changed by either task).
+
+## D-24 closure table
+
+| ID | capability | program | commit |
+|----|------------|---------|--------|
+| EX-62 | Inject a Waypoint backend | examples/war_engine_configuration.rs | c1e4a213 |
+| EX-63 | Run a graph and inspect the checkpoints | examples/war_engine_configuration.rs | c1e4a213 |
+| EX-64 | Configure the engine (EngineConfig) | examples/war_engine_configuration.rs | c1e4a213 |
+| EX-65 | Override the superstep cap from the environment | examples/war_engine_configuration.rs | c1e4a213 |
+| EX-66 | Prune checkpoints with the retention service | examples/war_engine_configuration.rs | c1e4a213 |
+| EX-80 | Graph fingerprint version | examples/war_engine_configuration.rs | c1e4a213 |
+| EX-67 | Custom edge condition fails closed when unregistered | examples/control_flow_dynamic_routing.rs | (this commit) |
+| EX-68 | Nested subgraph composition | examples/control_flow_dynamic_routing.rs | (this commit) |
+| EX-69 | LLM-driven dynamic routing | examples/control_flow_dynamic_routing.rs | (this commit) |
+| EX-70 | Cap the Muster fan-out from the environment | examples/control_flow_dynamic_routing.rs | (this commit) |

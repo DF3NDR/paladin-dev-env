@@ -47,7 +47,7 @@ impl PaladinPort for GroveMockPaladinPort {
 
         Ok(PaladinResult {
             output: format!("[{}]: Handled task: {}", paladin.node.name, input),
-            token_count: 100,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(100, 0),
             execution_time_ms: 10,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -335,11 +335,7 @@ impl paladin_ports::output::llm_port::LlmPort for RecordingRoutingLlmMock {
             model: request.model,
             content: response_json.to_string(),
             finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
-            usage: paladin_ports::output::llm_port::TokenUsage {
-                prompt_tokens: 100,
-                completion_tokens: 50,
-                total_tokens: 150,
-            },
+            usage: paladin_ports::output::llm_port::TokenUsage::new(100, 50),
             created_at: chrono::Utc::now(),
             metadata: std::collections::HashMap::new(),
             function_call: None,
@@ -679,7 +675,7 @@ async fn test_grove_error_handling() {
 
             Ok(PaladinResult {
                 output: format!("[{}]: Success", paladin.node.name),
-                token_count: 50,
+                usage: paladin_ports::output::llm_port::TokenUsage::new(50, 0),
                 execution_time_ms: 10,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,
@@ -798,11 +794,7 @@ async fn test_grove_llm_routing_end_to_end() {
                 model: request.model,
                 content: response_json.to_string(),
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsage {
-                    prompt_tokens: 150,
-                    completion_tokens: 80,
-                    total_tokens: 230,
-                },
+                usage: TokenUsage::new(150, 80),
                 created_at: chrono::Utc::now(),
                 metadata: std::collections::HashMap::new(),
                 function_call: None,

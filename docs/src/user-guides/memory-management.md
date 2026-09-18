@@ -110,7 +110,7 @@ use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Create in-memory garrison — max_entries and max_tokens are GarrisonConfig::new
     // constructor arguments, not with_max_entries()/with_max_tokens() builder calls.
@@ -156,8 +156,9 @@ let garrison = InMemoryGarrison::new(
 );
 
 // Token counting is a separate concern from GarrisonConfig — GarrisonEntry.token_count
-// is populated by a `TokenCounter` implementation (e.g. `TiktokenCounter::new("gpt-4")`),
-// there is no `GarrisonConfig::with_token_counter` method.
+// is populated by a `TokenCounterPort` implementation (the exact `TiktokenCounter::new("gpt-4")`,
+// or the ungated default `HeuristicTokenCounter`), there is no `GarrisonConfig::with_token_counter`
+// method.
 ```
 
 ### Eviction Strategies

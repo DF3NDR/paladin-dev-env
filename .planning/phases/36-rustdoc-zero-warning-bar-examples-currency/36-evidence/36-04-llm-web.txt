@@ -1,0 +1,155 @@
+Phase 36 Plan 04 -- paladin-llm and paladin-web rustdoc closure evidence
+=========================================================================
+
+## paladin-llm
+
+### BEFORE (baseline, default features, forced re-documentation)
+
+    $ touch crates/paladin-llm/src/lib.rs && cargo doc -p paladin-llm --no-deps
+
+warning: public documentation for `redact_secret_patterns` links to private item `JWT_MIN_SEGMENT_LEN`
+   --> crates/paladin-llm/src/redaction.rs:164:44
+warning: public documentation for `pessimistic_tokens_per_1000_bytes` links to private item `PESSIMISTIC_TOKENS_PER_1000_BYTES`
+  --> crates/paladin-llm/src/services/commissary.rs:89:11
+warning: unclosed HTML tag `status`
+warning: unclosed HTML tag `body`
+warning: `paladin-llm` (lib doc) generated 4 warnings
+
+### BEFORE (all-features, RUSTDOCFLAGS="-D warnings")
+
+    $ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps
+
+9 errors (13 rows across RD-47, RD-48, RD-49, RD-50, RD-117..RD-125):
+- redaction.rs:164 -- JWT_MIN_SEGMENT_LEN (private)
+- services/commissary.rs:89 -- PESSIMISTIC_TOKENS_PER_1000_BYTES (private)
+- compat/engine.rs:114 -- CompatEngine::build_request (private)
+- compat/engine.rs:201 -- CompatEngine::map_error (private)
+- compat/engine.rs:1041 -- classify_fetch_failure (private)
+- gemini/adapter.rs:28 -- GeminiResponse (private)
+- gemini/adapter.rs:59 -- GeminiAdapter::map_error (private)
+- http_status.rs -- unclosed HTML tag `status`
+- http_status.rs -- unclosed HTML tag `body`
+error: could not document `paladin-llm`
+
+### AFTER (default features, forced re-documentation)
+
+    $ touch crates/paladin-llm/src/lib.rs && cargo doc -p paladin-llm --no-deps
+
+ Documenting paladin-llm v0.10.0 (/workspace/crates/paladin-llm)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.13s
+   Generated /workspace/target/doc/paladin_llm/index.html
+
+0 lines matching `warning:` (down from 4).
+
+### AFTER (all-features, RUSTDOCFLAGS="-D warnings")
+
+    $ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-llm --all-features --no-deps
+
+ Documenting paladin-llm v0.10.0 (/workspace/crates/paladin-llm)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.16s
+   Generated /workspace/target/doc/paladin_llm/index.html
+EXIT=0
+
+### Workspace-level checks (post-fix, paladin-llm)
+
+    $ cargo fmt --all -- --check          -> clean (no output)
+    $ cargo check --workspace --all-targets --all-features   -> Finished, exit 0
+    $ make api-surface                    -> "API surface unchanged" (3959 items)
+
+### Negative-evidence greps
+
+    $ grep -rn 'allow(rustdoc::' crates/paladin-llm/src
+    crates/paladin-llm/src/lib.rs:49:#![allow(rustdoc::broken_intra_doc_links)]
+
+    NOTE: this line pre-dates Phase 36 (commit 24bc92f47, 2026-05-28) and is a
+    crate-level allow for a DIFFERENT lint (`broken_intra_doc_links`, i.e. links
+    that do not resolve to any item) than the one this plan's fixes address
+    (`private_intra_doc_links` -- links that resolve but to a private item -- and
+    `invalid_html_tags`). It was not introduced by this plan and is out of this
+    plan's scope (not one of this task's `<files>`); no new rustdoc
+    lint-suppression attribute was added by this plan's fixes.
+
+    $ grep -rn 'cfg_attr(docsrs' crates/paladin-llm/src
+    (no output)
+
+    $ grep -c '&lt;' crates/paladin-llm/src/http_status.rs
+    0
+
+    $ grep -rn 'pub const JWT_MIN_SEGMENT_LEN\|pub const PESSIMISTIC_TOKENS_PER_1000_BYTES' crates/paladin-llm/src
+    (no output)
+
+    $ grep -c 'Quartermaster' crates/paladin-llm/src/services/commissary.rs
+    0
+
+    $ git diff --stat HEAD~1 -- crates/ src/ (post-commit, restricted to crates/paladin-llm/)
+    all changed lines are doc-comment lines only (verified via `git diff -- crates/paladin-llm/` before commit)
+
+
+## paladin-web
+
+### BEFORE (baseline, default features, forced re-documentation)
+
+    $ touch crates/paladin-web/src/lib.rs && cargo doc -p paladin-web --no-deps
+
+warning: public documentation for `limit` links to private item `MAX_HISTORY_LIMIT`
+   --> crates/paladin-web/src/thread_controller.rs:483:54
+warning: public documentation for `resume_thread` links to private item `map_parley_error`
+   --> crates/paladin-web/src/thread_controller.rs:686:27
+warning: public documentation for `get_thread_history` links to private item `MAX_HISTORY_LIMIT`
+   --> crates/paladin-web/src/thread_controller.rs:757:24
+warning: `paladin-web` (lib doc) generated 3 warnings
+
+### BEFORE (all-features, RUSTDOCFLAGS="-D warnings")
+
+    $ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps
+
+8 errors (11 rows across RD-07, RD-08, RD-09, RD-129..RD-136):
+- dev_ui_controller.rs:3   -- unresolved link `RunInspectorPort` (public, cross-crate, needs explicit path)
+- dev_ui_controller.rs:20  -- unresolved link `dev_ui_inspector_page` (public, same-crate, needs explicit path)
+- dev_ui_controller.rs:28  -- unresolved link `InspectorView::supersteps` (public, cross-crate, needs explicit path)
+- dev_ui_controller.rs:69  -- NOT_WIRED_MESSAGE (private)
+- dev_ui_controller.rs:131 -- escape_for_script (private)
+- thread_controller.rs:483 -- MAX_HISTORY_LIMIT (private)
+- thread_controller.rs:686 -- map_parley_error (private)
+- thread_controller.rs:757 -- MAX_HISTORY_LIMIT (private, second mention)
+error: could not document `paladin-web`
+
+### AFTER (default features, forced re-documentation)
+
+    $ touch crates/paladin-web/src/lib.rs && cargo doc -p paladin-web --no-deps
+
+ Documenting paladin-web v0.10.0 (/workspace/crates/paladin-web)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.22s
+   Generated /workspace/target/doc/paladin_web/index.html
+
+0 lines matching `warning:` (down from 3).
+
+### AFTER (all-features, RUSTDOCFLAGS="-D warnings")
+
+    $ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-web --all-features --no-deps
+
+ Documenting paladin-web v0.10.0 (/workspace/crates/paladin-web)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.38s
+   Generated /workspace/target/doc/paladin_web/index.html
+EXIT=0
+
+### Workspace-level checks (post-fix, paladin-web)
+
+    $ cargo fmt --all -- --check          -> clean (no output)
+    $ cargo check --workspace --all-targets --all-features   -> Finished, exit 0
+    $ cargo test --workspace --doc        -> 0 failed (paladin_web doctests: 0 passed / 0 failed -- crate carries no doctests)
+    $ make api-surface                    -> "API surface unchanged" (3959 items)
+
+### Negative-evidence greps
+
+    $ grep -rn 'allow(rustdoc::' crates/paladin-web/src
+    (no output)
+
+    $ grep -rn 'cfg_attr(docsrs' crates/paladin-web/src
+    (no output)
+
+    $ grep -rn 'pub const MAX_HISTORY_LIMIT\|pub const NOT_WIRED_MESSAGE\|pub fn escape_for_script\|pub fn map_parley_error' crates/paladin-web/src
+    (no output)
+
+    $ git diff -- crates/paladin-web/ (pre-commit)
+    all changed lines are doc-comment lines only

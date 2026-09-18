@@ -9,6 +9,10 @@ files:
   - .github/workflows/ci.yml
   - k8s/minio.yaml
   - crates/paladin-storage
+owner: repo maintainer
+deferred_past: v0.10.0
+recheck_by: 2026-10-16
+dispositioned_by: Phase 36.1 (2026-09-18)
 ---
 
 ## Problem
@@ -65,3 +69,24 @@ Open questions to answer during evaluation:
 
 This item deliberately carries no `resolves_phase` tag — it is expected to outlive the current
 milestone and must not be silently closed. Owner: repo maintainer.
+
+## Disposition (Phase 36.1, 2026-09-18)
+
+**What was verified now.** The documentation-currency half of this item — the live configuration
+and the docs that quote it staying pinned to the last known-good `quay.io` MinIO release, and the
+checksum-verified `mc` client install — was settled by an earlier sweep (quick tasks 260913-15w
+and 260913-h7l, both cited in the Problem section above) and remains in force; this phase found no
+further documentation drift to fix here.
+
+**What remains blocked, and why.** The evaluation itself — building a RustFS `FileStoragePort`
+adapter behind its own Cargo feature flag, proving parity against the existing MinIO/S3 adapter
+with adapter-parity integration tests, and only then swapping the dev/test compose and CI service
+definitions — is an adapter build with its own TDD and coverage obligation (82% workspace line
+coverage floor, ADR-0006). That is past this milestone by the item's own text, and adding a v2
+requirement line does not shrink it to something this closing phase could absorb.
+
+**A v2 requirement line has been added** — see `.planning/REQUIREMENTS.md` `## v2 Requirements`
+→ `### Platform & Tooling`, naming this evaluation as a v0.11.0 candidate and pointing back at
+this file, so the milestone backlog carries it as well as the todo directory.
+
+**Re-check trigger.** 2026-10-16, or the v0.11.0 planning kickoff, whichever comes first.

@@ -1,0 +1,12 @@
+ Documenting paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+error: public documentation for `muster_progress_round_trips` links to private item `muster_progress_fixture`
+   --> crates/paladin-storage/src/waypoint/contract_tests.rs:673:7
+    |
+673 | /// [`muster_progress_fixture`] (two completed tasks with distinct keys and
+    |       ^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+    = note: `-D rustdoc::private-intra-doc-links` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(rustdoc::private_intra_doc_links)]`
+
+error: could not document `paladin-storage`

@@ -1,0 +1,79 @@
+Phase 36 Plan 01 -- Per-crate post-fix sweep (D-10)
+Toolchain: cargo 1.97.1 / rustc 1.97.1
+
+=====================================================================
+Task 1 -- paladin-memory (RD-01, RD-66, RD-126)
+Fix: crates/paladin-memory/src/token_counter/mod.rs:3 -- bare-shorthand
+`[HeuristicTokenCounter]` intra-doc link replaced with an explicit markdown link +
+full crate path: `[`HeuristicTokenCounter`](crate::token_counter::heuristic::HeuristicTokenCounter)`.
+=====================================================================
+
+$ touch crates/paladin-memory/src/lib.rs && cargo doc -p paladin-memory --no-deps
+ Documenting paladin-memory v0.10.0 (/workspace/crates/paladin-memory)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.05s
+   Generated /workspace/target/doc/paladin_memory/index.html
+warning: line count = 0
+
+$ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-memory --all-features --no-deps
+ Documenting paladin-memory v0.10.0 (/workspace/crates/paladin-memory)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 5.74s
+   Generated /workspace/target/doc/paladin_memory/index.html
+EXIT:0
+
+=====================================================================
+Task 2 -- paladin-ports (RD-51, RD-127) + paladin-storage (RD-46, RD-128)
+Fixes:
+  crates/paladin-ports/src/output/structured_executor_port.rs:158 -- the public
+  `run_structured` doc block's `[`repair_prompt`]` link (a private item) de-linked
+  to plain code font ("the crate-private `repair_prompt` helper").
+  crates/paladin-storage/src/waypoint/contract_tests.rs:673 -- the public
+  `muster_progress_round_trips` doc block's `[`muster_progress_fixture`]` link
+  (a private item) de-linked to plain code font ("`muster_progress_fixture`").
+=====================================================================
+
+$ touch crates/paladin-ports/src/lib.rs crates/paladin-storage/src/lib.rs
+$ cargo doc -p paladin-ports -p paladin-storage --no-deps
+    Checking croner v2.2.0
+    Checking paladin-ports v0.10.0 (/workspace/crates/paladin-ports)
+ Documenting paladin-ports v0.10.0 (/workspace/crates/paladin-ports)
+    Checking chrono-tz v0.10.4
+ Documenting paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.90s
+   Generated /workspace/target/doc/paladin_ports/index.html and 1 other file
+warning: line count = 0
+
+$ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ports --all-features --no-deps
+ Documenting paladin-ports v0.10.0 (/workspace/crates/paladin-ports)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.89s
+   Generated /workspace/target/doc/paladin_ports/index.html
+EXIT:0
+
+$ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-storage --all-features --no-deps
+    Checking paladin-ports v0.10.0 (/workspace/crates/paladin-ports)
+ Documenting paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.77s
+   Generated /workspace/target/doc/paladin_storage/index.html
+EXIT:0
+
+=====================================================================
+Cross-checks (both tasks)
+=====================================================================
+
+$ grep -rn 'allow(rustdoc::private_intra_doc_links)' crates/paladin-memory/src crates/paladin-ports/src crates/paladin-storage/src
+none
+
+$ grep -rn 'pub fn repair_prompt' crates/paladin-ports/src
+none -- visibility not widened
+
+$ cargo fmt --all -- --check
+(no output -- PASS)
+
+$ cargo check --workspace --all-targets --all-features
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 29s
+(EXIT:0)
+
+$ make api-surface
+Checking public API surface...
+API surface extracted (3959 items)
+API surface unchanged
+(unchanged after every commit in this plan -- verified before each of the five commits)

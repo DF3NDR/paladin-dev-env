@@ -131,6 +131,66 @@ pub enum NodeCacheError {
 /// │   InMemoryNodeCache | RedisNodeCache (paladin-storage) │
 /// └─────────────────────────────────────────────────────┘
 /// ```
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use std::sync::Mutex;
+/// use std::time::Duration;
+///
+/// use async_trait::async_trait;
+/// use paladin_core::platform::container::battlefield::StateDelta;
+/// use paladin_core::platform::container::node_cache::CachedDelta;
+/// use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeCachePort};
+///
+/// struct InMemoryCache {
+///     entries: Mutex<HashMap<NodeCacheKey, CachedDelta>>,
+/// }
+///
+/// #[async_trait]
+/// impl NodeCachePort for InMemoryCache {
+///     async fn get(&self, key: &NodeCacheKey) -> Result<Option<CachedDelta>, NodeCacheError> {
+///         Ok(self.entries.lock().unwrap().get(key).cloned())
+///     }
+///
+///     async fn put(
+///         &self,
+///         key: &NodeCacheKey,
+///         delta: &StateDelta,
+///         ttl: Duration,
+///     ) -> Result<(), NodeCacheError> {
+///         let stored_at = chrono::Utc::now();
+///         let expires_at = stored_at + chrono::Duration::from_std(ttl).unwrap();
+///         let cached = CachedDelta::new(delta.clone(), stored_at, expires_at);
+///         self.entries.lock().unwrap().insert(key.clone(), cached);
+///         Ok(())
+///     }
+///
+///     async fn invalidate(&self, prefix: &str) -> Result<u64, NodeCacheError> {
+///         let mut entries = self.entries.lock().unwrap();
+///         let before = entries.len();
+///         entries.retain(|k, _| !k.starts_with(prefix));
+///         Ok((before - entries.len()) as u64)
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let cache = InMemoryCache {
+///         entries: Mutex::new(HashMap::new()),
+///     };
+///     let key = NodeCacheKey::new("graphA:node1:input-hash");
+///
+///     cache
+///         .put(&key, &StateDelta::new(), Duration::from_secs(60))
+///         .await?;
+///
+///     let hit = cache.get(&key).await?;
+///     assert!(hit.is_some(), "a stored entry round-trips back out as a hit");
+///     Ok(())
+/// }
+/// ```
 #[async_trait]
 pub trait NodeCachePort: Send + Sync {
     /// Look up a cached result for `key`.

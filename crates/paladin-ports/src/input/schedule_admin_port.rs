@@ -86,6 +86,98 @@ pub enum ScheduleAdminError {
 ///
 /// Implementations must be `Send + Sync`: schedules are created, read and ticked
 /// concurrently across HTTP handlers and the background tick loop.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use std::sync::Mutex;
+///
+/// use async_trait::async_trait;
+/// use paladin_core::platform::container::run_schedule::{RunSchedule, RunScheduleId, RunScheduleUpdate};
+/// use paladin_ports::input::schedule_admin_port::{
+///     CreateRunSchedule, ScheduleAdminError, ScheduleAdminPort,
+/// };
+/// use paladin_ports::output::run_schedule_repository_port::RunSchedulePage;
+///
+/// struct InMemorySchedules {
+///     rows: Mutex<HashMap<RunScheduleId, RunSchedule>>,
+/// }
+///
+/// #[async_trait]
+/// impl ScheduleAdminPort for InMemorySchedules {
+///     async fn create(&self, create: CreateRunSchedule) -> Result<RunSchedule, ScheduleAdminError> {
+///         let schedule = RunSchedule::new(RunScheduleId::new_v7(), create.assistant_id, create.cron);
+///         self.rows
+///             .lock()
+///             .unwrap()
+///             .insert(schedule.schedule_id.clone(), schedule.clone());
+///         Ok(schedule)
+///     }
+///
+///     async fn get(
+///         &self,
+///         schedule_id: &RunScheduleId,
+///     ) -> Result<Option<RunSchedule>, ScheduleAdminError> {
+///         Ok(self.rows.lock().unwrap().get(schedule_id).cloned())
+///     }
+///
+///     async fn list(
+///         &self,
+///         _limit: u32,
+///         _cursor: Option<RunScheduleId>,
+///     ) -> Result<RunSchedulePage, ScheduleAdminError> {
+///         Ok(RunSchedulePage {
+///             items: self.rows.lock().unwrap().values().cloned().collect(),
+///             next_cursor: None,
+///         })
+///     }
+///
+///     async fn patch(
+///         &self,
+///         schedule_id: &RunScheduleId,
+///         _update: RunScheduleUpdate,
+///     ) -> Result<RunSchedule, ScheduleAdminError> {
+///         self.rows
+///             .lock()
+///             .unwrap()
+///             .get(schedule_id)
+///             .cloned()
+///             .ok_or_else(|| ScheduleAdminError::NotFound {
+///                 schedule_id: schedule_id.clone(),
+///             })
+///     }
+///
+///     async fn delete(&self, schedule_id: &RunScheduleId) -> Result<(), ScheduleAdminError> {
+///         self.rows.lock().unwrap().remove(schedule_id);
+///         Ok(())
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let admin = InMemorySchedules {
+///         rows: Mutex::new(HashMap::new()),
+///     };
+///     let created = admin
+///         .create(CreateRunSchedule {
+///             assistant_id: "a1".to_string(),
+///             version: None,
+///             cron: "0 * * * *".to_string(),
+///             timezone: None,
+///             input: serde_json::json!({}),
+///             enabled: true,
+///             thread_strategy: None,
+///             on_missed: None,
+///             webhook: None,
+///         })
+///         .await?;
+///
+///     let fetched = admin.get(&created.schedule_id).await?;
+///     assert_eq!(fetched.as_ref().map(|s| &s.schedule_id), Some(&created.schedule_id));
+///     Ok(())
+/// }
+/// ```
 #[async_trait]
 pub trait ScheduleAdminPort: Send + Sync {
     /// Validate `create`, then persist a brand-new schedule with its first `next_tick`

@@ -5,19 +5,17 @@ All notable changes to the Paladin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-- The Commissary prompt-budgeting types are now re-exported from the `paladin` facade:
-  `Commissary`, `CommissaryError`, `CommissaryPlan`, `Consignment`, `ConsignmentItem`,
-  `DispensedItem`, `ShedItem`, and `Stockpile`.
-
 ## [0.10.0] - 2026-09-10
 
 ### Behavioral changes
 
-Four user-visible behavior changes ship in this release without requiring a code change. Each is
-detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes).
+Five user-visible behavior changes ship in this release without requiring a code change. The
+first four (`M-B-01`…`M-B-04`) are detailed, with a worked before/after example, in
+[`MIGRATION.md` §9.1](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes); the
+fifth (RAG rationing, below) results from the signature break registered in
+[`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)'s
+`paladin-memory` rows, with its own worked example in `docs/src/architecture/commissary.md`'s
+"In-tree caller: RAG" section rather than a §9.1 table row.
 
 - **M-B-01 — `EdgeCondition::Custom` no longer defaults to `true` when no evaluator is registered
   (BUG-01 fix).** Campaign/graph validation now fails, naming every unregistered condition, before
@@ -28,6 +26,20 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   halt before exiting. Set `terminationGracePeriodSeconds` ≥ 2 × `shutdown_grace` in any Kubernetes
   Deployment manifest before rolling out this upgrade (both shipped manifests already ship `60`).
   Set `APP_ENGINE_GRACEFUL_SHUTDOWN=false` to restore the old immediate-exit behavior.
+- **RAG retrieval output now carries a truncation marker and a shed record where it previously
+  dropped silently (COMM-01, COMM-02, Phase 33).** `RagRetrievalService::retrieve_context` rations
+  retrieved memories through a `Commissary::dispense` call instead of the old inline
+  `content.len() / 4` byte-length estimate: a single memory larger than the whole `rag.max_tokens`
+  budget is now **retained truncated** with the Commissary's own per-item marker, rather than
+  dropped entirely — the exact opposite of the old behavior, which injected nothing for it — and
+  every memory that does not survive rationing is recorded in `RagRetrievalResult::shed` and
+  surfaced as a trailing omission line in the rendered prompt (both `format_for_prompt` and the
+  facade's `format_retrieved_context`) whenever `shed` is non-empty. At an unchanged
+  `rag.max_tokens`, the injected volume is now planned at the Commissary's pessimistic ratio (358
+  tokens per 1000 bytes), so roughly 30% fewer bytes are planned for injection than the old
+  byte-length estimate allowed at the same setting; `RagRetrievalResult::prompt_tokens` /
+  `allotted_tokens` / `exact_tally` show the real, measured usage. No `rag.max_tokens` value needs
+  to change to get this behavior — it applies at whatever budget is already configured.
 - **M-B-03 — `tool_error_mode` defaults to `FeedToModel`, naming v0.9's existing behavior rather
   than changing it.** A failed Arsenal/handoff tool call was always fed back to the model and the
   run continued — that is unchanged. The only observable difference: the fed-back text is now
@@ -76,6 +88,55 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   because they change what a run does; `retry` and `timeout` are deliberately excluded, so tuning
   either never makes `resume` fail with `GraphMismatch`. A thread suspended under a `v4`
   fingerprint fails closed on resume exactly as the `v3` → `v4` bump did.
+
+- **Every token-usage carrier now reports the full prompt/completion/cache/reasoning split instead
+  of a bare count (ACCT-01/ACCT-02/ACCT-03, Phase 31).** `PaladinResult.usage`,
+  `NodeExecutionRecord.usage`, `TraceEvent::NodeFinished.usage`, `TraceEvent::RunFinished.usage`,
+  `StreamingResponse.usage` (`#[non_exhaustive]`) and `ChunkMetadata.usage` (`#[non_exhaustive]`)
+  all replace their former `token_count`/`total_tokens` bare-count field with a full `TokenUsage`
+  (`prompt_tokens`, `completion_tokens`, `total_tokens`, plus optional `cache_read_tokens`,
+  `cache_write_tokens`, `reasoning_tokens`). The HTTP edge follows: `ExecuteResponse.usage` is now
+  a `TokenUsageResponse` DTO in place of `token_count: u32`. `TokenUsage::from_total` — the
+  total-only constructor that discarded the split — is **deleted outright**, with no
+  `#[deprecated]` replacement; every accumulator in the tree (the execution service's reasoning
+  loop, Formation/Phalanx per-Paladin aggregation, the engine's `TraceDispatcher`) now saturates a
+  real `TokenUsage` via its new `Add`/`AddAssign`/`Sum` impls instead of reconstructing a
+  zero-split usage from a total. See
+  [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register) for
+  the full per-type register and every `cargo semver-checks` suppression.
+
+- **`Commissary::new`/`Commissary::from_port` no longer take a caller-supplied exactness
+  argument; the `HistoryTrimmer`/`Commissary` context-window resolvers are now one shared
+  function (PRIM-01, PRIM-02, PRIM-04).** `TokenCounterPort` gained a defaulted
+  `is_exact(&self) -> bool { false }` method (`TiktokenCounter` overrides it `true`,
+  `HeuristicTokenCounter` inherits the default); `Commissary` now reads `Stockpile.exact_tally`
+  live from `counter.is_exact()` instead of a fourth constructor argument, so `new` drops one
+  positional parameter and `from_port` drops one too. Separately, `paladin_llm::window::resolve_context_window`
+  — one pure, four-step precedence function (config table → provider capabilities → framework
+  default or caller fallback, with an explicit `WindowFallbackPolicy` instead of a strict-bool
+  flag) — now backs both `Commissary::new`'s window resolution (strict policy) and
+  `HistoryTrimmer::resolve_limit` (lenient policy), replacing two independent inline `.or(...)`
+  precedence walks with one; the facade's local `LimitSource` enum is gone, folded into the
+  shared `WindowSource`. Six pre-refactor equivalence fixtures, committed green before either
+  consumer was rewired, prove neither Commissary's resolved windows nor HistoryTrimmer's trims
+  changed. See [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
+  (the `paladin-llm | Commissary` row is marked `N/A` with no allowlist mirror — every
+  discovery run recorded zero fired `cargo semver-checks` lints for it; see that section's note).
+
+- **`RagRetrievalService::retrieve_context`/`retrieve_context_with_timeout` return a new
+  `RagRetrievalResult` in place of their v0.9.0 return type; `format_for_prompt` now takes that
+  struct as its parameter (COMM-01, COMM-02, COMM-04, Phase 33).** `RagRetrievalResult` carries the
+  retained memories (each with the post-dispense `body` — render this, never `memory.content`),
+  the shed record (`shed: Vec<ShedItem>`), and the Commissary's `Stockpile` accounting
+  (`prompt_tokens`/`allotted_tokens`/`exact_tally`). A new `RagRetrievalError` enum surfaces
+  Sanctum/Commissary/budget-conversion failures (plus `DuplicateMemoryId` when one search result
+  set carries the same memory UUID twice — a typed error rather than a silent overwrite), and a new
+  `with_token_counter(Arc<dyn TokenCounterPort>)` builder mirrors
+  `PaladinExecutionService::with_token_counter` so a caller can inject an exact counter. No
+  forwarding method and no `#[deprecated]` alias ship (ADR-0051 clean break) — see
+  [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register) (the
+  two `paladin-memory` rows, both marked `N/A` with no allowlist mirror for the same tool-coverage
+  reason as the `Commissary` row immediately above) for the full per-row migration guidance.
 
 ### Added
 
@@ -286,6 +347,38 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   rather than changing it; the fed-back text is now redacted (bearer tokens, API-key shapes,
   `key=`/`token=` values, JWT-shaped triples) before being bounded — see
   [`MIGRATION.md` §9.1, M-B-03](MIGRATION.md#91-behavioral-changes-user-visible-without-code-changes).
+- **`TokenCounterPort::is_exact(&self) -> bool` (PRIM-01).** A defaulted method (`false` by
+  default) that lets a counting adapter declare whether its `count` result is the model's own
+  exact tokenizer tally or an approximation. `TiktokenCounter` overrides it `true` (scoped to the
+  encoding resolved at `new(model)`); `HeuristicTokenCounter` relies on the trait default. See
+  [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
+- **`paladin-memory` gains an unconditional production dependency on `paladin-llm`
+  (`default-features = false`) (COMM-01, Phase 33).** `RagRetrievalService` calls
+  `Commissary::dispense` directly to ration retrieved memories — the workspace's first
+  unconditional production lateral adapter-to-adapter crate edge (`paladin-battalion` takes
+  `paladin-llm` as a dev-dependency only; `paladin-content` takes it optionally behind its `llm`
+  feature). No cycle: `paladin-llm` depends only on `paladin-core` and `paladin-ports`; the
+  featureless dependency keeps `reqwest`/`rand` out of `paladin-memory`'s build.
+- **The Commissary prompt-budgeting types are now re-exported from the `paladin` facade
+  (Phase 32).** `Commissary`, `CommissaryError`, `CommissaryPlan`, `Consignment`,
+  `ConsignmentItem`, `DispensedItem`, `ShedItem`, and `Stockpile`.
+- **The shared context-window resolution types are now re-exported from the `paladin` facade
+  (Phase 32).** `ResolvedWindow`, `UnknownContextWindow`, `WindowFallbackPolicy`, `WindowSource`,
+  and `resolve_context_window`, sourced from `paladin_llm::window`.
+
+### Removed
+
+- **Legacy fallible `garrison::TokenCounter` trait and `TokenCounterFactory` deleted outright, no
+  deprecated replacement (PRIM-03).** `paladin-memory`'s pre-`TokenCounterPort` counting contract
+  — the `TokenCounter` trait (`count_tokens`, `model_name`) and its `TokenCounterFactory`
+  (`for_model`/`supported_models`/`is_supported`) — is removed with no `#[deprecated]` shim and no
+  forwarding alias, per ADR-0051's clean-break authority for Phases 31-33. `TiktokenCounter`'s
+  only counting path is now its `TokenCounterPort` implementation, with the BPE lookup and
+  per-string cache inlined directly into `count`; `TokenCounterPort` is now the only counting
+  contract in the workspace. Both types sit behind the `content-processing` feature, so this
+  removal is invisible to a default-features build; enable `content-processing` and migrate any
+  caller of the removed trait/factory to `TokenCounterPort` directly. See
+  [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
 
 ### Fixed
 
@@ -308,6 +401,97 @@ detailed, with a worked before/after example, in [`MIGRATION.md` §9.1](MIGRATIO
   even if a later `after_model` hook (e.g. a `Guardrail` rule) requested a different one. The
   `after_model` pass's own `FinalResult` now wins when present, mirroring the already-correct
   sibling post-model-call path.
+- **Two token-usage under-reports corrected (ACCT-02/ACCT-03, Phase 31).**
+  1. **Battalion per-Paladin token split was always zeroed.** `Formation`/`Phalanx`'s aggregation
+     path built each `BattalionResult.per_paladin_tokens` entry from a bare total via
+     `TokenUsage::from_total(total)`, which always left `prompt_tokens`/`completion_tokens` at `0`
+     even though the real split was available on the underlying `PaladinResult`. The real
+     `result.usage` split is now inserted directly, with no reconstruction step.
+  2. **Anthropic's `prompt_tokens` excluded cached input, under-reporting the billed figure.** The
+     adapter previously reported `prompt_tokens = input_tokens` alone; Anthropic's own
+     `input_tokens` field EXCLUDES cache reads and cache writes, both of which the API still
+     bills. `prompt_tokens` is now `input_tokens + cache_read_input_tokens +
+     cache_creation_input_tokens` (saturating) — the actual billed input. **Before/after:** a call
+     that previously reported `prompt_tokens: 85` with a 512-token cache read now reports
+     `prompt_tokens: 597`; a consumer computing its own cost estimate from `prompt_tokens` will see
+     a LARGER number for any call that hits the prompt cache, and that larger number is the one
+     Anthropic actually billed. See
+     [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
+- **A failed-tool error's reason is now redacted and bounded like the text already fed back to
+  the model.** When a tool call is configured to fail the run rather than report the failure back
+  to the model, the resulting error's reason previously carried the upstream tool's raw error text
+  verbatim — including anything credential-shaped an upstream tool's own error message happened to
+  contain. It now passes through the same redact-then-bound sanitizer the model-facing failure
+  path already used, so a credential in an upstream tool's error message no longer reaches the
+  error surface unredacted.
+
+### Documentation
+
+- **New guide: WarEngine — Battlefield State & Superstep Execution.** Covers `Battlefield` state
+  and superstep merge semantics, `Waypoint` full-snapshot checkpointing after every superstep and
+  its `(ThreadId, WaypointId)` addressing scheme, the three `WaypointPort` backends,
+  `EngineConfig`/`EngineLimits` (`max_supersteps`, `max_node_visits`, `run_timeout_secs`,
+  `waypoint_durability`, `max_muster_tasks`) with their `APP_ENGINE_*` environment overrides, and
+  the graph-fingerprint scheme that invalidates a resumed run's checkpoints when its structure
+  changes. Linked from the User Guides nav, with runnable, compile-verified examples.
+- **Getting Started and API Reference brought current with the v0.10.0 tree.** Every dependency
+  pin and MSRV statement now reads v0.10.0 / Rust 1.88; the feature-flag and crate inventories are
+  regenerated from the workspace `Cargo.toml` manifests (previously-undocumented flags such as
+  `otel`, `dev-ui`, `redis-cache` and `storage-postgres` are now listed); the stable-API catalogue
+  is rerooted onto the live crate paths.
+- **User Guides and Architecture pages corrected against the shipped API.** Constructor and trait
+  samples that no longer compiled (Garrison attachment, Arsenal armament results, the Herald
+  trait, Commander construction, RAG retrieval) now run through compile-verified examples; the
+  domain-model page documents the engine's new state entities (`Battlefield`, `Waypoint`, `Aegis`,
+  `TraceRecord`) alongside the existing ones.
+- **Deployment and Operations pages rebuilt on the real CI/CD and tracing surface.** The CI/CD
+  guide now tables every job the live workflows actually run instead of an illustrative sample; the
+  monitoring and troubleshooting pages point at the tracing export the release ships (an optional
+  OpenTelemetry OTLP sink behind the `otel` feature) rather than a dependency that does not exist.
+- **Contributing gained an Architecture Decisions index.** A new page tables the ADRs that change
+  what a crate consumer or operator sees, linked directly after the retitled Adapter Development
+  Guide (previously mislabeled "Architecture Decisions" although it was always an adapter
+  walkthrough).
+- **Appendix pages rebuilt from live output and corrected import paths.** The CLI reference pages
+  now carry verbatim `--help` captures of the shipped `paladin-cli` binary in place of hand-written
+  command syntax; the port and adapter import paths used across the appendix's setup and migration
+  guides are corrected to the paths that actually compile against the workspace crates.
+- **Five appendix pages recorded as historical rather than corrected.** The doc-coverage report,
+  the Milestone 7 build-baseline snapshot, the legacy contributing guide, and the `paladin user`
+  CLI/REST pages describe surfaces the shipped v0.10.0 binary no longer has (or, for the coverage
+  report and build baseline, describe a point-in-time measurement rather than a maintained page).
+  Each now carries a banner naming its live replacement — none was deleted; every existing link to
+  these pages still resolves.
+- **The generated API documentation now builds warning-free, and stays that way.** `cargo doc`
+  previously emitted dozens of broken-link and malformed-markup warnings across the workspace
+  under both the default feature set and the full feature set; every one is fixed, and the
+  zero-warning bar is now enforced in three places so the count cannot silently regrow: locally
+  through the code-quality checks, at push time through a pre-push hook, and in CI as part of the
+  required lint job.
+- **The examples gallery grew fourteen new runnable programs**, covering engine configuration and
+  checkpointing, control flow and dynamic routing, human-in-the-loop gating and thread replay,
+  graceful shutdown, the agent runtime and its middleware hooks, schema-validated structured
+  output, the Platform API client and webhook signature verification, the node-result cache,
+  observability and distributed tracing (including OpenTelemetry export), and evaluation
+  scenarios. The gallery index now lists every program in the directory, with what it demonstrates
+  and how to run it.
+- **The two in-process HTTP host examples now mount the same routers the shipped server mounts**,
+  so they exercise the real request-handling surface rather than a partial stand-in.
+- **The examples gallery index is corrected against the current release**: the stated minimum Rust
+  version and the documented result-field names now match what the shipped crates actually
+  require and return.
+- **Documentation currency work closed six remaining deferred prose defects, filled in the last
+  nineteen missing worked examples, and recorded a known documentation-lint gap.** Six mdBook
+  pages were corrected against the shipped API: the provider contribution guide's adapter import
+  paths, the testing guide's `tests/` directory tree, the CLI configuration appendix's Garrison
+  and Arsenal troubleshooting entries, the `OpenAIAdapter` type name corrected everywhere it was
+  miscased across the book, and the deployment guide's CI/CD YAML fragments now captioned
+  illustrative rather than presented as literal, runnable configuration. Nineteen public builders,
+  ports and services gained worked `# Examples` doctests, and a new code-quality gate keeps every
+  future one from shipping without one. The decision record for the `cargo doc` zero-warning bar
+  now names the eight crate-level documentation-lint suppressions still in force across five
+  crates, with their per-crate hidden diagnostic counts and the reason each is knowingly kept for
+  this release rather than cleared.
 
 ### Known limitations
 

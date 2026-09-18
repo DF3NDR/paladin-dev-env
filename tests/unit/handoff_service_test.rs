@@ -404,7 +404,7 @@ impl PaladinExecutorPort for SuccessExecutor {
         self.call_count.fetch_add(1, Ordering::SeqCst);
         Ok(PaladinResult {
             output: "Specialist result".to_string(),
-            token_count: 100,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(100, 0),
             execution_time_ms: 50,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -467,7 +467,7 @@ impl PaladinExecutorPort for TransientThenSuccessExecutor {
         } else {
             Ok(PaladinResult {
                 output: "Recovered result".to_string(),
-                token_count: 80,
+                usage: paladin_ports::output::llm_port::TokenUsage::new(80, 0),
                 execution_time_ms: 40,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,

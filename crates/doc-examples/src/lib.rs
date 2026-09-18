@@ -8,12 +8,18 @@
 pub mod support;
 
 pub mod agent_runtime;
+pub mod arsenal_tools;
+pub mod battalion_patterns;
 pub mod bridge;
 pub mod content;
 pub mod deployment_topologies;
 pub mod fault_tolerance;
+pub mod herald_output;
 pub mod http_service_host;
 pub mod orchestration;
+pub mod paladin_agents;
 pub mod queue_worker;
 pub mod readme;
+pub mod sanctum_vector_memory;
 pub mod sidecar;
+pub mod superstep_engine;

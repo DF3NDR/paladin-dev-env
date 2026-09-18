@@ -349,6 +349,10 @@ path = "tests/integration/qdrant_sanctum_tests.rs"
 required-features = ["qdrant"]
 
 [[test]]
+name = "rag_commissary"
+path = "tests/integration/rag_commissary_test.rs"
+
+[[test]]
 name = "rag_integration"
 path = "tests/integration/rag_integration_tests.rs"
 required-features = ["qdrant"]
@@ -456,6 +460,26 @@ required-features = ["content-processing"]
 name = "http_service_host"
 path = "examples/http_service_host.rs"
 required-features = ["web-server"]
+
+[[example]]
+name = "platform_api_client"
+path = "examples/platform_api_client.rs"
+required-features = ["web-server", "dev-ui"]
+
+[[example]]
+name = "webhook_receiver"
+path = "examples/webhook_receiver.rs"
+required-features = ["web-server"]
+
+[[example]]
+name = "node_result_cache"
+path = "examples/node_result_cache.rs"
+required-features = ["redis-cache"]
+
+[[example]]
+name = "observability_otel_export"
+path = "examples/observability_otel_export.rs"
+required-features = ["otel"]
 
 [[bin]]
 name = "paladin"

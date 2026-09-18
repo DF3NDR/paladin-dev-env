@@ -18,6 +18,7 @@ use paladin_core::platform::container::node_error::NodeError;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::ParleyRequest;
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
 use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
@@ -483,7 +484,7 @@ pub fn shuffle_seeded<T>(items: &mut [T], seed: u64) {
 /// `FaultyPaladinPort` already established.
 #[derive(Default)]
 pub struct RecordingPaladinPort {
-    outputs: Mutex<HashMap<String, (String, u32)>>,
+    outputs: Mutex<HashMap<String, (String, TokenUsage)>>,
     calls: Mutex<Vec<(String, String)>>,
 }
 
@@ -508,10 +509,22 @@ impl RecordingPaladinPort {
         output: impl Into<String>,
         token_count: u32,
     ) {
+        self.set_output_with_usage(name, output, TokenUsage::new(token_count, 0));
+    }
+
+    /// Configure the output string AND reported [`TokenUsage`] a Paladin
+    /// named `name` returns (ACCT-02), including the three optional
+    /// cache/reasoning sub-counts a plain token count cannot express.
+    pub fn set_output_with_usage(
+        &self,
+        name: impl Into<String>,
+        output: impl Into<String>,
+        usage: TokenUsage,
+    ) {
         self.outputs
             .lock()
             .unwrap()
-            .insert(name.into(), (output.into(), token_count));
+            .insert(name.into(), (output.into(), usage));
     }
 
     /// The ordered call log: one `(paladin_name, input)` entry per `execute`
@@ -536,7 +549,7 @@ impl PaladinPort for RecordingPaladinPort {
             .unwrap()
             .push((name.clone(), input.to_string()));
 
-        let (output, token_count) = self
+        let (output, usage) = self
             .outputs
             .lock()
             .unwrap()
@@ -546,7 +559,7 @@ impl PaladinPort for RecordingPaladinPort {
 
         Ok(PaladinResult {
             output,
-            token_count,
+            usage,
             execution_time_ms: 0,
             loop_count: 1,
             stop_reason: StopReason::Completed,

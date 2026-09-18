@@ -34,13 +34,13 @@ Battalions coordinate multiple Paladins to solve complex tasks that require:
 
 ### Example: Research → Analysis → Summary
 
-```rust
-use paladin::battalion::*;
+```rust,ignore
+use paladin::core::platform::container::battalion::*;
 use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Researcher Paladin
     let researcher = PaladinBuilder::new(llm_adapter.clone())
@@ -103,7 +103,7 @@ Output: Professional report
 
 ### Configuration Options
 
-```rust
+```rust,ignore
 let formation = Formation::new()
     .add_paladin(p1)
     .add_paladin(p2)
@@ -125,13 +125,13 @@ let formation = Formation::new()
 
 ### Example: Multi-Perspective Analysis
 
-```rust
-use paladin::battalion::*;
+```rust,ignore
+use paladin::core::platform::container::battalion::*;
 use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Technical Reviewer
     let technical = PaladinBuilder::new(llm_adapter.clone())
@@ -200,7 +200,7 @@ Output: Combined review report
 
 ### Performance Tuning
 
-```rust
+```rust,ignore
 let phalanx = Phalanx::new()
     .add_paladin(p1)
     .add_paladin(p2)
@@ -223,13 +223,13 @@ let phalanx = Phalanx::new()
 
 ### Example: Content Generation Pipeline
 
-```rust
-use paladin::battalion::*;
+```rust,ignore
+use paladin::core::platform::container::battalion::*;
 use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Define Paladins
     let topic_generator = create_paladin("TopicGenerator", "Generate blog post topics", llm_adapter.clone())?;
@@ -311,7 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Advanced Features
 
-```rust
+```rust,ignore
 let campaign = Campaign::new()
     .add_node("start", start_paladin)
     .add_node("process", process_paladin)
@@ -345,13 +345,13 @@ let campaign = Campaign::new()
 
 ### Example: Project Planning
 
-```rust
-use paladin::battalion::*;
+```rust,ignore
+use paladin::core::platform::container::battalion::*;
 use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Commander - Breaks down project into tasks
     let commander = PaladinBuilder::new(llm_adapter.clone())
@@ -431,7 +431,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Routing Strategies
 
-```rust
+```rust,ignore
 // 1. Keyword-based routing
 .routing_strategy(RoutingStrategy::KeywordBased(keywords_map))
 
@@ -499,7 +499,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 1. Wrong Pattern Choice
 
 ❌ **Anti-pattern**: Using Formation for independent tasks
-```rust
+```rust,ignore
 // Slow: Analyst must wait for researcher to finish
 Formation::new()
     .add_paladin(researcher)
@@ -507,7 +507,7 @@ Formation::new()
 ```
 
 ✅ **Better**: Use Phalanx for parallel execution
-```rust
+```rust,ignore
 Phalanx::new()
     .add_paladin(researcher)
     .add_paladin(analyst)  // Run simultaneously
@@ -516,14 +516,14 @@ Phalanx::new()
 ### 2. Inefficient Aggregation
 
 ❌ **Anti-pattern**: Not using an aggregator in Phalanx
-```rust
+```rust,ignore
 // Raw outputs are hard to process
 let results = phalanx.execute_all(input).await?;
 // Now you have to manually combine 5 different outputs
 ```
 
 ✅ **Better**: Define aggregator Paladin
-```rust
+```rust,ignore
 let aggregator = PaladinBuilder::new(llm_adapter)
     .system_prompt("Combine reviews into single report...")
     .build()?;
@@ -534,13 +534,13 @@ phalanx.aggregator(aggregator)
 ### 3. Missing Error Handling
 
 ❌ **Anti-pattern**: Letting one failure stop everything
-```rust
+```rust,ignore
 Formation::new()
     .stop_on_error(true)  // One error kills entire pipeline
 ```
 
 ✅ **Better**: Graceful degradation
-```rust
+```rust,ignore
 Formation::new()
     .stop_on_error(false)
     .fallback_strategy(FallbackStrategy::UseLastValid)
@@ -549,14 +549,14 @@ Formation::new()
 ### 4. Circular Dependencies in Campaign
 
 ❌ **Anti-pattern**: Creating cycles without limits
-```rust
+```rust,ignore
 Campaign::new()
     .add_edge("A", "B")
     .add_edge("B", "A")  // Infinite loop!
 ```
 
 ✅ **Better**: Add cycle detection and limits
-```rust
+```rust,ignore
 Campaign::new()
     .add_edge("A", "B")
     .add_conditional("B", "A", condition)
@@ -567,7 +567,7 @@ Campaign::new()
 
 ### Formation Performance
 
-```rust
+```rust,ignore
 // Sequential execution time: T1 + T2 + T3
 // Use when output dependency is required
 ```
@@ -579,7 +579,7 @@ Campaign::new()
 
 ### Phalanx Performance
 
-```rust
+```rust,ignore
 // Parallel execution time: max(T1, T2, T3) + aggregation
 // Best for reducing total execution time
 ```
@@ -591,7 +591,7 @@ Campaign::new()
 
 ### Campaign Performance
 
-```rust
+```rust,ignore
 // Variable: depends on graph structure and conditionals
 // Can have exponential complexity if not careful
 ```
@@ -604,7 +604,7 @@ Campaign::new()
 
 ### Chain of Command Performance
 
-```rust
+```rust,ignore
 // Depends on routing efficiency and subordinate parallelization
 ```
 
@@ -617,7 +617,7 @@ Campaign::new()
 
 ### Enable Detailed Logging
 
-```rust
+```rust,ignore
 env::set_var("RUST_LOG", "paladin::battalion=debug");
 
 let formation = Formation::new()
@@ -627,7 +627,7 @@ let formation = Formation::new()
 
 ### Track Execution Time
 
-```rust
+```rust,ignore
 use std::time::Instant;
 
 let start = Instant::now();
@@ -637,7 +637,7 @@ println!("Execution time: {:?}", start.elapsed());
 
 ### Checkpoint Recovery
 
-```rust
+```rust,ignore
 let campaign = Campaign::new()
     .enable_checkpoints(true)
     .checkpoint_path("./campaign_state")

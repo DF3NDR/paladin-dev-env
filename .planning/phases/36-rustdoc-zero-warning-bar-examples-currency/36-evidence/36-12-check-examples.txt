@@ -1,0 +1,95 @@
+Phase 36 Plan 12, Task 1 — `make check-examples` (rewritten scripts/check-all-examples.sh, D-14)
+Toolchain: cargo 1.97.1 / rustc 1.97.1
+Captured: 2026-09-17
+
+## Context
+
+Previous script ran a per-file `cargo check`, naming one example and enabling every
+workspace feature at once (`--all-features`) — silently satisfying every
+`required-features` gate in Cargo.toml, exactly the blind spot CI's Example Muster
+feature split exists to catch. Rewritten to run the same invocations
+`.github/workflows/ci.yml`'s "Example Muster" job runs (7 invocations: 1 default-features
+bulk build + 6 explicit feature-split builds, one per distinct `required-features` list
+declared across the 8 `[[example]]` blocks), plus the binary-count assertion, in the same
+order.
+
+## Distinct required-features lists (from Cargo.toml, 8 [[example]] blocks)
+
+| required-features            | targets                                    |
+|-------------------------------|---------------------------------------------|
+| (none — auto-discovered)      | 54 targets (62 total .rs files - 8 gated)   |
+| vision,llm-openai              | vision_analysis, vision_battalion            |
+| content-processing              | document_processing                          |
+| web-server                       | http_service_host, webhook_receiver          |
+| web-server,dev-ui                 | platform_api_client                          |
+| redis-cache                        | node_result_cache                            |
+| otel                                 | observability_otel_export                    |
+
+6 distinct required-features lists → 6 explicit `cargo build --example` invocations,
+matching the acceptance criterion.
+
+## `make check-examples` output (final run, exit 0)
+
+```
+Checking all examples build (CI feature-split mirror)...
+==========================================
+Example Muster (local mirror of CI)
+==========================================
+
+[1/7] Build examples (default features -- auto-discovered targets)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.60s
+[2/7] Build examples (vision -- vision_analysis, vision_battalion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.53s
+[3/7] Build examples (content-processing -- document_processing)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.55s
+[4/7] Build examples (web-server -- http_service_host, webhook_receiver)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.53s
+[5/7] Build examples (web-server,dev-ui -- platform_api_client)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.53s
+[6/7] Build examples (redis-cache -- node_result_cache)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.52s
+[7/7] Build examples (otel -- observability_otel_export)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s
+
+Asserting every example binary was produced...
+Expected: 62 example binaries; found: 62
+
+All 62 example binaries present.
+```
+
+Exit code: 0.
+
+Note: colour escape codes present on the terminal are stripped in this capture for
+readability; the exit codes and text content are unedited.
+
+## `--offline` flag
+
+Kept — a smoke test (`cargo build --offline -p paladin-ai-core --lib`) confirmed the
+devcontainer's registry cache is warm before this script was finalized, so every
+invocation keeps `--offline` exactly as CI's steps do. No divergence from CI was needed.
+
+## Acceptance-criteria greps
+
+```
+$ grep -c 'cargo check --example' scripts/check-all-examples.sh
+0
+$ grep -c -- '--all-features' scripts/check-all-examples.sh
+0
+$ grep -c 'cargo build --example' scripts/check-all-examples.sh   # includes the 1 default bulk build line
+9
+$ grep -c 'check-examples:' Makefile
+1
+$ grep -c 'check-examples' Makefile   # .PHONY line + target line
+2
+$ grep -c 'clean-code: .*check-examples' Makefile
+0
+$ grep -c 'check-examples' .pre-commit-config.yaml
+0
+$ make lint-shell
+Running shellcheck...
+✅ shellcheck clean
+$ git diff --stat HEAD~1 -- src/ crates/ examples/
+(empty)
+```
+
+All acceptance criteria for Task 1 confirmed green.

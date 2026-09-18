@@ -26,6 +26,38 @@ use super::validator::AssistantValidator;
 
 /// Implements [`AssistantAdminPort`] over an [`AssistantRepositoryPort`] and an
 /// [`AssistantValidator`].
+///
+/// # Examples
+///
+/// Constructing an `AssistantService` from its port dependencies: the shipped
+/// in-memory assistant repository, and an [`AssistantValidator`] built over an
+/// empty [`EngineRegistries`](paladin_battalion::engine::registries::EngineRegistries)
+/// bundle -- the same bundle a live `WarEngine` carries, but with no
+/// `Custom`/`Registered` names pre-registered, since this example validates
+/// no Workflow body.
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use paladin::application::services::assistant::{AssistantService, AssistantValidator};
+/// use paladin_battalion::engine::registries::EngineRegistries;
+/// use paladin_ports::input::assistant_admin_port::AssistantAdminPort;
+/// use paladin_storage::assistant::in_memory::InMemoryAssistantRepository;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let repository = Arc::new(InMemoryAssistantRepository::new());
+///     let validator = Arc::new(AssistantValidator::new(Arc::new(EngineRegistries::new())));
+///     let service = AssistantService::new(repository, validator);
+///
+///     // No assistant has been published yet, so the freshly wired service
+///     // reports an empty first page -- a cheap, real call proving the two
+///     // dependencies wired together without a live backend.
+///     let page = service.list(10, None, false).await?;
+///     assert!(page.items.is_empty());
+///     Ok(())
+/// }
+/// ```
 pub struct AssistantService {
     repository: Arc<dyn AssistantRepositoryPort>,
     validator: Arc<AssistantValidator>,

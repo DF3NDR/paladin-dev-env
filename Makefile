@@ -164,6 +164,11 @@ check-doc-examples: ## Compile doc examples (paladin-doc-examples crate) + synta
 	@echo "$(CYAN)Checking doc code examples...$(NC)"
 	@./scripts/check-doc-examples.sh
 
+.PHONY: check-examples
+check-examples: ## Build every examples/ target under CI's feature-split matrix (D-14; mirrors the Example Muster job). Not in clean-code or pre-push -- several full builds are too slow for a push hook.
+	@echo "$(CYAN)Checking all examples build (CI feature-split mirror)...$(NC)"
+	@./scripts/check-all-examples.sh
+
 .PHONY: check-doc-config
 check-doc-config: ## Validate fenced YAML config snippets in docs/src parse correctly
 	@echo "$(CYAN)Checking doc config snippets...$(NC)"
@@ -193,6 +198,10 @@ check-workflow-triggers: ## Verify every workflow's trigger surface matches the 
 check-codeql-dismissals: ## Verify CODEQL-DISMISSALS.md is schema-complete, non-drifted, non-stale and self-consistent
 	@./scripts/check-codeql-dismissals.sh
 
+.PHONY: check-migration-allowlist
+check-migration-allowlist: ## Verify MIGRATION.md §9.2 register is set-equal to .cargo/semver-checks-allowlist.toml (row-level, PRIM-05)
+	@./scripts/check-migration-allowlist.sh
+
 .PHONY: check-release-consistency
 # Deliberately NOT part of check-gates: every sibling guard above is a
 # no-argument offline check runnable against the current tree as-is: this
@@ -208,7 +217,7 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 	@./scripts/check-release-consistency.sh --tag "$(RELEASE_TAG)"
 
 .PHONY: check-gates
-check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals ## Run all offline release-gate guards
+check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist ## Run all offline release-gate guards
 
 .PHONY: test-shell-guards
 # Loops over every tests/scripts/*_test.sh rather than a hardcoded list, so
@@ -370,6 +379,17 @@ openapi: ## Regenerate the committed OpenAPI baseline (crates/paladin-web/openap
 	@UPDATE_OPENAPI=1 $(CARGO) test -p paladin-web --lib openapi_matches_committed_baseline -- --quiet
 	@echo "Wrote crates/paladin-web/openapi.json"
 
+.PHONY: api-surface
+api-surface: ## Check the public API surface against the committed baseline
+	@echo "$(CYAN)Checking public API surface...$(NC)"
+	@./scripts/check-api-surface.sh .project/current-exports.txt
+
+.PHONY: api-surface-update
+api-surface-update: ## Regenerate the committed public API baseline (.project/current-exports.txt)
+	@echo "$(CYAN)Regenerating public API baseline...$(NC)"
+	@./scripts/extract-public-api.sh .project/current-exports.txt
+	@echo "$(YELLOW)Remember to add a CHANGELOG.md entry describing the public surface change.$(NC)"
+
 .PHONY: bless-golden
 bless-golden: ## Regenerate the committed graph-export goldens (crates/paladin-battalion/tests/golden/export/)
 	@echo "$(CYAN)Regenerating graph-export goldens...$(NC)"
@@ -400,8 +420,23 @@ doc: ## Generate documentation
 	@echo "$(CYAN)Generating documentation...$(NC)"
 	@$(CARGO) doc --workspace --no-deps --open
 
+.PHONY: doc-check
+doc-check: ## Enforce the rustdoc zero-warning bar (ADR-0033) + doctests: default-features zero warnings, all-features -D warnings, cargo test --workspace --doc
+	@echo "$(CYAN)[1/3] Checking documentation (default features, zero warnings; ADR-0033)...$(NC)"
+	@$(CARGO) doc --workspace --no-deps 2>&1 | tee /tmp/doc-output.txt && ! grep -q "warning:" /tmp/doc-output.txt
+	@echo "$(CYAN)[2/3] Checking documentation (all features, -D warnings; ADR-0033)...$(NC)"
+	@RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --all-features --no-deps
+	@echo "$(CYAN)[3/3] Running documentation tests...$(NC)"
+	@$(CARGO) test --workspace --doc
+	@echo "$(GREEN)✅ doc-check passed (ADR-0033)$(NC)"
+
+.PHONY: check-api-examples
+check-api-examples: ## Enforce the public-API `# Examples` heading gate (D-05/D-06): every pub *Builder/*Port/*Service must carry a compiling example
+	@echo "$(CYAN)Checking public API '# Examples' headings...$(NC)"
+	@./scripts/check-public-api-examples.sh
+
 .PHONY: clean-code
-clean-code: fmt lint lint-shell check ## Format, lint (Rust + shell), and check code
+clean-code: fmt lint lint-shell check doc-check check-api-examples ## Format, lint (Rust + shell), check code, and enforce the rustdoc zero-warning bar and the public-API examples gate
 
 .PHONY: hooks
 hooks: ## Install git pre-commit and pre-push hooks

@@ -492,6 +492,7 @@ mod tests {
     use crate::maneuver::ManeuverConfig;
     use crate::maneuver::parser::FlowParser;
     use async_trait::async_trait;
+    use paladin_core::platform::container::battalion::TokenUsage;
     use paladin_core::platform::container::paladin::{
         MaxLoops, Paladin, PaladinData, PaladinStatus,
     };
@@ -553,7 +554,7 @@ mod tests {
 
             Ok(PaladinResult {
                 output,
-                token_count: 100,
+                usage: TokenUsage::new(100, 0),
                 execution_time_ms: 50,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,
@@ -840,7 +841,7 @@ mod tests {
 
             Ok(PaladinResult {
                 output: format!("output from {}", agent_name),
-                token_count: 100,
+                usage: TokenUsage::new(100, 0),
                 execution_time_ms: 50,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,
@@ -888,7 +889,7 @@ mod tests {
 
             Ok(PaladinResult {
                 output: "slow output".to_string(),
-                token_count: 100,
+                usage: TokenUsage::new(100, 0),
                 execution_time_ms: 10000,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,
@@ -965,7 +966,7 @@ mod tests {
 
             Ok(PaladinResult {
                 output,
-                token_count: 100,
+                usage: TokenUsage::new(100, 0),
                 execution_time_ms: 50,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,

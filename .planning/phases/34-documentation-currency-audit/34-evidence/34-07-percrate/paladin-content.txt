@@ -1,0 +1,3 @@
+ Documenting paladin-content v0.10.0 (/workspace/crates/paladin-content)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.33s
+   Generated /workspace/target/doc/paladin_content/index.html

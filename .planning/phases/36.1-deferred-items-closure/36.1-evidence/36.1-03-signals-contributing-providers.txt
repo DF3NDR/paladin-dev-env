@@ -1,0 +1,89 @@
+=== 34-signals.sh: docs/src/contributing/contributing-providers.md ===
+--- class 1: version strings ---
+cmd: grep -nE 'v?[0-9]+\.[0-9]+\.[0-9]+' "docs/src/contributing/contributing-providers.md"
+318:### Streaming Usage Terminal-Chunk Contract (v0.10.0, ACCT-03)
+compared against: Cargo.toml [workspace.package] rust-version (and any crate version)
+--- class 2: dependency pins ---
+cmd: grep -nE '^[a-z-]+ *= *\{? *version' "docs/src/contributing/contributing-providers.md"
+none
+--- class 3: crate names ---
+cmd: grep -noE 'paladin-[a-z-]+' "docs/src/contributing/contributing-providers.md" | sort -u
+169:paladin-llm
+233:paladin-llm
+241:paladin-llm
+255:paladin-dev-env
+323:paladin-llm
+338:paladin-llm
+35:paladin-llm
+39:paladin-llm
+40:paladin-llm
+43:paladin-llm
+49:paladin-llm
+55:paladin-ai
+59:paladin-llm
+compared against: ls crates/
+--- class 4: module/source paths ---
+cmd: grep -noE '(crates|src)/[A-Za-z0-9_/.-]+\.rs' "docs/src/contributing/contributing-providers.md"
+40:crates/paladin-llm/src/myprovider/mod.rs
+49:crates/paladin-llm/src/lib.rs
+169:crates/paladin-llm/src/lib.rs
+233:crates/paladin-llm/src/lib.rs
+241:crates/paladin-llm/src/provider_factory.rs
+323:crates/paladin-llm/src/conformance.rs
+338:crates/paladin-llm/src/openai_compatible/adapter.rs
+compared against: test -f on each path
+--- class 5: make targets ---
+cmd: grep -noE 'make [a-z-]+' "docs/src/contributing/contributing-providers.md"
+none
+--- class 6: workflow / job names ---
+cmd: grep -noE '[a-z-]+\.yml' "docs/src/contributing/contributing-providers.md"
+none
+--- class 7: error types ---
+cmd: grep -noE '[A-Z][A-Za-z]*Error(::[A-Za-z]+)?' "docs/src/contributing/contributing-providers.md"
+128:LlmError
+140:LlmError
+142:LlmError::AuthenticationError
+151:LlmError::AuthenticationError
+158:LlmError::ProviderError
+177:LlmError
+191:LlmError
+191:LlmError
+216:LlmError
+221:LlmError
+246:LlmError::ConfigurationError
+456:LlmError::NetworkError
+464:LlmError
+472:LlmError::RateLimitExceeded
+476:LlmError::NetworkError
+compared against: grep -rn '<type>' crates/ src/
+--- class 8: feature flags ---
+cmd: grep -noE '"[a-z-]+"' "docs/src/contributing/contributing-providers.md"
+51:"myprovider"
+60:"llm-openai"
+60:"llm-anthropic"
+60:"llm-deepseek"
+60:"llm-myprovider"
+90:"default-model"
+116:"http"
+213:"myprovider"
+244:"myprovider"
+280:"response"
+280:"test"
+285:"test-key"
+287:"test-model"
+343:"partial"
+compared against: [features] headings in any workspace manifest
+--- class 9: shipped-surface checklist hit ---
+cmd: grep -nFf ".planning/phases/34-documentation-currency-audit/34-shipped-tokens.txt" "docs/src/contributing/contributing-providers.md"
+35:LLM provider adapters live in the `paladin-llm` crate, gated by a feature flag:
+39:mkdir -p crates/paladin-llm/src/myprovider
+40:touch crates/paladin-llm/src/myprovider/mod.rs
+43:Add a feature flag to `crates/paladin-llm/Cargo.toml`:
+49:Then gate the module in `crates/paladin-llm/src/lib.rs`:
+59:llm-myprovider = ["paladin-llm/myprovider"]
+169:correspondence test in `crates/paladin-llm/src/lib.rs`
+233:Update `crates/paladin-llm/src/lib.rs`:
+241:Add to `crates/paladin-llm/src/provider_factory.rs`:
+323:(`crates/paladin-llm/src/conformance.rs`'s `streaming_usage_equals_non_streaming_usage` case,
+338:- Your adapter's own rustdoc (see `crates/paladin-llm/src/openai_compatible/adapter.rs`'s
+343:Never invent a fourth "partial" value, and never substitute a `TokenCounterPort` estimate for a

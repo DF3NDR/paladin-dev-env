@@ -27,7 +27,7 @@
 //! - A template with no placeholder renders literally, unchanged.
 //! - A placeholder in the `muster.` namespace (`{muster.payload}`,
 //!   `{muster.task_key}`, CF-03 / D-15) resolves ONLY from the executing
-//!   node's [`MusterContext`](paladin_core::platform::container::directive::MusterContext)
+//!   node's [`MusterContext`]
 //!   — passed to [`InputMapping::render`] separately — never from the
 //!   Battlefield. With no muster context present (an ordinary,
 //!   non-Muster-worker execution), such a placeholder is a typed
@@ -37,7 +37,7 @@
 //! - A placeholder in the `parley.` namespace (`{parley.value}`,
 //!   `{parley.prompt}`, `{parley.kind}`, `{parley.responded_by}`, HITL-01,
 //!   D-07) resolves ONLY from the executing node's own outstanding
-//!   [`ParleyResponse`](paladin_core::platform::container::parley::ParleyResponse)
+//!   [`ParleyResponse`]
 //!   — passed to [`InputMapping::render`] separately, `Some` only on the
 //!   post-resume re-run of a parleying node — never from the Battlefield.
 //!   `kind`/`prompt` are stamped onto the response by `WarEngine::resume_with`

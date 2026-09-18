@@ -102,7 +102,7 @@ frozen at 311 lines that two milestones made invisible.
 | **Milestone 9-12 + Deferred-QA close-out** | 12-16 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Ingest run 5 (FINAL) — `.project/Milestone_9-Classic-Orchestrator-Completion` + `.project/Milestone_10-CI-Hardening-Release-Automation` + `.project/Milestone_11-Documentation-Overhaul-Publish` + `.project/Milestone_12-Web-API` + `.project/Deferred-QA-CICD-Completion` + `.project/project-management` (46 docs) |
 | **Provider Expansion** | 17 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-15 per *Roadmap Extension Protocol* item 1. |
 | **Security Tooling** | 18-21 | ✅ **Shipped v0.9.0 (2026-09-01)** — [archive](milestones/v0.9.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-24 per *Roadmap Extension Protocol* item 1, closing the Rust-SAST gap the v0.8.0 milestone audit left as its one genuinely open item; extended 2026-08-25 with Phases 19-21 (publish credential, publish operations, release artifacts). |
-| **Durable Agent Execution Runtime** | 22-29 | 🔲 Not started | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. |
+| **Durable Agent Execution Runtime** | 22-37 | 🔄 **In progress** — Phases 22-29 complete 2026-09-10 (`0.10.0` bumped on the feature branch, tag not yet cut); Phases 30-33 added 2026-09-14, complete 2026-09-16; Phases 34-37 added 2026-09-17 (documentation currency + the crate release) | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. **Extended 2026-09-14** with Phases 30-33 (Token Economy — Commissary anchoring, lossless accounting, primitive unification, Commissary adoption), sourced from `.project/Milestone_13-Token-Economy/` (overview + Epics 1-4). Milestone 14 (Treasurer, `.project/Milestone_14-Treasurer/`) is reserved, not roadmapped. **Extended 2026-09-17** with Phases 34-37 (Release Readiness — documentation currency audit, mdBook currency, rustdoc zero-warning bar & examples currency, the crate release) — operator-instructed pre-tag work, not corpus-sourced. |
 
 **The ingest is complete.** All 263 documents in `.project/` are covered — 199 classified across
 five runs and 64 `tasks-*.md` measured deterministically by `intel/task-completion-state.md`. There
@@ -192,7 +192,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 
 </details>
 
-**Durable Agent Execution Runtime (Phases 22-29)** — in progress (added 2026-09-01)
+**Durable Agent Execution Runtime (Phases 22-33)** — in progress (added 2026-09-01; extended 2026-09-14 with Phases 30-33)
 
 - [x] **Phase 22: Battlefield State & Superstep Engine** - Typed shared state, cyclic superstep execution, and automatic per-superstep checkpointing that resumes with zero re-execution after a crash (completed 2026-09-02)
 - [x] **Phase 22.1: Engine readiness defect and MSRV follow-up (INSERTED)** - Fix the BUG-03 cycle-bootstrap starvation and BUG-04 resume-frontier defects, complete the graph fingerprint, raise the MSRV floor to a measured 1.88, and seal G-22-1 on whole-run CI evidence (completed 2026-09-03)
@@ -203,6 +203,21 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 - [x] **Phase 27: Platform API** - Durable background runs on a worker pool, Parley/streaming integration, versioned assistants, and API-managed schedules/webhooks (completed 2026-09-08)
 - [x] **Phase 28: Observability & Tooling** - Machine-consumable trace stream, OTel/log/SSE consumers, graph/run visualization, and the paladin-eval regression harness (completed 2026-09-09)
 - [x] **Phase 29: Program Gates & Release** - Complete MIGRATION.md, proven backward compatibility, the program acceptance audit, and a releasable v0.10.0 (completed 2026-09-10)
+
+**Token Economy — Commissary anchoring & lossless accounting** (added 2026-09-14, still v0.10.0 — the `0.10.0` tag is not yet cut; Phase 33 re-seals the Phase 29 release gates)
+
+- [x] **Phase 30: Token-Economy Vocabulary & Commissary Anchoring** - Record the units-plain / roles-medieval vocabulary rule, anchor `Commissary` with an ADR and an mdBook page, reserve `Treasurer` with its downstream guardrail, document the four `max_tokens` meanings, purge the orphan `Quartermaster` references, and record the clean-break versioning decision as an ADR (docs only) (completed 2026-09-14)
+- [x] **Phase 31: Lossless Token Accounting** - Carry the full `TokenUsage` prompt/completion split (plus optional cache/reasoning fields) from the LLM port to `RunFinished` and a herald, remove the `from_total` zeroing from the battalion path, and prove streaming usage parity per adapter (keystone; breaking) (completed 2026-09-15)
+- [x] **Phase 32: Unified Token Primitives** - One counting contract (`TokenCounterPort::is_exact`, `Commissary::new` drops `is_exact_counter`, legacy `TokenCounter`/`TokenCounterFactory` retired) and one shared context-window resolver with a strict mode consumed by both `HistoryTrimmer` and `Commissary` (breaking) (completed 2026-09-16)
+- [x] **Phase 33: Commissary In-Tree Adoption** - Route RAG truncation through `Commissary::dispense` with shed records and a truncation marker, closing the last silent-truncation path with an integration-tested production caller, then re-seal the Phase 29 release gates on the final commit (completed 2026-09-16)
+
+**Release Readiness — documentation currency & the crate release** (added 2026-09-17, still v0.10.0 — the `0.10.0` tag is not yet cut; Phase 37 cuts it)
+
+- [x] **Phase 34: Documentation Currency Audit** - Audit the mdBook, the rustdoc corpus and the `examples/` / `doc-examples` programs against everything Phases 22-33 changed (and anything v0.9.0 left unwritten), producing one classified gap inventory that scopes Phases 35-36 (read-only; no docs change) (completed 2026-09-17)
+- [x] **Phase 35: mdBook Currency** - Close every mdBook gap the Phase 34 inventory records so the book describes the v0.10.0 tree — new pages where a capability shipped without one, corrected pages where the API or vocabulary changed, and `mdbook build` + linkcheck green (completed 2026-09-17)
+- [x] **Phase 36: Rustdoc Zero-Warning Bar & Examples Currency** - Take `cargo doc --workspace --no-deps` from 73 carried warnings to zero so CI's "Check documentation" step is green, resolve the 14 `--all-features` intra-doc links, and bring every `examples/` and `doc-examples` program current with the Phase 22-33 API (completed 2026-09-18)
+- [x] **Phase 36.1: Deferred Items Closure (INSERTED)** - Every deferred item Phases 30-35 recorded and left unowned is closed in the tree or explicitly dispositioned before v0.10.0 ships — the Phase 31/32/34/35/36 registers, ledger rows 36-38 and the two pending todos are walked item by item, and `WINDOWS.md` agrees with the registers (`open_count: 0`) (completed 2026-09-18)
+- [ ] **Phase 37: v0.10.0 Crate Release** - Re-seal the Phase 29 release gates on the post-documentation final commit, merge to `main`, cut the `v0.10.0` tag through `release.yml`, and confirm every publishable crate is on crates.io at `0.10.0`
 
 ## Phase Details
 
@@ -217,7 +232,7 @@ of the v0.9.0 Security Tooling milestone — are archived in
 [`v0.9.0-REQUIREMENTS.md`](milestones/v0.9.0-REQUIREMENTS.md) and
 [`v0.9.0-MILESTONE-AUDIT.md`](milestones/v0.9.0-MILESTONE-AUDIT.md). Only phases in the current
 and future milestones are detailed below, which is what keeps this file a constant size per
-milestone. Phases 22-29 — the current milestone, v0.10.0 "Durable Agent Execution
+milestone. Phases 22-33 — the current milestone, v0.10.0 "Durable Agent Execution
 Runtime" — are detailed in full below.*
 
 ### Phase 22: Battlefield State & Superstep Engine
@@ -755,6 +770,432 @@ Plans:
 
 - [x] 29-09-PLAN.md — SHIP-04: the 0.10.0 bump, changelogs, dry-run publish, CI evidence, audit step 10
 
+### Phase 30: Token-Economy Vocabulary & Commissary Anchoring
+
+**Goal**: The token-economy vocabulary is decided in writing and `Commissary` has a documentation home — the units-plain / roles-medieval rule is recorded, `Commissary` is anchored with an on-branch ADR and an mdBook page, `Treasurer` is reserved (not built) with its downstream guardrail, the four meanings of `max_tokens` are documented, the last orphan `Quartermaster` references are gone, and the clean-break versioning decision that Phases 31-33 rely on is an ADR rather than an assumption.
+**Depends on**: Phase 29 (docs-only; can land alone and first)
+**Requirements**: VOCAB-01, VOCAB-02, VOCAB-03, VOCAB-04, VOCAB-05, VOCAB-06, VOCAB-07
+**Source**: `.project/Milestone_13-Token-Economy/Epic_1/prd-vocabulary-and-docs-foundation.md` (D-1, D-2, D-3, D-8, D-9; F4 partial, F5 docs)
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. `PROJECT.md` and `docs/src/architecture/domain-model.md` state the vocabulary rule — units/measures (`TokenUsage`, `max_tokens`, `max_context_tokens`) and technical ports (`TokenCounterPort`, `LlmPort`, `EmbeddingPort`) keep plain names; domain roles, places and events get Medieval-Military names — and `Commissary` appears in both the ubiquitous-language list and the domain-model table as the input-side, per-call window-rationing officer (VOCAB-01)
+  2. A numbered ADR in `.planning/decisions/` records the `Commissary` design (`verify_fits` guard + `dispense` allocator, fail-loud / never-silent), the Quartermaster→Commissary rename rationale and the explicit rejected-name list, reconstructed from `origin/feature/quartermaster-prompt-budgeting`'s `0010-prompt-context-budgeting.md` and the port commit history — and an mdBook page under `docs/src/` (concept, the `Consignment`/`Stockpile`/`ShedItem` model, a usage sketch) is reachable from the architecture nav with the link-check green (VOCAB-02, VOCAB-03)
+  3. A one-page `Treasurer` reservation ADR exists: the role is reserved (0/0 in-tree, verified by grep), will own cross-run / per-tenant / per-API-key allowances, per-model currency pricing, `cost_estimate` production and rate pacing, *installs* a per-run `TokenBudget` rather than replacing it, is built in a later milestone (Milestone 14 in `.project/Milestone_14-Treasurer/`), and — the downstream guardrail — is a framework-only word that must never appear as an audit-target or fixture domain term (VOCAB-04)
+  4. `docs/src/getting-started/configuration.md` carries one table naming the four `max_tokens` meanings (Garrison store cap, RAG injection cap, per-request completion cap, run-level `token_budget` cap) and states that any future Treasurer-level cap uses a distinct key (`allowance`); the rustdoc on `ExecutionMetadata.cost_estimate` (`crates/paladin-core/src/platform/container/herald.rs`) says it is reserved for the Treasurer (Milestone 14 / FUT-08) with no in-tree producer, and the field is not removed (VOCAB-05)
+  5. `grep -rniE '\bQuartermaster\b' crates src` returns nothing — the `src/lib.rs` provenance comment is reworded without the retired term — and the `SirQuartermaster` example in `.project/project-management/paladin-project-plan-final.md` is annotated as historical; `.planning/` phase history is untouched (VOCAB-06)
+  6. A token-economy versioning ADR records that Phases 31-33 land as **clean breaks inside the untagged v0.10.0** — superseding, for these phases only, the v0.10.0 corpus rule X-03 ("deprecations allowed, removals are not, before v0.11.0") on the operator's 2026-09-14 decision (single coordinated downstream consumer, pre-1.0) — and that every break still gets a `MIGRATION.md` §9.2 row and a `cargo semver-checks` allowlist row as documentation for the downstream refactor, never as a compatibility shim; the supersession is also recorded in `PROJECT.md` Key Decisions (VOCAB-07)
+
+**Plans**: 3 plans
+
+Plans:
+**Wave 1**
+
+- [x] 30-01-PLAN.md — Anchor `Commissary`: ADR-0049 (design, rename rationale, nine rejected names), the vocabulary rule in all three ubiquitous-language lists, and the new `docs/src/architecture/commissary.md` page linked from the architecture nav (VOCAB-01, VOCAB-02, VOCAB-03) — wave 1
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 30-02-PLAN.md — ADR-0050 (`Treasurer` reservation + downstream guardrail) and ADR-0051 (clean breaks inside the untagged v0.10.0, superseding X-03 for Phases 31-33), plus the PROMOTION.md index and PROJECT.md Key Decisions bookkeeping (VOCAB-04, VOCAB-07) — wave 2
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 30-03-PLAN.md — The four meanings of `max_tokens` as one table, the `cost_estimate` rustdoc reservation at five doc sites, and the last two `Quartermaster` prose references retired from `crates`/`src` (VOCAB-05, VOCAB-06) — wave 3
+
+### Phase 31: Lossless Token Accounting
+
+**Goal**: The provider's prompt/completion split survives from the LLM port to `RunFinished` and a herald — no carrier above the port collapses `TokenUsage` to a bare total any more, `TokenUsage` gains optional cache and reasoning fields, and streamed runs report the same usage as non-streamed ones — so that everything cost-shaped (currency pricing, the Treasurer) becomes buildable on the shipped shape. This is the keystone phase: Phase 32 depends on it and Milestone 14 will.
+**Depends on**: Phase 29 (keystone — independent of Phase 30; Phase 30's VOCAB-07 versioning ADR should land first so the clean break is a recorded decision)
+**Requirements**: ACCT-01, ACCT-02, ACCT-03, ACCT-04, ACCT-05
+**Source**: `.project/Milestone_13-Token-Economy/Epic_2/prd-lossless-token-accounting.md` (D-4; F1, F8)
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. `TokenUsage` (`crates/paladin-core/src/platform/container/token_usage.rs`, the single definition) carries `cache_read_tokens`, `cache_write_tokens` and `reasoning_tokens` as `#[serde(default)]` optionals; the rustdoc states whether `total_tokens` includes them; a legacy JSON document without the new fields deserializes via defaults and a new document round-trips (ACCT-01)
+  2. `PaladinResult`, `BattalionResult.per_paladin_tokens`, the Waypoint `NodeExecutionRecord`, `TraceEvent::NodeFinished` and `RunFinished` carry a full `TokenUsage` rather than a bare count; `TokenUsage::from_total` is gone from the battalion aggregation path (`formation_service.rs`, `phalanx_service.rs`), and a round-trip test proves a usage with non-zero prompt AND completion (plus cache/reasoning) reaches `RunFinished` intact — a clean break with no `#[deprecated]` bare-count accessor whose only purpose is downstream compatibility (ACCT-02)
+  3. Every LLM adapter's `execute_stream` path is audited: a per-adapter test asserts the accumulated `TokenUsage` on the streaming path equals the non-streaming path, or the adapter's inability to report streamed usage is documented as an explicit exception in the adapter's rustdoc and the mdBook provider page (ACCT-03)
+  4. The breakdown is observable end-to-end in at least one herald in both JSON and Markdown output (ACCT-04)
+  5. Every touched public type has a `MIGRATION.md` §9.2 row and a matching `cargo semver-checks` allowlist row (Phase 29 D-04 row-level CI gate green), the `CHANGELOG.md` `[0.10.0]` section records the carrier change, and `make clean-code` plus the 82 % coverage floor are green (ACCT-05)
+
+**Plans**: 7 plans
+
+Plans:
+**Wave 1**
+
+- [x] 31-01-PLAN.md — `TokenUsage` gains the three optional sub-counts, saturating `Add`/`AddAssign`/`Sum` and builders; every in-tree literal migrates (ACCT-01)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 31-02-PLAN.md — the carrier break: `PaladinResult`/`NodeExecutionRecord`/`NodeFinished`/`RunFinished` carry a full `TokenUsage`, the total-only constructor is deleted, real per-Paladin splits (ACCT-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 31-03-PLAN.md — streaming terminal-chunk usage contract on the port plus `CompatEngine`/OpenAI/DeepSeek, and the no-estimation fallback (ACCT-03)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 31-04-PLAN.md — Anthropic and Gemini streaming usage, the shared parity conformance case, and the documented provider exception (ACCT-03)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 31-05-PLAN.md — JSON and Markdown herald breakdown, CLI split rendering, and the mdBook/rustdoc sweep (ACCT-04)
+- [x] 31-06-PLAN.md — HTTP edge: `TokenUsageResponse`, `ExecuteResponse.usage`, inspector `CompletedRow.usage`, regenerated `openapi.json` (ACCT-02, ACCT-05)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 31-07-PLAN.md — `MIGRATION.md` §9.2 rows, empirically-derived semver allowlist entries, `CHANGELOG.md` `[0.10.0]`, and the phase gate evidence (ACCT-05)
+
+### Phase 32: Unified Token Primitives
+
+**Goal**: Exactly one token-counting contract and exactly one context-window resolver exist — `TokenCounterPort` gains its exactness signal so `Commissary::new` stops asking the caller for it, the legacy fallible `garrison::TokenCounter`/`TokenCounterFactory` pair is retired, and `HistoryTrimmer` and `Commissary` resolve the window through a single shared function that preserves Commissary's strict "no invented window" refusal.
+**Depends on**: Phase 31 (the primitives layer settles together), Phase 30 (VOCAB-07 versioning ADR)
+**Requirements**: PRIM-01, PRIM-02, PRIM-03, PRIM-04, PRIM-05
+**Source**: `.project/Milestone_13-Token-Economy/Epic_3/prd-unify-token-primitives.md` (D-5, D-6; F2, F3)
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. `TokenCounterPort` (`crates/paladin-ports/src/output/token_counter_port.rs`) has `fn is_exact(&self) -> bool` defaulting to `false`; the tiktoken-backed counter returns `true` and the heuristic counter returns `false`, each proven by a test (PRIM-01)
+  2. `Commissary::new` no longer takes an `is_exact_counter: bool` argument and reads exactness from the port — a clean break with no forwarding constructor — and every in-tree call site compiles against the new signature (PRIM-02)
+  3. The legacy `garrison::TokenCounter` trait and `TokenCounterFactory` are removed together with their three re-exports (`paladin-memory` `garrison/mod.rs` and `prelude.rs`, and the facade's `src/infrastructure/adapters/garrison/mod.rs`), every former in-tree caller consuming `TokenCounterPort` instead; if one internal caller genuinely cannot migrate, it is marked `#[deprecated]` with the blocking reason recorded in the phase context and removal assigned to Phase 33 (PRIM-03)
+  4. A shared resolver in `paladin-llm` (e.g. `window::resolve_context_window`) owns the precedence config table → provider capabilities → default, with an explicit strict mode that errors rather than defaults when the window is unknown; both `HistoryTrimmer` (`src/application/services/paladin/middleware/history.rs`, today's `resolve_limit`) and `Commissary` consume it; precedence tests cover config-table hit, provider-capability hit, default fallback and strict refusal, and an equivalence snapshot proves `Commissary` resolves the same windows as before this phase and `HistoryTrimmer` produces the same trims (PRIM-04)
+  5. The `Commissary::new` signature change and the legacy-counter removal each have a `MIGRATION.md` §9.2 row and a semver-checks allowlist row (row-level gate green), the `CHANGELOG.md` `[0.10.0]` section records them, and `make clean-code` plus the coverage floor are green (PRIM-05)
+
+**Plans**: 5 plans
+
+Plans:
+
+**Wave 1**
+
+- [x] 32-01-PLAN.md — `TokenCounterPort::is_exact` defaulted `false` with tiktoken `true` and heuristic inheriting it, `Commissary` dropping its caller-supplied exactness argument and reading the port, plus the consolidated one-way checkpoint for the phase (PRIM-01, PRIM-02)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 32-02-PLAN.md — the pre-resolver equivalence snapshot committed green, then `paladin_llm::window`: one precedence walk with an explicit fallback-policy enum, a labelled source enum and four precedence tests (PRIM-04)
+- [x] 32-03-PLAN.md — legacy `garrison::TokenCounter`/`TokenCounterFactory` deleted outright, the tiktoken counting path inlined into the port impl, four re-export sites narrowed and the doc sweep with its exit grep (PRIM-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 32-04-PLAN.md — both consumers call the shared resolver: `Commissary::new` under the strict policy with an absent table, `HistoryTrimmer::resolve_limit` under the lenient policy, the facade's duplicate source enum deleted, equivalence fixtures green and unedited (PRIM-04)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 32-05-PLAN.md — empirical semver discovery with the mandatory `--release-type minor` and the feature-gated second pass, `MIGRATION.md` §9.2 rows with row-matched allowlist entries, `CHANGELOG.md` `[0.10.0]` bullets, the two migration pages, and the phase gate evidence (PRIM-05)
+
+### Phase 33: Commissary In-Tree Adoption
+
+**Goal**: `Commissary` has a real production caller and the last silent token-truncation path is gone — RAG retrieval rations its injection budget through `Commissary::dispense` with score-derived priorities, records every shed memory and marks truncated output — and, because Phases 31-33 changed public API after Phase 29 sealed the release gates, those gates are re-run green on the final commit so v0.10.0 is releasable again.
+**Depends on**: Phase 32 (shared resolver, settled counter contract), Phase 31, Phase 30
+**Requirements**: COMM-01, COMM-02, COMM-03, COMM-04
+**Source**: `.project/Milestone_13-Token-Economy/Epic_4/prd-commissary-in-tree-adoption.md` (D-7; F6, F4 completes)
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. `RagRetrievalService::truncate_to_token_budget`'s inline `content.len() / 4` + silent drop (`crates/paladin-memory/src/services/rag_retrieval_service.rs`) is replaced by a `Commissary::dispense` call over a `Consignment` built from the retrieved memories with priority derived from relevance score and budget `rag.max_tokens`; a property test proves the retained set's total is ≤ the budget and the highest-scoring memories are the ones retained (COMM-01)
+  2. The `ShedItem` list (which memories were dropped and why) is surfaced through the RAG result path, and a truncation marker is emitted when content was shed; tests assert both are present when the budget is exceeded and both absent when everything fits (COMM-02)
+  3. An integration test exercises `Commissary::dispense` through the real RAG path — the F4 production-caller evidence — and no silent token-based truncation remains in-tree (the Phase 26 D-13 deferral closes; grep-provable) (COMM-03)
+  4. The Phase 29 release gates are re-sealed on the final commit of this phase: `MIGRATION.md` has no "TBD" and its §9.2 register matches the semver-checks allowlist row-for-row, `v0_9_config_boot` and the OpenAPI golden diff pass, `cargo semver-checks` and the MSRV job are green, `cargo publish --dry-run` is green in dependency order, and the `CHANGELOG.md` `[0.10.0]` section carries the RAG truncation-marker behavioural note plus the Phase 31/32 API entries — with the evidence appended to the Phase 29 acceptance audit rather than a new audit (COMM-04)
+
+**Plans**: 6 plans
+
+Plans:
+
+**Wave 1**
+
+- [x] 33-01-PLAN.md — the `paladin-memory` → `paladin-llm` production edge plus the tracer slice: result struct, error enum, the sync `ration` seam and the first `Commissary::dispense` call, with every consumer migrated in one commit (COMM-01)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [x] 33-02-PLAN.md — one shared omission-marker helper emitted by both renderers, the counts-only observability line, and the both-directions marker/shed tests (COMM-02)
+
+**Wave 3** *(blocked on Wave 2; 33-03 and 33-04 run in parallel)*
+
+- [x] 33-03-PLAN.md — the `proptest` over the rationing seam plus the four named edge tests: oversized-single-memory, non-clamping budget conversion, equal-score tie order, budget boundary (COMM-01)
+- [x] 33-04-PLAN.md — the ungated `rag_commissary` integration test (F4 evidence), the Commissary module-doc retirement and the D-19 exit greps (COMM-03)
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [x] 33-05-PLAN.md — empirical semver discovery, the two `MIGRATION.md` §9.2 rows with row-matched allowlist entries, the `CHANGELOG.md` `[0.10.0]` entries with the `[Unreleased]` fold, and the regenerated API baseline (COMM-04)
+
+**Wave 5** *(blocked on Wave 4 — runs on the phase's final commit)*
+
+- [x] 33-06-PLAN.md — the full Phase 29 gate re-seal with the PRIM-04 regression check, `33-CI-EVIDENCE.md`, and audit §11 with one unticked human-only tag box (COMM-04)
+
+### Phase 34: Documentation Currency Audit
+
+**Goal**: The documentation debt is measured before it is paid — one inventory records, per mdBook page under `docs/src/`, per crate's rustdoc, and per `examples/` / `crates/doc-examples` program, what Phases 22-33 changed that the docs do not yet say (plus any v0.9.0-era gap the Phase 16 currency pass and the Phase 28-17 / 29-06 docs plans left open), with every finding classified as *missing page*, *stale content*, *rustdoc warning or broken intra-doc link*, or *non-compiling / obsolete example*, so that Phases 35 and 36 are scoped by evidence rather than by guess.
+**Depends on**: Phase 33 (the tree the docs must describe is final — all 13 phases of the milestone are verified)
+**Requirements**: CURR-01, CURR-02, CURR-03, CURR-04, CURR-05 (minted at planning 2026-09-17; prefix shared with Phases 35-36)
+**Source**: Operator instruction 2026-09-17 (pre-tag readiness review); `33-CI-EVIDENCE.md` row 26 (73 carried `cargo doc` warnings); STATE.md Phase 32 close (14 unresolved intra-doc links under `--all-features`); `WINDOWS.md` #36
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. A single audit document in the phase directory lists every mdBook page under `docs/src/` with a currency verdict (current / stale / missing) against the Phase 22-33 shipped surface, and every stale or missing verdict cites the phase and the shipped item (type, route, config key, CLI subcommand) the page fails to describe
+  2. The rustdoc failures are enumerated, not summarised: every `warning:` line from `cargo doc --workspace --no-deps` and every unresolved intra-doc link from the `RUSTDOCFLAGS="-D warnings" … --all-features` run is listed with crate, file and line, and the `ci.yml` lint-job "Check documentation" command is quoted verbatim as the bar Phase 36 must clear
+  3. Every program under `examples/` and every module of `crates/doc-examples` is recorded with its build status under the feature sets the CI `cargo build --examples` step splits on, and a currency verdict — which Phase 22-33 API it should demonstrate but does not, or which removed / renamed API it still names
+  4. The inventory is partitioned into the Phase 35 (mdBook) and Phase 36 (rustdoc + examples) work lists with each item sized, and anything found that is neither documentation nor an example is routed to the deferred register rather than absorbed into either phase
+  5. No documentation, rustdoc or example is changed in this phase — the audit is read-only against the tree, and the phase's commits touch only `.planning/`
+
+**Plans**: 9 plans
+
+Plans:
+**Wave 1**
+
+- [x] 34-01-PLAN.md — Tracer: mint CURR-01…05, build the 34-AUDIT.md spine, prove one worked row per table
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 34-02-PLAN.md — Shipped-surface checklist (§1) compiled from CHANGELOG / MIGRATION / REQUIREMENTS
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 34-03-PLAN.md — mdBook build + linkcheck + vocabulary baseline, and the 18 root/getting-started/architecture/api-reference verdicts
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 34-04-PLAN.md — mdBook verdicts for the 20 user-guides and the 20 deployment/topologies/operations/contributing pages
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 34-05-PLAN.md — mdBook verdicts for the 34 remaining appendix pages; the 93-page partition closes
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 34-06-PLAN.md — Rustdoc default-feature enumeration against the ci.yml bar, plus the workspace all-features record
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 34-07-PLAN.md — Per-crate all-features sweep, doctest baseline, public-API example-heading gate record
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 34-08-PLAN.md — Examples build status under the four CI feature sets, currency verdicts and the capability gap list
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [x] 34-09-PLAN.md — Phase 35 / Phase 36 work lists, deferred register, and the phase-range read-only proof
+
+### Phase 35: mdBook Currency
+
+**Goal**: The mdBook describes the v0.10.0 tree — every gap the Phase 34 inventory records for `docs/src/` is closed: a page exists for each Phase 22-33 capability that shipped without one, every stale page is corrected to the shipped API and vocabulary (the superstep engine, Parley, Aegis, the platform API, the `TokenUsage` split, `Commissary`), the Upgrading page and migration pointers agree with `MIGRATION.md`, and `mdbook build` with the linkcheck backend is green.
+**Depends on**: Phase 34 (the mdBook work list); independent of Phase 36 and may run in parallel with it
+**Requirements**: CURR-06, CURR-07, CURR-08, CURR-09, CURR-10 (minted at planning 2026-09-17;
+prefix shared with Phases 34 and 36)
+**Source**: Phase 34 audit inventory (mdBook partition); `.github/workflows/docs.yml`
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. Every item in the Phase 34 mdBook work list is closed by a page edit or a new page, and `docs/src/SUMMARY.md` links each new page from the nav position the audit assigned
+  2. `mdbook build docs/` with the `linkcheck` backend passes with zero broken links — the exact `docs.yml` command sequence, including `mdbook-mermaid install`
+  3. No touched page names a type, function, config key, route or CLI flag the v0.10.0 tree does not export; snippets meant to run are compile-verified in `crates/doc-examples`, and illustrative snippets are marked as such
+  4. The book's vocabulary matches the three ubiquitous-language lists (Phase 30 VOCAB-02): no `Quartermaster`, and no bare token total where the prompt / completion split shipped in Phase 31
+  5. `CHANGELOG.md` `[0.10.0]` carries a Documentation entry summarising the pages added and corrected
+
+**Plans**: 10 plans
+
+Plans:
+
+**Wave 1**
+
+- [x] 35-01-PLAN.md — Tracer: mint CURR-06…CURR-10, write the WarEngine superstep-engine guide with its compile-verified doc-examples module and nav entry, seed the deferred register (MB-30)
+
+**Wave 2** *(blocked on Wave 1 — eight plans with disjoint file sets)*
+
+- [x] 35-02-PLAN.md — Five new `doc-examples` modules for the signature-level user-guide rows (MB-19, MB-20, MB-24, MB-27, MB-28)
+- [x] 35-03-PLAN.md — Getting Started and User Guides version/MSRV/feature sweep plus the three line-pinned content fixes (MB-06, MB-07, MB-18, MB-21, MB-22, MB-23, MB-25, MB-26, MB-29)
+- [x] 35-04-PLAN.md — Introduction and Architecture: vocabulary close-out, domain-model entities, crate and API-shape corrections (MB-02, MB-03, MB-04, MB-05, MB-08, MB-09, MB-10, MB-11, MB-12)
+- [x] 35-05-PLAN.md — API Reference and Contributing: the ADR index retitle-and-add, both crate maps, feature flags, migration guide, stable API (MB-13, MB-14, MB-15, MB-16, MB-17, MB-35)
+- [x] 35-06-PLAN.md — CI pages rebuilt on the real job inventory and the three superseded Operations callouts (MB-31, MB-32, MB-33, MB-34, MB-36)
+- [x] 35-07-PLAN.md — The CLI family rebuilt from live `--help` captures (MB-40, MB-41, MB-42, MB-43, MB-44, MB-45, MB-46)
+- [x] 35-08-PLAN.md — Appendix archive tier plus three correct-tier snapshot pages (MB-01, MB-37, MB-39, MB-47, MB-54, MB-55, MB-59, MB-60)
+- [x] 35-09-PLAN.md — Appendix import-path family and the API-shape/inventory pages (MB-38, MB-48, MB-49, MB-50, MB-51, MB-52, MB-53, MB-56, MB-57, MB-58)
+
+**Wave 3** *(blocked on Wave 2 — runs on the phase's final commit)*
+
+- [x] 35-10-PLAN.md — `35-EVIDENCE.md` with the sixty-row closure table and the full gate run, the `[0.10.0]` Documentation changelog entry, the D-21 exit greps and the deferred-register fold
+
+### Phase 36: Rustdoc Zero-Warning Bar & Examples Currency
+
+**Goal**: The rustdoc corpus clears the bar CI already enforces and the examples demonstrate the tree that ships — `cargo doc --workspace --no-deps` emits zero `warning:` lines so the lint job's "Check documentation" step is green rather than carried, the 14 unresolved intra-doc links under `--all-features` are resolved, every public item Phases 22-33 added or changed has rustdoc (with a doc test where the project's public-API rule applies), and every `examples/` program and `crates/doc-examples` module builds against and demonstrates the v0.10.0 API.
+**Depends on**: Phase 34 (the rustdoc + examples work list); independent of Phase 35 and may run in parallel with it
+**Requirements**: CURR-11, CURR-12, CURR-13, CURR-14, CURR-15
+**Source**: Phase 34 audit inventory (rustdoc + examples partition); `33-CI-EVIDENCE.md` row 26; `WINDOWS.md` #36; `.github/workflows/ci.yml` lint job and the `cargo build --examples` feature-set split
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. `cargo doc --workspace --no-deps` emits zero `warning:` lines under the exact `ci.yml` lint-job command, and `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` exits 0, closing `WINDOWS.md` #36
+  2. Every Phase 34 rustdoc finding is closed at its cited crate / file / line, and both rustdoc commands are added to the pre-push gate or `make clean-code` so the warning count cannot silently regrow
+  3. `cargo build --examples` passes under each feature set the CI step splits on, and `cargo test --workspace --doc` is green — run explicitly, because the coverage and `--tests` gates skip doctests
+  4. Every Phase 34 example finding is closed: obsolete examples are updated to the shipped API or deleted with a `CHANGELOG.md` note, and each Phase 22-33 capability the audit flagged as undemonstrated has a runnable example listed in `examples/README.md`
+  5. `make api-surface` reports no change — docs and examples do not move the public surface; if a fix genuinely requires a public change it is recorded in `MIGRATION.md` §9.2 and the semver allowlist per the Phase 29 / 33 pattern
+
+**Plans**: 13 plans
+
+Plans:
+**Wave 1**
+
+- [x] 36-01-PLAN.md — Tracer: close the memory/ports/storage rustdoc groups, add the token-economy example, seed the evidence harness
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 36-02-PLAN.md — Rustdoc: paladin-battalion (72 rows, 34 location groups)
+- [x] 36-03-PLAN.md — Rustdoc: paladin-ai-core (28 rows, 14 location groups)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 36-04-PLAN.md — Rustdoc: paladin-llm and paladin-web (24 rows, 17 location groups)
+- [x] 36-05-PLAN.md — Rustdoc: the paladin-ai facade (12 rows, 7 location groups)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 36-06-PLAN.md — Examples: WarEngine configuration & checkpoints, control flow & dynamic routing
+- [x] 36-07-PLAN.md — Examples: human-in-the-loop gate & resume, graceful shutdown
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 36-08-PLAN.md — Examples: agent runtime & middleware, structured output, RAG retrieval
+- [x] 36-09-PLAN.md — Examples: http_service_host router parity, Platform API client, webhook receiver
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 36-10-PLAN.md — Examples: node-result cache, observability & OTel export, eval scenarios
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [x] 36-11-PLAN.md — examples/README.md: gallery index completion and currency fixes
+- [x] 36-12-PLAN.md — Gate wiring: make doc-check, clean-code, pre-push, CI lint step, examples check, closing measurement
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [x] 36-13-PLAN.md — Closure map, WINDOWS.md rows 36/37, CHANGELOG entries, CI evidence
+
+**Cross-cutting constraints:**
+
+- `make api-surface` reports the surface unchanged.
+- `cargo check --workspace --all-targets --all-features` exits 0 and `cargo test --workspace --doc` stays green.
+- Both programs are picked up by the bulk `cargo build --examples` selector — neither declares required-features.
+- `cargo check --workspace --all-targets --all-features` exits 0 and `make api-surface` reports the surface unchanged.
+
+### Phase 36.1: Deferred Items Closure (INSERTED)
+
+**Goal**: Every deferred item Phases 30-35 recorded and left unowned is either closed in the tree or explicitly dispositioned before v0.10.0 ships — the per-phase `deferred-items.md` registers (31, 32, 34, 35), the two open `WINDOWS.md` rows (#36, #37) and the two `todos/pending/` files are walked item by item, each one is fixed, waived with a written reason, or re-homed to a named owner, and the `WINDOWS.md` ledger is brought back into agreement with the registers so `/gsd-complete-milestone` sees the whole picture rather than two rows.
+**Depends on**: Phase 36 (closes the rustdoc items — `WINDOWS.md` #36, #37 and the 73-warning `cargo doc` baseline — that this phase must verify closed rather than fix twice); independent of Phase 35
+**Requirements**: CURR-16, CURR-17, CURR-18, CURR-19, CURR-20, CURR-21
+**Source**: `phases/31-lossless-token-accounting/deferred-items.md`, `phases/32-unified-token-primitives/deferred-items.md`, `phases/34-documentation-currency-audit/deferred-items.md`, `phases/35-mdbook-currency/deferred-items.md`; `WINDOWS.md` rows 36-37; `todos/pending/2026-08-13-verify-local-coverage-reproduction.md`, `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md`; STATE.md Phase 32 / 33 close-out carried concerns
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. The unowned `docs/src` prose defects Phase 35 deferred are closed on the page: `contributing-providers.md` lines 272 and 367 use the relocated adapter path, `testing-guide.md`'s `tests/` tree no longer places `config.test.yml` under `fixtures/`, `cli-configuration.md`'s Garrison and Arsenal troubleshooting entries no longer assert a source-line TODO, `grep -rnw OpenAiAdapter docs/src` is empty across all seven pages, and `cicd.md`'s deploy and best-practice YAML is either captioned illustrative or replaced by a real workflow excerpt
+  2. The Phase 34 tooling findings are dispositioned, not merely re-pointed: `scripts/check-public-api-examples.sh` is either wired into CI or `make clean-code` against a refrozen entry-point baseline with its 19 MISSING items fixed, or waived in `WINDOWS.md` with the maintainer's reason; `ci.yml`'s examples-count comment matches `find examples -name '*.rs' | wc -l`; PROJECT.md's Phase 4 amendment names `paladin-llm` as the one crate with its own `examples/`
+  3. `tests/cli_isolation_test.rs::test_cli_feature_is_not_default` no longer fails under `cargo test --workspace --all-features` — gated or rescoped — so the three-phase-old carried failure stops being re-logged
+  4. `WINDOWS.md` #36 and #37 are `fixed` (verified against Phase 36's output, not re-done here), and every open entry from the Phase 34 and 35 registers has a `WINDOWS.md` row with status `fixed` or `waived` plus a reason, so the ledger and the registers agree
+  5. The two `todos/pending/` items (local coverage reproduction on a Docker machine; RustFS evaluation) are each either completed, or explicitly deferred past v0.10.0 with an owner and a re-check date written into the todo file — neither is left as an undated pointer
+  6. `make clean-code`, `make security`, `cargo test --workspace`, `mdbook build` with linkcheck, and `make api-surface` are green on the closing commit; docs-only fixes move no public surface
+
+**Plans**: 14 plans
+
+Plans:
+
+**Wave 1**
+
+- [x] 36.1-01-PLAN.md — Tracer: rewrite the `cli_isolation` guard against the manifest, seed the closure table and the coverage declaration, capture the all-features sweep
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 36.1-02-PLAN.md — Sanitize the tool-failure reason on both run-failing arms, with a pinning test (ledger row 38)
+- [x] 36.1-03-PLAN.md — SC1 pages: provider-guide adapter path, CLI troubleshooting entries, illustrative CI/CD captions
+- [x] 36.1-04-PLAN.md — SC1 pages: rebuild the tests tree, sweep the adapter type casing across seven pages, run the docs gate
+- [x] 36.1-05-PLAN.md — `# Examples` for six lighter port traits
+- [x] 36.1-06-PLAN.md — `# Examples` for the trace port and the two assistant ports
+- [x] 36.1-07-PLAN.md — `# Examples` for the three widest port traits; all twelve ports satisfied
+- [x] 36.1-08-PLAN.md — `# Examples` for `ScheduleService` and `WebhookDeliveryService`
+- [x] 36.1-09-PLAN.md — `# Examples` for `RunSubmissionService` and `RunInspectorService`
+- [x] 36.1-10-PLAN.md — `# Examples` for `RunEventStreamService` and `AssistantService`
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 36.1-11-PLAN.md — The nineteenth section and the three-place gate wiring in one commit; the refrozen entry-point snapshot and its two pointers
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 36.1-12-PLAN.md — PROJECT.md corrections, the ADR-0033 suppressions amendment, both todo dispositions, the v2 candidate line, the changelog bullets
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 36.1-13-PLAN.md — Twelve ledger rows plus row 38, the completed closure table, the closing gate sequence
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 36.1-14-PLAN.md — CI evidence record and the blocking push checkpoint
+
+**Cross-cutting constraints:**
+
+- `make api-surface` reports the surface unchanged on every commit — the only visibility change is `pub(crate)`, which `cargo public-api` never lists.
+- Nothing under `src/` or `crates/` changes except the two tool-error match arms, the sanitizer's visibility, their test, the nineteen doc comments and `tests/cli_isolation_test.rs`.
+- `.planning/WINDOWS.md` is mutated only through the ledger CLI; no row is ever deleted.
+- The gate wiring lands in the same commit as the nineteenth `# Examples` fix, so no commit exists where the gate is wired and red.
+- The executor never pushes — the branch push is the maintainer's action at the 36.1-14 checkpoint.
+
+### Phase 37: v0.10.0 Crate Release
+
+**Goal**: v0.10.0 is released, not merely releasable — the Phase 29 gates are re-sealed on the final post-documentation commit, the feature branch merges to `main`, `release.yml` cuts the `v0.10.0` tag on the merge commit per the Phase 29 two-SHA rule, every publishable crate is on crates.io at `0.10.0`, and the release evidence is recorded so the milestone can close.
+**Depends on**: Phase 35, Phase 36 (all documentation and example work landed); Phase 36.1 (deferred items closed or dispositioned before the tag); Phase 33 (the gate re-seal this phase repeats)
+**Requirements**: SHIP-05
+**Source**: Phase 29 D-17 / D-18 / D-21 (human-only §11 sign-off box; `0.10.0` bumped without a tag; tag cut on the `main` merge commit by `release.yml`); the v0.9.0 post-close release record in MILESTONES.md
+**UI hint**: no
+**Success Criteria** (what must be TRUE):
+
+  1. The Phase 29 gate set — `MIGRATION.md` with no "TBD" and its §9.2 register matching the semver-checks allowlist row-for-row, `v0_9_config_boot`, the OpenAPI golden diff, `cargo semver-checks`, the MSRV job, `make publish-dry-run` in dependency order, and a complete `CHANGELOG.md` `[0.10.0]` — is re-run green on the final commit, with the evidence appended to the Phase 29 acceptance audit and the §11 human sign-off box ticked by the maintainer
+  2. The CI `coverage` job on the pre-merge run reports at or above the ADR-0006 floor and the run is recorded in the CI-evidence table — the one gate this devcontainer cannot measure locally
+  3. The feature branch is merged to `main`, `release.yml` runs green, and the `v0.10.0` tag sits on the merge commit
+  4. Every publishable crate resolves on crates.io at `0.10.0` (the `publish = false` `doc-examples` crate excluded), verified against the registry index and recorded in MILESTONES.md alongside the v0.9.0 entry
+  5. The milestone is closed after the tag via `/gsd-complete-milestone v0.10.0`: the `## Milestones` row flips to Shipped, phase detail archives to `milestones/v0.10.0-ROADMAP.md`, and the next milestone starts at Phase 38
+
+**Plans**: 11 plans
+
+Plans:
+**Wave 1**
+
+- [x] 37-01-PLAN.md — Pre-flight (disk, clean tree, branch state), create `37-CI-EVIDENCE.md` end-to-end, and hand the `paladin-eval` first-publish bootstrap to the maintainer (D-17)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 37-02-PLAN.md — Local re-seal: D-06 gate rows 1, 2, 3, 4, 5 and 7 on the final pre-merge tree
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 37-03-PLAN.md — Local re-seal: gate row 6 (`make publish-dry-run`), the adjacent checks, and the Local sweep's closing verdict tally
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 37-04-PLAN.md — Mint `SHIP-05`, resolve the ROADMAP requirements line, correct the STATE.md evidence pointer, and add one dated forward-pointer line to each prior evidence file
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 37-05-PLAN.md — Append corpus audit section 12 (the seven-row re-seal table) and the pointer file's dated paragraph
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 37-06-PLAN.md — Push the branch, open the release PR (D-01), write the D-12 pause hand-off, and stop until CI concludes
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 37-07-PLAN.md — Record the pre-merge CI evidence including the `coverage` job's conclusion and figure; last plan that commits to the feature branch
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 37-08-PLAN.md — The maintainer's §11 tick, the read-only post-tick and `paladin-eval` pre-tag gates, then the merge-and-tag hand-off and hard stop
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 37-09-PLAN.md — Re-verify the resume condition, prove the tag sits on the merge commit, cut `chore/37-close`, and record the post-merge and release-run evidence
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [ ] 37-10-PLAN.md — Registry verification per derived publishable crate (D-08), the `trustpub_data` proof, and the final carried-findings list
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
+- [ ] 37-11-PLAN.md — The MILESTONES.md v0.10.0 release record, `37-READY-TO-CLOSE.md`, and the docs-only `chore/37-close` pull request
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |
@@ -784,6 +1225,15 @@ Plans:
 | 27. Platform API | v0.10.0 | 26/26 | Complete    | 2026-09-08 |
 | 28. Observability & Tooling | v0.10.0 | 17/17 | Complete    | 2026-09-09 |
 | 29. Program Gates & Release | v0.10.0 | 9/9 | Complete    | 2026-09-10 |
+| 30. Token-Economy Vocabulary & Commissary Anchoring | v0.10.0 | 3/3 | Complete    | 2026-09-14 |
+| 31. Lossless Token Accounting | v0.10.0 | 7/7 | Complete    | 2026-09-15 |
+| 32. Unified Token Primitives | v0.10.0 | 5/5 | Complete    | 2026-09-16 |
+| 33. Commissary In-Tree Adoption | v0.10.0 | 6/6 | Complete    | 2026-09-16 |
+| 34. Documentation Currency Audit | v0.10.0 | 9/9 | Complete    | 2026-09-17 |
+| 35. mdBook Currency | v0.10.0 | 10/10 | Complete    | 2026-09-17 |
+| 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 13/13 | Complete    | 2026-09-18 |
+| 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 14/14 | Complete    | 2026-09-18 |
+| 37. v0.10.0 Crate Release | v0.10.0 | 0/11 | Planned | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see
@@ -1087,3 +1537,42 @@ CF-03/Muster); 26 (RT) is mostly standalone, depending only on 22; 27 (PLAT) dep
 28 (OBS) depends on 22's trace seam and 27's WarGraphDoc; 29 (SHIP) is the program-gates/release
 phase, depending on all of 22-28. Phases 1-21 unchanged and unrenumbered; every `### Phase N:`
 header is verbatim.*
+
+*Extended: 2026-09-14 — **v0.10.0 extended with Phases 30-33 "Token Economy"** before the
+`0.10.0` tag is cut. Forward work sourced from the handoff planning corpus in
+`.project/Milestone_13-Token-Economy/` (overview + Epics 1-4), authored 2026-09-14 from the
+downstream Web3 Security Paladin repo's token-economy systems analysis (findings F1-F8, decisions
+D-1…D-9). Four new requirement ID prefixes — the twenty-seventh through thirtieth, recycling none
+of the twenty-six spent: `VOCAB-*` (7), `ACCT-*` (5), `PRIM-*` (5), `COMM-*` (4) — 21
+requirements. Phase order follows the overview's dependency graph (§2): 30 (docs) can land alone
+and first; 31 (accounting) is the keystone; 32 depends on 31; 33 depends on 32. **Three
+scope-time amendments to the source PRDs, recorded here rather than silently applied:** (a) the
+PRDs target `v0.11.0`; the operator's instruction is that this work is still part of the
+**v0.10.0** release, which is possible because Phase 29 bumped `0.10.0` on the feature branch
+without a tag (Phase 29 D-18/D-21) — so Phase 33 gains COMM-04, re-sealing the Phase 29 release
+gates; (b) the PRDs' clean-break policy (overview §5.1: drop `Commissary::new`'s
+`is_exact_counter`, remove the legacy `TokenCounter`/`TokenCounterFactory`, change the token
+carriers outright, no shims) **supersedes the v0.10.0 corpus rule X-03** ("deprecations allowed,
+removals are not, before v0.11.0") for Phases 31-33 only — Phase 30 gains VOCAB-07 to record that
+supersession as an ADR per protocol item 4; (c) Epic 2's goals bullet ("keep a `token_count`
+accessor for one release as a deprecation shim") contradicts its own R3 and §5.1 — R3 wins, no
+shim (ACCT-02) — and Epic 4 R3 (wire `HistoryTrimmer` to the shared resolver) duplicates Epic 3 R4,
+so it lives once, in Phase 32 (PRIM-04), with Phase 33 keeping only the regression check.
+**Treasurer (Milestone 14, `.project/Milestone_14-Treasurer/`) is reserved by Phase 30's ADR and
+not roadmapped** — operator-confirmed deferral; it depends on Phase 31 and is the natural first
+phase of the next milestone. Phases 1-29 unchanged and unrenumbered; every `### Phase N:` header
+is verbatim.*
+
+*Extended: 2026-09-17 — **v0.10.0 extended with Phases 34-37 "Release Readiness"** before the
+`0.10.0` tag is cut. Operator-instructed, not corpus-sourced: with all 13 phases verified, the
+pre-tag review found the mdBook not updated for the milestone's changes, the rustdoc corpus failing
+CI's zero-tolerance "Check documentation" step (73 carried `cargo doc` warnings per
+`33-CI-EVIDENCE.md` row 26; 14 unresolved intra-doc links under `--all-features`, `WINDOWS.md`
+#36), and the examples likely stale against the Phase 22-33 API — with the gap possibly reaching
+back into v0.9.0. Phase order: 34 audits first (read-only, producing the inventory that scopes 35
+and 36); 35 (mdBook) and 36 (rustdoc + examples) are independent siblings that both depend on 34
+and may run in parallel; 37 (release) depends on both and repeats the Phase 33 gate re-seal on the
+final commit before the merge, the tag and the crates.io publish. Requirement IDs are deferred to
+planning — one new prefix will be needed (the thirty-first; `DOCS-*` is spent) — and Phase 37 may
+extend SHIP-04 in place per protocol item 3. Phases 1-33 unchanged and unrenumbered; every
+`### Phase N:` header is verbatim.*

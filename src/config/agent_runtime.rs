@@ -1171,7 +1171,7 @@ impl ModelFallbackConfig {
     /// [`AgentRuntimeConfigError::UnresolvedProviders`] rather than
     /// stopping at the first, distinguishing an outright-unknown name from
     /// a real provider whose cargo feature is not compiled into this
-    /// build (via [`KNOWN_PROVIDER_NAMES`], a list independent of the
+    /// build (via `KNOWN_PROVIDER_NAMES`, a list independent of the
     /// CURRENT build's compiled features).
     ///
     /// Credentials are NEVER read from or stored in this struct (D-12,

@@ -406,7 +406,14 @@ arsenal:
 - Verify garrison type is `"sqlite"`, not `"in_memory"`
 - Check database file path is correct and writable
 - Verify `ttl_seconds` hasn't expired old entries
-- Check garrison is wired in agent command: verify no TODO at line 293
+- Check that the `agent` command actually built a garrison: it reads the config's `garrison`
+  block and passes it to `instantiate_garrison` (`src/application/cli/config/loader.rs`), which
+  constructs the `GarrisonPort` implementation (`InMemoryGarrison` or the SQLite-backed adapter)
+  and hands it to `PaladinExecutionService::new`. If the whole `garrison:` block is absent from
+  the config, `instantiate_garrison` returns `None` and the Paladin runs without memory — add a
+  `garrison:` block with a `type` value. If `garrison:` is present but `type` is missing or
+  blank, config loading fails before the Paladin ever starts (`garrison.type` is a required
+  field with no default) — the symptom is a startup error, not silent memory loss.
 
 ### Arsenal Issues
 
@@ -419,7 +426,12 @@ arsenal:
 - Check MCP server command is executable: `which <command>`
 - Test MCP server independently: run command with `--list-tools` (if supported)
 - Check arsenal registry logs for tool discovery errors
-- Verify arsenal is wired in agent command: verify no TODO at line 296
+- Check that the `agent` command actually built an arsenal: it reads `arsenal.mcp_servers` from
+  the paladin config and passes it to `instantiate_arsenal`
+  (`src/application/cli/config/loader.rs`), which builds an `ArsenalExecutionService` registered
+  against each configured server and hands it to `PaladinExecutionService::new`. An empty or
+  missing `arsenal.mcp_servers` list produces an arsenal with no tools registered — verify the
+  server's `name` entry appears under `arsenal.mcp_servers` in the config.
 
 #### MCP Server Connection Failed
 
@@ -452,9 +464,12 @@ arsenal:
 **Solutions:**
 - Verify `scheduler.enabled: true` in config
 - Check cron expression is valid: use [crontab.guru](https://crontab.guru/)
-- Ensure scheduler port is wired in application (no TODO at line 297)
+- Check the schedule's status through the Platform API's `/v1/schedules*` route family (Phase 27)
+  — `GET /v1/schedules/{schedule_id}` reports `last_tick`/`next_tick`/`skipped_ticks`, which shows
+  whether the tick is firing and whether runs are being skipped because a `fixed_thread` is busy;
+  see [Platform API — Schedules](../api-reference/platform-api.md#schedules)
 - Review scheduler logs for errors
-- Verify tokio-cron-scheduler is initialized
+- Verify `APP_SCHEDULES_ENABLED` and `APP_SCHEDULES_TICK_INTERVAL_MS` are set as expected
 
 #### Invalid Cron Expression
 

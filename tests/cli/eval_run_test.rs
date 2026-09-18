@@ -19,6 +19,7 @@
 use std::path::PathBuf;
 
 use paladin::application::cli::commands::eval::{first_divergence, run_eval_report};
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent, TraceRecord};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 
@@ -222,7 +223,7 @@ fn repeat_divergence_exits_nonzero_and_names_the_seq_range() {
             TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
-                total_tokens: 0,
+                usage: TokenUsage::default(),
                 duration_ms: 1,
                 trace_dropped_total: 0,
             },

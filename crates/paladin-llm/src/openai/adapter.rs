@@ -127,6 +127,18 @@ struct OpenAIRequest {
     /// -identical to a pre-0.10 request (X-03).
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<OpenAIResponseFormat>,
+    /// Requests the trailing `usage` frame on a streaming call (D-13/D-15).
+    /// `Some({"include_usage": true})` on every streaming request; omitted
+    /// entirely on a non-streaming one, keeping that body byte-identical to
+    /// a pre-0.10 request (X-03).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<OpenAIStreamOptions>,
+}
+
+/// `OpenAIRequest.stream_options`'s only shape this adapter sends (D-15).
+#[derive(Debug, Serialize)]
+struct OpenAIStreamOptions {
+    include_usage: bool,
 }
 
 /// OpenAI's own two native JSON-mode wire shapes (RT-FR-17, D-28).
@@ -201,14 +213,48 @@ struct OpenAIChoice {
 struct OpenAIUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
+    // Deliberately unread: `TokenUsage::new` recomputes `total_tokens` as
+    // `prompt_tokens + completion_tokens` (D-02), so the provider's own
+    // reported total is discarded rather than trusted. Kept on the struct so
+    // the deserializer still matches the full wire shape for debugging.
+    #[allow(dead_code)]
     total_tokens: u32,
+    /// `prompt_tokens_details.cached_tokens` (D-20). Absent on a response
+    /// that reports no cache split -- `None` in that case (D-03), never a
+    /// fabricated `Some(0)`.
+    #[serde(default)]
+    prompt_tokens_details: Option<OpenAIPromptTokensDetails>,
+    /// `completion_tokens_details.reasoning_tokens` (D-20).
+    #[serde(default)]
+    completion_tokens_details: Option<OpenAICompletionTokensDetails>,
+}
+
+/// `OpenAIUsage.prompt_tokens_details` (D-20).
+#[derive(Debug, Deserialize)]
+struct OpenAIPromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: Option<u32>,
+}
+
+/// `OpenAIUsage.completion_tokens_details` (D-20).
+#[derive(Debug, Deserialize)]
+struct OpenAICompletionTokensDetails {
+    #[serde(default)]
+    reasoning_tokens: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
 struct OpenAIStreamChunk {
+    /// `#[serde(default)]` because the trailing empty-`choices` usage frame
+    /// (D-14/D-15) is not guaranteed to repeat the stream's `id`.
     #[allow(dead_code)]
+    #[serde(default)]
     id: String,
     choices: Vec<OpenAIStreamChoice>,
+    /// Present only on the trailing empty-`choices` frame a
+    /// `stream_options: {"include_usage": true}` request elicits (D-14/D-15).
+    #[serde(default)]
+    usage: Option<OpenAIUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -396,6 +442,29 @@ impl OpenAIAdapter {
         }
     }
 
+    /// Map a wire-reported [`OpenAIUsage`] into [`TokenUsage`], applying the
+    /// D-20 cache/reasoning sub-count builders only when the payload
+    /// actually carried the figure (D-03: an absent figure is `None`, never
+    /// a fabricated `Some(0)`). Shared by both the non-streaming
+    /// usage-construction site and the streaming terminal-chunk usage, so
+    /// the two paths cannot drift.
+    fn map_usage(usage: OpenAIUsage) -> TokenUsage {
+        let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
+        if let Some(cached) = usage
+            .prompt_tokens_details
+            .and_then(|details| details.cached_tokens)
+        {
+            mapped = mapped.with_cache_read(cached);
+        }
+        if let Some(reasoning) = usage
+            .completion_tokens_details
+            .and_then(|details| details.reasoning_tokens)
+        {
+            mapped = mapped.with_reasoning(reasoning);
+        }
+        mapped
+    }
+
     async fn make_request_with_retries(
         &self,
         request: &OpenAIRequest,
@@ -504,64 +573,81 @@ impl OpenAIAdapter {
             return Err(self.map_error(status.as_u16(), &error_text));
         }
 
-        let stream = response.bytes_stream().map(|chunk_result| {
-            chunk_result
-                .map_err(|e| LlmError::NetworkError(format!("Stream error: {}", e)))
-                .and_then(|chunk| {
-                    let chunk_str = String::from_utf8_lossy(&chunk);
+        // `flat_map` rather than `map`: a single network chunk can carry more
+        // than one complete SSE `data: {...}` event (this is common when a
+        // mock transport, or a provider whose TCP framing does not align to
+        // event boundaries, writes the whole body at once) -- every `data:`
+        // line found is emitted as its own stream item, mirroring
+        // `CompatEngine::generate_stream` (D-14/plan 31-03 Task 1).
+        //
+        // D-14 hold-and-emit terminal-chunk contract: the `finish_reason`
+        // frame and the trailing empty-`choices` usage frame can arrive on
+        // separate SSE frames, both strictly before `[DONE]`. Both are held
+        // in state captured by this `move` closure (a `Stream::map`/
+        // `flat_map` closure is `FnMut`, so ordinary mutable locals persist
+        // correctly across calls) and emitted together on the ONE `[DONE]`
+        // terminal chunk.
+        let mut held_finish_reason: Option<FinishReason> = None;
+        let mut held_usage: Option<TokenUsage> = None;
 
-                    for line in chunk_str.lines() {
-                        if let Some(data) = line.strip_prefix("data: ") {
-                            if data == "[DONE]" {
-                                return Ok(StreamingResponse {
-                                    id: Uuid::new_v4(),
-                                    delta: String::new(),
-                                    finish_reason: Some(FinishReason::Stop),
-                                });
+        let stream = response.bytes_stream().flat_map(move |chunk_result| {
+            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    let mut items = Vec::new();
+
+                    for line in text.lines() {
+                        let Some(data) = line.strip_prefix("data: ") else {
+                            continue;
+                        };
+
+                        if data.trim() == "[DONE]" {
+                            let mut terminal = StreamingResponse::terminal(
+                                held_finish_reason.take().unwrap_or(FinishReason::Stop),
+                            );
+                            if let Some(usage) = held_usage.take() {
+                                terminal = terminal.with_usage(usage);
                             }
+                            items.push(Ok(terminal));
+                            continue;
+                        }
 
-                            match serde_json::from_str::<OpenAIStreamChunk>(data) {
-                                Ok(chunk) => {
-                                    if let Some(choice) = chunk.choices.first() {
-                                        let delta =
-                                            choice.delta.content.clone().unwrap_or_default();
-                                        let finish_reason =
-                                            choice.finish_reason.as_ref().map(|r| {
-                                                match r.as_str() {
-                                                    "stop" => FinishReason::Stop,
-                                                    "length" => FinishReason::Length,
-                                                    "content_filter" => FinishReason::ContentFilter,
-                                                    "function_call" => FinishReason::FunctionCall,
-                                                    other => FinishReason::Error(format!(
-                                                        "Unknown: {}",
-                                                        other
-                                                    )),
-                                                }
-                                            });
-
-                                        return Ok(StreamingResponse {
-                                            id: Uuid::new_v4(),
-                                            delta,
-                                            finish_reason,
+                        match serde_json::from_str::<OpenAIStreamChunk>(data) {
+                            Ok(chunk) => {
+                                if let Some(usage) = chunk.usage {
+                                    held_usage = Some(Self::map_usage(usage));
+                                }
+                                if let Some(choice) = chunk.choices.first() {
+                                    if let Some(reason) = &choice.finish_reason {
+                                        held_finish_reason = Some(match reason.as_str() {
+                                            "stop" => FinishReason::Stop,
+                                            "length" => FinishReason::Length,
+                                            "content_filter" => FinishReason::ContentFilter,
+                                            "function_call" => FinishReason::FunctionCall,
+                                            other => {
+                                                FinishReason::Error(format!("Unknown: {}", other))
+                                            }
                                         });
                                     }
+                                    let delta = choice.delta.content.clone().unwrap_or_default();
+                                    items.push(Ok(StreamingResponse::delta(delta)));
                                 }
-                                Err(e) => {
-                                    return Err(LlmError::ProcessingError(format!(
-                                        "Failed to parse stream chunk: {}",
-                                        e
-                                    )));
-                                }
+                            }
+                            Err(e) => {
+                                items.push(Err(LlmError::ProcessingError(format!(
+                                    "Failed to parse stream chunk: {}",
+                                    e
+                                ))));
                             }
                         }
                     }
 
-                    Ok(StreamingResponse {
-                        id: Uuid::new_v4(),
-                        delta: String::new(),
-                        finish_reason: None,
-                    })
-                })
+                    items
+                }
+                Err(e) => vec![Err(LlmError::NetworkError(format!("Stream error: {}", e)))],
+            };
+
+            futures::stream::iter(items)
         });
 
         Ok(Box::pin(stream))
@@ -599,6 +685,7 @@ impl LlmPort for OpenAIAdapter {
                 .response_format
                 .as_ref()
                 .map(to_openai_response_format),
+            stream_options: None,
         };
 
         let response = self.make_request_with_retries(&openai_request).await?;
@@ -611,18 +698,16 @@ impl LlmPort for OpenAIAdapter {
 
         let choice = &response.choices[0];
         let finish_reason = self.convert_finish_reason(choice.finish_reason.clone());
+        let content = choice.message.content.clone();
+        let usage = Self::map_usage(response.usage);
 
         Ok(LlmResponse {
             id: Uuid::new_v4(),
             request_id: request.id,
             model: response.model,
-            content: choice.message.content.clone(),
+            content,
             finish_reason,
-            usage: TokenUsage {
-                prompt_tokens: response.usage.prompt_tokens,
-                completion_tokens: response.usage.completion_tokens,
-                total_tokens: response.usage.total_tokens,
-            },
+            usage,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -661,6 +746,9 @@ impl LlmPort for OpenAIAdapter {
                 .response_format
                 .as_ref()
                 .map(to_openai_response_format),
+            stream_options: Some(OpenAIStreamOptions {
+                include_usage: true,
+            }),
         };
 
         let stream = self.make_streaming_request(&openai_request).await?;
@@ -1139,5 +1227,299 @@ mod tests {
                 ])
             );
         }
+    }
+
+    // ── Phase 31 (D-13, D-14, D-15, D-20): streaming usage terminal-chunk
+    //    contract, and cache/reasoning sub-count mapping on both paths ────
+
+    mod streaming_usage_wiring {
+        use super::*;
+        use futures::StreamExt;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::{Value, json};
+        use std::sync::{Arc, Mutex};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        /// Distinct, non-round figures so a swapped or dropped field cannot
+        /// pass by coincidence (house style, `table_herald.rs`/`json_herald.rs`).
+        fn detail_bearing_usage_json() -> Value {
+            json!({
+                "prompt_tokens": 800,
+                "completion_tokens": 900,
+                "total_tokens": 1700,
+                "prompt_tokens_details": {"cached_tokens": 128},
+                "completion_tokens_details": {"reasoning_tokens": 640}
+            })
+        }
+
+        #[tokio::test]
+        async fn generate_maps_cache_and_reasoning_when_the_payload_carries_them() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(
+                    json!({
+                        "id": "cmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": detail_bearing_usage_json()
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+
+            let response = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .unwrap();
+
+            assert_eq!(response.usage.cache_read_tokens, Some(128));
+            assert_eq!(response.usage.reasoning_tokens, Some(640));
+            assert_eq!(response.usage.cache_write_tokens, None);
+        }
+
+        #[tokio::test]
+        async fn generate_leaves_cache_and_reasoning_none_when_the_payload_omits_them() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(
+                    json!({
+                        "id": "cmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+
+            let response = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .unwrap();
+
+            assert_eq!(response.usage.cache_read_tokens, None);
+            assert_eq!(response.usage.cache_write_tokens, None);
+            assert_eq!(response.usage.reasoning_tokens, None);
+        }
+
+        #[tokio::test]
+        async fn streaming_request_carries_stream_options_include_usage() {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let captured_clone = Arc::clone(&captured);
+
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    let body_text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                    *captured_clone.lock().unwrap() = Some(body_text);
+                    b"data: [DONE]\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+
+            let stream = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await
+                .unwrap();
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+
+            let body_text = captured
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("request must have been captured");
+            let body: Value = serde_json::from_str(&body_text).unwrap();
+            assert_eq!(
+                body.get("stream_options"),
+                Some(&json!({"include_usage": true}))
+            );
+        }
+
+        #[tokio::test]
+        async fn streaming_terminal_chunk_carries_the_same_usage_as_the_non_streaming_body() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(
+                    json!({
+                        "id": "cmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "Hello world"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": detail_bearing_usage_json()
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+            let non_streaming = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .unwrap();
+
+            let mut stream_server = Server::new_async().await;
+            let sse_body = format!(
+                "data: {{\"id\":\"1\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"Hel\"}},\"finish_reason\":null}}]}}\n\n\
+                 data: {{\"id\":\"1\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"lo\"}},\"finish_reason\":null}}]}}\n\n\
+                 data: {{\"id\":\"1\",\"choices\":[{{\"index\":0,\"delta\":{{\"content\":\"\"}},\"finish_reason\":\"stop\"}}]}}\n\n\
+                 data: {{\"id\":\"1\",\"choices\":[],\"usage\":{}}}\n\n\
+                 data: [DONE]\n\n",
+                detail_bearing_usage_json()
+            );
+            stream_server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(sse_body)
+                .create_async()
+                .await;
+
+            let stream = adapter_at(&stream_server.url())
+                .generate_stream(build_request())
+                .await
+                .unwrap();
+            let mut stream = Box::into_pin(stream);
+
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.unwrap());
+            }
+
+            let finish_indices: Vec<usize> = chunks
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.finish_reason.is_some())
+                .map(|(i, _)| i)
+                .collect();
+            let usage_indices: Vec<usize> = chunks
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| c.usage.is_some())
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(finish_indices.len(), 1);
+            assert_eq!(usage_indices.len(), 1);
+            assert_eq!(
+                finish_indices, usage_indices,
+                "the finish-reason chunk and the usage chunk must be the SAME chunk"
+            );
+            assert_eq!(chunks[usage_indices[0]].usage, Some(non_streaming.usage));
+
+            let assembled: String = chunks.iter().map(|c| c.delta.as_str()).collect();
+            assert_eq!(assembled, "Hello");
+        }
+    }
+
+    // ── Shared conformance suite (D-19, plan 31-04) ──
+    //
+    // Nested in its own module (rather than inline in `mod tests`) so every generated test's
+    // full path contains "conformance" -- `cargo test --lib conformance` (the plan's own
+    // acceptance criterion) selects it by that substring. Bodies below mirror the
+    // `streaming_usage_wiring` module's own hand-written tests above, adapted to
+    // `ConformanceFixture`'s shape.
+    mod conformance_suite {
+        use super::*;
+        use serde_json::json;
+        use std::sync::Arc;
+
+        struct OpenAiFixture;
+
+        impl crate::conformance::ConformanceFixture for OpenAiFixture {
+            const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
+
+            fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
+                Arc::new(
+                    OpenAIAdapter::new(OpenAIConfig {
+                        api_key: "test-key".to_string(),
+                        base_url: base_url.to_string(),
+                        organization: None,
+                        timeout_seconds: 5,
+                        max_retries: 0,
+                    })
+                    .expect("test config must build a valid adapter"),
+                )
+            }
+
+            fn success_body() -> String {
+                json!({
+                    "id": "cmpl-1",
+                    "model": "gpt-4o",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+                })
+                .to_string()
+            }
+
+            fn stream_body() -> String {
+                // D-19: the trailing empty-`choices` usage frame carries the SAME figures as
+                // `success_body()` above -- the shared parity case asserts equality.
+                // `OpenAIStreamChoice.index` is a required (non-`Option`) field on this
+                // adapter's OWN stream struct (unlike `CompatEngine`'s shape), so every choice
+                // object below carries it.
+                concat!(
+                    "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"lo \"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n",
+                    "data: [DONE]\n\n",
+                )
+                .to_string()
+            }
+
+            fn error_body(status: u16) -> String {
+                json!({"error": {"message": format!("mock error for status {status}"), "type": "mock_error"}})
+                    .to_string()
+            }
+        }
+
+        crate::llm_conformance_suite!(OpenAiFixture);
     }
 }

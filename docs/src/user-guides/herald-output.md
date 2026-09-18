@@ -52,7 +52,10 @@ let herald = JsonHerald::with_config(JsonHeraldConfig {
 });
 
 let json_str = herald.format_paladin_result(&result)?;
-// {"output": "...", "token_count": 150, "execution_time_ms": 1230, ...}
+// "usage" is the full TokenUsage split, serialized as a stable six-key object:
+// {"output": "...", "usage": {"prompt_tokens": 100, "completion_tokens": 50,
+//   "total_tokens": 150, "cache_read_tokens": null, "cache_write_tokens": null,
+//   "reasoning_tokens": null}, "execution_time_ms": 1230, ...}
 ```
 
 ### `MarkdownHerald`
@@ -96,6 +99,10 @@ let herald = TableHerald::new(TableHeraldConfig {
 
 ## Herald Trait
 
+The `Herald` trait has **seven** methods, not three — `format_stream_chunk` returns
+`Result<Option<String>, HeraldError>` where `None` means "buffering, not ready to emit
+yet", not an error:
+
 ```rust,ignore
 pub trait Herald: Send + Sync {
     /// Format a completed Paladin result
@@ -104,9 +111,20 @@ pub trait Herald: Send + Sync {
     /// Format a completed Battalion result
     fn format_battalion_result(&self, result: &BattalionResult) -> Result<String, HeraldError>;
 
-    /// Format a streaming chunk — returns Some(String) when output is ready to emit,
-    /// or None if the Herald is buffering
+    /// Format a streaming chunk. `Ok(None)` means "buffering -- not ready to emit yet".
     fn format_stream_chunk(&self, chunk: &StreamChunk) -> Result<Option<String>, HeraldError>;
+
+    /// Finalize streaming output with metadata (tokens, timing) once the stream completes.
+    fn finalize_stream(&self, metadata: &ExecutionMetadata) -> Result<String, HeraldError>;
+
+    /// Format an error for display. Infallible -- never returns Err.
+    fn format_error(&self, error: &PaladinError) -> String;
+
+    /// Formatter identifier, e.g. "json", "markdown", "table".
+    fn name(&self) -> &str;
+
+    /// MIME type of the formatted output, e.g. "application/json".
+    fn mime_type(&self) -> &str;
 }
 ```
 
@@ -155,34 +173,10 @@ println!("{}", result.output);
 
 ## Custom Herald Implementation
 
-Implement the `Herald` trait to create a bespoke formatter:
+Implement the `Herald` trait — all seven methods — to create a bespoke formatter:
 
 ```rust,ignore
-use paladin_core::platform::container::herald::{
-    Herald, HeraldError, PaladinResult, BattalionResult, StreamChunk,
-};
-
-pub struct CsvHerald;
-
-impl Herald for CsvHerald {
-    fn format_paladin_result(&self, result: &PaladinResult) -> Result<String, HeraldError> {
-        Ok(format!(
-            "{},{},{},{:?}\n",
-            result.output.replace(',', ";"),
-            result.token_count,
-            result.execution_time_ms,
-            result.stop_reason,
-        ))
-    }
-
-    fn format_battalion_result(&self, result: &BattalionResult) -> Result<String, HeraldError> {
-        Ok(result.output.clone())
-    }
-
-    fn format_stream_chunk(&self, chunk: &StreamChunk) -> Result<Option<String>, HeraldError> {
-        Ok(Some(chunk.text.clone()))
-    }
-}
+{{#include ../../../crates/doc-examples/src/herald_output.rs:custom_herald}}
 ```
 
 ---

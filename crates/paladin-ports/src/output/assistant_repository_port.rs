@@ -115,6 +115,188 @@ pub enum AssistantRepositoryError {
 /// Implementations must be `Send + Sync`: assistants are published, read
 /// and resolved concurrently across HTTP handlers and the run-submission
 /// path.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use std::sync::Mutex;
+///
+/// use async_trait::async_trait;
+/// use paladin_core::platform::container::assistant::{
+///     Assistant, AssistantDefinition, AssistantId, AssistantKind, AssistantSource,
+///     AssistantVersion, NewAssistantVersion,
+/// };
+/// use paladin_ports::output::assistant_repository_port::{
+///     AssistantPage, AssistantRepositoryError, AssistantRepositoryPort, AssistantVersionPage,
+/// };
+///
+/// struct InMemoryAssistants {
+///     assistants: Mutex<HashMap<String, Assistant>>,
+///     versions: Mutex<HashMap<(String, u32), AssistantVersion>>,
+/// }
+///
+/// #[async_trait]
+/// impl AssistantRepositoryPort for InMemoryAssistants {
+///     async fn create(
+///         &self,
+///         assistant_id: &AssistantId,
+///         new: NewAssistantVersion,
+///     ) -> Result<AssistantVersion, AssistantRepositoryError> {
+///         let mut assistants = self.assistants.lock().unwrap();
+///         if assistants.contains_key(assistant_id.as_str()) {
+///             return Err(AssistantRepositoryError::AlreadyExists {
+///                 assistant_id: assistant_id.clone(),
+///             });
+///         }
+///         let mut version = AssistantVersion::new(assistant_id.clone(), 1, new.definition);
+///         if let Some(created_by) = new.created_by {
+///             version = version.with_created_by(created_by);
+///         }
+///         if let Some(note) = new.note {
+///             version = version.with_note(note);
+///         }
+///         assistants.insert(
+///             assistant_id.as_str().to_string(),
+///             Assistant::new(assistant_id.clone(), 1, AssistantSource::Stored),
+///         );
+///         self.versions
+///             .lock()
+///             .unwrap()
+///             .insert((assistant_id.as_str().to_string(), 1), version.clone());
+///         Ok(version)
+///     }
+///
+///     async fn append_version(
+///         &self,
+///         assistant_id: &AssistantId,
+///         new: NewAssistantVersion,
+///     ) -> Result<AssistantVersion, AssistantRepositoryError> {
+///         let mut assistants = self.assistants.lock().unwrap();
+///         let assistant = assistants.get_mut(assistant_id.as_str()).ok_or_else(|| {
+///             AssistantRepositoryError::NotFound {
+///                 assistant_id: assistant_id.clone(),
+///             }
+///         })?;
+///         let next = assistant.latest + 1;
+///         assistant.latest = next;
+///         let version = AssistantVersion::new(assistant_id.clone(), next, new.definition);
+///         self.versions
+///             .lock()
+///             .unwrap()
+///             .insert((assistant_id.as_str().to_string(), next), version.clone());
+///         Ok(version)
+///     }
+///
+///     async fn get(
+///         &self,
+///         assistant_id: &AssistantId,
+///     ) -> Result<Option<Assistant>, AssistantRepositoryError> {
+///         Ok(self
+///             .assistants
+///             .lock()
+///             .unwrap()
+///             .get(assistant_id.as_str())
+///             .cloned())
+///     }
+///
+///     async fn get_version(
+///         &self,
+///         assistant_id: &AssistantId,
+///         version: u32,
+///     ) -> Result<Option<AssistantVersion>, AssistantRepositoryError> {
+///         Ok(self
+///             .versions
+///             .lock()
+///             .unwrap()
+///             .get(&(assistant_id.as_str().to_string(), version))
+///             .cloned())
+///     }
+///
+///     async fn list(
+///         &self,
+///         _limit: u32,
+///         _cursor: Option<AssistantId>,
+///         _include_deleted: bool,
+///     ) -> Result<AssistantPage, AssistantRepositoryError> {
+///         Ok(AssistantPage::default())
+///     }
+///
+///     async fn list_versions(
+///         &self,
+///         assistant_id: &AssistantId,
+///         _limit: u32,
+///         _cursor: Option<u32>,
+///     ) -> Result<AssistantVersionPage, AssistantRepositoryError> {
+///         let versions = self.versions.lock().unwrap();
+///         let mut items: Vec<AssistantVersion> = versions
+///             .iter()
+///             .filter(|((id, _), _)| id == assistant_id.as_str())
+///             .map(|(_, v)| v.clone())
+///             .collect();
+///         items.sort_by_key(|v| v.version);
+///         Ok(AssistantVersionPage {
+///             items,
+///             next_cursor: None,
+///         })
+///     }
+///
+///     async fn soft_delete(
+///         &self,
+///         assistant_id: &AssistantId,
+///     ) -> Result<(), AssistantRepositoryError> {
+///         let mut assistants = self.assistants.lock().unwrap();
+///         let assistant = assistants.get_mut(assistant_id.as_str()).ok_or_else(|| {
+///             AssistantRepositoryError::NotFound {
+///                 assistant_id: assistant_id.clone(),
+///             }
+///         })?;
+///         assistant.deleted_at = Some(chrono::Utc::now());
+///         Ok(())
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let repo = InMemoryAssistants {
+///         assistants: Mutex::new(HashMap::new()),
+///         versions: Mutex::new(HashMap::new()),
+///     };
+///     let assistant_id = AssistantId::new("triage-agent")?;
+///     let definition = AssistantDefinition {
+///         kind: AssistantKind::Agent,
+///         body: serde_json::json!({ "system_prompt": "You triage tickets." }),
+///     };
+///
+///     repo.create(
+///         &assistant_id,
+///         NewAssistantVersion {
+///             definition: definition.clone(),
+///             created_by: None,
+///             note: None,
+///         },
+///     )
+///     .await?;
+///
+///     repo.append_version(
+///         &assistant_id,
+///         NewAssistantVersion {
+///             definition,
+///             created_by: None,
+///             note: Some("second pass".to_string()),
+///         },
+///     )
+///     .await?;
+///
+///     let page = repo.list_versions(&assistant_id, 10, None).await?;
+///     assert_eq!(
+///         page.items.len(),
+///         2,
+///         "create plus one append_version leaves exactly two versions on record"
+///     );
+///     Ok(())
+/// }
+/// ```
 #[async_trait]
 pub trait AssistantRepositoryPort: Send + Sync {
     /// Create a brand-new assistant with its first version (`version == 1`,

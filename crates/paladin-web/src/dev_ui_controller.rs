@@ -1,6 +1,7 @@
 //! Feature-gated (`dev-ui`, default off) admin developer tool (28-15, D-25/D-26):
 //! `GET /v1/dev-ui/threads/{id}` renders one thread's
-//! [`RunInspectorPort`] view as a single static HTML page -- the execution overlay
+//! [`RunInspectorPort`](paladin_ports::input::run_inspector_port::RunInspectorPort)
+//! view as a single static HTML page -- the execution overlay
 //! diagram, a per-node visits panel, a per-superstep fired-edge list and a superstep
 //! table with field-change NAMES only (never a Battlefield field value, T-28-14-01).
 //!
@@ -17,7 +18,8 @@
 //!
 //! ## Authorization (D-25)
 //!
-//! `crate::app::create_dev_ui_router` mounts [`dev_ui_inspector_page`] under the SAME
+//! `crate::app::create_dev_ui_router` mounts
+//! [`dev_ui_inspector_page`](crate::dev_ui_controller::dev_ui_inspector_page) under the SAME
 //! [`crate::auth_middleware::require_auth`] + [`crate::auth_middleware::require_admin`]
 //! middleware layers `create_app_router`'s admin routes already use -- this port neither
 //! performs nor implies an authorization boundary of its own (see
@@ -25,7 +27,8 @@
 //!
 //! ## No values-shown mode (T-28-15-03)
 //!
-//! [`InspectorView::supersteps`]'s `field_changes` is `Vec<FieldName>` by TYPE (28-14) --
+//! [`InspectorView::supersteps`](paladin_ports::input::run_inspector_port::InspectorView::supersteps)'s
+//! `field_changes` is `Vec<FieldName>` by TYPE (28-14) --
 //! there is nowhere on the view a Battlefield field VALUE could be placed even by
 //! mistake, and this module never introduces one.
 
@@ -66,8 +69,8 @@ const NOT_WIRED_MESSAGE: &str = "Inspector not available. This server was not bu
 ///
 /// Mirrors [`crate::thread_controller::ThreadApiState`]'s injection-only shape:
 /// [`Self::inspector`] is `None` until a [`RunInspectorPort`] backend is wired, at which
-/// point every request answers `501` through [`NOT_WIRED_MESSAGE`] rather than panicking
-/// or 404-ing.
+/// point every request answers `501` through the crate-private `NOT_WIRED_MESSAGE`
+/// constant rather than panicking or 404-ing.
 #[derive(Clone)]
 pub struct DevUiState {
     /// The facade this route renders. `None` when no inspector backend is configured.
@@ -128,7 +131,7 @@ fn map_inspector_error(id: &str, err: InspectorError) -> ApiError {
 /// inspector backend to `501`, both through the structured [`ApiError`] envelope; any
 /// other backend failure is `500`. On success, returns `200` with a `text/html` body
 /// embedding the serialized [`paladin_ports::input::run_inspector_port::InspectorView`]
-/// (escaped per [`escape_for_script`]) and the configured Mermaid URL.
+/// (escaped per the crate-private `escape_for_script` helper) and the configured Mermaid URL.
 pub async fn dev_ui_inspector_page(
     State(state): State<DevUiState>,
     Path(id): Path<String>,
@@ -183,6 +186,7 @@ mod tests {
     use uuid::Uuid;
 
     use paladin_core::platform::container::run::{RunId, RunStatus};
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::user::UserRole;
     use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, WaypointId};
     use paladin_ports::input::run_inspector_port::{
@@ -229,7 +233,7 @@ mod tests {
             attempt: 1,
             outcome,
             duration_ms: Some(12),
-            token_count: Some(34),
+            usage: Some(TokenUsage::new(30, 4)),
             cache_hit: false,
         }
     }
@@ -638,7 +642,7 @@ mod tests {
                         attempt: 1,
                         outcome: NodeOutcomeKind::Succeeded,
                         duration_ms: None,
-                        token_count: None,
+                        usage: None,
                         cache_hit: true,
                     }],
                     field_changes: vec![],
@@ -749,7 +753,7 @@ mod tests {
         assert!(body.contains("\"evaluated_edges\":[]"));
     }
 
-    /// E2 partial: a cache-hit `CompletedRow` carries `duration_ms`/`token_count` as
+    /// E2 partial: a cache-hit `CompletedRow` carries `duration_ms`/`usage` as
     /// `None` by construction -- the page renders a dash rather than a stale/misleading
     /// number.
     #[tokio::test]
@@ -757,7 +761,17 @@ mod tests {
         let body = html_body_for(partial_fixture_view()).await;
         assert!(body.contains("\"cache_hit\":true"));
         assert!(body.contains("\"duration_ms\":null"));
-        assert!(body.contains("\"token_count\":null"));
+        assert!(body.contains("\"usage\":null"));
+    }
+
+    /// D-24: an executed (non-cache-hit) `CompletedRow` embeds its full six-key
+    /// `usage` object -- not a bare count -- in the page's `InspectorView` JSON.
+    #[tokio::test]
+    async fn dev_ui_page_embeds_executed_row_with_full_usage_object() {
+        let body = html_body_for(branching_fixture_view()).await;
+        assert!(body.contains("\"prompt_tokens\":30"));
+        assert!(body.contains("\"completion_tokens\":4"));
+        assert!(body.contains("\"total_tokens\":34"));
     }
 
     /// E4 partial: an awaiting-input superstep's `completed` list is empty by

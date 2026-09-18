@@ -1,0 +1,198 @@
+Phase 36 Plan 12, Task 2 — Closing zero measurement (D-01, D-02, D-03, D-13)
+Toolchain: cargo 1.97.1 (c980f4866 2026-06-30) / rustc 1.97.1 (8bab26f4f 2026-07-14)
+Parent HEAD (before this commit): fed7b72e7d31b2e8cbca36bd66a9c53db6a920ea (Task 1's commit)
+Measured: 2026-09-17, against the working tree carrying this commit's own edits (Makefile
+doc-check/clean-code, .pre-commit-config.yaml doc-check hook, ci.yml lint-job step + Example
+Muster coverage) applied but not yet committed — per D-13 the gate-wiring edits and this
+measurement land together in one commit, so no commit in history has the gate installed while
+red.
+
+## Summary: both bars green, doctests at baseline, no drift
+
+| Check | Baseline (36-01) | This measurement |
+|---|---|---|
+| `cargo doc --workspace --no-deps` (ci.yml:63 form) | RED (exit 1); 73 total `warning:` lines (65 content + 8 summary) | **GREEN (exit 0); 0 `warning:` lines** |
+| `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` | exit 101 | **exit 0** |
+| `cargo test --workspace --doc` | 462 passed / 0 failed / 210 ignored | **462 passed / 0 failed / 210 ignored** (identical) |
+| `make check-examples` | n/a (script did not exist in this form) | **exit 0, 62/62 binaries** |
+| `make api-surface` | 3959 items | **3959 items, unchanged** |
+| `cargo fmt --all -- --check` | — | **exit 0** |
+| `cargo check --workspace --all-targets --all-features` | — | **exit 0** |
+
+No residual diagnostic found. No new `RD-nn`/`EX-nn` row minted.
+
+## 1. `make doc-check` (all three steps, in order)
+
+Exit code: **0**
+
+```
+[1/3] Checking documentation (default features, zero warnings; ADR-0033)...
+ Documenting paladin-ai v0.10.0 (/workspace)
+ Documenting paladin-content v0.10.0 (/workspace/crates/paladin-content)
+ ... (13 crates documented)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in ~13-25s
+   Generated /workspace/target/doc/paladin/index.html and 13 other files
+[2/3] Checking documentation (all features, -D warnings; ADR-0033)...
+ Documenting paladin-ai v0.10.0 (/workspace)
+ ... (13 crates documented, all-features)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in ~20-25s
+   Generated /workspace/target/doc/paladin/index.html and 14 other files
+[3/3] Running documentation tests...
+   Doc-tests paladin_ai_core
+   Doc-tests paladin_battalion
+   Doc-tests paladin_content
+   Doc-tests paladin_eval
+   Doc-tests paladin_herald
+   Doc-tests paladin_llm
+   Doc-tests paladin_memory
+   Doc-tests paladin_notifications
+   Doc-tests paladin_ai
+   Doc-tests paladin_ports
+   Doc-tests paladin_storage
+   Doc-tests paladin_web
+   (13 doc-test binaries, see individual test result lines in section 3 below)
+✅ doc-check passed (ADR-0033)
+```
+
+Full 804-line capture retained locally at plan-execution time (not committed verbatim to keep
+this file scannable); the per-step `test result:` lines are reproduced in full in section 3.
+
+## 2. The two bar commands, run individually (exit codes recorded separately per D-13)
+
+**Bar 1 — `cargo doc --workspace --no-deps` teed, then `! grep -q "warning:"` (ci.yml:63
+verbatim, reproduced byte-identically in `make doc-check` step 1):**
+
+```
+$ cargo doc --workspace --no-deps 2>&1 | tee /tmp/bar1-final.txt > /dev/null
+build exit: 0
+$ grep -c 'warning:' /tmp/bar1-final.txt
+0
+$ grep -q "warning:" /tmp/bar1-final.txt; echo "grep exit: $?"
+grep exit: 1   # (1 = no match = no warnings found = the negated grep in the composite expression succeeds)
+```
+
+Composite `ci.yml:63` expression exit: **0** (green).
+
+**Bar 2 — `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps`:**
+
+```
+$ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+ Documenting paladin-eval v0.10.0 (/workspace/crates/paladin-eval)
+ Documenting paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+ Documenting paladin-doc-examples v0.10.0 (/workspace/crates/doc-examples)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 24.37s
+   Generated /workspace/target/doc/paladin/index.html and 14 other files
+exit: 0
+```
+
+## 3. `cargo test --workspace --doc` — full per-crate `test result:` lines
+
+```
+test result: ok. 147 passed; 0 failed; 18 ignored; 0 measured; 0 filtered out; finished in 0.08s
+test result: ok. 95 passed; 0 failed; 38 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: ok. 59 passed; 0 failed; 52 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 137 passed; 0 failed; 94 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+Sums: **462 passed, 0 failed, 210 ignored** — identical to the 462/0/210 baseline recorded in
+`36-RESEARCH.md` / the plan frontmatter. `cargo test --workspace --doc` exit: **0**.
+
+## 4. `make check-examples` re-run after the CI Example Muster edits
+
+```
+[1/7] Build examples (default features -- auto-discovered targets)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.60s
+[2/7] Build examples (vision -- vision_analysis, vision_battalion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.53s
+[3/7] Build examples (content-processing -- document_processing)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.75s
+[4/7] Build examples (web-server -- http_service_host, webhook_receiver)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.54s
+[5/7] Build examples (web-server,dev-ui -- platform_api_client)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.55s
+[6/7] Build examples (redis-cache -- node_result_cache)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.55s
+[7/7] Build examples (otel -- observability_otel_export)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.58s
+
+Asserting every example binary was produced...
+Expected: 62 example binaries; found: 62
+
+All 62 example binaries present.
+```
+
+Exit: **0**. The script's 7 invocations (1 default + 6 explicit feature-split) agree one-for-one
+with `ci.yml`'s Example Muster job's 7 build steps (verified by direct comparison of the two
+files' invocation lines during editing — see Task 1's own evidence file for the distinct
+required-features table).
+
+## 5. `make api-surface`
+
+```
+🔍 Checking API surface for changes...
+Extracting public API surface using cargo-public-api...
+✅ API surface extracted to /tmp/tmp.1qpQzJdp3t (3959 items)
+✅ API surface unchanged
+```
+
+Exit: **0**. 3959 items, unchanged from every prior plan's own capture this phase.
+
+## 6. `cargo fmt --all -- --check` and `cargo check --workspace --all-targets --all-features`
+
+```
+$ cargo fmt --all -- --check
+exit: 0
+$ cargo check --workspace --all-targets --all-features
+    Checking paladin-ai v0.10.0 (/workspace)
+    Checking paladin-doc-examples v0.10.0 (/workspace/crates/doc-examples)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 24.97s
+exit: 0
+```
+
+## 7. Toolchain and measured commit
+
+- `cargo --version`: `cargo 1.97.1 (c980f4866 2026-06-30)`
+- `rustc --version`: `rustc 1.97.1 (8bab26f4f 2026-07-14)`
+- Parent HEAD: `fed7b72e7d31b2e8cbca36bd66a9c53db6a920ea` (Task 1's commit, "docs(36): rewrite
+  check-all-examples.sh to mirror the CI feature split (D-14)")
+- This measurement's own commit (Task 2, gate wiring + this file) is the very next commit on
+  `feature/phase-33`; per D-13 its own diff is exactly what was measured above — no separate
+  "measure, then commit" gap exists.
+
+## Pre-existing crate-level rustdoc allows — what they hide (measured, not fixed)
+
+Orchestrator-requested record-only evidence item (no source change). See
+`.planning/phases/36-rustdoc-zero-warning-bar-examples-currency/deferred-items.md` for the full
+writeup, proposed classification and recommended owner. Summary: with the eight pre-existing
+`#![allow(rustdoc::...)]` crate-level attributes (`src/lib.rs:117-119`,
+`crates/paladin-llm/src/lib.rs:49`, `crates/paladin-ports/src/lib.rs:51-52`,
+`crates/paladin-storage/src/lib.rs:19`, `crates/paladin-notifications/src/lib.rs:14`)
+temporarily disabled (via `//`-prefixed Rust line comments, restored with `git checkout --`
+immediately after capture; `git status --porcelain -- src crates` confirmed empty afterward; a
+follow-up `cargo doc --workspace --no-deps` run confirmed the real, allows-in-place bar is still
+green at 0 `warning:` lines):
+
+| Crate | `generated N warnings` |
+|---|---|
+| `paladin-ports` | 119 |
+| `paladin-ai` (facade) | 108 |
+| `paladin-llm` | 69 |
+| `paladin-storage` | 10 |
+| `paladin-notifications` | 3 |
+| **Total content diagnostics** | **309** |
+| Total `warning:`-prefixed lines (309 content + 5 per-crate summaries) | 314 |
+
+None of the eight attributes were removed or altered in any committed state; the WINDOWS.md
+row-adjacent register entry recording this as a `deviation` was reverted after being recorded
+via `gsd-tools windows append` because this plan's own instructions prohibit modifying
+`.planning/WINDOWS.md` (reserved for plan 36-13's row 36/37 flips) — the deferred-items.md
+register is this finding's sole recorded home for now.

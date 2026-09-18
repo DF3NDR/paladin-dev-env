@@ -62,6 +62,17 @@ jobs:
       - name: Check documentation
         run: cargo doc --workspace --no-deps 2>&1 | tee /tmp/doc-output.txt && ! grep -q "warning:" /tmp/doc-output.txt
 
+      # ADR-0033's second bar command: the all-features sweep catches
+      # feature-gated rustdoc defects the default-features build above never
+      # compiles at all (D-12). The workspace doctest run already executes
+      # later in this workflow (the "Run doc tests" step in the `test` job,
+      # "Unit Tests") and is deliberately not duplicated here.
+      - name: Check documentation (all features, -D warnings)
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+
+      - name: Check public-API `# Examples` headings
+        run: ./scripts/check-public-api-examples.sh
+
   # Lints every workflow file in .github/workflows/, including the five this
   # job does not live in. Needs no toolchain, no cache and no services --
   # the cheapest job in the pipeline. Pinned to a concrete release rather
@@ -535,17 +546,23 @@ jobs:
       - name: Fetch dependencies
         run: cargo fetch --locked
 
-      # examples/ holds 47 .rs files. Exactly 4 are declared [[example]] targets
-      # in Cargo.toml, and every one of those 4 gates on a feature outside the
-      # default set (`default = ["llm-openai"]`): vision_analysis/vision_battalion
-      # need "vision,llm-openai", document_processing needs "content-processing",
-      # http_service_host needs "web-server". cargo's bulk `--examples` selector
-      # SILENTLY SKIPS targets whose required-features are unmet — no error, no
-      # warning, exit code 0 (verified live during 04-RESEARCH.md Part B, Q1(b)).
-      # A single bare `cargo build --examples` step would therefore report success
-      # while covering only 43 of 47 targets, with nothing flagging the gap. The
-      # 4 invocations below are the minimum needed to cover all 47.
-      - name: Build examples (default features — 43 auto-discovered targets)
+      # examples/ holds 62 .rs files. Exactly 8 are declared [[example]] targets
+      # in Cargo.toml, and every one of those 8 gates on a feature outside the
+      # default set (`default = ["llm-openai", "llm-anthropic", "llm-deepseek"]`):
+      # vision_analysis/vision_battalion need "vision,llm-openai",
+      # document_processing needs "content-processing", http_service_host and
+      # webhook_receiver need "web-server", platform_api_client needs
+      # "web-server,dev-ui", node_result_cache needs "redis-cache",
+      # observability_otel_export needs "otel". cargo's bulk `--examples`
+      # selector SILENTLY SKIPS targets whose required-features are unmet — no
+      # error, no warning, exit code 0 (verified live during 04-RESEARCH.md
+      # Part B, Q1(b)). A single bare `cargo build --examples` step would
+      # therefore report success while covering only 54 of 62 targets, with
+      # nothing flagging the gap. The 7 invocations below are the minimum
+      # needed to cover all 62 (36-12/D-17: each gated target's own required
+      # feature list gets its own invocation, matching
+      # scripts/check-all-examples.sh's local mirror exactly).
+      - name: Build examples (default features — 54 auto-discovered targets)
         run: cargo build --examples --offline
 
       - name: Build examples (vision — vision_analysis, vision_battalion)
@@ -554,13 +571,22 @@ jobs:
       - name: Build examples (content-processing — document_processing)
         run: cargo build --example document_processing --features "content-processing" --offline
 
-      - name: Build examples (web-server — http_service_host)
-        run: cargo build --example http_service_host --features "web-server" --offline
+      - name: Build examples (web-server — http_service_host, webhook_receiver)
+        run: cargo build --example http_service_host --example webhook_receiver --features "web-server" --offline
 
-      # Assert the full 47-target count. Match on basenames derived from the
+      - name: Build examples (web-server,dev-ui — platform_api_client)
+        run: cargo build --example platform_api_client --features "web-server,dev-ui" --offline
+
+      - name: Build examples (redis-cache — node_result_cache)
+        run: cargo build --example node_result_cache --features "redis-cache" --offline
+
+      - name: Build examples (otel — observability_otel_export)
+        run: cargo build --example observability_otel_export --features "otel" --offline
+
+      # Assert the full 62-target count. Match on basenames derived from the
       # example source files rather than raw `ls`, since cargo also emits `.d`
       # dependency files and hash-suffixed duplicates into target/debug/examples.
-      - name: Assert all 47 example binaries were produced
+      - name: Assert all 62 example binaries were produced
         run: |
           EXPECTED=$(find examples -name '*.rs' | wc -l)
           FOUND=0

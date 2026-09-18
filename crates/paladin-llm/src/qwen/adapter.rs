@@ -698,4 +698,63 @@ mod tests {
         assert!(caps.supports_streaming);
         assert!(caps.supports_system_messages);
     }
+
+    // ── Shared conformance suite (D-19, plan 31-04) ──
+    //
+    // Qwen delegates every method to `CompatEngine` (D-05), so it speaks the identical
+    // OpenAI-compatible wire shape `openai_compatible`/`ollama` already instantiate the suite
+    // against; bodies below mirror those fixtures' shape exactly (distinct model/provider names
+    // only).
+    mod conformance_suite {
+        use super::*;
+        use std::sync::Arc;
+
+        struct QwenFixture;
+
+        impl crate::conformance::ConformanceFixture for QwenFixture {
+            const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
+
+            fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
+                let config = QwenConfig::new(
+                    "test-key".to_string(),
+                    base_url.to_string(),
+                    QWEN_DEFAULT_MODEL.to_string(),
+                );
+                Arc::new(QwenAdapter::new(config).expect("test config must build"))
+            }
+
+            fn success_body() -> String {
+                json!({
+                    "id": "cmpl-1",
+                    "model": QWEN_DEFAULT_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+                })
+                .to_string()
+            }
+
+            fn stream_body() -> String {
+                // D-19: the trailing empty-`choices` usage frame carries the SAME figures as
+                // `success_body()` above -- the shared parity case asserts equality.
+                concat!(
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"lo \"},\"finish_reason\":null}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"world\"},\"finish_reason\":\"stop\"}]}\n\n",
+                    "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n",
+                    "data: [DONE]\n\n",
+                )
+                .to_string()
+            }
+
+            fn error_body(status: u16) -> String {
+                json!({"error": format!("mock error for status {status}")}).to_string()
+            }
+        }
+
+        crate::llm_conformance_suite!(QwenFixture);
+    }
 }

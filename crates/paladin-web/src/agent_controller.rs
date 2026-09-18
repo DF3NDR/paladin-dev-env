@@ -37,6 +37,7 @@ use serde_json::json;
 use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_ports::output::paladin_port::{PaladinStream, PaladinStreamChunk};
 
 use utoipa_axum::router::OpenApiRouter;
@@ -113,6 +114,46 @@ pub struct ExecuteRequest {
     pub timeout_seconds: Option<u64>,
 }
 
+/// Wire representation of a [`TokenUsage`] on an HTTP response body (D-24).
+///
+/// Mirrors `TokenUsage`'s six fields field-for-field. `paladin-core` gains no
+/// `utoipa` dependency for this: the schema annotation lives here, on the
+/// web-layer DTO, and never leaks inward (dependencies flow inward only). The
+/// three optional sub-counts are `null` when the provider did not report the
+/// figure -- see [`TokenUsage`]'s own docs for what each figure means.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct TokenUsageResponse {
+    /// Number of tokens in the input prompt (includes any cache read/write tokens).
+    pub prompt_tokens: u32,
+    /// Number of tokens in the generated completion (includes any reasoning tokens).
+    pub completion_tokens: u32,
+    /// Total tokens; always `prompt_tokens + completion_tokens`.
+    pub total_tokens: u32,
+    /// Of `prompt_tokens`, how many were served from a provider-side cache read.
+    /// `null` when the provider did not report this figure.
+    pub cache_read_tokens: Option<u32>,
+    /// Of `prompt_tokens`, how many were written to a provider-side cache for
+    /// future reuse. `null` when the provider did not report this figure.
+    pub cache_write_tokens: Option<u32>,
+    /// Of `completion_tokens`, how many were spent on internal reasoning /
+    /// thinking rather than the visible output. `null` when the provider did
+    /// not report this figure.
+    pub reasoning_tokens: Option<u32>,
+}
+
+impl From<TokenUsage> for TokenUsageResponse {
+    fn from(usage: TokenUsage) -> Self {
+        Self {
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_write_tokens: usage.cache_write_tokens,
+            reasoning_tokens: usage.reasoning_tokens,
+        }
+    }
+}
+
 /// Response body for a successful agent execution.
 ///
 /// Carries the agent output plus the safe execution metadata from
@@ -123,8 +164,9 @@ pub struct ExecuteRequest {
 pub struct ExecuteResponse {
     /// The generated output text.
     pub output: String,
-    /// Total tokens used (prompt + completion).
-    pub token_count: u32,
+    /// Provider-reported token usage for this call (D-24). The three optional
+    /// sub-counts are `null` when the provider did not report them.
+    pub usage: TokenUsageResponse,
     /// Wall-clock execution time in milliseconds.
     pub execution_time_ms: u64,
     /// Number of reasoning loops executed.
@@ -137,7 +179,7 @@ impl From<PaladinResult> for ExecuteResponse {
     fn from(result: PaladinResult) -> Self {
         Self {
             output: result.output,
-            token_count: result.token_count,
+            usage: TokenUsageResponse::from(result.usage),
             execution_time_ms: result.execution_time_ms,
             loop_count: result.loop_count,
             stop_reason: stop_reason_label(&result.stop_reason).to_string(),
@@ -443,12 +485,22 @@ type SseEventStream = Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Sen
 /// Render a streaming chunk (or error) as an SSE event.
 ///
 /// Emits `chunk` events with `{ "text": ... }`, a terminal `done` event, and an `error`
-/// event for a mid-stream failure (after which the stream closes).
+/// event for a mid-stream failure (after which the stream closes). The `done` event
+/// carries `usage` (D-18/D-24) whenever the final chunk's metadata reports it --
+/// `null` when the provider's stream ended without reporting usage (D-17: never a
+/// fabricated estimate).
 fn chunk_to_event(item: Result<PaladinStreamChunk, PaladinError>) -> Event {
     match item {
-        Ok(chunk) if chunk.is_final => Event::default()
-            .event("done")
-            .data(json!({ "done": true }).to_string()),
+        Ok(chunk) if chunk.is_final => {
+            let usage = chunk
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.usage.clone())
+                .map(TokenUsageResponse::from);
+            Event::default()
+                .event("done")
+                .data(json!({ "done": true, "usage": usage }).to_string())
+        }
         Ok(chunk) => Event::default()
             .event("chunk")
             .data(json!({ "text": chunk.text }).to_string()),
@@ -793,7 +845,7 @@ mod tests {
             match self {
                 MockExecutor::Succeeds(output) => Ok(PaladinResult::new(
                     output.clone(),
-                    5,
+                    TokenUsage::new(5, 0),
                     10,
                     1,
                     StopReason::Completed,
@@ -803,7 +855,7 @@ mod tests {
                     tokio::time::sleep(Duration::from_secs(60)).await;
                     Ok(PaladinResult::new(
                         "late".to_string(),
-                        0,
+                        TokenUsage::default(),
                         0,
                         0,
                         StopReason::Completed,
@@ -888,6 +940,59 @@ mod tests {
         AgentApiState::new(Arc::new(registry))
     }
 
+    /// In-test streamer whose final chunk carries `metadata.usage` (CR-01), mirroring
+    /// what `PaladinExecutionService`'s real streaming consumer does on the terminal
+    /// provider chunk (D-18).
+    struct MockStreamerWithUsage {
+        text: String,
+        usage: Option<TokenUsage>,
+    }
+
+    #[async_trait]
+    impl StreamingExecutorPort for MockStreamerWithUsage {
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            let (tx, rx) = tokio::sync::mpsc::channel(8);
+            let text = self.text.clone();
+            let usage = self.usage.clone();
+            tokio::spawn(async move {
+                let metadata = usage.map(|u| {
+                    paladin_ports::output::paladin_port::ChunkMetadata::new().with_usage(u)
+                });
+                let _ = tx
+                    .send(Ok(PaladinStreamChunk {
+                        text,
+                        is_final: true,
+                        metadata,
+                    }))
+                    .await;
+            });
+            Ok(rx)
+        }
+    }
+
+    fn state_with_streaming_usage_agent(
+        id: &str,
+        text: &str,
+        usage: Option<TokenUsage>,
+    ) -> AgentApiState {
+        let registry = AgentRegistry::new();
+        let streamer: Arc<dyn StreamingExecutorPort> = Arc::new(MockStreamerWithUsage {
+            text: text.to_string(),
+            usage,
+        });
+        registry.insert_with_streaming(
+            id,
+            test_agent(id),
+            Arc::new(MockExecutor::Succeeds("buffered".to_string())),
+            Some(streamer),
+        );
+        AgentApiState::new(Arc::new(registry))
+    }
+
     #[tokio::test]
     async fn stream_emits_chunk_events_then_done() {
         let state = state_with_streaming_agent("r", vec!["Hel".to_string(), "lo".to_string()]);
@@ -914,6 +1019,76 @@ mod tests {
             body.contains("event: done"),
             "expected a done event: {body}"
         );
+    }
+
+    /// CR-01: D-18 requires the SSE run-stream AND paladin-web streaming responses to
+    /// forward the terminal chunk's usage. The `done` event must carry a `usage` object
+    /// (same six-key `TokenUsageResponse` shape as the non-streaming `ExecuteResponse`)
+    /// when the final chunk's metadata reports it.
+    #[tokio::test]
+    async fn stream_done_event_carries_usage_when_final_chunk_reports_it() {
+        let usage = TokenUsage::new(11, 4).with_reasoning(2);
+        let state = state_with_streaming_usage_agent("r", "done text", Some(usage));
+        let response = execute_agent_stream(
+            State(state),
+            admin(),
+            Path("r".to_string()),
+            Json(ExecuteRequest {
+                input: "hi".to_string(),
+                timeout_seconds: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_body(response).await;
+        assert!(
+            body.contains("event: done"),
+            "expected a done event: {body}"
+        );
+        let data_line = body
+            .lines()
+            .find(|line| line.starts_with("data:") && line.contains("\"usage\""))
+            .unwrap_or_else(|| panic!("expected a data: line with usage: {body}"));
+        let payload: serde_json::Value =
+            serde_json::from_str(data_line.trim_start_matches("data:").trim())
+                .expect("done event data is valid JSON");
+        assert_eq!(payload["done"], true);
+        let usage = payload.get("usage").expect("usage object present");
+        assert_eq!(usage["prompt_tokens"], 11);
+        assert_eq!(usage["completion_tokens"], 4);
+        assert_eq!(usage["total_tokens"], 15);
+        assert_eq!(usage["reasoning_tokens"], 2);
+        assert!(usage["cache_read_tokens"].is_null());
+        assert!(usage["cache_write_tokens"].is_null());
+    }
+
+    /// D-17: a final chunk whose metadata carries no usage must never fabricate one --
+    /// the `done` event's `usage` key stays `null`.
+    #[tokio::test]
+    async fn stream_done_event_usage_is_null_when_final_chunk_has_none() {
+        let state = state_with_streaming_usage_agent("r", "done text", None);
+        let response = execute_agent_stream(
+            State(state),
+            admin(),
+            Path("r".to_string()),
+            Json(ExecuteRequest {
+                input: "hi".to_string(),
+                timeout_seconds: None,
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = read_body(response).await;
+        let data_line = body
+            .lines()
+            .find(|line| line.starts_with("data:") && line.contains("\"done\":true"))
+            .unwrap_or_else(|| panic!("expected a done data: line: {body}"));
+        let payload: serde_json::Value =
+            serde_json::from_str(data_line.trim_start_matches("data:").trim())
+                .expect("done event data is valid JSON");
+        assert!(payload["usage"].is_null());
     }
 
     #[tokio::test]
@@ -1167,7 +1342,7 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["output"], "done");
-        assert_eq!(body["token_count"], 5);
+        assert_eq!(body["usage"]["total_tokens"], 5);
         assert_eq!(body["execution_time_ms"], 10);
         assert_eq!(body["loop_count"], 1);
         assert_eq!(body["stop_reason"], "completed");
@@ -1640,13 +1815,60 @@ mod tests {
 
     #[test]
     fn execute_response_from_paladin_result_maps_fields_and_label() {
-        let result = PaladinResult::new("hi".to_string(), 7, 42, 2, StopReason::MaxLoops);
+        let result = PaladinResult::new(
+            "hi".to_string(),
+            TokenUsage::new(7, 0),
+            42,
+            2,
+            StopReason::MaxLoops,
+        );
         let response = ExecuteResponse::from(result);
         assert_eq!(response.output, "hi");
-        assert_eq!(response.token_count, 7);
+        assert_eq!(response.usage.total_tokens, 7);
+        assert_eq!(response.usage.prompt_tokens, 7);
+        assert_eq!(response.usage.completion_tokens, 0);
         assert_eq!(response.execution_time_ms, 42);
         assert_eq!(response.loop_count, 2);
         assert_eq!(response.stop_reason, "max_loops");
+    }
+
+    /// D-24: `TokenUsageResponse::from` mirrors every `TokenUsage` field, including the
+    /// three optional sub-counts, field-for-field.
+    #[test]
+    fn token_usage_response_from_token_usage_maps_all_six_fields_unchanged() {
+        let usage = TokenUsage::new(1_234, 567)
+            .with_cache_read(100)
+            .with_cache_write(50)
+            .with_reasoning(200);
+        let response = TokenUsageResponse::from(usage);
+        assert_eq!(response.prompt_tokens, 1_234);
+        assert_eq!(response.completion_tokens, 567);
+        assert_eq!(response.total_tokens, 1_801);
+        assert_eq!(response.cache_read_tokens, Some(100));
+        assert_eq!(response.cache_write_tokens, Some(50));
+        assert_eq!(response.reasoning_tokens, Some(200));
+    }
+
+    /// D-24: the serialized `ExecuteResponse` carries a `usage` object with all six
+    /// keys present, the three optional ones `null` when the provider did not report
+    /// them -- asserted against the actual serialized JSON, not the type definition.
+    #[test]
+    fn execute_response_serializes_usage_object_with_six_keys() {
+        let result = PaladinResult::new(
+            "hi".to_string(),
+            TokenUsage::new(7, 3),
+            42,
+            2,
+            StopReason::Completed,
+        );
+        let value = serde_json::to_value(ExecuteResponse::from(result)).expect("serialize");
+        let usage = value.get("usage").expect("usage object present");
+        assert_eq!(usage["prompt_tokens"], 7);
+        assert_eq!(usage["completion_tokens"], 3);
+        assert_eq!(usage["total_tokens"], 10);
+        assert!(usage["cache_read_tokens"].is_null());
+        assert!(usage["cache_write_tokens"].is_null());
+        assert!(usage["reasoning_tokens"].is_null());
     }
 
     #[test]

@@ -7,6 +7,10 @@ files:
   - docs/src/contributing/testing-guide.md
   - Makefile:251-256
   - .github/workflows/ci.yml:605-613
+owner: repo maintainer
+deferred_past: v0.10.0
+recheck_by: 2026-10-16
+dispositioned_by: Phase 36.1 (2026-09-18)
 ---
 
 ## Problem
@@ -51,3 +55,29 @@ On a machine with Docker available:
 
 This item deliberately does NOT carry a `resolves_phase` tag — it is expected to outlive Phase 15
 and should not be silently closed when that phase completes. Owner: repo maintainer (the user).
+
+## Disposition (Phase 36.1, 2026-09-18)
+
+**What was verified now.** The documentation half of this item's problem statement was settled
+by an earlier phase (the testing guide's Code Coverage section was itself corrected for accuracy
+in Phase 36.1 plan 04, independent of this todo). The local-reproduction half remains genuinely
+unwalked: this devcontainer has no container runtime at all — `which docker` returns nothing
+(exit 1) — while `cargo-llvm-cov` itself is present (`which cargo-llvm-cov` resolves to
+`/usr/local/cargo/bin/cargo-llvm-cov`). `make services-up` requires Docker to bring up the
+services `make coverage`'s workspace-scope run depends on, so the documented two-step local
+procedure cannot be walked end-to-end in any environment available to this phase — this is a
+measured fact about the environment, proven by the check above, not an assertion.
+
+**What remains blocked, and why.** The actual end-to-end reproduction — checking out the repo on
+a Docker-capable machine, following the testing guide's steps verbatim, running `make services-up`
+then `make coverage`, and comparing the reported figure against CI's — needs a machine this
+project's authoring environments have never had, in Phase 15 or since.
+
+**Comparison target, updated.** The historic figure this item compared against (82.39% lines, at
+commit `e9e3267f9ae6d8483be3ee52c04ffe6a763cbb37`, run 31727496744) is superseded: the walk now
+compares the local `make coverage` figure against whatever percentage the Phase 37 pre-merge CI
+`coverage` job records for the release commit (ROADMAP Phase 37, success criterion 2), at
+whole-percent precision — not the stale historic run.
+
+**Re-check trigger.** 2026-10-16, or the first time a Docker-capable machine is available to the
+repo maintainer, whichever comes first.

@@ -1,0 +1,122 @@
+ Documenting paladin-ai-core v0.10.0 (/workspace/crates/paladin-core)
+error: unresolved link to `StateNode::run`
+ --> crates/paladin-core/src/platform/container/directive.rs:3:7
+  |
+3 | //! [`StateNode::run`] (`paladin-battalion::engine::node`) returns a
+  |       ^^^^^^^^^^^^^^ no item named `StateNode` in scope
+  |
+  = note: `-D rustdoc::broken-intra-doc-links` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(rustdoc::broken_intra_doc_links)]`
+
+error: unresolved link to `extract_json`
+  |
+  = note: the link appears in this line:
+
+          [`extract_json`] is the Phase 23 D-11 rule lifted verbatim out of
+           ^^^^^^^^^^^^^^
+  = note: no item named `extract_json` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `TraceEvent`
+  |
+  = note: the link appears in this line:
+
+          [`TraceEvent`] is the twelve-variant, `#[non_exhaustive]` set of
+           ^^^^^^^^^^^^
+  = note: no item named `TraceEvent` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `TraceRecord`
+  |
+  = note: the link appears in this line:
+
+          `PaladinExecutionService`) emit. [`TraceRecord`] is the envelope every
+                                            ^^^^^^^^^^^^^
+  = note: no item named `TraceRecord` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `TraceRecord`
+  |
+  = note: the link appears in this line:
+
+          are gone — the [`TraceRecord`] envelope carries it once.
+                            ^^^^^^^^^^^^^
+  = note: no item named `TraceRecord` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `TraceEvent::DeltaMerged`
+  |
+  = note: the link appears in this line:
+
+          [`TraceEvent::DeltaMerged`] reports which fields changed via
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `TraceEvent` in scope
+
+error: unresolved link to `FieldChange`
+  |
+  = note: the link appears in this line:
+
+          [`FieldChange`] — `field`, `dispatch`, `writers` and `value_bytes`
+           ^^^^^^^^^^^^^
+  = note: no item named `FieldChange` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `FieldChange::value`
+  |
+  = note: the link appears in this line:
+
+          [`FieldChange::value`] carries the serialized value passed through the
+           ^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `FieldChange` in scope
+
+error: unresolved link to `TraceEvent::NodeProgress`
+  |
+  = note: the link appears in this line:
+
+          PRD 07's prose names [`TraceEvent::NodeProgress`]'s payload field `kind`
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `TraceEvent` in scope
+
+error: unresolved link to `TraceEvent::ParleyRaised`
+  |
+  = note: the link appears in this line:
+
+          and [`TraceEvent::ParleyRaised`]'s payload field `kind` — but
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `TraceEvent` in scope
+
+error: unresolved link to `TraceEvent::NodeProgress`
+  |
+  = note: the link appears in this line:
+
+          naming the two payload fields [`TraceEvent::NodeProgress`]'s `progress`
+                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `TraceEvent` in scope
+
+error: unresolved link to `TraceEvent::ParleyRaised`
+  |
+  = note: the link appears in this line:
+
+          and [`TraceEvent::ParleyRaised`]'s `parley_kind` — the DATA these two
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `TraceEvent` in scope
+
+error: unresolved link to `WebhookDelivery`
+  |
+  = note: the link appears in this line:
+
+          Every persisted [`WebhookDelivery`] carries
+                           ^^^^^^^^^^^^^^^^^
+  = note: no item named `WebhookDelivery` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `WEBHOOK_DELIVERY_SCHEMA_VERSION`
+  |
+  = note: the link appears in this line:
+
+          [`WEBHOOK_DELIVERY_SCHEMA_VERSION`] in its own `schema_version` field,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `WEBHOOK_DELIVERY_SCHEMA_VERSION` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: could not document `paladin-ai-core`

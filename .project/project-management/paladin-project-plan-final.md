@@ -1123,6 +1123,9 @@ config:
   include_expert_names: true
 ```
 
+*Historical example name: "Quartermaster" as a budgeting term was retired and replaced by
+Commissary — see `.planning/decisions/0049-commissary-design-and-rename.md`.*
+
 ---
 
 ### Epic 15 Completion Criteria

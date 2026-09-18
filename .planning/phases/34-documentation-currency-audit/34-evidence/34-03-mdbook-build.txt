@@ -1,0 +1,1444 @@
+=== 34-03 mdBook build baseline evidence ===
+Run window start (UTC): 2026-09-17T04:02:48Z
+
+--- Tool versions vs docs.yml pins ---
+$ mdbook --version
+mdbook v0.4.40
+$ mdbook-linkcheck --version
+mdbook-linkcheck 0.7.7
+$ mdbook-mermaid --version
+mdbook-mermaid 0.13.0
+Compared against docs.yml pins: mdbook 0.4.40 (line 46), mdbook-mermaid 0.13.0 (line 50), mdbook-linkcheck 0.7.7 (line 54) -- all three match exactly.
+
+--- mdbook-mermaid install docs/ ---
+Already run this session; git status --porcelain -- docs was empty immediately after (no mutation of docs/mermaid.min.js / docs/mermaid-init.js). Statement: mdbook-mermaid install docs/ did NOT mutate docs/ this run.
+
+--- mdbook build docs/ ---
+$ time mdbook build docs/
+2026-09-17 04:02:54 [INFO] (mdbook::book): Book building has started
+Warning: The mdbook-mermaid preprocessor was built against version 0.4.36 of mdbook, but we're being called from version 0.4.40
+2026-09-17 04:02:54 [INFO] (mdbook::book): Running the html backend
+2026-09-17 04:02:57 [INFO] (mdbook::book): Running the linkcheck backend
+2026-09-17 04:02:57 [INFO] (mdbook::renderer): Invoking the "linkcheck" renderer
+[2026-09-17T04:02:57Z INFO  mdbook_linkcheck] Started the link checker
+[2026-09-17T04:02:57Z INFO  mdbook_linkcheck] Scanning book for links
+[2026-09-17T04:02:57Z INFO  mdbook_linkcheck] Found 1006 links (0 incomplete links)
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "embedding-in-your-own-app" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "embedding-in-your-own-app" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "prerequisites" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "docker-images" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "environment-variables" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "volumes-and-persistence" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "networking" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "multi-container-setup" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "multi-architecture-support" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "image-versioning" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "health-checks" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "resource-limits" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "production-deployment" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "environment-variables" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "multi-container-setup" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "health-check-failing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "prerequisites" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "kubernetes-manifests" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configmaps-and-secrets" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "helm-chart" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "resource-management" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "high-availability" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "graceful-shutdown" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "horizontal-scaling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "storage" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "networking" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "monitoring" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "run-server-producer-api--worker-replicas" section exists in "/workspace/docs/src/deployment-topologies/queue-worker.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "pre-deployment-checklist" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "reliability" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "monitoring" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "disaster-recovery" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cost-optimization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "maintenance" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "production-deployment" section exists in "/workspace/docs/src/deployment/docker.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "github-actions-workflows" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "ci-pipeline" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "docker-build-pipeline" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "release-pipeline" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "integration-testing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security-scanning" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "deployment-automation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "release-pipeline" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "code-of-conduct" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "getting-started" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "git-hooks-pre-commit" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "development-workflow" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-guidelines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "code-quality-standards" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "documentation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "releasing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "adding-a-new-dependency" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-change-process" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "pull-request-process" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "community" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "rust-coding-conventions" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-guidelines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "operator-guide-cutting-a-release" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "canonical-publish-order" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "trusted-publishing" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-reference-test-commands" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-philosophy" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "test-organization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "unit-testing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "integration-testing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "functional-testing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "test-coverage" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "mocking-and-fixtures" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "ci-integration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "next-steps" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "test-coverage" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "port-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "llm-adapter-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrison-adapter-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "arsenal-adapter-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "citadel-adapter-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-adapters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "publishing-adapters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "prerequisites" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "implementation-steps" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "adapter-template" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-requirements" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "documentation-requirements" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "submission-guidelines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "overview" section exists in "/workspace/docs/src/user-guides/tool-integration.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "llm-provider" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladinbuilder-api" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "execution-model" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladinresult-fields" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "stopreason-variants" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "autonomous-features" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "memory--garrison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "tools--arsenal" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "output-formatting--herald" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-eight-patterns" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "formation--sequential" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "phalanx--concurrent" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "campaign--graphdag" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "chain-of-command--hierarchical" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "conclave--mixture-of-experts" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "council--collaborative-discussion" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "grove--semantic-routing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "maneuver--flow-dsl" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "commander--strategy-router" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-notes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "workflow-patterns-overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "formation--sequential" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "phalanx--parallel" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "campaign--graph--dag" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "chain-of-command--hierarchical" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "commander--dynamic-strategy-routing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "job-scheduling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "event-and-trigger-system" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "see-also" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "phalanx--parallel" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "paladin-content" section exists in "/workspace/docs/src/api-reference/crate-map.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "content-ingestion-sources" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "aggregation-and-the-processing-pipeline" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "content--agent-bridge" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "content-delivery" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "capabilities-and-limitations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "see-also" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "capabilities-and-limitations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "use-case-recipes" section exists in "/workspace/docs/src/user-guides/agent-orchestrator-bridge.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "paladin-content" section exists in "/workspace/docs/src/api-reference/crate-map.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "agents-triggering-orchestration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "orchestration-invoking-agents" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuring-the-bridge" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "use-case-recipes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "see-also" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "configuration-reference" section exists in "/workspace/docs/src/user-guides/orchestration.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "job-scheduling" section exists in "/workspace/docs/src/user-guides/orchestration.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "event-and-trigger-system" section exists in "/workspace/docs/src/user-guides/orchestration.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "paladin-ports" section exists in "/workspace/docs/src/api-reference/crate-map.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "concepts" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start--stdio-server" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "streamable-http-server-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configyml-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "arsenalport-trait" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "arsenalregistry-trait" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "attaching-arsenal-to-a-paladin" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "custom-armaments-direct-rust-tools" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "handoff-tool" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "concepts" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrison-adapters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrisonport-trait" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrisonconfig" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "conversation-roles" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "attaching-to-a-paladin" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "long-term-memory-with-embeddings" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configyml-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "sanctum-vs-garrison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "sanctum-adapters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "sanctumport-trait" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "sanctumentry-and-memory-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "searching-with-sanctumquery" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "rag--retrieval-augmented-generation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "attaching-to-a-paladin" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "docker-setup-qdrant" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configyml-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "available-heralds" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "herald-trait" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "attaching-to-a-paladin" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "attaching-to-a-battalion-service" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "custom-herald-implementation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "streaming-output" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "flow-dsl-syntax" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "execution-patterns" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cli-commands" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "visualization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "wargraph-in-three-sentences" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "directives-node-authored-routing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "directiveparser-reading-a-paladins-output" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "muster-dynamic-fan-out" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "subgraphs-composing-graphs" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "llm-evaluated-edges" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migrating-from-v09-m-b-01" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "building-an-approval-gate" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "raising-a-parley-from-a-paladin-node" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "resuming-a-suspended-thread" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "partial-answers" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "expiry-on_expire-policies" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "chronicle-history-replay-and-fork" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "graceful-shutdown-from-the-embedders-side" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-http-surface" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "notifying-a-human-a-parley-is-waiting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "what-an-aegis-is" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-error-taxonomy-why-transience-exists" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "retry" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "timeouts-wall-clock-versus-idle" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handlers-and-compensation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "model-fallback" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "node-caching" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-node-kind-support-matrix" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "limitations-you-should-know-about" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security-notes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-node-kind-support-matrix" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-two-layer-contract-nodeinterceptor-vs-executionmiddleware" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "installing-a-chain" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "built-in-middleware" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "vault-cross-session-memory" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "structured-output" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "native-response_format-by-provider" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-tool-call-protocol" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-reasoning_agent-preset" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-ollama-recipe" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security-notes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security-notes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "basic-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "system-prompt-best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "model-selection" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "temperature-and-sampling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "stop-words-and-termination" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "timeout-and-retry-settings" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "advanced-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "custom-tool-development" section exists in "/workspace/docs/src/user-guides/tool-integration.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrison-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "in-memory-garrison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "persistent-garrison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "memory-windowing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "semantic-search" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "memory-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "advanced-patterns" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "scoping-by-paladin" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "semantic-search" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "arsenal-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "mcp-protocol" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "stdio-tool-servers" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "streamable-http-tool-servers" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "custom-tool-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "tool-result-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "the-tool-call-protocol" section exists in "/workspace/docs/src/user-guides/agent-runtime.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "herald-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "built-in-formatters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "custom-formatters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "streaming-output" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "multi-format-output" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "post-processing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "advanced-patterns" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "values-are-opt-in-redacted-then-capped" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "otlp-export" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "known-limitations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "run_traces-persistence-and-retention" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "log-levels" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "structured-logging" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "log-aggregation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "log-analysis" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "metrics-collection" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "prometheus-setup" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "grafana-dashboards" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "alerting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "key-metrics" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "distributed-tracing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "health-checks" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-baselines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "benchmarking" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "llm-optimization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "memory-optimization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "concurrency-tuning" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "database-optimization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "network-optimization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "resource-allocation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "diagnostic-tools" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "common-issues" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-issues" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-issues" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "deployment-issues" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "integration-issues" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "getting-help" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "available-feature-flags" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "default-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "usage-examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "build-comparison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "feature-dependencies" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "upgrading-to-v0100-from-v09x" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migrating-to-v050-from-v04x" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migrating-to-v04x-from-v03x" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migrating-to-v020-from-v01x" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migrating-to-v010-feature-flag-reorganization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migration-scenarios" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-your-migration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "pagination" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "introduction" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-stability-guarantee" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "versioning-policy" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "stability-tiers" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "per-crate-api-surface-and-stability" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "stable-public-api-catalog" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "port-traits-output-ports" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "port-traits-input-ports" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "domain-entities" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "builder-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "base-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "internal-implementation-details-not-stable" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-change-process" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migration-guide-for-breaking-changes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "tracking-api-changes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "frequently-asked-questions" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "questions-and-support" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "versioning-policy" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-change-process" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "routing-strategies" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "expertise-definition" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "fallback-behavior" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "turn-taking-strategies" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "termination-conditions" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrison-integration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "introduction" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "getting-started" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "vision-content-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "supported-providers" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-vision-api" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "document-processing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cli-usage" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "yaml-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "battalion-integration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-considerations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "programmatic-api" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "yaml-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cli-usage" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "use-cases" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "observability" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "formation-sequential" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "phalanx-parallel" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "campaign-graphdag" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "chain-of-command-hierarchical" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "pattern-selection-guide" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "common-pitfalls" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-considerations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "introduction" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "motivation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "syntax-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling-strategies" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "visualization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-considerations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "installation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "environment-setup" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "getting-started" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-onboarding" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-setup-check" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-features" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "commands-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-agent" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-battalion" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-muster" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-council" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-maneuver" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-arsenal" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-files" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "provider-comparison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-guide" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "use-case-recommendations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migration-guide" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-characteristics" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "prerequisites" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "local-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "docker-compose" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "kubernetes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cloud-deployments" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "production-best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "monitoring" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "backup-and-recovery" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migration-scenarios" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "inmemory-to-qdrant-migration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "qdrant-version-upgrades" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "changing-vector-dimensions" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "zero-downtime-migration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "rollback-procedures" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "data-validation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "trusted-publishing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "dry-run-claim-boundary" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "body-source" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "trusted-publishing" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "artifact-inventory" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "body-source" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "executive-summary" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "architecture-overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "design-principles" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "system-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "core-components" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "data-flow" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "implementation-guidelines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security-considerations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "deployment-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "future-considerations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "5-use-cases-initial" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-file-structure" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrison-configuration-memory" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "arsenal-configuration-tools" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "scheduler-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "complete-configuration-examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "environment-variables" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "command-syntax" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "agent-roles" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "discussion-modes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "output-options" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "command-syntax" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "generation-workflow" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-options" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "output-formats" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cli-snapshot-testing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "code-of-conduct" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "getting-started" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "development-workflow" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "architecture-guidelines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-requirements" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "documentation-standards" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "pull-request-process" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "community" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z INFO  mdbook_linkcheck] No broken links found
+
+Exit code: 0
+Wall time: 3s
+2026-09-17 04:02:54 [INFO] (mdbook::book): Book building has started
+Warning: The mdbook-mermaid preprocessor was built against version 0.4.36 of mdbook, but we're being called from version 0.4.40
+2026-09-17 04:02:54 [INFO] (mdbook::book): Running the html backend
+2026-09-17 04:02:57 [INFO] (mdbook::book): Running the linkcheck backend
+2026-09-17 04:02:57 [INFO] (mdbook::renderer): Invoking the "linkcheck" renderer
+[2026-09-17T04:02:57Z INFO  mdbook_linkcheck] Started the link checker
+[2026-09-17T04:02:57Z INFO  mdbook_linkcheck] Scanning book for links
+[2026-09-17T04:02:57Z INFO  mdbook_linkcheck] Found 1006 links (0 incomplete links)
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "embedding-in-your-own-app" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "embedding-in-your-own-app" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "prerequisites" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "docker-images" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "environment-variables" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "volumes-and-persistence" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "networking" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "multi-container-setup" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "multi-architecture-support" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "image-versioning" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "health-checks" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "resource-limits" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "production-deployment" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "environment-variables" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "multi-container-setup" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "health-check-failing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "prerequisites" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "kubernetes-manifests" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configmaps-and-secrets" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "helm-chart" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "resource-management" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "high-availability" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "graceful-shutdown" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "horizontal-scaling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "storage" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "networking" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "monitoring" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "run-server-producer-api--worker-replicas" section exists in "/workspace/docs/src/deployment-topologies/queue-worker.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "pre-deployment-checklist" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "reliability" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "monitoring" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "disaster-recovery" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cost-optimization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "maintenance" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "production-deployment" section exists in "/workspace/docs/src/deployment/docker.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "github-actions-workflows" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "ci-pipeline" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "docker-build-pipeline" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "release-pipeline" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "integration-testing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security-scanning" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "deployment-automation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "release-pipeline" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "code-of-conduct" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "getting-started" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "git-hooks-pre-commit" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "development-workflow" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-guidelines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "code-quality-standards" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "documentation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "releasing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "adding-a-new-dependency" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-change-process" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "pull-request-process" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "community" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "rust-coding-conventions" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-guidelines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "operator-guide-cutting-a-release" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "canonical-publish-order" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "trusted-publishing" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-reference-test-commands" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-philosophy" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "test-organization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "unit-testing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "integration-testing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "functional-testing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "test-coverage" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "mocking-and-fixtures" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "ci-integration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "next-steps" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "test-coverage" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "port-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "llm-adapter-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrison-adapter-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "arsenal-adapter-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "citadel-adapter-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-adapters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "publishing-adapters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "prerequisites" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "implementation-steps" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "adapter-template" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-requirements" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "documentation-requirements" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "submission-guidelines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "overview" section exists in "/workspace/docs/src/user-guides/tool-integration.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "llm-provider" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladinbuilder-api" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "execution-model" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladinresult-fields" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "stopreason-variants" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "autonomous-features" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "memory--garrison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "tools--arsenal" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "output-formatting--herald" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-eight-patterns" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "formation--sequential" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "phalanx--concurrent" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "campaign--graphdag" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "chain-of-command--hierarchical" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "conclave--mixture-of-experts" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "council--collaborative-discussion" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "grove--semantic-routing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "maneuver--flow-dsl" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "commander--strategy-router" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-notes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "workflow-patterns-overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "formation--sequential" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "phalanx--parallel" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "campaign--graph--dag" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "chain-of-command--hierarchical" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "commander--dynamic-strategy-routing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "job-scheduling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "event-and-trigger-system" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "see-also" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "phalanx--parallel" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "paladin-content" section exists in "/workspace/docs/src/api-reference/crate-map.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "content-ingestion-sources" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "aggregation-and-the-processing-pipeline" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "content--agent-bridge" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "content-delivery" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "capabilities-and-limitations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "see-also" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "capabilities-and-limitations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "use-case-recipes" section exists in "/workspace/docs/src/user-guides/agent-orchestrator-bridge.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "paladin-content" section exists in "/workspace/docs/src/api-reference/crate-map.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "agents-triggering-orchestration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "orchestration-invoking-agents" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuring-the-bridge" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "use-case-recipes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "see-also" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "configuration-reference" section exists in "/workspace/docs/src/user-guides/orchestration.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "job-scheduling" section exists in "/workspace/docs/src/user-guides/orchestration.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "event-and-trigger-system" section exists in "/workspace/docs/src/user-guides/orchestration.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "paladin-ports" section exists in "/workspace/docs/src/api-reference/crate-map.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "concepts" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start--stdio-server" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "streamable-http-server-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configyml-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "arsenalport-trait" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "arsenalregistry-trait" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "attaching-arsenal-to-a-paladin" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "custom-armaments-direct-rust-tools" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "handoff-tool" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "concepts" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrison-adapters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrisonport-trait" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrisonconfig" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "conversation-roles" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "attaching-to-a-paladin" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "long-term-memory-with-embeddings" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configyml-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "sanctum-vs-garrison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "sanctum-adapters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "sanctumport-trait" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "sanctumentry-and-memory-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "searching-with-sanctumquery" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "rag--retrieval-augmented-generation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "attaching-to-a-paladin" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "docker-setup-qdrant" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configyml-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "available-heralds" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "herald-trait" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "attaching-to-a-paladin" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "attaching-to-a-battalion-service" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "custom-herald-implementation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "streaming-output" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "flow-dsl-syntax" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "execution-patterns" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cli-commands" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "visualization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "wargraph-in-three-sentences" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "directives-node-authored-routing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "directiveparser-reading-a-paladins-output" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "muster-dynamic-fan-out" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "subgraphs-composing-graphs" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "llm-evaluated-edges" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migrating-from-v09-m-b-01" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "building-an-approval-gate" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "raising-a-parley-from-a-paladin-node" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "resuming-a-suspended-thread" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "partial-answers" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "expiry-on_expire-policies" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "chronicle-history-replay-and-fork" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "graceful-shutdown-from-the-embedders-side" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-http-surface" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "notifying-a-human-a-parley-is-waiting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "what-an-aegis-is" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-error-taxonomy-why-transience-exists" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "retry" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "timeouts-wall-clock-versus-idle" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handlers-and-compensation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "model-fallback" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "node-caching" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-node-kind-support-matrix" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "limitations-you-should-know-about" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security-notes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-node-kind-support-matrix" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-two-layer-contract-nodeinterceptor-vs-executionmiddleware" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "installing-a-chain" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "built-in-middleware" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "vault-cross-session-memory" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "structured-output" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "native-response_format-by-provider" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-tool-call-protocol" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-reasoning_agent-preset" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "the-ollama-recipe" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security-notes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security-notes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "basic-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "system-prompt-best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "model-selection" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "temperature-and-sampling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "stop-words-and-termination" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "timeout-and-retry-settings" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "advanced-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "custom-tool-development" section exists in "/workspace/docs/src/user-guides/tool-integration.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrison-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "in-memory-garrison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "persistent-garrison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "memory-windowing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "semantic-search" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "memory-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "advanced-patterns" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "scoping-by-paladin" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "semantic-search" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "arsenal-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "mcp-protocol" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "stdio-tool-servers" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "streamable-http-tool-servers" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "custom-tool-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "tool-result-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "the-tool-call-protocol" section exists in "/workspace/docs/src/user-guides/agent-runtime.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "herald-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "built-in-formatters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "custom-formatters" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "streaming-output" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "multi-format-output" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "post-processing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "advanced-patterns" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "values-are-opt-in-redacted-then-capped" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "otlp-export" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "known-limitations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "run_traces-persistence-and-retention" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "log-levels" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "structured-logging" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "log-aggregation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "log-analysis" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "metrics-collection" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "prometheus-setup" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "grafana-dashboards" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "alerting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "key-metrics" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "distributed-tracing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "health-checks" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-baselines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "benchmarking" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "llm-optimization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "memory-optimization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "concurrency-tuning" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "database-optimization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "network-optimization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "resource-allocation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "diagnostic-tools" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "common-issues" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-issues" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-issues" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "deployment-issues" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "integration-issues" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "getting-help" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "available-feature-flags" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "default-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "usage-examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "build-comparison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "feature-dependencies" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "upgrading-to-v0100-from-v09x" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migrating-to-v050-from-v04x" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migrating-to-v04x-from-v03x" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migrating-to-v020-from-v01x" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migrating-to-v010-feature-flag-reorganization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migration-scenarios" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-your-migration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "pagination" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "introduction" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-stability-guarantee" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "versioning-policy" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "stability-tiers" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "per-crate-api-surface-and-stability" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "stable-public-api-catalog" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "port-traits-output-ports" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "port-traits-input-ports" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "domain-entities" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "builder-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "base-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "internal-implementation-details-not-stable" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-change-process" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migration-guide-for-breaking-changes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "tracking-api-changes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "frequently-asked-questions" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "questions-and-support" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "versioning-policy" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-change-process" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "routing-strategies" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "expertise-definition" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "fallback-behavior" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "turn-taking-strategies" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "termination-conditions" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrison-integration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "api-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "introduction" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "getting-started" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "vision-content-types" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "supported-providers" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-vision-api" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "document-processing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cli-usage" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "yaml-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "battalion-integration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-considerations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "programmatic-api" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "yaml-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cli-usage" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "use-cases" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "observability" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "formation-sequential" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "phalanx-parallel" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "campaign-graphdag" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "chain-of-command-hierarchical" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "pattern-selection-guide" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "common-pitfalls" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-considerations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "introduction" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "motivation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "syntax-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "error-handling-strategies" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "visualization" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-considerations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "installation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "environment-setup" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "getting-started" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-onboarding" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-setup-check" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-features" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "commands-reference" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-agent" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-battalion" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-muster" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-council" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-maneuver" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "paladin-arsenal" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-files" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "provider-comparison" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-guide" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "use-case-recommendations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migration-guide" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "performance-characteristics" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "prerequisites" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "local-development" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "docker-compose" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "kubernetes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cloud-deployments" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "production-best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "monitoring" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "backup-and-recovery" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "migration-scenarios" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "inmemory-to-qdrant-migration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "qdrant-version-upgrades" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "changing-vector-dimensions" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "zero-downtime-migration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "rollback-procedures" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "data-validation" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "trusted-publishing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "dry-run-claim-boundary" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "body-source" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "trusted-publishing" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "artifact-inventory" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation::filesystem] Not checking that the "body-source" section exists in "/workspace/docs/src/appendix/release-automation.md" because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "executive-summary" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "architecture-overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "design-principles" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "system-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "core-components" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "data-flow" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "implementation-guidelines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "security-considerations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "deployment-architecture" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "future-considerations" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "5-use-cases-initial" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-file-structure" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "garrison-configuration-memory" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "arsenal-configuration-tools" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "scheduler-configuration" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "complete-configuration-examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "environment-variables" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "command-syntax" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "agent-roles" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "discussion-modes" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "output-options" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "overview" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "quick-start" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "command-syntax" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "generation-workflow" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "configuration-options" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "output-formats" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "best-practices" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "examples" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "troubleshooting" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "cli-snapshot-testing" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "code-of-conduct" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "getting-started" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "development-workflow" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "architecture-guidelines" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "testing-requirements" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "documentation-standards" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "pull-request-process" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z WARN  linkcheck::validation] Not checking "community" in the current file because fragment resolution isn't implemented
+[2026-09-17T04:02:57Z INFO  mdbook_linkcheck] No broken links found
+
+Exit code: 0
+Wall time: 3s
+
+Linkcheck summary line (verbatim): [2026-09-17T04:02:57Z INFO  mdbook_linkcheck] No broken links found
+Link count line (verbatim): [2026-09-17T04:02:57Z INFO  mdbook_linkcheck] Found 1006 links (0 incomplete links)
+515 lines are fragment-resolution 'Not checking ... because fragment resolution isn't implemented' informational warnings, a known mdbook-linkcheck limitation (fragment/anchor resolution across included pages), not link failures -- warning-policy=error in book.toml governs true linkcheck failures, and the build exited 0.
+
+=== bash scripts/check-doc-examples.sh ===
+Compiling documentation examples (paladin-doc-examples crate)...
+All included examples compile.
+
+Checking README Quick Example matches crates/doc-examples/src/readme.rs ...
+README Quick Example is in sync.
+
+Checking doc code examples in /workspace/docs/src ...
+
+Results: 0 checked, 616 skipped, 0 failed
+All doc code examples pass validation.
+
+Exit code: 0
+Wall time: 5s
+
+=== bash scripts/check-doc-config.sh ===
+Validating fenced YAML blocks in /workspace/docs/src ...
+
+Results: 154 YAML block(s) checked, 0 failed
+
+Exit code: 0
+Wall time: 0s
+
+=== orphan check (D-05): pages on disk vs pages linked from docs/src/SUMMARY.md ===
+$ find docs/src -name '*.md' | sort | wc -l
+93
+$ grep -oE link targets from docs/src/SUMMARY.md, normalized to docs/src/ prefix, deduped, plus SUMMARY.md itself | wc -l
+93
+$ comm -23 <(find docs/src -name '*.md' | sort) <(nav-reachable set including SUMMARY.md itself)
+(empty -- zero orphans)
+
+=== vocabulary sweep (D-10): grep -rniE '\bQuartermaster\b' docs/src ===
+docs/src/architecture/commissary.md:7:Quartermaster→Commissary rename rationale, and the rejected-name list are in ADR-0049
+Hit count: 1
+
+=== D-29 token_count / TokenUsage split re-check (10-page hit list) ===
+--- docs/src/getting-started/quickstart.md ---
+$ grep -n 'token_count' docs/src/getting-started/quickstart.md
+(none)
+$ grep -n 'TokenUsage' docs/src/getting-started/quickstart.md
+118:| `usage` | `TokenUsage` | Prompt/completion split, plus cache/reasoning sub-counts when the provider reports them |
+--- docs/src/operations/observability.md ---
+$ grep -n 'token_count' docs/src/operations/observability.md
+(none)
+$ grep -n 'TokenUsage' docs/src/operations/observability.md
+38:| `NodeFinished` | one node attempt ends | `outcome`, `duration_ms`, `usage: TokenUsage`, `cache_hit` |
+43:| `RunFinished` | the run reaches a terminal outcome | `status`, `total_supersteps`, `usage: TokenUsage`, `duration_ms`, `trace_dropped_total` |
+--- docs/src/user-guides/battalion-patterns.md ---
+$ grep -n 'token_count' docs/src/user-guides/battalion-patterns.md
+(none)
+$ grep -n 'TokenUsage' docs/src/user-guides/battalion-patterns.md
+313:entry carries its own `usage: TokenUsage`, D-07), `status: BattalionStatus`,
+314:`per_paladin_tokens: HashMap<String, TokenUsage>` (the per-Paladin split), and
+--- docs/src/user-guides/output-formatting.md ---
+$ grep -n 'token_count' docs/src/user-guides/output-formatting.md
+(none)
+$ grep -n 'TokenUsage' docs/src/user-guides/output-formatting.md
+170:`usage` is the full `TokenUsage` split: a stable six-key object where the three
+--- docs/src/user-guides/agent-orchestrator-bridge.md ---
+$ grep -n 'token_count' docs/src/user-guides/agent-orchestrator-bridge.md
+(none)
+$ grep -n 'TokenUsage' docs/src/user-guides/agent-orchestrator-bridge.md
+111:`PaladinResult` carries `output`, `usage` (the full `TokenUsage` split), `execution_time_ms`,
+--- docs/src/appendix/conclave-pattern.md ---
+$ grep -n 'token_count' docs/src/appendix/conclave-pattern.md
+(none)
+$ grep -n 'TokenUsage' docs/src/appendix/conclave-pattern.md
+726:full `TokenUsage` (prompt/completion split, plus cache/reasoning sub-counts when the provider
+--- docs/src/architecture/domain-model.md ---
+$ grep -n 'token_count' docs/src/architecture/domain-model.md
+102:    pub token_count: usize,
+$ grep -n 'TokenUsage' docs/src/architecture/domain-model.md
+35:table gets a Medieval-Military name. Units and measures (`TokenUsage`, `max_tokens`,
+--- docs/src/user-guides/herald-output.md ---
+$ grep -n 'token_count' docs/src/user-guides/herald-output.md
+(none)
+$ grep -n 'TokenUsage' docs/src/user-guides/herald-output.md
+55:// "usage" is the full TokenUsage split, serialized as a stable six-key object:
+--- docs/src/user-guides/memory-management.md ---
+$ grep -n 'token_count' docs/src/user-guides/memory-management.md
+46:    pub token_count: Option<u32>,
+158:// Token counting is a separate concern from GarrisonConfig — GarrisonEntry.token_count
+160:// or the ungated default `HeuristicTokenCounter`), there is no `GarrisonConfig::with_token_counter`
+312:    token_count INTEGER,
+358:    window.iter().map(|e| e.token_count.unwrap_or(0)).sum::<u32>());
+418:            .map(|e| e.token_count.unwrap_or(0))
+434:            let entry_tokens = entry.token_count.unwrap_or(0);
+496:                token_count: None,
+675:    token_count: Some(10),
+695:    token_count: Some(15),
+714:    token_count: Some(20),
+790:    token_count: Some(estimate_tokens(&message)),
+842:            token_count: None,
+882:                token_count: None,
+952:            let entry_tokens = entry.token_count.unwrap_or(0);
+1016:            token_count: None,
+1132:            token_count: Some(2),
+1156:                token_count: Some(10),
+1163:            .map(|e| e.token_count.unwrap_or(0))
+$ grep -n 'TokenUsage' docs/src/user-guides/memory-management.md
+(none)
+--- docs/src/user-guides/paladin-agents.md ---
+$ grep -n 'token_count' docs/src/user-guides/paladin-agents.md
+(none)
+$ grep -n 'TokenUsage' docs/src/user-guides/paladin-agents.md
+161:| `usage` | `TokenUsage` | Prompt/completion split, plus cache/reasoning sub-counts when the provider reports them |
+
+=== object-store currency sweep (CONTEXT.md Folded Todos, MinIO slice) ===
+$ grep -rniE 'minio|dl\.min\.io|quay\.io' docs/src examples
+Hit count: 247
+docs/src/api-reference/migration-guide.md:139:- ❌ S3/MinIO storage adapter (`s3-storage`)
+docs/src/api-reference/migration-guide.md:149:2. **You use S3/MinIO file storage** in your code
+docs/src/api-reference/migration-guide.md:416:error[E0433]: failed to resolve: use of undeclared type `MinioAdapter`
+docs/src/getting-started/installation.md:25:- **Docker + Docker Compose** v2 -- required for the built-in Redis, MinIO, and
+docs/src/getting-started/installation.md:88:| `s3-storage` | no | MinIO / AWS S3 file storage |
+docs/src/getting-started/installation.md:114:make services-up   # Redis, MinIO, MySQL via Docker Compose
+docs/src/api-reference/stable-api.md:650:- `MinIOAdapter`, `LocalFileAdapter` → Use `FileStoragePort` trait instead
+docs/src/operations/troubleshooting.md:484:### MinIO/S3 Errors
+docs/src/operations/troubleshooting.md:492:# Test MinIO connectivity
+docs/src/operations/troubleshooting.md:494:  curl -v http://minio:9000/minio/health/live
+docs/src/operations/troubleshooting.md:500:kubectl create secret generic minio-credentials \
+docs/src/operations/troubleshooting.md:501:  --from-literal=access-key="minioadmin" \
+docs/src/operations/troubleshooting.md:502:  --from-literal=secret-key="minioadmin"
+docs/src/getting-started/quickstart.md:97:# Start backing services (Redis, MinIO) -- optional for basic examples
+docs/src/architecture/crate-map.md:249:| `s3-storage` | no | MinIO / S3 storage |
+docs/src/api-reference/crate-map.md:105:| `s3-storage` | MinIO / S3 file storage | `rust-s3` |
+docs/src/architecture/overview.md:31:│   LLMs · Databases · Redis · MinIO · MCP tools · HTTP clients   │
+docs/src/architecture/overview.md:248:| Object storage | MinIO / S3 (optional) |
+docs/src/contributing/development-setup.md:29:- **Docker**: For running integration tests with Redis, MinIO, MySQL
+docs/src/contributing/development-setup.md:45:# Start service dependencies (Redis, MinIO, MySQL)
+docs/src/SUMMARY.md:113:- [MinIO File Repository Setup](appendix/minio-file-repository-setup.md)
+docs/src/deployment/production.md:235:// Configure MinIO via the real FileStorageConfig
+docs/src/deployment/production.md:237:    minio_endpoint: "minio:9000".into(),
+docs/src/deployment/production.md:238:    minio_access_key: "minioadmin".into(),
+docs/src/deployment/production.md:239:    minio_secret_key: "minioadmin".into(),
+docs/src/deployment/production.md:240:    minio_bucket: "paladin-files".into(),
+docs/src/deployment/production.md:241:    minio_secure: Some(false),
+docs/src/deployment/production.md:484:  - minio_operations_total          # MinIO ops
+docs/src/contributing/branching-model.md:49:| `ci.yml` | `push`, `pull_request`, `workflow_dispatch` | `['**']` | Core gate (lint, security audit, license/dependency policy, unit tests, examples, crate isolation, integration tests, coverage, CLI snapshots, API surface, benchmark compile check). Runs on every branch push under D-03 so no branch is ever silently uncovered; absorbed `integration-tests.yml`'s jobs and its nightly cron was retired rather than relocated — the broad integration suite now runs on every push to every branch, which is strictly more coverage than a once-daily run, so no `schedule:` key was added here. Revisit condition for reinstating a narrower schedule: the object-storage image is now pinned to an explicit quay.io release tag (`quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772`) and so no longer floats; if the remaining floating service-container image tag (`redis:7-alpine`) needs drift detection between pushes, a scheduled workflow targeting that tag would be the reinstatement, not resurrecting the deleted file. |
+docs/src/api-reference/feature-flags.md:26:4. **Infrastructure Selection** - Pick storage/queue adapters (Redis, S3/MinIO, Qdrant)
+docs/src/api-reference/feature-flags.md:77:| `s3-storage` | `rust-s3` | `infrastructure::adapters::file_storage::minio` | S3/MinIO file storage adapter |
+docs/src/user-guides/orchestration.md:222:> Redis instance. Run `make dev` to start it (alongside MinIO, MySQL, Qdrant).
+docs/src/assets/DeploymentArchitecture.svg:82:    <text x="910" y="405" font-family="Arial, sans-serif" font-size="10" text-anchor="middle" fill="white">MinIO / Ceph</text>
+docs/src/deployment/cicd.md:301:      minio:
+docs/src/deployment/cicd.md:302:        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+docs/src/deployment/cicd.md:304:          MINIO_ROOT_USER: minioadmin
+docs/src/deployment/cicd.md:305:          MINIO_ROOT_PASSWORD: minioadmin
+docs/src/deployment/cicd.md:307:          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+docs/src/deployment/cicd.md:322:          timeout 60 bash -c 'until curl -f http://localhost:9000/minio/health/live; do sleep 2; done'
+docs/src/deployment/cicd.md:329:          MINIO_ENDPOINT: localhost:9000
+docs/src/deployment/cicd.md:330:          MINIO_ACCESS_KEY: minioadmin
+docs/src/deployment/cicd.md:331:          MINIO_SECRET_KEY: minioadmin
+docs/src/contributing/testing-guide.md:14:# Integration tests with Docker services (Redis, MinIO, MySQL)
+docs/src/contributing/testing-guide.md:89:│   ├── minio_storage_test.rs
+docs/src/contributing/testing-guide.md:255:### MinIO Integration Test
+docs/src/contributing/testing-guide.md:258:// tests/integration/minio_storage_test.rs
+docs/src/contributing/testing-guide.md:260:use paladin::infrastructure::adapters::file_storage::MinioAdapter;
+docs/src/contributing/testing-guide.md:265:async fn test_minio_upload_download() {
+docs/src/contributing/testing-guide.md:266:    // Arrange: Start MinIO container
+docs/src/contributing/testing-guide.md:268:    let minio = docker.run(
+docs/src/contributing/testing-guide.md:269:        GenericImage::new("quay.io/minio/minio", "RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772")
+docs/src/contributing/testing-guide.md:270:            .with_env_var("MINIO_ROOT_USER", "minioadmin")
+docs/src/contributing/testing-guide.md:271:            .with_env_var("MINIO_ROOT_PASSWORD", "minioadmin")
+docs/src/contributing/testing-guide.md:275:    let adapter = MinioAdapter::new(
+docs/src/contributing/testing-guide.md:277:        "minioadmin",
+docs/src/contributing/testing-guide.md:278:        "minioadmin",
+docs/src/contributing/testing-guide.md:425:MinIO. **Start them first** — `make services-up` — or your local figure will not match CI's.
+docs/src/contributing/testing-guide.md:433:# 1. Start Redis and MinIO (once per session)
+docs/src/contributing/testing-guide.md:451:If `make coverage` fails with a Redis/MinIO connection error, that is `make coverage` itself
+docs/src/contributing/testing-guide.md:512:exercises Redis- and MinIO-backed code paths; if `make services-up` was not run first, those tests
+docs/src/contributing/testing-guide.md:652:      minio:
+docs/src/contributing/testing-guide.md:653:        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+docs/src/contributing/testing-guide.md:655:          MINIO_ROOT_USER: minioadmin
+docs/src/contributing/testing-guide.md:656:          MINIO_ROOT_PASSWORD: minioadmin
+docs/src/appendix/cli-setup-check.md:11:- Optional services (Redis, Qdrant, MinIO)
+docs/src/appendix/cli-setup-check.md:134:  - MinIO: Not configured (skipped)
+docs/src/appendix/cli-setup-check.md:151:**MinIO** (if `MINIO_ENDPOINT` configured):
+examples/README.md:26:- Docker (for examples using Redis/MinIO)
+examples/README.md:1383:# All services (Redis, MinIO)
+examples/README.md:1388:docker-compose -f docker/docker-compose.yml up minio -d
+docs/src/deployment/docker.md:47:> **Development shortcut**: For local development use `make dev` (starts all services via `docker/docker-compose.dev.yml`) or `make services-up` (starts Redis + MinIO only). See `make help` for all targets.
+docs/src/deployment/docker.md:228:  minio_endpoint: "minio:9000"
+docs/src/deployment/docker.md:229:  minio_access_key: "minioadmin"
+docs/src/deployment/docker.md:230:  minio_secret_key: "minioadmin"
+docs/src/deployment/docker.md:231:  minio_bucket: "paladin"
+docs/src/deployment/docker.md:232:  minio_secure: false
+docs/src/deployment/docker.md:262:# MinIO (object storage) — read by the Paladin binary as APP_MINIO_ACCESS_KEY/APP_MINIO_SECRET_KEY.
+docs/src/deployment/docker.md:263:# MINIO_ROOT_USER/MINIO_ROOT_PASSWORD below are consumed by the MinIO *container* itself
+docs/src/deployment/docker.md:265:APP_MINIO_ACCESS_KEY=minioadmin
+docs/src/deployment/docker.md:266:APP_MINIO_SECRET_KEY=minioadmin
+docs/src/deployment/docker.md:267:MINIO_ROOT_USER=minioadmin
+docs/src/deployment/docker.md:268:MINIO_ROOT_PASSWORD=minioadmin
+docs/src/deployment/docker.md:397:Complete setup with Redis, MinIO, and Paladin:
+docs/src/deployment/docker.md:418:  minio:
+docs/src/deployment/docker.md:419:    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+docs/src/deployment/docker.md:420:    container_name: paladin-minio
+docs/src/deployment/docker.md:425:      MINIO_ROOT_USER: minioadmin
+docs/src/deployment/docker.md:426:      MINIO_ROOT_PASSWORD: minioadmin
+docs/src/deployment/docker.md:428:      - minio-data:/data
+docs/src/deployment/docker.md:431:      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+docs/src/deployment/docker.md:455:      minio:
+docs/src/deployment/docker.md:465:  minio-data:
+docs/src/deployment/docker.md:745:docker-compose ps  # Are Redis/MinIO healthy?
+docs/src/deployment/docker.md:777:docker exec paladin curl -v http://minio:9000
+docs/src/appendix/cli-onboarding.md:141:# Optional: MinIO (for file storage)
+docs/src/appendix/cli-onboarding.md:142:# MINIO_ENDPOINT=localhost:9000
+docs/src/appendix/cli-onboarding.md:143:# MINIO_ACCESS_KEY=minioadmin
+docs/src/appendix/cli-onboarding.md:144:# MINIO_SECRET_KEY=minioadmin
+docs/src/operations/monitoring.md:382:| `minio_operations_total` | Counter | MinIO operations |
+docs/src/user-guides/sanctum-vector-memory.md:279:make dev           # Starts Redis, MinIO, MySQL, and Qdrant
+docs/src/deployment/kubernetes.md:35:> `k8s/configmap.yaml`, `k8s/secret.yaml.example`, `k8s/redis.yaml`, `k8s/minio.yaml`, plus a
+docs/src/deployment/kubernetes.md:126:│  │            │ Redis  │  │ MinIO/S3        │  │ │ │
+docs/src/deployment/kubernetes.md:448:      minio_endpoint: "minio.paladin.svc.cluster.local:9000"
+docs/src/deployment/kubernetes.md:449:      minio_access_key: "minioadmin"
+docs/src/deployment/kubernetes.md:450:      minio_secret_key: "minioadmin"
+docs/src/deployment/kubernetes.md:451:      minio_bucket: "paladin"
+docs/src/deployment/kubernetes.md:452:      minio_secure: false
+docs/src/deployment/kubernetes.md:581:  minio:
+docs/src/deployment/kubernetes.md:582:    endpoint: "minio:9000"
+docs/src/deployment/kubernetes.md:884:          app: minio
+docs/src/appendix/integration-tests.md:33:| `cli_real_services_test.rs` | `paladin` | Redis, MinIO | `cli` |
+docs/src/appendix/integration-tests.md:37:| `file_storage_integration_tests.rs` | `paladin`, `paladin-ports` | MinIO | `s3-storage` |
+docs/src/appendix/integration-tests.md:76:| MinIO | Requires MinIO (S3-compatible object storage) |
+docs/src/appendix/integration-tests.md:88:- Docker (for Redis / MinIO when running service-dependent tests)
+docs/src/appendix/integration-tests.md:101:### Option B — With Redis and MinIO (docker-compose)
+docs/src/appendix/integration-tests.md:107:docker compose -f docker/docker-compose.test.yml up -d redis-test minio-test minio-test-init
+docs/src/appendix/integration-tests.md:109:# Wait for minio-test-init to finish creating buckets
+docs/src/appendix/integration-tests.md:110:until docker inspect paladin-minio-test-init --format="{{.State.Status}}" 2>/dev/null | grep -q exited; do sleep 2; done
+docs/src/appendix/integration-tests.md:115:TEST_MINIO_ENDPOINT=localhost:9010 \
+docs/src/appendix/integration-tests.md:116:TEST_MINIO_ACCESS_KEY=testuser TEST_MINIO_SECRET_KEY=testpass123 \
+docs/src/appendix/integration-tests.md:138:# Run only MinIO file storage tests
+docs/src/appendix/integration-tests.md:163:make test-integration-minio    # MinIO tests only
+docs/src/appendix/integration-tests.md:177:| MinIO | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772` | `localhost:9000` |
+docs/src/appendix/integration-tests.md:190:| `MINIO_ENDPOINT` | `localhost:9000` |
+docs/src/appendix/integration-tests.md:191:| `MINIO_ACCESS_KEY` | `minioadmin` |
+docs/src/appendix/integration-tests.md:192:| `MINIO_SECRET_KEY` | `minioadmin` |
+docs/src/appendix/integration-tests.md:193:| `MINIO_USE_SSL` | `false` |
+docs/src/appendix/integration-tests.md:205:| `minio-test` | `paladin-minio-test` | MinIO on port 9010 (host) |
+docs/src/appendix/integration-tests.md:206:| `minio-test-init` | `paladin-minio-test-init` | Creates test buckets, then exits |
+docs/src/appendix/cli-testing.md:28:Tests that require Docker services (Redis, MinIO) to be running. Skipped automatically when services are unavailable.
+docs/src/appendix/cli-testing.md:34:- MinIO connectivity and health checks
+docs/src/appendix/cli-testing.md:40:make services-up   # Start Redis, MinIO, MySQL via Docker Compose
+docs/src/appendix/minio-file-repository-setup.md:1:# MinIO File Storage Adapter Setup (with rust-s3)
+docs/src/appendix/minio-file-repository-setup.md:3:This section describes how to set up and use the MinIO file storage adapter for the paladin framework using the `rust-s3` crate, alongside the Redis queue adapter.
+docs/src/appendix/minio-file-repository-setup.md:5:## Why rust-s3 instead of minio crate?
+docs/src/appendix/minio-file-repository-setup.md:7:We use the `rust-s3` crate instead of the `minio` crate because:
+docs/src/appendix/minio-file-repository-setup.md:9:- **Better S3 Compatibility**: Full S3 API compatibility means it works with MinIO, AWS S3, and other S3-compatible services
+docs/src/appendix/minio-file-repository-setup.md:18:- MinIO server (via Docker - works perfectly with rust-s3)
+docs/src/appendix/minio-file-repository-setup.md:25:The easiest way to get started with both Redis and MinIO:
+docs/src/appendix/minio-file-repository-setup.md:32:# Start Redis, MinIO, and the application
+docs/src/appendix/minio-file-repository-setup.md:44:# Start Redis, MinIO, and development tools
+docs/src/appendix/minio-file-repository-setup.md:49:docker run -d --name minio -p 9000:9000 -p 9001:9001 \
+docs/src/appendix/minio-file-repository-setup.md:50:  -e "MINIO_ROOT_USER=minioadmin" \
+docs/src/appendix/minio-file-repository-setup.md:51:  -e "MINIO_ROOT_PASSWORD=minioadmin" \
+docs/src/appendix/minio-file-repository-setup.md:52:  quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772 server /data --console-address ":9001"
+docs/src/appendix/minio-file-repository-setup.md:66:# Or locally (requires Redis and MinIO running)
+docs/src/appendix/minio-file-repository-setup.md:75:Both Redis and MinIO can be configured using environment variables:
+docs/src/appendix/minio-file-repository-setup.md:84:# MinIO File Storage Configuration (using rust-s3)
+docs/src/appendix/minio-file-repository-setup.md:85:export APP_MINIO_ENDPOINT=localhost:9000
+docs/src/appendix/minio-file-repository-setup.md:86:export APP_MINIO_ACCESS_KEY=minioadmin
+docs/src/appendix/minio-file-repository-setup.md:87:export APP_MINIO_SECRET_KEY=minioadmin
+docs/src/appendix/minio-file-repository-setup.md:88:export APP_MINIO_BUCKET=paladin-files
+docs/src/appendix/minio-file-repository-setup.md:89:export APP_MINIO_SECURE=false
+docs/src/appendix/minio-file-repository-setup.md:90:export APP_MINIO_MAX_FILE_SIZE=104857600  # 100MB
+docs/src/appendix/minio-file-repository-setup.md:91:export APP_MINIO_ALLOWED_EXTENSIONS=txt,md,json,pdf,doc,rs,py
+docs/src/appendix/minio-file-repository-setup.md:106:minio_endpoint = "localhost:9000"
+docs/src/appendix/minio-file-repository-setup.md:107:minio_access_key = "minioadmin"
+docs/src/appendix/minio-file-repository-setup.md:108:minio_secret_key = "minioadmin"
+docs/src/appendix/minio-file-repository-setup.md:109:minio_bucket = "paladin-files"
+docs/src/appendix/minio-file-repository-setup.md:110:minio_secure = false
+docs/src/appendix/minio-file-repository-setup.md:120:use paladin::infrastructure::adapters::file_storage::minio::MinioAdapter;
+docs/src/appendix/minio-file-repository-setup.md:125:let config = MinioConfig::default();
+docs/src/appendix/minio-file-repository-setup.md:126:let adapter = MinioAdapter::new(config, None).await?;
+docs/src/appendix/minio-file-repository-setup.md:217:### MinIO (Development)
+docs/src/appendix/minio-file-repository-setup.md:219:let config = MinioConfig {
+docs/src/appendix/minio-file-repository-setup.md:221:    access_key: "minioadmin".to_string(),
+docs/src/appendix/minio-file-repository-setup.md:222:    secret_key: "minioadmin".to_string(),
+docs/src/appendix/minio-file-repository-setup.md:225:    path_style: true,  // Important for MinIO
+docs/src/appendix/minio-file-repository-setup.md:232:let config = MinioConfig {
+docs/src/appendix/minio-file-repository-setup.md:245:let config = MinioConfig {
+docs/src/appendix/minio-file-repository-setup.md:287:### MinIO Console (Development)
+docs/src/appendix/minio-file-repository-setup.md:289:Access MinIO Console for file management:
+docs/src/appendix/minio-file-repository-setup.md:295:# Access MinIO Console
+docs/src/appendix/minio-file-repository-setup.md:297:# Login: minioadmin/minioadmin (configurable via environment)
+docs/src/appendix/minio-file-repository-setup.md:312:    println!("MinIO is healthy (response time: {}ms)",
+docs/src/appendix/minio-file-repository-setup.md:341:let config = MinioConfig {
+docs/src/appendix/minio-file-repository-setup.md:353:1. **MinIO Connection Failed**
+docs/src/appendix/minio-file-repository-setup.md:355:   # Check MinIO is running
+docs/src/appendix/minio-file-repository-setup.md:356:   docker ps | grep minio
+docs/src/appendix/minio-file-repository-setup.md:358:   # Check MinIO health
+docs/src/appendix/minio-file-repository-setup.md:359:   curl -f http://localhost:9000/minio/health/live
+docs/src/appendix/minio-file-repository-setup.md:364:   // For MinIO, always use path_style: true
+docs/src/appendix/minio-file-repository-setup.md:365:   let config = MinioConfig {
+docs/src/appendix/minio-file-repository-setup.md:366:       path_style: true,  // Important for MinIO
+docs/src/appendix/minio-file-repository-setup.md:371:   let config = MinioConfig {
+docs/src/appendix/minio-file-repository-setup.md:380:   let config = MinioConfig {
+docs/src/appendix/minio-file-repository-setup.md:412:### From minio crate to rust-s3
+docs/src/appendix/minio-file-repository-setup.md:414:If you were previously using the `minio` crate, here are the key differences:
+docs/src/appendix/minio-file-repository-setup.md:424:// Old (minio crate)
+docs/src/appendix/minio-file-repository-setup.md:425:use minio::s3::client::Client;
+docs/src/appendix/minio-file-repository-setup.md:441:1. **Multi-node MinIO**: Deploy MinIO in distributed mode
+docs/src/appendix/minio-file-repository-setup.md:443:3. **Load Balancing**: Use multiple MinIO instances behind a load balancer
+docs/src/appendix/minio-file-repository-setup.md:449:   export MINIO_ROOT_USER=your-secure-access-key
+docs/src/appendix/minio-file-repository-setup.md:450:   export MINIO_ROOT_PASSWORD=your-very-secure-secret-key-32chars
+docs/src/appendix/minio-file-repository-setup.md:455:   export APP_MINIO_SECURE=true
+docs/src/appendix/minio-file-repository-setup.md:474:The easiest way to get started with both Redis and MinIO:
+docs/src/appendix/minio-file-repository-setup.md:481:# Start Redis, MinIO, and the application
+docs/src/appendix/minio-file-repository-setup.md:493:# Start Redis, MinIO, and development tools
+docs/src/appendix/minio-file-repository-setup.md:498:docker run -d --name minio -p 9000:9000 -p 9001:9001 \
+docs/src/appendix/minio-file-repository-setup.md:499:  -e "MINIO_ROOT_USER=minioadmin" \
+docs/src/appendix/minio-file-repository-setup.md:500:  -e "MINIO_ROOT_PASSWORD=minioadmin" \
+docs/src/appendix/minio-file-repository-setup.md:501:  quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772 server /data --console-address ":9001"
+docs/src/appendix/minio-file-repository-setup.md:515:# Or locally (requires Redis and MinIO running)
+docs/src/appendix/minio-file-repository-setup.md:524:Both Redis and MinIO can be configured using environment variables:
+docs/src/appendix/minio-file-repository-setup.md:533:# MinIO File Storage Configuration
+docs/src/appendix/minio-file-repository-setup.md:534:export APP_MINIO_ENDPOINT=localhost:9000
+docs/src/appendix/minio-file-repository-setup.md:535:export APP_MINIO_ACCESS_KEY=minioadmin
+docs/src/appendix/minio-file-repository-setup.md:536:export APP_MINIO_SECRET_KEY=minioadmin
+docs/src/appendix/minio-file-repository-setup.md:537:export APP_MINIO_BUCKET=paladin-files
+docs/src/appendix/minio-file-repository-setup.md:538:export APP_MINIO_SECURE=false
+docs/src/appendix/minio-file-repository-setup.md:539:export APP_MINIO_MAX_FILE_SIZE=104857600  # 100MB
+docs/src/appendix/minio-file-repository-setup.md:540:export APP_MINIO_ALLOWED_EXTENSIONS=txt,md,json,pdf,doc,rs,py
+docs/src/appendix/minio-file-repository-setup.md:555:minio_endpoint = "localhost:9000"
+docs/src/appendix/minio-file-repository-setup.md:556:minio_access_key = "minioadmin"
+docs/src/appendix/minio-file-repository-setup.md:557:minio_secret_key = "minioadmin"
+docs/src/appendix/minio-file-repository-setup.md:558:minio_bucket = "paladin-files"
+docs/src/appendix/minio-file-repository-setup.md:559:minio_secure = false
+docs/src/appendix/minio-file-repository-setup.md:569:use paladin::infrastructure::adapters::file_storage::minio::MinioAdapter;
+docs/src/appendix/minio-file-repository-setup.md:574:let config = MinioConfig::default();
+docs/src/appendix/minio-file-repository-setup.md:575:let adapter = MinioAdapter::new(config, None).await?;
+docs/src/appendix/minio-file-repository-setup.md:680:### MinIO Console (Development)
+docs/src/appendix/minio-file-repository-setup.md:682:Access MinIO Console for file management:
+docs/src/appendix/minio-file-repository-setup.md:688:# Access MinIO Console
+docs/src/appendix/minio-file-repository-setup.md:690:# Login: minioadmin/minioadmin (configurable via environment)
+docs/src/appendix/minio-file-repository-setup.md:705:    println!("MinIO is healthy (response time: {}ms)",
+docs/src/appendix/minio-file-repository-setup.md:774:// MinIO adapter automatically manages HTTP connections
+docs/src/appendix/minio-file-repository-setup.md:798:export APP_MINIO_MAX_FILE_SIZE=104857600  # 100MB
+docs/src/appendix/minio-file-repository-setup.md:809:1. **MinIO Connection Failed**
+docs/src/appendix/minio-file-repository-setup.md:811:   # Check MinIO is running
+docs/src/appendix/minio-file-repository-setup.md:812:   docker ps | grep minio
+docs/src/appendix/minio-file-repository-setup.md:814:   # Check MinIO health
+docs/src/appendix/minio-file-repository-setup.md:815:   curl -f http://localhost:9000/minio/health/live
+docs/src/appendix/minio-file-repository-setup.md:821:   # Ensure APP_MINIO_ACCESS_KEY and APP_MINIO_SECRET_KEY are correct
+docs/src/appendix/minio-file-repository-setup.md:856:### High Availability MinIO
+docs/src/appendix/minio-file-repository-setup.md:858:For production, consider MinIO in distributed mode:
+docs/src/appendix/minio-file-repository-setup.md:863:  minio1:
+docs/src/appendix/minio-file-repository-setup.md:864:    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+docs/src/appendix/minio-file-repository-setup.md:865:    command: server http://minio{1...4}/data{1...2}
+docs/src/appendix/minio-file-repository-setup.md:867:  minio2:
+docs/src/appendix/minio-file-repository-setup.md:868:    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+docs/src/appendix/minio-file-repository-setup.md:869:    command: server http://minio{1...4}/data{1...2}
+docs/src/appendix/minio-file-repository-setup.md:871:  # ... minio3, minio4
+docs/src/appendix/minio-file-repository-setup.md:878:   export MINIO_ROOT_USER=your-secure-access-key
+docs/src/appendix/minio-file-repository-setup.md:879:   export MINIO_ROOT_PASSWORD=your-very-secure-secret-key
+docs/src/appendix/minio-file-repository-setup.md:884:   export APP_MINIO_SECURE=true
+docs/src/appendix/minio-file-repository-setup.md:889:   export APP_MINIO_ALLOWED_EXTENSIONS=rs,py,js,json,md,txt
+docs/src/appendix/minio-file-repository-setup.md:894:   export APP_MINIO_MAX_FILE_SIZE=52428800  # 50MB
+
+--- narrower checks ---
+$ grep -rniE 'dl\.min\.io' docs/src examples
+(none)
+$ grep -rniE '(^|[^./])minio/minio' docs/src examples | grep -v 'quay.io/minio/minio'
+(none)
+Verdict: every image-pin occurrence already uses quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772 (9 occurrences across 6 files, all identical to the pin quick task 260913-15w introduced); zero hits name a retired Docker Hub community image or a dl.min.io download URL. No MB-nn minted for this slice.
+
+=== SC5 read-only proof (close of Task 1) ===
+$ git status --porcelain -- . ':!.planning'
+(shown above; expected empty)

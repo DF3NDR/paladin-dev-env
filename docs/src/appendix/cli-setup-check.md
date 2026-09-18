@@ -25,14 +25,26 @@ paladin setup-check --quiet
 
 ## Command Options
 
-```bash
-paladin setup-check [OPTIONS]
+Build the binary with the `cli` feature before capturing this output yourself:
+`cargo build --release --features cli --bin paladin-cli` (the binary carries
+`required-features = ["cli"]` and is not produced by a default `cargo build`).
+
+```text
+$ paladin-cli setup-check --help
+Check environment setup and configuration
+
+Usage: paladin-cli setup-check [OPTIONS]
+
+Options:
+      --verbose  Show detailed diagnostic information
+      --quiet    Enable quiet mode (minimal output)
+  -h, --help     Print help
 ```
 
-**Options:**
-- `-v, --verbose` - Show detailed version strings, response times, and diagnostic info
-- `-q, --quiet` - Minimal output, only show failures (exit code indicates status)
-- `--json` - Output results in JSON format (for scripting)
+`setup-check` exposes one flag of its own, `--verbose` ("Show detailed diagnostic information");
+`--quiet` is the global flag shared by every subcommand. There is no short alias for either flag,
+and output is always the human-readable format shown below — there is no machine-readable output
+option.
 
 ## Check Categories
 
@@ -43,7 +55,7 @@ Validates core system requirements:
 ```
 System:
   ✓ Paladin CLI: v0.1.0
-  ✓ Rust Toolchain: 1.75.0 (stable)
+  ✓ Rust Toolchain: 1.88.0 (stable)
 ```
 
 **What's checked:**
@@ -57,7 +69,7 @@ System:
   ✓ Paladin CLI: v0.1.0
     Build: 2026-02-09 10:30:00 UTC
     Features: redis-queue, s3-storage, qdrant-vector
-  ✓ Rust Toolchain: rustc 1.75.0 (82e1608df 2023-12-21)
+  ✓ Rust Toolchain: rustc 1.88.0 (6b00bc388 2025-06-23)
     Host: x86_64-unknown-linux-gnu
 ```
 
@@ -203,7 +215,7 @@ Default terminal-friendly output with colors and Unicode symbols:
 
 System:
   ✓ Paladin CLI: v0.1.0
-  ✓ Rust Toolchain: 1.75.0
+  ✓ Rust Toolchain: 1.88.0
 
 Environment:
   ✓ .env file: Found
@@ -243,7 +255,7 @@ System:
     Features: redis-queue, s3-storage, qdrant-vector
 
   ✓ Rust Toolchain
-    Version: rustc 1.75.0 (82e1608df 2023-12-21)
+    Version: rustc 1.88.0 (6b00bc388 2025-06-23)
     Host: x86_64-unknown-linux-gnu
     LLVM: 17.0.6
 
@@ -273,76 +285,6 @@ Providers:
 [... continues ...]
 ```
 
-### JSON Format
-
-Machine-readable output for scripting:
-
-```bash
-paladin setup-check --json
-```
-
-```json
-{
-  "version": "0.1.0",
-  "timestamp": "2026-02-09T10:30:00Z",
-  "checks": {
-    "system": [
-      {
-        "name": "Paladin CLI",
-        "status": "pass",
-        "value": "v0.1.0",
-        "details": {
-          "build_date": "2026-02-09T10:30:00Z",
-          "git_commit": "abc123f"
-        }
-      },
-      {
-        "name": "Rust Toolchain",
-        "status": "pass",
-        "value": "1.75.0"
-      }
-    ],
-    "environment": [
-      {
-        "name": ".env file",
-        "status": "pass",
-        "value": "Found"
-      },
-      {
-        "name": "OPENAI_API_KEY",
-        "status": "pass",
-        "value": "Configured"
-      }
-    ],
-    "providers": [
-      {
-        "name": "OpenAI",
-        "status": "pass",
-        "response_time_ms": 342,
-        "models": ["gpt-4", "gpt-3.5-turbo"]
-      }
-    ],
-    "services": [
-      {
-        "name": "Redis",
-        "status": "pass",
-        "optional": true,
-        "response_time_ms": 15,
-        "version": "7.0.11"
-      }
-    ]
-  },
-  "summary": {
-    "total": 10,
-    "passed": 9,
-    "warned": 1,
-    "failed": 0,
-    "skipped": 3
-  },
-  "exit_code": 0
-}
-```
-
 ## Troubleshooting
 
 ### System Checks Fail
@@ -363,7 +305,7 @@ System:
 
 2. **Rebuild if needed:**
    ```bash
-   cargo build --release --bin paladin-cli
+   cargo build --release --features cli --bin paladin-cli
    ```
 
 3. **Check PATH:**
@@ -464,8 +406,7 @@ Use in CI/CD pipelines:
 # GitHub Actions
 - name: Validate Paladin Environment
   run: |
-    paladin setup-check --quiet --json > setup-check.json
-    cat setup-check.json
+    paladin setup-check --quiet
   env:
     OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 ```

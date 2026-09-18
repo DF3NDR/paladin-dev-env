@@ -22,6 +22,7 @@
 - [Sanctum Vector Memory](user-guides/sanctum-vector-memory.md)
 - [Herald Output](user-guides/herald-output.md)
 - [Maneuver Flow DSL](user-guides/maneuver-flow-dsl.md)
+- [WarEngine: Battlefield State & Superstep Execution](user-guides/superstep-engine.md)
 - [Control Flow: Dynamic Routing & Subgraphs](user-guides/control-flow.md)
 - [Parley & Chronicle: Pause, Resume, History and Graceful Shutdown](user-guides/parley-and-chronicle.md)
 - [Aegis: Retry, Timeout, Error Handlers, Model Fallback and Node Caching](user-guides/fault-tolerance.md)
@@ -36,6 +37,7 @@
 - [Overview](architecture/overview.md)
 - [Hexagonal Design](architecture/hexagonal-design.md)
 - [Domain Model](architecture/domain-model.md)
+- [Commissary](architecture/commissary.md)
 - [Design Patterns](architecture/design-patterns.md)
 - [Crate Map](architecture/crate-map.md)
 
@@ -77,7 +79,8 @@
 
 - [Development Setup](contributing/development-setup.md)
 - [Testing Guide](contributing/testing-guide.md)
-- [Architecture Decisions](contributing/architecture-decisions.md)
+- [Adapter Development Guide](contributing/architecture-decisions.md)
+- [Architecture Decisions](contributing/adr-index.md)
 - [Contributing Providers](contributing/contributing-providers.md)
 - [Branching Model](contributing/branching-model.md)
 

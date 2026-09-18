@@ -10,7 +10,8 @@
 //!
 //! # The `extract_json` lift (D-26, CF-FR-06)
 //!
-//! [`extract_json`] is the Phase 23 D-11 rule lifted verbatim out of
+//! [`extract_json`](crate::platform::container::structured::extract_json) is
+//! the Phase 23 D-11 rule lifted verbatim out of
 //! `paladin-battalion`'s `DirectiveParser::StructuredDirective` (its former
 //! private `extract_envelope` helper): the trimmed whole output, if it
 //! parses as a JSON **object**; otherwise the content of the FIRST

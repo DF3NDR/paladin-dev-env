@@ -51,11 +51,7 @@ impl LlmPort for MockLlmPort {
             model: request.model,
             content: "unused".to_string(),
             finish_reason: FinishReason::Stop,
-            usage: LlmTokenUsage {
-                prompt_tokens: 0,
-                completion_tokens: 0,
-                total_tokens: 0,
-            },
+            usage: LlmTokenUsage::new(0, 0),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -154,7 +150,7 @@ impl PaladinPort for FormationMockPaladinPort {
 
         Ok(PaladinResult {
             output,
-            token_count,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(token_count, 0),
             execution_time_ms,
             loop_count: 1,
             stop_reason: StopReason::Completed,

@@ -275,7 +275,7 @@ use paladin::core::platform::container::battalion::BattalionConfig;
 
 async fn vision_pipeline_example() -> Result<(), Box<dyn std::error::Error>> {
     // 1. Create vision-enabled Paladins
-    let llm_port = Arc::new(OpenAiAdapter::new(openai_config)?);
+    let llm_port = Arc::new(OpenAIAdapter::new(openai_config)?);
 
     let detector = PaladinBuilder::new(llm_port.clone())
         .name("detector")

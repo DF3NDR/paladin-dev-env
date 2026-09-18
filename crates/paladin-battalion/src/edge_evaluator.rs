@@ -1,6 +1,8 @@
 //! Registered evaluators for `EdgeCondition::Custom` (BUG-01, CF-01).
 //!
-//! `paladin-core`'s [`EdgeCondition`] enum names a `Custom(String)` variant
+//! `paladin-core`'s
+//! [`EdgeCondition`](paladin_core::platform::container::battalion::campaign::EdgeCondition)
+//! enum names a `Custom(String)` variant
 //! but -- deliberately -- has no idea what any given name *means*: resolving
 //! a name to behavior is application-layer responsibility, owned here in
 //! `paladin-battalion`, mirroring the house pattern

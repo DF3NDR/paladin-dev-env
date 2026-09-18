@@ -118,11 +118,10 @@ impl LlmAnalysisService {
                     let output = LlmAnalysisOutput {
                         content: response.content,
                         model_used: response.model,
-                        token_usage: TokenUsage {
-                            prompt_tokens: response.usage.prompt_tokens,
-                            completion_tokens: response.usage.completion_tokens,
-                            total_tokens: response.usage.total_tokens,
-                        },
+                        token_usage: TokenUsage::new(
+                            response.usage.prompt_tokens,
+                            response.usage.completion_tokens,
+                        ),
                         processing_time_ms: processing_time,
                     };
 

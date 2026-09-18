@@ -1,0 +1,802 @@
+Plan 36.1-09 -- workspace documentation measurement
+Captured at HEAD 16a29ed2 (after this plan's RunSubmissionService and
+RunInspectorService # Examples sections landed).
+
+== Command 1 ==
+$ cargo doc --workspace --no-deps
+
+    Checking paladin-ai v0.10.0 (/workspace)
+ Documenting paladin-ai v0.10.0 (/workspace)
+ Documenting paladin-doc-examples v0.10.0 (/workspace/crates/doc-examples)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 11.57s
+   Generated /workspace/target/doc/paladin/index.html and 13 other files
+
+Warning line count: 0
+
+== Command 2 ==
+$ cargo test --workspace --doc
+
+   Compiling paladin-llm v0.10.0 (/workspace/crates/paladin-llm)
+   Compiling paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+   Compiling paladin-notifications v0.10.0 (/workspace/crates/paladin-notifications)
+   Compiling paladin-memory v0.10.0 (/workspace/crates/paladin-memory)
+   Compiling paladin-content v0.10.0 (/workspace/crates/paladin-content)
+   Compiling paladin-ai v0.10.0 (/workspace)
+   Compiling paladin-eval v0.10.0 (/workspace/crates/paladin-eval)
+   Compiling paladin-doc-examples v0.10.0 (/workspace/crates/doc-examples)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.11s
+   Doc-tests paladin
+
+running 169 tests
+test src/application/services/arsenal/arsenal_execution_service.rs - application::services::arsenal::arsenal_execution_service::ArsenalExecutionService (line 53) ... ignored
+test src/application/services/arsenal/arsenal_execution_service.rs - application::services::arsenal::arsenal_execution_service::ArsenalExecutionService::invoke_tool_direct (line 144) ... ignored
+test src/application/services/arsenal/arsenal_execution_service.rs - application::services::arsenal::arsenal_execution_service::ArsenalExecutionService::register_client (line 106) ... ignored
+test src/application/services/arsenal/arsenal_execution_service.rs - application::services::arsenal::arsenal_execution_service::ArsenalExecutionService::new (line 79) ... ok
+test src/application/errors/prompt_error.rs - application::errors::prompt_error::PromptError (line 15) ... ok
+test src/application/errors/planning_error.rs - application::errors::planning_error::PlanningError (line 15) ... ok
+test src/application/services/arsenal/arsenal_registry_service.rs - application::services::arsenal::arsenal_registry_service::ArsenalRegistryService (line 20) ... ok
+test src/application/services/arsenal/arsenal_registry_service.rs - application::services::arsenal::arsenal_registry_service::ArsenalRegistryService::new (line 52) ... ok
+test src/application/services/arsenal/vault_tools.rs - application::services::arsenal::vault_tools::VaultTools::new (line 73) ... ok
+test src/application/services/arsenal/arsenal_registry_service.rs - application::services::arsenal::arsenal_registry_service::ArsenalRegistryService::count (line 67) ... ok
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry (line 21) ... ignored
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry (line 39) ... ignored
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry (line 52) ... ignored
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry::HeraldRegistry::contains (line 182) ... ignored
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry::HeraldRegistry::default (line 233) ... ignored
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry::HeraldRegistry::get (line 142) ... ignored
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry::HeraldRegistry::is_empty (line 208) ... ignored
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry::HeraldRegistry::len (line 196) ... ignored
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry::HeraldRegistry::list (line 163) ... ignored
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry::HeraldRegistry::new (line 98) ... ignored
+test src/application/services/herald/herald_registry.rs - application::services::herald::herald_registry::HeraldRegistry::register (line 119) ... ignored
+test src/application/services/arsenal/in_process_arsenal.rs - application::services::arsenal::in_process_arsenal::InProcessArsenal (line 75) ... ok
+test src/application/services/arsenal/arsenal_registry_service.rs - application::services::arsenal::arsenal_registry_service::ArsenalRegistryService::clear (line 83) ... ok
+test src/application/services/chronicle.rs - application::services::chronicle::ChronicleService (line 24) ... ok
+test src/application/services/chronicle.rs - application::services::chronicle::ChronicleService::history (line 53) ... ok
+test src/application/services/chronicle.rs - application::services::chronicle::ChronicleService::inspect (line 88) ... ok
+test src/application/services/content/content_ingestion_service.rs - application::services::content::content_ingestion_service::DefaultContentIngestionService (line 243) ... ok
+test src/application/services/paladin/handoff_service.rs - application::services::paladin::handoff_service::HandoffService::transfer_context (line 381) ... ok
+test src/application/services/paladin/handoff_service.rs - application::services::paladin::handoff_service::HandoffService::select_agent (line 210) ... ok
+test src/application/services/paladin/handoff_service.rs - application::services::paladin::handoff_service::HandoffService::should_handoff (line 94) ... ok
+test src/application/services/chronicle.rs - application::services::chronicle::ChronicleService::latest_on_branch (line 129) ... ok
+test src/application/services/paladin/handoff_service.rs - application::services::paladin::handoff_service::HandoffService (line 26) ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder (line 8) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder (line 63) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::add_mcp_stdio (line 915) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::add_stop_word (line 410) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::agent_description (line 327) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::auto_generate_prompt (line 301) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::auto_temperature (line 387) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::build (line 1255) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::enable_autonomous_planning (line 534) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::enable_autonomous_prompts (line 564) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::enable_autosave (line 991) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::enable_dynamic_temperature (line 593) - compile ... ok
+test src/application/services/paladin/middleware/context.rs - application::services::paladin::middleware::context::PromptAssembly::render (line 187) ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::enable_planning (line 477) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::enable_vision (line 507) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::handoff_config (line 875) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::max_loops (line 276) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::model (line 223) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::name (line 179) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::memory_extraction_strategy (line 806) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::output_format (line 620) - compile ... ok
+test src/application/services/paladin/middleware/context.rs - application::services::paladin::middleware::context::ModelCallContext<'p>::effective_llm (line 370) ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::new (line 114) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::regenerate_prompt (line 351) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::restore_from (line 1048) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::retry_attempts (line 433) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::save_state_dir (line 1017) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::system_prompt (line 156) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::timeout_seconds (line 455) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::temperature (line 249) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::user_name (line 201) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::with_arsenal_registry (line 675) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::with_citadel (line 963) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::with_embedding_port (line 772) - compile ... ok
+test src/application/services/paladin/handoff_service.rs - application::services::paladin::handoff_service::HandoffService::validate_handoff (line 301) ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::with_garrison (line 647) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::with_herald (line 702) - compile ... ok
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::with_sanctum (line 736) ... ignored
+test src/application/services/paladin/paladin_builder.rs - application::services::paladin::paladin_builder::PaladinBuilder::with_handoffs (line 834) - compile ... ok
+test src/application/services/paladin/paladin_execution_service.rs - application::services::paladin::paladin_execution_service (line 18) - compile ... ok
+test src/application/services/paladin/paladin_execution_service.rs - application::services::paladin::paladin_execution_service::PaladinExecutionService::execute (line 936) - compile ... ok
+test src/application/services/paladin/paladin_execution_service.rs - application::services::paladin::paladin_execution_service::PaladinExecutionService::execute_observed (line 980) - compile ... ok
+test src/application/services/paladin/paladin_execution_service.rs - application::services::paladin::paladin_execution_service::PaladinExecutionService::execute_scoped (line 1018) - compile ... ok
+test src/application/services/paladin/paladin_execution_service.rs - application::services::paladin::paladin_execution_service::PaladinExecutionService::execute_stream_observed (line 3113) - compile ... ok
+test src/application/services/paladin/paladin_execution_service.rs - application::services::paladin::paladin_execution_service::PaladinExecutionService::new (line 349) - compile ... ok
+test src/application/services/paladin/paladin_execution_service.rs - application::services::paladin::paladin_execution_service::PaladinExecutionService::with_herald (line 644) - compile ... ok
+test src/application/services/paladin/paladin_execution_service.rs - application::services::paladin::paladin_execution_service::PaladinExecutionService::with_planning_service (line 710) - compile ... ok
+test src/application/services/paladin/paladin_execution_service.rs - application::services::paladin::paladin_execution_service::effective_history (line 284) ... ignored
+test src/application/services/paladin/paladin_execution_service.rs - application::services::paladin::paladin_execution_service::PaladinExecutionService::with_prompt_generation_service (line 743) - compile ... ok
+test src/application/services/paladin/planning_service.rs - application::services::paladin::planning_service (line 10) - compile ... ok
+test src/application/services/paladin/middleware/mod.rs - application::services::paladin::middleware::FinalResult::new (line 85) ... ok
+test src/application/services/paladin/planning_service.rs - application::services::paladin::planning_service::PlanningService::new (line 72) - compile ... ok
+test src/application/services/paladin/prompt_generation_service.rs - application::services::paladin::prompt_generation_service (line 16) - compile ... ok
+test src/application/services/paladin/prompt_generation_service.rs - application::services::paladin::prompt_generation_service::PromptGenerationService::new (line 64) - compile ... ok
+test src/application/services/paladin/structured.rs - application::services::paladin::structured::StructuredExecutorExt::execute_structured (line 73) - compile ... ok
+test src/application/services/paladin/middleware/context.rs - application::services::paladin::middleware::context::PromptSection::new (line 100) ... ok
+test src/application/services/paladin/middleware/resilience.rs - application::services::paladin::middleware::resilience::ModelFallbackMiddleware (line 72) ... ok
+test src/application/services/paladin/middleware/resilience.rs - application::services::paladin::middleware::resilience::ModelRetryMiddleware (line 148) ... ok
+test src/application/services/parley/registry.rs - application::services::parley::registry::GraphRegistry (line 32) ... ok
+test src/application/services/paladin/temperature_service.rs - application::services::paladin::temperature_service::TemperatureService (line 54) ... ok
+test src/application/services/run/schedule/service.rs - application::services::run::schedule::service::ScheduleService (line 151) ... ok
+test src/config/agent_runtime.rs - config::agent_runtime::AgentRuntimeConfig (line 89) ... ok
+test src/application/services/run/inspector.rs - application::services::run::inspector::RunInspectorService (line 84) ... ok
+test src/application/services/run/submission.rs - application::services::run::submission::RunSubmissionService (line 115) ... ok
+test src/config/agent_runtime.rs - config::agent_runtime::AgentRuntimeConfig::build_chain (line 319) ... ok
+test src/config/assistants.rs - config::assistants::AssistantsConfig::validate (line 68) ... ok
+test src/config/assistants.rs - config::assistants::AssistantsConfig (line 30) ... ok
+test src/config/agent_runtime.rs - config::agent_runtime::AgentRuntimeConfig::validate (line 161) ... ok
+test src/config/engine.rs - config::engine::EngineConfig (line 32) ... ok
+test src/config/engine.rs - config::engine::EngineConfig::validate (line 135) ... ok
+test src/config/engine.rs - config::engine::EngineLimits::from (line 223) ... ok
+test src/config/env_utils.rs - config::env_utils::EnvOverridable (line 17) ... ok
+test src/config/node_cache.rs - config::node_cache::NodeCacheConfig (line 42) ... ok
+test src/config/env_utils.rs - config::env_utils::read_env (line 46) ... ok
+test src/config/node_cache.rs - config::node_cache::NodeCacheConfig::validate (line 122) ... ok
+test src/config/run_queue.rs - config::run_queue::RunQueueConfig (line 53) ... ok
+test src/config/run_store.rs - config::run_store::RunStoreConfig (line 56) ... ok
+test src/config/run_queue.rs - config::run_queue::RunQueueConfig::validate (line 89) ... ok
+test src/config/run_stream.rs - config::run_stream::RunStreamConfig (line 25) ... ok
+test src/config/run_store.rs - config::run_store::RunStoreConfig::validate (line 94) ... ok
+test src/config/run_stream.rs - config::run_stream::RunStreamConfig::validate (line 58) ... ok
+test src/config/run_worker.rs - config::run_worker::RunWorkerConfig (line 36) ... ok
+test src/config/schedules.rs - config::schedules::SchedulesConfig (line 25) ... ok
+test src/config/run_worker.rs - config::run_worker::RunWorkerConfig::validate (line 85) ... ok
+test src/config/schedules.rs - config::schedules::SchedulesConfig::validate (line 61) ... ok
+test src/config/trace.rs - config::trace::TraceConfig::validate (line 112) ... ok
+test src/config/trace.rs - config::trace::TraceConfig (line 44) ... ok
+test src/config/waypoint_store.rs - config::waypoint_store::WaypointStoreConfig (line 57) ... ok
+test src/infrastructure/adapters/arsenal/mcp_protocol.rs - infrastructure::adapters::arsenal::mcp_protocol (line 20) - compile ... ok
+test src/infrastructure/adapters/arsenal/mcp_protocol.rs - infrastructure::adapters::arsenal::mcp_protocol::MCPClient::connect_stdio (line 78) - compile ... ok
+test src/infrastructure/adapters/arsenal/mcp_protocol.rs - infrastructure::adapters::arsenal::mcp_protocol::MCPClient::connect_streamable_http (line 130) - compile ... ok
+test src/infrastructure/adapters/arsenal/mcp_protocol.rs - infrastructure::adapters::arsenal::mcp_protocol::MCPClient::connect_streamable_http_with_timeout (line 180) - compile ... ok
+test src/infrastructure/adapters/arsenal/mcp_protocol.rs - infrastructure::adapters::arsenal::mcp_protocol::MCPClient::discover_tools (line 241) - compile ... ok
+test src/infrastructure/adapters/arsenal/mcp_protocol.rs - infrastructure::adapters::arsenal::mcp_protocol::MCPClient::invoke_tool (line 270) - compile ... ok
+test src/infrastructure/adapters/arsenal/mcp_stdio_adapter.rs - infrastructure::adapters::arsenal::mcp_stdio_adapter (line 14) - compile ... ok
+test src/infrastructure/adapters/arsenal/mcp_stdio_adapter.rs - infrastructure::adapters::arsenal::mcp_stdio_adapter::MCPStdioAdapter::connect (line 83) - compile ... ok
+test src/config/waypoint_store.rs - config::waypoint_store::WaypointStoreConfig::validate (line 96) ... ok
+test src/config/webhooks.rs - config::webhooks::WebhooksConfig (line 69) ... ok
+test src/config/webhooks.rs - config::webhooks::WebhooksConfig::validate (line 113) ... ok
+test src/infrastructure/adapters/arsenal/mcp_streamable_http_adapter.rs - infrastructure::adapters::arsenal::mcp_streamable_http_adapter (line 23) - compile ... ok
+test src/infrastructure/adapters/arsenal/mcp_streamable_http_adapter.rs - infrastructure::adapters::arsenal::mcp_streamable_http_adapter::MCPStreamableHttpAdapter::connect (line 134) - compile ... ok
+test src/infrastructure/adapters/arsenal/resource_controls.rs - infrastructure::adapters::arsenal::resource_controls (line 9) - compile ... ok
+test src/infrastructure/adapters/arsenal/resource_controls.rs - infrastructure::adapters::arsenal::resource_controls::ConcurrencyLimiter (line 147) - compile ... ok
+test src/infrastructure/adapters/arsenal/resource_controls.rs - infrastructure::adapters::arsenal::resource_controls::ConcurrencyLimiter::acquire (line 196) - compile ... ok
+test src/infrastructure/adapters/arsenal/resource_controls.rs - infrastructure::adapters::arsenal::resource_controls::TimeoutWrapper (line 37) - compile ... ok
+test src/infrastructure/adapters/arsenal/resource_controls.rs - infrastructure::adapters::arsenal::resource_controls::TimeoutWrapper::execute (line 92) - compile ... ok
+test src/core/platform/manager/content_service.rs - core::platform::manager::content_service::ContentItemService (line 25) ... ok
+test src/infrastructure/adapters/arsenal/tool_result_formatter.rs - infrastructure::adapters::arsenal::tool_result_formatter (line 8) - compile ... ok
+test src/infrastructure/adapters/arsenal/tool_result_formatter.rs - infrastructure::adapters::arsenal::tool_result_formatter::ToolResultFormatter::format_batch (line 358) - compile ... ok
+test src/core/platform/manager/user_service.rs - core::platform::manager::user_service::UserService (line 32) ... ok
+test src/infrastructure/adapters/arsenal/mcp_stdio_adapter.rs - infrastructure::adapters::arsenal::mcp_stdio_adapter::MCPStdioAdapter::new (line 51) ... ok
+test src/infrastructure/adapters/arsenal/tool_result_formatter.rs - infrastructure::adapters::arsenal::tool_result_formatter::ToolResultFormatter::format_result (line 145) - compile ... ok
+test src/core/platform/manager/event_manager.rs - core::platform::manager::event_manager::EventService (line 76) ... ok
+test src/infrastructure/adapters/arsenal/mcp_streamable_http_adapter.rs - infrastructure::adapters::arsenal::mcp_streamable_http_adapter::MCPStreamableHttpAdapter::new (line 91) ... ok
+test src/infrastructure/adapters/scheduling/tokio_cron_adapter.rs - infrastructure::adapters::scheduling::tokio_cron_adapter (line 22) - compile ... ok
+test src/infrastructure/adapters/arsenal/resource_controls.rs - infrastructure::adapters::arsenal::resource_controls::TimeoutWrapper::new (line 67) ... ok
+test src/infrastructure/resilience/circuit_breaker.rs - infrastructure::resilience::circuit_breaker (line 24) - compile ... ok
+test src/infrastructure/resilience/circuit_breaker.rs - infrastructure::resilience::circuit_breaker::CircuitBreaker (line 95) - compile ... ok
+test src/infrastructure/adapters/arsenal/resource_controls.rs - infrastructure::adapters::arsenal::resource_controls::ConcurrencyLimiter::new (line 174) ... ok
+test src/infrastructure/adapters/arsenal/tool_result_formatter.rs - infrastructure::adapters::arsenal::tool_result_formatter::ToolResultFormatter::format_error (line 229) ... ok
+test src/infrastructure/adapters/arsenal/tool_result_formatter.rs - infrastructure::adapters::arsenal::tool_result_formatter::ToolResultFormatter::without_emoji (line 100) ... ok
+test src/infrastructure/adapters/arsenal/tool_result_formatter.rs - infrastructure::adapters::arsenal::tool_result_formatter::ToolResultFormatter::new (line 82) ... ok
+test src/lib.rs - (line 77) ... ignored
+test src/lib.rs - application (line 175) ... ignored
+test src/infrastructure/security/encryption.rs - infrastructure::security::encryption (line 15) ... ok
+test src/infrastructure/resilience/circuit_breaker.rs - infrastructure::resilience::circuit_breaker::CircuitBreaker::new (line 134) ... ok
+test src/infrastructure/adapters/arsenal/tool_result_formatter.rs - infrastructure::adapters::arsenal::tool_result_formatter::ToolResultFormatter::without_timing (line 116) ... ok
+test src/lib.rs - prelude (line 147) - compile ... ok
+test src/lib.rs - prelude (line 156) - compile ... ok
+test src/infrastructure/resilience/circuit_breaker.rs - infrastructure::resilience::circuit_breaker::CircuitBreaker::get_state (line 297) ... ok
+test src/infrastructure/resilience/circuit_breaker.rs - infrastructure::resilience::circuit_breaker::CircuitBreaker::call (line 183) ... ok
+test src/infrastructure/security/mod.rs - infrastructure::security (line 12) ... ok
+test src/lib.rs - core (line 205) ... ok
+test src/lib.rs - core (line 230) ... ok
+test src/presets/mod.rs - presets::reasoning_agent (line 269) ... ok
+test src/presets/mod.rs - presets::reasoning_agent (line 227) ... ok
+test src/application/services/run/webhook/service.rs - application::services::run::webhook::service::WebhookDeliveryService (line 111) ... ok
+
+test result: ok. 151 passed; 0 failed; 18 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+all doctests ran in 3.24s; merged doctests compilation took 3.01s
+   Doc-tests paladin_core
+
+running 133 tests
+test crates/paladin-core/src/base/service/message_service.rs - base::service::message_service::MessageService (line 166) ... ok
+test crates/paladin-core/src/base/service/collection_versioning_service.rs - base::service::collection_versioning_service::CollectionVersionService (line 103) ... ok
+test crates/paladin-core/src/platform/container/aegis.rs - platform::container::aegis::Aegis (line 32) ... ok
+test crates/paladin-core/src/platform/container/arsenal/handoff_tool.rs - platform::container::arsenal::handoff_tool::HandoffTool (line 15) - compile ... ok
+test crates/paladin-core/src/platform/container/arsenal/handoff_tool.rs - platform::container::arsenal::handoff_tool::HandoffTool::validate_parameters (line 101) - compile ... ok
+test crates/paladin-core/src/platform/container/aegis.rs - platform::container::aegis::RetryPredicate::admits (line 179) ... ok
+test crates/paladin-core/src/platform/container/aegis.rs - platform::container::aegis::RetryPolicy (line 89) ... ok
+test crates/paladin-core/src/base/service/node_version_service.rs - base::service::node_version_service::NodeVersionService (line 97) ... ok
+test crates/paladin-core/src/base/service/field_version_service.rs - base::service::field_version_service::FieldVersionService (line 96) ... ok
+test crates/paladin-core/src/platform/container/battalion/campaign.rs - platform::container::battalion::campaign (line 8) - compile ... ok
+test crates/paladin-core/src/platform/container/battalion/campaign.rs - platform::container::battalion::campaign::Campaign::add_edge (line 157) - compile ... ok
+test crates/paladin-core/src/platform/container/battalion/campaign.rs - platform::container::battalion::campaign::Campaign::add_paladin (line 132) - compile ... ok
+test crates/paladin-core/src/platform/container/battalion/chain_of_command.rs - platform::container::battalion::chain_of_command (line 8) - compile ... ok
+test crates/paladin-core/src/platform/container/aegis.rs - platform::container::aegis::TimeoutPolicy (line 227) ... ok
+test crates/paladin-core/src/platform/container/arsenal/handoff_error.rs - platform::container::arsenal::handoff_error::HandoffError (line 18) ... ok
+test crates/paladin-core/src/platform/container/battalion/chain_of_command.rs - platform::container::battalion::chain_of_command::ChainOfCommand::new (line 94) - compile ... ok
+test crates/paladin-core/src/platform/container/battalion/chain_of_command.rs - platform::container::battalion::chain_of_command::ChainOfCommand::with_strategy (line 131) - compile ... ok
+test crates/paladin-core/src/platform/container/battalion/conclave.rs - platform::container::battalion::conclave (line 16) ... ignored
+test crates/paladin-core/src/platform/container/battalion/conclave.rs - platform::container::battalion::conclave::Conclave (line 200) ... ignored
+test crates/paladin-core/src/platform/container/battalion/conclave.rs - platform::container::battalion::conclave::Conclave::new (line 243) ... ignored
+test crates/paladin-core/src/platform/container/battalion/conclave.rs - platform::container::battalion::conclave::ConclaveResult (line 370) ... ignored
+test crates/paladin-core/src/platform/container/arsenal/core.rs - platform::container::arsenal::core::ArmamentCall::new (line 57) ... ok
+test crates/paladin-core/src/platform/container/battalion/council.rs - platform::container::battalion::council (line 17) ... ignored
+test crates/paladin-core/src/platform/container/battalion/council.rs - platform::container::battalion::council::Council (line 257) ... ignored
+test crates/paladin-core/src/platform/container/battalion/council.rs - platform::container::battalion::council::CouncilBuilder (line 277) ... ignored
+test crates/paladin-core/src/platform/container/battalion/council.rs - platform::container::battalion::council::CouncilBuilder::build (line 410) ... ignored
+test crates/paladin-core/src/platform/container/battalion/council.rs - platform::container::battalion::council::CouncilMessage::new (line 148) ... ignored
+test crates/paladin-core/src/platform/container/battalion/formation.rs - platform::container::battalion::formation::Formation (line 25) ... ignored
+test crates/paladin-core/src/platform/container/battalion/formation.rs - platform::container::battalion::formation::Formation::new (line 63) ... ignored
+test crates/paladin-core/src/platform/container/battalion/formation.rs - platform::container::battalion::formation::Formation::with_shared_context (line 90) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove (line 18) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder (line 300) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::add_tree (line 368) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::build (line 520) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::config (line 492) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::fallback_tree (line 424) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::min_confidence (line 475) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::name (line 351) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::new (line 327) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::routing_fallback (line 458) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::routing_model (line 406) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::routing_strategy (line 385) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::GroveBuilder::similarity_threshold (line 441) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::Tree::add_agent (line 194) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::Tree::new (line 176) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::TreeAgent::new (line 107) ... ignored
+test crates/paladin-core/src/platform/container/autonomous_config.rs - platform::container::autonomous_config::AutonomousConfig (line 62) ... ok
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::TreeAgent::with_embedding (line 143) ... ignored
+test crates/paladin-core/src/platform/container/battalion/grove.rs - platform::container::battalion::grove::TreeAgent::with_keywords (line 126) ... ignored
+test crates/paladin-core/src/platform/container/assistant.rs - platform::container::assistant::AssistantId (line 59) ... ok
+test crates/paladin-core/src/platform/container/battalion/council.rs - platform::container::battalion::council::CouncilBuilder::new (line 300) ... ok
+test crates/paladin-core/src/platform/container/battalion/campaign.rs - platform::container::battalion::campaign::Campaign::new (line 109) ... ok
+test crates/paladin-core/src/platform/container/battalion/mod.rs - platform::container::battalion::ErrorStrategy (line 232) ... ok
+test crates/paladin-core/src/platform/container/battalion/conclave.rs - platform::container::battalion::conclave::ConclaveConfig (line 72) ... ok
+test crates/paladin-core/src/platform/container/battalion/mod.rs - platform::container::battalion::BattalionStatus (line 462) ... ok
+test crates/paladin-core/src/platform/container/battalion/phalanx.rs - platform::container::battalion::phalanx::Phalanx (line 35) ... ignored
+test crates/paladin-core/src/platform/container/battalion/council.rs - platform::container::battalion::council::CouncilConfig (line 173) ... ok
+test crates/paladin-core/src/platform/container/battalion/mod.rs - platform::container::battalion::BattalionStrategy (line 258) ... ok
+test crates/paladin-core/src/platform/container/battalion/mod.rs - platform::container::battalion::BattalionConfig (line 29) ... ok
+test crates/paladin-core/src/platform/container/battalion/phalanx.rs - platform::container::battalion::phalanx::Phalanx::new (line 66) ... ignored
+test crates/paladin-core/src/platform/container/battalion/phalanx.rs - platform::container::battalion::phalanx::Phalanx::with_aggregation (line 88) ... ignored
+test crates/paladin-core/src/platform/container/battalion/phalanx.rs - platform::container::battalion::phalanx::Phalanx::with_max_concurrency (line 100) ... ignored
+test crates/paladin-core/src/platform/container/citadel.rs - platform::container::citadel (line 22) - compile ... ok
+test crates/paladin-core/src/platform/container/citadel.rs - platform::container::citadel::PaladinState (line 113) - compile ... ok
+test crates/paladin-core/src/platform/container/battalion/mod.rs - platform::container::battalion::RetryPolicy (line 176) ... ok
+test crates/paladin-core/src/platform/container/battlefield.rs - platform::container::battlefield::CacheMarker (line 117) ... ok
+test crates/paladin-core/src/platform/container/battlefield.rs - platform::container::battlefield::Battlefield::get (line 369) ... ok
+test crates/paladin-core/src/platform/container/battlefield.rs - platform::container::battlefield::Battlefield::from_json (line 507) ... ok
+test crates/paladin-core/src/platform/container/battlefield.rs - platform::container::battlefield::Battlefield::initialize (line 440) ... ok
+test crates/paladin-core/src/platform/container/battlefield.rs - platform::container::battlefield::StateDelta::set (line 257) ... ok
+test crates/paladin-core/src/platform/container/directive.rs - platform::container::directive::Directive::from (line 134) ... ok
+test crates/paladin-core/src/platform/container/citadel_error.rs - platform::container::citadel_error::CitadelError (line 17) ... ok
+test crates/paladin-core/src/platform/container/garrison.rs - platform::container::garrison::ConversationHistory::new (line 340) ... ok
+test crates/paladin-core/src/platform/container/garrison.rs - platform::container::garrison::GarrisonConfig (line 243) ... ok
+test crates/paladin-core/src/platform/container/execution_result.rs - platform::container::execution_result::PaladinResult (line 22) ... ok
+test crates/paladin-core/src/platform/container/execution_result.rs - platform::container::execution_result::PaladinResult::new (line 210) ... ok
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald (line 10) ... ignored
+test crates/paladin-core/src/platform/container/garrison.rs - platform::container::garrison::EvictionStrategy (line 221) ... ok
+test crates/paladin-core/src/platform/container/garrison.rs - platform::container::garrison::GarrisonEntry::new (line 89) ... ok
+test crates/paladin-core/src/platform/container/garrison.rs - platform::container::garrison::GarrisonEntry::summary (line 151) ... ok
+test crates/paladin-core/src/platform/container/handoff.rs - platform::container::handoff::HandoffContext::new (line 91) ... ok
+test crates/paladin-core/src/platform/container/handoff.rs - platform::container::handoff::HandoffStrategy::threshold (line 35) ... ok
+test crates/paladin-core/src/platform/container/heartbeat.rs - platform::container::heartbeat::HeartbeatHandle (line 48) ... ok
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald::ExecutionMetadata (line 403) ... ok
+test crates/paladin-core/src/platform/container/garrison.rs - platform::container::garrison::GarrisonType (line 199) ... ok
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald::ExecutionMetadata (line 420) ... ok
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald::ExecutionMetadata (line 446) ... ok
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald::Herald::format_paladin_result (line 66) ... ignored
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald::Herald::format_stream_chunk (line 104) ... ignored
+test crates/paladin-core/src/platform/container/log.rs - platform::container::log::LogEntryBuilder (line 198) ... ok
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald::StreamChunk (line 219) ... ok
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald::ExecutionMetadata (line 471) ... ok
+test crates/paladin-core/src/platform/container/node_error.rs - platform::container::node_error::NodeError (line 133) ... ok
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald::StreamChunk (line 184) ... ok
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald::StreamChunk (line 201) ... ok
+test crates/paladin-core/src/platform/container/herald.rs - platform::container::herald::StreamChunk::builder (line 268) ... ok
+test crates/paladin-core/src/platform/container/paladin.rs - platform::container::paladin (line 9) ... ok
+test crates/paladin-core/src/platform/container/paladin_config.rs - platform::container::paladin_config::PaladinConfig (line 28) ... ok
+test crates/paladin-core/src/platform/container/paladin.rs - platform::container::paladin::PaladinStatus::is_active (line 293) ... ok
+test crates/paladin-core/src/platform/container/paladin.rs - platform::container::paladin::Paladin (line 206) ... ok
+test crates/paladin-core/src/platform/container/paladin.rs - platform::container::paladin::PaladinStatus::is_terminal (line 275) ... ok
+test crates/paladin-core/src/platform/container/paladin_config.rs - platform::container::paladin_config::PaladinConfigBuilder (line 90) ... ok
+test crates/paladin-core/src/platform/container/paladin_error.rs - platform::container::paladin_error::PaladinError (line 13) ... ok
+test crates/paladin-core/src/platform/container/parley.rs - platform::container::parley::ParleyRequest (line 104) ... ok
+test crates/paladin-core/src/platform/container/parley.rs - platform::container::parley::ParleyId::new (line 32) ... ok
+test crates/paladin-core/src/platform/container/sanctum.rs - platform::container::sanctum::MemoryBuilder (line 110) ... ignored
+test crates/paladin-core/src/platform/container/run.rs - platform::container::run::RunStatus::try_transition (line 189) ... ok
+test crates/paladin-core/src/platform/container/run_scope.rs - platform::container::run_scope::RunScope (line 46) ... ok
+test crates/paladin-core/src/platform/container/planning.rs - platform::container::planning::TaskPlan::new (line 39) ... ok
+test crates/paladin-core/src/platform/container/planning.rs - platform::container::planning::Subtask::new (line 147) ... ok
+test crates/paladin-core/src/platform/container/parley.rs - platform::container::parley::ParleyResponse (line 163) ... ok
+test crates/paladin-core/src/platform/container/run_scope.rs - platform::container::run_scope::RunScope::with_vault_namespace (line 74) ... ok
+test crates/paladin-core/src/platform/container/structured.rs - platform::container::structured::StructuredOptions::new (line 75) ... ok
+test crates/paladin-core/src/platform/container/structured.rs - platform::container::structured::render_instruction_block (line 341) ... ok
+test crates/paladin-core/src/platform/container/task.rs - platform::container::task::ContentIndexingService (line 410) ... ok
+test crates/paladin-core/src/platform/container/structured.rs - platform::container::structured::extract_json (line 136) ... ok
+test crates/paladin-core/src/platform/container/task.rs - platform::container::task::DataBackupService (line 335) ... ok
+test crates/paladin-core/src/platform/container/task.rs - platform::container::task::EmailNotificationService (line 555) ... ok
+test crates/paladin-core/src/platform/container/structured.rs - platform::container::structured::shape_check (line 199) ... ok
+test crates/paladin-core/src/platform/container/token_usage.rs - platform::container::token_usage::TokenUsage::with_cache_read (line 79) ... ok
+test crates/paladin-core/src/platform/container/token_usage.rs - platform::container::token_usage::TokenUsage::with_reasoning (line 107) ... ok
+test crates/paladin-core/src/platform/container/token_usage.rs - platform::container::token_usage::TokenUsage::with_cache_write (line 93) ... ok
+test crates/paladin-core/src/platform/container/transience.rs - platform::container::transience::Transience (line 24) ... ok
+test crates/paladin-core/src/platform/container/vault.rs - platform::container::vault::Namespace (line 62) ... ok
+test crates/paladin-core/src/platform/container/token_usage.rs - platform::container::token_usage::TokenUsage::new (line 55) ... ok
+test crates/paladin-core/src/platform/container/vault.rs - platform::container::vault::Namespace::is_prefix_of (line 191) ... ok
+test crates/paladin-core/src/platform/container/vault.rs - platform::container::vault::Namespace::parse (line 109) ... ok
+test crates/paladin-core/src/platform/container/vault.rs - platform::container::vault::Page (line 440) ... ok
+test crates/paladin-core/src/platform/container/vault.rs - platform::container::vault::Namespace::new (line 86) ... ok
+test crates/paladin-core/src/platform/container/vault.rs - platform::container::vault::ScoredVaultRecord (line 398) ... ok
+test crates/paladin-core/src/platform/container/waypoint.rs - platform::container::waypoint::ThreadId::child (line 136) ... ok
+test crates/paladin-core/src/platform/container/vault.rs - platform::container::vault::VaultRecord (line 236) ... ok
+test crates/paladin-core/src/platform/container/waypoint.rs - platform::container::waypoint::ThreadId::child_on_branch (line 212) ... ok
+
+test result: ok. 95 passed; 0 failed; 38 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+all doctests ran in 1.36s; merged doctests compilation took 1.31s
+   Doc-tests paladin_battalion
+
+running 111 tests
+test crates/paladin-battalion/src/campaign_service.rs - campaign_service (line 19) ... ignored
+test crates/paladin-battalion/src/campaign_service.rs - campaign_service::CampaignExecutionService (line 57) ... ignored
+test crates/paladin-battalion/src/campaign_service.rs - campaign_service::CampaignExecutionService::execute (line 195) ... ignored
+test crates/paladin-battalion/src/campaign_service.rs - campaign_service::CampaignExecutionService::format_result (line 153) ... ignored
+test crates/paladin-battalion/src/campaign_service.rs - campaign_service::CampaignExecutionService::new (line 81) ... ignored
+test crates/paladin-battalion/src/campaign_service.rs - campaign_service::CampaignExecutionService::with_evaluator (line 123) ... ignored
+test crates/paladin-battalion/src/campaign_service.rs - campaign_service::CampaignExecutionService::with_herald (line 104) ... ignored
+test crates/paladin-battalion/src/chain_of_command_service.rs - chain_of_command_service (line 17) ... ignored
+test crates/paladin-battalion/src/chain_of_command_service.rs - chain_of_command_service::ChainOfCommandExecutionService::format_result (line 185) ... ignored
+test crates/paladin-battalion/src/chain_of_command_service.rs - chain_of_command_service::ChainOfCommandExecutionService::to_battalion_result (line 135) ... ignored
+test crates/paladin-battalion/src/chain_of_command_service.rs - chain_of_command_service::ChainOfCommandExecutionService::with_herald (line 110) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::Commander (line 135) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::Commander (line 154) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::Commander (line 175) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::Commander::execute (line 424) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::Commander::execute (line 431) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::Commander::execute (line 450) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::Commander::format_result (line 347) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::Commander::with_herald (line 321) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder (line 1409) ... ignored
+test crates/paladin-battalion/src/chain_of_command_service.rs - chain_of_command_service::ChainOfCommandExecutionService::new (line 82) - compile ... ok
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder (line 1449) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder (line 1458) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder (line 1483) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder::aggregator (line 1611) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder::build (line 1711) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder::config (line 1591) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder::error_strategy (line 1652) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder::flow (line 1634) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder::maneuver_config (line 1674) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder::new (line 1518) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder::paladins (line 1575) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder::strategy (line 1559) ... ignored
+test crates/paladin-battalion/src/commander.rs - commander::CommanderBuilder::strategy_selection (line 1543) ... ignored
+test crates/paladin-battalion/src/conclave_execution_service.rs - conclave_execution_service::ConclaveExecutionService (line 28) ... ignored
+test crates/paladin-battalion/src/conclave_execution_service.rs - conclave_execution_service::ConclaveExecutionService::execute (line 81) ... ignored
+test crates/paladin-battalion/src/conclave_execution_service.rs - conclave_execution_service::ConclaveExecutionService::new (line 51) ... ignored
+test crates/paladin-battalion/src/council_service.rs - council_service::CouncilExecutionService (line 46) ... ignored
+test crates/paladin-battalion/src/council_service.rs - council_service::CouncilExecutionService::convene (line 114) ... ignored
+test crates/paladin-battalion/src/council_service.rs - council_service::CouncilExecutionService::new (line 80) ... ignored
+test crates/paladin-battalion/src/engine/cache_key.rs - engine::cache_key::node_prefix (line 89) ... ok
+test crates/paladin-battalion/src/engine/cache_key.rs - engine::cache_key::graph_prefix (line 69) ... ok
+test crates/paladin-battalion/src/engine/directive_parser.rs - engine::directive_parser::DirectiveParser::parse (line 249) ... ok
+test crates/paladin-battalion/src/engine/export/dot.rs - engine::export::dot::to_dot (line 19) ... ok
+test crates/paladin-battalion/src/engine/directive_parser.rs - engine::directive_parser::DirectiveParser::parse (line 272) ... ok
+test crates/paladin-battalion/src/engine/export/mermaid.rs - engine::export::mermaid::to_mermaid (line 23) ... ok
+test crates/paladin-battalion/src/commander.rs - commander::StrategySelection (line 43) ... ok
+test crates/paladin-battalion/src/engine/graph.rs - engine::graph::NodeSpec::gate (line 316) ... ok
+test crates/paladin-battalion/src/engine/export/shape.rs - engine::export::shape::GraphShape (line 44) ... ok
+test crates/paladin-battalion/src/engine/mod.rs - engine::TypedSchema<T>::new (line 211) ... ok
+test crates/paladin-battalion/src/engine/graph.rs - engine::graph::NodeSpec::with_output_schema (line 272) ... ok
+test crates/paladin-battalion/src/engine/mod.rs - engine::WarEngine<W>::with_node_cache (line 1901) ... ok
+test crates/paladin-battalion/src/engine/input_mapping.rs - engine::input_mapping::InputMapping::render (line 122) ... ok
+test crates/paladin-battalion/src/engine/mod.rs - engine::WarEngine<W>::with_vault (line 1983) - compile ... ok
+test crates/paladin-battalion/src/engine/mod.rs - engine::WarEngine<W>::with_shutdown_grace (line 1846) ... ok
+test crates/paladin-battalion/src/engine/retry.rs - engine::retry::backoff_delay (line 39) ... ok
+test crates/paladin-battalion/src/engine/shutdown.rs - engine::shutdown::RunGuard (line 235) ... ok
+test crates/paladin-battalion/src/engine/mod.rs - engine::graph_doc (line 109) ... ok
+test crates/paladin-battalion/src/engine/mod.rs - engine::export (line 85) ... ok
+test crates/paladin-battalion/src/engine/shutdown.rs - engine::shutdown::ShutdownCoordinator::in_flight (line 206) ... ok
+test crates/paladin-battalion/src/engine/shutdown.rs - engine::shutdown::ShutdownCoordinator::token (line 93) ... ok
+test crates/paladin-battalion/src/engine/shutdown.rs - engine::shutdown::ShutdownOutcome::drained (line 273) ... ok
+test crates/paladin-battalion/src/engine/shutdown.rs - engine::shutdown::ShutdownCoordinator::new (line 70) ... ok
+test crates/paladin-battalion/src/engine/shutdown.rs - engine::shutdown::ShutdownOutcome::timed_out (line 287) ... ok
+test crates/paladin-battalion/src/engine/shutdown.rs - engine::shutdown::ShutdownCoordinator (line 41) ... ok
+test crates/paladin-battalion/src/engine/shutdown.rs - engine::shutdown::ShutdownCoordinator::register (line 111) ... ok
+test crates/paladin-battalion/src/error_aggregation.rs - error_aggregation::AggregatedError::add_error (line 49) ... ok
+test crates/paladin-battalion/src/formation_service.rs - formation_service::FormationExecutionService (line 30) ... ignored
+test crates/paladin-battalion/src/formation_service.rs - formation_service::FormationExecutionService::execute (line 143) ... ignored
+test crates/paladin-battalion/src/formation_service.rs - formation_service::FormationExecutionService::format_result (line 101) ... ignored
+test crates/paladin-battalion/src/formation_service.rs - formation_service::FormationExecutionService::new (line 53) ... ignored
+test crates/paladin-battalion/src/formation_service.rs - formation_service::FormationExecutionService::with_herald (line 75) ... ignored
+test crates/paladin-battalion/src/grove_service.rs - grove_service::GroveExecutionService (line 91) ... ignored
+test crates/paladin-battalion/src/grove_service.rs - grove_service::GroveExecutionService::execute (line 180) ... ignored
+test crates/paladin-battalion/src/grove_service.rs - grove_service::GroveExecutionService::new (line 130) ... ignored
+test crates/paladin-battalion/src/error_aggregation.rs - error_aggregation::AggregatedError::failure_rate (line 99) ... ok
+test crates/paladin-battalion/src/error_aggregation.rs - error_aggregation::AggregatedError::record_success (line 65) ... ok
+test crates/paladin-battalion/src/error_aggregation.rs - error_aggregation::AggregatedError::into_result (line 152) ... ok
+test crates/paladin-battalion/src/error_aggregation.rs - error_aggregation::AggregatedError::summary (line 125) ... ok
+test crates/paladin-battalion/src/error_aggregation.rs - error_aggregation::AggregatedError::has_errors (line 81) ... ok
+test crates/paladin-battalion/src/in_memory_registry.rs - in_memory_registry::HashMapPaladinRegistry::clear (line 153) ... ok
+test crates/paladin-battalion/src/error_aggregation.rs - error_aggregation::AggregatedError::new (line 29) ... ok
+test crates/paladin-battalion/src/in_memory_registry.rs - in_memory_registry::HashMapPaladinRegistry::count (line 127) ... ok
+test crates/paladin-battalion/src/in_memory_registry.rs - in_memory_registry::HashMapPaladinRegistry::new (line 74) ... ok
+test crates/paladin-battalion/src/llm_decision.rs - llm_decision::LlmDecisionEvaluator (line 106) ... ok
+test crates/paladin-battalion/src/in_memory_registry.rs - in_memory_registry::HashMapPaladinRegistry::from_map (line 97) ... ok
+test crates/paladin-battalion/src/llm_failure.rs - llm_failure::to_node_error_source (line 145) ... ok
+test crates/paladin-battalion/src/llm_failure.rs - llm_failure::to_paladin_error (line 59) ... ok
+test crates/paladin-battalion/src/maneuver/parser/ast.rs - maneuver::parser::ast::FlowExpression (line 15) ... ok
+test crates/paladin-battalion/src/lib.rs - in_memory_registry (line 84) ... ok
+test crates/paladin-battalion/src/maneuver/parser/ast.rs - maneuver::parser::ast::FlowExpression::agent_count (line 143) ... ok
+test crates/paladin-battalion/src/maneuver/parser/ast.rs - maneuver::parser::ast::FlowExpression::depth (line 89) ... ok
+test crates/paladin-battalion/src/maneuver/parser/ast.rs - maneuver::parser::ast::FlowExpression::agent_names (line 48) ... ok
+test crates/paladin-battalion/src/maneuver/parser/ast.rs - maneuver::parser::ast::FlowExpression::width (line 117) ... ok
+test crates/paladin-battalion/src/maneuver/visualizer.rs - maneuver::visualizer::FlowVisualizer (line 28) ... ignored
+test crates/paladin-battalion/src/maneuver/visualizer.rs - maneuver::visualizer::FlowVisualizer (line 45) ... ignored
+test crates/paladin-battalion/src/maneuver/parser/error.rs - maneuver::parser::error::FlowParseError::suggestion (line 74) ... ok
+test crates/paladin-battalion/src/maneuver/parser/mod.rs - maneuver::parser (line 15) ... ok
+test crates/paladin-battalion/src/maneuver/parser/error.rs - maneuver::parser::error::FlowParseError::format_with_context (line 133) ... ok
+test crates/paladin-battalion/src/phalanx_service.rs - phalanx_service::PhalanxExecutionService (line 37) ... ignored
+test crates/paladin-battalion/src/phalanx_service.rs - phalanx_service::PhalanxExecutionService::format_result (line 93) ... ignored
+test crates/paladin-battalion/src/phalanx_service.rs - phalanx_service::PhalanxExecutionService::with_herald (line 67) ... ignored
+test crates/paladin-battalion/src/maneuver/parser/mod.rs - maneuver::parser::FlowParser::parse (line 73) ... ok
+test crates/paladin-battalion/src/maneuver/service.rs - maneuver::service::ManeuverExecutionService (line 18) ... ok
+test crates/paladin-battalion/src/maneuver/parser/mod.rs - maneuver::parser::FlowParser (line 43) ... ok
+test crates/paladin-battalion/src/maneuver/visualizer.rs - maneuver::visualizer::FlowVisualizer::to_ascii (line 73) ... ok
+test crates/paladin-battalion/src/maneuver/visualizer.rs - maneuver::visualizer::FlowVisualizer::with_timing (line 253) ... ok
+test crates/paladin-battalion/src/retry.rs - retry::calculate_retry_delay (line 25) ... ok
+test crates/paladin-battalion/src/engine/shutdown.rs - engine::shutdown::ShutdownCoordinator::cancel_and_wait (line 141) ... ok
+test crates/paladin-battalion/src/maneuver/visualizer.rs - maneuver::visualizer::FlowVisualizer::to_mermaid (line 103) ... ok
+test crates/paladin-battalion/src/retry.rs - retry::should_retry (line 95) ... ok
+
+test result: ok. 59 passed; 0 failed; 52 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+all doctests ran in 1.54s; merged doctests compilation took 1.50s
+   Doc-tests paladin_content
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests paladin_doc_examples
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests paladin_eval
+
+running 6 tests
+test crates/paladin-eval/src/runner.rs - runner::eval_scenarios (line 670) ... ignored
+test crates/paladin-eval/src/runner.rs - runner::eval_scenarios (line 675) ... ignored
+test crates/paladin-eval/src/scenario.rs - scenario::LlmErrorKind::to_llm_error (line 390) ... ok
+test crates/paladin-eval/src/scripted_llm.rs - scripted_llm::ScenarioLlm (line 114) ... ok
+test crates/paladin-eval/src/lib.rs - (line 37) ... ok
+test crates/paladin-eval/src/scenario.rs - scenario::Scenario (line 69) ... ok
+
+test result: ok. 4 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 1.00s; merged doctests compilation took 0.99s
+   Doc-tests paladin_herald
+
+running 6 tests
+test crates/paladin-herald/src/json_herald.rs - json_herald (line 8) ... ignored
+test crates/paladin-herald/src/json_herald.rs - json_herald::JsonHerald (line 60) ... ignored
+test crates/paladin-herald/src/json_herald.rs - json_herald::JsonHerald::with_config (line 97) ... ignored
+test crates/paladin-herald/src/markdown_herald.rs - markdown_herald (line 8) ... ignored
+test crates/paladin-herald/src/markdown_herald.rs - markdown_herald::MarkdownHerald (line 106) ... ignored
+test crates/paladin-herald/src/markdown_herald.rs - markdown_herald::MarkdownHerald::with_config (line 143) ... ignored
+
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.22s; merged doctests compilation took 0.22s
+   Doc-tests paladin_llm
+
+running 8 tests
+test crates/paladin-llm/src/lib.rs - (line 35) - compile ... ok
+test crates/paladin-llm/src/provider_factory.rs - provider_factory::LlmProviderFactory (line 323) - compile ... ok
+test crates/paladin-llm/src/http_status.rs - http_status::map_http_status (line 67) ... ok
+test crates/paladin-llm/src/mock.rs - mock::MockLlmAdapter (line 101) ... ok
+test crates/paladin-llm/src/mock.rs - mock::MockLlmAdapter::with_script (line 247) ... ok
+test crates/paladin-llm/src/llm_analysis_service.rs - llm_analysis_service::LlmAnalysisService (line 61) ... ok
+test crates/paladin-llm/src/mock.rs - mock::MultiStepMockLlmPort (line 485) ... ok
+test crates/paladin-llm/src/fallback.rs - fallback::FallbackLlmAdapter (line 117) ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.66s; merged doctests compilation took 0.64s
+   Doc-tests paladin_memory
+
+running 12 tests
+test crates/paladin-memory/src/citadel/file_citadel.rs - citadel::file_citadel::FileCitadel (line 47) - compile ... ok
+test crates/paladin-memory/src/citadel/file_citadel.rs - citadel::file_citadel::FileCitadel::new (line 82) - compile ... ok
+test crates/paladin-memory/src/citadel/mod.rs - citadel::file_citadel (line 22) - compile ... ok
+test crates/paladin-memory/src/garrison/in_memory_garrison.rs - garrison::in_memory_garrison::InMemoryGarrison (line 35) - compile ... ok
+test crates/paladin-memory/src/garrison/sqlite_garrison.rs - garrison::sqlite_garrison::SqliteGarrison (line 38) - compile ... ok
+test crates/paladin-memory/src/garrison/in_memory_garrison.rs - garrison::in_memory_garrison::InMemoryGarrison::new (line 72) - compile ... ok
+test crates/paladin-memory/src/sanctum/in_memory_adapter.rs - sanctum::in_memory_adapter::InMemorySanctum (line 68) - compile ... ok
+test crates/paladin-memory/src/sanctum/in_memory_adapter.rs - sanctum::in_memory_adapter::InMemorySanctumConfig (line 35) - compile ... ok
+test crates/paladin-memory/src/vault/in_memory.rs - vault::in_memory::InMemoryVault (line 26) - compile ... ok
+test crates/paladin-memory/src/vault/sqlite.rs - vault::sqlite::SqliteVault (line 57) - compile ... ok
+test crates/paladin-memory/src/services/memory_extraction_service.rs - services::memory_extraction_service::MemoryExtractionService (line 44) ... ok
+test crates/paladin-memory/src/services/rag_retrieval_service.rs - services::rag_retrieval_service::RagRetrievalService (line 166) ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 0.97s; merged doctests compilation took 0.96s
+   Doc-tests paladin_notifications
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests paladin_ports
+
+running 242 tests
+test crates/paladin-ports/src/input/content_input_port.rs - input::content_input_port::ContentIngestionPort (line 14) ... ok
+test crates/paladin-ports/src/input/mod.rs - input::parley_port (line 52) ... ok
+test crates/paladin-ports/src/input/ml_port.rs - input::ml_port::MlPort (line 100) ... ok
+test crates/paladin-ports/src/input/document_port.rs - input::document_port::DocumentPort (line 116) ... ok
+test crates/paladin-ports/src/input/mod.rs - input::run_event_stream_port (line 33) ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port (line 100) - compile ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port (line 178) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port (line 200) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port (line 158) - compile ... ok
+test crates/paladin-ports/src/input/parley_port.rs - input::parley_port::ResumeAccepted (line 88) ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port (line 72) - compile ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalPort (line 287) - compile ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalPort (line 355) - compile ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalPort (line 321) - compile ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalPort (line 426) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalPort::invoke (line 515) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalPort::list_armaments (line 482) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalPort::validate_call (line 546) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port (line 122) - compile ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry (line 586) - compile ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry (line 621) - compile ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry (line 711) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry (line 726) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry (line 744) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry::get (line 847) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry::list (line 870) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry (line 642) - compile ... ok
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry::register (line 800) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry::unregister (line 826) ... ignored
+test crates/paladin-ports/src/input/mod.rs - input::run_inspector_port (line 59) ... ok
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port (line 107) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port (line 160) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port (line 198) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port (line 231) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port (line 321) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port::BattalionPort (line 423) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port::BattalionPort (line 515) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port::BattalionPort (line 534) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port::BattalionPort (line 563) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port::BattalionPort (line 593) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port::BattalionPort::cancel (line 770) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port::BattalionPort::execute (line 651) ... ignored
+test crates/paladin-ports/src/output/battalion_port.rs - output::battalion_port::BattalionPort::status (line 701) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalPort (line 372) ... ok
+test crates/paladin-ports/src/output/auth_port.rs - output::auth_port::AuthPort (line 59) ... ok
+test crates/paladin-ports/src/input/assistant_admin_port.rs - input::assistant_admin_port::AssistantAdminPort (line 126) ... ok
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port (line 121) - compile ... ok
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port (line 145) - compile ... ok
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port (line 74) - compile ... ok
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port (line 95) - compile ... ok
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::CitadelPort (line 312) - compile ... ok
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::CitadelPort (line 394) - compile ... ok
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::CitadelPort (line 477) ... ignored
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::CitadelPort (line 498) ... ignored
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::CitadelPort (line 514) ... ignored
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::CitadelPort (line 535) ... ignored
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::CitadelPort (line 356) - compile ... ok
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::async_trait (line 176) ... ignored
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::async_trait (line 194) ... ignored
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::async_trait (line 216) ... ignored
+test crates/paladin-ports/src/output/arsenal_port.rs - output::arsenal_port::ArsenalRegistry (line 663) ... ok
+test crates/paladin-ports/src/output/embedding_port.rs - output::embedding_port (line 60) - compile ... ok
+test crates/paladin-ports/src/output/embedding_port.rs - output::embedding_port (line 77) - compile ... ok
+test crates/paladin-ports/src/input/run_submission_port.rs - input::run_submission_port::RunSubmissionPort (line 182) ... ok
+test crates/paladin-ports/src/output/embedding_port.rs - output::embedding_port::EmbeddingError (line 187) - compile ... ok
+test crates/paladin-ports/src/output/embedding_port.rs - output::embedding_port (line 105) - compile ... ok
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port (line 103) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port (line 128) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port (line 155) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port (line 196) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port (line 250) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port (line 322) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port (line 72) ... ignored
+test crates/paladin-ports/src/output/embedding_port.rs - output::embedding_port::EmbeddingError (line 218) - compile ... ok
+test crates/paladin-ports/src/output/citadel_port.rs - output::citadel_port::CitadelPort (line 417) ... ok
+test crates/paladin-ports/src/output/cancellation_probe.rs - output::cancellation_probe::NeverCancelled (line 81) ... ok
+test crates/paladin-ports/src/output/embedding_port.rs - output::embedding_port::Embedding (line 311) ... ok
+test crates/paladin-ports/src/input/schedule_admin_port.rs - input::schedule_admin_port::ScheduleAdminPort (line 92) ... ok
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort (line 864) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort (line 896) ... ignored
+test crates/paladin-ports/src/output/embedding_port.rs - output::embedding_port::Embedding (line 327) ... ok
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort (line 919) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort (line 942) ... ignored
+test crates/paladin-ports/src/output/assistant_repository_port.rs - output::assistant_repository_port::AssistantRepositoryPort (line 121) ... ok
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort (line 955) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort::copy_file (line 1167) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort::delete_file (line 1076) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort::download_file (line 1048) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort::file_exists (line 1091) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort::get_file_info (line 1115) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort::get_storage_stats (line 1212) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort::health_check (line 1230) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort::list_files (line 1136) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort::move_file (line 1194) ... ignored
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStoragePort::upload_file (line 1007) ... ignored
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port (line 58) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port (line 113) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::GarrisonPort (line 278) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::GarrisonPort (line 307) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::GarrisonPort (line 328) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::GarrisonPort (line 357) ... ignored
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::GarrisonPort::forget_all (line 468) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::GarrisonPort::recall_recent (line 421) - compile ... ok
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::BatchFileStoragePort (line 1243) ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port (line 90) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::GarrisonPort::remember (line 394) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::GarrisonPort::search (line 447) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::GarrisonPort::stats (line 484) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::LongTermGarrisonPort (line 532) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::LongTermGarrisonPort (line 560) - compile ... ok
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::AdvancedFileStoragePort (line 1286) ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::LongTermGarrisonPort (line 590) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::LongTermGarrisonPort (line 628) ... ignored
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::LongTermGarrisonPort::remember_with_embedding (line 671) - compile ... ok
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStorageError (line 495) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port (line 121) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port (line 52) - compile ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::LongTermGarrisonPort::search_similar (line 705) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port (line 102) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port (line 72) - compile ... ok
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileStorageError::FileTooLarge (line 541) ... ok
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FileVersioningPort (line 1348) ... ok
+test crates/paladin-ports/src/output/file_storage_port.rs - output::file_storage_port::FullFileStoragePort (line 1403) ... ok
+test crates/paladin-ports/src/output/garrison_port.rs - output::garrison_port::GarrisonStats (line 218) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmPort (line 1257) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::FinishReason (line 921) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmPort::generate (line 1332) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmError::AuthenticationError (line 307) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmError (line 254) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmPort::generate_stream (line 1421) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmError::NetworkError (line 292) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmPort::generate_stream (line 1456) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmPort::get_capabilities (line 1619) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmPort::get_capabilities (line 1647) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmPort::get_provider_name (line 1585) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmPort::validate_model (line 1508) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmPort::get_available_models (line 1550) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmError::EmptyCompletion (line 428) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmPort::generate (line 1352) - compile ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmRequest::new (line 679) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmRequest::with_metadata (line 753) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmRequest::with_attachments (line 711) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmRequest (line 626) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmError::UsageLimitExceeded (line 368) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmError::RateLimitExceeded (line 327) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmRequest (line 611) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmRequest::with_response_format (line 779) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmResponse (line 819) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmResponse (line 845) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::LlmRequest::with_stream (line 732) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::StreamingResponse (line 1012) ... ok
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::StreamingResponse::with_usage (line 1119) ... ok
+test crates/paladin-ports/src/output/mod.rs - output::sanctum_port (line 119) - compile ... ok
+test crates/paladin-ports/src/output/mod.rs - output::sanctum_port (line 190) - compile ... ok
+test crates/paladin-ports/src/output/mod.rs - output::scheduler_port (line 69) - compile ... ok
+test crates/paladin-ports/src/output/mod.rs - output::vault_port (line 115) - compile ... ok
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port (line 100) ... ignored
+test crates/paladin-ports/src/output/mod.rs - output::sanctum_port (line 162) - compile ... ok
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port (line 133) ... ignored
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::ProviderCapabilities (line 1152) ... ok
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port (line 163) ... ignored
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::StreamingResponse::terminal (line 1098) ... ok
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port (line 223) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port (line 290) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port (line 69) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::BasicNotificationPort (line 1243) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationDeliveryPort (line 682) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationDeliveryPort (line 722) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationDeliveryPort (line 752) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationDeliveryPort::can_handle (line 811) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationDeliveryPort::capabilities (line 976) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationDeliveryPort::deliver_bulk (line 884) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationDeliveryPort::deliver_notification (line 838) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationDeliveryPort::health_check (line 960) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationTemplatePort (line 1039) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationTemplatePort (line 1075) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationTemplatePort::list_templates (line 1178) ... ignored
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationTemplatePort::render_template (line 1202) ... ignored
+test crates/paladin-ports/src/output/paladin_executor_port.rs - output::paladin_executor_port::PaladinExecutorPort (line 45) - compile ... ok
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port (line 110) ... ignored
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port (line 149) ... ignored
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port (line 182) ... ignored
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::StreamingResponse::delta (line 1075) ... ok
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port (line 280) ... ignored
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port (line 75) ... ignored
+test crates/paladin-ports/src/output/log_port.rs - output::log_port::LogPort (line 221) ... ok
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port::PaladinPort (line 536) ... ignored
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port::PaladinPort (line 623) ... ignored
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port::PaladinPort (line 664) ... ignored
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port::PaladinPort::execute (line 763) ... ignored
+test crates/paladin-ports/src/output/llm_port.rs - output::llm_port::TokenUsage (line 982) ... ok
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationPortError (line 399) ... ok
+test crates/paladin-ports/src/output/notification_port.rs - output::notification_port::NotificationPortError::RateLimitExceeded (line 474) ... ok
+test crates/paladin-ports/src/output/orchestrator_port.rs - output::orchestrator_port::OrchestratorPort (line 234) ... ok
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port::ChunkMetadata::new (line 442) ... ok
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port::PaladinPort::execute_stream (line 955) ... ignored
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port::PaladinPort::validate (line 1032) ... ignored
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port::PaladinPort::execute_observed (line 814) ... ok
+test crates/paladin-ports/src/output/node_cache_port.rs - output::node_cache_port::NodeCachePort (line 137) ... ok
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port::ChunkMetadata::with_usage (line 474) ... ok
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port (line 121) ... ignored
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port (line 186) ... ignored
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port (line 225) ... ignored
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port (line 297) ... ignored
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port (line 75) ... ignored
+test crates/paladin-ports/src/output/paladin_registry.rs - output::paladin_registry::PaladinRegistry::get (line 140) ... ok
+test crates/paladin-ports/src/output/paladin_registry.rs - output::paladin_registry::PaladinRegistry::list_ids (line 189) ... ok
+test crates/paladin-ports/src/output/paladin_port.rs - output::paladin_port::PaladinPort::execute_scoped (line 890) ... ok
+test crates/paladin-ports/src/output/paladin_registry.rs - output::paladin_registry::PaladinRegistry::contains (line 168) ... ok
+test crates/paladin-ports/src/output/paladin_registry.rs - output::paladin_registry (line 14) ... ok
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port::QueuePort (line 445) ... ignored
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port::QueuePort (line 500) ... ignored
+test crates/paladin-ports/src/output/paladin_registry.rs - output::paladin_registry::PaladinRegistry::register (line 110) ... ok
+test crates/paladin-ports/src/output/paladin_registry.rs - output::paladin_registry::PaladinRegistry (line 57) ... ok
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port::FullQueuePort (line 842) ... ok
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port::QueueManagementPort (line 783) ... ok
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port::PriorityQueuePort (line 735) ... ok
+test crates/paladin-ports/src/output/sanctum_port.rs - output::sanctum_port::SanctumError (line 238) - compile ... ok
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port::TypedQueuePort (line 622) ... ok
+test crates/paladin-ports/src/output/queue_port.rs - output::queue_port::BatchQueuePort (line 667) ... ok
+test crates/paladin-ports/src/output/sanctum_port.rs - output::sanctum_port::SanctumError (line 264) - compile ... ok
+test crates/paladin-ports/src/output/sanctum_port.rs - output::sanctum_port::SanctumQuery (line 454) ... ok
+test crates/paladin-ports/src/output/sanctum_port.rs - output::sanctum_port::SanctumFilter (line 370) ... ok
+test crates/paladin-ports/src/output/run_repository_port.rs - output::run_repository_port::RunRepositoryPort (line 147) ... ok
+test crates/paladin-ports/src/output/run_queue_port.rs - output::run_queue_port::RunQueuePort (line 117) ... ok
+test crates/paladin-ports/src/output/streaming_executor_port.rs - output::streaming_executor_port::StreamingExecutorPort (line 47) - compile ... ok
+test crates/paladin-ports/src/output/sanctum_port.rs - output::sanctum_port::SanctumSearchResult (line 540) ... ok
+test crates/paladin-ports/src/output/run_trace_port.rs - output::run_trace_port::RunTracePort (line 132) ... ok
+test crates/paladin-ports/src/output/vision_llm_port.rs - output::vision_llm_port (line 12) - compile ... ok
+test crates/paladin-ports/src/output/vision_llm_port.rs - output::vision_llm_port::VisionCapableLlm::generate_with_vision (line 87) - compile ... ok
+test crates/paladin-ports/src/output/vision_llm_port.rs - output::vision_llm_port::VisionCapableLlm::supports_vision (line 132) - compile ... ok
+test crates/paladin-ports/src/output/run_schedule_repository_port.rs - output::run_schedule_repository_port::RunScheduleRepositoryPort (line 86) ... ok
+test crates/paladin-ports/src/output/scheduler_port.rs - output::scheduler_port::SchedulerPort (line 239) ... ok
+test crates/paladin-ports/src/output/structured_executor_port.rs - output::structured_executor_port::StructuredExecutorPort (line 60) ... ok
+test crates/paladin-ports/src/output/sanctum_port.rs - output::sanctum_port::SanctumQuery (line 463) ... ok
+test crates/paladin-ports/src/output/vault_port.rs - output::vault_port::VaultPort (line 87) ... ok
+test crates/paladin-ports/src/output/vision_port.rs - output::vision_port::VisionPort (line 65) ... ok
+test crates/paladin-ports/src/output/user_repository_port.rs - output::user_repository_port::UserRepositoryPort (line 14) ... ok
+test crates/paladin-ports/src/output/workflow_repository_port.rs - output::workflow_repository_port::WorkflowRepositoryPort (line 111) ... ok
+test crates/paladin-ports/src/output/token_counter_port.rs - output::token_counter_port::TokenCounterPort (line 53) ... ok
+test crates/paladin-ports/src/output/waypoint_port.rs - output::waypoint_port::WaypointPort (line 169) ... ok
+test crates/paladin-ports/src/output/webhook_delivery_port.rs - output::webhook_delivery_port::WebhookDeliveryRepositoryPort (line 80) ... ok
+
+test result: ok. 148 passed; 0 failed; 94 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+all doctests ran in 3.53s; merged doctests compilation took 3.47s
+   Doc-tests paladin_storage
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests paladin_web
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+Total passed across all workspace crates: 477 (151+95+59+0+0+4+0+8+12+0+148+0+0); 0 failed in every crate.

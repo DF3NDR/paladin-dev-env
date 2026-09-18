@@ -11,7 +11,7 @@ and workflows call each other see the [Agent ↔ Orchestrator Bridge](agent-orch
 For how a Battalion fits among the ways to *run* agents, see
 [Deployment Topologies](../deployment-topologies/overview.md).
 
-> Every code example targets the current **v0.8.0** workspace. The substantive examples are real,
+> Every code example targets the current **v0.10.0** workspace. The substantive examples are real,
 > compiled code pulled from the `paladin-doc-examples` crate via mdBook `{{#include}}`, so they are
 > checked against the live API; a few illustrative fragments are marked `rust,ignore`. The API forms
 > are verified against `crates/paladin-battalion/` and `crates/paladin-ports/`.
@@ -206,7 +206,7 @@ let result = commander.execute(input).await?;
 ```
 
 Each file records `battalion_id`, `strategy_used`, `duration_ms`, `total_tokens`,
-per-Paladin `paladin_results` (output, `execution_time_ms`, `token_count`, `stop_reason`),
+per-Paladin `paladin_results` (output, `execution_time_ms`, `usage: TokenUsage`, `stop_reason`),
 `per_paladin_times`, `per_paladin_tokens`, and `strategy_selection_reasoning`.
 
 ---

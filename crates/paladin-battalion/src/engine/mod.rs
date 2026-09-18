@@ -1,13 +1,19 @@
 //! War Engine — Superstep Execution Engine
 //!
-//! This module implements the execution engine for [`WarGraph`]s: typed,
-//! potentially-cyclic graphs of [`StateNode`]s whose shared state is a
-//! [`Battlefield`] (`paladin-core`), automatically checkpointed as a
-//! [`Waypoint`] after every superstep through a [`WaypointPort`]
+//! This module implements the execution engine for
+//! [`WarGraph`](crate::engine::graph::WarGraph)s: typed,
+//! potentially-cyclic graphs of
+//! [`StateNode`](crate::engine::node::StateNode)s whose shared state is a
+//! [`Battlefield`](paladin_core::platform::container::battlefield::Battlefield)
+//! (`paladin-core`), automatically checkpointed as a
+//! [`Waypoint`](paladin_core::platform::container::waypoint::Waypoint) after
+//! every superstep through a
+//! [`WaypointPort`](paladin_ports::output::waypoint_port::WaypointPort)
 //! (`paladin-ports`).
 //!
 //! Phase 22 Plan 01 proved the tracer: a single-entry, single-`Function`-node,
-//! zero-edge graph, run through [`WarEngine::start`], checkpointed as exactly
+//! zero-edge graph, run through
+//! [`WarEngine::start`](crate::engine::WarEngine::start), checkpointed as exactly
 //! one `Waypoint`, and resumed by a freshly constructed `WarEngine` with zero
 //! re-execution. Plan 05 expands this into the real superstep engine
 //! (`engine::superstep`): the general multi-node loop with cycles, snapshot
@@ -17,23 +23,23 @@
 //! expansion does not require changing these signatures.
 //!
 //! Submodules:
-//! - [`bridges`] — `WarGraph::from_formation`/`from_phalanx`/`from_campaign`
+//! - [`bridges`](crate::engine::bridges) — `WarGraph::from_formation`/`from_phalanx`/`from_campaign`
 //!   (ENG-FR-19, X-03): additive legacy bridges reproducing
 //!   `FormationExecutionService`/`PhalanxExecutionService`/
 //!   `CampaignExecutionService`'s data flow byte for byte, without touching
 //!   any of those legacy services.
-//! - [`graph`] — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`, and
+//! - [`graph`](crate::engine::graph) — `WarGraph`, `NodeSpec`, `EdgeSpec`, `EngineLimits`, and
 //!   `WarGraph::validate`/`fingerprint`.
-//! - [`directive_parser`] — `DirectiveParser`, `OnParseError`: how a
+//! - [`directive_parser`](crate::engine::directive_parser) — `DirectiveParser`, `OnParseError`: how a
 //!   `NodeSpec::Paladin` node's raw string output becomes a routing
 //!   `Directive` (CF-02, D-11). `PlainOutput` is the backward-compatible
 //!   default; `StructuredDirective` parses a documented JSON envelope.
-//! - [`input_mapping`] — `InputMapping`, `InputMappingError`: the X-03
+//! - [`input_mapping`](crate::engine::input_mapping) — `InputMapping`, `InputMappingError`: the X-03
 //!   string bridge a `NodeSpec::Paladin` node renders its input through.
-//! - [`node`] — `StateNode`, `NodeContext`, `StateNodeError`.
-//! - [`dispatch_registry`] — `DispatchRegistry`, the engine-owned
+//! - [`node`](crate::engine::node) — `StateNode`, `NodeContext`, `StateNodeError`.
+//! - [`dispatch_registry`](crate::engine::dispatch_registry) — `DispatchRegistry`, the engine-owned
 //!   `DispatchRule::Custom` name -> closure registration (ENG-FR-09).
-//! - [`hooks`] — `TraceDispatcher` (ENG-FR-21's bounded, drop-oldest
+//! - [`hooks`](crate::engine::hooks) — `TraceDispatcher` (ENG-FR-21's bounded, drop-oldest
 //!   `TraceSink` forwarder), `NodeInterceptor`/`InterceptDecision`
 //!   (ENG-FR-22's ordered, empty-by-default chain). Both are seams with no
 //!   consumer yet (Docs 05, 07); ENG-FR-23's cancellation-to-`Halted` path
@@ -740,8 +746,9 @@ pub enum EngineError {
     /// deserialise as a `StateDelta` naming only fields declared in the
     /// graph's own schema -- an undeclared field rejects THIS response,
     /// never the run and never a partial edit (T-24-13). Checked through
-    /// the SAME per-kind validator
-    /// [`graph::validate_parley_value_for_kind`] a Gate's own `on_expire`
+    /// the SAME per-kind validator -- the crate-private
+    /// `graph::validate_parley_value_for_kind` helper --
+    /// a Gate's own `on_expire`
     /// default (`WarGraph::validate`, 24-02) and a Directive's raise-time
     /// default (`DirectiveParser::parse`, 24-03) are checked against
     /// (T-24-06) -- never a second, weaker check for the same structural
@@ -1082,7 +1089,7 @@ pub enum EngineError {
     /// [`WarEngine::replay`] or [`WarEngine::fork`] named a `from` Waypoint
     /// id that does not exist on `thread` (HITL-03, D-16): the SAME
     /// "missing is `None`, not an error" contract
-    /// [`WaypointPort::get`](paladin_ports::output::waypoint_port::WaypointPort::get)
+    /// [`WaypointPort::get`]
     /// documents is here turned into a typed engine error, mirroring how
     /// [`EngineError::ThreadNotFound`] turns [`WaypointPort::latest`]'s own
     /// `None` into a typed error at THIS layer. Nothing is persisted when
@@ -1420,7 +1427,8 @@ pub struct ResumeOptions {
 }
 
 /// Executes [`WarGraph`]s: runs nodes, merges their deltas into the shared
-/// [`Battlefield`], and automatically checkpoints a [`Waypoint`] after every
+/// [`Battlefield`], and automatically checkpoints a
+/// [`Waypoint`](paladin_core::platform::container::waypoint::Waypoint) after every
 /// superstep through `W: WaypointPort` (ENG-FR-11).
 pub struct WarEngine<W: WaypointPort> {
     paladin_port: Arc<dyn PaladinPort>,
@@ -2071,17 +2079,17 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.structured_executor.clone(),
         )
         .await;
-        // D-02, D-04: `status` from the `RunOutcome`/`Err` this call itself
-        // matches on; `total_supersteps`/`total_tokens` from this run's own
+        // D-02, D-04, D-11: `status` from the `RunOutcome`/`Err` this call
+        // itself matches on; `total_supersteps`/`usage` from this run's own
         // dispatcher, tallied synchronously as `SuperstepStarted`/
         // `NodeFinished` records were stamped (never racing the async
-        // consumer, `TraceDispatcher::superstep_count`/`token_total`'s own
+        // consumer, `TraceDispatcher::superstep_count`/`total_usage`'s own
         // doc comments); `trace_dropped_total` is stamped by
         // `TraceDispatcher::emit` itself at enqueue time (D-07).
         trace.emit(TraceEvent::RunFinished {
             status: run_finish_status(&outcome),
             total_supersteps: trace.superstep_count(),
-            total_tokens: trace.token_total(),
+            usage: trace.total_usage(),
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2187,15 +2195,15 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                 run_id: trace.run_id().cloned(),
                 graph_fingerprint: expected.to_string(),
             });
-            // D-02, D-04: nothing executed on this call (the thread was
-            // already `Completed`), so `total_supersteps`/`total_tokens`
-            // are genuinely `0` here -- this dispatcher's own counters
-            // agree, since no `SuperstepStarted`/`NodeFinished` was ever
-            // stamped through it.
+            // D-02, D-04, D-11: nothing executed on this call (the thread
+            // was already `Completed`), so `total_supersteps`/`usage` are
+            // genuinely `0`/`TokenUsage::default()` here -- this
+            // dispatcher's own counters agree, since no
+            // `SuperstepStarted`/`NodeFinished` was ever stamped through it.
             trace.emit(TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: trace.superstep_count(),
-                total_tokens: trace.token_total(),
+                usage: trace.total_usage(),
                 duration_ms: run_started_at.elapsed().as_millis() as u64,
                 trace_dropped_total: 0,
             });
@@ -2314,7 +2322,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         trace.emit(TraceEvent::RunFinished {
             status: run_finish_status(&outcome),
             total_supersteps: trace.superstep_count(),
-            total_tokens: trace.token_total(),
+            usage: trace.total_usage(),
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2668,7 +2676,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         trace.emit(TraceEvent::RunFinished {
             status: run_finish_status(&outcome),
             total_supersteps: trace.superstep_count(),
-            total_tokens: trace.token_total(),
+            usage: trace.total_usage(),
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2683,7 +2691,8 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
     /// [`EngineError::WaypointNotFound`]), checks `graph.fingerprint()`
     /// against the loaded Waypoint's own (mismatch -> [`EngineError::GraphMismatch`],
     /// ENG-FR-14) -- BEFORE anything else, mirroring `resume_with_options`'s
-    /// own guard order -- then re-enters [`superstep::run_with_namespace`]
+    /// own guard order -- then re-enters the crate-private
+    /// `superstep::run_with_namespace`
     /// with `parent_waypoint_id = Some(from)`, `fork_of = Some(from)` and
     /// superstep numbering continuing at `from`'s own `superstep + 1`
     /// (the SAME `from.superstep` when `from` carries a mid-muster
@@ -2837,7 +2846,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         trace.emit(TraceEvent::RunFinished {
             status: run_finish_status(&outcome),
             total_supersteps: trace.superstep_count(),
-            total_tokens: trace.token_total(),
+            usage: trace.total_usage(),
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2904,6 +2913,7 @@ mod tests {
     use paladin_core::platform::container::parley::{
         OnExpire, ParleyId, ParleyKind, ParleyRequest,
     };
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::transience::Transience;
     use paladin_core::platform::container::waypoint::{NodeOutcomeKind, Waypoint};
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
@@ -3383,9 +3393,261 @@ mod tests {
             .iter()
             .find(|r| r.node_id == node_id)
             .expect("counter node record present");
-        assert_eq!(record.token_count, 42);
+        assert_eq!(record.usage.total_tokens, 42);
         assert_eq!(record.attempt, 1);
         assert!(matches!(record.outcome, NodeOutcomeKind::Succeeded));
+    }
+
+    /// D-30: the round-trip invariant test for the generalized "full
+    /// carrier, never a collapsed total" intent (ACCT-02) -- two Paladin
+    /// nodes each report a `TokenUsage` with distinct non-round
+    /// prompt/completion figures plus cache/reasoning optionals, and the
+    /// SAME full value (field-for-field, not just the total) survives from
+    /// `NodeExecutionRecord` through `TraceEvent::NodeFinished` to the
+    /// saturating sum on `TraceEvent::RunFinished.usage`.
+    #[tokio::test]
+    async fn d30_round_trip_sums_full_usage_across_two_paladin_nodes() {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(make_paladin("first"), InputMapping::new("go"), out.clone()),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(make_paladin("second"), InputMapping::new("go"), out),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+
+        let first_usage = TokenUsage::new(1_234, 567)
+            .with_cache_read(100)
+            .with_cache_write(50)
+            .with_reasoning(200);
+        let second_usage = TokenUsage::new(89, 23).with_reasoning(7);
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage("first", "done", first_usage.clone());
+        port.set_output_with_usage("second", "done", second_usage.clone());
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store.clone()).with_trace_sink(sink.clone());
+
+        let thread = ThreadId::new("d30-round-trip").unwrap();
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        // NodeExecutionRecord: each node's Waypoint record carries its own
+        // full usage, field-for-field -- never just a matching total.
+        let saved = store.saved_waypoints(&thread).await;
+        let record_usage_for = |node: &NodeId| -> TokenUsage {
+            saved
+                .iter()
+                .flat_map(|w| w.completed.iter())
+                .find(|r| &r.node_id == node)
+                .unwrap_or_else(|| panic!("record for {node:?} present"))
+                .usage
+                .clone()
+        };
+        assert_eq!(record_usage_for(&n1), first_usage);
+        assert_eq!(record_usage_for(&n2), second_usage);
+
+        // TraceEvent::NodeFinished: the identical full values on the trace.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        let finished_usage_for = |node: &NodeId| -> TokenUsage {
+            events
+                .iter()
+                .find_map(|r| match &r.event {
+                    TraceEvent::NodeFinished { node_id, usage, .. } if node_id == node => {
+                        Some(usage.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("NodeFinished for {node:?} present"))
+        };
+        assert_eq!(finished_usage_for(&n1), first_usage);
+        assert_eq!(finished_usage_for(&n2), second_usage);
+
+        // TraceEvent::RunFinished: the saturating field-by-field sum, not a
+        // sum of totals that could mask a disagreement in the optionals.
+        let run_usage = events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { usage, .. } => Some(usage.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(run_usage.prompt_tokens, 1_323);
+        assert_eq!(run_usage.completion_tokens, 590);
+        assert_eq!(run_usage.total_tokens, 1_913);
+        assert_eq!(run_usage.cache_read_tokens, Some(100));
+        assert_eq!(run_usage.cache_write_tokens, Some(50));
+        assert_eq!(run_usage.reasoning_tokens, Some(207));
+    }
+
+    /// A run with zero Paladin nodes at all (a plain `Function` node)
+    /// finishes with `RunFinished.usage == TokenUsage::default()` -- the
+    /// boundary case at the other end of the D-30 round trip.
+    #[tokio::test]
+    async fn zero_paladin_node_run_finishes_with_default_usage() {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let id = NodeId::new("fn-only");
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(out, serde_json::json!("v"))),
+        );
+        graph.add_entry(id);
+
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(UnimplementedPaladinPort),
+            Arc::new(InMemoryWaypointStore::new()),
+        )
+        .with_trace_sink(sink.clone());
+
+        let thread = ThreadId::new("zero-paladin-nodes").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let run_usage = sink
+            .events()
+            .await
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { usage, .. } => Some(usage.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(run_usage, TokenUsage::default());
+    }
+
+    /// A cache-hit node records `TokenUsage::default()` on both its
+    /// `NodeExecutionRecord` and its `NodeFinished` -- even though the
+    /// underlying `PaladinPort` is configured to report a large non-zero
+    /// usage -- keeps `cache_hit: true`, and adds nothing to
+    /// `RunFinished.usage` (D-11).
+    #[tokio::test]
+    async fn cache_hit_paladin_node_records_default_usage_and_contributes_nothing() {
+        use crate::engine::test_support::RecordingNodeCache;
+        use paladin_core::platform::container::aegis::{CacheKeySpec, CachePolicy};
+
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let id = NodeId::new("cached-paladin");
+        graph.add_node(
+            id.clone(),
+            NodeSpec::paladin(make_paladin("cached-paladin"), InputMapping::new("go"), out),
+        );
+        graph.add_entry(id.clone());
+        graph.set_aegis(
+            id.clone(),
+            Aegis {
+                cache: Some(CachePolicy {
+                    ttl: std::time::Duration::from_secs(60),
+                    key: CacheKeySpec::Default,
+                }),
+                ..Aegis::default()
+            },
+        );
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage("cached-paladin", "done", TokenUsage::new(9_999, 9_999));
+        let cache = RecordingNodeCache::new();
+        let store = Arc::new(RecordingWaypointStore::new());
+        let port_dyn: Arc<dyn PaladinPort> = port.clone();
+
+        // First run: a miss -- populates the cache, real usage reported.
+        let engine1 =
+            WarEngine::new(port_dyn.clone(), store.clone()).with_node_cache(cache.clone());
+        let thread1 = ThreadId::new("cache-hit-1").unwrap();
+        engine1
+            .start(&graph, thread1, StateDelta::new())
+            .await
+            .unwrap();
+
+        // Second run: a hit on the SAME cache backend -- the node never
+        // executes, so the Paladin port's configured 9,999+9,999 usage is
+        // never reported.
+        let sink = RecordingTraceSink::new();
+        let engine2 = WarEngine::new(port_dyn, store.clone())
+            .with_node_cache(cache)
+            .with_trace_sink(sink.clone());
+        let thread2 = ThreadId::new("cache-hit-2").unwrap();
+        let outcome = engine2
+            .start(&graph, thread2.clone(), StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let saved = store.saved_waypoints(&thread2).await;
+        let record = saved
+            .iter()
+            .flat_map(|w| w.completed.iter())
+            .find(|r| r.node_id == id)
+            .expect("cache-hit record present");
+        assert!(record.cache_hit);
+        assert_eq!(record.usage, TokenUsage::default());
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        let finished_usage = events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::NodeFinished {
+                    node_id,
+                    cache_hit,
+                    usage,
+                    ..
+                } if node_id == &id => {
+                    assert!(*cache_hit);
+                    Some(usage.clone())
+                }
+                _ => None,
+            })
+            .expect("NodeFinished for the cache-hit node present");
+        assert_eq!(finished_usage, TokenUsage::default());
+
+        let run_usage = events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { usage, .. } => Some(usage.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(run_usage, TokenUsage::default());
     }
 
     #[tokio::test]
@@ -9974,9 +10236,9 @@ mod tests {
             .expect("a RunFinished record must exist")
     }
 
-    /// D-02, D-04: a two-superstep successful run's `RunFinished` reports
-    /// `status: Completed`, `total_supersteps: 2`, `total_tokens` the sum
-    /// of both nodes' `NodeFinished.token_count`, and `duration_ms > 0`.
+    /// D-02, D-04, D-11: a two-superstep successful run's `RunFinished`
+    /// reports `status: Completed`, `total_supersteps: 2`, `usage` the sum
+    /// of both nodes' `NodeFinished.usage`, and `duration_ms > 0`.
     #[tokio::test]
     async fn run_finished_reports_completed_with_totals() {
         /// A minimal in-test `PaladinPort` reporting a caller-configured
@@ -10001,7 +10263,7 @@ mod tests {
                     .unwrap_or(0);
                 Ok(PaladinResult {
                     output: "ok".to_string(),
-                    token_count: tokens,
+                    usage: TokenUsage::new(tokens, 0),
                     ..Default::default()
                 })
             }
@@ -10066,13 +10328,13 @@ mod tests {
                 TraceEvent::RunFinished {
                     status,
                     total_supersteps,
-                    total_tokens,
+                    usage,
                     duration_ms,
                     trace_dropped_total,
                 } => Some((
                     *status,
                     *total_supersteps,
-                    *total_tokens,
+                    usage.clone(),
                     *duration_ms,
                     *trace_dropped_total,
                 )),
@@ -10082,7 +10344,7 @@ mod tests {
         assert_eq!(run_finished.0, RunFinishStatus::Completed);
         assert_eq!(run_finished.1, 2, "two supersteps: n1 then n2");
         assert_eq!(
-            run_finished.2, 12,
+            run_finished.2.total_tokens, 12,
             "5 + 7 tokens across both NodeFinished records"
         );
         assert!(
@@ -10222,9 +10484,9 @@ mod tests {
         }
     }
 
-    /// D-02: a retried node's two `NodeFinished` records carry `attempt` 1
-    /// (failed) and 2 (succeeded), each with its own `duration_ms`/
-    /// `token_count` matching the SAME values the Waypoint's own
+    /// D-02, D-11: a retried node's two `NodeFinished` records carry
+    /// `attempt` 1 (failed) and 2 (succeeded), each with its own
+    /// `duration_ms`/`usage` matching the SAME values the Waypoint's own
     /// `NodeExecutionRecord` carries for that attempt -- trace and
     /// Waypoint never disagree.
     #[tokio::test]
@@ -10267,7 +10529,7 @@ mod tests {
         assert!(matches!(outcome, RunOutcome::Completed { .. }));
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        let mut finishes: Vec<(u32, NodeOutcomeKind, u64, u64)> = sink
+        let mut finishes: Vec<(u32, NodeOutcomeKind, u64, TokenUsage)> = sink
             .events()
             .await
             .iter()
@@ -10277,10 +10539,10 @@ mod tests {
                     attempt,
                     outcome,
                     duration_ms,
-                    token_count,
+                    usage,
                     ..
                 } if node_id == &id => {
-                    Some((*attempt, outcome.clone(), *duration_ms, *token_count))
+                    Some((*attempt, outcome.clone(), *duration_ms, usage.clone()))
                 }
                 _ => None,
             })
@@ -10311,8 +10573,8 @@ mod tests {
             "trace and Waypoint duration_ms must agree"
         );
         assert_eq!(
-            finishes[1].3, record.token_count,
-            "trace and Waypoint token_count must agree"
+            finishes[1].3, record.usage,
+            "trace and Waypoint usage must agree"
         );
     }
 

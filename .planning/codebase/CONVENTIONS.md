@@ -136,17 +136,20 @@ impl From<LlmProviderError> for LlmError {
 - Mark with `#![warn(missing_docs)]` and document all public items
 - Use `#[doc(hidden)]` to hide implementation details
 
-**`# Examples` heading spelling (D-06, Phase 16 DOCS-03):** on the D-05-enumerated **public API
-entry points** — `pub *Builder` structs, `pub *Port` traits, `pub *Service` structs (see
-`.planning/phases/16-documentation-currency-the-architecture-gap/16-DOCS-03-ENTRY-POINTS.md` for
-the full 76-item enumeration) — the heading is spelled **`# Examples`** (plural), not
+**`# Examples` heading spelling (D-06, Phase 16 DOCS-03; refrozen Phase 36.1 D-11):** on the
+D-05-enumerated **public API entry points** — `pub *Builder` structs, `pub *Port` traits, `pub
+*Service` structs (see
+`.planning/phases/36.1-deferred-items-closure/36.1-ENTRY-POINTS.md` for the full 101-item
+snapshot at Phase 36.1 close) — the heading is spelled **`# Examples`** (plural), not
 `# Example`. Both spellings render identically in rustdoc and neither is a compiler warning, so
-this is house style scoped narrowly to those 76 items, not a tree-wide sweep: the roughly 285
+this is house style scoped narrowly to those 101 items, not a tree-wide sweep: the roughly 285
 other `# Example`/`# Examples` occurrences elsewhere in the tree are left as-is and are not
 enforced. `scripts/check-public-api-examples.sh` is the mechanical enforcer for the plural rule on
 the enumerated set — there is no stable-Rust lint for this (`rustdoc::missing_doc_code_examples`
 is nightly-only), so the script is the honest fallback, not a workaround for a built-in that
-exists elsewhere.
+exists elsewhere. The check is wired into `make clean-code` (via `make check-api-examples`), a
+pre-push git hook, and the CI `lint` job, so drift between the rule and the tree cannot recur
+silently (D-12).
 
 **Example from** `src/application/services/paladin/paladin_builder.rs`:
 ```rust

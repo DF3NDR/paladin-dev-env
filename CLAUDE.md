@@ -64,8 +64,10 @@ make health               # Service status
   adapters → core + ports. Never import infrastructure from core or application.
 - **Ubiquitous language**: always use the Medieval Military terms (Paladin, Battalion, Garrison,
   Arsenal, Citadel, Herald, Quest, …) consistently in code, docs, and comments.
-- **Before committing a parent task**: `cargo test` → `cargo fmt --check` → `cargo clippy`, then
-  conventional-commit message. Stop after each major task and wait for go-ahead.
+- **Before committing a parent task**: `cargo test` → `cargo fmt --check` → `cargo clippy` →
+  `make api-surface` (an intentional public-surface change is refreshed with
+  `make api-surface-update` plus a CHANGELOG entry), then conventional-commit message. Stop after
+  each major task and wait for go-ahead.
 - **Security**: run `make security` (cargo-audit + cargo-deny) and `cargo clippy -- -D warnings`
   on new/modified code, plus the manual credential-handling review in the imported
   `security.instructions.md`. `codeql.yml` runs Rust static analysis **advisory-only** — CodeQL

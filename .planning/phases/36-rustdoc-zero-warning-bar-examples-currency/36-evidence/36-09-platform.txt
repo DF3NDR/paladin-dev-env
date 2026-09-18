@@ -1,0 +1,203 @@
+Phase 36 Plan 09 -- Platform API client + webhook receiver + HTTP-service-host router parity
+================================================================================================
+
+Task 1: Router parity for both HTTP-service-host files (EX-33, EX-55)
+------------------------------------------------------------------------------------------------
+
+Files: examples/http_service_host.rs, crates/doc-examples/src/http_service_host.rs
+
+Fix: both files now assemble agent_router().merge(thread_router()).merge(run_router()) --
+then the docs router (examples/http_service_host.rs only) -- in the same order
+src/bin/paladin-server.rs uses (paladin-server.rs lines 230-238). The thread and run states
+are constructed unwired (ThreadApiState::new()/RunApiState::new(), no waypoint/run store),
+matching the shipped server's own off-by-default behavior (RunStoreBackend::Disabled /
+WaypointStoreBackend::Disabled are the defaults) -- every /v1/threads/* and /v1/runs/* route
+therefore answers 501 not_implemented (reachable) rather than 404 (absent), which is exactly
+the EX-33/EX-55 defect this task closes.
+
+$ cargo build --example http_service_host --features "web-server"
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.42s
+exit 0
+
+$ env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY \
+    cargo run --example http_service_host --features "web-server"
+paladin-server (example) listening on http://127.0.0.1:41677
+GET /v1/agents -> [{"description":"You research topics thoroughly.","id":"researcher","model":"mock","name":"researcher"}]
+POST …/execute -> output: "Mock LLM response"
+POST …/execute/stream -> 1 chunk event(s)
+GET /v1/threads/demo-thread/state -> 501 Not Implemented (no waypoint store wired)
+GET /v1/runs/{run_id} -> 501 Not Implemented (no run store wired)
+GET /openapi.json -> "Paladin Agent API"
+docs UI available at http://127.0.0.1:41677/docs
+exit 0
+
+$ ./scripts/check-doc-examples.sh
+Compiling documentation examples (paladin-doc-examples crate)...
+All included examples compile.
+Checking README Quick Example matches crates/doc-examples/src/readme.rs ...
+README Quick Example is in sync.
+Checking doc code examples in /workspace/docs/src ...
+Results: 0 checked, 622 skipped, 0 failed
+All doc code examples pass validation.
+exit 0
+
+$ mdbook build docs/
+...
+[2026-09-17T22:12:51Z INFO  mdbook_linkcheck] No broken links found
+exit 0
+
+$ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-doc-examples --all-features --no-deps
+ Documenting paladin-doc-examples v0.10.0
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.89s
+    Generated /workspace/target/doc/paladin_doc_examples/index.html
+exit 0
+
+$ cargo fmt --all -- --check
+exit 0
+
+$ cargo check --workspace --all-targets --all-features
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.01s
+exit 0
+
+$ ./scripts/check-api-surface.sh .project/current-exports.txt
+✅ API surface extracted (3959 items)
+✅ API surface unchanged
+exit 0
+
+Acceptance-criteria greps:
+  grep -c 'thread_router' examples/http_service_host.rs                    -> 2 (>= 1)
+  grep -c 'run_router' examples/http_service_host.rs                       -> 2 (>= 1)
+  grep -c 'thread_router' crates/doc-examples/src/http_service_host.rs     -> 3 (>= 1)
+  grep -c 'run_router' crates/doc-examples/src/http_service_host.rs        -> 3 (>= 1)
+  grep -c 'http_host' crates/doc-examples/src/http_service_host.rs         -> 2 (>= 2, anchor open/close intact)
+
+git diff --stat HEAD~1 -- src/ : empty (no src/ changes in this task's commit)
+
+Task 2: examples/platform_api_client.rs (EX-77, EX-78, EX-79, EX-91, EX-92, EX-93, EX-94,
+EX-95, EX-98, EX-99, EX-104, EX-110)
+------------------------------------------------------------------------------------------------
+
+Design note: `paladin_port_from_settings` (`src/infrastructure/web/facade_provisioner.rs`)
+resolves a REAL provider credential via `LlmProviderFactory` -- there is no "mock" entry in
+its provider registry -- so this example cannot go through `build_run_api` and stay offline.
+Instead it wires the same collaborators `build_run_api` wires (run/assistant/run-schedule/
+webhook-delivery repositories, run queue, waypoint store, resolvers, worker pool, schedule
+service, webhook delivery drain loop, run event bus), but every store is the
+`paladin_storage::*::in_memory` adapter for its port (never sqlite/postgres/redis), and the
+run engine's `PaladinPort` is a local `MockEnginePort` wrapping the SAME
+`PaladinExecutionService` + `MockLlmAdapter` pair `http_service_host.rs` uses -- fully
+in-process, offline, no provider key, per D-16.
+
+$ cargo build --example platform_api_client --features "web-server,dev-ui"
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.95s
+exit 0
+
+$ timeout 300 env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY \
+    cargo run --example platform_api_client --features "web-server,dev-ui"
+run queue: in-memory (paladin_storage::run_queue::in_memory::InMemoryRunQueue is in force) -- EX-98
+run store: this example wires paladin_storage::run::in_memory::InMemoryRunRepository directly, fully in-process. A deployment's config-driven selector (RunStoreConfig::default().backend) defaults to Disabled; its durable alternatives are RunStoreBackend::Sqlite { path } and RunStoreBackend::Postgres { url_env } -- EX-99
+platform_api_client (example) listening on http://127.0.0.1:39455
+POST /v1/runs -> run_id 01a0b178-f6b3-7612-a91d-b84eac55c8b7
+GET /v1/runs/01a0b178-f6b3-7612-a91d-b84eac55c8b7/stream -> event(s): ["done"]
+POST /v1/runs/01a0b178-f6eb-78b1-8ae9-49a2acac476c/cancel -> 202 Accepted {"run_id":"01a0b178-f6eb-78b1-8ae9-49a2acac476c","status":"queued","was_local":false}
+POST /v1/assistants -> assistant_id "greeter" version 1
+POST /v1/assistants/greeter/versions -> version 2
+GET /v1/assistants/greeter/versions -> version ids [Number(1), Number(2)]
+POST /v1/schedules -> schedule_id "01a0b178-f6fc-73b1-bff7-3783da02d04c" would submit assistant_id "researcher" on cron "0 * * * *" (enabled: false)
+GET /v1/schedules -> 1 schedule(s)
+GET /v1/threads/demo-thread/state -> 404 Not Found (no Waypoint exists -- this example's one assistant is Agent-kind, whose run path never touches the waypoint store; a Workflow-kind assistant is required for a populated demo)
+POST /v1/threads/demo-thread/resume -> 404 Not Found (same reason -- no suspended parley to resume; see human_in_the_loop_gate.rs for a live Workflow-based demo)
+GET /v1/threads/demo-thread/history -> 200 OK (empty thread)
+GET /v1/dev-ui/threads/demo-thread -> 501 Not Implemented (admin-gated AND feature-gated: dev-ui feature compiled in, admin bearer token required, no RunInspectorPort wired)
+POST /v1/agents/researcher/execute -> usage.prompt_tokens=30 usage.completion_tokens=60
+exit 0
+
+$ cargo build --examples   (bare, no features -- confirms the gated target is skipped)
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.70s
+exit 0
+
+$ cargo fmt --all -- --check
+exit 0
+
+$ cargo check --workspace --all-targets --all-features
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.62s
+exit 0
+
+$ ./scripts/check-api-surface.sh .project/current-exports.txt
+✅ API surface extracted (3959 items)
+✅ API surface unchanged
+exit 0
+
+Acceptance-criteria greps:
+  grep -cE '\.unwrap\(\)|\.expect\(' examples/platform_api_client.rs                        -> 0
+  grep -cE 'OPENAI_API_KEY|ANTHROPIC_API_KEY|DEEPSEEK_API_KEY' examples/platform_api_client.rs -> 0
+  git diff --stat HEAD~1 -- src/ crates/                                                    -> empty
+
+Deviation (recorded, not a defect -- plan's own D-16 scope-note permission): items 6/7
+(thread state/resume/history, EX-77/EX-78/EX-79; the dev-ui inspector, EX-104) are called
+against a thread carrying no Waypoint, because this program's one registered assistant is
+Agent-kind (`Runnable::Agent`), whose run path (`RunWorkerPool::run_agent`) calls
+`PaladinPort::execute` directly and never touches the waypoint store. The routes are proven
+reachable and correctly wired (real 404/200/501 status codes printed, stated in the program's
+own header and stdout), not populated with a genuinely paused thread -- a Workflow-kind
+assistant (a WarGraph with a human-in-the-loop node) would be needed for that, which is a
+separate, substantial demonstration (see `human_in_the_loop_gate.rs`,
+`war_engine_configuration.rs`).
+
+Task 3: examples/webhook_receiver.rs (EX-96, EX-97)
+------------------------------------------------------------------------------------------------
+
+Reuses the SAME `sign_webhook_body` function and the SAME `hmac`/`sha2` crates the shipped
+`WebhookDeliveryService` signs with (never a hand-rolled construction); the receiver handler
+captures the raw request body via axum's `Bytes` extractor (before any deserialization) and
+verifies in constant time via `hmac::Mac::verify_slice` (never a plain `==` on digest bytes).
+The signing secret is generated in-process from 32 random bytes and is never printed --
+only "valid"/"invalid" and the constant-time-verified/rejected narration are printed.
+
+$ cargo build --example webhook_receiver --features "web-server"
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.70s
+exit 0
+
+$ timeout 60 env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u DEEPSEEK_API_KEY \
+    cargo run --example webhook_receiver --features "web-server"
+webhook_receiver (example) listening on http://127.0.0.1:33341/webhook
+sending a genuine delivery (signature computed once, over these exact bytes)...
+  receiver: signature verified (recomputed digest matched)
+genuine delivery -> 200 OK valid
+sending the SAME signature over a tampered (mutated) body...
+  receiver: rejected (recomputed digest did not match)
+tampered delivery -> 401 Unauthorized invalid
+APP_WEBHOOKS_ALLOW_PRIVATE = false (unset defaults to false)
+  relaxes: loopback and private-range (RFC1918/link-local/unique-local) delivery destinations, for local development and internal-network testing only.
+  does NOT relax: the cloud metadata address 169.254.169.254 is rejected regardless of this override -- it is never a legitimate webhook receiver.
+  known, documented limitation (not an oversight): neither the write-time nor the send-time SSRF check pins the resolved address between the check and the actual connection, so DNS rebinding (a hostname that answers a public address at check time and a private/metadata address at connect time) is not caught by this guard alone.
+  SsrfGuard::check_url(http://127.0.0.1:33341/webhook) -> rejected (loopback address rejected) -- this program's own loopback receiver is exactly the kind of destination the guard rejects by default; set APP_WEBHOOKS_ALLOW_PRIVATE=true to allow it
+  SsrfGuard::check_addrs([169.254.169.254]) -> rejected (cloud metadata address (169.254.169.254) rejected) (checked regardless of allow_private, never dispatched over the network)
+exit 0
+
+$ cargo build --examples   (bare, no features -- confirms all three gated targets are skipped)
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.69s
+exit 0
+
+$ cargo fmt --all -- --check
+exit 0
+
+$ cargo check --workspace --all-targets --all-features
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.45s
+exit 0
+
+$ ./scripts/check-api-surface.sh .project/current-exports.txt
+✅ API surface extracted (3959 items)
+✅ API surface unchanged
+exit 0
+
+Acceptance-criteria greps:
+  grep -cE 'println!.*(secret|signing_key|SIGNING_KEY)' examples/webhook_receiver.rs -> 0
+  grep -c 'X-Paladin-Signature' examples/webhook_receiver.rs                        -> 1
+  grep -cE '\.unwrap\(\)|\.expect\(' examples/webhook_receiver.rs                   -> 0
+  Constant-time comparison confirmed by reading webhook_handler: `hmac::Mac::verify_slice`,
+  never a plain `==` on the digest bytes.
+  git diff --stat HEAD~1 -- src/ crates/                                            -> empty
+
+All three tasks in this plan are now committed. `make api-surface` reports the surface
+unchanged across every commit in this plan (3959 items, stable).

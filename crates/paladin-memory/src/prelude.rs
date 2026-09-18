@@ -7,7 +7,7 @@ pub use crate::garrison::InMemoryGarrison;
 #[cfg(feature = "sqlite")]
 pub use crate::garrison::SqliteGarrison;
 #[cfg(feature = "content-processing")]
-pub use crate::garrison::{TiktokenCounter, TokenCounter, TokenCounterFactory};
+pub use crate::garrison::TiktokenCounter;
 
 // Sanctum
 #[cfg(feature = "qdrant")]
@@ -22,7 +22,8 @@ pub use crate::vault::SqliteVault;
 
 // Services
 pub use crate::services::{
-    MemoryExtractionService, MemoryExtractionStrategy, RagConfig, RagRetrievalService,
+    MemoryExtractionService, MemoryExtractionStrategy, RagConfig, RagRetainedMemory,
+    RagRetrievalError, RagRetrievalResult, RagRetrievalService, ShedItem, rag_omission_marker,
 };
 
 // Config types

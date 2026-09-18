@@ -2,6 +2,11 @@
 
 This section describes how to set up and use the MinIO file storage adapter for the paladin framework using the `rust-s3` crate, alongside the Redis queue adapter.
 
+> This is appendix reference material, not a tutorial: the code blocks below are illustrative
+> fragments fenced `rust,ignore` and are not compiled by mdBook's build. The API forms are
+> verified against `crates/paladin-ports/src/output/file_storage_port.rs` and
+> `src/infrastructure/adapters/file_storage/mod.rs`.
+
 ## Why rust-s3 instead of minio crate?
 
 We use the `rust-s3` crate instead of the `minio` crate because:
@@ -14,7 +19,7 @@ We use the `rust-s3` crate instead of the `minio` crate because:
 ## Prerequisites
 
 - Docker and Docker Compose
-- Rust 1.75 or later
+- Rust 1.88 or later
 - MinIO server (via Docker - works perfectly with rust-s3)
 - Redis 7.0 or later (if running locally)
 
@@ -116,9 +121,9 @@ allowed_extensions = ["txt", "md", "json", "pdf", "doc", "rs", "py"]
 
 ### Basic Usage
 
-```rust
+```rust,ignore
 use paladin::infrastructure::adapters::file_storage::minio::MinioAdapter;
-use paladin::paladin_ports::output::file_storage_port::{FileStoragePort, UploadOptions};
+use paladin_ports::output::file_storage_port::{FileStoragePort, UploadOptions};
 use std::path::PathBuf;
 
 // Initialize the adapter (uses rust-s3 internally)
@@ -156,7 +161,7 @@ adapter.delete_file(&file_path).await?;
 
 #### Presigned URLs
 
-```rust
+```rust,ignore
 use std::time::Duration;
 
 // Generate presigned download URL (valid for 1 hour)
@@ -179,7 +184,7 @@ println!("Presigned upload URL: {}", upload_url);
 
 #### Metadata and Content Types
 
-```rust
+```rust,ignore
 let mut metadata = HashMap::new();
 metadata.insert("author".to_string(), "security-team".to_string());
 metadata.insert("scan-type".to_string(), "vulnerability".to_string());
@@ -197,7 +202,7 @@ let file_item = adapter.upload_file(&file_path, &content, Some(upload_options)).
 
 ### Batch Operations
 
-```rust
+```rust,ignore
 // Upload multiple files concurrently (rust-s3 handles concurrency efficiently)
 let files = vec![
     (PathBuf::from("batch/file1.txt"), file1_content, Some(options1)),
@@ -215,7 +220,7 @@ let downloaded_files = adapter.download_files(paths, None).await?;
 Thanks to `rust-s3`, the same adapter can work with different S3-compatible services:
 
 ### MinIO (Development)
-```rust
+```rust,ignore
 let config = MinioConfig {
     endpoint: "localhost:9000".to_string(),
     access_key: "minioadmin".to_string(),
@@ -228,7 +233,7 @@ let config = MinioConfig {
 ```
 
 ### AWS S3 (Production)
-```rust
+```rust,ignore
 let config = MinioConfig {
     endpoint: "s3.amazonaws.com".to_string(),
     access_key: "YOUR_AWS_ACCESS_KEY".to_string(),
@@ -241,7 +246,7 @@ let config = MinioConfig {
 ```
 
 ### DigitalOcean Spaces
-```rust
+```rust,ignore
 let config = MinioConfig {
     endpoint: "nyc3.digitaloceanspaces.com".to_string(),
     access_key: "YOUR_DO_ACCESS_KEY".to_string(),
@@ -257,8 +262,8 @@ let config = MinioConfig {
 
 ### Uploading Code for Analysis
 
-```rust
-use paladin::paladin_ports::output::file_storage_port::*;
+```rust,ignore
+use paladin_ports::output::file_storage_port::*;
 
 // Upload source code files with rust-s3
 let rust_files = vec!["main.rs", "lib.rs", "security.rs"];
@@ -299,7 +304,7 @@ open http://localhost:9001
 
 ### File Storage Statistics
 
-```rust
+```rust,ignore
 // Get storage statistics (powered by rust-s3)
 let stats = adapter.get_storage_stats().await?;
 println!("Total files: {}, Total size: {} bytes",
@@ -320,7 +325,7 @@ if health.is_available {
 
 `rust-s3` provides efficient connection handling:
 
-```rust
+```rust,ignore
 // rust-s3 automatically manages HTTP connections and connection pooling
 // Supports concurrent operations out of the box
 // Includes automatic retry logic for failed requests
@@ -330,14 +335,14 @@ if health.is_available {
 
 Use batch operations for better performance:
 
-```rust
+```rust,ignore
 // rust-s3 executes uploads concurrently for better performance
 let batch_results = adapter.upload_files(large_file_list).await?;
 ```
 
 ### Timeout and Retry Configuration
 
-```rust
+```rust,ignore
 let config = MinioConfig {
     connection_timeout: Duration::from_secs(30),
     request_timeout: Duration::from_secs(300),
@@ -420,7 +425,7 @@ If you were previously using the `minio` crate, here are the key differences:
 
 ### Code Changes Required
 
-```rust
+```rust,ignore
 // Old (minio crate)
 use minio::s3::client::Client;
 
@@ -565,9 +570,9 @@ allowed_extensions = ["txt", "md", "json", "pdf", "doc", "rs", "py"]
 
 ### Basic Usage
 
-```rust
+```rust,ignore
 use paladin::infrastructure::adapters::file_storage::minio::MinioAdapter;
-use paladin::paladin_ports::output::file_storage_port::{FileStoragePort, UploadOptions};
+use paladin_ports::output::file_storage_port::{FileStoragePort, UploadOptions};
 use std::path::PathBuf;
 
 // Initialize the adapter
@@ -603,7 +608,7 @@ adapter.delete_file(&file_path).await?;
 
 ### Batch Operations
 
-```rust
+```rust,ignore
 // Upload multiple files
 let files = vec![
     (PathBuf::from("batch/file1.txt"), file1_content, Some(options1)),
@@ -618,7 +623,7 @@ let downloaded_files = adapter.download_files(paths, None).await?;
 
 ### File Versioning
 
-```rust
+```rust,ignore
 // Upload a new version
 let versioned_file = adapter.upload_file_version(&file_path, &new_content, None).await?;
 
@@ -630,8 +635,8 @@ let versions = adapter.list_file_versions(&file_path).await?;
 
 ### Uploading Code for Analysis
 
-```rust
-use paladin::paladin_ports::output::file_storage_port::*;
+```rust,ignore
+use paladin_ports::output::file_storage_port::*;
 
 // Upload source code files
 let rust_files = vec!["main.rs", "lib.rs", "security.rs"];
@@ -655,7 +660,7 @@ for file_name in rust_files {
 
 ### Generating and Storing Reports
 
-```rust
+```rust,ignore
 // Generate security report
 let report_content = generate_security_report().await?;
 let report_path = PathBuf::from("reports/security_audit_2024.md");
@@ -692,7 +697,7 @@ open http://localhost:9001
 
 ### File Storage Statistics
 
-```rust
+```rust,ignore
 // Get storage statistics
 let stats = adapter.get_storage_stats().await?;
 println!("Total files: {}, Total size: {} bytes",
@@ -709,9 +714,9 @@ if health.is_available {
 
 ### Combined Queue and Storage Operations
 
-```rust
+```rust,ignore
 use paladin::infrastructure::adapters::queue::redis::RedisQueueAdapter;
-use paladin::paladin_ports::output::queue_port::QueuePort;
+use paladin_ports::output::queue_port::QueuePort;
 
 // Upload file and queue analysis task
 let file_item = storage_adapter.upload_file(&file_path, &content, None).await?;
@@ -750,8 +755,8 @@ paladin-files/
 
 The adapter provides comprehensive error handling:
 
-```rust
-use paladin::paladin_ports::output::file_storage_port::FileStorageError;
+```rust,ignore
+use paladin_ports::output::file_storage_port::FileStorageError;
 
 match adapter.upload_file(&path, &content, None).await {
     Ok(file_item) => println!("Uploaded: {}", file_item.path.display()),
@@ -770,7 +775,7 @@ match adapter.upload_file(&path, &content, None).await {
 
 Both adapters use connection pooling for efficiency:
 
-```rust
+```rust,ignore
 // MinIO adapter automatically manages HTTP connections
 // Redis adapter uses ConnectionManager for connection pooling
 ```
@@ -779,7 +784,7 @@ Both adapters use connection pooling for efficiency:
 
 Use batch operations for better performance:
 
-```rust
+```rust,ignore
 // Instead of multiple single uploads
 for file in files {
     adapter.upload_file(&file.path, &file.content, None).await?;  // Slower

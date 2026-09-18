@@ -26,8 +26,10 @@ A `WarGraph` is a collection of nodes and static edges, executed by a `WarEngine
 `CampaignExecutionService`'s DAG, a `WarGraph` **permits cycles** — `WarGraph::validate` rejects
 only a node that could never become ready (unreachable from `entry` and not marked a dynamic
 target or worker template), not a cycle itself, and every run is bounded by `EngineLimits`
-(`max_supersteps`, `max_node_visits`). This page assumes that much and no more; the full engine
-guide is future documentation (see the `Deferred` note in `23-CONTEXT.md`).
+(`max_supersteps`, `max_node_visits`). This page assumes that much and no more; for the full
+engine guide — `Battlefield` state, superstep merge semantics, `Waypoint` checkpointing, the
+`WaypointPort` backends, `EngineConfig`/`EngineLimits` and the graph fingerprint — see
+[WarEngine: Battlefield State & Superstep Execution](superstep-engine.md).
 
 ---
 
@@ -47,7 +49,7 @@ pub enum NextStep {
     Goto(Vec<NodeId>),    // enter these nodes directly next superstep
     Muster(Vec<MusterTask>), // fan out worker tasks (see below)
     End,                  // complete the run after this superstep's merge
-    Parley(ParleyRequest), // suspend — not implemented this phase, fails the run
+    Parley(ParleyRequest), // suspend the run awaiting external input (see below)
 }
 ```
 
@@ -69,9 +71,12 @@ node's static edges `NotFiring`.
 superstep still merge their own deltas normally; `End` takes precedence over a `Goto` emitted by
 another node in the same superstep.
 
-**`NextStep::Parley`** is declared for Doc 03's suspension mechanism but not implemented this
-phase: a node returning it fails the run with `EngineError::ParleyNotSupported` rather than
-silently pausing — Phase 24 (HITL-01) lands the real behavior.
+**`NextStep::Parley`** suspends the run awaiting external input — fully implemented as of
+Phase 24 (HITL-01, HITL-02): the emitting node's static edges resolve `NotFiring` for that
+superstep, every `ParleyRequest` raised in the suspending superstep is collected onto one
+`AwaitingInput` Waypoint, and `WarEngine::resume_with` is the only path that advances a
+suspended thread. See [Parley & Chronicle](parley-and-chronicle.md) for the shipped pause/resume
+mechanism, building an approval gate, and raising a parley from a Paladin node.
 
 ---
 
@@ -128,8 +133,9 @@ deterministically on aggregation and to reject a duplicate key within one Muster
 node reads its task's payload through `NodeContext::muster` — never through a Battlefield
 field — via the `{muster.payload}` / `{muster.task_key}` placeholders in an `InputMapping`
 template; graph validation rejects any schema field declared with the `muster.` prefix, so this
-namespace can never be shadowed. `EngineLimits::max_muster_tasks` (default 100) bounds a single
-Muster directive, enforced at directive-receipt time before any task dispatches
+namespace can never be shadowed. `EngineLimits::max_muster_tasks` (default 100, overridable via
+the `APP_ENGINE_MAX_MUSTER_TASKS` environment variable) bounds a single Muster directive,
+enforced at directive-receipt time before any task dispatches
 (`EngineError::MusterTaskLimitExceeded`) — raising it is a legitimate operator action, so it is
 excluded from the graph fingerprint. A run resumed mid-Muster picks up the outstanding tasks from
 the last progress Waypoint, which stores the superstep's *unmerged* delta snapshot rather than a

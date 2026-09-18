@@ -19,10 +19,10 @@
 //!   material, it returns a [`Stockpile`]: every retained item clamped to a per-item
 //!   share (with a visible truncation marker when a cut was needed) and every shed item
 //!   recorded with its label, priority, and original size. Nothing is dropped silently
-//!   — the explicit anti-pattern this module rejects is
-//!   `paladin_memory::services::rag_retrieval_service::RagRetrievalService::
-//!   truncate_to_token_budget`, which drops lowest-scoring items with no marker and no
-//!   record.
+//!   — the anti-pattern this module was built to replace was the RAG retrieval
+//!   service's own inline byte-length budget estimate, which dropped lowest-scoring
+//!   memories with no marker and no record. That silent drop was retired in v0.10.0
+//!   when RAG became this module's first production caller (Phase 33).
 //!
 //! **Framework owns measurement and enforcement; callers own policy.** The Commissary
 //! never decides WHICH material matters more — that is the caller-supplied `priority`
@@ -30,19 +30,20 @@
 //! policy crosses into this crate.
 //!
 //! **Honesty clause.** Not every model has an exact tokenizer available offline
-//! (`claude-*`, `deepseek-*`). [`TokenCounterPort::count`] is infallible and carries no
-//! built-in exactness signal (unlike the removed, fallible `TokenCounter::is_exact`), so
-//! the caller supplies `is_exact_counter` explicitly at construction — it already knows
-//! which concrete counter it injected (e.g. `HeuristicTokenCounter` → `false`,
-//! `TiktokenCounter` → `true`). That flag is threaded straight into
-//! [`Stockpile::exact_tally`] so a caller reading a `Commissary`-produced stockpile can
-//! tell an exact tally from an estimate and budget its own margin accordingly.
+//! (`claude-*`, `deepseek-*`). Exactness is declared by the injected
+//! [`TokenCounterPort`] itself, through [`TokenCounterPort::is_exact`] — one source of
+//! truth, with no cached duplicate on `Commissary`. `Commissary` reads
+//! `self.counter.is_exact()` live where [`Stockpile::exact_tally`] is set, so a caller
+//! reading a `Commissary`-produced stockpile can always tell an exact tally from a
+//! deliberately over-counting estimate and budget its own margin accordingly.
 
 use std::sync::Arc;
 
 use paladin_ports::output::llm_port::{LlmPort, ProviderCapabilities};
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 use thiserror::Error;
+
+use crate::window::{WindowFallbackPolicy, resolve_context_window};
 
 /// Planning-only tokens-per-1000-bytes ratio used ONLY internally by
 /// [`Commissary::dispense`] to decide how many bytes each item may keep while
@@ -84,8 +85,8 @@ pub struct CommissaryPlan {
     /// The tokens-per-1000-bytes ratio used ONLY for byte-share PLANNING while
     /// dispensing (deciding how many bytes each item may keep). The final tally
     /// reported on the returned [`Stockpile`] always goes through the configured
-    /// [`TokenCounterPort`], never this ratio. Defaults to
-    /// [`PESSIMISTIC_TOKENS_PER_1000_BYTES`]. Zero is rejected at
+    /// [`TokenCounterPort`], never this ratio. Defaults to the crate-private
+    /// `PESSIMISTIC_TOKENS_PER_1000_BYTES` constant. Zero is rejected at
     /// [`Commissary::new`] construction time — the division-hazard guard.
     pub pessimistic_tokens_per_1000_bytes: u32,
 
@@ -205,11 +206,10 @@ pub struct Stockpile {
     /// The token allowance this stockpile was dispensed against
     /// ([`Commissary::allotted_tokens`] at the time of dispensing).
     pub allotted_tokens: u32,
-    /// Threaded from the `is_exact_counter` argument supplied at
-    /// [`Commissary::new`]/[`Commissary::from_port`] construction time: `true` if
-    /// `prompt_tokens` is an exact tally, `false` if it is a deliberately over-counting
-    /// estimate. A caller treating an estimate as exact would be over-trusting the
-    /// guard — this field is how it avoids that mistake.
+    /// Read live from the injected [`TokenCounterPort::is_exact`] where this
+    /// `Stockpile` is built: `true` if `prompt_tokens` is an exact tally, `false` if it
+    /// is a deliberately over-counting estimate. A caller treating an estimate as exact
+    /// would be over-trusting the guard — this field is how it avoids that mistake.
     pub exact_tally: bool,
 }
 
@@ -302,7 +302,11 @@ pub struct Commissary {
     capabilities: ProviderCapabilities,
     provider: String,
     config: CommissaryPlan,
-    is_exact_counter: bool,
+    /// The context window resolved once, at construction, through
+    /// [`resolve_context_window`] under [`WindowFallbackPolicy::Strict`]. Read back by
+    /// [`Commissary::window`] instead of re-walking the precedence order on every
+    /// allowance query.
+    resolved_window: u32,
 }
 
 impl std::fmt::Debug for Commissary {
@@ -311,7 +315,8 @@ impl std::fmt::Debug for Commissary {
             .field("provider", &self.provider)
             .field("capabilities", &self.capabilities)
             .field("config", &self.config)
-            .field("is_exact_counter", &self.is_exact_counter)
+            .field("counter", &self.counter.name())
+            .field("is_exact", &self.counter.is_exact())
             .finish()
     }
 }
@@ -320,18 +325,19 @@ impl Commissary {
     /// Constructs a `Commissary` for `provider` from an already-obtained
     /// [`ProviderCapabilities`] and [`TokenCounterPort`].
     ///
-    /// `is_exact_counter` is caller-supplied because the new, infallible
-    /// [`TokenCounterPort`] contract carries no built-in exactness signal (unlike the
-    /// removed, fallible `TokenCounter::is_exact`) — the caller already knows which
-    /// concrete counter it is injecting (e.g. `HeuristicTokenCounter` → `false`,
-    /// `TiktokenCounter` → `true`).
+    /// Exactness is not a caller-supplied argument: [`Stockpile::exact_tally`] is read
+    /// live from `counter.is_exact()` wherever a stockpile is built, so there is exactly
+    /// one source of truth for whether `counter` produces exact or approximate tallies.
     ///
     /// # Errors
     ///
     /// - [`CommissaryError::InvalidConfig`] if `config.pessimistic_tokens_per_1000_bytes`
     ///   is zero, or if `config.per_item_min_bytes > config.per_item_max_bytes`.
-    /// - [`CommissaryError::UndeclaredContextWindow`] if `capabilities.max_context_tokens`
-    ///   is `None` and `config.fallback_context_tokens` is also `None`.
+    /// - [`CommissaryError::UndeclaredContextWindow`] if the context window is resolved,
+    ///   once, through [`resolve_context_window`] under [`WindowFallbackPolicy::Strict`]
+    ///   (no config table, `config.fallback_context_tokens` as the caller fallback) and
+    ///   that resolution refuses -- i.e. `capabilities.max_context_tokens` is `None` and
+    ///   `config.fallback_context_tokens` is also `None`.
     /// - [`CommissaryError::ReservationExceedsWindow`] if
     ///   `config.reserved_completion_tokens` is greater than or equal to the resolved
     ///   window.
@@ -339,7 +345,6 @@ impl Commissary {
         provider: impl Into<String>,
         capabilities: ProviderCapabilities,
         counter: Arc<dyn TokenCounterPort>,
-        is_exact_counter: bool,
         config: CommissaryPlan,
     ) -> Result<Self, CommissaryError> {
         let provider = provider.into();
@@ -356,12 +361,21 @@ impl Commissary {
             )));
         }
 
-        let window = capabilities
-            .max_context_tokens
-            .or(config.fallback_context_tokens)
-            .ok_or_else(|| CommissaryError::UndeclaredContextWindow {
-                provider: provider.clone(),
-            })?;
+        // Commissary passes no config table (D-03): step one of the shared resolver's
+        // walk is a permanent no-op here, so every window Commissary resolves stays
+        // identical to the pre-resolver value -- do not "fix" this by inventing a table.
+        let resolved = resolve_context_window(
+            &config.model_hint,
+            None,
+            &capabilities,
+            WindowFallbackPolicy::Strict {
+                caller_fallback: config.fallback_context_tokens,
+            },
+        )
+        .map_err(|_unknown| CommissaryError::UndeclaredContextWindow {
+            provider: provider.clone(),
+        })?;
+        let window = resolved.tokens;
 
         if config.reserved_completion_tokens >= window {
             return Err(CommissaryError::ReservationExceedsWindow {
@@ -375,7 +389,7 @@ impl Commissary {
             capabilities,
             provider,
             config,
-            is_exact_counter,
+            resolved_window: window,
         })
     }
 
@@ -389,27 +403,22 @@ impl Commissary {
     pub fn from_port(
         llm: &dyn LlmPort,
         counter: Arc<dyn TokenCounterPort>,
-        is_exact_counter: bool,
         config: CommissaryPlan,
     ) -> Result<Self, CommissaryError> {
         Self::new(
             llm.get_provider_name().to_string(),
             llm.get_capabilities(),
             counter,
-            is_exact_counter,
             config,
         )
     }
 
-    /// Resolves the context window: the provider's declared `max_context_tokens`, or
-    /// [`CommissaryPlan::fallback_context_tokens`] when the provider declared none.
-    /// Guaranteed to resolve to a value by the constructor's
-    /// [`CommissaryError::UndeclaredContextWindow`] guard.
+    /// The context window resolved once at construction, through
+    /// [`resolve_context_window`] under [`WindowFallbackPolicy::Strict`]
+    /// ([`Commissary::new`]). Guaranteed to have resolved to a value by the
+    /// constructor's [`CommissaryError::UndeclaredContextWindow`] guard.
     fn window(&self) -> u32 {
-        self.capabilities
-            .max_context_tokens
-            .or(self.config.fallback_context_tokens)
-            .unwrap_or(0)
+        self.resolved_window
     }
 
     /// The token allowance available for a prompt: the resolved window minus
@@ -439,8 +448,8 @@ impl Commissary {
     /// 6. Each retained item is truncated to its final share with a char-boundary-safe
     ///    walk, with the truncation marker appended when a cut was needed.
     /// 7. The final `fixed + rendered` text is tallied through the configured
-    ///    [`TokenCounterPort`] for `prompt_tokens`; `is_exact_counter` (supplied at
-    ///    construction) is carried into `exact_tally`.
+    ///    [`TokenCounterPort`] for `prompt_tokens`; `exact_tally` is read live from
+    ///    `counter.is_exact()`.
     /// 8. The stockpile is returned with `shed` populated in shed order.
     ///
     /// # Errors
@@ -544,7 +553,7 @@ impl Commissary {
             shed,
             prompt_tokens,
             allotted_tokens,
-            exact_tally: self.is_exact_counter,
+            exact_tally: self.counter.is_exact(),
         })
     }
 
@@ -604,8 +613,21 @@ mod tests {
     /// A deterministic, infallible stand-in [`TokenCounterPort`] for these tests: the
     /// same `chars() / 4` approximation [`HeuristicTokenCounter`] uses, reimplemented
     /// locally so this module's tests do not need a `paladin-memory` dev-dependency.
+    /// Exactness is configurable via the `exact` field so tests can exercise both
+    /// directions of [`Stockpile::exact_tally`] without a constructor argument on
+    /// `Commissary` itself; the default (`false`) keeps every existing helper
+    /// unchanged.
     #[derive(Debug, Default, Clone, Copy)]
-    struct MockCounter;
+    struct MockCounter {
+        exact: bool,
+    }
+
+    impl MockCounter {
+        /// A `MockCounter` that reports exact tokenisation.
+        fn exact() -> Self {
+            Self { exact: true }
+        }
+    }
 
     impl TokenCounterPort for MockCounter {
         fn count(&self, text: &str, _model: &str) -> u32 {
@@ -615,10 +637,18 @@ mod tests {
         fn name(&self) -> &str {
             "mock"
         }
+
+        fn is_exact(&self) -> bool {
+            self.exact
+        }
     }
 
     fn counter() -> Arc<dyn TokenCounterPort> {
-        Arc::new(MockCounter)
+        Arc::new(MockCounter::default())
+    }
+
+    fn exact_counter() -> Arc<dyn TokenCounterPort> {
+        Arc::new(MockCounter::exact())
     }
 
     fn capabilities_with_window(window: Option<u32>) -> ProviderCapabilities {
@@ -633,7 +663,6 @@ mod tests {
             "deepseek",
             capabilities_with_window(Some(window)),
             counter(),
-            false,
             config,
         )
         .unwrap()
@@ -807,7 +836,6 @@ mod tests {
             "mystery-provider",
             capabilities_with_window(None),
             counter(),
-            false,
             CommissaryPlan::default(),
         );
 
@@ -827,7 +855,6 @@ mod tests {
             "mystery-provider",
             capabilities_with_window(None),
             counter(),
-            false,
             config,
         )
         .unwrap();
@@ -845,7 +872,6 @@ mod tests {
             "deepseek",
             capabilities_with_window(Some(100)),
             counter(),
-            false,
             config,
         );
 
@@ -868,7 +894,6 @@ mod tests {
             "deepseek",
             capabilities_with_window(Some(10_000)),
             counter(),
-            false,
             config,
         );
 
@@ -886,7 +911,6 @@ mod tests {
             "deepseek",
             capabilities_with_window(Some(10_000)),
             counter(),
-            false,
             config,
         );
 
@@ -949,29 +973,32 @@ mod tests {
     }
 
     #[test]
-    fn exact_tally_true_is_threaded_from_the_constructor_argument() {
+    fn exact_tally_true_is_read_from_an_exact_injected_port() {
         let commissary = Commissary::new(
             "deepseek",
             capabilities_with_window(Some(10_000)),
-            counter(),
-            /* is_exact_counter */ true,
+            exact_counter(),
             CommissaryPlan::default(),
         )
         .unwrap();
         let consignment = Consignment::new();
 
-        let stockpile = commissary.dispense("fixed material", &consignment).unwrap();
+        let first = commissary.dispense("fixed material", &consignment).unwrap();
+        let second = commissary.dispense("fixed material", &consignment).unwrap();
 
-        assert!(stockpile.exact_tally);
+        assert!(first.exact_tally);
+        assert_eq!(
+            first.exact_tally, second.exact_tally,
+            "exact_tally does not depend on dispense call order"
+        );
     }
 
     #[test]
-    fn exact_tally_false_is_threaded_from_the_constructor_argument() {
+    fn exact_tally_false_is_read_from_an_approximate_injected_port() {
         let commissary = Commissary::new(
             "deepseek",
             capabilities_with_window(Some(10_000)),
             counter(),
-            /* is_exact_counter */ false,
             CommissaryPlan::default(),
         )
         .unwrap();
@@ -982,6 +1009,63 @@ mod tests {
         assert!(!stockpile.exact_tally);
     }
 
+    /// Equivalence snapshot (D-13): committed green against the PRE-RESOLVER inline
+    /// guard in `Commissary::new` -- `capabilities.max_context_tokens`, falling back to
+    /// `config.fallback_context_tokens` when the provider declared none. Plan 32-02
+    /// introduces `paladin_llm::window::
+    /// resolve_context_window` as the single shared precedence walk, and plan 32-04
+    /// rewires `Commissary::new` to call it — these three rows and their asserted
+    /// allowances/error must stay byte-identical across that rewire. The CONTINUITY,
+    /// not just the numbers, is the proof (D-13): this test is never edited to make a
+    /// later refactor pass.
+    #[test]
+    fn window_and_allowance_equivalence_snapshot_pre_resolver() {
+        enum Expected {
+            Allotted(u32),
+            UndeclaredWindow,
+        }
+
+        let rows: [(Option<u32>, Option<u32>, Expected); 3] = [
+            (Some(8_765), Some(2_222), Expected::Allotted(8_444)),
+            (None, Some(2_222), Expected::Allotted(1_901)),
+            (None, None, Expected::UndeclaredWindow),
+        ];
+
+        for (max_context_tokens, fallback_context_tokens, expected) in rows {
+            let config = CommissaryPlan {
+                reserved_completion_tokens: 321,
+                fallback_context_tokens,
+                ..CommissaryPlan::default()
+            };
+            let result = Commissary::new(
+                "deepseek",
+                capabilities_with_window(max_context_tokens),
+                counter(),
+                config,
+            );
+
+            match expected {
+                Expected::Allotted(expected_allotted) => {
+                    let commissary = result.unwrap_or_else(|err| {
+                        panic!("expected construction to succeed, got {err}")
+                    });
+                    assert_eq!(commissary.allotted_tokens(), expected_allotted);
+                }
+                Expected::UndeclaredWindow => {
+                    let err = result.expect_err("expected UndeclaredContextWindow");
+                    assert!(
+                        matches!(err, CommissaryError::UndeclaredContextWindow { .. }),
+                        "expected UndeclaredContextWindow, got {err:?}"
+                    );
+                    assert!(
+                        err.to_string().contains("deepseek"),
+                        "error message must name the provider ('deepseek'): {err}"
+                    );
+                }
+            }
+        }
+    }
+
     #[cfg(feature = "mock")]
     #[test]
     fn the_window_comes_from_the_ports_declared_capabilities() {
@@ -989,14 +1073,12 @@ mod tests {
 
         let mock_adapter = MockLlmAdapter::new();
         let mock_commissary =
-            Commissary::from_port(&mock_adapter, counter(), false, CommissaryPlan::default())
-                .unwrap();
+            Commissary::from_port(&mock_adapter, counter(), CommissaryPlan::default()).unwrap();
 
         let big_commissary = Commissary::new(
             "big-provider",
             capabilities_with_window(Some(64_000)),
             counter(),
-            false,
             CommissaryPlan::default(),
         )
         .unwrap();

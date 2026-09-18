@@ -18,7 +18,7 @@
 use colored::*;
 use paladin_core::platform::container::herald::{
     BattalionResult, ExecutionMetadata, Herald, HeraldError, PaladinError, PaladinResult,
-    StreamChunk,
+    StreamChunk, TokenUsage,
 };
 use serde::{Deserialize, Serialize};
 
@@ -227,6 +227,83 @@ impl MarkdownHerald {
     fn error_heading(&self) -> String {
         "**Error**\n\n".to_string()
     }
+
+    /// Render a "Token Usage" block for a full `TokenUsage` split (D-22).
+    ///
+    /// Prompt, Completion and Total rows are always rendered. Cache read,
+    /// Cache write and Reasoning rows are rendered ONLY when the
+    /// corresponding optional is `Some` — Markdown is for humans, so an
+    /// unreported figure is omitted entirely rather than shown as a
+    /// placeholder.
+    fn token_usage_block(&self, usage: &TokenUsage) -> String {
+        let mut block = String::new();
+        block.push_str(&self.heading(self.config.heading_level + 2, "Token Usage"));
+        block.push_str(&self.format_field("Prompt", &usage.prompt_tokens.to_string()));
+        block.push_str(&self.format_field("Completion", &usage.completion_tokens.to_string()));
+        block.push_str(&self.format_field("Total", &usage.total_tokens.to_string()));
+        if let Some(cache_read) = usage.cache_read_tokens {
+            block.push_str(&self.format_field("Cache read", &cache_read.to_string()));
+        }
+        if let Some(cache_write) = usage.cache_write_tokens {
+            block.push_str(&self.format_field("Cache write", &cache_write.to_string()));
+        }
+        if let Some(reasoning) = usage.reasoning_tokens {
+            block.push_str(&self.format_field("Reasoning", &reasoning.to_string()));
+        }
+        block
+    }
+
+    /// Render a per-Paladin usage table for a `BattalionResult` (D-22).
+    ///
+    /// One row per Paladin, keyed by the `per_paladin_tokens` map so each row
+    /// names the Paladin it belongs to. A table's column set is fixed, so an
+    /// unreported optional renders as an empty cell rather than an omitted
+    /// row.
+    fn per_paladin_usage_table(
+        &self,
+        per_paladin_tokens: &std::collections::HashMap<String, TokenUsage>,
+    ) -> String {
+        let mut table = String::new();
+        table.push_str(&self.heading(self.config.heading_level + 1, "Per-Paladin Token Usage"));
+        table.push_str(
+            "| Name | Prompt | Completion | Total | Cache read | Cache write | Reasoning |\n",
+        );
+        table.push_str(
+            "|------|--------|------------|-------|------------|-------------|-----------|\n",
+        );
+
+        let mut names: Vec<&String> = per_paladin_tokens.keys().collect();
+        names.sort();
+
+        for name in names {
+            let usage = &per_paladin_tokens[name];
+            let cache_read = usage
+                .cache_read_tokens
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            let cache_write = usage
+                .cache_write_tokens
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            let reasoning = usage
+                .reasoning_tokens
+                .map(|v| v.to_string())
+                .unwrap_or_default();
+            table.push_str(&format!(
+                "| {} | {} | {} | {} | {} | {} | {} |\n",
+                name,
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.total_tokens,
+                cache_read,
+                cache_write,
+                reasoning,
+            ));
+        }
+        table.push('\n');
+
+        table
+    }
 }
 
 impl Default for MarkdownHerald {
@@ -254,7 +331,7 @@ impl Herald for MarkdownHerald {
 
         // Metadata section
         output.push_str(&self.heading(self.config.heading_level + 1, "Metadata"));
-        output.push_str(&self.format_field("Token Count", &result.token_count.to_string()));
+        output.push_str(&self.token_usage_block(&result.usage));
         output.push_str(
             &self.format_field("Execution Time (ms)", &result.execution_time_ms.to_string()),
         );
@@ -293,6 +370,11 @@ impl Herald for MarkdownHerald {
         );
         output.push_str(&self.format_field("Total Tokens", &result.total_tokens.to_string()));
         output.push('\n');
+
+        // Per-Paladin usage table, under the existing total-tokens summary.
+        if !result.per_paladin_tokens.is_empty() {
+            output.push_str(&self.per_paladin_usage_table(&result.per_paladin_tokens));
+        }
 
         // Individual Paladin results
         output.push_str(&self.heading(self.config.heading_level + 1, "Paladin Results"));
@@ -336,10 +418,7 @@ impl Herald for MarkdownHerald {
         if let Some(duration) = metadata.duration_ms {
             output.push_str(&self.format_field("Duration", &format!("{}ms", duration)));
         }
-        output.push_str(&self.format_field(
-            "Total Tokens",
-            &metadata.token_usage.total_tokens.to_string(),
-        ));
+        output.push_str(&self.token_usage_block(&metadata.token_usage));
         if let Some(cost) = metadata.cost_estimate {
             output.push_str(&self.format_field("Cost", &format!("${:.4}", cost)));
         }
@@ -369,14 +448,16 @@ impl Herald for MarkdownHerald {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use paladin_core::platform::container::battalion::{BattalionStatus, BattalionStrategy};
+    use paladin_core::platform::container::battalion::{
+        BattalionStatus, BattalionStrategy, TokenUsage,
+    };
     use paladin_ports::output::paladin_port::StopReason;
     use uuid::Uuid;
 
     fn create_test_paladin_result() -> PaladinResult {
         PaladinResult {
             output: "Test output content".to_string(),
-            token_count: 100,
+            usage: TokenUsage::new(100, 0),
             execution_time_ms: 1500,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -395,7 +476,7 @@ mod tests {
                 create_test_paladin_result(),
                 PaladinResult {
                     output: "Second output".to_string(),
-                    token_count: 150,
+                    usage: TokenUsage::new(150, 0),
                     execution_time_ms: 2000,
                     loop_count: 2,
                     stop_reason: StopReason::MaxLoops,
@@ -520,7 +601,67 @@ mod tests {
         assert!(formatted.contains("### Output"));
         assert!(formatted.contains("Test output content"));
         assert!(formatted.contains("### Metadata"));
-        assert!(formatted.contains("**Token Count:**"));
+        assert!(formatted.contains("Token Usage"));
+        assert!(formatted.contains("**Prompt:**"));
+        assert!(formatted.contains("**Completion:**"));
+        assert!(formatted.contains("**Total:**"));
+        assert!(!formatted.contains("**Token Count:**"));
+    }
+
+    #[test]
+    fn test_token_usage_block_omits_unreported_optionals() {
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+        let result = PaladinResult {
+            output: "output".to_string(),
+            usage: TokenUsage::new(10, 5),
+            execution_time_ms: 1500,
+            loop_count: 1,
+            stop_reason: StopReason::Completed,
+            ..Default::default()
+        };
+
+        let formatted = herald.format_paladin_result(&result).unwrap();
+
+        // Prompt, Completion and Total are always present.
+        assert!(formatted.contains("**Prompt:**"));
+        assert!(formatted.contains("**Completion:**"));
+        assert!(formatted.contains("**Total:**"));
+        // Unreported optionals are omitted, never rendered as a placeholder.
+        assert!(!formatted.contains("**Cache read:**"));
+        assert!(!formatted.contains("**Cache write:**"));
+        assert!(!formatted.contains("**Reasoning:**"));
+    }
+
+    #[test]
+    fn test_token_usage_block_renders_optionals_when_reported() {
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+        let result = PaladinResult {
+            output: "output".to_string(),
+            usage: TokenUsage::new(1_234, 567)
+                .with_cache_read(100)
+                .with_cache_write(50)
+                .with_reasoning(200),
+            execution_time_ms: 1500,
+            loop_count: 1,
+            stop_reason: StopReason::Completed,
+            ..Default::default()
+        };
+
+        let formatted = herald.format_paladin_result(&result).unwrap();
+
+        assert!(formatted.contains("Token Usage"));
+        assert!(formatted.contains("**Prompt:** 1234"));
+        assert!(formatted.contains("**Completion:** 567"));
+        assert!(formatted.contains("**Total:** 1801"));
+        assert!(formatted.contains("**Cache read:** 100"));
+        assert!(formatted.contains("**Cache write:** 50"));
+        assert!(formatted.contains("**Reasoning:** 200"));
     }
 
     #[test]
@@ -554,11 +695,11 @@ mod tests {
         let mut per_paladin_tokens = std::collections::HashMap::new();
         per_paladin_tokens.insert(
             "Scout".to_string(),
-            paladin_core::platform::container::battalion::TokenUsage::from_total(137),
+            paladin_core::platform::container::battalion::TokenUsage::new(137, 0),
         );
         per_paladin_tokens.insert(
             "Sentinel".to_string(),
-            paladin_core::platform::container::battalion::TokenUsage::from_total(263),
+            paladin_core::platform::container::battalion::TokenUsage::new(263, 0),
         );
 
         let result = BattalionResult {
@@ -570,7 +711,7 @@ mod tests {
             paladin_results: vec![
                 PaladinResult {
                     output: "Scout output".to_string(),
-                    token_count: 137,
+                    usage: TokenUsage::new(137, 0),
                     execution_time_ms: 1500,
                     loop_count: 1,
                     stop_reason: StopReason::Completed,
@@ -578,7 +719,7 @@ mod tests {
                 },
                 PaladinResult {
                     output: "Sentinel output".to_string(),
-                    token_count: 263,
+                    usage: TokenUsage::new(263, 0),
                     execution_time_ms: 2000,
                     loop_count: 2,
                     stop_reason: StopReason::Completed,
@@ -615,6 +756,48 @@ mod tests {
         let scout_pos = formatted.find("Scout output").unwrap();
         let sentinel_pos = formatted.find("Sentinel output").unwrap();
         assert!(scout_pos < sentinel_pos);
+    }
+
+    #[test]
+    fn test_per_paladin_usage_table_renders_real_non_zero_splits() {
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+
+        let mut per_paladin_tokens = std::collections::HashMap::new();
+        per_paladin_tokens.insert("Scout".to_string(), TokenUsage::new(321, 145));
+        per_paladin_tokens.insert(
+            "Sentinel".to_string(),
+            TokenUsage::new(410, 90).with_cache_read(30),
+        );
+
+        let result = BattalionResult {
+            battalion_id: Uuid::new_v4(),
+            battalion_name: "SplitBattalion".to_string(),
+            started_at: Utc::now(),
+            completed_at: Utc::now(),
+            final_output: "Combined output".to_string(),
+            paladin_results: vec![],
+            status: BattalionStatus::Completed,
+            strategy_used: BattalionStrategy::Formation,
+            strategy_selection_reasoning: None,
+            strategy_selection_time_ms: 0,
+            per_paladin_times: std::collections::HashMap::new(),
+            per_paladin_tokens,
+            total_tokens: 966,
+            paladin_success_count: 2,
+            paladin_failure_count: 0,
+            node_errors: Vec::new(),
+        };
+
+        let formatted = herald.format_battalion_result(&result).unwrap();
+
+        assert!(formatted.contains("Per-Paladin Token Usage"));
+        // Scout's row carries its real, non-zero prompt/completion split.
+        assert!(formatted.contains("| Scout | 321 | 145 | 466 |"));
+        // Sentinel's row carries its cache-read figure in the right cell.
+        assert!(formatted.contains("| Sentinel | 410 | 90 | 500 | 30 |"));
     }
 
     #[test]
@@ -659,11 +842,7 @@ mod tests {
             .execution_id(uuid::Uuid::new_v4())
             .start_time(chrono::Utc::now())
             .model_used("gpt-4".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 300,
-                completion_tokens: 200,
-                total_tokens: 500,
-            })
+            .token_usage(TokenUsage::new(300, 200))
             .duration_ms(1234)
             .build()
             .unwrap();
@@ -789,11 +968,7 @@ mod tests {
             .execution_id(uuid::Uuid::new_v4())
             .start_time(chrono::Utc::now())
             .model_used("gpt-4".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 180,
-                completion_tokens: 120,
-                total_tokens: 300,
-            })
+            .token_usage(TokenUsage::new(180, 120))
             .duration_ms(1500)
             .build()
             .unwrap();

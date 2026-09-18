@@ -1,5 +1,14 @@
 # REST API Usage Examples:
 
+> **Archived — historical document.** This page documents the `paladin user` CLI and REST
+> examples from an earlier design draft. The `paladin user` subcommand family it describes does
+> not exist in the shipped `paladin-cli` binary — the live `Commands` enum has twelve variants and
+> none of them is a user command. The user domain, service and repository layers do exist
+> (`crates/paladin-core/src/platform/manager/user_service.rs`,
+> `crates/paladin-storage/src/sqlite_user_repository.rs`); a web-facing user API and CLI remain
+> forward scope, not yet shipped. This disposition is recorded in ADR-0047
+> (`.planning/decisions/0047-architecture-appendix-disposition.md`).
+
 1. Register a new user:
 POST /users/register
 ```json
@@ -67,6 +76,13 @@ CLI Usage Examples:
 
 7. Verify user:
 ./paladin user verify -u 550e8400-e29b-41d4-a716-446655440000
+
+> The remainder of this page is an unedited, truncated excerpt of the legacy source comment this
+> page was generated from; it ends mid-statement in the original file. It is fenced as inert text
+> below rather than corrected, per this archive's proportionality rule (D-02, D-04) — the content
+> is unchanged, only its rendering is repaired.
+
+```text
 */
 
 // =============================================================================
@@ -137,3 +153,5 @@ that seamlessly integrates with your existing paladin framework architecture.
         assert!(user_service.validate_username("").is_err());
         assert!(user_service.validate_username("ab").is_err());
         assert!(user_service.validate_username("user
+```
+<!-- source excerpt truncated here in the original page; fence closed to keep the page rendering -->

@@ -30,6 +30,20 @@ pub(crate) struct CompatRequest {
     /// -identical to a pre-0.10 request (X-03).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<CompatResponseFormat>,
+    /// Requests the OpenAI-family `usage` object on the final SSE frame of a
+    /// streaming call (D-13/D-15). `Some({"include_usage": true})` whenever
+    /// `stream` is `true`; omitted entirely on a non-streaming request, so
+    /// that request body stays byte-identical to a pre-0.10 one (X-03).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<CompatStreamOptions>,
+}
+
+/// The `stream_options` request field's only shape this engine sends
+/// (D-15): ask every OpenAI-compatible endpoint to emit a trailing
+/// empty-`choices` frame carrying the call's `usage` object.
+#[derive(Debug, Serialize)]
+pub(crate) struct CompatStreamOptions {
+    pub include_usage: bool,
 }
 
 /// The provider-agnostic `response_format` hint, compiled down to this
@@ -91,21 +105,53 @@ pub(crate) struct CompatUsage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     /// Some compatible providers omit `total_tokens` from their usage
-    /// object. When absent, the engine computes `prompt_tokens +
-    /// completion_tokens` rather than reporting zero (PROV-02 precision
-    /// edge) — see [`super::engine::CompatEngine`]'s usage-construction
-    /// site.
+    /// object, and even when present it is deliberately unread:
+    /// `TokenUsage::new` recomputes `total_tokens` as `prompt_tokens +
+    /// completion_tokens` (D-02), so the provider's own reported total is
+    /// discarded rather than trusted — see [`super::engine::CompatEngine`]'s
+    /// usage-construction site. Kept on the struct so the deserializer still
+    /// matches the full wire shape for debugging.
+    #[allow(dead_code)]
     #[serde(default)]
     pub total_tokens: Option<u32>,
+    /// OpenAI-shaped `prompt_tokens_details.cached_tokens` (D-20). Absent on
+    /// providers that never report a cache split; `None` in that case (D-03)
+    /// — never fabricated as `Some(0)`.
+    #[serde(default)]
+    pub prompt_tokens_details: Option<CompatPromptTokensDetails>,
+    /// OpenAI-shaped `completion_tokens_details.reasoning_tokens` (D-20).
+    #[serde(default)]
+    pub completion_tokens_details: Option<CompatCompletionTokensDetails>,
+}
+
+/// `CompatUsage.prompt_tokens_details` (D-20).
+#[derive(Debug, Deserialize)]
+pub(crate) struct CompatPromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
+}
+
+/// `CompatUsage.completion_tokens_details` (D-20).
+#[derive(Debug, Deserialize)]
+pub(crate) struct CompatCompletionTokensDetails {
+    #[serde(default)]
+    pub reasoning_tokens: Option<u32>,
 }
 
 /// A single SSE `data: {...}` streaming chunk.
 #[derive(Debug, Deserialize)]
 pub(crate) struct CompatStreamResponse {
-    #[serde(rename = "id")]
+    /// `#[serde(default)]` because the trailing empty-`choices` usage frame
+    /// (D-14/D-15) is not guaranteed to repeat the stream's `id` on every
+    /// vendor.
+    #[serde(rename = "id", default)]
     #[allow(dead_code)]
     pub _id: String,
     pub choices: Vec<CompatStreamChoice>,
+    /// Present only on the trailing empty-`choices` frame a
+    /// `stream_options: {"include_usage": true}` request elicits (D-14/D-15).
+    #[serde(default)]
+    pub usage: Option<CompatUsage>,
 }
 
 #[derive(Debug, Deserialize)]

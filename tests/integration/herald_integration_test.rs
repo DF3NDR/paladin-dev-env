@@ -49,11 +49,7 @@ impl LlmPort for MockLlmPort {
             model: request.model,
             content: self.response_text.clone(),
             finish_reason: FinishReason::Stop,
-            usage: TokenUsage {
-                prompt_tokens: 50,
-                completion_tokens: 100,
-                total_tokens: 150,
-            },
+            usage: TokenUsage::new(50, 100),
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -148,8 +144,12 @@ async fn test_paladin_with_json_herald() {
         "JSON should contain 'output' field"
     );
     assert!(
-        parsed.get("token_count").is_some(),
-        "JSON should contain 'token_count' field"
+        parsed.get("usage").is_some(),
+        "JSON should contain 'usage' field"
+    );
+    assert!(
+        parsed["usage"].is_object(),
+        "'usage' should be the full TokenUsage object, not a bare scalar"
     );
     assert!(
         parsed.get("execution_time_ms").is_some(),
@@ -227,8 +227,8 @@ async fn test_paladin_with_markdown_herald() {
         "Markdown should contain 'Metadata' section"
     );
     assert!(
-        markdown_output.contains("Token Count"),
-        "Markdown should contain 'Token Count' field"
+        markdown_output.contains("Token Usage"),
+        "Markdown should contain 'Token Usage' block"
     );
 
     println!("Markdown Herald output:\n{}", markdown_output);
@@ -363,7 +363,10 @@ async fn test_herald_with_metadata() {
     let result = result.unwrap();
 
     // Verify metadata is present in result
-    assert!(result.token_count > 0, "Token count should be populated");
+    assert!(
+        result.usage.total_tokens > 0,
+        "Token count should be populated"
+    );
     let _ = result.execution_time_ms;
     assert!(result.loop_count >= 1, "Loop count should be at least 1");
 
@@ -404,7 +407,7 @@ impl PaladinPort for MockPaladinPort {
                 "{}: {} - {}",
                 paladin.node.name, input, self.response_suffix
             ),
-            token_count: 50,
+            usage: paladin_ports::output::llm_port::TokenUsage::new(50, 0),
             execution_time_ms: 25,
             loop_count: 1,
             stop_reason: StopReason::Completed,

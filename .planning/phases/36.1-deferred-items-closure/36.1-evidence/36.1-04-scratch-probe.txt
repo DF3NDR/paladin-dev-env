@@ -1,0 +1,529 @@
+# 36.1-04 Scratch Compile Probe — battalion-patterns-guide.md flagged bodies (D-07)
+#
+# Each body was written verbatim (post-casing-fix: OpenAiAdapter -> OpenAIAdapter) into a
+# throwaway examples/_scratch.rs and checked with:
+#   cargo check --example _scratch --features llm-openai
+# The scratch file was deleted immediately after each run and never committed.
+
+================================================================================
+Body 1 of 4 — docs/src/appendix/battalion-patterns-guide.md line 43
+Formation example (Formation (Sequential) section)
+Command: cargo check --example _scratch --features llm-openai
+--------------------------------------------------------------------------------
+    Checking paladin-ai v0.10.0 (/workspace)
+error[E0433]: cannot find type `Arc` in this scope
+ --> examples/_scratch.rs:6:23
+  |
+6 |     let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
+  |                       ^^^ use of undeclared type `Arc`
+  |
+help: consider importing this struct
+  |
+1 + use std::sync::Arc;
+  |
+
+warning: unused import: `paladin::core::platform::container::battalion::*`
+ --> examples/_scratch.rs:1:5
+  |
+1 | use paladin::core::platform::container::battalion::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0433]: cannot find type `OpenAIAdapter` in this scope
+ --> examples/_scratch.rs:6:32
+  |
+6 |     let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
+  |                                ^^^^^^^^^^^^^ use of undeclared type `OpenAIAdapter`
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:9:22
+   |
+ 9 |       let researcher = PaladinBuilder::new(llm_adapter.clone())
+   |  ______________________^
+10 | |         .name("Researcher")
+11 | |         .system_prompt("You are a research assistant. Gather relevant information on the given topic. \
+12 | |                         Output key facts and sources.")
+13 | |         .temperature(0.5)
+14 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-13318523231123112121.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+14 |         .build().await?;
+   |                 ++++++
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:17:19
+   |
+17 |       let analyst = PaladinBuilder::new(llm_adapter.clone())
+   |  ___________________^
+18 | |         .name("Analyst")
+19 | |         .system_prompt("You are a data analyst. Analyze the research provided and identify trends, \
+20 | |                         insights, and patterns. Output structured analysis.")
+21 | |         .temperature(0.6)
+22 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-13318523231123112121.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+22 |         .build().await?;
+   |                 ++++++
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:25:18
+   |
+25 |       let writer = PaladinBuilder::new(llm_adapter)
+   |  __________________^
+26 | |         .name("Writer")
+27 | |         .system_prompt("You are a technical writer. Take the analysis and create a clear, \
+28 | |                         concise summary for executives. Output professional report.")
+29 | |         .temperature(0.7)
+30 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-13318523231123112121.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+30 |         .build().await?;
+   |                 ++++++
+
+error[E0061]: this function takes 2 arguments but 0 arguments were supplied
+  --> examples/_scratch.rs:33:21
+   |
+33 |     let formation = Formation::new()
+   |                     ^^^^^^^^^^^^^^-- two arguments of type `Vec<paladin::core::base::entity::node::Node<paladin::PaladinData>>` and `BattalionConfig` are missing
+   |
+note: associated function defined here
+  --> crates/paladin-core/src/platform/container/battalion/formation.rs:68:12
+   |
+68 |     pub fn new(paladins: Vec<Paladin>, config: BattalionConfig) -> Result<Self, BattalionError> {
+   |            ^^^
+help: provide the arguments
+   |
+33 |     let formation = Formation::new(/* Vec<paladin::core::base::entity::node::Node<paladin::PaladinData>> */, /* BattalionConfig */)
+   |                                    +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0599]: no method named `add_paladin` found for enum `Result<T, E>` in the current scope
+  --> examples/_scratch.rs:34:10
+   |
+33 |       let formation = Formation::new()
+   |  _____________________-
+34 | |         .add_paladin(researcher)
+   | |         -^^^^^^^^^^^ method not found in `Result<paladin::prelude::Formation, BattalionError>`
+   | |_________|
+   |
+
+Some errors have detailed explanations: E0061, E0277, E0433, E0599.
+For more information about an error, try `rustc --explain E0061`.
+warning: `paladin-ai` (example "_scratch") generated 1 warning
+error: could not compile `paladin-ai` (example "_scratch") due to 7 previous errors; 1 warning emitted
+
+================================================================================
+Body 2 of 4 — docs/src/appendix/battalion-patterns-guide.md line 134
+Phalanx example (Phalanx (Parallel) section)
+Command: cargo check --example _scratch --features llm-openai
+--------------------------------------------------------------------------------
+    Checking paladin-ai v0.10.0 (/workspace)
+error[E0433]: cannot find type `Arc` in this scope
+ --> examples/_scratch.rs:6:23
+  |
+6 |     let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
+  |                       ^^^ use of undeclared type `Arc`
+  |
+help: consider importing this struct
+  |
+1 + use std::sync::Arc;
+  |
+
+warning: unused import: `paladin::core::platform::container::battalion::*`
+ --> examples/_scratch.rs:1:5
+  |
+1 | use paladin::core::platform::container::battalion::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0433]: cannot find type `OpenAIAdapter` in this scope
+ --> examples/_scratch.rs:6:32
+  |
+6 |     let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
+  |                                ^^^^^^^^^^^^^ use of undeclared type `OpenAIAdapter`
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:9:21
+   |
+ 9 |       let technical = PaladinBuilder::new(llm_adapter.clone())
+   |  _____________________^
+10 | |         .name("TechnicalReviewer")
+11 | |         .system_prompt("Review code from a technical perspective: correctness, efficiency, safety.")
+12 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-17436900216877916881.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+12 |         .build().await?;
+   |                 ++++++
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:15:20
+   |
+15 |       let security = PaladinBuilder::new(llm_adapter.clone())
+   |  ____________________^
+16 | |         .name("SecurityReviewer")
+17 | |         .system_prompt("Review code from a security perspective: vulnerabilities, unsafe practices.")
+18 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-17436900216877916881.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+18 |         .build().await?;
+   |                 ++++++
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:21:14
+   |
+21 |       let ux = PaladinBuilder::new(llm_adapter.clone())
+   |  ______________^
+22 | |         .name("UXReviewer")
+23 | |         .system_prompt("Review code from a UX perspective: usability, error messages, documentation.")
+24 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-17436900216877916881.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+24 |         .build().await?;
+   |                 ++++++
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:27:22
+   |
+27 |       let aggregator = PaladinBuilder::new(llm_adapter)
+   |  ______________________^
+28 | |         .name("Aggregator")
+29 | |         .system_prompt("Combine multiple code reviews into a single coherent report. \
+30 | |                         Prioritize critical issues and provide actionable feedback.")
+31 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-17436900216877916881.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+31 |         .build().await?;
+   |                 ++++++
+
+error[E0061]: this function takes 2 arguments but 0 arguments were supplied
+  --> examples/_scratch.rs:34:19
+   |
+34 |     let phalanx = Phalanx::new()
+   |                   ^^^^^^^^^^^^-- two arguments of type `Vec<paladin::core::base::entity::node::Node<paladin::PaladinData>>` and `BattalionConfig` are missing
+   |
+note: associated function defined here
+  --> crates/paladin-core/src/platform/container/battalion/phalanx.rs:72:12
+   |
+72 |     pub fn new(paladins: Vec<Paladin>, config: BattalionConfig) -> Result<Self, BattalionError> {
+   |            ^^^
+help: provide the arguments
+   |
+34 |     let phalanx = Phalanx::new(/* Vec<paladin::core::base::entity::node::Node<paladin::PaladinData>> */, /* BattalionConfig */)
+   |                                +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0599]: no method named `add_paladin` found for enum `Result<T, E>` in the current scope
+  --> examples/_scratch.rs:35:10
+   |
+34 |       let phalanx = Phalanx::new()
+   |  ___________________-
+35 | |         .add_paladin(technical)
+   | |         -^^^^^^^^^^^ method not found in `Result<paladin::prelude::Phalanx, BattalionError>`
+   | |_________|
+   |
+
+Some errors have detailed explanations: E0061, E0277, E0433, E0599.
+For more information about an error, try `rustc --explain E0061`.
+warning: `paladin-ai` (example "_scratch") generated 1 warning
+error: could not compile `paladin-ai` (example "_scratch") due to 8 previous errors; 1 warning emitted
+
+================================================================================
+Body 3 of 4 — docs/src/appendix/battalion-patterns-guide.md line 232
+Campaign example (Campaign (Graph/DAG) section)
+Command: cargo check --example _scratch --features llm-openai
+--------------------------------------------------------------------------------
+    Checking paladin-ai v0.10.0 (/workspace)
+error[E0433]: cannot find type `Arc` in this scope
+ --> examples/_scratch.rs:6:23
+  |
+6 |     let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
+  |                       ^^^ use of undeclared type `Arc`
+  |
+help: consider importing this struct
+  |
+1 + use std::sync::Arc;
+  |
+
+warning: unused import: `paladin::core::platform::container::battalion::*`
+ --> examples/_scratch.rs:1:5
+  |
+1 | use paladin::core::platform::container::battalion::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0433]: cannot find type `OpenAIAdapter` in this scope
+ --> examples/_scratch.rs:6:32
+  |
+6 |     let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
+  |                                ^^^^^^^^^^^^^ use of undeclared type `OpenAIAdapter`
+
+error[E0425]: cannot find function `create_paladin` in this scope
+ --> examples/_scratch.rs:9:27
+  |
+9 |     let topic_generator = create_paladin("TopicGenerator", "Generate blog post topics", llm_adapter.clone())?;
+  |                           ^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `create_paladin` in this scope
+  --> examples/_scratch.rs:10:22
+   |
+10 |     let researcher = create_paladin("Researcher", "Research the topic", llm_adapter.clone())?;
+   |                      ^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `create_paladin` in this scope
+  --> examples/_scratch.rs:11:27
+   |
+11 |     let outline_creator = create_paladin("OutlineCreator", "Create article outline", llm_adapter.clone())?;
+   |                           ^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `create_paladin` in this scope
+  --> examples/_scratch.rs:12:18
+   |
+12 |     let writer = create_paladin("Writer", "Write the article", llm_adapter.clone())?;
+   |                  ^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `create_paladin` in this scope
+  --> examples/_scratch.rs:13:24
+   |
+13 |     let fact_checker = create_paladin("FactChecker", "Verify factual accuracy", llm_adapter.clone())?;
+   |                        ^^^^^^^^^^^^^^ not found in this scope
+
+error[E0425]: cannot find function `create_paladin` in this scope
+  --> examples/_scratch.rs:14:18
+   |
+14 |     let editor = create_paladin("Editor", "Edit and polish", llm_adapter)?;
+   |                  ^^^^^^^^^^^^^^ not found in this scope
+
+error[E0061]: this function takes 1 argument but 0 arguments were supplied
+   --> examples/_scratch.rs:17:20
+    |
+ 17 |     let campaign = Campaign::new()
+    |                    ^^^^^^^^^^^^^-- argument #1 of type `BattalionConfig` is missing
+    |
+note: associated function defined here
+   --> crates/paladin-core/src/platform/container/battalion/campaign.rs:116:12
+    |
+116 |     pub fn new(config: BattalionConfig) -> Self {
+    |            ^^^
+help: provide the argument
+    |
+ 17 |     let campaign = Campaign::new(/* BattalionConfig */)
+    |                                  +++++++++++++++++++++
+
+error[E0599]: no method named `add_node` found for struct `paladin::prelude::Campaign` in the current scope
+  --> examples/_scratch.rs:19:10
+   |
+17 |       let campaign = Campaign::new()
+   |  ____________________-
+18 | |         // Initial node
+19 | |         .add_node("generate_topic", topic_generator)
+   | |         -^^^^^^^^ method not found in `paladin::prelude::Campaign`
+   | |_________|
+   |
+
+Some errors have detailed explanations: E0061, E0425, E0433, E0599.
+For more information about an error, try `rustc --explain E0061`.
+warning: `paladin-ai` (example "_scratch") generated 1 warning
+error: could not compile `paladin-ai` (example "_scratch") due to 10 previous errors; 1 warning emitted
+
+================================================================================
+Body 4 of 4 — docs/src/appendix/battalion-patterns-guide.md line 354
+Chain of Command example (Chain of Command (Hierarchical) section)
+Command: cargo check --example _scratch --features llm-openai
+--------------------------------------------------------------------------------
+    Checking paladin-ai v0.10.0 (/workspace)
+error[E0433]: cannot find type `Arc` in this scope
+ --> examples/_scratch.rs:6:23
+  |
+6 |     let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
+  |                       ^^^ use of undeclared type `Arc`
+  |
+help: consider importing this struct
+  |
+1 + use std::sync::Arc;
+  |
+
+error[E0433]: cannot find type `HashMap` in this scope
+  --> examples/_scratch.rs:43:57
+   |
+43 |         .routing_strategy(RoutingStrategy::KeywordBased(HashMap::from([
+   |                                                         ^^^^^^^ use of undeclared type `HashMap`
+   |
+help: consider importing this struct
+   |
+ 1 + use std::collections::HashMap;
+   |
+
+warning: unused import: `paladin::core::platform::container::battalion::*`
+ --> examples/_scratch.rs:1:5
+  |
+1 | use paladin::core::platform::container::battalion::*;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+error[E0433]: cannot find type `OpenAIAdapter` in this scope
+ --> examples/_scratch.rs:6:32
+  |
+6 |     let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
+  |                                ^^^^^^^^^^^^^ use of undeclared type `OpenAIAdapter`
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:9:21
+   |
+ 9 |       let commander = PaladinBuilder::new(llm_adapter.clone())
+   |  _____________________^
+10 | |         .name("ProjectManager")
+11 | |         .system_prompt("You are a project manager. Break down projects into specific, \
+12 | |                         actionable tasks. For each task, specify what needs to be done. \
+13 | |                         Output format: TASK: <description> for each task.")
+14 | |         .temperature(0.6)
+15 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-10659541605288309523.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+15 |         .build().await?;
+   |                 ++++++
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:18:21
+   |
+18 |       let developer = PaladinBuilder::new(llm_adapter.clone())
+   |  _____________________^
+19 | |         .name("Developer")
+20 | |         .system_prompt("You are a senior developer. Implement the given technical task. \
+21 | |                         Provide code and implementation details.")
+22 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-10659541605288309523.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+22 |         .build().await?;
+   |                 ++++++
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:24:20
+   |
+24 |       let designer = PaladinBuilder::new(llm_adapter.clone())
+   |  ____________________^
+25 | |         .name("Designer")
+26 | |         .system_prompt("You are a UX/UI designer. Design solutions for the given task. \
+27 | |                         Provide wireframes and design specifications.")
+28 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-10659541605288309523.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+28 |         .build().await?;
+   |                 ++++++
+
+error[E0277]: the `?` operator can only be applied to values that implement `Try`
+  --> examples/_scratch.rs:30:18
+   |
+30 |       let tester = PaladinBuilder::new(llm_adapter)
+   |  __________________^
+31 | |         .name("Tester")
+32 | |         .system_prompt("You are a QA engineer. Create test plans for the given task. \
+33 | |                         Provide test cases and acceptance criteria.")
+34 | |         .build()?;
+   | |_________________^ the `?` operator cannot be applied to type `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   |
+   = help: the nightly-only, unstable trait `Try` is not implemented for `impl Future<Output = Result<Node<PaladinData>, PaladinError>>`
+   = note: the full name for the type has been written to '/workspace/target/debug/examples/_scratch-ad9368c8a1f6d34d.long-type-10659541605288309523.txt'
+   = note: consider using `--verbose` to print the full type name to the console
+help: consider `await`ing on the `Future`
+   |
+34 |         .build().await?;
+   |                 ++++++
+
+error[E0061]: this function takes 3 arguments but 0 arguments were supplied
+   --> examples/_scratch.rs:37:17
+    |
+ 37 |     let chain = ChainOfCommand::new()
+    |                 ^^^^^^^^^^^^^^^^^^^-- three arguments of type `paladin::core::base::entity::node::Node<paladin::PaladinData>`, `Vec<paladin::core::base::entity::node::Node<paladin::PaladinData>>`, and `BattalionConfig` are missing
+    |
+note: associated function defined here
+   --> crates/paladin-core/src/platform/container/battalion/chain_of_command.rs:108:12
+    |
+108 |     pub fn new(
+    |            ^^^
+help: provide the arguments
+    |
+ 37 |     let chain = ChainOfCommand::new(/* paladin::core::base::entity::node::Node<paladin::PaladinData> */, /* Vec<paladin::core::base::entity::node::Node<paladin::PaladinData>> */, /* BattalionConfig */)
+    |                                     ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+error[E0599]: no method named `commander` found for enum `Result<T, E>` in the current scope
+   --> examples/_scratch.rs:38:10
+    |
+ 37 |       let chain = ChainOfCommand::new()
+    |  _________________-
+ 38 | |         .commander(commander)
+    | |         -^^^^^^^^^ method not found in `Result<paladin::prelude::ChainOfCommand, BattalionError>`
+    | |_________|
+    |
+    |
+note: the method `commander` exists on the type `paladin::prelude::ChainOfCommand`
+   --> crates/paladin-core/src/platform/container/battalion/chain_of_command.rs:166:5
+    |
+166 |     pub fn commander(&self) -> &Paladin {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+help: consider using `Result::expect` to unwrap the `paladin::prelude::ChainOfCommand` value, panicking if the value is a `Result::Err`
+    |
+ 37 |     let chain = ChainOfCommand::new().expect("REASON")
+    |                                      +++++++++++++++++
+
+error[E0433]: cannot find type `RoutingStrategy` in this scope
+  --> examples/_scratch.rs:43:27
+   |
+43 |         .routing_strategy(RoutingStrategy::KeywordBased(HashMap::from([
+   |                           ^^^^^^^^^^^^^^^ use of undeclared type `RoutingStrategy`
+
+Some errors have detailed explanations: E0061, E0277, E0433, E0599.
+For more information about an error, try `rustc --explain E0061`.
+warning: `paladin-ai` (example "_scratch") generated 1 warning
+error: could not compile `paladin-ai` (example "_scratch") due to 10 previous errors; 1 warning emitted

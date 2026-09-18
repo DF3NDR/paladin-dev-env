@@ -275,11 +275,7 @@ impl ScenarioLlm {
                 model: request.model.clone(),
                 content: text.clone(),
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsage {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    total_tokens: 0,
-                },
+                usage: TokenUsage::new(0, 0),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
@@ -290,11 +286,7 @@ impl ScenarioLlm {
                 model: request.model.clone(),
                 content: format!("Calling tool: {name}"),
                 finish_reason: FinishReason::FunctionCall,
-                usage: TokenUsage {
-                    prompt_tokens: 0,
-                    completion_tokens: 0,
-                    total_tokens: 0,
-                },
+                usage: TokenUsage::new(0, 0),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall {
@@ -329,16 +321,8 @@ impl LlmPort for ScenarioLlm {
     {
         let response = self.generate(request).await?;
         let chunks = vec![
-            Ok(StreamingResponse {
-                id: Uuid::new_v4(),
-                delta: response.content.clone(),
-                finish_reason: None,
-            }),
-            Ok(StreamingResponse {
-                id: Uuid::new_v4(),
-                delta: String::new(),
-                finish_reason: Some(response.finish_reason),
-            }),
+            Ok(StreamingResponse::delta(response.content.clone())),
+            Ok(StreamingResponse::terminal(response.finish_reason).with_usage(response.usage)),
         ];
         Ok(Box::new(stream::iter(chunks)))
     }

@@ -425,11 +425,10 @@ impl VisionCapableLlm for OpenAIAdapter {
             model: api_response.model,
             content,
             finish_reason,
-            usage: TokenUsage {
-                prompt_tokens: api_response.usage.prompt_tokens,
-                completion_tokens: api_response.usage.completion_tokens,
-                total_tokens: api_response.usage.total_tokens,
-            },
+            usage: TokenUsage::new(
+                api_response.usage.prompt_tokens,
+                api_response.usage.completion_tokens,
+            ),
             created_at: Utc::now(),
             metadata: Default::default(),
             function_call: None,

@@ -1,0 +1,140 @@
+Phase 36 Plan 05 -- paladin-ai facade closure (D-10, D-24)
+Toolchain: cargo 1.97.1 / rustc 1.97.1
+
+=====================================================================
+Task 1 -- five default-feature facade groups (RD-02, RD-03, RD-04, RD-05, RD-06,
+followers RD-138, RD-139, RD-140, RD-141, RD-143)
+Fixes (all D-05 private intra-doc link, plain-code-font de-link, no widened
+visibility, no lint suppression):
+  src/application/services/paladin/paladin_execution_service.rs:1014 --
+  `execute_scoped`'s doc block's `[`Self::execute_bounded`]` link de-linked to
+  `` `execute_bounded` ``.
+  src/application/services/parley/adapter.rs:28 -- the adapter module doc's
+  `[`shadow_validate`]` link de-linked to `` `shadow_validate` ``.
+  src/application/services/run/worker.rs:641 -- `with_event_bus`'s doc block's
+  `[`Self::record_engine_failure`]` link de-linked to `` `record_engine_failure` ``.
+  src/config/agent_runtime.rs:1174 -- `resolve_chain`'s doc block's
+  `[`KNOWN_PROVIDER_NAMES`]` link de-linked to `` `KNOWN_PROVIDER_NAMES` ``; the
+  provider-name precedence prose was not otherwise touched and remains true
+  against the shipped constant (checked by reading its 9-entry contents).
+  src/presets/mod.rs:55 -- `ReasoningAgentOptions`'s doc table's
+  `[`DEFAULT_SYSTEM_PROMPT`]` link de-linked to `` `DEFAULT_SYSTEM_PROMPT` ``.
+=====================================================================
+
+$ touch src/lib.rs && cargo doc -p paladin-ai --no-deps
+ Documenting paladin-ai v0.10.0 (/workspace)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.54s
+   Generated /workspace/target/doc/paladin/index.html
+warning: line count = 0
+
+$ cargo check --workspace --all-targets --all-features
+    Checking paladin-ai v0.10.0 (/workspace)
+    Checking paladin-doc-examples v0.10.0 (/workspace/crates/doc-examples)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 13.99s
+EXIT:0
+
+=====================================================================
+Task 2 -- two feature-gated facade groups (RD-137 under cli, RD-142 under otel)
+and crate closure (D-10, D-26, D-28)
+Fixes (D-05, D-07 satisfied in place -- both doc'd item and target already sit
+behind the same feature gate, no gate annotation added):
+  src/application/cli/commands/eval.rs:281 -- `first_divergence`'s doc block's
+  `[`stabilized_fingerprints`]` link de-linked to `` `stabilized_fingerprints` ``.
+  Both `first_divergence` (pub) and `stabilized_fingerprints` (private) live in
+  a module compiled only under the `cli` feature (src/lib.rs:166,
+  src/application/mod.rs:57 `#[cfg(feature = "cli")]`).
+  src/infrastructure/telemetry/otel_sink.rs:42 -- the sink module doc's
+  `[`build_reqwest_client`]` link de-linked to `` `build_reqwest_client` ``. Both
+  the module and the private helper live behind the `otel` feature
+  (src/infrastructure/telemetry/mod.rs:23 `#[cfg(feature = "otel")]`). The
+  de-linked mention was left exactly as terse as the surrounding Security
+  section already was -- no additional detail about header or redirect
+  handling was added (T-36-15).
+=====================================================================
+
+$ touch src/lib.rs && cargo doc -p paladin-ai --no-deps
+ Documenting paladin-ai v0.10.0 (/workspace)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.46s
+   Generated /workspace/target/doc/paladin/index.html
+warning: line count = 0
+
+$ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-ai --all-features --no-deps
+    Checking paladin-ai-core v0.10.0 (/workspace/crates/paladin-core)
+    Checking paladin-ports v0.10.0 (/workspace/crates/paladin-ports)
+    Checking paladin-herald v0.10.0 (/workspace/crates/paladin-herald)
+    Checking paladin-llm v0.10.0 (/workspace/crates/paladin-llm)
+    Checking paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+    Checking paladin-battalion v0.10.0 (/workspace/crates/paladin-battalion)
+    Checking paladin-notifications v0.10.0 (/workspace/crates/paladin-notifications)
+    Checking paladin-web v0.10.0 (/workspace/crates/paladin-web)
+    Checking paladin-memory v0.10.0 (/workspace/crates/paladin-memory)
+    Checking paladin-content v0.10.0 (/workspace/crates/paladin-content)
+    Checking paladin-eval v0.10.0 (/workspace/crates/paladin-eval)
+    Checking paladin-ai v0.10.0 (/workspace)
+ Documenting paladin-ai v0.10.0 (/workspace)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 38.20s
+   Generated /workspace/target/doc/paladin/index.html and 2 other files
+EXIT:0
+
+$ cargo fmt --all -- --check
+EXIT:0
+
+$ cargo check --workspace --all-targets --all-features
+    Checking paladin-ai v0.10.0 (/workspace)
+    Checking paladin-doc-examples v0.10.0 (/workspace/crates/doc-examples)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 16.26s
+EXIT:0
+
+$ cargo test --workspace --doc (test result lines only)
+test result: ok. 147 passed; 0 failed; 18 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test result: ok. 95 passed; 0 failed; 38 ignored; 0 measured; 0 filtered out; finished in 0.06s
+test result: ok. 59 passed; 0 failed; 52 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 137 passed; 0 failed; 94 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+All: 0 failed.
+
+$ ./scripts/check-api-surface.sh .project/current-exports.txt
+Checking API surface for changes...
+Extracting public API surface using cargo-public-api...
+API surface extracted to /tmp/tmp.8dBOJ5RNiJ (3959 items)
+API surface unchanged
+EXIT:0
+
+=====================================================================
+Informational only -- workspace-wide figure (authoritative only once every
+wave in the phase has merged; not a gate for this plan)
+=====================================================================
+
+$ touch src/lib.rs && RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+    Checking paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+ Documenting paladin-content v0.10.0 (/workspace/crates/paladin-content)
+ Documenting paladin-herald v0.10.0 (/workspace/crates/paladin-herald)
+ Documenting paladin-web v0.10.0 (/workspace/crates/paladin-web)
+ Documenting paladin-notifications v0.10.0 (/workspace/crates/paladin-notifications)
+ Documenting paladin-memory v0.10.0 (/workspace/crates/paladin-memory)
+ Documenting paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+ Documenting paladin-battalion v0.10.0 (/workspace/crates/paladin-battalion)
+ Documenting paladin-llm v0.10.0 (/workspace/crates/paladin-llm)
+ Documenting paladin-ports v0.10.0 (/workspace/crates/paladin-ports)
+ Documenting paladin-ai-core v0.10.0 (/workspace/crates/paladin-core)
+    Checking paladin-eval v0.10.0 (/workspace/crates/paladin-eval)
+ Documenting paladin-eval v0.10.0 (/workspace/crates/paladin-eval)
+    Checking paladin-ai v0.10.0 (/workspace)
+ Documenting paladin-ai v0.10.0 (/workspace)
+ Documenting paladin-doc-examples v0.10.0 (/workspace/crates/doc-examples)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 34.60s
+   Generated /workspace/target/doc/paladin/index.html and 14 other files
+EXIT:0
+
+With plans 36-02, 36-03 and 36-04 already landed on this branch, the
+workspace-wide all-features bar is already green from this worktree's vantage
+point. Plan 36-12 (the closing plan) is still the authoritative measurement --
+this run is recorded here as a data point, not as this plan's own gate.

@@ -283,11 +283,7 @@ mod tests {
                 content: r#"{"topics": ["test"], "sentiment": "positive", "quality_score": 0.8}"#
                     .to_string(),
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsage {
-                    prompt_tokens: 100,
-                    completion_tokens: 50,
-                    total_tokens: 150,
-                },
+                usage: TokenUsage::new(100, 50),
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,

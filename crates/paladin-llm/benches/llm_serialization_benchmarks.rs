@@ -26,11 +26,7 @@ fn sample_response(request_id: Uuid) -> LlmResponse {
         model: "mock-llm-model".to_string(),
         content: "All benchmark migration checks completed successfully.".to_string(),
         finish_reason: FinishReason::Stop,
-        usage: TokenUsage {
-            prompt_tokens: 58,
-            completion_tokens: 24,
-            total_tokens: 82,
-        },
+        usage: TokenUsage::new(58, 24),
         created_at: Utc::now(),
         metadata: HashMap::new(),
         function_call: None,

@@ -163,6 +163,127 @@ pub struct ThreadSummary {
 /// [`WaypointError`] is reserved for genuine backend failures: connection
 /// errors, (de)serialization failures, and a schema version the running
 /// build does not know how to read.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::{BTreeMap, HashMap};
+/// use std::sync::Mutex;
+///
+/// use async_trait::async_trait;
+/// use chrono::{DateTime, Utc};
+/// use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
+/// use paladin_core::platform::container::waypoint::{
+///     FrontierSnapshot, GraphFingerprint, ThreadId, Waypoint, WaypointId, WaypointStatus,
+/// };
+/// use paladin_ports::output::waypoint_port::{
+///     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
+/// };
+///
+/// struct InMemoryWaypoints {
+///     by_thread: Mutex<HashMap<ThreadId, Vec<Waypoint>>>,
+/// }
+///
+/// #[async_trait]
+/// impl WaypointPort for InMemoryWaypoints {
+///     async fn save(&self, wp: &Waypoint) -> Result<(), WaypointError> {
+///         self.by_thread
+///             .lock()
+///             .unwrap()
+///             .entry(wp.thread_id.clone())
+///             .or_default()
+///             .push(wp.clone());
+///         Ok(())
+///     }
+///
+///     async fn latest(&self, thread: &ThreadId) -> Result<Option<Waypoint>, WaypointError> {
+///         Ok(self
+///             .by_thread
+///             .lock()
+///             .unwrap()
+///             .get(thread)
+///             .and_then(|wps| wps.last().cloned()))
+///     }
+///
+///     async fn get(
+///         &self,
+///         thread: &ThreadId,
+///         id: &WaypointId,
+///     ) -> Result<Option<Waypoint>, WaypointError> {
+///         Ok(self
+///             .by_thread
+///             .lock()
+///             .unwrap()
+///             .get(thread)
+///             .and_then(|wps| wps.iter().find(|wp| &wp.waypoint_id == id).cloned()))
+///     }
+///
+///     async fn history(
+///         &self,
+///         _thread: &ThreadId,
+///         _limit: Option<u32>,
+///         _before: Option<WaypointId>,
+///     ) -> Result<Vec<WaypointSummary>, WaypointError> {
+///         Ok(vec![])
+///     }
+///
+///     async fn list_threads(
+///         &self,
+///         _limit: Option<u32>,
+///         _before: Option<DateTime<Utc>>,
+///     ) -> Result<Vec<ThreadSummary>, WaypointError> {
+///         Ok(vec![])
+///     }
+///
+///     async fn delete_thread(&self, thread: &ThreadId) -> Result<u64, WaypointError> {
+///         Ok(self
+///             .by_thread
+///             .lock()
+///             .unwrap()
+///             .remove(thread)
+///             .map(|wps| wps.len() as u64)
+///             .unwrap_or(0))
+///     }
+///
+///     async fn delete_waypoint(
+///         &self,
+///         _thread: &ThreadId,
+///         _id: &WaypointId,
+///     ) -> Result<bool, WaypointError> {
+///         Ok(false)
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let store = InMemoryWaypoints {
+///         by_thread: Mutex::new(HashMap::new()),
+///     };
+///     let thread = ThreadId::new("thread-1")?;
+///     let waypoint = Waypoint::new_root(
+///         thread.clone(),
+///         0,
+///         GraphFingerprint::from_canonical_bytes(b"example-graph"),
+///         Battlefield::new(BattlefieldSchema::new(vec![])),
+///         vec![],
+///         vec![],
+///         WaypointStatus::Running,
+///         BTreeMap::new(),
+///         FrontierSnapshot::default(),
+///     );
+///
+///     store.save(&waypoint).await?;
+///     let latest = store
+///         .latest(&thread)
+///         .await?
+///         .ok_or("expected the just-saved waypoint to round-trip back out")?;
+///     assert_eq!(
+///         latest.waypoint_id, waypoint.waypoint_id,
+///         "latest returns the exact waypoint that was saved"
+///     );
+///     Ok(())
+/// }
+/// ```
 #[async_trait]
 pub trait WaypointPort: Send + Sync {
     /// Persist a Waypoint.

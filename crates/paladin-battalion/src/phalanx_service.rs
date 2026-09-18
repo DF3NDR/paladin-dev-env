@@ -15,14 +15,14 @@ use uuid::Uuid;
 use crate::error_aggregation::AggregatedError;
 use paladin_core::platform::container::battalion::phalanx::{AggregationStrategy, Phalanx};
 use paladin_core::platform::container::battalion::{
-    BattalionError, BattalionResult, ErrorStrategy, NodeError, TokenUsage,
+    BattalionError, BattalionResult, ErrorStrategy, NodeError,
 };
 use paladin_core::platform::container::herald::Herald;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult};
 
 #[cfg(test)]
-use paladin_core::platform::container::battalion::BattalionStatus;
+use paladin_core::platform::container::battalion::{BattalionStatus, TokenUsage};
 
 #[cfg(test)]
 use tokio::sync::mpsc;
@@ -275,9 +275,8 @@ impl PhalanxExecutionService {
         for (i, result) in paladin_results.iter().enumerate() {
             if let Some(name) = successful_names.get(i) {
                 per_paladin_times.insert((*name).clone(), result.execution_time_ms);
-                per_paladin_tokens
-                    .insert((*name).clone(), TokenUsage::from_total(result.token_count));
-                total_tokens += u64::from(result.token_count);
+                per_paladin_tokens.insert((*name).clone(), result.usage.clone());
+                total_tokens += u64::from(result.usage.total_tokens);
             }
         }
 
@@ -540,7 +539,7 @@ mod tests {
 
             Ok(PaladinResult {
                 output,
-                token_count: 50,
+                usage: TokenUsage::new(50, 0),
                 execution_time_ms: self.delay_ms,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,

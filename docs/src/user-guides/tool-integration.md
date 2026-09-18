@@ -30,13 +30,18 @@ The Arsenal system enables Paladins to:
 - **Tool Result**: Response from tool execution
 
 > **Reachability note:** Arsenal and MCP tool execution ship and work today — everything below
-> this note is real and invocable. What is *not* reachable through any shipped `LlmPort`
-> adapter (OpenAI, Anthropic, DeepSeek, or the bundled mock) is the LLM-initiated entry into
-> that loop: none of them ever returns a populated function call from `generate()`, so a
-> Paladin's own reasoning loop never triggers an `Armament` on its own today. You invoke
-> Arsenal directly through the `ArsenalPort` API this guide documents below; LLM-driven
-> invocation requires a consumer-supplied `LlmPort` implementation that parses tool calls
-> itself. See ADR-0042 for the tracked status of LLM-native tool calling.
+> this note is real and invocable. No shipped `LlmPort` adapter (OpenAI, Anthropic, DeepSeek, or
+> the bundled mock) ever returns a populated function call from `generate()` — that narrower,
+> wire-level path still requires a consumer-supplied `LlmPort` implementation that parses tool
+> calls itself. See ADR-0042 for the tracked status of native, wire-level tool calling.
+>
+> There is a shipped, opt-in alternative that does not require a custom `LlmPort`: the
+> prompt-level tool-call protocol middleware pair, `ToolCallProtocolMiddleware` and
+> `FinishOnPlainAnswerMiddleware`, lets a Paladin's own reasoning loop parse tool calls out of
+> plain-text output and trigger an Armament without any consumer-written port implementation.
+> Both are installed by the `reasoning_agent` preset. See
+> [Agent Runtime: The Tool-Call Protocol](agent-runtime.md#the-tool-call-protocol) for the full
+> mechanism.
 
 ## Arsenal Architecture
 
@@ -179,7 +184,7 @@ use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Connect to an MCP STDIO server: MCPStdioAdapter::new(command, args) is
     // a thin builder; connect() spawns the subprocess and performs the full
@@ -287,7 +292,7 @@ use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Connect to a remote MCP server over Streamable-HTTP. The bearer token
     // is read from an env var here in application code -- never hardcode a

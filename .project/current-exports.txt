@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-09-12 23:30:32 UTC
+# Public API Surface - Generated 2026-09-16 17:49:43 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -24,8 +24,13 @@ pub use paladin::Paladin
 pub use paladin::PaladinConfig
 pub use paladin::PaladinData
 pub use paladin::PaladinStatus
+pub use paladin::ResolvedWindow
 pub use paladin::ShedItem
 pub use paladin::Stockpile
+pub use paladin::UnknownContextWindow
+pub use paladin::WindowFallbackPolicy
+pub use paladin::WindowSource
+pub use paladin::resolve_context_window
 pub mod paladin::application
 pub mod paladin::application::errors
 pub mod paladin::application::errors::citadel_error
@@ -3954,8 +3959,13 @@ pub use paladin::application::services::sanctum::ExtractedMemory
 pub use paladin::application::services::sanctum::MemoryExtractionService
 pub use paladin::application::services::sanctum::MemoryExtractionStrategy
 pub use paladin::application::services::sanctum::RagConfig
+pub use paladin::application::services::sanctum::RagRetainedMemory
+pub use paladin::application::services::sanctum::RagRetrievalError
+pub use paladin::application::services::sanctum::RagRetrievalResult
 pub use paladin::application::services::sanctum::RagRetrievalService
 pub use paladin::application::services::sanctum::RetrievalTrigger
+pub use paladin::application::services::sanctum::ShedItem
+pub use paladin::application::services::sanctum::rag_omission_marker
 pub use paladin::application::services::sanctum::retrieve_context_with_timeout
 pub mod paladin::application::services::sanctum::memory_extraction_service
 pub use paladin::application::services::sanctum::memory_extraction_service::ExtractedMemory
@@ -3963,8 +3973,13 @@ pub use paladin::application::services::sanctum::memory_extraction_service::Memo
 pub use paladin::application::services::sanctum::memory_extraction_service::MemoryExtractionStrategy
 pub mod paladin::application::services::sanctum::rag_retrieval_service
 pub use paladin::application::services::sanctum::rag_retrieval_service::RagConfig
+pub use paladin::application::services::sanctum::rag_retrieval_service::RagRetainedMemory
+pub use paladin::application::services::sanctum::rag_retrieval_service::RagRetrievalError
+pub use paladin::application::services::sanctum::rag_retrieval_service::RagRetrievalResult
 pub use paladin::application::services::sanctum::rag_retrieval_service::RagRetrievalService
 pub use paladin::application::services::sanctum::rag_retrieval_service::RetrievalTrigger
+pub use paladin::application::services::sanctum::rag_retrieval_service::ShedItem
+pub use paladin::application::services::sanctum::rag_retrieval_service::rag_omission_marker
 pub use paladin::application::services::sanctum::rag_retrieval_service::retrieve_context_with_timeout
 pub mod paladin::application::services::waypoint_retention
 pub struct paladin::application::services::waypoint_retention::WaypointRetentionService
@@ -7906,4 +7921,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 3944
+Total public items: 3959

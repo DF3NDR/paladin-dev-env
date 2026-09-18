@@ -91,11 +91,7 @@ impl LlmPort for MockLlmPort {
                 model: "mock-model".to_string(),
                 content,
                 finish_reason: FinishReason::Stop,
-                usage: TokenUsage {
-                    prompt_tokens: 10,
-                    completion_tokens: 20,
-                    total_tokens: 30,
-                },
+                usage: TokenUsage::new(10, 20),
                 created_at: chrono::Utc::now(),
                 metadata: std::collections::HashMap::new(),
                 function_call: None,
@@ -158,7 +154,7 @@ async fn test_execution_service_executes_successfully() {
         "Should execute exactly one loop"
     );
     assert!(
-        paladin_result.token_count > 0,
+        paladin_result.usage.total_tokens > 0,
         "Token count should be tracked"
     );
     // Execution time is always tracked (u64, defaults to 0)
@@ -400,7 +396,7 @@ async fn test_execution_service_tracks_metadata() {
     // Verify all metadata is tracked
     // execution_time_ms is u64, always >= 0, can be 0 for fast mocks
     assert!(
-        paladin_result.token_count > 0,
+        paladin_result.usage.total_tokens > 0,
         "Token count should be tracked"
     );
     assert_eq!(paladin_result.loop_count, 1, "Loop count should be tracked");
@@ -528,7 +524,7 @@ async fn test_autonomous_metadata_population() {
         paladin_result.handoff_history.is_empty(),
         "No handoffs executed"
     );
-    assert!(paladin_result.token_count > 0, "Token count tracked");
+    assert!(paladin_result.usage.total_tokens > 0, "Token count tracked");
     // execution_time_ms is u64, always >= 0, no need to check
     assert_eq!(paladin_result.loop_count, 1, "Loop count tracked");
 }

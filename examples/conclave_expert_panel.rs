@@ -63,6 +63,7 @@ use paladin::core::platform::container::battalion::conclave::{
     Conclave, ConclaveConfig, ObservabilityLevel,
 };
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin::core::platform::container::token_usage::TokenUsage;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, StopReason};
 use std::sync::Arc;
 
@@ -191,7 +192,7 @@ impl PaladinPort for ExamplePaladinPort {
 
         Ok(PaladinResult {
             output,
-            token_count: token_estimate,
+            usage: TokenUsage::new(token_estimate, 0),
             execution_time_ms: 100,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -371,7 +372,9 @@ async fn example_1_basic_expert_panel() -> Result<(), Box<dyn std::error::Error>
         }
         println!(
             "  ⏱️  {}ms | 🔄 {} loops | 📊 {} tokens",
-            expert_result.execution_time_ms, expert_result.loop_count, expert_result.token_count
+            expert_result.execution_time_ms,
+            expert_result.loop_count,
+            expert_result.usage.total_tokens
         );
     }
 
@@ -383,7 +386,7 @@ async fn example_1_basic_expert_panel() -> Result<(), Box<dyn std::error::Error>
     println!("{}", "═".repeat(80));
     println!(
         "📊 Aggregator: {}ms | {} tokens\n",
-        result.aggregated_output.execution_time_ms, result.aggregated_output.token_count
+        result.aggregated_output.execution_time_ms, result.aggregated_output.usage.total_tokens
     );
 
     Ok(())

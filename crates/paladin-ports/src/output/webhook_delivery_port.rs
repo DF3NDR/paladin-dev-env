@@ -74,6 +74,113 @@ pub enum WebhookDeliveryRepositoryError {
 ///
 /// Implementations must be `Send + Sync`: deliveries are enqueued and
 /// claimed concurrently across `WebhookDeliveryService` instances.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use std::sync::Mutex;
+///
+/// use async_trait::async_trait;
+/// use chrono::{DateTime, Utc};
+/// use paladin_core::platform::container::run::{RunEventKind, RunId};
+/// use paladin_core::platform::container::waypoint::ThreadId;
+/// use paladin_core::platform::container::webhook::{
+///     WebhookAttemptResult, WebhookDelivery, WebhookDeliveryId,
+/// };
+/// use paladin_ports::output::webhook_delivery_port::{
+///     WebhookDeliveryPage, WebhookDeliveryRepositoryError, WebhookDeliveryRepositoryPort,
+/// };
+///
+/// struct InMemoryDeliveries {
+///     rows: Mutex<HashMap<WebhookDeliveryId, WebhookDelivery>>,
+/// }
+///
+/// #[async_trait]
+/// impl WebhookDeliveryRepositoryPort for InMemoryDeliveries {
+///     async fn enqueue(
+///         &self,
+///         delivery: WebhookDelivery,
+///     ) -> Result<(), WebhookDeliveryRepositoryError> {
+///         self.rows
+///             .lock()
+///             .unwrap()
+///             .insert(delivery.delivery_id.clone(), delivery);
+///         Ok(())
+///     }
+///
+///     async fn get(
+///         &self,
+///         delivery_id: &WebhookDeliveryId,
+///     ) -> Result<Option<WebhookDelivery>, WebhookDeliveryRepositoryError> {
+///         Ok(self.rows.lock().unwrap().get(delivery_id).cloned())
+///     }
+///
+///     async fn claim_due(
+///         &self,
+///         _now: DateTime<Utc>,
+///         _limit: u32,
+///     ) -> Result<Vec<WebhookDelivery>, WebhookDeliveryRepositoryError> {
+///         Ok(Vec::new())
+///     }
+///
+///     async fn record_attempt(
+///         &self,
+///         delivery_id: &WebhookDeliveryId,
+///         _result: WebhookAttemptResult,
+///     ) -> Result<(), WebhookDeliveryRepositoryError> {
+///         if self.rows.lock().unwrap().contains_key(delivery_id) {
+///             Ok(())
+///         } else {
+///             Err(WebhookDeliveryRepositoryError::NotFound {
+///                 delivery_id: delivery_id.clone(),
+///             })
+///         }
+///     }
+///
+///     async fn list_for_run(
+///         &self,
+///         run_id: &RunId,
+///         _limit: u32,
+///         _cursor: Option<WebhookDeliveryId>,
+///     ) -> Result<WebhookDeliveryPage, WebhookDeliveryRepositoryError> {
+///         let items = self
+///             .rows
+///             .lock()
+///             .unwrap()
+///             .values()
+///             .filter(|d| &d.run_id == run_id)
+///             .cloned()
+///             .collect();
+///         Ok(WebhookDeliveryPage {
+///             items,
+///             next_cursor: None,
+///         })
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let repo = InMemoryDeliveries {
+///         rows: Mutex::new(HashMap::new()),
+///     };
+///     let run_id = RunId::new_v7();
+///     let delivery = WebhookDelivery::new(
+///         WebhookDeliveryId::new_v7(),
+///         run_id.clone(),
+///         ThreadId::new("t1")?,
+///         RunEventKind::Completed,
+///         "https://example.invalid/hook",
+///         "{}",
+///         Utc::now(),
+///     );
+///
+///     repo.enqueue(delivery).await?;
+///     let page = repo.list_for_run(&run_id, 10, None).await?;
+///     assert_eq!(page.items.len(), 1, "the enqueued delivery must be listed back");
+///     Ok(())
+/// }
+/// ```
 #[async_trait]
 pub trait WebhookDeliveryRepositoryPort: Send + Sync {
     /// Persist a brand-new, `Pending` delivery.

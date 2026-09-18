@@ -119,7 +119,7 @@ impl JsonHerald {
     fn paladin_result_to_json(&self, result: &PaladinResult) -> Value {
         let mut json = json!({
             "output": result.output,
-            "token_count": result.token_count,
+            "usage": result.usage,
             "execution_time_ms": result.execution_time_ms,
             "loop_count": result.loop_count,
             "stop_reason": format!("{:?}", result.stop_reason),
@@ -199,11 +199,15 @@ impl Herald for JsonHerald {
     }
 
     fn finalize_stream(&self, metadata: &ExecutionMetadata) -> Result<String, HeraldError> {
+        // "usage" carries the full TokenUsage split (D-21); "total_tokens" is
+        // kept beside it as a derived convenience for existing consumers
+        // (D-08 permits coexistence as long as it is never the sole carrier).
         let json = json!({
             "type": "metadata",
             "execution_id": metadata.execution_id,
             "duration_ms": metadata.duration_ms,
             "model_used": metadata.model_used,
+            "usage": metadata.token_usage,
             "total_tokens": metadata.token_usage.total_tokens,
             "cost_estimate": metadata.cost_estimate,
             "timestamp": chrono::Utc::now().to_rfc3339(),
@@ -250,7 +254,7 @@ mod tests {
     fn create_test_paladin_result() -> PaladinResult {
         PaladinResult {
             output: "Test output content".to_string(),
-            token_count: 100,
+            usage: TokenUsage::new(100, 0),
             execution_time_ms: 1500,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -269,7 +273,7 @@ mod tests {
                 create_test_paladin_result(),
                 PaladinResult {
                     output: "Second output".to_string(),
-                    token_count: 150,
+                    usage: TokenUsage::new(150, 0),
                     execution_time_ms: 2000,
                     loop_count: 2,
                     stop_reason: StopReason::Completed,
@@ -323,7 +327,8 @@ mod tests {
         // Verify it's valid JSON
         let parsed: Value = serde_json::from_str(&formatted).unwrap();
         assert_eq!(parsed["output"], "Test output content");
-        assert_eq!(parsed["token_count"], 100);
+        assert_eq!(parsed["usage"]["total_tokens"], 100);
+        assert!(parsed.get("token_count").is_none());
         assert_eq!(parsed["execution_time_ms"], 1500);
         assert_eq!(parsed["loop_count"], 1);
         assert_eq!(parsed["stop_reason"], "Completed");
@@ -388,8 +393,8 @@ mod tests {
         let herald = JsonHerald::new();
 
         let mut per_paladin_tokens = std::collections::HashMap::new();
-        per_paladin_tokens.insert("Scout".to_string(), TokenUsage::from_total(137));
-        per_paladin_tokens.insert("Sentinel".to_string(), TokenUsage::from_total(263));
+        per_paladin_tokens.insert("Scout".to_string(), TokenUsage::new(137, 0));
+        per_paladin_tokens.insert("Sentinel".to_string(), TokenUsage::new(263, 0));
 
         let result = BattalionResult {
             battalion_id: Uuid::new_v4(),
@@ -400,7 +405,7 @@ mod tests {
             paladin_results: vec![
                 PaladinResult {
                     output: "Scout output".to_string(),
-                    token_count: 137,
+                    usage: TokenUsage::new(137, 0),
                     execution_time_ms: 1500,
                     loop_count: 1,
                     stop_reason: StopReason::Completed,
@@ -408,7 +413,7 @@ mod tests {
                 },
                 PaladinResult {
                     output: "Sentinel output".to_string(),
-                    token_count: 263,
+                    usage: TokenUsage::new(263, 0),
                     execution_time_ms: 2000,
                     loop_count: 2,
                     stop_reason: StopReason::Completed,
@@ -510,11 +515,7 @@ mod tests {
             .execution_id(uuid::Uuid::new_v4())
             .start_time(chrono::Utc::now())
             .model_used("gpt-4".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 300,
-                completion_tokens: 200,
-                total_tokens: 500,
-            })
+            .token_usage(TokenUsage::new(300, 200))
             .duration_ms(1234)
             .build()
             .unwrap();
@@ -526,7 +527,12 @@ mod tests {
         let parsed: Value = serde_json::from_str(json_str).unwrap();
         assert_eq!(parsed["type"], "metadata");
         assert_eq!(parsed["duration_ms"], 1234);
+        assert_eq!(parsed["usage"]["prompt_tokens"], 300);
+        assert_eq!(parsed["usage"]["completion_tokens"], 200);
+        assert_eq!(parsed["usage"]["total_tokens"], 500);
         assert_eq!(parsed["total_tokens"], 500);
+        // The derived bare total can never drift from the full usage object.
+        assert_eq!(parsed["total_tokens"], parsed["usage"]["total_tokens"]);
     }
 
     #[test]
@@ -597,8 +603,8 @@ mod tests {
         // Verify key fields match
         assert_eq!(parsed["output"].as_str().unwrap(), original.output);
         assert_eq!(
-            parsed["token_count"].as_u64().unwrap(),
-            original.token_count as u64
+            parsed["usage"]["total_tokens"].as_u64().unwrap(),
+            u64::from(original.usage.total_tokens)
         );
         assert_eq!(
             parsed["execution_time_ms"].as_u64().unwrap(),
@@ -692,11 +698,7 @@ mod tests {
             .execution_id(uuid::Uuid::new_v4())
             .start_time(chrono::Utc::now())
             .model_used("gpt-4".to_string())
-            .token_usage(TokenUsage {
-                prompt_tokens: 90,
-                completion_tokens: 60,
-                total_tokens: 150,
-            })
+            .token_usage(TokenUsage::new(90, 60))
             .duration_ms(500)
             .build()
             .unwrap();
@@ -734,6 +736,125 @@ mod tests {
         let meta: Value = serde_json::from_str(lines[3]).unwrap();
         assert_eq!(meta["type"], "metadata");
         assert_eq!(meta["duration_ms"], 500);
-        assert_eq!(meta["total_tokens"], 150);
+        assert_eq!(meta["usage"]["total_tokens"], 150);
+        assert_eq!(meta["total_tokens"], meta["usage"]["total_tokens"]);
+    }
+
+    // --- ACCT-04 / D-21: stable six-key usage object -----------------------
+
+    #[test]
+    fn test_usage_object_carries_full_split_with_all_optionals_reported() {
+        let herald = JsonHerald::new();
+        let result = PaladinResult {
+            output: "Test output content".to_string(),
+            usage: TokenUsage::new(1_234, 567)
+                .with_cache_read(100)
+                .with_cache_write(50)
+                .with_reasoning(200),
+            execution_time_ms: 1500,
+            loop_count: 1,
+            stop_reason: StopReason::Completed,
+            ..Default::default()
+        };
+
+        let formatted = herald.format_paladin_result(&result).unwrap();
+        let parsed: Value = serde_json::from_str(&formatted).unwrap();
+
+        let usage = &parsed["usage"];
+        assert_eq!(usage["prompt_tokens"], 1234);
+        assert_eq!(usage["completion_tokens"], 567);
+        assert_eq!(usage["total_tokens"], 1801);
+        assert_eq!(usage["cache_read_tokens"], 100);
+        assert_eq!(usage["cache_write_tokens"], 50);
+        assert_eq!(usage["reasoning_tokens"], 200);
+        // No bare per-result token-count key survives beside the usage object.
+        assert!(parsed.get("token_count").is_none());
+    }
+
+    #[test]
+    fn test_usage_object_key_set_is_stable_with_nulls_when_optionals_unreported() {
+        let herald = JsonHerald::new();
+        let result = PaladinResult {
+            output: "Test output content".to_string(),
+            usage: TokenUsage::new(10, 5),
+            execution_time_ms: 1500,
+            loop_count: 1,
+            stop_reason: StopReason::Completed,
+            ..Default::default()
+        };
+
+        let formatted = herald.format_paladin_result(&result).unwrap();
+        let parsed: Value = serde_json::from_str(&formatted).unwrap();
+
+        let usage = parsed["usage"]
+            .as_object()
+            .expect("usage must be a JSON object");
+        // A consumer's key set never changes between providers: exactly six
+        // keys, with the three unreported optionals present and `null`.
+        assert_eq!(usage.len(), 6);
+        assert_eq!(usage["prompt_tokens"], 10);
+        assert_eq!(usage["completion_tokens"], 5);
+        assert_eq!(usage["total_tokens"], 15);
+        assert!(usage["cache_read_tokens"].is_null());
+        assert!(usage["cache_write_tokens"].is_null());
+        assert!(usage["reasoning_tokens"].is_null());
+    }
+
+    #[test]
+    fn test_per_paladin_tokens_carry_real_non_zero_splits() {
+        let herald = JsonHerald::new();
+        let mut per_paladin_tokens = std::collections::HashMap::new();
+        per_paladin_tokens.insert("Scout".to_string(), TokenUsage::new(321, 145));
+
+        let result = BattalionResult {
+            battalion_id: Uuid::new_v4(),
+            battalion_name: "SplitBattalion".to_string(),
+            started_at: Utc::now(),
+            completed_at: Utc::now(),
+            final_output: "output".to_string(),
+            paladin_results: vec![],
+            status: BattalionStatus::Completed,
+            strategy_used: BattalionStrategy::Formation,
+            strategy_selection_reasoning: None,
+            strategy_selection_time_ms: 0,
+            per_paladin_times: std::collections::HashMap::new(),
+            per_paladin_tokens,
+            total_tokens: 466,
+            paladin_success_count: 1,
+            paladin_failure_count: 0,
+            node_errors: Vec::new(),
+        };
+
+        let formatted = herald.format_battalion_result(&result).unwrap();
+        let parsed: Value = serde_json::from_str(&formatted).unwrap();
+
+        let scout = &parsed["per_paladin_tokens"]["Scout"];
+        assert_eq!(scout["prompt_tokens"], 321);
+        assert_eq!(scout["completion_tokens"], 145);
+        assert_ne!(scout["prompt_tokens"], 0);
+        assert_ne!(scout["completion_tokens"], 0);
+    }
+
+    #[test]
+    fn test_usage_object_deserializes_back_into_equal_token_usage() {
+        let herald = JsonHerald::new();
+        let original_usage = TokenUsage::new(1_234, 567)
+            .with_cache_read(100)
+            .with_cache_write(50)
+            .with_reasoning(200);
+        let result = PaladinResult {
+            output: "output".to_string(),
+            usage: original_usage.clone(),
+            execution_time_ms: 1500,
+            loop_count: 1,
+            stop_reason: StopReason::Completed,
+            ..Default::default()
+        };
+
+        let formatted = herald.format_paladin_result(&result).unwrap();
+        let parsed: Value = serde_json::from_str(&formatted).unwrap();
+
+        let roundtripped: TokenUsage = serde_json::from_value(parsed["usage"].clone()).unwrap();
+        assert_eq!(roundtripped, original_usage);
     }
 }

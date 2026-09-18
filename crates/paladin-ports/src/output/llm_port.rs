@@ -142,11 +142,7 @@
 //!             model: request.model,
 //!             content: "Response from local LLM".to_string(),
 //!             finish_reason: FinishReason::Stop,
-//!             usage: TokenUsage {
-//!                 prompt_tokens: 10,
-//!                 completion_tokens: 20,
-//!                 total_tokens: 30,
-//!             },
+//!             usage: TokenUsage::new(10, 20),
 //!             created_at: Utc::now(),
 //!             metadata: HashMap::new(),
 //!             function_call: None,
@@ -986,11 +982,7 @@ pub enum FinishReason {
 /// ```rust
 /// use paladin_ports::output::llm_port::TokenUsage;
 ///
-/// let usage = TokenUsage {
-///     prompt_tokens: 150,
-///     completion_tokens: 300,
-///     total_tokens: 450,
-/// };
+/// let usage = TokenUsage::new(150, 300);
 ///
 /// // Calculate cost for GPT-4 (example: $0.03/1K prompt, $0.06/1K completion)
 /// let prompt_cost = (usage.prompt_tokens as f64 / 1000.0) * 0.03;
@@ -1018,27 +1010,15 @@ pub use paladin_core::platform::container::token_usage::TokenUsage;
 /// # Examples
 ///
 /// ```rust
-/// use paladin_ports::output::llm_port::StreamingResponse;
-/// use uuid::Uuid;
+/// use paladin_ports::output::llm_port::{FinishReason, StreamingResponse};
 ///
 /// // Accumulate streaming chunks
 /// let mut accumulated = String::new();
 /// let chunks = vec![
-///     StreamingResponse {
-///         id: Uuid::new_v4(),
-///         delta: "Hello".to_string(),
-///         finish_reason: None,
-///     },
-///     StreamingResponse {
-///         id: Uuid::new_v4(),
-///         delta: " world".to_string(),
-///         finish_reason: None,
-///     },
-///     StreamingResponse {
-///         id: Uuid::new_v4(),
-///         delta: "!".to_string(),
-///         finish_reason: Some(paladin_ports::output::llm_port::FinishReason::Stop),
-///     },
+///     StreamingResponse::delta("Hello"),
+///     StreamingResponse::delta(" world"),
+///     StreamingResponse::delta("!"),
+///     StreamingResponse::terminal(FinishReason::Stop),
 /// ];
 ///
 /// for chunk in chunks {
@@ -1050,7 +1030,26 @@ pub use paladin_core::platform::container::token_usage::TokenUsage;
 ///
 /// assert_eq!(accumulated, "Hello world!");
 /// ```
+///
+/// # Streaming usage contract (D-13, D-14)
+///
+/// As of v0.10.0 this struct is `#[non_exhaustive]` and gained the additive
+/// `usage` field. Construct it through [`StreamingResponse::delta`] /
+/// [`StreamingResponse::terminal`] plus the chainable
+/// [`StreamingResponse::with_usage`] -- a full struct literal no longer
+/// compiles outside this crate. This is a one-way decision, mirroring
+/// [`LlmRequest`]: `StreamingResponse` has no `Default`, so there was no
+/// functional-update escape hatch, and the constructors keep the *next*
+/// field free.
+///
+/// `usage` is `Some` on exactly ONE chunk per stream -- the terminal chunk,
+/// the same one that carries `finish_reason: Some(..)` -- and `None` on
+/// every other chunk. A provider whose stream ends without ever reporting
+/// usage yields a terminal chunk with `usage: None`; the execution service
+/// then records [`TokenUsage::default`] for that call rather than
+/// substituting a locally-computed estimate (D-17).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StreamingResponse {
     /// Unique identifier for this chunk
     pub id: Uuid,
@@ -1058,6 +1057,76 @@ pub struct StreamingResponse {
     pub delta: String,
     /// Why generation stopped (present only in final chunk)
     pub finish_reason: Option<FinishReason>,
+    /// Token usage reported by the provider, present only on the terminal
+    /// chunk that also carries `finish_reason: Some(..)` (D-13/D-14). `None`
+    /// on every other chunk, and `None` on the terminal chunk itself when
+    /// the provider's stream ended without reporting usage (D-16/D-17) --
+    /// never a locally-computed estimate.
+    #[serde(default)]
+    pub usage: Option<TokenUsage>,
+}
+
+impl StreamingResponse {
+    /// Construct a non-terminal delta chunk: fresh [`Uuid`], no finish
+    /// reason, no usage.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::StreamingResponse;
+    ///
+    /// let chunk = StreamingResponse::delta("Hello");
+    /// assert_eq!(chunk.delta, "Hello");
+    /// assert!(chunk.finish_reason.is_none());
+    /// assert!(chunk.usage.is_none());
+    /// ```
+    pub fn delta(text: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            delta: text.into(),
+            finish_reason: None,
+            usage: None,
+        }
+    }
+
+    /// Construct a terminal chunk: fresh [`Uuid`], empty delta, the given
+    /// finish reason, no usage yet -- chain [`Self::with_usage`] when the
+    /// provider reported one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{FinishReason, StreamingResponse};
+    ///
+    /// let chunk = StreamingResponse::terminal(FinishReason::Stop);
+    /// assert!(chunk.delta.is_empty());
+    /// assert!(matches!(chunk.finish_reason, Some(FinishReason::Stop)));
+    /// assert!(chunk.usage.is_none());
+    /// ```
+    pub fn terminal(finish_reason: FinishReason) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            delta: String::new(),
+            finish_reason: Some(finish_reason),
+            usage: None,
+        }
+    }
+
+    /// Chainable: attach the provider's reported usage to this chunk (D-14).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{FinishReason, StreamingResponse, TokenUsage};
+    ///
+    /// let chunk = StreamingResponse::terminal(FinishReason::Stop)
+    ///     .with_usage(TokenUsage::new(11, 7));
+    /// assert_eq!(chunk.usage, Some(TokenUsage::new(11, 7)));
+    /// ```
+    pub fn with_usage(mut self, usage: TokenUsage) -> Self {
+        self.usage = Some(usage);
+        self
+    }
 }
 
 /// Provider capabilities for feature detection

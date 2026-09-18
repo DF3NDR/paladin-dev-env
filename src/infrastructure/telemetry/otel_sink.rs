@@ -39,7 +39,7 @@
 //! # Security (T-28-09-01/02, `.github/instructions/security.instructions.md`)
 //!
 //! The OTLP HTTP client is built with `redirect(Policy::none())` (this
-//! file's `Policy::none()` -- see [`build_reqwest_client`]) so a `3xx` from
+//! file's `Policy::none()` -- see `build_reqwest_client`) so a `3xx` from
 //! the configured collector can never carry `OtelConfig.headers`'
 //! credential-shaped values to a different, attacker-influenced host. No
 //! header value is ever logged, `Debug`-printed or otherwise interpolated
@@ -487,7 +487,7 @@ impl TraceSink for OtelTraceSink {
                 attempt,
                 outcome,
                 duration_ms,
-                token_count,
+                usage,
                 cache_hit,
             } => {
                 self.finish_attempt_span(
@@ -497,7 +497,7 @@ impl TraceSink for OtelTraceSink {
                     *attempt,
                     outcome,
                     *duration_ms,
-                    *token_count,
+                    u64::from(usage.total_tokens),
                     *cache_hit,
                     at,
                 );
@@ -553,7 +553,7 @@ impl TraceSink for OtelTraceSink {
             TraceEvent::RunFinished {
                 status,
                 total_supersteps,
-                total_tokens,
+                usage,
                 duration_ms,
                 trace_dropped_total,
             } => {
@@ -561,7 +561,7 @@ impl TraceSink for OtelTraceSink {
                     &thread_id,
                     status,
                     *total_supersteps,
-                    *total_tokens,
+                    u64::from(usage.total_tokens),
                     *duration_ms,
                     *trace_dropped_total,
                     at,
@@ -610,6 +610,7 @@ mod tests {
     use super::*;
     use opentelemetry_sdk::trace::InMemorySpanExporter;
     use paladin_core::platform::container::parley::{ParleyId, ParleyKind};
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_ports::output::trace_sink_port::FieldChange;
 
     fn thread(id: &str) -> ThreadId {
@@ -661,7 +662,7 @@ mod tests {
             TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
-                total_tokens: 0,
+                usage: TokenUsage::new(0, 0),
                 duration_ms: 500,
                 trace_dropped_total: 0,
             },
@@ -715,7 +716,7 @@ mod tests {
             event: TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 0,
-                total_tokens: 0,
+                usage: TokenUsage::new(0, 0),
                 duration_ms: 10,
                 trace_dropped_total: 0,
             },
@@ -785,7 +786,7 @@ mod tests {
                     attempt,
                     outcome,
                     duration_ms: 5,
-                    token_count: 3,
+                    usage: TokenUsage::new(3, 0),
                     cache_hit: false,
                 },
             ))
@@ -799,7 +800,7 @@ mod tests {
             TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
-                total_tokens: 3,
+                usage: TokenUsage::new(3, 0),
                 duration_ms: 100,
                 trace_dropped_total: 0,
             },
@@ -878,7 +879,7 @@ mod tests {
                 attempt: 1,
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
-                token_count: 42,
+                usage: TokenUsage::new(42, 0),
                 cache_hit: true,
             },
         ))
@@ -1011,7 +1012,7 @@ mod tests {
                     attempt,
                     outcome,
                     duration_ms: 5,
-                    token_count: 1,
+                    usage: TokenUsage::new(1, 0),
                     cache_hit: false,
                 },
             ))
@@ -1043,7 +1044,7 @@ mod tests {
                 attempt: 1,
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
-                token_count: 2,
+                usage: TokenUsage::new(2, 0),
                 cache_hit: false,
             },
         ))
@@ -1076,7 +1077,7 @@ mod tests {
             TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 2,
-                total_tokens: 3,
+                usage: TokenUsage::new(3, 0),
                 duration_ms: 50,
                 trace_dropped_total: 0,
             },
@@ -1162,7 +1163,7 @@ mod tests {
                 attempt: 1,
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
-                token_count: 0,
+                usage: TokenUsage::new(0, 0),
                 cache_hit: false,
             },
         ))
@@ -1199,7 +1200,7 @@ mod tests {
             TraceEvent::RunFinished {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
-                total_tokens: 0,
+                usage: TokenUsage::new(0, 0),
                 duration_ms: 15,
                 trace_dropped_total: 0,
             },

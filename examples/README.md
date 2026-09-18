@@ -8,12 +8,28 @@ This directory contains comprehensive examples demonstrating Paladin's capabilit
 - [Basic Paladin Examples](#basic-paladin-examples)
 - [Autonomous Agent Examples](#autonomous-agent-examples) 🆕
 - [Memory & Garrison Examples](#memory--garrison-examples)
+- [Token Economy Examples](#token-economy-examples)
 - [Sanctum Long-term Memory Examples](#sanctum-long-term-memory-examples)
 - [Tool Integration Examples](#tool-integration-examples)
 - [Battalion Orchestration Examples](#battalion-orchestration-examples)
 - [Output Formatting Examples](#output-formatting-examples)
 - [State Management Examples](#state-management-examples)
+- [Vision](#vision)
+- [Document Processing](#document-processing)
+- [HTTP Service Host](#http-service-host)
+- [RAG & Retrieval](#rag--retrieval)
+- [Commander Strategies (Council / Grove / Conclave)](#commander-strategies-council--grove--conclave)
 - [Performance Benchmarking Examples](#performance-benchmarking-examples)
+- [WarEngine Configuration & Checkpoints](#warengine-configuration--checkpoints)
+- [Control Flow & Dynamic Routing](#control-flow--dynamic-routing)
+- [Human-in-the-Loop](#human-in-the-loop)
+- [Graceful Shutdown](#graceful-shutdown)
+- [Agent Runtime & Middleware](#agent-runtime--middleware)
+- [Structured Output](#structured-output)
+- [Platform API](#platform-api)
+- [Node-Result Cache](#node-result-cache)
+- [Observability & Tracing](#observability--tracing)
+- [Evaluation](#evaluation)
 - [Configuration Examples](#configuration-examples)
 - [Advanced Examples](#advanced-examples)
 - [Running Examples](#running-examples)
@@ -21,7 +37,7 @@ This directory contains comprehensive examples demonstrating Paladin's capabilit
 ## Getting Started
 
 All examples require:
-- Rust 1.70 or later
+- Rust 1.88 or later
 - API keys for LLM providers (OpenAI, DeepSeek, or Anthropic)
 - Docker (for examples using Redis/MinIO)
 
@@ -70,7 +86,7 @@ let paladin = PaladinBuilder::new(llm_adapter)
     .build()?;
 
 let response = paladin.execute("Hello!").await?;
-println!("{}", response.content);
+println!("{}", response.output);
 ```
 
 ### [paladin_with_config.rs](paladin_with_config.rs)
@@ -384,6 +400,27 @@ cargo run --example garrison_semantic_search
 - Vector similarity search
 - RAG (Retrieval-Augmented Generation)
 - Long-term knowledge
+
+## Token Economy Examples
+
+### [token_economy_commissary.rs](token_economy_commissary.rs)
+**Demonstrates:** Commissary prompt-budgeting and context-window resolution
+
+Shows the Commissary -- the input-side, per-call window-rationing officer -- measuring
+an assembled prompt against a provider's own declared context window, dispensing a
+bounded, priority-ordered stockpile of material, and resolving that window through the
+shared `resolve_context_window` precedence chain. Runs fully offline against a
+`MockLlmAdapter`; needs no provider API key.
+
+```bash
+cargo run --example token_economy_commissary
+```
+
+**Key concepts:**
+- `Commissary::new` / `Commissary::dispense`
+- `TokenCounterPort::is_exact` (approximate vs. exact counters)
+- `resolve_context_window`, `WindowSource`, `WindowFallbackPolicy`
+- `TokenUsage`'s cache-read/cache-write sub-counts (Anthropic-shaped usage)
 
 ## Sanctum Long-term Memory Examples
 
@@ -1024,9 +1061,8 @@ println!("{}", mermaid);
 ```
 
 ### [cli_configs/maneuver.yaml](cli_configs/maneuver.yaml) 🆕
-**Demonstrates:** Complete Maneuver YAML configuration
 
-Shows full configuration template for Maneuver Battalion with all options.
+Complete Maneuver YAML configuration template for Maneuver Battalion with all options.
 
 **Key concepts:**
 - YAML-based flow definition
@@ -1231,6 +1267,215 @@ cargo run --example battalion_checkpoint_recovery
 - Partial execution
 - Fault handling
 
+## Vision
+
+### [vision_analysis.rs](vision_analysis.rs)
+**Demonstrates:** Basic single-image analysis using the Sentinel Vision System
+
+Creates a vision-enabled Paladin, analyzes an image from a file, and processes the
+analysis result. Needs an OpenAI API key (`OPENAI_API_KEY`) and the `vision`/`llm-openai`
+features.
+
+```bash
+cargo run --example vision_analysis --features "vision,llm-openai"
+```
+
+**Key concepts:**
+- Vision-enabled Paladin construction
+- `VisionContent` and `ImageDetail`
+- Analyzing an image from a file path
+- `VisionError` handling
+
+### [vision_battalion.rs](vision_battalion.rs)
+**Demonstrates:** Multi-agent vision processing using Battalion orchestration patterns
+
+Shows Formation (sequential vision analysis pipeline) and Phalanx (parallel vision
+processing across multiple images) applied to Sentinel vision content. Needs an OpenAI
+API key and the `vision`/`llm-openai` features.
+
+```bash
+cargo run --example vision_battalion --features "vision,llm-openai"
+```
+
+**Key concepts:**
+- Formation: sequential vision analysis pipeline
+- Phalanx: parallel vision processing across images
+- Vision-enabled Battalion orchestration
+
+## Document Processing
+
+### [document_processing.rs](document_processing.rs)
+**Demonstrates:** PDF text extraction and intelligent document chunking
+
+Extracts text from PDF documents, reads document metadata, chunks documents for RAG or
+analysis, and processes documents with Paladins. Needs the `content-processing` feature.
+
+```bash
+cargo run --example document_processing --features content-processing
+```
+
+**Key concepts:**
+- `PdfExtractor` / `DocumentAdapter`
+- `DocumentPort` and `DocumentSource`
+- `ChunkConfig` document chunking
+- Document metadata access
+
+## HTTP Service Host
+
+### [http_service_host.rs](http_service_host.rs)
+**Demonstrates:** Booting the Paladin HTTP API in-process and calling an agent, with full router parity against the shipped server
+
+Assembles the app exactly as the `paladin-server` binary does -- the agent router under
+`/v1`, merged with the thread router and the run router (in that order), and only then
+the OpenAPI docs router -- serves it on an ephemeral port, and drives it over real HTTP:
+lists agents, runs one buffered and one streamed execution, calls one thread route and
+one run route (both report `501 not_implemented`, matching the shipped server's own
+off-by-default behavior with no waypoint/run store wired), and reads the OpenAPI title.
+Hermetic -- backed by `MockLlmAdapter`, needs no network or provider keys, but does need
+the `web-server` feature.
+
+```bash
+cargo run --example http_service_host --features web-server
+```
+
+**Key concepts:**
+- `agent_router` + `thread_router` + `run_router` merge order (server parity)
+- In-process HTTP serving on an ephemeral port
+- Buffered and streamed agent execution over HTTP
+- Off-by-default thread/run store wiring (`501 not_implemented`)
+- OpenAPI docs router
+
+## RAG & Retrieval
+
+### [paladin_with_rag.rs](paladin_with_rag.rs)
+**Demonstrates:** RAG (Retrieval-Augmented Generation) configuration and conceptual workflow
+
+A conceptual, printed walkthrough of `RagRetrievalService` (automatic context retrieval
+from Sanctum) and `MemoryExtractionService` (automatic memory storage) wired into
+`PaladinExecutionService`'s execution flow. Calls none of the Phase 33 rationed-retrieval
+API directly -- see `sanctum_rag_retrieval.rs` below for a runnable sibling that drives
+the real service.
+
+```bash
+cargo run --example paladin_with_rag
+```
+
+**Key concepts:**
+- `RagRetrievalService` automatic context retrieval
+- `MemoryExtractionService` automatic memory storage
+- RAG configuration via `config.yml` / `examples/cli_configs/paladin_rag.yaml`
+- Building agent knowledge over sessions
+
+### [sanctum_rag_retrieval.rs](sanctum_rag_retrieval.rs)
+**Demonstrates:** `RagRetrievalResult` typed retrieval, `ShedItem` shed records, a typed `RagRetrievalError`, the timeout-bounded `retrieve_context_with_timeout` free function, and exact `TokenCounterPort` injection via `with_token_counter`
+
+A runnable sibling to `paladin_with_rag.rs`'s conceptual walkthrough: drives
+`RagRetrievalService` for real over an in-memory Sanctum, reads back the typed
+`RagRetrievalResult` and its `ShedItem` records when a token budget forces memories out,
+matches a failing retrieval against the typed `RagRetrievalError` enum, calls the
+timeout-bounded `retrieve_context_with_timeout` free function, and contrasts an exact
+`TokenCounterPort` against the heuristic default. Fully offline -- in-memory Sanctum,
+deterministic embedding stand-in.
+
+```bash
+cargo run --example sanctum_rag_retrieval
+```
+
+**Key concepts:**
+- `RagRetrievalResult` typed retrieval
+- `ShedItem` shed records under a rationed budget
+- Typed `RagRetrievalError` (e.g. `BudgetTooLarge`)
+- `retrieve_context_with_timeout` free function
+- `with_token_counter` exact-counter injection
+
+## Commander Strategies (Council / Grove / Conclave)
+
+### [commander_council.rs](commander_council.rs)
+**Demonstrates:** Commander orchestrating Council discussions with different turn-taking strategies and termination conditions
+
+Shows Commander automatically selecting the Council strategy, contrasting RoundRobin and
+ModeratorDirected turn-taking, and MaxRounds/Consensus/Keyword termination conditions,
+with formatted discussion output.
+
+```bash
+cargo run --example commander_council
+```
+
+**Key concepts:**
+- Commander Council strategy selection
+- Turn-taking strategies (RoundRobin, ModeratorDirected)
+- Termination conditions (MaxRounds, Consensus, Keyword)
+- Formatted discussion output
+
+### [commander_grove.rs](commander_grove.rs)
+**Demonstrates:** Commander orchestrating Grove routing with all three routing strategies
+
+Shows Commander automatically selecting the Grove strategy across KeywordMatch (fast,
+deterministic), SemanticSimilarity (contextual, embedding-based) and LlmRouting
+(intelligent, LLM-powered), plus fallback behavior and confidence scoring.
+
+```bash
+cargo run --example commander_grove
+```
+
+**Key concepts:**
+- Commander Grove strategy selection
+- KeywordMatch / SemanticSimilarity / LlmRouting
+- Fallback behavior
+- Confidence scoring
+
+### [conclave_expert_panel.rs](conclave_expert_panel.rs)
+**Demonstrates:** The Conclave Mixture-of-Agents pattern -- parallel expert analysis synthesized by an aggregator
+
+Multiple specialized Paladins (Technical, Business, Security) analyze a task in
+parallel, and an aggregator synthesizes their diverse perspectives into one response,
+with retry logic and partial-success handling.
+
+```bash
+cargo run --example conclave_expert_panel
+```
+
+**Key concepts:**
+- Expert parallel execution
+- Diverse perspectives (Technical, Business, Security)
+- Synthesis aggregation
+- Retry logic with exponential backoff
+- Partial success handling
+- Observability levels (Minimal/Standard/Verbose)
+
+### [council_discussion.rs](council_discussion.rs)
+**Demonstrates:** The Council pattern with multiple expert Paladins engaged in a structured discussion
+
+Several expert Paladins discuss implementing two-factor authentication using a
+round-robin turn-taking strategy and a maximum-rounds termination condition, with a
+formatted discussion transcript.
+
+```bash
+cargo run --example council_discussion
+```
+
+**Key concepts:**
+- Council with multiple expert participants
+- Round-robin turn-taking strategy
+- Maximum rounds termination condition
+- Formatted discussion transcript
+
+### [grove_routing.rs](grove_routing.rs)
+**Demonstrates:** The Grove pattern for routing tasks to specialized agent trees based on keyword matching
+
+Creates a Grove with multiple expert trees, routes tasks by keyword match to specialized
+agents, and prints the routing decision and confidence score.
+
+```bash
+cargo run --example grove_routing
+```
+
+**Key concepts:**
+- Grove with multiple expert trees
+- Keyword-based routing strategy
+- Specialized agents with specific expertise
+- Routing decision visibility and confidence scoring
+
 ## Performance Benchmarking Examples
 
 ### [muster_baseline.rs](muster_baseline.rs)
@@ -1248,6 +1493,297 @@ APP_ENV=test cargo run --offline --release --example muster_baseline
 - In-process startup timing
 - Measurement harnesses vs. `criterion` benchmarks
 - Host-specific baseline figures (not portable performance claims)
+
+### [war_engine_memory_baseline.rs](war_engine_memory_baseline.rs)
+**Demonstrates:** WarEngine memory-per-superstep measurement harness (ENG-NFR-02)
+
+A recorded measurement harness for the memory half of ENG-NFR-02 ("one Battlefield clone
+per superstep maximum, plus one per concurrently executing node view"). Reads the
+process's resident set size (RSS) from `/proc/self/status` before and after a fixed
+`WarGraph` workload and reports the delta, following `muster_baseline.rs`'s exact method.
+
+```bash
+cargo run --release --example war_engine_memory_baseline
+```
+
+**Key concepts:**
+- Process RSS delta measurement via `/proc/self/status`
+- `Arc<Battlefield>` clone-count measurement through the public `WarEngine` API
+- Fixed-width, fixed-depth `WarGraph` workload
+- Host-specific baseline figures (not portable performance claims)
+
+## WarEngine Configuration & Checkpoints
+
+### [war_engine_configuration.rs](war_engine_configuration.rs)
+**Demonstrates:** WaypointPort injection, EngineConfig, the superstep-cap environment override, checkpoint history read-back, WaypointRetentionService pruning, and the graph fingerprint version
+
+Injects an explicit `InMemoryWaypointStore` as the `WaypointPort` implementor,
+configures a `WarEngine` via `EngineConfig` naming every bounded-iteration/durability
+field, overrides `APP_ENGINE_MAX_SUPERSTEPS` in-process, runs a small cyclic `WarGraph`
+and reads its checkpoint history back through the port, prunes that history with
+`WaypointRetentionService`, and prints `GRAPH_FINGERPRINT_VERSION`. Fully offline --
+reads no LLM provider API key.
+
+```bash
+cargo run --example war_engine_configuration
+```
+
+**Key concepts:**
+- `WaypointPort` injection (`InMemoryWaypointStore`)
+- `EngineConfig` (max_supersteps, max_node_visits, run_timeout_secs, waypoint_durability, max_muster_tasks)
+- `APP_ENGINE_MAX_SUPERSTEPS` environment override
+- Checkpoint history read-back
+- `WaypointRetentionService` pruning
+- `GRAPH_FINGERPRINT_VERSION`
+
+## Control Flow & Dynamic Routing
+
+### [control_flow_dynamic_routing.rs](control_flow_dynamic_routing.rs)
+**Demonstrates:** Custom edge conditions (fail-closed vs. registered), a nested Battalion subgraph, LLM-driven routing, and the Muster fan-out cap
+
+Registers an `EdgeCondition::Custom` evaluator and contrasts the fail-closed
+`EngineError::UnregisteredEdgeCondition` outcome against the edge taken once
+registered; embeds a child `WarGraph` as a `NodeSpec::Battalion` node; drives an edge
+decision from `MockLlmAdapter` through `LlmDecisionEvaluator`; and overrides
+`APP_ENGINE_MAX_MUSTER_TASKS`, enforced against a running engine. Fully offline --
+every LLM call goes through `MockLlmAdapter`.
+
+```bash
+cargo run --example control_flow_dynamic_routing
+```
+
+**Key concepts:**
+- `EdgeCondition::Custom` fail-closed vs. registered contrast
+- `NodeSpec::Battalion` nested subgraph
+- `LlmDecisionEvaluator` LLM-driven routing
+- `APP_ENGINE_MAX_MUSTER_TASKS` fan-out cap enforcement
+
+## Human-in-the-Loop
+
+### [human_in_the_loop_gate.rs](human_in_the_loop_gate.rs)
+**Demonstrates:** Pausing at a Gate node, resuming with typed responses (total validation), and replaying the thread onto a new branch
+
+Runs a graph whose entry point is a `NodeSpec::Gate` to `RunOutcome::AwaitingInput`,
+calls `WarEngine::resume_with` and shows a total-validation rejection of an unrelated
+parley id before the correct response completes the run, reads the history back
+through `ChronicleService`, then replays the run onto a new branch resumed with the
+opposite decision to a divergent result. Fully offline -- no Paladin node, no LLM call.
+
+```bash
+cargo run --example human_in_the_loop_gate
+```
+
+**Key concepts:**
+- `NodeSpec::Gate` pause
+- `WarEngine::resume_with` typed total validation (`EngineError::UnknownParleyId`)
+- `ChronicleService` history read-back
+- `WarEngine::replay` onto a new branch
+
+## Graceful Shutdown
+
+### [graceful_shutdown.rs](graceful_shutdown.rs)
+**Demonstrates:** Draining in-flight work, configuring the grace period from the environment, and toggling graceful shutdown off and on
+
+Registers a run with a `ShutdownCoordinator`, fans out a fast and a slow node, and
+drains in-flight work in one `Halted` checkpoint showing both `Succeeded` and
+`Skipped { reason: "shutdown" }` outcomes; overrides `APP_ENGINE_SHUTDOWN_GRACE_SECS`
+and re-runs the drain bounded at the new value; and toggles
+`APP_ENGINE_GRACEFUL_SHUTDOWN` to contrast exit-immediately against wait-and-drain.
+Fully offline -- no Paladin node, no LLM call, no real signal handler.
+
+```bash
+cargo run --example graceful_shutdown
+```
+
+**Key concepts:**
+- `ShutdownCoordinator::register` / `cancel_and_wait`
+- Draining a fan-out of in-flight work into one `Halted` checkpoint
+- `APP_ENGINE_SHUTDOWN_GRACE_SECS` grace-period override
+- `APP_ENGINE_GRACEFUL_SHUTDOWN` toggle
+
+## Agent Runtime & Middleware
+
+### [agent_runtime_middleware.rs](agent_runtime_middleware.rs)
+**Demonstrates:** Custom ExecutionMiddleware hooks, AgentRuntimeConfig-resolved built-in middleware, custom token-counter injection, context-window management, ConfinedVault memory namespacing, and the fail-run tool error mode
+
+A custom `ExecutionMiddleware`'s `before_model`/`after_model`/`around_tool` hooks fire
+against a real `PaladinExecutionService::execute` run; `AgentRuntimeConfig::build_chain`
+resolves middleware from configuration; a custom `TokenCounterPort` is contrasted with
+the defaulted heuristic counter; `HistoryTrimmer` and `SummarizationMiddleware` reduce
+a long history; two `ConfinedVault` handles namespace two agents' memories apart with a
+denied cross-namespace read; and `ToolErrorMode::FailRun` fails a run with a structured
+`PaladinError::ArmamentFailed`. Fully offline -- uses `MockLlmAdapter` and in-memory
+ports.
+
+```bash
+cargo run --example agent_runtime_middleware
+```
+
+**Key concepts:**
+- Custom `ExecutionMiddleware` hook chain
+- `AgentRuntimeConfig::build_chain`
+- Custom `TokenCounterPort` injection
+- `HistoryTrimmer` + `SummarizationMiddleware`
+- `ConfinedVault` memory namespacing
+- `ToolErrorMode::FailRun` -> `PaladinError::ArmamentFailed`
+
+## Structured Output
+
+### [structured_output_schema.rs](structured_output_schema.rs)
+**Demonstrates:** JSON Schema derivation via schemars and schema-validated structured output (accept and reject)
+
+Derives a JSON Schema from a Rust type via `schemars::schema_for!`, executes a Paladin
+through the typed structured-execution path (`StructuredExecutorExt::execute_structured`)
+against a conforming response and prints the typed value's own fields, then drives a
+schema-violating response to a typed `PaladinError::StructuredOutputInvalid` rejection
+rather than silent acceptance. Fully offline -- uses `MockLlmAdapter`.
+
+```bash
+cargo run --example structured_output_schema
+```
+
+**Key concepts:**
+- `schemars::schema_for!` JSON Schema derivation
+- `StructuredExecutorExt::execute_structured`
+- Typed value returned (not a raw string)
+- `PaladinError::StructuredOutputInvalid` typed rejection
+
+## Platform API
+
+### [platform_api_client.rs](platform_api_client.rs)
+**Demonstrates:** The full Platform API surface driven in-process: run submit/stream/cancel, assistants, schedules, thread state/resume/history, the dev-ui inspector route, token usage, and queue/store backend selection
+
+An in-process, fully in-memory Platform API client (every durable store is the
+`paladin-storage` in-memory adapter for its port) that submits, streams and cancels
+runs; creates and publishes assistant versions; creates and lists a cron schedule;
+calls thread state/resume/history and the admin-and-feature-gated dev-ui inspector
+route (against a Waypoint-less thread -- see the program's own header for what it
+cannot demonstrate offline); prints the prompt/completion token split; and prints
+which run-queue/run-store implementation is in force. Hermetic -- backed by
+`MockLlmAdapter`, reads no provider key, needs the `web-server` and `dev-ui` features.
+
+```bash
+cargo run --example platform_api_client --features "web-server,dev-ui"
+```
+
+**Key concepts:**
+- Run submission, SSE streaming, cancellation
+- Assistants (create/publish/list versions)
+- Schedules (create/list)
+- Thread state/resume/history routes
+- The dev-ui inspector route
+- Token usage (prompt/completion split)
+- Run queue / run store backend selection
+
+### [webhook_receiver.rs](webhook_receiver.rs)
+**Demonstrates:** Webhook signature verification and the private-address SSRF override, from the receiving end
+
+Stands up a receiver on an ephemeral loopback port that captures the raw request body
+before deserialization and recomputes the digest with `sign_webhook_body` -- the same
+function and `hmac`/`sha2` crates the shipped `WebhookDeliveryService` signs with --
+verifying in constant time via `hmac::Mac::verify_slice`; verifies a genuine delivery,
+rejects a tampered body under the same signature, and names the
+`APP_WEBHOOKS_ALLOW_PRIVATE` override against the receiver's own loopback address and
+the always-rejected cloud metadata address. Hermetic -- no provider key, no external
+service, needs the `web-server` feature.
+
+```bash
+cargo run --example webhook_receiver --features "web-server"
+```
+
+**Key concepts:**
+- Raw-byte signature verification (`sign_webhook_body`, reused verbatim from the sender)
+- `X-Paladin-Signature: sha256=<hex>` header verification
+- Constant-time comparison (`hmac::Mac::verify_slice`)
+- `APP_WEBHOOKS_ALLOW_PRIVATE` private-address SSRF override
+- The always-rejected cloud metadata address (169.254.169.254)
+
+## Node-Result Cache
+
+### [node_result_cache.rs](node_result_cache.rs)
+**Demonstrates:** The Redis-backed node-result cache adapter and the node-cache enable/disable toggle
+
+Constructs the `redis-cache`-gated `RedisNodeCache` adapter and wires it onto a
+`WarEngine` via `with_node_cache`; runs a graph twice under different threads to show
+a cache miss then a hit (no re-execution, proven from the persisted Waypoint's own
+`cache_hit` field); then toggles `APP_NODE_CACHE_ENABLED` off and runs a graph with no
+`CachePolicy` attached on an engine with no cache backend wired to show the cache
+bypassed entirely. Needs a running Redis server (`make services-up`); build-only in CI
+(no Redis server available there).
+
+```bash
+cargo build --example node_result_cache --features "redis-cache"
+```
+
+**Key concepts:**
+- `RedisNodeCache` (`NodeCachePort` adapter)
+- `WarEngine::with_node_cache`
+- Cache miss vs. hit via `NodeExecutionRecord.cache_hit`
+- `APP_NODE_CACHE_ENABLED` toggle
+- `EngineError::CachePolicyWithoutCacheBackend`
+
+## Observability & Tracing
+
+### [observability_tracing.rs](observability_tracing.rs)
+**Demonstrates:** The trace record envelope and real event variant names, TraceConfig-driven sink composition, the OTLP environment toggle, and persisted trace history read-back
+
+Runs a small graph with a custom in-process `TraceSink` and prints every captured
+`TraceRecord`'s envelope plus its real `TraceEvent` variant name; constructs a
+`TraceConfig` and calls the facade's own
+`paladin::infrastructure::telemetry::build_run_sink` to show a single changed field's
+None-vs-Some effect; sets `PALADIN_TRACE_OTEL_ENABLED` and shows export also requires
+the `otel` Cargo feature; and reads the same run's persisted trace rows back via
+`RunTracePort::read`. Fully offline -- default features, no LLM provider key needed.
+
+```bash
+cargo run --example observability_tracing
+```
+
+**Key concepts:**
+- `TraceEvent` / `TraceRecord` envelope
+- `paladin::infrastructure::telemetry::build_run_sink`
+- `PALADIN_TRACE_OTEL_ENABLED` environment toggle
+- `RunTracePort::read` persisted trace history
+
+### [observability_otel_export.rs](observability_otel_export.rs)
+**Demonstrates:** The OTLP trace export sink (OtelTraceSink)
+
+Wires the `otel`-gated `OtelTraceSink` onto a `WarEngine` run and prints the endpoint
+configuration it exports through. Needs a reachable OTLP/HTTP collector (an
+OpenTelemetry Collector, Jaeger, or similar) at the configured endpoint; build-only in
+CI (no collector available there).
+
+```bash
+cargo build --example observability_otel_export --features "otel"
+```
+
+**Key concepts:**
+- `OtelTraceSink` OTLP export
+- `otel` Cargo feature (pulls in `opentelemetry`, `opentelemetry_sdk`, `opentelemetry-otlp`)
+- Configured collector endpoint (`http://localhost:4318/v1/traces` by default)
+
+## Evaluation
+
+### [eval_scenarios_demo.rs](eval_scenarios_demo.rs)
+**Demonstrates:** Scenario declaration and ScenarioRunner::run_case, the PALADIN_EVAL_LIVE live-mode toggle, and the CLI eval-run command-line form
+
+Declares two scenarios in Rust against a Paladin built with `MockLlmAdapter` and runs
+them through `ScenarioRunner::run_case`; names `PALADIN_EVAL_LIVE`'s effect via
+`check_live_mode(false)`'s typed `Err(LiveModeError::FlagNotSet)` refusal; and writes a
+real `.eval.yaml` scenario file, prints the equivalent `paladin eval run` CLI command,
+and drives the same glob through `ScenarioRunner::trials` and `Scenario::from_path` +
+`run_case` in-process. Fully offline -- needs no `required-features` (`paladin-eval` is
+an unconditional dev-dependency).
+
+```bash
+cargo run --example eval_scenarios_demo
+```
+
+**Key concepts:**
+- `Scenario` / `Case` / `ScenarioRunner::run_case`
+- `PALADIN_EVAL_LIVE` live-mode toggle (`check_live_mode`)
+- `.eval.yaml` glob discovery (`ScenarioRunner::trials`)
+- The CLI `paladin eval run "<glob>"` equivalent
 
 ## Configuration Examples
 
@@ -1273,6 +1809,12 @@ Chain of Command configuration.
 
 ## Advanced Examples
 
+> **Note:** the snippets below are illustrative pseudocode meant to convey a
+> pattern, not compiled or verified against the current API the way every
+> `### [name.rs](name.rs)` example above is (those all build and run in CI).
+> `load_config()`, `create_llm_adapter()` and `create_fallback_adapter()`
+> below are placeholders for your own code, not real Paladin functions.
+
 ### Error Handling Patterns
 
 Most examples include robust error handling:
@@ -1289,11 +1831,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let llm_adapter = create_llm_adapter(&config)
         .or_else(|_| create_fallback_adapter())?;
 
-    // Create Paladin with retries
+    // Create Paladin with retries (PaladinBuilder::retry_attempts, not
+    // max_retries/retry_delay -- there is no per-Paladin retry-delay setting)
     let paladin = PaladinBuilder::new(llm_adapter)
-        .max_retries(3)
-        .retry_delay(Duration::from_secs(1))
-        .build()?;
+        .retry_attempts(3)
+        .build()
+        .await?;
 
     // Execute with timeout
     let result = tokio::time::timeout(
@@ -1325,8 +1868,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let response = paladin.execute(input).await?;
 
     info!(
-        tokens = response.token_usage.total_tokens,
-        duration = ?response.execution_time,
+        tokens = response.usage.total_tokens,
+        duration = ?response.execution_time_ms,
         "Execution completed"
     );
 
@@ -1407,6 +1950,7 @@ Create a new example in `examples/my_example.rs`:
 
 ```rust
 use paladin::prelude::*;
+use paladin_llm::openai::adapter::{OpenAIAdapter, OpenAIConfig};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -1414,23 +1958,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load API key
     let api_key = std::env::var("OPENAI_API_KEY")?;
 
-    // Create LLM adapter
-    let llm_adapter = Arc::new(
-        OpenAiAdapter::new()
-            .api_key(&api_key)
-            .model("gpt-4")
-            .build()?
+    // Create LLM adapter (OpenAIAdapter::new takes an OpenAIConfig, not a
+    // builder chain -- the model is set on PaladinBuilder below, per-request,
+    // not on the adapter itself)
+    let llm_adapter: Arc<dyn LlmPort> = Arc::new(
+        OpenAIAdapter::new(OpenAIConfig::new(api_key))?
     );
 
     // Create Paladin
     let paladin = PaladinBuilder::new(llm_adapter)
         .name("MyPaladin")
         .system_prompt("You are a helpful assistant.")
-        .build()?;
+        .model("gpt-4")
+        .build()
+        .await?;
 
     // Execute
     let response = paladin.execute("Hello!").await?;
-    println!("{}", response.content);
+    println!("{}", response.output);
 
     Ok(())
 }
@@ -1530,5 +2075,4 @@ Good example characteristics:
 ## Questions?
 
 - Check [Documentation](../docs/)
-- Open an [Issue](https://github.com/your-org/paladin/issues)
-- Join [Discord](https://discord.gg/paladin) (if available)
+- Open an [Issue](https://github.com/DF3NDR/paladin-dev-env/issues)

@@ -1,0 +1,56 @@
+Plan 36-02 -- paladin-battalion per-crate rustdoc sweep (D-10, D-24)
+Toolchain: cargo 1.97.1 / rustc 1.97.1
+Captured: 2026-09-17
+
+=== Default-feature forced re-documentation ===
+Command: touch crates/paladin-battalion/src/lib.rs && cargo doc -p paladin-battalion --no-deps
+Exit code: 0
+Diagnostic ('warning:') line count: 0 (down from 36 measured at plan start)
+
+$ cargo doc -p paladin-battalion --no-deps
+ Documenting paladin-battalion v0.10.0 (/workspace/crates/paladin-battalion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.90s
+   Generated /workspace/target/doc/paladin_battalion/index.html
+
+=== All-features bar ===
+Command: touch crates/paladin-battalion/src/lib.rs && RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps
+Exit code: 0
+
+$ RUSTDOCFLAGS="-D warnings" cargo doc -p paladin-battalion --all-features --no-deps
+ Documenting paladin-battalion v0.10.0 (/workspace/crates/paladin-battalion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.35s
+   Generated /workspace/target/doc/paladin_battalion/index.html
+
+=== Supporting workspace gates (run after the per-crate sweep) ===
+- cargo fmt --all -- --check: clean (no output)
+- cargo check --workspace --all-targets --all-features: exit 0
+  (Checking paladin-battalion v0.10.0; Checking paladin-eval v0.10.0; Checking paladin-ai
+  v0.10.0; Checking paladin-doc-examples v0.10.0; Finished in 24.91s)
+- cargo test --workspace --doc: 462 passed, 0 failed, 0 measured (sum across all
+  per-crate doctest result lines), matching the 36-01 baseline figure exactly -- no
+  doctest was broken by this plan's doc-comment rewrites.
+- ./scripts/check-api-surface.sh .project/current-exports.txt: "API surface unchanged"
+  (3959 items, byte-identical to .project/current-exports.txt)
+
+=== Negative-evidence greps (T-36-04, D-05) ===
+$ grep -rn 'pub fn push_field\|pub fn validate_schedulable\|pub fn validate_aegis_undeclared_nodes\|pub fn validate_parley_value_for_kind' crates/paladin-battalion/src
+(no output -- none of the four private helpers were widened to pub)
+
+$ grep -n 'fn analyze_and_select' crates/paladin-battalion/src/commander.rs
+1193:    fn analyze_and_select(&self, input: &str) -> (BattalionStrategy, String) {
+(still private -- no `pub` keyword)
+
+$ grep -rn 'allow(rustdoc::' crates/paladin-battalion/src
+(no output -- no lint-suppression attribute was added anywhere in the crate)
+
+$ git diff -- crates/paladin-battalion/ | grep -E '^[+-]' | grep -v '^+++\|^---' | grep -vE "^[+-]\s*(///|//!)"
+(no output -- every added/removed line across all nine touched files begins with a doc
+comment marker; no non-doc source line changed)
+
+=== Baseline-vs-final comparison ===
+Baseline (36-EVIDENCE.md / 36-evidence/36-01-baseline.txt, captured by plan 36-01):
+  paladin-battalion contributed 36 of the workspace's 65 default-feature rustdoc
+  diagnostics and 36 of the 77 all-features errors (34-AUDIT.md Sec6, 34 location
+  groups, 72 RD-nn rows across default+all-features).
+Final (this file): paladin-battalion contributes 0 diagnostics under either bar command.
+All 72 rows (RD-10..RD-45, RD-67..RD-102) are closed.

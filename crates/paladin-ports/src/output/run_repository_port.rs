@@ -141,6 +141,127 @@ pub enum RunRepositoryError {
 ///
 /// Implementations must be `Send + Sync`: runs are inserted, transitioned
 /// and read back concurrently across HTTP handlers and worker tasks.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use std::sync::Mutex;
+///
+/// use async_trait::async_trait;
+/// use chrono::{DateTime, Utc};
+/// use paladin_core::platform::container::parley::ParleyResponse;
+/// use paladin_core::platform::container::run::{AssistantRef, Run, RunId, RunStatus};
+/// use paladin_core::platform::container::waypoint::ThreadId;
+/// use paladin_ports::output::run_repository_port::{
+///     RunOutcomeRecord, RunPage, RunQuery, RunRepositoryError, RunRepositoryPort,
+/// };
+///
+/// struct InMemoryRuns {
+///     runs: Mutex<HashMap<RunId, Run>>,
+/// }
+///
+/// #[async_trait]
+/// impl RunRepositoryPort for InMemoryRuns {
+///     async fn insert(&self, run: &Run) -> Result<(), RunRepositoryError> {
+///         self.runs
+///             .lock()
+///             .unwrap()
+///             .insert(run.run_id.clone(), run.clone());
+///         Ok(())
+///     }
+///
+///     async fn get(&self, run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
+///         Ok(self.runs.lock().unwrap().get(run_id).cloned())
+///     }
+///
+///     async fn update_status(
+///         &self,
+///         _run_id: &RunId,
+///         _from: RunStatus,
+///         _to: RunStatus,
+///         _at: DateTime<Utc>,
+///     ) -> Result<(), RunRepositoryError> {
+///         Ok(())
+///     }
+///
+///     async fn record_outcome(
+///         &self,
+///         _run_id: &RunId,
+///         _outcome: RunOutcomeRecord,
+///     ) -> Result<(), RunRepositoryError> {
+///         Ok(())
+///     }
+///
+///     async fn list(&self, _query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+///         Ok(RunPage {
+///             items: vec![],
+///             next_cursor: None,
+///         })
+///     }
+///
+///     async fn active_run_for_thread(
+///         &self,
+///         _thread_id: &ThreadId,
+///     ) -> Result<Option<Run>, RunRepositoryError> {
+///         Ok(None)
+///     }
+///
+///     async fn request_cancel(&self, run_id: &RunId) -> Result<RunStatus, RunRepositoryError> {
+///         Err(RunRepositoryError::NotFound {
+///             run_id: run_id.clone(),
+///         })
+///     }
+///
+///     async fn is_cancel_requested(
+///         &self,
+///         _thread_id: &ThreadId,
+///     ) -> Result<bool, RunRepositoryError> {
+///         Ok(false)
+///     }
+///
+///     async fn bump_attempt(&self, _run_id: &RunId) -> Result<u32, RunRepositoryError> {
+///         Ok(1)
+///     }
+///
+///     async fn record_resume(
+///         &self,
+///         _run_id: &RunId,
+///         _responses: Vec<ParleyResponse>,
+///     ) -> Result<u32, RunRepositoryError> {
+///         Ok(1)
+///     }
+///
+///     async fn clear_pending_responses(&self, _run_id: &RunId) -> Result<(), RunRepositoryError> {
+///         Ok(())
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+///     let repo = InMemoryRuns {
+///         runs: Mutex::new(HashMap::new()),
+///     };
+///     let run = Run::new(
+///         RunId::new_v7(),
+///         ThreadId::new("thread-1")?,
+///         AssistantRef {
+///             assistant_id: "assistant-1".to_string(),
+///             version: 1,
+///         },
+///         serde_json::json!({"input": "hello"}),
+///     );
+///
+///     repo.insert(&run).await?;
+///     let fetched = repo.get(&run.run_id).await?;
+///     assert_eq!(
+///         fetched.map(|r| r.run_id),
+///         Some(run.run_id),
+///         "the inserted run round-trips back out of get"
+///     );
+///     Ok(())
+/// }
+/// ```
 #[async_trait]
 pub trait RunRepositoryPort: Send + Sync {
     /// Persist a newly submitted `Run`.

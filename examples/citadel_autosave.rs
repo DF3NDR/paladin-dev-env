@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📊 Execution Results:");
     println!("   Output length: {} characters", result.output.len());
     println!("   Loops: {}", result.loop_count);
-    println!("   Tokens: {}", result.token_count);
+    println!("   Tokens: {}", result.usage.total_tokens);
     println!();
 
     // Step 7: Verify the state was saved automatically

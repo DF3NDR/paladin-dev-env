@@ -1,0 +1,164 @@
+    Checking paladin-eval v0.10.0 (/workspace/crates/paladin-eval)
+ Documenting paladin-content v0.10.0 (/workspace/crates/paladin-content)
+ Documenting paladin-eval v0.10.0 (/workspace/crates/paladin-eval)
+ Documenting paladin-herald v0.10.0 (/workspace/crates/paladin-herald)
+ Documenting paladin-notifications v0.10.0 (/workspace/crates/paladin-notifications)
+ Documenting paladin-web v0.10.0 (/workspace/crates/paladin-web)
+ Documenting paladin-memory v0.10.0 (/workspace/crates/paladin-memory)
+ Documenting paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+    Checking paladin-ai v0.10.0 (/workspace)
+ Documenting paladin-ai v0.10.0 (/workspace)
+error: unresolved link to `HeuristicTokenCounter`
+  |
+  = note: the link appears in this line:
+
+          [`HeuristicTokenCounter`] is the phase-wide default: a synchronous,
+           ^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `HeuristicTokenCounter` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+  = note: `-D rustdoc::broken-intra-doc-links` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(rustdoc::broken_intra_doc_links)]`
+
+error: unresolved link to `RunInspectorPort`
+  |
+  = note: the link appears in this line:
+
+          [`RunInspectorPort`] view as a single static HTML page -- the execution overlay
+           ^^^^^^^^^^^^^^^^^^
+  = note: no item named `RunInspectorPort` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+  = note: `-D rustdoc::broken-intra-doc-links` implied by `-D warnings`
+  = help: to override `-D warnings` add `#[allow(rustdoc::broken_intra_doc_links)]`
+
+error: unresolved link to `dev_ui_inspector_page`
+  |
+  = note: the link appears in this line:
+
+          `crate::app::create_dev_ui_router` mounts [`dev_ui_inspector_page`] under the SAME
+                                                     ^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `dev_ui_inspector_page` in scope
+  = help: to escape `[` and `]` characters, add '\' before them like `\[` or `\]`
+
+error: unresolved link to `InspectorView::supersteps`
+  |
+  = note: the link appears in this line:
+
+          [`InspectorView::supersteps`]'s `field_changes` is `Vec<FieldName>` by TYPE (28-14) --
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: no item named `InspectorView` in scope
+
+error: public documentation for `DevUiState` links to private item `NOT_WIRED_MESSAGE`
+  --> crates/paladin-web/src/dev_ui_controller.rs:69:49
+   |
+69 | /// point every request answers `501` through [`NOT_WIRED_MESSAGE`] rather than panicking
+   |                                                 ^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+   = note: `-D rustdoc::private-intra-doc-links` implied by `-D warnings`
+   = help: to override `-D warnings` add `#[allow(rustdoc::private_intra_doc_links)]`
+
+error: public documentation for `dev_ui_inspector_page` links to private item `escape_for_script`
+   --> crates/paladin-web/src/dev_ui_controller.rs:131:20
+    |
+131 | /// (escaped per [`escape_for_script`]) and the configured Mermaid URL.
+    |                    ^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `limit` links to private item `MAX_HISTORY_LIMIT`
+   --> crates/paladin-web/src/thread_controller.rs:483:54
+    |
+483 |     /// Maximum number of items to return (at most [`MAX_HISTORY_LIMIT`]).
+    |                                                      ^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `resume_thread` links to private item `map_parley_error`
+   --> crates/paladin-web/src/thread_controller.rs:686:27
+    |
+686 | /// [`ParleyError`] per [`map_parley_error`].
+    |                           ^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `get_thread_history` links to private item `MAX_HISTORY_LIMIT`
+   --> crates/paladin-web/src/thread_controller.rs:757:24
+    |
+757 | /// `limit` (at most [`MAX_HISTORY_LIMIT`]) and an opaque `cursor` whose
+    |                        ^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: could not document `paladin-memory`
+warning: build failed, waiting for other jobs to finish...
+error: could not document `paladin-web`
+error: public documentation for `muster_progress_round_trips` links to private item `muster_progress_fixture`
+   --> crates/paladin-storage/src/waypoint/contract_tests.rs:673:7
+    |
+673 | /// [`muster_progress_fixture`] (two completed tasks with distinct keys and
+    |       ^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+    = note: `-D rustdoc::private-intra-doc-links` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(rustdoc::private_intra_doc_links)]`
+
+error: could not document `paladin-storage`
+error: public documentation for `first_divergence` links to private item `stabilized_fingerprints`
+   --> src/application/cli/commands/eval.rs:281:54
+    |
+281 | /// record stream diverges from run 0's, comparing [`stabilized_fingerprints`]
+    |                                                      ^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+    = note: `-D rustdoc::private-intra-doc-links` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(rustdoc::private_intra_doc_links)]`
+
+error: public documentation for `execute_scoped` links to private item `Self::execute_bounded`
+    --> src/application/services/paladin/paladin_execution_service.rs:1014:24
+     |
+1014 |     /// exactly like [`Self::execute_bounded`]'s own contract.
+     |                        ^^^^^^^^^^^^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `adapter` links to private item `shadow_validate`
+  --> src/application/services/parley/adapter.rs:28:38
+   |
+28 | //! modifying `paladin-battalion`, [`shadow_validate`] re-implements the
+   |                                      ^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `with_event_bus` links to private item `Self::record_engine_failure`
+   --> src/application/services/run/worker.rs:641:11
+    |
+641 |     /// [`Self::record_engine_failure`]'s own retained publish, is
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^ this item is private
+    |
+    = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `resolve_chain` links to private item `KNOWN_PROVIDER_NAMES`
+    --> src/config/agent_runtime.rs:1174:22
+     |
+1174 |     /// build (via [`KNOWN_PROVIDER_NAMES`], a list independent of the
+     |                      ^^^^^^^^^^^^^^^^^^^^ this item is private
+     |
+     = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `otel_sink` links to private item `build_reqwest_client`
+  --> src/infrastructure/telemetry/otel_sink.rs:42:38
+   |
+42 | //! file's `Policy::none()` -- see [`build_reqwest_client`]) so a `3xx` from
+   |                                      ^^^^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: public documentation for `ReasoningAgentOptions` links to private item `DEFAULT_SYSTEM_PROMPT`
+  --> src/presets/mod.rs:55:27
+   |
+55 | /// | `system_prompt` | [`DEFAULT_SYSTEM_PROMPT`] -- a documented tool-use prompt |
+   |                           ^^^^^^^^^^^^^^^^^^^^^ this item is private
+   |
+   = note: this link will resolve properly if you pass `--document-private-items`
+
+error: could not document `paladin-ai`

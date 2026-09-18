@@ -1,6 +1,6 @@
 # Migration Guide
 
-This guide covers all breaking changes since v0.1.0 up to the current **v0.5.0** release.
+This guide covers all breaking changes since v0.1.0 up to the current **v0.10.0** release.
 
 ## Upgrading to v0.10.0 (from v0.9.x)
 
@@ -12,6 +12,42 @@ change and the operator upgrade checklist for v0.9.x → v0.10.0. The intervenin
 changes are recorded in
 [`CHANGELOG.md`](https://github.com/DF3NDR/paladin-dev-env/blob/main/CHANGELOG.md), not in this
 guide.
+
+### Token usage carriers
+
+Every token-usage carrier now reports the full prompt/completion split plus optional
+cache-read/cache-write/reasoning sub-counts, instead of a single bare count
+(ACCT-01/ACCT-02/ACCT-03). `PaladinResult.usage`, `NodeExecutionRecord.usage`,
+`TraceEvent::NodeFinished.usage`, `TraceEvent::RunFinished.usage`, `StreamingResponse.usage`,
+`ChunkMetadata.usage`, and the HTTP `ExecuteResponse.usage` all replace their former
+`token_count`/`total_tokens` field with a `TokenUsage`. `TokenUsage::from_total` is deleted
+outright, with no deprecated replacement — use `TokenUsage::new(prompt, completion)` plus the
+`with_cache_read`/`with_cache_write`/`with_reasoning` builders instead. See
+[`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
+for the full per-type register.
+
+### Token primitives
+
+Two duplications in the token-counting/window-resolution primitives are collapsed to one each
+(PRIM-01…PRIM-04). `TokenCounterPort` gained `fn is_exact(&self) -> bool { false }`, so
+`Commissary::new`/`Commissary::from_port` no longer take a caller-supplied `is_exact_counter:
+bool` argument — `Commissary` now reads exactness live from the injected counter's `is_exact()`.
+The legacy fallible `garrison::TokenCounter` trait and its `TokenCounterFactory` are removed
+outright with no deprecated replacement; `TiktokenCounter` survives as the sole implementor of
+`TokenCounterPort`, now the workspace's only counting contract. Both `Commissary::new`'s window
+resolution and `HistoryTrimmer::resolve_limit` now call the same shared
+`paladin_llm::window::resolve_context_window` function in place of two independent precedence
+walks. See [`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register)
+for the full per-type register.
+
+Separately, in v0.10.0 (Phase 33, COMM-01…03), `RagRetrievalService::retrieve_context`
+and `retrieve_context_with_timeout` change their return type to a result struct
+carrying the Commissary's shed record, and `format_for_prompt` changes its parameter
+to that struct; a new `with_token_counter` builder mirrors
+`PaladinExecutionService::with_token_counter`. Read `.memories` and `.shed` off the
+returned result rather than the old `Vec`. See the `paladin-memory | RagRetrievalService`
+and `paladin-memory | retrieve_context_with_timeout` rows in
+[`MIGRATION.md` §9.2](https://github.com/DF3NDR/paladin-dev-env/blob/main/MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
 
 ## Table of Contents
 
@@ -473,7 +509,8 @@ Use this checklist to track your migration:
 | Version | Status | Default Features |
 |---------|--------|------------------|
 | < 0.1.0 | Old | `redis-queue`, `s3-storage`, `openai-embeddings` |
-| 0.1.0 | **Current** | `llm-openai` only |
+| 0.1.0 | Released | `llm-openai` only |
+| 0.10.0 | **Current** | `llm-openai`, `llm-anthropic`, `llm-deepseek` |
 | Future | Planned | May add more granular LLM provider features |
 
 ## Feedback

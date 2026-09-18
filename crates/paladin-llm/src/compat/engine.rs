@@ -34,6 +34,7 @@ use paladin_ports::output::llm_port::{
 
 use super::types::{
     CompatMessage, CompatModelsResponse, CompatRequest, CompatResponse, CompatResponseFormat,
+    CompatStreamOptions, CompatUsage,
 };
 use crate::http_status::map_http_status;
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
@@ -110,7 +111,7 @@ pub struct CompatRequestParameters {
     ///
     /// **Option (a) — chosen by the developer 2026-08-22, recorded here
     /// against ADR-0004 (closing G-17-4b, plan 17-19).** When a preset
-    /// declares this `false`, [`CompatEngine::build_request`] omits
+    /// declares this `false`, `CompatEngine::build_request` omits
     /// `temperature` from the outgoing body entirely; it never substitutes
     /// one legal value for another. ADR-0004's *Considered Options* rejects
     /// adapter-level clamping by name: *"a caller who requested 1.8 and got
@@ -197,7 +198,7 @@ pub struct CompatEngineConfig {
     /// the same reasoning applies uniformly. Setting `Policy::none()` means
     /// a `3xx` response can never cause the `Authorization` header carrying
     /// the operator's API key to be replayed to a different,
-    /// attacker-influenced host — see [`CompatEngine::map_error`]'s
+    /// attacker-influenced host — see `CompatEngine::map_error`'s
     /// `300..=399` arm for what a refused redirect surfaces to the caller
     /// as.
     pub redirect_policy: Option<reqwest::redirect::Policy>,
@@ -510,7 +511,38 @@ impl CompatEngine {
             presence_penalty,
             stream: request.stream,
             response_format,
+            // Set unconditionally to `None` here; `generate_stream` forces
+            // it to `Some` right after building this request, mirroring the
+            // existing defensive `api_request.stream = true` override
+            // (D-13/D-15) -- `request.stream` is not a reliable signal at
+            // this point since callers such as the execution service build
+            // the `LlmRequest` and only decide to call `generate_stream`
+            // afterward.
+            stream_options: None,
         })
+    }
+
+    /// Map a wire-reported [`CompatUsage`] into [`TokenUsage`], applying the
+    /// D-20 cache/reasoning sub-count builders only when the provider's
+    /// payload actually carried the figure (D-03: an absent figure is
+    /// `None`, never a fabricated `Some(0)`). Shared by both the
+    /// non-streaming usage-construction site and the streaming terminal
+    /// -chunk usage, so the two paths cannot drift.
+    fn map_compat_usage(usage: CompatUsage) -> TokenUsage {
+        let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
+        if let Some(cached) = usage
+            .prompt_tokens_details
+            .and_then(|details| details.cached_tokens)
+        {
+            mapped = mapped.with_cache_read(cached);
+        }
+        if let Some(reasoning) = usage
+            .completion_tokens_details
+            .and_then(|details| details.reasoning_tokens)
+        {
+            mapped = mapped.with_reasoning(reasoning);
+        }
+        mapped
     }
 
     /// Convert a `PromptItem` into the wire message list. Provider-agnostic
@@ -780,24 +812,16 @@ impl CompatEngine {
                 return Err(err);
             }
 
-            let prompt_tokens = api_response.usage.prompt_tokens;
-            let completion_tokens = api_response.usage.completion_tokens;
-            let total_tokens = api_response
-                .usage
-                .total_tokens
-                .unwrap_or(prompt_tokens + completion_tokens);
+            let content = choice.message.content.clone();
+            let usage = Self::map_compat_usage(api_response.usage);
 
             Ok(LlmResponse {
                 id: Uuid::new_v4(),
                 request_id: request.id,
                 model: api_response.model,
-                content: choice.message.content.clone(),
+                content,
                 finish_reason,
-                usage: TokenUsage {
-                    prompt_tokens,
-                    completion_tokens,
-                    total_tokens,
-                },
+                usage,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
@@ -839,6 +863,9 @@ impl CompatEngine {
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
         let mut api_request = self.build_request(&request)?;
         api_request.stream = true;
+        api_request.stream_options = Some(CompatStreamOptions {
+            include_usage: true,
+        });
 
         let url = format!("{}/chat/completions", self.config.base_url);
 
@@ -890,7 +917,20 @@ impl CompatEngine {
         // the FIRST matching line per chunk would silently drop every
         // subsequent delta in that chunk; every `data:` line found is
         // therefore emitted as its own stream item.
-        let llm_stream = stream.flat_map(|chunk_result| {
+        //
+        // D-14 hold-and-emit terminal-chunk contract: a `choices[].finish_reason`
+        // frame and the trailing empty-`choices` usage frame can arrive on
+        // SEPARATE SSE frames, both strictly before `[DONE]`. Rather than
+        // emitting `finish_reason`/`usage` on whichever frame happens to
+        // carry them, this holds both in state captured by the `move`
+        // closure (a `Stream::flat_map` closure is `FnMut`, so ordinary
+        // mutable locals persist correctly across calls) and emits them
+        // together on the ONE `[DONE]` terminal chunk -- delta frames are
+        // still emitted immediately, in wire order, carrying neither.
+        let mut held_finish_reason: Option<FinishReason> = None;
+        let mut held_usage: Option<TokenUsage> = None;
+
+        let llm_stream = stream.flat_map(move |chunk_result| {
             let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
                 Ok(bytes) => {
                     let text = String::from_utf8_lossy(&bytes).into_owned();
@@ -902,26 +942,28 @@ impl CompatEngine {
                         };
 
                         if json_str.trim() == "[DONE]" {
-                            items.push(Ok(StreamingResponse {
-                                id: Uuid::new_v4(),
-                                delta: String::new(),
-                                finish_reason: Some(FinishReason::Stop),
-                            }));
+                            let mut terminal = StreamingResponse::terminal(
+                                held_finish_reason.take().unwrap_or(FinishReason::Stop),
+                            );
+                            if let Some(usage) = held_usage.take() {
+                                terminal = terminal.with_usage(usage);
+                            }
+                            items.push(Ok(terminal));
                             continue;
                         }
 
                         match serde_json::from_str::<super::types::CompatStreamResponse>(json_str) {
                             Ok(response) => {
+                                if let Some(usage) = response.usage {
+                                    held_usage = Some(Self::map_compat_usage(usage));
+                                }
                                 if let Some(choice) = response.choices.first() {
+                                    if let Some(reason) = &choice.finish_reason {
+                                        held_finish_reason =
+                                            Some(Self::map_finish_reason(Some(reason.clone())));
+                                    }
                                     let content = choice.delta.content.clone().unwrap_or_default();
-                                    items.push(Ok(StreamingResponse {
-                                        id: Uuid::new_v4(),
-                                        delta: content,
-                                        finish_reason: choice
-                                            .finish_reason
-                                            .as_ref()
-                                            .map(|r| Self::map_finish_reason(Some(r.clone()))),
-                                    }));
+                                    items.push(Ok(StreamingResponse::delta(content)));
                                 }
                             }
                             Err(e) => {
@@ -996,7 +1038,7 @@ impl CompatEngine {
     /// every failure at `debug` with the same sentence, which is precisely
     /// why a region/credential mismatch looked identical to an offline
     /// vendor and G-17-4c was misdiagnosed for five days. It now reads
-    /// [`classify_fetch_failure`]'s verdict on `e` and only a
+    /// `classify_fetch_failure`'s verdict on `e` and only a
     /// misconfiguration (currently: `AuthenticationError`) is raised to
     /// `warn`; every other failure — including the offline/timeout states
     /// D-13/D-14 were written for — keeps its original `debug` wording
@@ -2024,6 +2066,250 @@ mod tests {
         assert!(
             !obj.contains_key("response_format"),
             "absent response_format must not appear on the wire, got: {obj:?}"
+        );
+    }
+
+    // ── D-13/D-14/D-15/D-20: streaming usage terminal-chunk contract ──────
+
+    /// The exact `usage` object every test below both streams and returns
+    /// non-streaming, so the two paths can be compared field-for-field.
+    /// Values are distinct and non-round so a swapped or dropped field
+    /// cannot pass by coincidence (house style, `table_herald.rs`/
+    /// `json_herald.rs`).
+    fn detail_bearing_usage_json() -> Value {
+        json!({
+            "prompt_tokens": 37,
+            "completion_tokens": 19,
+            "total_tokens": 56,
+            "prompt_tokens_details": {"cached_tokens": 11},
+            "completion_tokens_details": {"reasoning_tokens": 5}
+        })
+    }
+
+    fn expected_detail_bearing_usage() -> TokenUsage {
+        TokenUsage::new(37, 19)
+            .with_cache_read(11)
+            .with_reasoning(5)
+    }
+
+    /// Two content frames, then a frame whose `choices[0].finish_reason` is
+    /// `"stop"` (itself carrying no content), then a frame with empty
+    /// `choices` and a full `usage` object, then `[DONE]`.
+    fn sse_body_with_usage_frame() -> String {
+        format!(
+            "data: {{\"id\":\"1\",\"choices\":[{{\"delta\":{{\"content\":\"Hel\"}},\"finish_reason\":null}}]}}\n\n\
+             data: {{\"id\":\"1\",\"choices\":[{{\"delta\":{{\"content\":\"lo\"}},\"finish_reason\":null}}]}}\n\n\
+             data: {{\"id\":\"1\",\"choices\":[{{\"delta\":{{\"content\":\"\"}},\"finish_reason\":\"stop\"}}]}}\n\n\
+             data: {{\"choices\":[],\"usage\":{}}}\n\n\
+             data: [DONE]\n\n",
+            detail_bearing_usage_json()
+        )
+    }
+
+    /// The same body with the usage frame removed entirely.
+    fn sse_body_without_usage_frame() -> String {
+        concat!(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hel\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        )
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn generate_stream_holds_finish_reason_and_usage_for_the_one_terminal_chunk() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body_with_usage_frame())
+            .create_async()
+            .await;
+
+        let engine = CompatEngine::new(test_config_at(&server.url())).unwrap();
+        let stream = engine
+            .generate_stream(build_request("test-model"))
+            .await
+            .unwrap();
+        let mut stream = Box::into_pin(stream);
+
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.next().await {
+            chunks.push(item.unwrap());
+        }
+
+        let finish_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.finish_reason.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        let usage_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.usage.is_some())
+            .map(|(i, _)| i)
+            .collect();
+
+        assert_eq!(
+            finish_indices.len(),
+            1,
+            "exactly one chunk must carry a finish reason"
+        );
+        assert_eq!(usage_indices.len(), 1, "exactly one chunk must carry usage");
+        assert_eq!(
+            finish_indices, usage_indices,
+            "the finish-reason chunk and the usage chunk must be the SAME chunk"
+        );
+
+        let terminal = &chunks[finish_indices[0]];
+        assert!(matches!(terminal.finish_reason, Some(FinishReason::Stop)));
+        assert_eq!(terminal.usage, Some(expected_detail_bearing_usage()));
+
+        let assembled: String = chunks.iter().map(|c| c.delta.as_str()).collect();
+        assert_eq!(
+            assembled, "Hello",
+            "wire order must be unaffected by the usage contract"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_stream_terminal_usage_equals_the_non_streaming_usage_field_for_field() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "id": "cmpl-1",
+                    "model": "test-model",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": detail_bearing_usage_json()
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let engine = CompatEngine::new(test_config_at(&server.url())).unwrap();
+        let non_streaming = engine.generate(build_request("test-model")).await.unwrap();
+
+        let mut stream_server = Server::new_async().await;
+        stream_server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body_with_usage_frame())
+            .create_async()
+            .await;
+        let stream_engine = CompatEngine::new(test_config_at(&stream_server.url())).unwrap();
+        let stream = stream_engine
+            .generate_stream(build_request("test-model"))
+            .await
+            .unwrap();
+        let mut stream = Box::into_pin(stream);
+
+        let mut terminal_usage = None;
+        while let Some(item) = stream.next().await {
+            let chunk = item.unwrap();
+            if chunk.usage.is_some() {
+                terminal_usage = chunk.usage;
+            }
+        }
+
+        assert_eq!(terminal_usage, Some(non_streaming.usage));
+    }
+
+    #[tokio::test]
+    async fn generate_stream_without_a_usage_frame_yields_terminal_chunk_with_usage_none() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body_without_usage_frame())
+            .create_async()
+            .await;
+
+        let engine = CompatEngine::new(test_config_at(&server.url())).unwrap();
+        let stream = engine
+            .generate_stream(build_request("test-model"))
+            .await
+            .unwrap();
+        let mut stream = Box::into_pin(stream);
+
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.next().await {
+            chunks.push(item.unwrap());
+        }
+
+        let terminal = chunks
+            .iter()
+            .find(|c| c.finish_reason.is_some())
+            .expect("a terminal chunk with a finish reason must exist");
+        assert!(matches!(terminal.finish_reason, Some(FinishReason::Stop)));
+        assert!(terminal.usage.is_none());
+        assert!(
+            chunks.iter().all(|c| c.usage.is_none()),
+            "no chunk may carry usage when the provider never reported one"
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_engine_streaming_request_carries_stream_options_include_usage() {
+        let mut server = Server::new_async().await;
+        let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+        let captured_clone = Arc::clone(&captured);
+
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body_from_request(move |req| {
+                let body_text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                *captured_clone.lock().unwrap() = Some(body_text);
+                b"data: [DONE]\n\n".to_vec()
+            })
+            .create_async()
+            .await;
+
+        let engine = CompatEngine::new(test_config_at(&server.url())).unwrap();
+        let stream = engine
+            .generate_stream(build_request("test-model"))
+            .await
+            .unwrap();
+        let mut stream = Box::into_pin(stream);
+        while stream.next().await.is_some() {}
+
+        let body_text = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("request must have been captured");
+        let body: Value = serde_json::from_str(&body_text).unwrap();
+        assert_eq!(
+            body.get("stream_options"),
+            Some(&json!({"include_usage": true}))
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_engine_non_streaming_request_carries_no_stream_options_key() {
+        let config = test_config_at("https://example.invalid/v1");
+        let request = build_request("test-model");
+
+        let (body, _) = generate_and_capture_body(config, request).await;
+        let obj = body.as_object().expect("body must be a JSON object");
+
+        assert!(
+            !obj.contains_key("stream_options"),
+            "a non-streaming request must never carry stream_options, got: {obj:?}"
         );
     }
 }

@@ -48,7 +48,7 @@ LLM provider libraries directly.
 
 ```toml
 [dependencies]
-paladin-ai = { version = "0.5.0", features = ["llm-openai"] }
+paladin-ai = { version = "0.10.0", features = ["llm-openai"] }
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -256,24 +256,18 @@ and examples.
 **Source**: `crates/paladin-battalion/src/commander.rs`
 
 The Commander provides a single entry-point that automatically selects the optimal pattern
-based on input analysis and the number/capabilities of Paladins provided.
+based on input analysis and the number/capabilities of Paladins provided. Build it through
+`CommanderBuilder` (the same builder [Orchestration](orchestration.md) uses) and run it with
+the live single-argument `execute` method — the direct `Commander::new` constructor takes
+five positional arguments (strategy, paladins, config, aggregator, paladin_port), and
+`execute` takes only the input string, never a separate strategy/config pair per call:
 
 ```rust,ignore
-use paladin_battalion::commander::Commander;
-use paladin_core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
-
-let commander = Commander::new(paladin_port, paladin_registry);
-
-// Auto-select strategy
-let result = commander
-    .execute(paladins, "Analyze and summarize this report", BattalionStrategy::Auto, config)
-    .await?;
-
-// Or force a specific strategy
-let result = commander
-    .execute(paladins, "Run in parallel", BattalionStrategy::Phalanx, config)
-    .await?;
+{{#include ../../../crates/doc-examples/src/battalion_patterns.rs:commander}}
 ```
+
+Force a specific strategy by passing a different `BattalionStrategy` variant to `.strategy()`
+on the builder instead of `BattalionStrategy::Auto`.
 
 ### Auto Mode Heuristics
 
@@ -309,8 +303,11 @@ let config = BattalionConfig {
 };
 ```
 
-`BattalionResult` fields: `output: String`, `paladin_results: Vec<PaladinResult>`,
-`status: BattalionStatus`, `execution_time_ms: u64`, `token_usage: TokenUsage`.
+`BattalionResult` fields: `final_output: String`, `paladin_results: Vec<PaladinResult>` (each
+entry carries its own `usage: TokenUsage`, D-07), `status: BattalionStatus`,
+`per_paladin_tokens: HashMap<String, TokenUsage>` (the per-Paladin split), and
+`total_tokens: u64` (the derived aggregate, D-08). There is no `execution_time_ms` or
+`token_usage` field on `BattalionResult` itself.
 
 ---
 

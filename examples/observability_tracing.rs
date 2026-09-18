@@ -194,7 +194,7 @@ async fn run_demo_graph(
     graph.add_entry(node_id);
 
     let persisting: Arc<dyn TraceSink> = Arc::new(PersistingTraceSink::new(trace_store));
-    let recording_sink: Arc<dyn TraceSink> = recording;
+    let recording_sink: Arc<dyn TraceSink> = recording.clone();
     let composite: Arc<dyn TraceSink> =
         Arc::new(CompositeSink::new(vec![recording_sink, persisting]));
 
@@ -205,10 +205,25 @@ async fn run_demo_graph(
 
     engine.start(&graph, thread, StateDelta::new()).await?;
 
-    // Trace dispatch is fire-and-forget: give the background consumer a
-    // moment to drain before reading anything back (the same technique
-    // paladin-battalion's own trace tests use).
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // Trace dispatch is fire-and-forget: rather than a fixed sleep (a race
+    // under CPU contention), poll the recording sink's record count,
+    // bounded by a generous timeout, until it stops growing across two
+    // consecutive checks -- the same "let the background consumer drain"
+    // intent paladin-battalion's own trace tests rely on, made robust here
+    // via polling instead of a fixed delay.
+    let poll_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut previous_len = recording.records().len();
+    loop {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let current_len = recording.records().len();
+        if current_len == previous_len {
+            break;
+        }
+        previous_len = current_len;
+        if tokio::time::Instant::now() >= poll_deadline {
+            break;
+        }
+    }
     Ok(())
 }
 

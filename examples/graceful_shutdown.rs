@@ -31,6 +31,7 @@
 
 use std::env;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -82,10 +83,16 @@ impl PaladinPort for UnusedPaladinPort {
 /// A pure `StateNode` that sleeps `hold`, then writes one fixed value to one
 /// field. A node holding well past the configured shutdown grace is the
 /// in-flight work a shutdown drains or aborts.
+///
+/// `completions` is shared across both nodes built by `fan_out_graph`: each
+/// increments it exactly once, right after finishing, so a caller can poll
+/// for "the fast node has genuinely completed" instead of guessing a fixed
+/// wall-clock delay (see `drain_run`).
 struct SlowWorker {
     field: FieldName,
     value: serde_json::Value,
     hold: Duration,
+    completions: Arc<AtomicUsize>,
 }
 
 #[async_trait]
@@ -98,6 +105,7 @@ impl StateNode for SlowWorker {
         tokio::time::sleep(self.hold).await;
         let mut delta = StateDelta::new();
         delta.set_raw(self.field.clone(), self.value.clone());
+        self.completions.fetch_add(1, Ordering::SeqCst);
         Ok(Directive {
             delta,
             next: NextStep::Edges,
@@ -105,14 +113,20 @@ impl StateNode for SlowWorker {
     }
 }
 
+/// `fan_out_graph`'s return: the graph itself, the fast/slow field names,
+/// and the shared completion counter both `SlowWorker`s increment.
+type FanOutGraph = (WarGraph, FieldName, FieldName, Arc<AtomicUsize>);
+
 /// Build a two-entry-node graph: `fast` finishes well inside any reasonable
 /// grace window, `slow` never does -- so a single superstep dispatches both
 /// concurrently and a shutdown mid-superstep drains one and cancels the
-/// other.
+/// other. The returned counter is shared between both nodes (see
+/// `SlowWorker`'s `completions` field) so `drain_run` can poll for "fast has
+/// completed" instead of guessing a fixed wall-clock delay.
 fn fan_out_graph(
     fast_hold: Duration,
     slow_hold: Duration,
-) -> Result<(WarGraph, FieldName, FieldName), Box<dyn std::error::Error>> {
+) -> Result<FanOutGraph, Box<dyn std::error::Error>> {
     let fast_field = FieldName::new("fast_result")?;
     let slow_field = FieldName::new("slow_result")?;
     let schema = BattlefieldSchema::new(vec![
@@ -120,12 +134,14 @@ fn fan_out_graph(
         FieldSpec::new(slow_field.clone(), DispatchRule::LastWrite, None, false),
     ]);
     let mut graph = WarGraph::new(schema, EngineLimits::default());
+    let completions = Arc::new(AtomicUsize::new(0));
     graph.add_node(
         NodeId::new("fast"),
         NodeSpec::Function(Arc::new(SlowWorker {
             field: fast_field.clone(),
             value: serde_json::json!("fast finished"),
             hold: fast_hold,
+            completions: completions.clone(),
         })),
     );
     graph.add_node(
@@ -134,24 +150,33 @@ fn fan_out_graph(
             field: slow_field.clone(),
             value: serde_json::json!("slow finished"),
             hold: slow_hold,
+            completions: completions.clone(),
         })),
     );
     graph.add_entry(NodeId::new("fast"));
     graph.add_entry(NodeId::new("slow"));
-    Ok((graph, fast_field, slow_field))
+    Ok((graph, fast_field, slow_field, completions))
 }
 
 /// Register a run with a fresh [`ShutdownCoordinator`], start `graph` under
-/// `engine_shutdown_grace`, wait a short fixed delay so the in-flight work
-/// is genuinely underway, then trigger the coordinator's shutdown directly
-/// (never a real signal handler) with `coordinator_grace`. Returns the
-/// coordinator's drain outcome alongside the run's own outcome.
+/// `engine_shutdown_grace`, poll (bounded by a generous timeout) until
+/// `fast_completions` shows the fast node has genuinely finished, then
+/// trigger the coordinator's shutdown directly (never a real signal
+/// handler) with `coordinator_grace`. Returns the coordinator's drain
+/// outcome alongside the run's own outcome.
+///
+/// Polling for the fast node's own completion signal -- rather than a fixed
+/// wall-clock delay -- is robust under CPU contention: no matter how slow
+/// the runner is, shutdown is never triggered before the fast node reports
+/// done, and the slow node's hold is always far longer, so it remains
+/// reliably in flight at that moment.
 async fn drain_run(
     store: Arc<InMemoryWaypointStore>,
     graph: WarGraph,
     thread: ThreadId,
     engine_shutdown_grace: Duration,
     coordinator_grace: Duration,
+    fast_completions: Arc<AtomicUsize>,
 ) -> Result<(ShutdownOutcome, RunOutcome), Box<dyn std::error::Error>> {
     let coordinator = ShutdownCoordinator::new();
     let (child_token, guard) = coordinator.register();
@@ -165,11 +190,13 @@ async fn drain_run(
         outcome
     });
 
-    // Give the in-flight work a moment to genuinely start before triggering
-    // shutdown -- deterministic enough for a demo: the fast node's own hold
-    // is always far shorter than this delay, and the slow node's hold is
-    // always far longer.
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    let poll_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while fast_completions.load(Ordering::SeqCst) < 1 {
+        if tokio::time::Instant::now() >= poll_deadline {
+            return Err("timed out waiting for the fast node to complete".into());
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
 
     let shutdown_outcome = coordinator.cancel_and_wait(coordinator_grace).await;
     let run_outcome = run_handle.await??;
@@ -191,7 +218,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let store = Arc::new(InMemoryWaypointStore::new());
-    let (graph, fast_field, slow_field) =
+    let (graph, fast_field, slow_field, fast_completions) =
         fan_out_graph(Duration::from_millis(10), Duration::from_secs(2))?;
     let thread = ThreadId::new("graceful-shutdown-drain")?;
     let (shutdown_outcome, run_outcome) = drain_run(
@@ -200,6 +227,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         thread.clone(),
         Duration::from_millis(150),
         Duration::from_secs(5),
+        fast_completions,
     )
     .await?;
 
@@ -246,7 +274,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("   running the drain again with the overridden grace wired into the engine:\n");
-    let (single_graph, _fast_unused, slow_field_2) =
+    let (single_graph, _fast_unused, slow_field_2, fast_completions_2) =
         fan_out_graph(Duration::from_millis(5), Duration::from_secs(5))?;
     let thread2 = ThreadId::new("graceful-shutdown-grace-override")?;
     let started_at = std::time::Instant::now();
@@ -256,6 +284,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         thread2.clone(),
         Duration::from_secs(overridden_config.shutdown_grace_secs),
         Duration::from_secs(30),
+        fast_completions_2,
     )
     .await?;
     let elapsed = started_at.elapsed();

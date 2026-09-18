@@ -986,3 +986,115 @@ has happened as of this addendum.
   literal no longer matches by design — read this entry, not a regression. Timing reason: after
   the release PR opens every commit costs a full CI cycle, and D-03 makes the §11 tick the last
   content commit on the branch.
+
+---
+
+### Plan 37-08 — Task 1 resolved by deviation; Task 2 read-only post-merge verification and the `paladin-eval` pre-tag gate re-check (2026-09-18)
+
+**Task 1 — resolved by deviation, not presented as a checkpoint.** Per this dispatch's own
+`<reality_delta>`, plan 37-08's Task 1 (`checkpoint:human-verify`, maintainer ticks §11) is not
+run as written: the maintainer merged PR #55 before any tick commit existed (recorded above,
+"Maintainer acts and statements, 2026-09-18," subsection (a)). The prior continuation's Task 3
+sign-off brief already obtained the maintainer's pre-tag sign-off of record — subsection (d) of
+that same entry, mechanism `AskUserQuestion`, the maintainer's chosen option verbatim-labelled
+"Sign in-session now, tick rides chore PR (Recommended)", sign-off statement quoted there in
+full. **That in-session statement is the pre-tag sign-off of record for merge commit
+`1d4a9724cc219b85856a23012543458d62559e47`.** The physical `- [x]` tick remains the maintainer's
+own hand edit, deferred to `chore/37-close` (D-10, D-00a). This dispatch authored no edit to
+`.project/v0.10.0/09-program-acceptance-audit.md` and did not open it for writing at any point —
+confirmed by `git status --porcelain` throughout. No push of any kind was made or attempted; the
+remote `feature/phase-33` branch is confirmed deleted (`gh api
+repos/DF3NDR/paladin-dev-env/branches/feature/phase-33` → `404 Branch not found`), so no push
+target even exists.
+
+**Task 2 — read-only verification, re-run against post-merge reality (not the plan's assumed
+post-tick reality).** Several of the plan's own checks have no subject because no tick commit
+exists; each is marked N/A-by-deviation below with its reason, never faked.
+
+**a. §11 box state on `origin/main`.**
+`git show origin/main:.project/v0.10.0/09-program-acceptance-audit.md | grep -n '...'` → line
+1549 still reads `- [ ] **The \`v0.10.0\` tag may be cut**` — unticked; the in-session sign-off of
+record (Task 1 above) stands in its place. File-wide, descriptive only, no assertion made on it:
+`grep -c '^- \[ \]'` → `8`; `grep -c '^- \[x\]'` → `0` — unchanged from the established baseline
+(8 open maintainer sign-off boxes across the file, 0 ticked); the other seven boxes remain the
+maintainer's independent discretion, untouched by this record.
+
+**b. PR #55 state.** `gh pr view 55 --json state,mergedAt,mergedBy,mergeCommit` →
+`state: "MERGED"`, `mergedAt: "2026-09-18T21:21:45Z"`, `mergedBy.login: "Am0rfu5"`,
+`mergeCommit.oid: "1d4a9724cc219b85856a23012543458d62559e47"`.
+
+**c. Merge commit shape and containment.** `git cat-file -p 1d4a9724cc219b85856a23012543458d62559e47`
+→ two `parent` lines (`8ed14aea05e9e5bca9695211da4c4ad6991e307b`,
+`1bb9406343b7fb965e0724ac7a689d45e4e5f61c`) — a genuine two-parent merge commit (D-04).
+`git merge-base --is-ancestor 1bb9406343b7fb965e0724ac7a689d45e4e5f61c origin/main` → exit `0`
+(PR head is an ancestor of `origin/main`). `git rev-parse origin/main` →
+`1d4a9724cc219b85856a23012543458d62559e47` — `origin/main`'s tip **equals** the merge commit
+exactly; `main` has not moved past it (independently re-confirmed at this dispatch's own fetch,
+not merely restated from plan 37-06's continuation).
+
+**d. Tree identity.** `git rev-parse 1d4a9724cc219b85856a23012543458d62559e47^{tree}` =
+`git rev-parse 1bb9406343b7fb965e0724ac7a689d45e4e5f61c^{tree}` =
+`d5e056d87a5716a7ec82f00805ff44069b6aff2e` — byte-identical (independently re-confirmed at this
+dispatch).
+
+**e. The `paladin-eval` pre-tag gate (D-17), re-run immediately before the tag hand-off.**
+```
+curl -s -o /tmp/pe.json -w '%{http_code}' \
+  -H 'User-Agent: paladin-release-check (github.com/DF3NDR/paladin-dev-env)' \
+  https://index.crates.io/pa/la/paladin-eval
+```
+→ HTTP `200`, body
+`{"name":"paladin-eval","vers":"0.0.1","deps":[],"cksum":"5652e4e010dbaf91c1d84896b119896b24ca550a168fd7dc4b0e50e58d996656","features":{},"yanked":false,"pubtime":"2026-09-18T21:17:04Z"}`
+— non-yanked, version `0.0.1`, below `0.10.0`. **Gate PASSES.** This is the third independent
+reading of this same fact (plan 37-06's continuation read it first; this dispatch is the second
+independent re-run at a later dispatch); the recorded maintainer reply this branches on is now
+"bootstrapped 0.0.1" (superseding "deferred," per the entry above), and the 200/non-yanked/
+sub-0.10.0 reading on its own already satisfies the gate's first named branch regardless of which
+reply is cited. Trusted Publisher link status: **"linked (reported by maintainer)"** — not
+independently verifiable over any unauthenticated crates.io endpoint (see the entry above);
+restated, not re-verified, here. The four Trusted Publisher fields (`DF3NDR` / `paladin-dev-env`
+/ `release.yml` / `crates-io`) are not publicly queryable and are not re-checked by this record —
+the Task 3 hand-off asks the maintainer to re-confirm them in the crates.io UI immediately before
+the tag push, since no agent check can.
+
+**f. No `v0.10*` tag exists anywhere, and no `release.yml` run newer than the v0.9.0 one.**
+`git tag -l 'v0.10*'` → empty. `git ls-remote --tags origin 'v0.10*'` → empty.
+`gh run list --workflow release.yml --limit 5 --json databaseId,event,headSha,status,conclusion,createdAt`:
+newest run is `33542459191` (`push`, `success`, `2026-09-01T18:14:25Z`, head
+`0b5d41063aca8da315603aebb3ce55fdc529964b` — the v0.9.0 tag's own release run); nothing newer.
+
+**g. `ci.yml` on the merge commit — HARD PRECONDITION for the tag, not yet satisfied.**
+`gh run view 35396397097 --json databaseId,workflowName,headSha,event,status,conclusion,jobs` →
+`headSha: 1d4a9724cc219b85856a23012543458d62559e47`, `event: "push"`, `status: "in_progress"`,
+`conclusion:` (empty, not yet concluded). Job tally: **34 `success`, 1 `skipped`, 1
+`in_progress`** (`Docker Build` — the same single still-running job this dispatch's own
+`<reality_delta>` named at dispatch time). **This run has not concluded as of this record.** The
+release pipeline's pre-publish consistency gate (`release.yml`'s `check-release-consistency` job)
+queries for a recorded `success`-concluded `ci.yml` run on the tagged SHA itself; per D-12 this
+dispatch does not wait or poll for it — it is stated as a hard precondition in the Task 3
+hand-off below, with the exact one-line confirmation command:
+`gh run view 35396397097 --json status,conclusion`.
+
+**Item 4 (PR mergeability / pending required checks on the "post-tick head") —
+N/A-by-deviation.** No post-tick head exists (Task 1 resolved by deviation; no tick commit was
+ever created). The PR itself is already `MERGED`, so "mergeability" no longer applies to it. The
+one still-open precondition gating the tag is item **g** above (`ci.yml`'s conclusion on the
+merge commit), which the Task 3 hand-off states explicitly as a hard precondition.
+
+**Subject-less plan checks, marked N/A-by-deviation (no tick commit exists to inspect):**
+- "the tick commit is the last content commit on the branch" — N/A, no tick commit exists.
+- "the tick commit's message carries no agent co-authorship trailer" — N/A, no tick commit
+  exists to inspect; the maintainer's in-session sign-off statement (Task 1 above) is the
+  provenance record in its place.
+- "nothing unpushed behind the tick" — N/A, no tick commit exists; separately, this branch's
+  ten local-only commits from plans 37-06/37-07 (`eaa07b67` through `cc1e56a7`) plus this
+  dispatch's own two commits stay deliberately unpushed — the remote branch is deleted (item
+  **Task 1** above) and D-10 routes them to `chore/37-close`, not to `feature/phase-33`.
+
+**This dispatch's own scope, stated plainly.** No push, no tag, no PR write, no workflow
+dispatch, no `gh run rerun`, and no `cargo publish` were performed. `.project/v0.10.0/09-program-acceptance-audit.md`
+and `29-ACCEPTANCE-AUDIT.md` were not opened for writing. This entry and the
+`.continue-here.md` append below are the only changes this dispatch makes, both committed
+locally on `feature/phase-33`, neither pushed.
+
+---

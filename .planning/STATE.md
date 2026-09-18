@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 37
 current_phase_name: v0.10.0 Crate Release
-status: planning
-stopped_at: Phase 37 context gathered
-last_updated: "2026-09-18T12:40:20.021Z"
+status: executing
+stopped_at: Phase 37 planned (11 plans, 11 sequential waves)
+last_updated: "2026-09-18T14:43:38.067Z"
 last_activity: 2026-09-18
-last_activity_desc: Phase 36.1 complete, transitioned to Phase 37
+last_activity_desc: Phase 37 planned — 11 plans in 11 sequential waves, plan check passed
 progress:
   total_phases: 18
   completed_phases: 17
-  total_plans: 204
+  total_plans: 215
   completed_plans: 204
 ---
 
@@ -63,7 +63,7 @@ names. See MILESTONES.md.
 
 Phase: 37 — v0.10.0 Crate Release
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-18 — Phase 36.1 complete, transitioned to Phase 37
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate

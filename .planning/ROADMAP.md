@@ -1152,17 +1152,48 @@ Plans:
 **Plans**: 11 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 37-01-PLAN.md — Pre-flight (disk, clean tree, branch state), create `37-CI-EVIDENCE.md` end-to-end, and hand the `paladin-eval` first-publish bootstrap to the maintainer (D-17)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 37-02-PLAN.md — Local re-seal: D-06 gate rows 1, 2, 3, 4, 5 and 7 on the final pre-merge tree
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 37-03-PLAN.md — Local re-seal: gate row 6 (`make publish-dry-run`), the adjacent checks, and the Local sweep's closing verdict tally
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 37-04-PLAN.md — Mint `SHIP-05`, resolve the ROADMAP requirements line, correct the STATE.md evidence pointer, and add one dated forward-pointer line to each prior evidence file
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 37-05-PLAN.md — Append corpus audit section 12 (the seven-row re-seal table) and the pointer file's dated paragraph
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 37-06-PLAN.md — Push the branch, open the release PR (D-01), write the D-12 pause hand-off, and stop until CI concludes
-- [ ] 37-07-PLAN.md — Record the pre-merge CI evidence including the `coverage` job's conclusion and figure; last agent commit on the feature branch
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 37-07-PLAN.md — Record the pre-merge CI evidence including the `coverage` job's conclusion and figure; last plan that commits to the feature branch
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
 - [ ] 37-08-PLAN.md — The maintainer's §11 tick, the read-only post-tick and `paladin-eval` pre-tag gates, then the merge-and-tag hand-off and hard stop
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
 - [ ] 37-09-PLAN.md — Re-verify the resume condition, prove the tag sits on the merge commit, cut `chore/37-close`, and record the post-merge and release-run evidence
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
 - [ ] 37-10-PLAN.md — Registry verification per derived publishable crate (D-08), the `trustpub_data` proof, and the final carried-findings list
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
 - [ ] 37-11-PLAN.md — The MILESTONES.md v0.10.0 release record, `37-READY-TO-CLOSE.md`, and the docs-only `chore/37-close` pull request
 
 ## Progress
@@ -1202,7 +1233,7 @@ Plans:
 | 35. mdBook Currency | v0.10.0 | 10/10 | Complete    | 2026-09-17 |
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 13/13 | Complete    | 2026-09-18 |
 | 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 14/14 | Complete    | 2026-09-18 |
-| 37. v0.10.0 Crate Release | v0.10.0 | 0/0 | Not started | — |
+| 37. v0.10.0 Crate Release | v0.10.0 | 0/11 | Planned | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

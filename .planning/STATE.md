@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37
 current_phase_name: v0.10.0 Crate Release
 status: executing
-stopped_at: Completed 37-04-PLAN.md (SHIP-05 minted, evidence pointers repaired)
-last_updated: "2026-09-18T18:23:32.981Z"
+stopped_at: Completed 37-05-PLAN.md (acceptance-audit section 12 re-seal, pointer paragraph)
+last_updated: "2026-09-18T18:36:30.047Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 37 execution started
 progress:
   total_phases: 18
   completed_phases: 17
   total_plans: 215
-  completed_plans: 208
+  completed_plans: 209
 ---
 
 # Project State
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 37 (v0.10.0 Crate Release) — EXECUTING
-Plan: 5 of 11
+Plan: 6 of 11
 Status: Ready to execute
 Last activity: 2026-09-18 — Phase 37 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -185,6 +185,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37 P02 | 50min | 1 tasks | 2 files |
 | Phase 37 P03 | 53min | 2 tasks | 1 files |
 | Phase 37 P04 | 7min | 2 tasks | 5 files |
+| Phase 37 P05 | 14min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -573,6 +574,9 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Gate row 6 (make publish-dry-run) and Task 2's adjacent checks (make security, make api-surface) hosted detached with real exit codes, polled with repeated foreground waits, never run in foreground (33m32s > 600s ceiling)
 - [Phase ?]: Local sweep closed: 31 numbered rows, 29 unconditional local passes, 2 named carried conditions, 0 CI-attributed rows; 82% ADR-0006 coverage floor named CI-attributed in an appended (not replacing) Summary addendum
 - [Phase ?]: 37-04: Traceability table's 'Complete' status column tracks trace completeness (row populated), not requirement satisfaction — SHIP-05's traceability row reads Complete while its definition-row checkbox stays unchecked until the crates ship.
+- [Phase ?]: Section 12 cites the provenance block's literally-labeled Local re-seal head SHA (522ab1d4), listing the later per-gate doc-only commit SHAs alongside with their source-tree identity to it stated explicitly
+- [Phase ?]: Gate row 7's evidence pointer cites 37-CI-EVIDENCE.md rows 3-13 (not the tally's shorthand 4-13), matching the more precise prose naming row 3's check-changelogs sub-target as a hard assertion
+- [Phase ?]: DNS-outage semver re-run and zero-valued CHANGELOG topic readings are recorded in-row (gate rows 4 and 7), separate from the four-item Findings list the plan's action text names
 
 ### Pending Todos
 
@@ -1140,8 +1144,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T18:23:32.866Z
-**Stopped at:** Completed 37-04-PLAN.md (SHIP-05 minted, evidence pointers repaired)
+**Last session:** 2026-09-18T18:36:29.933Z
+**Stopped at:** Completed 37-05-PLAN.md (acceptance-audit section 12 re-seal, pointer paragraph)
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

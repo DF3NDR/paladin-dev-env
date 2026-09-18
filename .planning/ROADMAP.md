@@ -1170,7 +1170,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 37-05-PLAN.md — Append corpus audit section 12 (the seven-row re-seal table) and the pointer file's dated paragraph
+- [x] 37-05-PLAN.md — Append corpus audit section 12 (the seven-row re-seal table) and the pointer file's dated paragraph
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

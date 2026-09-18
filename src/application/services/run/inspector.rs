@@ -72,6 +72,39 @@ const TRACE_PAGE_LIMIT: u32 = 256;
 /// The facade [`RunInspectorPort`] implementation (D-24): builds an
 /// [`InspectorView`] on top of Waypoint history, an optional persisted
 /// trace, the run repository, and the assistant resolver.
+///
+/// # Examples
+///
+/// Constructing a `RunInspectorService` from its port dependencies: the
+/// shipped in-memory waypoint store, the shipped in-memory run repository,
+/// and the shipped [`CodeWorkflowResolver`](super::resolver::CodeWorkflowResolver)
+/// -- the same resolver route [`RunSubmissionService`](super::submission::RunSubmissionService)'s
+/// own example uses, settled once and reused here rather than re-derived.
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use paladin::application::services::run::{CodeWorkflowResolver, RunInspectorService};
+/// use paladin_core::platform::container::waypoint::ThreadId;
+/// use paladin_ports::input::run_inspector_port::{InspectorError, RunInspectorPort};
+/// use paladin_storage::run::in_memory::InMemoryRunRepository;
+/// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let waypoints = Arc::new(InMemoryWaypointStore::new());
+///     let run_repo = Arc::new(InMemoryRunRepository::new());
+///     let resolver = Arc::new(CodeWorkflowResolver::new());
+///     let service = RunInspectorService::new(waypoints, run_repo, resolver);
+///
+///     // No run or Waypoint history exists yet for this thread, so
+///     // `inspect` reports it not found -- proving the service is fully
+///     // wired without a live backend.
+///     let thread_id = ThreadId::new("t1").unwrap();
+///     let err = service.inspect(&thread_id).await.unwrap_err();
+///     assert!(matches!(err, InspectorError::ThreadNotFound { .. }));
+/// }
+/// ```
 pub struct RunInspectorService {
     waypoint_port: Arc<dyn WaypointPort>,
     run_repo: Arc<dyn RunRepositoryPort>,

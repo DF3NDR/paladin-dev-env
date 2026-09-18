@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 36
-current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
-status: verifying
+current_phase: 36.1
+current_phase_name: Deferred Items Closure
+status: planning
 stopped_at: Completed 36-13-PLAN.md — Phase 36 fully closed (13/13 plans complete)
-last_updated: "2026-09-18T00:42:44.582Z"
-last_activity: 2026-09-17
-last_activity_desc: Phase 36 execution started
+last_updated: "2026-09-18T01:19:37.532Z"
+last_activity: 2026-09-18
+last_activity_desc: Phase 36 complete, transitioned to Phase 36.1
 progress:
   total_phases: 18
   completed_phases: 16
@@ -61,10 +61,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 36 (Rustdoc Zero-Warning Bar & Examples Currency) — EXECUTING
-Plan: 13 of 13
-Status: Phase complete — ready for verification
-Last activity: 2026-09-17 — Phase 36 execution started
+Phase: 36.1 — Deferred Items Closure
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-18 — Phase 36 complete, transitioned to Phase 36.1
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
@@ -73,7 +73,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 
 **Velocity:**
 
-- Total plans completed: 364
+- Total plans completed: 377
 - Average duration: —
 - Total execution time: —
 
@@ -115,6 +115,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | 33 | 6 | - | - |
 | 34 | 9 | - | - |
 | 35 | 10 | - | - |
+| 36 | 13 | - | - |
 
 *Updated after each plan completion*
 

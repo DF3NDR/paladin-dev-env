@@ -1077,7 +1077,7 @@ Plans:
 
 **Goal**: Every deferred item Phases 30-35 recorded and left unowned is either closed in the tree or explicitly dispositioned before v0.10.0 ships — the per-phase `deferred-items.md` registers (31, 32, 34, 35), the two open `WINDOWS.md` rows (#36, #37) and the two `todos/pending/` files are walked item by item, each one is fixed, waived with a written reason, or re-homed to a named owner, and the `WINDOWS.md` ledger is brought back into agreement with the registers so `/gsd-complete-milestone` sees the whole picture rather than two rows.
 **Depends on**: Phase 36 (closes the rustdoc items — `WINDOWS.md` #36, #37 and the 73-warning `cargo doc` baseline — that this phase must verify closed rather than fix twice); independent of Phase 35
-**Requirements**: TBD — assigned at planning under the Phase 34 prefix
+**Requirements**: CURR-16, CURR-17, CURR-18, CURR-19, CURR-20, CURR-21
 **Source**: `phases/31-lossless-token-accounting/deferred-items.md`, `phases/32-unified-token-primitives/deferred-items.md`, `phases/34-documentation-currency-audit/deferred-items.md`, `phases/35-mdbook-currency/deferred-items.md`; `WINDOWS.md` rows 36-37; `todos/pending/2026-08-13-verify-local-coverage-reproduction.md`, `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md`; STATE.md Phase 32 / 33 close-out carried concerns
 **UI hint**: no
 **Success Criteria** (what must be TRUE):
@@ -1089,11 +1089,49 @@ Plans:
   5. The two `todos/pending/` items (local coverage reproduction on a Docker machine; RustFS evaluation) are each either completed, or explicitly deferred past v0.10.0 with an owner and a re-check date written into the todo file — neither is left as an undated pointer
   6. `make clean-code`, `make security`, `cargo test --workspace`, `mdbook build` with linkcheck, and `make api-surface` are green on the closing commit; docs-only fixes move no public surface
 
-**Plans**: 0 plans
+**Plans**: 14 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 36.1 to break down)
+**Wave 1**
+
+- [ ] 36.1-01-PLAN.md — Tracer: rewrite the `cli_isolation` guard against the manifest, seed the closure table and the coverage declaration, capture the all-features sweep
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 36.1-02-PLAN.md — Sanitize the tool-failure reason on both run-failing arms, with a pinning test (ledger row 38)
+- [ ] 36.1-03-PLAN.md — SC1 pages: provider-guide adapter path, CLI troubleshooting entries, illustrative CI/CD captions
+- [ ] 36.1-04-PLAN.md — SC1 pages: rebuild the tests tree, sweep the adapter type casing across seven pages, run the docs gate
+- [ ] 36.1-05-PLAN.md — `# Examples` for six lighter port traits
+- [ ] 36.1-06-PLAN.md — `# Examples` for the trace port and the two assistant ports
+- [ ] 36.1-07-PLAN.md — `# Examples` for the three widest port traits; all twelve ports satisfied
+- [ ] 36.1-08-PLAN.md — `# Examples` for `ScheduleService` and `WebhookDeliveryService`
+- [ ] 36.1-09-PLAN.md — `# Examples` for `RunSubmissionService` and `RunInspectorService`
+- [ ] 36.1-10-PLAN.md — `# Examples` for `RunEventStreamService` and `AssistantService`
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 36.1-11-PLAN.md — The nineteenth section and the three-place gate wiring in one commit; the refrozen entry-point snapshot and its two pointers
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 36.1-12-PLAN.md — PROJECT.md corrections, the ADR-0033 suppressions amendment, both todo dispositions, the v2 candidate line, the changelog bullets
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 36.1-13-PLAN.md — Twelve ledger rows plus row 38, the completed closure table, the closing gate sequence
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 36.1-14-PLAN.md — CI evidence record and the blocking push checkpoint
+
+**Cross-cutting constraints:**
+
+- `make api-surface` reports the surface unchanged on every commit — the only visibility change is `pub(crate)`, which `cargo public-api` never lists.
+- Nothing under `src/` or `crates/` changes except the two tool-error match arms, the sanitizer's visibility, their test, the nineteen doc comments and `tests/cli_isolation_test.rs`.
+- `.planning/WINDOWS.md` is mutated only through the ledger CLI; no row is ever deleted.
+- The gate wiring lands in the same commit as the nineteenth `# Examples` fix, so no commit exists where the gate is wired and red.
+- The executor never pushes — the branch push is the maintainer's action at the 36.1-14 checkpoint.
 
 ### Phase 37: v0.10.0 Crate Release
 
@@ -1152,7 +1190,7 @@ Plans:
 | 34. Documentation Currency Audit | v0.10.0 | 9/9 | Complete    | 2026-09-17 |
 | 35. mdBook Currency | v0.10.0 | 10/10 | Complete    | 2026-09-17 |
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 13/13 | Complete    | 2026-09-18 |
-| 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 0/0 | Not started | — |
+| 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 0/14 | Planned | — |
 | 37. v0.10.0 Crate Release | v0.10.0 | 0/0 | Not started | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits

@@ -467,7 +467,7 @@ facade re-export.
   acceptance audit rather than a new audit (PRD R4; roadmap-time addition; SHIP-01…04
   re-verification)
 
-### Documentation Currency Audit (Release Readiness — Phases 34-36, epic `CURR`)
+### Documentation Currency Audit (Release Readiness — Phases 34-36.1, epic `CURR`)
 
 The prefix also carries Phases 35-36 per ROADMAP ("assigned at planning under the Phase 34
 prefix"); those phases mint their own `CURR-nn` numbers when planned.
@@ -539,6 +539,48 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   rustdoc and examples work moves no public surface, and no private item is widened to `pub` and
   no rustdoc lint is suppressed to satisfy a link (ROADMAP Phase 36 SC5; D-00c, D-00d, D-00h,
   D-05, D-28)
+
+- [ ] **CURR-16**: The six unowned `docs/src` prose defects Phase 35 deferred are closed on the
+  page — `contributing-providers.md` lines 272 and 367 use the shipped adapter module path,
+  `testing-guide.md`'s `tests/` tree matches the real directory listing with `config.test.yml` at
+  the repository root, `cli-configuration.md`'s Garrison and Arsenal troubleshooting entries name
+  live wiring rather than a source-line marker, `grep -rnw OpenAiAdapter docs/src` is empty across
+  all seven pages, and `cicd.md`'s deploy and best-practice YAML is captioned illustrative
+  (ROADMAP Phase 36.1 SC1; D-00a, D-00e, D-00h, D-02, D-04, D-05, D-06, D-07, D-08)
+
+- [ ] **CURR-17**: The Phase 34 tooling findings are dispositioned, not re-pointed —
+  `scripts/check-public-api-examples.sh` is wired into `make clean-code`, the pre-push hook and the
+  CI lint job with all 19 MISSING entry points fixed, the set at closure is recorded in
+  `36.1-ENTRY-POINTS.md` at 101 items, `ci.yml`'s examples-count comment is verified correct, and
+  PROJECT.md names `paladin-llm` as the one crate with its own `examples/` directory
+  (ROADMAP Phase 36.1 SC2; D-00d, D-00g, D-09, D-10, D-11, D-12, D-13, D-14)
+
+- [ ] **CURR-18**: `tests/cli_isolation_test.rs::test_cli_feature_is_not_default` no longer fails
+  under `cargo test --workspace --all-features` — the guard asserts the manifest's declared default
+  feature set rather than the current build's feature configuration, so the three-phase-old carried
+  failure stops being re-logged (ROADMAP Phase 36.1 SC3; D-15, D-16)
+
+- [ ] **CURR-19**: `WINDOWS.md` rows 36 and 37 are verified `fixed` against Phase 36's output, row
+  38 is `fixed` by this phase's tool-error sanitization, and every open entry from the Phase 31,
+  32, 34, 35 and 36 registers has exactly one row with status `fixed` or `waived` plus a reason —
+  `gsd-tools windows status` reports `open_count: 0` and the closure table in `36.1-EVIDENCE.md`
+  maps every entry to a row, a commit and a verification command
+  (ROADMAP Phase 36.1 SC4; D-00b, D-00j, D-01, D-03, D-17, D-18, D-19, D-20, D-21)
+
+- [ ] **CURR-20**: Both `todos/pending/` items — the local coverage reproduction on a
+  container-capable machine and the object-store adapter evaluation — are explicitly deferred past
+  v0.10.0 with an owner, a re-check date and a disposition section written into the todo file,
+  neither is left as an undated pointer, and `gsd-tools list-todos` still surfaces both
+  (ROADMAP Phase 36.1 SC5; D-00k, D-22, D-23, D-24)
+
+- [ ] **CURR-21**: `make clean-code` (now including `doc-check` and `check-api-examples`),
+  `make lint-shell`, `make security`, `cargo test --workspace`,
+  `cargo test --workspace --all-features --no-fail-fast`, the `docs.yml` mdBook sequence with
+  linkcheck, and `make api-surface` are green on the closing commit with their outputs captured;
+  the public surface does not move, the eight crate-level rustdoc suppressions are kept and
+  justified in a dated ADR-0033 amendment, and `CHANGELOG.md` `[0.10.0]` carries the phase's
+  Documentation and Fixed bullets
+  (ROADMAP Phase 36.1 SC6; D-00f, D-00i, D-25, D-26, D-27, D-28, D-29)
 
 ## v2 Requirements
 
@@ -663,6 +705,12 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-13 | Phase 36 | Complete |
 | CURR-14 | Phase 36 | Complete |
 | CURR-15 | Phase 36 | Complete |
+| CURR-16 | Phase 36.1 | Pending |
+| CURR-17 | Phase 36.1 | Pending |
+| CURR-18 | Phase 36.1 | Pending |
+| CURR-19 | Phase 36.1 | Pending |
+| CURR-20 | Phase 36.1 | Pending |
+| CURR-21 | Phase 36.1 | Pending |
 
 **Coverage:**
 

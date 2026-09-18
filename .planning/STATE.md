@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
 status: executing
-stopped_at: Completed 36.1-09-PLAN.md
-last_updated: "2026-09-18T04:52:40.905Z"
+stopped_at: Completed 36.1-10-PLAN.md
+last_updated: "2026-09-18T05:02:00.790Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36.1 execution started
 progress:
   total_phases: 18
   completed_phases: 16
   total_plans: 204
-  completed_plans: 198
+  completed_plans: 200
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 97%
+**Progress:** [██████████] 98%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36.1 (Deferred Items Closure) — EXECUTING
-Plan: 10 of 14
+Plan: 11 of 14
 Status: Ready to execute
 Last activity: 2026-09-18 — Phase 36.1 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -175,6 +175,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36.1 P07 | ~15min | 3 tasks | 4 files |
 | Phase 36.1 P08 | ~20min | 2 tasks | 3 files |
 | Phase 36.1 P09 | ~35min | 2 tasks | 3 files |
+| Phase 36.1 P10 | ~15min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -548,6 +549,8 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 36.1 plan 36.1-07: closed the last three port-trait # Examples gaps (RunRepositoryPort 11 methods, RunScheduleRepositoryPort 8 methods, WaypointPort 7 methods, inline in-memory adapters); plan's read_first undercounted method totals for the first two (stale relative to trait growth) -- implemented all required methods per D-10's compile-and-pass bar; public-API examples script now reports exactly 7 MISSING, all Service kind, zero Port
 - [Phase ?]: 36.1-08: ScheduleService/WebhookDeliveryService # Examples built from shipped in-memory adapters (schedule/webhook/run repos) plus an inline RunSubmissionPort fixture copied from that port's own doctest; WebhookDeliveryService's fallible constructor propagated via ? in a wrapping fn rather than unwrapped. MISSING count 7 -> 5 (D-09, D-10).
 - [Phase ?]: Phase 36.1 plan 09: RunSubmissionService and RunInspectorService # Examples sections both settled the unverified AssistantResolver collaborator (RESEARCH.md A1) by reusing the shipped, in-tree CodeWorkflowResolver::new() -- no inline resolver impl was needed; both doctests construct from real shipped in-memory adapters and pass under cargo test -p paladin-ai --doc
+- [Phase ?]: Phase 36.1 plan 10: RunEventStreamService's example stops at construction (never calls stream/awaits an event, per T-36.1-39); wiring proven via Arc::strong_count(&bus)==2 instead of a stream call
+- [Phase ?]: Phase 36.1 plan 10: AssistantService's unverified registries collaborator turned out to have a real zero-argument constructor (EngineRegistries::new()/Default) -- no not-run fence or fabricated constructor was needed; missing count after this plan is exactly 1 (WaypointRetentionService), handed to plan 36.1-11
 
 ### Pending Todos
 
@@ -1115,8 +1118,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T04:52:40.812Z
-**Stopped at:** Completed 36.1-09-PLAN.md
+**Last session:** 2026-09-18T05:02:00.706Z
+**Stopped at:** Completed 36.1-10-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

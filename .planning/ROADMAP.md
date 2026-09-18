@@ -1162,7 +1162,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 37-03-PLAN.md — Local re-seal: gate row 6 (`make publish-dry-run`), the adjacent checks, and the Local sweep's closing verdict tally
+- [x] 37-03-PLAN.md — Local re-seal: gate row 6 (`make publish-dry-run`), the adjacent checks, and the Local sweep's closing verdict tally
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

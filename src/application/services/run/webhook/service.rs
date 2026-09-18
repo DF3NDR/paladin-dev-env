@@ -100,6 +100,39 @@ pub fn backoff_for(attempt: u32) -> Duration {
 
 /// Drains a durable webhook delivery queue: claim, SSRF-check, sign, send,
 /// record (D-40..D-43).
+///
+/// # Examples
+///
+/// Constructing a `WebhookDeliveryService` from the two shipped in-memory
+/// adapters it needs. [`WebhookDeliveryService::new`] builds its own
+/// no-redirect HTTP client and can fail, so construction is wrapped in a
+/// fallible entry point rather than unwrapped away.
+///
+/// ```
+/// use std::sync::Arc;
+///
+/// use paladin::application::services::run::webhook::{
+///     WebhookDeliveryOptions, WebhookDeliveryService,
+/// };
+/// use paladin_storage::run::in_memory::InMemoryRunRepository;
+/// use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
+///
+/// fn build() -> Result<WebhookDeliveryService, Box<dyn std::error::Error>> {
+///     let deliveries = Arc::new(InMemoryWebhookDeliveryRepository::new());
+///     let runs = Arc::new(InMemoryRunRepository::new());
+///     let service = WebhookDeliveryService::new(
+///         deliveries,
+///         runs,
+///         WebhookDeliveryOptions::default(),
+///     )?;
+///     Ok(service)
+/// }
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let _service = build()?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct WebhookDeliveryService {
     deliveries: Arc<dyn WebhookDeliveryRepositoryPort>,
     runs: Arc<dyn RunRepositoryPort>,

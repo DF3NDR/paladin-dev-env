@@ -4,15 +4,15 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
-status: planning
+status: executing
 stopped_at: Phase 36.1 context gathered
-last_updated: "2026-09-18T02:17:19.208Z"
+last_updated: "2026-09-18T03:20:50.862Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36 complete, transitioned to Phase 36.1
 progress:
   total_phases: 18
   completed_phases: 16
-  total_plans: 190
+  total_plans: 204
   completed_plans: 190
 ---
 
@@ -63,7 +63,7 @@ names. See MILESTONES.md.
 
 Phase: 36.1 — Deferred Items Closure
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-18 — Phase 36 complete, transitioned to Phase 36.1
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate

@@ -1123,7 +1123,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 36.1-14-PLAN.md — CI evidence record and the blocking push checkpoint
+- [x] 36.1-14-PLAN.md — CI evidence record and the blocking push checkpoint
 
 **Cross-cutting constraints:**
 

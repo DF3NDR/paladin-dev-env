@@ -4,16 +4,16 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
-status: executing
-stopped_at: "Phase 36.1 plan 36.1-14 at its blocking checkpoint: maintainer push of feature/phase-33 pending, then record the CI run in 36.1-CI-EVIDENCE.md and resume with /gsd-execute-phase 36.1"
-last_updated: "2026-09-18T06:00:05.925Z"
+status: verifying
+stopped_at: Completed 36.1-14-PLAN.md
+last_updated: "2026-09-18T09:51:32.215Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36.1 execution started
 progress:
   total_phases: 18
-  completed_phases: 16
+  completed_phases: 17
   total_plans: 204
-  completed_plans: 203
+  completed_plans: 204
 ---
 
 # Project State
@@ -63,7 +63,7 @@ names. See MILESTONES.md.
 
 Phase: 36.1 (Deferred Items Closure) — EXECUTING
 Plan: 14 of 14
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-18 — Phase 36.1 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
@@ -179,6 +179,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36.1 P11 | ~11min | 2 tasks | 7 files |
 | Phase 36.1 P12 | ~20min | 3 tasks | 6 files |
 | Phase 36.1 P13 | ~28min | 3 tasks | 3 files |
+| Phase 36.1 P14 | ~20min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -559,6 +560,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 36.1 Plan 12: ADR-0033 amended with the eight kept crate-level rustdoc suppressions (309 hidden diagnostics across 5 crates), owner v0.11.0 rustdoc-suppressions phase, re-check 2026-10-16; no .rs file changed, cargo doc stays zero warnings
 - [Phase ?]: Phase 36.1 Plan 13: WINDOWS.md reconciled with every open Phase 31/32/34/35/36 deferred-item register — sixteen new rows (ids 40-55: 11 fixed, 5 waived) plus row 38 resolved; open_count: 0, total_count: 55 (one row higher than expected because an accidental probe row, id 39, was minted while verifying the ledger CLI's syntax and waived transparently rather than hidden).
 - [Phase ?]: Phase 36.1 Plan 13: all seven D-25 closing gates ran on the closing commit; cargo test --workspace failed transiently on its first attempt (3 unrelated tests, 30s timeouts, environmental resource contention after two CPU-heavy gates) and was recorded verbatim per D-25, then a full unfiltered re-run confirmed 0 failures. make api-surface unchanged (3959 items).
+- [Phase ?]: 36.1-14: recorded live-read CI run 35329107346 proving the public-API # Examples heading step (D-12); independently cross-checked via gh api job logs, no disagreement requiring reconciliation, row 7 doctests recorded on its own merits
 
 ### Pending Todos
 
@@ -1126,9 +1128,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T06:00:05.831Z
-**Stopped at:** Phase 36.1 plan 36.1-14 at its blocking checkpoint: maintainer push of feature/phase-33 pending, then record the CI run in 36.1-CI-EVIDENCE.md and resume with /gsd-execute-phase 36.1
-**Resume file:** .planning/phases/36.1-deferred-items-closure/36.1-CI-EVIDENCE.md
+**Last session:** 2026-09-18T09:51:32.106Z
+**Stopped at:** Completed 36.1-14-PLAN.md
+**Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

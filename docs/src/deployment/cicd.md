@@ -277,7 +277,14 @@ manual checklist in `security.instructions.md`.
 
 ## Deployment Automation
 
+No workflow of this shape ships in this repository — the sample below (and the eight Best
+Practices fragments that follow it) is illustrative teaching material only; the real release
+path is [`release.yml`](#releaseyml), described above.
+
 ### Deploy to Kubernetes
+
+**Illustrative only — no workflow of this shape ships in this repository; the real release
+path is [release.yml](#releaseyml).**
 
 ```yaml
 name: Deploy
@@ -335,6 +342,9 @@ jobs:
 
 Configure branch protection rules in GitHub:
 
+**Illustrative only — no workflow of this shape ships in this repository; the real release
+path is [release.yml](#releaseyml).**
+
 ```yaml
 # Required status checks
 - CI / check
@@ -352,6 +362,9 @@ Configure branch protection rules in GitHub:
 
 Store secrets in GitHub repository settings:
 
+**Illustrative only — no workflow of this shape ships in this repository; the real release
+path is [release.yml](#releaseyml).**
+
 ```bash
 # Required secrets
 GITHUB_TOKEN          # Auto-provided
@@ -360,6 +373,9 @@ KUBE_CONFIG           # For K8s deployment
 ```
 
 ### 3. Caching Strategy
+
+**Illustrative only — no workflow of this shape ships in this repository; the real release
+path is [release.yml](#releaseyml).**
 
 ```yaml
 # Cache Cargo dependencies
@@ -376,6 +392,9 @@ KUBE_CONFIG           # For K8s deployment
 
 ### 4. Concurrency Control
 
+**Illustrative only — no workflow of this shape ships in this repository; the real release
+path is [release.yml](#releaseyml).**
+
 ```yaml
 # Cancel in-progress runs for same PR
 concurrency:
@@ -384,6 +403,9 @@ concurrency:
 ```
 
 ### 5. Conditional Workflows
+
+**Illustrative only — no workflow of this shape ships in this repository; the real release
+path is [release.yml](#releaseyml).**
 
 ```yaml
 # Skip CI for docs-only changes
@@ -396,6 +418,9 @@ on:
 
 ### 6. Matrix Testing
 
+**Illustrative only — no workflow of this shape ships in this repository; the real release
+path is [release.yml](#releaseyml).**
+
 ```yaml
 strategy:
   matrix:
@@ -406,6 +431,9 @@ strategy:
 
 ### 7. Artifact Retention
 
+**Illustrative only — no workflow of this shape ships in this repository; the real release
+path is [release.yml](#releaseyml).**
+
 ```yaml
 - uses: actions/upload-artifact@v3
   with:
@@ -415,6 +443,9 @@ strategy:
 ```
 
 ### 8. Notifications
+
+**Illustrative only — no workflow of this shape ships in this repository; the real release
+path is [release.yml](#releaseyml).**
 
 ```yaml
 - name: Slack Notification

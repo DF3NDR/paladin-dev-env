@@ -1111,7 +1111,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 36.1-11-PLAN.md — The nineteenth section and the three-place gate wiring in one commit; the refrozen entry-point snapshot and its two pointers
+- [x] 36.1-11-PLAN.md — The nineteenth section and the three-place gate wiring in one commit; the refrozen entry-point snapshot and its two pointers
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

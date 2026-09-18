@@ -1115,7 +1115,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 36.1-12-PLAN.md — PROJECT.md corrections, the ADR-0033 suppressions amendment, both todo dispositions, the v2 candidate line, the changelog bullets
+- [x] 36.1-12-PLAN.md — PROJECT.md corrections, the ADR-0033 suppressions amendment, both todo dispositions, the v2 candidate line, the changelog bullets
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

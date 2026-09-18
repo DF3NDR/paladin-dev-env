@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
 status: executing
-stopped_at: Completed 36.1-11-PLAN.md
-last_updated: "2026-09-18T05:14:18.675Z"
+stopped_at: Completed 36.1-12-PLAN.md
+last_updated: "2026-09-18T05:24:40.984Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36.1 execution started
 progress:
   total_phases: 18
   completed_phases: 16
   total_plans: 204
-  completed_plans: 201
+  completed_plans: 202
 ---
 
 # Project State
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36.1 (Deferred Items Closure) — EXECUTING
-Plan: 12 of 14
+Plan: 13 of 14
 Status: Ready to execute
 Last activity: 2026-09-18 — Phase 36.1 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -177,6 +177,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36.1 P09 | ~35min | 2 tasks | 3 files |
 | Phase 36.1 P10 | ~15min | 2 tasks | 3 files |
 | Phase 36.1 P11 | ~11min | 2 tasks | 7 files |
+| Phase 36.1 P12 | ~20min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -553,6 +554,8 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 36.1 plan 10: RunEventStreamService's example stops at construction (never calls stream/awaits an event, per T-36.1-39); wiring proven via Arc::strong_count(&bus)==2 instead of a stream call
 - [Phase ?]: Phase 36.1 plan 10: AssistantService's unverified registries collaborator turned out to have a real zero-argument constructor (EngineRegistries::new()/Default) -- no not-run fence or fabricated constructor was needed; missing count after this plan is exactly 1 (WaypointRetentionService), handed to plan 36.1-11
 - [Phase ?]: 36.1-11: wired the public-API # Examples gate in three places (make/pre-push/CI) in the same commit as the 19th fix (D-12); CURR-17 stays pending until 36.1-12's PROJECT.md correction lands
+- [Phase ?]: Phase 36.1 Plan 12: PROJECT.md's stale examples figures corrected in place at both occurrences (62 .rs files, 8 declared [[example]] targets, paladin-llm as the sole crate with its own examples/ dir), verified against the tree before writing
+- [Phase ?]: Phase 36.1 Plan 12: ADR-0033 amended with the eight kept crate-level rustdoc suppressions (309 hidden diagnostics across 5 crates), owner v0.11.0 rustdoc-suppressions phase, re-check 2026-10-16; no .rs file changed, cargo doc stays zero warnings
 
 ### Pending Todos
 
@@ -1120,8 +1123,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T05:14:18.590Z
-**Stopped at:** Completed 36.1-11-PLAN.md
+**Last session:** 2026-09-18T05:24:40.899Z
+**Stopped at:** Completed 36.1-12-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

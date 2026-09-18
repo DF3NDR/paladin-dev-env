@@ -548,7 +548,7 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   all seven pages, and `cicd.md`'s deploy and best-practice YAML is captioned illustrative
   (ROADMAP Phase 36.1 SC1; D-00a, D-00e, D-00h, D-02, D-04, D-05, D-06, D-07, D-08)
 
-- [ ] **CURR-17**: The Phase 34 tooling findings are dispositioned, not re-pointed —
+- [x] **CURR-17**: The Phase 34 tooling findings are dispositioned, not re-pointed —
   `scripts/check-public-api-examples.sh` is wired into `make clean-code`, the pre-push hook and the
   CI lint job with all 19 MISSING entry points fixed, the set at closure is recorded in
   `36.1-ENTRY-POINTS.md` at 101 items, `ci.yml`'s examples-count comment is verified correct, and
@@ -567,13 +567,13 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   maps every entry to a row, a commit and a verification command
   (ROADMAP Phase 36.1 SC4; D-00b, D-00j, D-01, D-03, D-17, D-18, D-19, D-20, D-21)
 
-- [ ] **CURR-20**: Both `todos/pending/` items — the local coverage reproduction on a
+- [x] **CURR-20**: Both `todos/pending/` items — the local coverage reproduction on a
   container-capable machine and the object-store adapter evaluation — are explicitly deferred past
   v0.10.0 with an owner, a re-check date and a disposition section written into the todo file,
   neither is left as an undated pointer, and `gsd-tools list-todos` still surfaces both
   (ROADMAP Phase 36.1 SC5; D-00k, D-22, D-23, D-24)
 
-- [ ] **CURR-21**: `make clean-code` (now including `doc-check` and `check-api-examples`),
+- [x] **CURR-21**: `make clean-code` (now including `doc-check` and `check-api-examples`),
   `make lint-shell`, `make security`, `cargo test --workspace`,
   `cargo test --workspace --all-features --no-fail-fast`, the `docs.yml` mdBook sequence with
   linkcheck, and `make api-surface` are green on the closing commit with their outputs captured;
@@ -708,11 +708,11 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-14 | Phase 36 | Complete |
 | CURR-15 | Phase 36 | Complete |
 | CURR-16 | Phase 36.1 | Complete |
-| CURR-17 | Phase 36.1 | Pending |
+| CURR-17 | Phase 36.1 | Complete |
 | CURR-18 | Phase 36.1 | Complete |
 | CURR-19 | Phase 36.1 | Pending |
-| CURR-20 | Phase 36.1 | Pending |
-| CURR-21 | Phase 36.1 | Pending |
+| CURR-20 | Phase 36.1 | Complete |
+| CURR-21 | Phase 36.1 | Complete |
 
 **Coverage:**
 

@@ -573,7 +573,7 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   neither is left as an undated pointer, and `gsd-tools list-todos` still surfaces both
   (ROADMAP Phase 36.1 SC5; D-00k, D-22, D-23, D-24)
 
-- [x] **CURR-21**: `make clean-code` (now including `doc-check` and `check-api-examples`),
+- [ ] **CURR-21**: `make clean-code` (now including `doc-check` and `check-api-examples`),
   `make lint-shell`, `make security`, `cargo test --workspace`,
   `cargo test --workspace --all-features --no-fail-fast`, the `docs.yml` mdBook sequence with
   linkcheck, and `make api-surface` are green on the closing commit with their outputs captured;
@@ -712,7 +712,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-18 | Phase 36.1 | Complete |
 | CURR-19 | Phase 36.1 | Pending |
 | CURR-20 | Phase 36.1 | Complete |
-| CURR-21 | Phase 36.1 | Complete |
+| CURR-21 | Phase 36.1 | Pending |
 
 **Coverage:**
 

@@ -1104,7 +1104,7 @@ Plans:
 - [x] 36.1-04-PLAN.md — SC1 pages: rebuild the tests tree, sweep the adapter type casing across seven pages, run the docs gate
 - [x] 36.1-05-PLAN.md — `# Examples` for six lighter port traits
 - [x] 36.1-06-PLAN.md — `# Examples` for the trace port and the two assistant ports
-- [ ] 36.1-07-PLAN.md — `# Examples` for the three widest port traits; all twelve ports satisfied
+- [x] 36.1-07-PLAN.md — `# Examples` for the three widest port traits; all twelve ports satisfied
 - [ ] 36.1-08-PLAN.md — `# Examples` for `ScheduleService` and `WebhookDeliveryService`
 - [ ] 36.1-09-PLAN.md — `# Examples` for `RunSubmissionService` and `RunInspectorService`
 - [ ] 36.1-10-PLAN.md — `# Examples` for `RunEventStreamService` and `AssistantService`

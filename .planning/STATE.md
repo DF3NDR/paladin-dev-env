@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
 status: executing
-stopped_at: Completed 36.1-06-PLAN.md
-last_updated: "2026-09-18T04:24:37.756Z"
+stopped_at: Completed 36.1-07-PLAN.md
+last_updated: "2026-09-18T04:35:24.564Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36.1 execution started
 progress:
   total_phases: 18
   completed_phases: 16
   total_plans: 204
-  completed_plans: 196
+  completed_plans: 197
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 96%
+**Progress:** [██████████] 97%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36.1 (Deferred Items Closure) — EXECUTING
-Plan: 7 of 14
+Plan: 8 of 14
 Status: Ready to execute
 Last activity: 2026-09-18 — Phase 36.1 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -172,6 +172,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36.1 P04 | ~35min | 3 tasks | 9 files |
 | Phase 36.1 P05 | ~15min | 3 tasks | 7 files |
 | Phase 36.1 P06 | 6min | 3 tasks | 4 files |
+| Phase 36.1 P07 | ~15min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -542,6 +543,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 36.1 plan 04: rebuilt testing-guide.md tests/ tree against ls -p tests truth (D-05), swept eleven OpenAiAdapter->OpenAIAdapter casing hits across seven pages (D-07), probed all four flagged battalion-patterns-guide.md bodies (all fail to compile, recorded for 36.1-13 to mint 4 waived unmet-truth ledger rows), and ran the docs.yml gate clean (zero broken links).
 - [Phase ?]: 36.1-05: closed six of the nineteen # Examples MISSING items (StructuredExecutorPort, NodeCachePort, RunSubmissionPort, ScheduleAdminPort, RunQueuePort, WebhookDeliveryRepositoryPort) with real executing doctests; re-measured paladin-ports at 142 passed doctests / 0 cargo doc warnings; MISSING count 19 -> 13
 - [Phase ?]: RunTracePort/AssistantAdminPort/AssistantRepositoryPort # Examples sections use inline Mutex<HashMap>-backed local structs implementing every trait method, never a storage-crate adapter
+- [Phase ?]: Phase 36.1 plan 36.1-07: closed the last three port-trait # Examples gaps (RunRepositoryPort 11 methods, RunScheduleRepositoryPort 8 methods, WaypointPort 7 methods, inline in-memory adapters); plan's read_first undercounted method totals for the first two (stale relative to trait growth) -- implemented all required methods per D-10's compile-and-pass bar; public-API examples script now reports exactly 7 MISSING, all Service kind, zero Port
 
 ### Pending Todos
 
@@ -1109,8 +1111,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T04:24:37.676Z
-**Stopped at:** Completed 36.1-06-PLAN.md
+**Last session:** 2026-09-18T04:35:24.480Z
+**Stopped at:** Completed 36.1-07-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

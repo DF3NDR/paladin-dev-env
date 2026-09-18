@@ -540,7 +540,7 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   no rustdoc lint is suppressed to satisfy a link (ROADMAP Phase 36 SC5; D-00c, D-00d, D-00h,
   D-05, D-28)
 
-- [ ] **CURR-16**: The six unowned `docs/src` prose defects Phase 35 deferred are closed on the
+- [x] **CURR-16**: The six unowned `docs/src` prose defects Phase 35 deferred are closed on the
   page — `contributing-providers.md` lines 272 and 367 use the shipped adapter module path,
   `testing-guide.md`'s `tests/` tree matches the real directory listing with `config.test.yml` at
   the repository root, `cli-configuration.md`'s Garrison and Arsenal troubleshooting entries name
@@ -705,7 +705,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-13 | Phase 36 | Complete |
 | CURR-14 | Phase 36 | Complete |
 | CURR-15 | Phase 36 | Complete |
-| CURR-16 | Phase 36.1 | Pending |
+| CURR-16 | Phase 36.1 | Complete |
 | CURR-17 | Phase 36.1 | Pending |
 | CURR-18 | Phase 36.1 | Complete |
 | CURR-19 | Phase 36.1 | Pending |

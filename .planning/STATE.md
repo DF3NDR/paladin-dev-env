@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
 status: executing
-stopped_at: Completed 36.1-02-PLAN.md
-last_updated: "2026-09-18T03:46:20.759Z"
+stopped_at: Completed 36.1-03-PLAN.md
+last_updated: "2026-09-18T03:53:24.581Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36.1 execution started
 progress:
   total_phases: 18
   completed_phases: 16
   total_plans: 204
-  completed_plans: 192
+  completed_plans: 193
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [█████████░] 94%
+**Progress:** [██████████] 95%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36.1 (Deferred Items Closure) — EXECUTING
-Plan: 3 of 14
+Plan: 4 of 14
 Status: Ready to execute
 Last activity: 2026-09-18 — Phase 36.1 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -168,6 +168,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36 P13 | 25min | 3 tasks | 4 files |
 | Phase 36.1 P01 | 20min | 2 tasks | 3 files |
 | Phase 36.1 P02 | 15min | 2 tasks | 2 files |
+| Phase 36.1 P03 | 20min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -534,6 +535,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: D-20 closure table: 36.1-EVIDENCE.md seeded with all 17 lines; line 1 (cli_isolation) completed, 16 pending for plan 36.1-13
 - [Phase ?]: D-16 sweep confirmed RESEARCH.md assumption A2: zero non-cli_isolation failing targets under --all-features --no-fail-fast
 - [Phase ?]: Phase 36.1 plan 02: both run-failing tool-error arms (handoff and regular Arsenal-tool) sanitize PaladinError::ArmamentFailed's reason via ToolResultFormatter::sanitize_tool_text (widened to pub(crate) only, make api-surface unchanged); pinning test fail_run_redacts_a_secret_in_the_reason covers the regular arm, handoff arm covered by the Task 1 two-call-site source guarantee (commits 979f2a1d, e7284987)
+- [Phase ?]: 36.1-03: contributing-providers.md's module-declaration line (pub mod myprovider_adapter;) left unfixed per nine-signal class-4 verdict — not the same relocated-path class as the two import-path fixes; no WINDOWS.md row minted (D-17's 12-row mapping has no slot)
 
 ### Pending Todos
 
@@ -1101,8 +1103,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T03:46:20.677Z
-**Stopped at:** Completed 36.1-02-PLAN.md
+**Last session:** 2026-09-18T03:53:24.505Z
+**Stopped at:** Completed 36.1-03-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

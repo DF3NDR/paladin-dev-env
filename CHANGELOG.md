@@ -417,6 +417,13 @@ fifth (RAG rationing, below) results from the signature break registered in
      a LARGER number for any call that hits the prompt cache, and that larger number is the one
      Anthropic actually billed. See
      [`MIGRATION.md` §9.2](MIGRATION.md#92-rust-api-changes-compile-affecting-the-x-10-register).
+- **A failed-tool error's reason is now redacted and bounded like the text already fed back to
+  the model.** When a tool call is configured to fail the run rather than report the failure back
+  to the model, the resulting error's reason previously carried the upstream tool's raw error text
+  verbatim — including anything credential-shaped an upstream tool's own error message happened to
+  contain. It now passes through the same redact-then-bound sanitizer the model-facing failure
+  path already used, so a credential in an upstream tool's error message no longer reaches the
+  error surface unredacted.
 
 ### Documentation
 
@@ -473,6 +480,18 @@ fifth (RAG rationing, below) results from the signature break registered in
 - **The examples gallery index is corrected against the current release**: the stated minimum Rust
   version and the documented result-field names now match what the shipped crates actually
   require and return.
+- **Documentation currency work closed six remaining deferred prose defects, filled in the last
+  nineteen missing worked examples, and recorded a known documentation-lint gap.** Six mdBook
+  pages were corrected against the shipped API: the provider contribution guide's adapter import
+  paths, the testing guide's `tests/` directory tree, the CLI configuration appendix's Garrison
+  and Arsenal troubleshooting entries, the `OpenAIAdapter` type name corrected everywhere it was
+  miscased across the book, and the deployment guide's CI/CD YAML fragments now captioned
+  illustrative rather than presented as literal, runnable configuration. Nineteen public builders,
+  ports and services gained worked `# Examples` doctests, and a new code-quality gate keeps every
+  future one from shipping without one. The decision record for the `cargo doc` zero-warning bar
+  now names the eight crate-level documentation-lint suppressions still in force across five
+  crates, with their per-crate hidden diagnostic counts and the reason each is knowingly kept for
+  this release rather than cleared.
 
 ### Known limitations
 

@@ -246,7 +246,8 @@ cases:
     println!("Wrote a scenario file to {}.", scenario_file.display());
     println!(
         "The equivalent CLI form:\n  cargo run --bin paladin --features cli -- eval run \
-         \"{glob_pattern}\"\n"
+         \"{glob_pattern}\"\n  (the temp file above is removed when this program exits; \
+         point the glob at a scenario file of your own to actually run this command)\n"
     );
 
     let trial_count = runner.trials(&glob_pattern).len();

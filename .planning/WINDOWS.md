@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 1
-waived_count: 26
-fixed_count: 11
-total_count: 38
-last_updated: 2026-09-17T23:54:41.450Z
+open_count: 0
+waived_count: 34
+fixed_count: 21
+total_count: 55
+last_updated: 2026-09-18T05:30:55.607Z
 ---
 
 # Broken Windows Ledger
@@ -52,7 +52,24 @@ last_updated: 2026-09-17T23:54:41.450Z
 | 35 | 28 | deviation | .planning/phases/28-observability-tooling/28-BENCH-EVIDENCE.md |  | PRD 07 acceptance 6's <=3% superstep-overhead bar with tracing on was measured and FAILED: log_sink +22.18%, composite +18.46%, against a ~110us untraced baseline (28-BENCH-EVIDENCE.md). Both genuinely fail the bar. ACCEPTED for v0.10.0 as a documented deviation (D-16) because tracing sinks are opt-in (no sink -> no overhead), trace.state_values defaults off, and the microbenchmark is all-Function-node with no LLM latency to amortise the overhead against -- so no v0.9 workflow and no default v0.10 workflow pays it. Maintainer sign-off recorded at Phase 28 close-out UAT (2026-09-09, STATE.md D-37). Follow-up: re-scope the bar to an I/O-bound superstep. Same record lives in the program acceptance audit (.project/v0.10.0/09-program-acceptance-audit.md, Accepted deviation for v0.10.0 subsection), docs/src/operations/observability.md's Known limitations bullet, and the root CHANGELOG.md's [0.10.0] Known limitations entry (plan 29-09). | waived | ACCEPTED for v0.10.0 per 29-CONTEXT.md D-16 and STATE.md's Phase 28 close entry D-37: the maintainer signed off on this measured FAIL at Phase 28 close-out UAT (2026-09-09) rather than requiring a pre-release fix, because tracing sinks are opt-in, trace.state_values defaults off, and the microbenchmark is all-Function-node with no LLM latency to amortise the overhead against. Recorded (not re-litigated) in the program acceptance audit's Accepted deviation for v0.10.0 subsection per 29-07-SUMMARY.md. Follow-up (re-scoping the bar to an I/O-bound superstep) remains open engineering work, tracked in 29-CONTEXT.md's Deferred Ideas, not a reason to block this release. | 2026-09-10T01:59:53.866Z | 2026-09-10T02:00:11.423Z |
 | 36 | 31 | unmet-truth | docs/src (workspace-wide) |  | cargo doc --workspace --no-deps emits 16 pre-existing warnings (private intra-doc links, unclosed HTML tags) unrelated to ACCT-04/token accounting; see deferred-items.md Plan 31-05 entry | fixed |  | 2026-09-15T06:23:45.171Z | 2026-09-17T23:54:41.289Z |
 | 37 | 32 | deviation | crates/paladin-memory/src/token_counter/mod.rs | 3 | Pre-existing broken intra-doc link [HeuristicTokenCounter] blocks cargo doc -p paladin-memory --features content-processing --no-deps under -D warnings; confirmed present on pre-task base commit, unrelated to plan 32-03's removal (logged in deferred-items.md) | fixed |  | 2026-09-15T16:43:27.667Z | 2026-09-17T23:54:41.450Z |
-| 38 | 36 | deviation | src/application/services/paladin/paladin_execution_service.rs | 1648 | ToolErrorMode::FailRun builds PaladinError::ArmamentFailed.reason from raw e.to_string(), bypassing ToolResultFormatter's redact-then-bound sanitizer -- contradicts the variant's own doc comment (paladin_error.rs) promising a redacted summary; discovered by examples/agent_runtime_middleware.rs (36-08), not fixed (D-18 docs-only phase boundary) | open |  | 2026-09-17T22:05:24.451Z |  |
+| 38 | 36 | deviation | src/application/services/paladin/paladin_execution_service.rs | 1648 | ToolErrorMode::FailRun builds PaladinError::ArmamentFailed.reason from raw e.to_string(), bypassing ToolResultFormatter's redact-then-bound sanitizer -- contradicts the variant's own doc comment (paladin_error.rs) promising a redacted summary; discovered by examples/agent_runtime_middleware.rs (36-08), not fixed (D-18 docs-only phase boundary) | fixed |  | 2026-09-17T22:05:24.451Z | 2026-09-18T05:30:55.607Z |
+| 39 | 31 | deviation | tests/cli_isolation_test.rs | 158 | TEST DRY RUN DO NOT COMMIT | waived | Executor error during plan 36.1-13: this row was minted accidentally while probing the gsd-tools windows append CLI's required-flag syntax before any mutation was intended (the tool has no dry-run mode). It is not a register defect. Owner: n/a. Re-check: none required — see 36.1-13-SUMMARY.md Deviations for the full account; the real cli_isolation register-entry row was minted separately immediately after this one. | 2026-09-18T05:29:45.344Z | 2026-09-18T05:30:06.030Z |
+| 40 | 31 | deviation |  |  | The cli_isolation register entry (also appears in the Phase 32 register): test_cli_feature_is_not_default panicked whenever the cli feature was forced on by a whole-workspace feature union. Fixed by rewriting the guard to assert Cargo.toml's declared [features] default array instead of the build's own cfg. Closed by 45dd7603 (36.1-01). | fixed |  | 2026-09-18T05:30:49.001Z | 2026-09-18T05:30:49.224Z |
+| 41 | 34 | todo | .planning/todos/pending/2026-08-13-verify-local-coverage-reproduction.md |  | The container-machine coverage walk (Phase 34 register, plan 34-04 Task 2 folded todo): verify local make coverage reproduces CI's 82.39% figure via make services-up + make coverage. This devcontainer has no Docker (which docker empty); dispositioned in .planning/todos/pending/2026-08-13-verify-local-coverage-reproduction.md by 01640b59 (36.1-12), comparison target re-pointed at the Phase 37 pre-merge CI coverage run. | waived | Owner: repo maintainer. Re-check: 2026-10-16. | 2026-09-18T05:30:49.395Z | 2026-09-18T05:30:49.641Z |
+| 42 | 34 | deviation | scripts/check-public-api-examples.sh |  | The public-API examples script's scope drift (Phase 34 register, plan 34-07 Task 2): scripts/check-public-api-examples.sh drifted from 76 to 101 entry points, 19 MISSING items, gate unwired from make/pre-commit/CI. Wired, refrozen at 101 and all 19 fixed across plans 36.1-05 through 36.1-11. Closed by b86a706b (36.1-11). | fixed |  | 2026-09-18T05:30:49.861Z | 2026-09-18T05:30:50.111Z |
+| 43 | 34 | unmet-truth | .github/workflows/ci.yml | 546 | The CI examples-count comment (Phase 34 register, plan 34-08 Task 1): ci.yml:546 was recorded as stale (47 .rs files / 4 declared [[example]] targets). Verified 2026-09-18: the comment already reads 62 .rs files / 8 declared targets, matching find examples -name '*.rs' \| wc -l = 62 and grep -c '^[[example]]' Cargo.toml = 8 -- Phase 36 fixed this in passing (closed-by-drift). No edit made in this phase (D-14). Closed by 09bc7d96 (Phase 36, verified in 36.1-13). | fixed |  | 2026-09-18T05:30:50.293Z | 2026-09-18T05:30:50.520Z |
+| 44 | 34 | unmet-truth | .planning/PROJECT.md | 28 | The corpus claim about crate-level example directories (Phase 34 register, plan 34-09 Task 2 item 1): PROJECT.md said 47 .rs files under examples/, 4 declared [[example]] targets, no crate under crates/ ships its own examples/ directory -- all three stale (now 62 / 8 / paladin-llm ships examples/live_vendor_smoke.rs). Corrected in place at both occurrences. Closed by 45454138 (36.1-12). | fixed |  | 2026-09-18T05:30:50.689Z | 2026-09-18T05:30:50.911Z |
+| 45 | 34 | todo | .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md |  | The object-store adapter evaluation (Phase 34 register, plan 34-09 Task 2 item 2 folded todo): evaluate replacing MinIO with RustFS in the dev/test stack. Adapter build with parity tests, past v0.10.0 by its own text. Dispositioned in .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md by 01640b59 and named as a v2 candidate (FUT-10) by dcdc6138 (36.1-12). | waived | Owner: repo maintainer. Re-check: 2026-10-16. | 2026-09-18T05:30:51.095Z | 2026-09-18T05:30:51.325Z |
+| 46 | 35 | unmet-truth | docs/src/contributing/contributing-providers.md | 272 | The provider guide's adapter import path (Phase 35 register, plan 35-01 Task 3 item 1): contributing-providers.md lines 272 and 367 used the pre-decomposition facade module path (paladin::infrastructure::adapters::llm::myprovider_adapter). Corrected to the live per-crate layout (paladin_llm::myprovider::MyProviderAdapter) and the Step 5 pub mod declaration matched to Step 1's module name. Closed by c0661030 and 51f25050 (36.1-03). | fixed |  | 2026-09-18T05:30:51.492Z | 2026-09-18T05:30:51.711Z |
+| 47 | 35 | unmet-truth | docs/src/contributing/testing-guide.md | 96 | The testing guide's fixture-path claim (Phase 35 register, plan 35-06): testing-guide.md's tests/ ASCII tree at line 96 and elsewhere showed fabricated file names and placed config.test.yml under fixtures/ (it lives at the repository root). Whole tree rebuilt from ls -p tests truth. Closed by 685bab79 (36.1-04). | fixed |  | 2026-09-18T05:30:51.887Z | 2026-09-18T05:30:52.113Z |
+| 48 | 35 | unmet-truth | docs/src/appendix/cli-configuration.md | 409 | The CLI appendix's two troubleshooting entries (Phase 35 register, plan 35-07): cli-configuration.md:409 (Garrison) and :422 (Arsenal) told a reader to verify a TODO marker at a source line that no longer exists in src/application/cli/commands/agent.rs. Rewritten to name the live config key and loader wiring the agent command performs, mirroring the page's own Scheduler entry. Closed by a807c025 (36.1-03). | fixed |  | 2026-09-18T05:30:52.298Z | 2026-09-18T05:30:52.520Z |
+| 49 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 43 | The adapter type casing across the book (Phase 35 register, plan 35-09): OpenAiAdapter appeared mis-cased at eleven word-boundary sites across seven docs/src pages against the shipped OpenAIAdapter casing (crates/paladin-llm/src/openai/adapter.rs:280). One casing-only sweep commit corrected all eleven sites; grep -rnw OpenAiAdapter docs/src now empty. Closed by a1bd0ca5 (36.1-04). | fixed |  | 2026-09-18T05:30:52.701Z | 2026-09-18T05:30:52.930Z |
+| 50 | 35 | unmet-truth | docs/src/deployment/cicd.md | 280 | The deployment page's uncaptioned YAML (Phase 35 register, security audit of 2026-09-17): cicd.md's Deploy to Kubernetes block (line 280) and eight Best Practices YAML fragments (332-427) read as workflows this repository runs; none of the seven shipped workflows deploys anywhere. A bold Illustrative only caption was added above each of the nine blocks, plus one intro sentence, in the voice of the page's own excerpt captions. Closed by 792bc3dd (36.1-03). | fixed |  | 2026-09-18T05:30:53.096Z | 2026-09-18T05:30:53.356Z |
+| 51 | 36 | lint-warning | src/lib.rs | 117 | The eight crate-level rustdoc allow attributes (Phase 36 register, plan 36-12): src/lib.rs:117-119, crates/paladin-llm/src/lib.rs:49, crates/paladin-ports/src/lib.rs:51-52, crates/paladin-storage/src/lib.rs:19, crates/paladin-notifications/src/lib.rs:14 hide 309 content diagnostics (ports 119, facade 108, llm 69, storage 10, notifications 3; measured 2026-09-17 at fed7b72e) beneath the ADR-0033 zero-warning bar. Kept and justified per the register's option (b) in the ADR-0033 amendment landed by b9bacc58 (36.1-12); no .rs file changed, cargo doc --workspace --no-deps still zero warning: lines. | waived | kept for v0.10.0 per the ADR-0033 amendment of 2026-09-18; owner: v0.11.0 rustdoc-suppressions phase or quick task; re-check at the v0.11.0 planning kickoff, 2026-10-16. | 2026-09-18T05:30:53.521Z | 2026-09-18T05:30:53.749Z |
+| 52 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 43 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 43 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:53.920Z | 2026-09-18T05:30:54.146Z |
+| 53 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 134 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 134 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:54.314Z | 2026-09-18T05:30:54.536Z |
+| 54 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 232 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 232 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:54.731Z | 2026-09-18T05:30:54.994Z |
+| 55 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 354 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 354 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:55.190Z | 2026-09-18T05:30:55.444Z |
 
 ````json
 [
@@ -507,10 +524,214 @@ last_updated: 2026-09-17T23:54:41.450Z
     "file": "src/application/services/paladin/paladin_execution_service.rs",
     "line": 1648,
     "description": "ToolErrorMode::FailRun builds PaladinError::ArmamentFailed.reason from raw e.to_string(), bypassing ToolResultFormatter's redact-then-bound sanitizer -- contradicts the variant's own doc comment (paladin_error.rs) promising a redacted summary; discovered by examples/agent_runtime_middleware.rs (36-08), not fixed (D-18 docs-only phase boundary)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-09-17T22:05:24.451Z",
-    "resolved_at": null
+    "resolved_at": "2026-09-18T05:30:55.607Z"
+  },
+  {
+    "id": 39,
+    "kind": "deviation",
+    "phase": "31",
+    "file": "tests/cli_isolation_test.rs",
+    "line": 158,
+    "description": "TEST DRY RUN DO NOT COMMIT",
+    "status": "waived",
+    "reason": "Executor error during plan 36.1-13: this row was minted accidentally while probing the gsd-tools windows append CLI's required-flag syntax before any mutation was intended (the tool has no dry-run mode). It is not a register defect. Owner: n/a. Re-check: none required — see 36.1-13-SUMMARY.md Deviations for the full account; the real cli_isolation register-entry row was minted separately immediately after this one.",
+    "recorded_at": "2026-09-18T05:29:45.344Z",
+    "resolved_at": "2026-09-18T05:30:06.030Z"
+  },
+  {
+    "id": 40,
+    "kind": "deviation",
+    "phase": "31",
+    "file": "",
+    "line": null,
+    "description": "The cli_isolation register entry (also appears in the Phase 32 register): test_cli_feature_is_not_default panicked whenever the cli feature was forced on by a whole-workspace feature union. Fixed by rewriting the guard to assert Cargo.toml's declared [features] default array instead of the build's own cfg. Closed by 45dd7603 (36.1-01).",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-18T05:30:49.001Z",
+    "resolved_at": "2026-09-18T05:30:49.224Z"
+  },
+  {
+    "id": 41,
+    "kind": "todo",
+    "phase": "34",
+    "file": ".planning/todos/pending/2026-08-13-verify-local-coverage-reproduction.md",
+    "line": null,
+    "description": "The container-machine coverage walk (Phase 34 register, plan 34-04 Task 2 folded todo): verify local make coverage reproduces CI's 82.39% figure via make services-up + make coverage. This devcontainer has no Docker (which docker empty); dispositioned in .planning/todos/pending/2026-08-13-verify-local-coverage-reproduction.md by 01640b59 (36.1-12), comparison target re-pointed at the Phase 37 pre-merge CI coverage run.",
+    "status": "waived",
+    "reason": "Owner: repo maintainer. Re-check: 2026-10-16.",
+    "recorded_at": "2026-09-18T05:30:49.395Z",
+    "resolved_at": "2026-09-18T05:30:49.641Z"
+  },
+  {
+    "id": 42,
+    "kind": "deviation",
+    "phase": "34",
+    "file": "scripts/check-public-api-examples.sh",
+    "line": null,
+    "description": "The public-API examples script's scope drift (Phase 34 register, plan 34-07 Task 2): scripts/check-public-api-examples.sh drifted from 76 to 101 entry points, 19 MISSING items, gate unwired from make/pre-commit/CI. Wired, refrozen at 101 and all 19 fixed across plans 36.1-05 through 36.1-11. Closed by b86a706b (36.1-11).",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-18T05:30:49.861Z",
+    "resolved_at": "2026-09-18T05:30:50.111Z"
+  },
+  {
+    "id": 43,
+    "kind": "unmet-truth",
+    "phase": "34",
+    "file": ".github/workflows/ci.yml",
+    "line": 546,
+    "description": "The CI examples-count comment (Phase 34 register, plan 34-08 Task 1): ci.yml:546 was recorded as stale (47 .rs files / 4 declared [[example]] targets). Verified 2026-09-18: the comment already reads 62 .rs files / 8 declared targets, matching find examples -name '*.rs' | wc -l = 62 and grep -c '^[[example]]' Cargo.toml = 8 -- Phase 36 fixed this in passing (closed-by-drift). No edit made in this phase (D-14). Closed by 09bc7d96 (Phase 36, verified in 36.1-13).",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-18T05:30:50.293Z",
+    "resolved_at": "2026-09-18T05:30:50.520Z"
+  },
+  {
+    "id": 44,
+    "kind": "unmet-truth",
+    "phase": "34",
+    "file": ".planning/PROJECT.md",
+    "line": 28,
+    "description": "The corpus claim about crate-level example directories (Phase 34 register, plan 34-09 Task 2 item 1): PROJECT.md said 47 .rs files under examples/, 4 declared [[example]] targets, no crate under crates/ ships its own examples/ directory -- all three stale (now 62 / 8 / paladin-llm ships examples/live_vendor_smoke.rs). Corrected in place at both occurrences. Closed by 45454138 (36.1-12).",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-18T05:30:50.689Z",
+    "resolved_at": "2026-09-18T05:30:50.911Z"
+  },
+  {
+    "id": 45,
+    "kind": "todo",
+    "phase": "34",
+    "file": ".planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md",
+    "line": null,
+    "description": "The object-store adapter evaluation (Phase 34 register, plan 34-09 Task 2 item 2 folded todo): evaluate replacing MinIO with RustFS in the dev/test stack. Adapter build with parity tests, past v0.10.0 by its own text. Dispositioned in .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md by 01640b59 and named as a v2 candidate (FUT-10) by dcdc6138 (36.1-12).",
+    "status": "waived",
+    "reason": "Owner: repo maintainer. Re-check: 2026-10-16.",
+    "recorded_at": "2026-09-18T05:30:51.095Z",
+    "resolved_at": "2026-09-18T05:30:51.325Z"
+  },
+  {
+    "id": 46,
+    "kind": "unmet-truth",
+    "phase": "35",
+    "file": "docs/src/contributing/contributing-providers.md",
+    "line": 272,
+    "description": "The provider guide's adapter import path (Phase 35 register, plan 35-01 Task 3 item 1): contributing-providers.md lines 272 and 367 used the pre-decomposition facade module path (paladin::infrastructure::adapters::llm::myprovider_adapter). Corrected to the live per-crate layout (paladin_llm::myprovider::MyProviderAdapter) and the Step 5 pub mod declaration matched to Step 1's module name. Closed by c0661030 and 51f25050 (36.1-03).",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-18T05:30:51.492Z",
+    "resolved_at": "2026-09-18T05:30:51.711Z"
+  },
+  {
+    "id": 47,
+    "kind": "unmet-truth",
+    "phase": "35",
+    "file": "docs/src/contributing/testing-guide.md",
+    "line": 96,
+    "description": "The testing guide's fixture-path claim (Phase 35 register, plan 35-06): testing-guide.md's tests/ ASCII tree at line 96 and elsewhere showed fabricated file names and placed config.test.yml under fixtures/ (it lives at the repository root). Whole tree rebuilt from ls -p tests truth. Closed by 685bab79 (36.1-04).",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-18T05:30:51.887Z",
+    "resolved_at": "2026-09-18T05:30:52.113Z"
+  },
+  {
+    "id": 48,
+    "kind": "unmet-truth",
+    "phase": "35",
+    "file": "docs/src/appendix/cli-configuration.md",
+    "line": 409,
+    "description": "The CLI appendix's two troubleshooting entries (Phase 35 register, plan 35-07): cli-configuration.md:409 (Garrison) and :422 (Arsenal) told a reader to verify a TODO marker at a source line that no longer exists in src/application/cli/commands/agent.rs. Rewritten to name the live config key and loader wiring the agent command performs, mirroring the page's own Scheduler entry. Closed by a807c025 (36.1-03).",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-18T05:30:52.298Z",
+    "resolved_at": "2026-09-18T05:30:52.520Z"
+  },
+  {
+    "id": 49,
+    "kind": "unmet-truth",
+    "phase": "35",
+    "file": "docs/src/appendix/battalion-patterns-guide.md",
+    "line": 43,
+    "description": "The adapter type casing across the book (Phase 35 register, plan 35-09): OpenAiAdapter appeared mis-cased at eleven word-boundary sites across seven docs/src pages against the shipped OpenAIAdapter casing (crates/paladin-llm/src/openai/adapter.rs:280). One casing-only sweep commit corrected all eleven sites; grep -rnw OpenAiAdapter docs/src now empty. Closed by a1bd0ca5 (36.1-04).",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-18T05:30:52.701Z",
+    "resolved_at": "2026-09-18T05:30:52.930Z"
+  },
+  {
+    "id": 50,
+    "kind": "unmet-truth",
+    "phase": "35",
+    "file": "docs/src/deployment/cicd.md",
+    "line": 280,
+    "description": "The deployment page's uncaptioned YAML (Phase 35 register, security audit of 2026-09-17): cicd.md's Deploy to Kubernetes block (line 280) and eight Best Practices YAML fragments (332-427) read as workflows this repository runs; none of the seven shipped workflows deploys anywhere. A bold Illustrative only caption was added above each of the nine blocks, plus one intro sentence, in the voice of the page's own excerpt captions. Closed by 792bc3dd (36.1-03).",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-18T05:30:53.096Z",
+    "resolved_at": "2026-09-18T05:30:53.356Z"
+  },
+  {
+    "id": 51,
+    "kind": "lint-warning",
+    "phase": "36",
+    "file": "src/lib.rs",
+    "line": 117,
+    "description": "The eight crate-level rustdoc allow attributes (Phase 36 register, plan 36-12): src/lib.rs:117-119, crates/paladin-llm/src/lib.rs:49, crates/paladin-ports/src/lib.rs:51-52, crates/paladin-storage/src/lib.rs:19, crates/paladin-notifications/src/lib.rs:14 hide 309 content diagnostics (ports 119, facade 108, llm 69, storage 10, notifications 3; measured 2026-09-17 at fed7b72e) beneath the ADR-0033 zero-warning bar. Kept and justified per the register's option (b) in the ADR-0033 amendment landed by b9bacc58 (36.1-12); no .rs file changed, cargo doc --workspace --no-deps still zero warning: lines.",
+    "status": "waived",
+    "reason": "kept for v0.10.0 per the ADR-0033 amendment of 2026-09-18; owner: v0.11.0 rustdoc-suppressions phase or quick task; re-check at the v0.11.0 planning kickoff, 2026-10-16.",
+    "recorded_at": "2026-09-18T05:30:53.521Z",
+    "resolved_at": "2026-09-18T05:30:53.749Z"
+  },
+  {
+    "id": 52,
+    "kind": "unmet-truth",
+    "phase": "35",
+    "file": "docs/src/appendix/battalion-patterns-guide.md",
+    "line": 43,
+    "description": "One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 43 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt.",
+    "status": "waived",
+    "reason": "appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step.",
+    "recorded_at": "2026-09-18T05:30:53.920Z",
+    "resolved_at": "2026-09-18T05:30:54.146Z"
+  },
+  {
+    "id": 53,
+    "kind": "unmet-truth",
+    "phase": "35",
+    "file": "docs/src/appendix/battalion-patterns-guide.md",
+    "line": 134,
+    "description": "One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 134 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt.",
+    "status": "waived",
+    "reason": "appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step.",
+    "recorded_at": "2026-09-18T05:30:54.314Z",
+    "resolved_at": "2026-09-18T05:30:54.536Z"
+  },
+  {
+    "id": 54,
+    "kind": "unmet-truth",
+    "phase": "35",
+    "file": "docs/src/appendix/battalion-patterns-guide.md",
+    "line": 232,
+    "description": "One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 232 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt.",
+    "status": "waived",
+    "reason": "appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step.",
+    "recorded_at": "2026-09-18T05:30:54.731Z",
+    "resolved_at": "2026-09-18T05:30:54.994Z"
+  },
+  {
+    "id": 55,
+    "kind": "unmet-truth",
+    "phase": "35",
+    "file": "docs/src/appendix/battalion-patterns-guide.md",
+    "line": 354,
+    "description": "One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 354 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt.",
+    "status": "waived",
+    "reason": "appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step.",
+    "recorded_at": "2026-09-18T05:30:55.190Z",
+    "resolved_at": "2026-09-18T05:30:55.444Z"
   }
 ]
 ````

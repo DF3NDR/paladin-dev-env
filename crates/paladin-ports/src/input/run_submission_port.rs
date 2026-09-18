@@ -176,6 +176,63 @@ pub enum RunSubmissionError {
 ///
 /// Implementations must be `Send + Sync`, mirroring every other port trait
 /// in this crate.
+///
+/// # Examples
+///
+/// ```
+/// use async_trait::async_trait;
+/// use paladin_core::platform::container::run::RunId;
+/// use paladin_core::platform::container::user::UserRole;
+/// use paladin_core::platform::container::waypoint::ThreadId;
+/// use paladin_ports::input::run_submission_port::{
+///     CancelOutcome, ForkRun, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
+/// };
+///
+/// struct AlwaysAccepts;
+///
+/// #[async_trait]
+/// impl RunSubmissionPort for AlwaysAccepts {
+///     async fn submit(&self, request: SubmitRun) -> Result<RunAccepted, RunSubmissionError> {
+///         Ok(RunAccepted {
+///             run_id: RunId::new_v7(),
+///             thread_id: request.thread_id.unwrap_or_else(|| ThreadId::new("t1").unwrap()),
+///         })
+///     }
+///
+///     async fn cancel(
+///         &self,
+///         run_id: &RunId,
+///         _requested_by: Option<(String, UserRole)>,
+///     ) -> Result<CancelOutcome, RunSubmissionError> {
+///         Err(RunSubmissionError::NotFound {
+///             run_id: run_id.clone(),
+///         })
+///     }
+///
+///     async fn fork(&self, request: ForkRun) -> Result<RunAccepted, RunSubmissionError> {
+///         Ok(RunAccepted {
+///             run_id: RunId::new_v7(),
+///             thread_id: request.thread_id,
+///         })
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let port = AlwaysAccepts;
+///     let request = SubmitRun {
+///         assistant_id: "a1".to_string(),
+///         version: None,
+///         thread_id: None,
+///         input: serde_json::json!({}),
+///         webhook: None,
+///         requested_by: None,
+///     };
+///
+///     let accepted = port.submit(request).await.unwrap();
+///     assert_eq!(accepted.thread_id, ThreadId::new("t1").unwrap());
+/// }
+/// ```
 #[async_trait]
 pub trait RunSubmissionPort: Send + Sync {
     /// Submit `request`, resolving its assistant reference, persisting and

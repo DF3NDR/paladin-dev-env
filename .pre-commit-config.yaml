@@ -142,3 +142,15 @@ repos:
         stages: [pre-push]
         pass_filenames: false
         files: ^(src|crates)/.*\.rs$|^Cargo\.toml$
+
+      # Same reasoning as doc-check above: GSD executor commits bypass
+      # commit-stage hooks entirely, and this gate rebuilds the doctest
+      # suite it depends on, so it rides at pre-push once per push rather
+      # than on every commit.
+      - id: check-api-examples
+        name: check public API '# Examples' headings
+        entry: make check-api-examples
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        files: ^(src|crates)/.*\.rs$|^Cargo\.toml$

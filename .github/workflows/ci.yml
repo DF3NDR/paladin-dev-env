@@ -70,6 +70,9 @@ jobs:
       - name: Check documentation (all features, -D warnings)
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
+      - name: Check public-API `# Examples` headings
+        run: ./scripts/check-public-api-examples.sh
+
   # Lints every workflow file in .github/workflows/, including the five this
   # job does not live in. Needs no toolchain, no cache and no services --
   # the cheapest job in the pipeline. Pinned to a concrete release rather

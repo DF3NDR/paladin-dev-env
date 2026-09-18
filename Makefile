@@ -430,8 +430,13 @@ doc-check: ## Enforce the rustdoc zero-warning bar (ADR-0033) + doctests: defaul
 	@$(CARGO) test --workspace --doc
 	@echo "$(GREEN)✅ doc-check passed (ADR-0033)$(NC)"
 
+.PHONY: check-api-examples
+check-api-examples: ## Enforce the public-API `# Examples` heading gate (D-05/D-06): every pub *Builder/*Port/*Service must carry a compiling example
+	@echo "$(CYAN)Checking public API '# Examples' headings...$(NC)"
+	@./scripts/check-public-api-examples.sh
+
 .PHONY: clean-code
-clean-code: fmt lint lint-shell check doc-check ## Format, lint (Rust + shell), check code, and enforce the rustdoc zero-warning bar
+clean-code: fmt lint lint-shell check doc-check check-api-examples ## Format, lint (Rust + shell), check code, and enforce the rustdoc zero-warning bar and the public-API examples gate
 
 .PHONY: hooks
 hooks: ## Install git pre-commit and pre-push hooks

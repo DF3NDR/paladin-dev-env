@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36
 current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
 status: executing
-stopped_at: Completed 36-12-PLAN.md
-last_updated: "2026-09-17T23:41:27.603Z"
+stopped_at: "Phase 36: 12/13 plans complete; 36-13 at blocking human-verify checkpoint — maintainer pushes feature/phase-33, confirms the CI lint job's two documentation steps + Example Muster green, then fills 36-CI-EVIDENCE.md and resumes 36-13 (SUMMARY, then code review + verifier)"
+last_updated: "2026-09-17T23:58:59.936Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 36 execution started
+last_activity_desc: Phase 36 executed through 36-12; 36-13 awaiting maintainer CI checkpoint
 progress:
   total_phases: 18
   completed_phases: 15
@@ -1090,9 +1090,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T23:41:27.523Z
-**Stopped at:** Completed 36-12-PLAN.md
-**Resume file:** None
+**Last session:** 2026-09-17T23:58:59.860Z
+**Stopped at:** Phase 36: 12/13 plans complete; 36-13 at blocking human-verify checkpoint — maintainer pushes feature/phase-33, confirms the CI lint job's two documentation steps + Example Muster green, then fills 36-CI-EVIDENCE.md and resumes 36-13 (SUMMARY, then code review + verifier)
+**Resume file:** .planning/phases/36-rustdoc-zero-warning-bar-examples-currency/36-13-PLAN.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

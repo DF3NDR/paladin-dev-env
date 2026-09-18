@@ -18,8 +18,9 @@ this phase, never retrofitted into this paragraph's original text (D-00d amend-a
 
 - **Local re-seal head SHA (this plan, plan 37-01):** `522ab1d4c4c4b5a62a8bbbbc5e234b0a29edbadd` —
   the tip of `feature/phase-33` at dispatch of this plan (`docs(37): begin phase execution`).
-- **PR head at open (D-01):** `pending` — filled in by the plan that pushes the branch and opens
-  the release PR.
+- **PR head at open (D-01):** `1bb9406343b7fb965e0724ac7a689d45e4e5f61c` — the tip of
+  `feature/phase-33` when release PR #55 was opened (plan 37-06, 2026-09-18):
+  https://github.com/DF3NDR/paladin-dev-env/pull/55.
 - **Post-§11-tick final SHA (D-03):** `pending` — filled in after the maintainer ticks §11 in
   `.project/v0.10.0/09-program-acceptance-audit.md` and that tick commit is pushed.
 - **`main` merge commit (D-02, D-04):** `pending` — filled in after the maintainer merges the PR
@@ -280,6 +281,53 @@ No further rows are added to this table by this plan — the real pre-merge PR-h
 run on the post-§11-tick final SHA, the post-merge run on the tagged `main` merge commit, and the
 real release run are each supplied by later plans in this phase, per the wave structure `37-PATTERNS.md`
 and `37-RESEARCH.md` Q7 describe.
+
+---
+
+### Plan 37-06 — push + release PR opened (2026-09-18)
+
+**Push (D-01, Task 1 step 1):** `git push origin feature/phase-33`, hosted detached
+(`target/37-06/push.{log,exit,pid}`), ran `2026-09-18T18:50:42Z`–`18:54:12Z` (3m 30s). Exit `0`.
+Full pre-push hook stage ran and every hook reported `Passed` (`cargo fmt`, `cargo clippy
+--workspace --all-targets --all-features -- -D warnings`, `cargo build --workspace`, `cargo test
+--workspace --lib`, `check-doc-examples`, `check-doc-config`, `check-api-surface`, `doc-check`,
+`check-api-examples`) — `--no-verify` was never passed. Remote accepted the push:
+`6fe5b70a..1bb94063  feature/phase-33 -> feature/phase-33`.
+
+**Post-push verification:** `git fetch origin` then `git rev-parse HEAD` =
+`git rev-parse origin/feature/phase-33` = `1bb9406343b7fb965e0724ac7a689d45e4e5f61c` (confirmed
+equal). `git status --porcelain -- .project/current-exports.txt` — empty; the API-surface
+baseline was not regenerated and did not move.
+
+**Release PR (D-01, Task 1 step 2):** `gh pr list --head feature/phase-33 --state all` returned
+`[]` immediately before creation (no duplicate). `gh pr create --base main --head
+feature/phase-33 --title "release: v0.10.0 — Durable Agent Execution Runtime" --body-file
+target/37-06/pr-body.md` succeeded:
+
+- **PR #55:** https://github.com/DF3NDR/paladin-dev-env/pull/55
+- **Base:** `main` / **Head:** `feature/phase-33`
+- **Head SHA:** `1bb9406343b7fb965e0724ac7a689d45e4e5f61c`
+- Body verified to contain the literal phrase `merge-commit`, a not-squash/not-rebase sentence,
+  a pointer to this file (`37-CI-EVIDENCE.md`) and a pointer to `CHANGELOG.md`'s `[0.10.0]`
+  section (`gh pr view --json body` grepped for both markers — both matched).
+
+| Workflow | Run ID (URL) | Event | Conclusion | SHA | Notes |
+|---|---|---|---|---|---|
+| `ci.yml` | [35382874018](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382874018) | `push` | `pending` | `1bb9406343b7fb965e0724ac7a689d45e4e5f61c` | Triggered by the D-01 push; status `queued` at time of recording. Plan 37-07 fills in the conclusion and the `coverage` job's printed percentage. |
+| `ci.yml` | [35382953376](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382953376) | `pull_request` | `pending` | `1bb9406343b7fb965e0724ac7a689d45e4e5f61c` | Triggered by PR #55's open against the same head SHA; status `queued` at time of recording. |
+
+Both run IDs confirmed via `gh run list --branch feature/phase-33 --workflow ci.yml --limit 10
+--json databaseId,event,headSha,status,conclusion` filtered to `headSha ==
+1bb9406343b7fb965e0724ac7a689d45e4e5f61c` — exactly 2 rows matched, satisfying the plan's `R >=
+2` acceptance criterion.
+
+**Full Task 1 `<automated>` verify block, run after the PR existed:** all six chained assertions
+(`HEAD == origin/feature/phase-33`; `.project/current-exports.txt` unmodified; exactly 1 open PR;
+body contains `merge-commit`; body contains `37-CI-EVIDENCE`; >= 2 `ci.yml` runs at the pushed
+head SHA) passed together — `ALL VERIFY CHECKS PASSED (N=1, R=2)`.
+
+No merge, no tag, no workflow dispatch, no `gh run rerun`, and no force-push occurred in this
+plan. No credential-shaped text appears in the PR body or in this record.
 
 ---
 

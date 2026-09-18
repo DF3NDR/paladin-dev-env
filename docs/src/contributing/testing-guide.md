@@ -354,7 +354,7 @@ async fn test_openai_adapter_with_mock_server() {
         .await;
 
     // Act: Create adapter with mock URL
-    let adapter = OpenAiAdapter::new(
+    let adapter = OpenAIAdapter::new(
         "test-key",
         &mock_server.uri(),
     );

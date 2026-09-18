@@ -233,7 +233,7 @@ llm:
 
 pub fn create_llm_adapter(config: &LlmConfig) -> Result<Arc<dyn LlmPort>> {
     match config.provider.as_str() {
-        "openai" => Ok(Arc::new(OpenAiAdapter::new(config)?)),
+        "openai" => Ok(Arc::new(OpenAIAdapter::new(config)?)),
         "deepseek" => Ok(Arc::new(DeepSeekAdapter::new(config)?)),
         "anthropic" => Ok(Arc::new(AnthropicAdapter::new(config)?)),
         "custom" => Ok(Arc::new(CustomLlmAdapter::new(

@@ -110,7 +110,7 @@ use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Create in-memory garrison — max_entries and max_tokens are GarrisonConfig::new
     // constructor arguments, not with_max_entries()/with_max_tokens() builder calls.

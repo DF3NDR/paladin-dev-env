@@ -84,7 +84,7 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Create 3 experts with different perspectives
     let technical = create_paladin(llm_adapter.clone(),

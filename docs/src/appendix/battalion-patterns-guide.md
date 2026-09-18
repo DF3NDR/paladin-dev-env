@@ -40,7 +40,7 @@ use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Researcher Paladin
     let researcher = PaladinBuilder::new(llm_adapter.clone())
@@ -131,7 +131,7 @@ use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Technical Reviewer
     let technical = PaladinBuilder::new(llm_adapter.clone())
@@ -229,7 +229,7 @@ use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Define Paladins
     let topic_generator = create_paladin("TopicGenerator", "Generate blog post topics", llm_adapter.clone())?;
@@ -351,7 +351,7 @@ use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Commander - Breaks down project into tasks
     let commander = PaladinBuilder::new(llm_adapter.clone())

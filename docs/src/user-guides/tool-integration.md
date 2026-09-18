@@ -184,7 +184,7 @@ use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Connect to an MCP STDIO server: MCPStdioAdapter::new(command, args) is
     // a thin builder; connect() spawns the subprocess and performs the full
@@ -292,7 +292,7 @@ use paladin::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let llm_adapter = Arc::new(OpenAiAdapter::new().build()?);
+    let llm_adapter = Arc::new(OpenAIAdapter::new().build()?);
 
     // Connect to a remote MCP server over Streamable-HTTP. The bearer token
     // is read from an env var here in application code -- never hardcode a

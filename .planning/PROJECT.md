@@ -440,6 +440,17 @@ Security Paladin repo's token-economy systems analysis, findings F1-F8 / decisio
   banners, the ADR index page added, `docs.yml` gate + `make test` green, D-21 exit greps empty,
   `CHANGELOG.md` `[0.10.0]` `### Documentation` entry, `35-EVIDENCE.md` closure table; verification
   9/9 after the code-review fix loop repaired the engine example's discarded `EngineLimits`
+- Phase 36 — rustdoc zero-warning bar and examples currency: every one of the 143 `RD-nn` and 64
+  `EX-nn` rows in `34-AUDIT.md` §6 closed by ID (`CURR-11…15`) — **complete 2026-09-18**: both
+  ADR-0033 bars green (`cargo doc --workspace --no-deps` 65→0 warnings; `-D warnings --all-features`
+  exit 101→0) with no visibility widened and no new lint suppression, 14 new offline example
+  programs (59 gap capabilities), router parity restored in both HTTP-host examples, the gallery
+  index at 62/62 sections, `make doc-check` wired into `clean-code`, pre-push and the CI lint job,
+  `check-all-examples.sh` mirroring the 8-target CI split, CI run 35290763563 green on every gate,
+  `WINDOWS.md` #36/#37 fixed; surfaced two findings left open by design — #38 (`FailRun` builds
+  `ArmamentFailed.reason` unredacted) and 309 diagnostics hidden behind eight pre-existing
+  crate-level `#![allow(rustdoc::…)]` attributes (`36-…/deferred-items.md`, Phase 36.1); code
+  review 1 critical triaged no-fix + 3 warnings fixed; verification 5/5
 
 **Locked by the corpus overview §0 (operator-confirmed 2026-09-14):** the two-officer model —
 `Commissary` (input-side, per-call window rationing; keep, do not rename) and `Treasurer`
@@ -1841,3 +1852,8 @@ then `/gsd-complete-milestone v0.10.0`).*
 CURR-06…10 validated, 10/10 plans, verification 9/9; 15 of 17 phases, 177/177 plans; next:
 `/gsd-discuss-phase 36` Rustdoc Zero-Warning Bar & Examples Currency, `/gsd-secure-phase 35` and
 `/gsd-validate-phase 35` advisory).*
+
+*Last updated: 2026-09-18 after Phase 36 completion (Rustdoc Zero-Warning Bar & Examples Currency:
+143 `RD-nn` + 64 `EX-nn` rows closed, CURR-11…15 validated, 13/13 plans, verification 5/5, CI run
+35290763563 green; 16 of 18 phases, 190/190 plans; next: `/gsd-discuss-phase 36.1` Deferred Items
+Closure, `/gsd-secure-phase 36` and `/gsd-validate-phase 36` advisory).*

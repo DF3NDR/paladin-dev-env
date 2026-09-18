@@ -676,7 +676,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | SHIP-02 | Phase 29 | Complete |
 | SHIP-03 | Phase 29 | Complete |
 | SHIP-04 | Phase 29 | Complete |
-| SHIP-05 | Phase 37 | Complete |
+| SHIP-05 | Phase 37 | Pending |
 | VOCAB-01 | Phase 30 | Complete |
 | VOCAB-02 | Phase 30 | Complete |
 | VOCAB-03 | Phase 30 | Complete |

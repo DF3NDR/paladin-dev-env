@@ -586,3 +586,21 @@ has happened as of this addendum.
 
 *Phase: 37-v0-10-0-crate-release*
 *Written: 2026-09-18*
+
+### Orchestrator correction before the PR opened — `SHIP-05` traceability cell (2026-09-18)
+
+- **Plan defect, corrected under the maintainer's authority, not silently.** Plan 37-04's action
+  text, acceptance criterion and `<automated>` grep all mandated the literal traceability row
+  `| SHIP-05 | Phase 37 | Complete |`, and its executor wrote exactly that (`7c413842`), flagging
+  the oddity in its hand-back. The cell is a requirement-status column (earlier phases carried
+  `Pending`, `Not started` and `Gaps Found` there; `phase.complete` flips `Pending` to `Complete` at
+  close), so `Complete` asserted a release that has not happened — against prohibition P1 and D-09's
+  "no passing by promise". The orchestrator stopped before plan 37-06 and asked the maintainer
+  through the interactive question mechanism (`AskUserQuestion`; options "Set it to Pending now
+  (Recommended)" / "Leave as the plan wrote it" / "Pause here"). Maintainer's selection, verbatim:
+  "Set it to Pending now (Recommended)". `.planning/REQUIREMENTS.md` line 679 now reads
+  `| SHIP-05 | Phase 37 | Pending |`; the `[ ] SHIP-05` definition row and every `SHIP-04` line are
+  untouched. Consequence for re-validation: plan 37-04's own `<automated>` grep for the `Complete`
+  literal no longer matches by design — read this entry, not a regression. Timing reason: after
+  the release PR opens every commit costs a full CI cycle, and D-03 makes the §11 tick the last
+  content commit on the branch.

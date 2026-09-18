@@ -1,22 +1,23 @@
 # Phase 36 Rustdoc Zero-Warning Bar & Examples Currency — CI Evidence Record (plan 36-13)
 
 **Phase:** 36-rustdoc-zero-warning-bar-examples-currency
-**Branch:** `feature/phase-33` (unpushed — this branch has never had an `origin/feature/phase-33`
-upstream; `git rev-parse --abbrev-ref --symbolic-full-name @{u}` fails with "no upstream
-configured", exactly as `33-CI-EVIDENCE.md` recorded for the same branch one phase earlier)
+**Branch:** `feature/phase-33`, pushed with upstream `origin/feature/phase-33` by the maintainer.
 **Head SHA at seed time:** `12aaf84e367ed8ae40dd7a5931925ba2976c934b` — the tip of
 `feature/phase-33` carrying plans 36-01 through 36-13's Tasks 1 and 2 (the closure map, the two
-`WINDOWS.md` row flips, and the changelog append). This plan is paused at its Task 3 checkpoint;
-no further commit lands before the push this file's PENDING table describes.
-**Written:** 2026-09-17
+`WINDOWS.md` row flips, and the changelog append).
+**Head SHA at the recorded CI run:** `20195975c1c2665abb169b287fa178353d672bd2` — two maintainer
+commits landed on top of the seed-time head after the push (`2ca02eab chore: updated GSD config`,
+`20195975 chore: fix end of file automation`); neither touches `src/`, `crates/`, `examples/`,
+`Cargo.toml`/`Cargo.lock`, `Makefile` or `.github/workflows/`, so the local sweep below (captured
+at the seed-time head) remains valid evidence for the pushed tree's actual gate behavior.
+**Written:** 2026-09-17. **Updated:** 2026-09-18, with the real CI run recorded below.
 
 This record follows the `33-CI-EVIDENCE.md` house shape: a **Local sweep** of every gate this
 devcontainer can run without a pushed branch (all run and recorded below, against the actual
-tree at the head SHA above), and a **CI-run table** — here explicitly **PENDING**, because
-plan 36-13's own Task 3 is a `checkpoint:human-verify` the orchestrator directed this executor
-not to resolve: no `git push`, no remote branch, no PR, and no `gh run` invocation. The
-maintainer performs the push and records the real run themselves, filling in the second table
-below.
+tree at the head SHA above), and a **CI-run table** recording the real run the maintainer's push
+triggered. Per this plan's Task 3 instructions the push itself was performed by the maintainer,
+not by an executor; the run's job and step data below were read live via `gh run view` and
+`gh api …/jobs/<id>/logs` and cross-checked against the raw job logs.
 
 ---
 
@@ -64,34 +65,67 @@ From `.github/workflows/ci.yml` at the head SHA above:
 
 ---
 
-## CI-run table — PENDING, to be recorded by the maintainer
+## CI-run table — recorded, real pushed-branch run (D-12)
 
-**No CI run exists yet for any Phase 36 commit.** `feature/phase-33` has never been pushed, so
-there is no `origin/feature/phase-33` for a workflow to trigger against. This executor was
-explicitly directed not to push, not to open a PR, and not to invoke `gh run` in this session —
-pushing and recording the real run is the maintainer's own step, exactly as `33-CI-EVIDENCE.md`
-left it for the orchestrator one phase earlier.
+The maintainer pushed `feature/phase-33` (final head `20195975c1c2665abb169b287fa178353d672bd2`,
+two no-op-for-this-phase commits past the seed-time head recorded above). The push triggered
+four workflow runs on that head SHA; the relevant one is `.github/workflows/ci.yml` run
+**35290763563** — https://github.com/DF3NDR/paladin-dev-env/actions/runs/35290763563. (The other
+three same-push runs: `feature-flags.yml` 35290763619, `codeql.yml` 35290763575 — advisory-only
+per `security.instructions.md`, not a merge gate — and `pre-commit` 35290763583, which concluded
+`success`.)
 
-| Job | Step | Run ID | Conclusion | Notes |
+Data below was read live via `gh run view 35290763563 --json jobs` and cross-checked against the
+raw per-job logs downloaded with `gh api repos/<owner>/<repo>/actions/jobs/<id>/logs` (ANSI
+escapes stripped with `sed 's/\x1b\[[0-9;]*m//g'`) — every figure quoted in the Notes column was
+read directly out of the log text, not assumed from the step's green checkmark alone.
+
+| Job | Job ID | Step | Conclusion | Notes |
 |---|---|---|---|---|
-| `lint` | `Check documentation` | _(pending)_ | _(pending)_ | pre-existing default-features bar |
-| `lint` | `Check documentation (all features, -D warnings)` | _(pending)_ | _(pending)_ | **the step D-12 makes a required check — this row is the phase's actual acceptance evidence** |
-| `test` | `Run doc tests` | _(pending)_ | _(pending)_ | `cargo test --workspace --doc`, expect 462 passed / 0 failed / 210 ignored to match the local figure |
-| `examples` (`Example Muster (Feature Matrix)`) | all 7 build steps + `Assert all 62 example binaries were produced` | _(pending)_ | _(pending)_ | expect 62 expected == 62 found, matching the local `make check-examples` figure |
+| `lint` (`Code Quality`) | 105432882707 | `Check documentation` | **success** | Pre-existing default-features bar. Raw log (`ci-job-lint.log`, step starting line 1550) shows the pipeline `cargo doc --workspace --no-deps 2>&1 \| tee /tmp/doc-output.txt && ! grep -q "warning:" /tmp/doc-output.txt` running to `Finished`/`Generated` with **zero** `warning:` lines in the captured output — matches the local figure (0, down from 73 baseline) exactly. |
+| `lint` (`Code Quality`) | 105432882707 | `Check documentation (all features, -D warnings)` | **success** | **The step D-12 makes a required check — this is the phase's actual acceptance evidence.** Raw log (step starting line 1691) shows `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps` running to `Finished`/`Generated` with no error and step conclusion `success` — matches the local figure (exit 0, down from exit 101 baseline) exactly. |
+| `test` (`Unit Tests (stable)`) | 105432882852 | `Run doc tests` | **success** | `cargo test --workspace --doc`'s 13 per-crate `test result:` lines (`ci-job-unit.log`, step starting line 5134) sum to **462 passed / 0 failed / 210 ignored** — summed by hand from each crate's line (`paladin` 147/0/18, `paladin_core` 95/0/38, `paladin_battalion` 59/0/52, `paladin_content` 0/0/0, `paladin_doc_examples` 0/0/0, `paladin_eval` 4/0/2, `paladin_herald` 0/0/6, `paladin_llm` 8/0/0, `paladin_memory` 12/0/0, `paladin_notifications` 0/0/0, `paladin_ports` 137/0/94, `paladin_storage` 0/0/0, `paladin_web` 0/0/0) — **identical** to the local closing figure in `36-evidence/36-12-closing-measurement.txt`. `Unit Tests (beta)` (job 105432882777) ran the identical step with the same `success` conclusion. |
+| `examples` (`Example Muster (Feature Matrix)`) | 105434525009 | `Build examples (default features — 54 auto-discovered targets)` | **success** | First of 7 build invocations. |
+| `examples` (`Example Muster (Feature Matrix)`) | 105434525009 | `Build examples (vision — vision_analysis, vision_battalion)` | **success** | |
+| `examples` (`Example Muster (Feature Matrix)`) | 105434525009 | `Build examples (content-processing — document_processing)` | **success** | |
+| `examples` (`Example Muster (Feature Matrix)`) | 105434525009 | `Build examples (web-server — http_service_host, webhook_receiver)` | **success** | |
+| `examples` (`Example Muster (Feature Matrix)`) | 105434525009 | `Build examples (web-server,dev-ui — platform_api_client)` | **success** | |
+| `examples` (`Example Muster (Feature Matrix)`) | 105434525009 | `Build examples (redis-cache — node_result_cache)` | **success** | |
+| `examples` (`Example Muster (Feature Matrix)`) | 105434525009 | `Build examples (otel — observability_otel_export)` | **success** | |
+| `examples` (`Example Muster (Feature Matrix)`) | 105434525009 | `Assert all 62 example binaries were produced` | **success** | Raw log line: `Expected: 62 example binaries; found: 62` (`ci-job-examples.log` line 1733) — **identical** to the local `make check-examples` figure (62/62). |
 
-### What fills this table in
+**Job-level conclusions confirming the above:** `Code Quality` job → `success`; `Unit Tests
+(stable)` job → `success`; `Unit Tests (beta)` job → `success`; `Example Muster (Feature Matrix)`
+job → `success`.
 
-1. `git push -u origin feature/phase-33`
-2. Wait for the run to complete, then: `gh run list --branch feature/phase-33 --limit 5`
-3. `gh run view <id> --json jobs` — read each job's `conclusion` and each step's `conclusion`
-   for the four rows above, and fill in the run ID and conclusions.
-4. If any CI figure disagrees with the local figures in the Local sweep table above, the CI
-   figure is authoritative (D-03): record the difference plainly in a new subsection here,
-   do not edit the local sweep table to match, and do not explain the difference away.
+### Local-versus-CI agreement (D-03)
+
+Every figure recorded above **agrees exactly** with the local closing measurement in
+`36-evidence/36-12-closing-measurement.txt`: zero default-feature `warning:` lines, all-features
+documentation exit 0, 462 passed / 0 failed / 210 ignored doctests, and 62/62 example binaries.
+**No disagreement was found between the local and CI figures for any of the four gates this run
+proves.** Per D-03 the CI figure is what is recorded as authoritative in this table regardless;
+the fact that it matches the local figure exactly is stated here as a finding, not assumed.
+
+### Overall run status at recording time
+
+Run 35290763563 was still `status: in_progress` (`conclusion: ""`) when this table was recorded
+(2026-09-18, ~00:40 UTC) — the four gate-relevant jobs above (`Code Quality`, `Unit Tests
+(stable)`, `Unit Tests (beta)`, `Example Muster (Feature Matrix)`) had all already completed with
+conclusion `success`; the jobs still running at that time were `Integration Tests` and `Docker
+Build` (both `in_progress`, neither one of the four gates this checkpoint verifies).
+`Benchmark Regression Signal (Non-Blocking)` and `Publish Dry Run` had already concluded
+`skipped`, by design (non-blocking / tag-gated). This record states the overall run status
+honestly rather than claiming a final green the run had not yet reached at recording time; the
+four rows this checkpoint exists to prove are unambiguously `success` and do not depend on the
+remaining jobs' outcome.
 
 ---
 
 *Phase: 36-rustdoc-zero-warning-bar-examples-currency*
-*Written: 2026-09-17*
-*Status: local sweep complete (8/8 green); CI-run table pending the maintainer's push, per this
-plan's Task 3 checkpoint.*
+*Written: 2026-09-17. Updated: 2026-09-18 with the real CI run.*
+*Status: local sweep complete (8/8 green); CI run 35290763563 recorded — all four
+checkpoint-relevant jobs (`Code Quality`, `Unit Tests (stable)`, `Unit Tests (beta)`, `Example
+Muster (Feature Matrix)`) concluded `success`, with every measured figure matching the local
+closing measurement exactly. Overall run was still in progress (`Integration Tests`, `Docker
+Build` running) at recording time — see "Overall run status at recording time" above.*

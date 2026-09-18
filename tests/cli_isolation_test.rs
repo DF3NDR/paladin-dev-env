@@ -10,6 +10,14 @@
 //! cargo test --test cli_isolation
 //! cargo test --test cli_isolation --no-default-features
 //! ```
+//!
+//! The CLI-feature-absence guard below reads the root manifest's declared `[features]
+//! default` array rather than the current build's own compile-time feature
+//! configuration, because a compile-time check cannot distinguish `cli` being
+//! genuinely listed in `default` from `cli` merely having been switched on by a
+//! whole-workspace feature-union invocation such as `--all-features`. That
+//! indistinguishability is what made the same `--all-features` false failure get
+//! re-logged by three consecutive phases.
 
 // Deliberately do NOT import anything from `paladin::application::cli`.
 // Any such import would mean the test only compiles with `--features cli`,
@@ -140,11 +148,30 @@ fn test_max_loops_variants_without_cli() {
 /// If this test panics, it means `cli` was inadvertently added to `[features]
 /// default` in Cargo.toml. Remove it to keep the library compilation path
 /// free of CLI-specific dependencies.
+///
+/// This asserts the root manifest's declared `[features] default` array directly
+/// (via the `toml` crate, already a regular dependency of this package) rather than
+/// the current build's own compile-time feature configuration, so the guard gives
+/// the same answer under every invocation, including `cargo test --all-features`
+/// (D-15).
 #[test]
 fn test_cli_feature_is_not_default() {
-    #[cfg(feature = "cli")]
-    panic!(
-        "The `cli` feature is enabled during a library-only test run. \
-         Check that `cli` is NOT listed in the `default` feature set in Cargo.toml."
+    let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+    let manifest_text =
+        std::fs::read_to_string(manifest_path).expect("root Cargo.toml must be readable");
+    let manifest: toml::Value = manifest_text
+        .parse()
+        .expect("root Cargo.toml must be valid TOML");
+    let default_features = manifest
+        .get("features")
+        .and_then(|f| f.get("default"))
+        .and_then(|d| d.as_array())
+        .expect("[features] default must be an array in Cargo.toml");
+    let names: Vec<&str> = default_features.iter().filter_map(|v| v.as_str()).collect();
+
+    assert!(
+        !names.contains(&"cli"),
+        "The `cli` feature must not be listed in the `default` feature set in Cargo.toml. \
+         Check that `cli` is NOT listed in the `default` feature set in Cargo.toml. Saw: {names:?}"
     );
 }

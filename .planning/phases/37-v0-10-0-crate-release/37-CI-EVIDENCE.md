@@ -1098,3 +1098,55 @@ and `29-ACCEPTANCE-AUDIT.md` were not opened for writing. This entry and the
 locally on `feature/phase-33`, neither pushed.
 
 ---
+
+### D-16 read-only diagnosis — `release.yml` run `35404826303`, `Create Release` failed (2026-09-18, ~23:20Z)
+
+Recorded by the orchestrator under D-16 (diagnose read-only, write it down, hard-stop; completing
+forward, any re-run or re-dispatch, and any yank are the maintainer's). No agent triggered, re-ran
+or dispatched anything.
+
+- **Tag (maintainer act, verified from the remote).** `git ls-remote --tags origin 'v0.10*'`:
+  tag object `9282f4da38bb19f75ce3ed488c10454bdf254990`, peeled `^{}` =
+  `1d4a9724cc219b85856a23012543458d62559e47` — annotated, tagger `Am0rfu5`, subject
+  `v0.10.0 Durable Agent Execution Runtime`; the peeled commit IS the PR #55 merge commit and is
+  contained in `origin/main` (whose tip it still is). `ci.yml` run `35396397097` on that SHA
+  concluded `success` at `2026-09-18T23:05:47Z`, before the tag push (~23:13Z). D-12's resume
+  condition holds. Maintainer's reply, verbatim: "tagge v0.10.0".
+- **Runbook §1 — what reached crates.io: nothing.** Sparse-index read of all twelve publishable
+  crates (list derived from `cargo metadata`, `publish != false`), each probed for
+  `"vers":"0.10.0"`: `paladin-ai=0 paladin-battalion=0 paladin-ai-core=0 paladin-ports=0
+  paladin-llm=0 paladin-storage=0 paladin-content=0 paladin-eval=0 paladin-herald=0
+  paladin-memory=0 paladin-notifications=0 paladin-web=0`. No version is burned; there is no
+  half-published chain.
+- **Runbook §2 — reading the run** (`release.yml` run
+  [35404826303](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35404826303), `push` event,
+  ref `v0.10.0`, SHA `1d4a9724`): `Verify Tag From Main` success; `Pre-Publish Consistency Gate`
+  success; **`Create Release` failure** (job `105792320558`); `Test Suite` in progress at the time
+  of this reading; `Build and Push Docker Images`, `Build Binaries`, `Generate SBOM`,
+  `Finalize Release Body` skipped (each `needs: create-release`). `publish-crates` has
+  `needs: [test, create-release, check-release-consistency]`, so it will be **skipped**, not run —
+  which is why the registry is untouched.
+- **Failing output, verbatim:**
+  `./scripts/create-or-reuse-release.sh: line 79: printf: write error: Broken pipe` /
+  `##[error]Process completed with exit code 1.`
+- **Cause (traced, not assumed).** `scripts/create-or-reuse-release.sh` runs under
+  `set -euo pipefail` (line 54). `_cor_gh_call` line 79 is
+  `status_line=$(printf '%s\n' "${raw}" | head -n1 | tr -d '\r')`. `head -n1` exits after the first
+  line; if `printf` is still writing `${raw}` it takes `EPIPE`, `pipefail` makes the pipeline
+  non-zero, and `set -e` kills the script. It is a **race whose odds worsen with response size**:
+  the `0.10.0` release response is 46274 bytes (release body 42386 bytes) against 25677 bytes
+  (body 5591) for `v0.9.0`, which is why it never fired before. This is the only
+  `printf … | head -n1` in `scripts/*.sh`.
+- **Side effect that DID land.** The API call itself succeeded before the parse died: GitHub
+  Release `v0.10.0` exists — author `github-actions[bot]`, `draft=false`, `prerelease=false`,
+  `published_at=2026-09-18T23:13:36Z`, body 42386 bytes, **0 assets**.
+- **Runbook match.** None of §6's gate codes applies (the consistency gate passed). The nearest
+  guidance is §3 "Completing forward": "Re-run failed jobs" first — `create-release` looks up and
+  reuses the existing release object. Caveat the runbook does not know about: the reuse path goes
+  through the same `_cor_gh_call` line 79 with the same ~46 KB response, so a re-run can lose the
+  same race again. Losing it is harmless (nothing publishes), so it is repeatable.
+- **Why a script fix cannot help this tag.** `release.yml` checks out the tag ref, so its scripts
+  are the ones at `1d4a9724`. A fix on `main` is not seen by `v0.10.0` unless the tag moves — which
+  D-00c/D-02 and the main-only tag policy forbid. A fix is a `v0.10.1`/`v0.11.0` matter; carried as
+  a finding.
+- **Status: HARD STOP (D-16).** Awaiting the maintainer.

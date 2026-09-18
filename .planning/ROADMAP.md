@@ -1064,7 +1064,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 36-13-PLAN.md — Closure map, WINDOWS.md rows 36/37, CHANGELOG entries, CI evidence
+- [x] 36-13-PLAN.md — Closure map, WINDOWS.md rows 36/37, CHANGELOG entries, CI evidence
 
 **Cross-cutting constraints:**
 

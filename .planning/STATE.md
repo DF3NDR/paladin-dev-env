@@ -4,16 +4,16 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 36
 current_phase_name: Rustdoc Zero-Warning Bar & Examples Currency
-status: executing
-stopped_at: "Phase 36: 12/13 plans complete; 36-13 at blocking human-verify checkpoint — maintainer pushes feature/phase-33, confirms the CI lint job's two documentation steps + Example Muster green, then fills 36-CI-EVIDENCE.md and resumes 36-13 (SUMMARY, then code review + verifier)"
-last_updated: "2026-09-17T23:58:59.936Z"
+status: verifying
+stopped_at: Completed 36-13-PLAN.md — Phase 36 fully closed (13/13 plans complete)
+last_updated: "2026-09-18T00:42:44.582Z"
 last_activity: 2026-09-17
-last_activity_desc: Phase 36 executed through 36-12; 36-13 awaiting maintainer CI checkpoint
+last_activity_desc: Phase 36 execution started
 progress:
   total_phases: 18
-  completed_phases: 15
+  completed_phases: 16
   total_plans: 190
-  completed_plans: 189
+  completed_plans: 190
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 99%
+**Progress:** [██████████] 100%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -63,7 +63,7 @@ names. See MILESTONES.md.
 
 Phase: 36 (Rustdoc Zero-Warning Bar & Examples Currency) — EXECUTING
 Plan: 13 of 13
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-17 — Phase 36 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
@@ -164,6 +164,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36 P10 | ~1h50min | 3 tasks | 6 files |
 | Phase 36 P11 | ~1h10min | 3 tasks | 2 files |
 | Phase 36 P12 | ~1h | 2 tasks | 8 files |
+| Phase 36 P13 | 25min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -523,6 +524,9 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 36 Plan 11: all three tasks' README edits landed in one commit per D-26; fixed a pre-existing Demonstrates-line-count defect in cli_configs/maneuver.yaml (Rule 1) so the plan's own cross-check invariant could pass.
 - [Phase ?]: Both ADR-0033 rustdoc bars + doctests wired into make clean-code, pre-push, and CI lint job (D-11/D-12/D-13); per-crate all-features sweep deliberately excluded from doc-check (workspace command already gates).
 - [Phase ?]: scripts/check-all-examples.sh rewritten to mirror CI's Example Muster 7-invocation feature split exactly (D-14); webhook_receiver folded into the existing web-server step rather than given its own, since acceptance criteria count distinct required-features lists, not targets.
+- [Phase ?]: Phase 36 closure: all 207 audit rows (143 RD-nn + 64 EX-nn) traced by ID to a commit in 36-EVIDENCE.md; no row omitted or invented
+- [Phase ?]: WINDOWS.md rows 36 and 37 resolved to fixed via gsd-tools only; CHANGELOG.md [0.10.0] Documentation section gained four reader-facing Phase 36 bullets
+- [Phase ?]: Real pushed-branch CI run 35290763563 recorded proving the new all-features rustdoc documentation gate (D-12); every CI figure matched the local closing measurement exactly, no D-03 disagreement to arbitrate
 
 ### Pending Todos
 
@@ -1090,9 +1094,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-17T23:58:59.860Z
-**Stopped at:** Phase 36: 12/13 plans complete; 36-13 at blocking human-verify checkpoint — maintainer pushes feature/phase-33, confirms the CI lint job's two documentation steps + Example Muster green, then fills 36-CI-EVIDENCE.md and resumes 36-13 (SUMMARY, then code review + verifier)
-**Resume file:** .planning/phases/36-rustdoc-zero-warning-bar-examples-currency/36-13-PLAN.md
+**Last session:** 2026-09-18T00:42:44.472Z
+**Stopped at:** Completed 36-13-PLAN.md — Phase 36 fully closed (13/13 plans complete)
+**Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

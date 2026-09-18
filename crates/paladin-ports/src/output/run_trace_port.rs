@@ -126,6 +126,95 @@ pub enum RunTraceError {
 /// for genuine backend failures: connection errors, (de)serialization
 /// failures, and a schema version the running build does not know how to
 /// read.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use std::sync::Mutex;
+///
+/// use async_trait::async_trait;
+/// use paladin_core::platform::container::trace::{TraceEvent, TraceRecord};
+/// use paladin_core::platform::container::waypoint::ThreadId;
+/// use paladin_ports::output::run_trace_port::{RunTraceError, RunTracePort};
+///
+/// struct InMemoryTraceStore {
+///     records: Mutex<HashMap<String, Vec<TraceRecord>>>,
+/// }
+///
+/// #[async_trait]
+/// impl RunTracePort for InMemoryTraceStore {
+///     async fn append(&self, records: &[TraceRecord]) -> Result<(), RunTraceError> {
+///         let mut store = self.records.lock().unwrap();
+///         for record in records {
+///             store
+///                 .entry(record.thread_id.as_str().to_string())
+///                 .or_default()
+///                 .push(record.clone());
+///         }
+///         Ok(())
+///     }
+///
+///     async fn read(
+///         &self,
+///         thread: &ThreadId,
+///         after_seq: u64,
+///         limit: u32,
+///     ) -> Result<Vec<TraceRecord>, RunTraceError> {
+///         let store = self.records.lock().unwrap();
+///         let rows = store
+///             .get(thread.as_str())
+///             .map(|rows| {
+///                 rows.iter()
+///                     .filter(|r| r.seq > after_seq)
+///                     .take(limit as usize)
+///                     .cloned()
+///                     .collect()
+///             })
+///             .unwrap_or_default();
+///         Ok(rows)
+///     }
+///
+///     async fn prune_thread(
+///         &self,
+///         thread: &ThreadId,
+///         before_superstep: u64,
+///     ) -> Result<u64, RunTraceError> {
+///         let _ = (thread, before_superstep);
+///         Ok(0)
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let store = InMemoryTraceStore {
+///         records: Mutex::new(HashMap::new()),
+///     };
+///     let thread = ThreadId::new("thread-1").unwrap();
+///
+///     // A thread that was never written to reads back empty, not an error.
+///     let empty = store.read(&thread, 0, 100).await.unwrap();
+///     assert!(
+///         empty.is_empty(),
+///         "an unwritten thread reads as empty, never an error"
+///     );
+///
+///     let record = TraceRecord {
+///         thread_id: thread.clone(),
+///         run_id: None,
+///         seq: 1,
+///         at: chrono::Utc::now(),
+///         event: TraceEvent::RunStarted {
+///             run_id: None,
+///             graph_fingerprint: "fp".to_string(),
+///         },
+///     };
+///     store.append(&[record]).await.unwrap();
+///
+///     let rows = store.read(&thread, 0, 100).await.unwrap();
+///     assert_eq!(rows.len(), 1, "the appended record round-trips back out");
+/// }
+/// ```
 #[async_trait]
 pub trait RunTracePort: Send + Sync {
     /// Append a batch of [`TraceRecord`]s.

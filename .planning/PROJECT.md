@@ -113,6 +113,8 @@ trustworthy enough to anchor a gate.
 
 ## Current State
 
+**Phase 36.1 complete (2026-09-18)** — deferred-items-closure, the inserted Release Readiness phase (CURR-16…21; 14 plans in 6 waves, run sequentially on the main checkout): every unowned entry in the Phase 31, 32, 34, 35 and 36 `deferred-items.md` registers, ledger rows 36-38 and the two `todos/pending/` files is now fixed, waived with a written reason, or re-homed with an owner and a 2026-10-16 re-check date, and `WINDOWS.md` reads `open_count: 0` (55 rows; rows 40-55 minted by this phase, row 39 an accidental executor row waived on the record). In the tree: both `ToolErrorMode::FailRun` arms now sanitize the `ArmamentFailed` reason (row 38); the `cli_isolation` guard asserts the manifest's default feature list and passes under `--all-features`; all 101 public-API entry points carry a `# Examples` doctest (19 added, `?`-style) and `make check-api-examples` gates `clean-code`, pre-push and the CI lint job; the six `docs/src` prose defects are closed and the docs gate is green; PROJECT.md's examples figures, ADR-0033's eight kept rustdoc suppressions, the RustFS v2 line (FUT-10) and the CHANGELOG are recorded. Verification `passed` 6/6 (re-verified after the four code-review fixes), CI run 35329107346 green on every required job (coverage 90.44 % lines), `make api-surface` unchanged at 3959 items. Next: `/gsd-plan-phase 37` (v0.10.0 Crate Release); `/gsd-secure-phase 36.1` and `/gsd-validate-phase 36.1` advisory.
+
 **Phase 34 complete (2026-09-17)** — documentation-currency-audit, the first Release Readiness phase
 (CURR-01…05; read-only, every commit `.planning/`-only, proven by `git diff --stat ee1fb160..HEAD -- . ':!.planning'`
 empty): one canonical `34-AUDIT.md` (2,377 lines) measures the documentation debt against the Phase 22-33
@@ -1861,7 +1863,4 @@ CURR-06…10 validated, 10/10 plans, verification 9/9; 15 of 17 phases, 177/177 
 `/gsd-discuss-phase 36` Rustdoc Zero-Warning Bar & Examples Currency, `/gsd-secure-phase 35` and
 `/gsd-validate-phase 35` advisory).*
 
-*Last updated: 2026-09-18 after Phase 36 completion (Rustdoc Zero-Warning Bar & Examples Currency:
-143 `RD-nn` + 64 `EX-nn` rows closed, CURR-11…15 validated, 13/13 plans, verification 5/5, CI run
-35290763563 green; 16 of 18 phases, 190/190 plans; next: `/gsd-discuss-phase 36.1` Deferred Items
-Closure, `/gsd-secure-phase 36` and `/gsd-validate-phase 36` advisory).*
+*Last updated: 2026-09-18 after Phase 36.1 completion (Deferred Items Closure: five registers, ledger rows 36-38 and two todos dispositioned, `open_count: 0`, CURR-16…21 validated, 14/14 plans, verification 6/6, CI run 35329107346 green; 17 of 18 phases, 204/204 plans; next: `/gsd-plan-phase 37` v0.10.0 Crate Release, `/gsd-secure-phase 36.1` and `/gsd-validate-phase 36.1` advisory).*

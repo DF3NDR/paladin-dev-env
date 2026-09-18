@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37
 current_phase_name: v0.10.0 Crate Release
 status: executing
-stopped_at: Completed 37-01-PLAN.md (D-17 deferred, D-13 non-dispatch recorded)
-last_updated: "2026-09-18T15:55:55.187Z"
+stopped_at: Completed 37-02-PLAN.md (semver-checks + MSRV, environment interruption recorded and recovered per maintainer decision)
+last_updated: "2026-09-18T17:10:03.703Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 37 execution started
 progress:
   total_phases: 18
   completed_phases: 17
   total_plans: 215
-  completed_plans: 205
+  completed_plans: 206
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `33-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 95%
+**Progress:** [██████████] 96%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 37 (v0.10.0 Crate Release) — EXECUTING
-Plan: 2 of 11
+Plan: 3 of 11
 Status: Ready to execute
 Last activity: 2026-09-18 — Phase 37 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -182,6 +182,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36.1 P13 | ~28min | 3 tasks | 3 files |
 | Phase 36.1 P14 | ~20min | 2 tasks | 1 files |
 | Phase 37 P01 | 35min | 3 tasks | 2 files |
+| Phase 37 P02 | 50min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -566,6 +567,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: D-17 checkpoint: maintainer reply classified as deferred (verbatim recorded in 37-CI-EVIDENCE.md); runbook owed before plan 37-08's tag hand-off
 - [Phase ?]: D-13 dry-run dispatch confirmed not attempted per traced Q1 conclusion; no rc/shadow tag created
 - [Phase ?]: Environment addendum: maintainer ran cargo clean; free space re-baselined at 135G for plan 37-02/37-03 preconditions (Task 1's 18G figure preserved, not edited)
+- [Phase ?]: 37-02: Interrupted semver-checks run (host DNS outage + reboot) classified not-measured, not red; maintainer authorized exactly one full 11-package re-run of the unmodified semver-loop.sh (verbatim: 'Record, then full re-run (Recommended)'); MSRV recorded from the pre-outage log, not re-run
 
 ### Pending Todos
 
@@ -1133,8 +1135,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T15:55:55.081Z
-**Stopped at:** Completed 37-01-PLAN.md (D-17 deferred, D-13 non-dispatch recorded)
+**Last session:** 2026-09-18T17:09:59.105Z
+**Stopped at:** Completed 37-02-PLAN.md (semver-checks + MSRV, environment interruption recorded and recovered per maintainer decision)
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

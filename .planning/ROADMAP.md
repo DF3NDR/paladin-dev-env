@@ -1158,7 +1158,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 37-02-PLAN.md — Local re-seal: D-06 gate rows 1, 2, 3, 4, 5 and 7 on the final pre-merge tree
+- [x] 37-02-PLAN.md — Local re-seal: D-06 gate rows 1, 2, 3, 4, 5 and 7 on the final pre-merge tree
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

@@ -218,6 +218,44 @@ abort count >= 12, zero `test result: FAILED` lines, `paladin-doc-examples` abse
 `Uploading` list — were asserted directly against `target/37-03/g6.log`/`g6.exit` after the one run
 completed, not re-run. No gate's pass/fail meaning was altered by this substitution.
 
+### Plan 37-03 Task 2 head SHA (dispatch — adjacent checks)
+
+`git rev-parse HEAD` at dispatch of Task 2 → `d2db617b0d1307a388fc44730810e24c602b6938` (Task 1's
+own evidence-file commit). The source tree under test is byte-identical to gate row 6's own head
+`ed0d3b06` — Task 1's commit touched only `37-CI-EVIDENCE.md`. Run **after** the dry run per the
+plan's own ordering instruction (heavy gates do not stack needlessly); both hosted detached at
+`target/37-03/{security,apisurface}.{log,exit,pid}` per the same protocol as gate row 6.
+
+| 30 | `make security` (`cargo audit` + `cargo deny check`, head `d2db617b`) | Ran `2026-09-18T17:57:44Z`–`17:57:49Z` (5s — advisory DB and dependency tree already warm from gate row 6's own `cargo audit` leg minutes earlier). Exit `0`. `cargo audit`: `warning: 10 allowed warnings found` — the identical count and identical crate/RUSTSEC-ID set as gate row 6's `release-check` leg and as `33-CI-EVIDENCE.md`/§11's own recorded figure (no new, non-allowlisted advisory). `cargo deny check` verbatim verdict line: `advisories ok, bans ok, licenses ok, sources ok` — matching the §11 four-section model exactly. | ✅ PASS |
+| 31 | `make api-surface` (`scripts/check-api-surface.sh`, head `d2db617b`) | Ran `2026-09-18T17:58:00Z`–`18:00:46Z` (2m 46s). Exit `0`. `✅ API surface extracted to /tmp/tmp.Xoax1ovIYA (3959 items)` — identical item count to `09-program-acceptance-audit.md` §11's own recorded reading. `✅ API surface unchanged` — zero drift against `.project/current-exports.txt`. `git status --porcelain -- .project/current-exports.txt` confirmed empty after the run (baseline not moved; `make api-surface-update` was never invoked). | ✅ PASS |
+
+`git status --porcelain` confirmed empty (full tree) after both checks; free space after both:
+**110G** (api-surface's temp-directory extraction does not persist).
+
+### Local sweep — closing verdict tally (plan 37-03, Task 2, 2026-09-18)
+
+**31 numbered Local sweep rows accounted for** (rows 1-31 above), matching the file's own row
+count exactly:
+
+- **29 unconditional local passes** (✅ PASS): rows 1-10, 12, 14-31 — every D-06 hard-assertion
+  gate row (1 offline register guards + §9.2 set-equality, 2 `v0_9_config_boot`, 3 OpenAPI golden
+  diff, 4 `cargo semver-checks` ×11 packages + tally, 5 MSRV floor, 6 `make publish-dry-run`
+  packaging, 7 CHANGELOG completeness hard assertions), plus this plan's own two adjacent checks
+  (`make security`, `make api-surface`), plus five of gate row 7's seven recorded topic-count
+  readings (RAG, TokenUsage, Commissary, mdBook, examples).
+- **2 named carried conditions** (⚠️ RECORDED, not a gate): rows 11 and 13 — the `rustdoc` and
+  `intra-doc` documentation-phase topic-count readings inside gate row 7's recorded-not-gated
+  scope, both `0`, both explicitly not a D-14 stop per the plan text that authored them (see
+  "Findings carried forward" above) and both left unedited in `CHANGELOG.md`.
+- **0 rows read as CI-attributed.** No numbered Local sweep row in this file claims the 82%
+  workspace line-coverage floor — that gate is named honestly in the closing summary below as
+  structurally unmeasurable here, never assigned a row number or a verdict cell in this table.
+
+All seven of D-06's gate rows (1 through 7) now carry at least one Local sweep entry: rows 1-2 →
+gate 1; row 14 → gate 2; row 15 → gate 3; rows 17-28 → gate 4; row 16 → gate 5; row 29 → gate 6;
+rows 4-13 → gate 7. Rows 30-31 are the two adjacent house-sweep checks (`make security`, `make
+api-surface`), not numbered D-06 gate rows themselves.
+
 ---
 
 ## CI-run table
@@ -498,6 +536,51 @@ maintainer at a blocking-human checkpoint. Task 3 (this plan) records the post-c
 state, the D-13 non-dispatch decision, and the first carried findings. The full D-06 seven-gate
 re-seal sweep, the D-01 push/PR, the D-02 merge+tag checkpoint, the D-08 full registry table, the
 real release run, and the MILESTONES.md entry are all later plans' work, not this plan's.
+
+---
+
+**Addendum — 2026-09-18, plan 37-03 (append-only, D-00d; nothing above this addendum is edited).**
+This addendum supersedes nothing above — it records what plan 37-03 (not plan 37-01) proves, at
+the point the Local sweep closes.
+
+**What this record proves:** every one of D-06's seven gate rows now has a Local sweep entry
+(rows 1-31 above — plan 37-02 supplied gate rows 1, 2, 3, 4, 5 and 7; this plan supplies gate row
+6, the heaviest and last of the seven, plus the two adjacent house-sweep checks). All 31 numbered
+rows are either an unconditional local pass (29 rows) or a named, non-blocking carried condition
+(2 rows, both pre-existing CHANGELOG wording gaps, neither a D-14 stop) — 0 rows are labelled a
+local pass for anything CI-attributed. Concretely, on the phase's local head SHA
+(`ed0d3b06`/`d2db617b`, byte-identical source tree throughout Tasks 1-2 of this plan): the full
+`release-check` chain (`clean-code` → workspace tests, 40/40 `test result:` lines `ok`, 0 failed →
+doctests → `cargo audit`, 10 allowed pre-existing warnings, no new advisory → `build-release`, a
+real 13m 12s release-profile build) passed; `cargo publish --workspace --dry-run` packaged and
+verified **12** crates in dependency order with `paladin-doc-examples` correctly absent from the
+uploaded set; `make security` (`cargo audit` + `cargo deny check`) passed with the identical
+allowed-warning count and the `advisories ok, bans ok, licenses ok, sources ok` verdict; `make
+api-surface` extracted 3959 items with zero drift against the committed baseline. The whole tree
+stayed clean (`git status --porcelain` empty) throughout, and `.project/current-exports.txt` was
+never regenerated.
+
+**What this record does NOT claim (two paragraphs, per this plan's own instruction):**
+
+*(a) The 82% workspace line-coverage floor (ADR-0006) is CI-attributed, not a local pass, and this
+record makes no claim otherwise.* Docker is absent from this devcontainer — `docker: command not
+found`, confirmed structurally in `09-program-acceptance-audit.md`'s own §11 reading and unchanged
+here — so `make coverage` (`cargo llvm-cov --workspace --features integration-tests,llm-all --lcov
+--output-path lcov.info --fail-under-lines 82 -- --test-threads=1`) cannot complete locally in this
+environment; it was not attempted by this plan, exactly as neither plan 37-02 nor plan 37-01
+attempted it. The CI `coverage` job on the pre-merge PR run is the **sole evidence source** for
+this gate (D-00e) — no local figure, rounded, re-derived, or otherwise, stands in for it anywhere
+in this file. Plan 37-07 is the plan that records that job's conclusion and its printed percentage
+**to the exact digits CI prints**, and per D-14 a job conclusion other than success is a stop there
+even if the printed number would read above the floor by eye.
+
+*(b) No CI run on the final pre-merge SHA or on the `main` merge commit is claimed by this file
+yet.* The `CI-run table` section below this addendum still carries only the read-only `gh` query
+results plan 37-01 recorded against SHAs that predate this phase's own commits — proof that an
+earlier point on this branch was fully green across the pushable workflows, not proof of anything
+about the local re-seal work this plan and plan 37-02 just performed. The real pre-merge PR-head
+run is plan 37-07's; the post-merge run on the tagged `main` merge commit is plan 37-09's. Neither
+has happened as of this addendum.
 
 ---
 

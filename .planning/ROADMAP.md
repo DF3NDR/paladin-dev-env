@@ -1166,7 +1166,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 37-04-PLAN.md — Mint `SHIP-05`, resolve the ROADMAP requirements line, correct the STATE.md evidence pointer, and add one dated forward-pointer line to each prior evidence file
+- [x] 37-04-PLAN.md — Mint `SHIP-05`, resolve the ROADMAP requirements line, correct the STATE.md evidence pointer, and add one dated forward-pointer line to each prior evidence file
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

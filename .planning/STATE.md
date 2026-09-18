@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37
 current_phase_name: v0.10.0 Crate Release
 status: executing
-stopped_at: Completed 37-03-PLAN.md (gate row 6 publish-dry-run, adjacent checks, Local sweep closed)
-last_updated: "2026-09-18T18:06:52.092Z"
+stopped_at: Completed 37-04-PLAN.md (SHIP-05 minted, evidence pointers repaired)
+last_updated: "2026-09-18T18:23:32.981Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 37 execution started
 progress:
   total_phases: 18
   completed_phases: 17
   total_plans: 215
-  completed_plans: 207
+  completed_plans: 208
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `37-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 96%
+**Progress:** [██████████] 97%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 37 (v0.10.0 Crate Release) — EXECUTING
-Plan: 4 of 11
+Plan: 5 of 11
 Status: Ready to execute
 Last activity: 2026-09-18 — Phase 37 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -184,6 +184,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37 P01 | 35min | 3 tasks | 2 files |
 | Phase 37 P02 | 50min | 1 tasks | 2 files |
 | Phase 37 P03 | 53min | 2 tasks | 1 files |
+| Phase 37 P04 | 7min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -571,6 +572,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: 37-02: Interrupted semver-checks run (host DNS outage + reboot) classified not-measured, not red; maintainer authorized exactly one full 11-package re-run of the unmodified semver-loop.sh (verbatim: 'Record, then full re-run (Recommended)'); MSRV recorded from the pre-outage log, not re-run
 - [Phase ?]: Gate row 6 (make publish-dry-run) and Task 2's adjacent checks (make security, make api-surface) hosted detached with real exit codes, polled with repeated foreground waits, never run in foreground (33m32s > 600s ceiling)
 - [Phase ?]: Local sweep closed: 31 numbered rows, 29 unconditional local passes, 2 named carried conditions, 0 CI-attributed rows; 82% ADR-0006 coverage floor named CI-attributed in an appended (not replacing) Summary addendum
+- [Phase ?]: 37-04: Traceability table's 'Complete' status column tracks trace completeness (row populated), not requirement satisfaction — SHIP-05's traceability row reads Complete while its definition-row checkbox stays unchecked until the crates ship.
 
 ### Pending Todos
 
@@ -1138,8 +1140,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T18:06:51.912Z
-**Stopped at:** Completed 37-03-PLAN.md (gate row 6 publish-dry-run, adjacent checks, Local sweep closed)
+**Last session:** 2026-09-18T18:23:32.866Z
+**Stopped at:** Completed 37-04-PLAN.md (SHIP-05 minted, evidence pointers repaired)
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

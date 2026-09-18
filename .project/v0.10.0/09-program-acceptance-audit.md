@@ -1553,7 +1553,79 @@ Verdict: PASS with one carried condition
 
 ---
 
+## 12. Re-seal for v0.10.0 release (Phase 37, SHIP-05)
+
+Phases 34, 35, 36 and 36.1 landed on `feature/phase-33` after §11 above was written, and this
+phase's (Phase 37, SHIP-05) goal is the release itself rather than mere releasability (SHIP-04,
+closed by §11) — so the full seven-gate release list D-06 names was re-run in full on this
+phase's own local head, ahead of the PR being opened and CI being asked to reconfirm it.
+
+**Head SHA this section's gates were measured on:** the local re-seal head SHA recorded in
+`37-CI-EVIDENCE.md`'s Provenance block, **`522ab1d4c4c4b5a62a8bbbbc5e234b0a29edbadd`** — the tip
+of `feature/phase-33` at dispatch of plan 37-01. Individual gate rows below ran on later
+doc-only commits as the sweep progressed across plans 37-01 through 37-03 (`028e9726`,
+`cb2ebf3e`, `af21ede9`, `ed0d3b06`/`d2db617b`); each of those commits only ever touched
+`37-CI-EVIDENCE.md` itself (per that file's own Task head-SHA notes), never a file under `src/`
+or `crates/*/src/`, so the source tree measured throughout is byte-identical to `522ab1d4`'s and
+to this phase's final pre-merge tree. This phase modifies no file under `src/` or `crates/*/src/`
+— the measured tree is identical to the shipped tree. All wall-clock timings recorded below are
+**cold-build timings**: the maintainer ran `cargo clean` ahead of this phase's local sweep
+(`37-CI-EVIDENCE.md`'s pre-flight addendum), so none of the durations below are comparable to any
+prior phase's warm-cache figures.
+
+| # | Gate | Command | SHA | Result | Evidence |
+|---|------|---------|-----|--------|----------|
+| 1 | `MIGRATION.md` no-TBD marker + §9.2 register ↔ semver-checks allowlist set-equality | `grep -c TBD MIGRATION.md` then `make check-migration-allowlist` | `522ab1d4` / `028e9726` | `COUNT=0`; 15 `crate\|type` pairs in both `MIGRATION.md` §9.2 and `.cargo/semver-checks-allowlist.toml`, set-equal in both directions — same pair count as §11's own 15. **PASS** | `37-CI-EVIDENCE.md` Local sweep rows 1-2 |
+| 2 | `v0_9_config_boot` frozen compat target | `cargo test --features web-server --test v0_9_config_boot` | `cb2ebf3e` (source tree == `028e9726`) | 9 passed, 0 failed — same 9-test count as §11. **PASS** | `37-CI-EVIDENCE.md` Local sweep row 14 |
+| 3 | OpenAPI golden diff (path-restricted) | `cargo test -p paladin-web --test openapi_golden_v0_9` | `cb2ebf3e` (source tree == `028e9726`) | 7 passed, 0 failed — same 7-test count as §11. **PASS** | `37-CI-EVIDENCE.md` Local sweep row 15 |
+| 4 | `cargo semver-checks` for the eleven baselined crates vs `0.9.0` | `cargo semver-checks check-release --package <pkg> --default-features --baseline-version 0.9.0`, once per crate | `af21ede9` (single post-outage re-run, source tree == `028e9726`) | 11/11 PASS, identical `major change` / `0 checks: 0 pass, 254 skip` / `no semver update required` shape to §11. `paladin-eval` excluded — it has no published `0.9.0` baseline (it did not exist at `0.9.0`). **Honestly recorded:** the first attempt at this sweep was interrupted by a host DNS outage and reboot (16:22-16:35 UTC, 2026-09-18) after 7 of 11 packages had produced a verdict; the maintainer authorized exactly one full re-run of the loop, and this row's result is that single complete re-run, not the interrupted attempt. **PASS (11/11)** | `37-CI-EVIDENCE.md` Local sweep rows 17-28 (tally row 28); the interrupted attempt is recorded separately under `37-CI-EVIDENCE.md`'s Findings, "Plan 37-02, Task 3 — environment interruption during the first semver-checks re-run" |
+| 5 | MSRV floor, toolchain 1.88 | `env RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --all-features --all-targets` | `af21ede9` (source tree == `028e9726`) | `Finished` in 5m 07s (cold build), 0 warnings. This run completed before the 16:22 UTC outage and was **not** re-run — only the semver loop was re-run, per the maintainer's decision. **PASS** | `37-CI-EVIDENCE.md` Local sweep row 16 |
+| 6 | `make publish-dry-run` — twelve crates, dependency order | `make publish-dry-run` | `ed0d3b06` (source tree == `028e9726`) | Exit `0`; 40/40 `test result:` lines `ok`, 0 failed; `cargo audit` 10 allowed pre-existing warnings, no new advisory introduced; `cargo publish --workspace --dry-run` uploaded 12 crates in dependency order, each aborting on dry run as expected; `paladin-doc-examples` (`publish = false`) correctly absent from the uploaded set. 33m 32s wall time on a cold `target/` (post `cargo clean`) — recorded as a cold-build timing, not a regression against any warm-cache figure. **PASS (12/12, dependency order)** | `37-CI-EVIDENCE.md` Local sweep row 29 |
+| 7 | `CHANGELOG.md` `[0.10.0]` completeness | `make check-gates` (bundles `check-changelogs`) plus three hard-assertion greps (`## [Unreleased]` count, `## [0.10.0]` count, withheld `v0.11.0` string count) plus seven recorded topic-count readings | `028e9726` | **Hard assertions** (the four that actually gate this row) all green: `check-changelogs` sub-target of `make check-gates` PASS; `## [Unreleased]` count `0`; `## [0.10.0]` count `1`; `v0[.]11[.]0` string count `0` across `CHANGELOG.md` + `MIGRATION.md`. Of the **seven recorded topic-count readings** (not gate conditions themselves), five are non-zero (RAG `22`, TokenUsage `4`, Commissary `15`, mdBook `1`, examples `7`); two read `0` — `rustdoc` and `intra-doc` — and are carried below as findings, not gate failures, per this phase's own rule that a documentation-phase topic-count reading of zero is recorded, not a red gate. **PASS** (hard assertions), **RECORDED** (two topic readings) | `37-CI-EVIDENCE.md` Local sweep rows 3-13 (row 3 = `make check-gates`, whose `check-changelogs` sub-target is one of the four hard assertions; rows 4-6 = the remaining hard-assertion greps; rows 7-13 = the seven recorded topic-count readings) |
+
+Two further gates §11 also recorded as outside its own seven-row list are carried forward here
+unchanged in kind, neither folded into the table above. The **82% workspace line-coverage floor**
+(ADR-0006) remains **CI-attributed, not a local pass**: this devcontainer has no Docker (D-00e),
+so `make coverage` cannot complete locally and was not attempted by any plan in this phase's local
+sweep; its conclusion and printed percentage are pending, to be recorded in `37-CI-EVIDENCE.md`'s
+CI-run table once the pre-merge PR's `coverage` job completes (plan 37-07) — this section makes no
+claim about that figure. The **API-surface baseline** (`make api-surface`) was re-run as an
+adjacent house-sweep check: `3959 items`, identical to §11's own recorded count, zero drift
+against `.project/current-exports.txt` (`37-CI-EVIDENCE.md` Local sweep row 31) — the baseline is
+recorded unmoved, not regenerated.
+
+**Findings:**
+- The stale "eleven publishable crates" figure persists in
+  `docs/src/contributing/development-setup.md`, in `docs/src/appendix/release-automation.md`'s
+  "Canonical Publish Order" section, and in `docs/src/appendix/release-recovery.md` §1's example
+  loop — the tree (`cargo metadata`) says twelve; per D-00f the shipped tree outranks these
+  documents. Recorded, not edited — a v0.11.0 docs-currency fix (`37-CI-EVIDENCE.md` Findings,
+  "Carried documentation findings").
+- `docs/src/appendix/release-automation.md`'s per-crate Trusted Publishing table and Credential
+  History ledger carry no `paladin-eval` row — the D-17 first-publish bootstrap is deferred (the
+  maintainer's Task 2 reply, `37-CI-EVIDENCE.md` Registry verification section) and the row will
+  not exist until the bootstrap actually happens.
+- No `workflow_dispatch` dry run of `release.yml` was attempted (D-13). Traced and recorded
+  reason: no single `tag` input value satisfies `verify-tag-source`'s ref resolution, the
+  changelog-heading match, and the manifest match, all at once, before a ref literally named
+  `v0.10.0` exists — D-13's own documented fallback (go straight to the tag; no rc tag, no shadow
+  tag) applies (`37-CI-EVIDENCE.md` Findings, "D-13 — dry-run dispatch not attempted").
+- `CHANGELOG.md`'s `[0.10.0]` heading carries the date `2026-09-10`, earlier than the actual
+  release date — recorded, not edited; neither D-06 gate row 7 nor
+  `scripts/check-release-consistency.sh` reads the date (`37-CI-EVIDENCE.md` Findings, "Carried
+  documentation findings").
+
+**Scope of this section.** Section 12 extends the evidence basis of the existing §11 sign-off box
+— `- [ ] **The v0.10.0 tag may be cut**` above — to this phase's final commit. **Section 12 mints
+no new sign-off box and edits no word of §11**: the box the maintainer ticks remains §11's own,
+and what it now covers is §11 plus this section (§12) plus `37-CI-EVIDENCE.md`'s complete Local
+sweep and CI-run tables. The maintainer signs §11's existing box against that combined evidence
+basis, at the phase's own checkpoint (plan 37-08), never against a box this section creates.
+
+---
+
 *Corpus document: `.project/v0.10.0/09-program-acceptance-audit.md`*
 *Phase: 29-program-gates-release*
 *Sections 1-5 by plan 29-04; sections 6-9 by plan 29-07; section 10 by plan 29-09.*
 *Section 11 by Phase 33 plan 33-06 (COMM-04 re-seal after Phases 30-33).*
+*Section 12 by Phase 37 plan 37-05 (SHIP-05 release re-seal).*

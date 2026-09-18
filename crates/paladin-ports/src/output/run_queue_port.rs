@@ -111,6 +111,74 @@ pub enum QueueError {
 ///
 /// Implementations must be `Send + Sync`: multiple worker tasks dequeue
 /// concurrently.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::VecDeque;
+/// use std::sync::Mutex;
+/// use std::time::Duration;
+///
+/// use async_trait::async_trait;
+/// use chrono::Utc;
+/// use paladin_core::platform::container::run::RunId;
+/// use paladin_core::platform::container::waypoint::ThreadId;
+/// use paladin_ports::output::run_queue_port::{
+///     LeaseToken, LeasedRun, QueueError, QueuedRun, RunQueuePort,
+/// };
+///
+/// struct InMemoryQueue {
+///     pending: Mutex<VecDeque<QueuedRun>>,
+/// }
+///
+/// #[async_trait]
+/// impl RunQueuePort for InMemoryQueue {
+///     async fn enqueue(&self, run: QueuedRun) -> Result<(), QueueError> {
+///         self.pending.lock().unwrap().push_back(run);
+///         Ok(())
+///     }
+///
+///     async fn dequeue(&self, _lease: Duration) -> Result<Option<LeasedRun>, QueueError> {
+///         Ok(self.pending.lock().unwrap().pop_front().map(|queued| LeasedRun {
+///             queued,
+///             token: LeaseToken::new("lease-1"),
+///         }))
+///     }
+///
+///     async fn extend_lease(&self, _token: &LeaseToken, _lease: Duration) -> Result<(), QueueError> {
+///         Ok(())
+///     }
+///
+///     async fn ack(&self, _token: &LeaseToken) -> Result<(), QueueError> {
+///         Ok(())
+///     }
+///
+///     async fn nack(&self, _token: &LeaseToken, _requeue_delay: Duration) -> Result<(), QueueError> {
+///         Ok(())
+///     }
+///
+///     async fn depth(&self) -> Result<u64, QueueError> {
+///         Ok(self.pending.lock().unwrap().len() as u64)
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let queue = InMemoryQueue {
+///         pending: Mutex::new(VecDeque::new()),
+///     };
+///     let run = QueuedRun {
+///         run_id: RunId::new_v7(),
+///         thread_id: ThreadId::new("t1").unwrap(),
+///         attempt: 1,
+///         enqueued_at: Utc::now(),
+///     };
+///
+///     queue.enqueue(run.clone()).await.unwrap();
+///     let leased = queue.dequeue(Duration::from_secs(30)).await.unwrap();
+///     assert_eq!(leased.map(|l| l.queued.run_id), Some(run.run_id));
+/// }
+/// ```
 #[async_trait]
 pub trait RunQueuePort: Send + Sync {
     /// Enqueue a run pointer for dispatch.

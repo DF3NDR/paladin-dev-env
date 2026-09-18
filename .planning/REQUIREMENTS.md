@@ -593,6 +593,8 @@ Deferred beyond this program (named out of scope by the corpus; tracked, not roa
 - **FUT-03**: Multi-region/HA storage replication (backend concern; overview §8)
 - **FUT-04**: Billing / usage metering (overview §8)
 - **FUT-05**: Multi-tenant orgs / RBAC beyond existing scopes (PLAT §6)
+- **FUT-10**: RustFS `FileStoragePort` adapter evaluation, as a MinIO replacement for the dev/test
+  stack (`.planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md`)
 
 ### Runtime
 

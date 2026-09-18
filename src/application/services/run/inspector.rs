@@ -91,7 +91,7 @@ const TRACE_PAGE_LIMIT: u32 = 256;
 /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let waypoints = Arc::new(InMemoryWaypointStore::new());
 ///     let run_repo = Arc::new(InMemoryRunRepository::new());
 ///     let resolver = Arc::new(CodeWorkflowResolver::new());
@@ -100,9 +100,14 @@ const TRACE_PAGE_LIMIT: u32 = 256;
 ///     // No run or Waypoint history exists yet for this thread, so
 ///     // `inspect` reports it not found -- proving the service is fully
 ///     // wired without a live backend.
-///     let thread_id = ThreadId::new("t1").unwrap();
-///     let err = service.inspect(&thread_id).await.unwrap_err();
+///     let thread_id = ThreadId::new("t1")?;
+///     let err = service
+///         .inspect(&thread_id)
+///         .await
+///         .err()
+///         .ok_or("expected inspect on an unknown thread to fail")?;
 ///     assert!(matches!(err, InspectorError::ThreadNotFound { .. }));
+///     Ok(())
 /// }
 /// ```
 pub struct RunInspectorService {

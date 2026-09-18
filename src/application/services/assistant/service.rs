@@ -45,7 +45,7 @@ use super::validator::AssistantValidator;
 /// use paladin_storage::assistant::in_memory::InMemoryAssistantRepository;
 ///
 /// #[tokio::main]
-/// async fn main() {
+/// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let repository = Arc::new(InMemoryAssistantRepository::new());
 ///     let validator = Arc::new(AssistantValidator::new(Arc::new(EngineRegistries::new())));
 ///     let service = AssistantService::new(repository, validator);
@@ -53,8 +53,9 @@ use super::validator::AssistantValidator;
 ///     // No assistant has been published yet, so the freshly wired service
 ///     // reports an empty first page -- a cheap, real call proving the two
 ///     // dependencies wired together without a live backend.
-///     let page = service.list(10, None, false).await.unwrap();
+///     let page = service.list(10, None, false).await?;
 ///     assert!(page.items.is_empty());
+///     Ok(())
 /// }
 /// ```
 pub struct AssistantService {

@@ -1149,11 +1149,21 @@ Plans:
   4. Every publishable crate resolves on crates.io at `0.10.0` (the `publish = false` `doc-examples` crate excluded), verified against the registry index and recorded in MILESTONES.md alongside the v0.9.0 entry
   5. The milestone is closed after the tag via `/gsd-complete-milestone v0.10.0`: the `## Milestones` row flips to Shipped, phase detail archives to `milestones/v0.10.0-ROADMAP.md`, and the next milestone starts at Phase 38
 
-**Plans**: 0 plans
+**Plans**: 11 plans
 
 Plans:
 
-- [ ] TBD (run /gsd-plan-phase 37 to break down)
+- [ ] 37-01-PLAN.md — Pre-flight (disk, clean tree, branch state), create `37-CI-EVIDENCE.md` end-to-end, and hand the `paladin-eval` first-publish bootstrap to the maintainer (D-17)
+- [ ] 37-02-PLAN.md — Local re-seal: D-06 gate rows 1, 2, 3, 4, 5 and 7 on the final pre-merge tree
+- [ ] 37-03-PLAN.md — Local re-seal: gate row 6 (`make publish-dry-run`), the adjacent checks, and the Local sweep's closing verdict tally
+- [ ] 37-04-PLAN.md — Mint `SHIP-05`, resolve the ROADMAP requirements line, correct the STATE.md evidence pointer, and add one dated forward-pointer line to each prior evidence file
+- [ ] 37-05-PLAN.md — Append corpus audit section 12 (the seven-row re-seal table) and the pointer file's dated paragraph
+- [ ] 37-06-PLAN.md — Push the branch, open the release PR (D-01), write the D-12 pause hand-off, and stop until CI concludes
+- [ ] 37-07-PLAN.md — Record the pre-merge CI evidence including the `coverage` job's conclusion and figure; last agent commit on the feature branch
+- [ ] 37-08-PLAN.md — The maintainer's §11 tick, the read-only post-tick and `paladin-eval` pre-tag gates, then the merge-and-tag hand-off and hard stop
+- [ ] 37-09-PLAN.md — Re-verify the resume condition, prove the tag sits on the merge commit, cut `chore/37-close`, and record the post-merge and release-run evidence
+- [ ] 37-10-PLAN.md — Registry verification per derived publishable crate (D-08), the `trustpub_data` proof, and the final carried-findings list
+- [ ] 37-11-PLAN.md — The MILESTONES.md v0.10.0 release record, `37-READY-TO-CLOSE.md`, and the docs-only `chore/37-close` pull request
 
 ## Progress
 

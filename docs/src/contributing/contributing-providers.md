@@ -269,7 +269,7 @@ Create `tests/unit/llm/myprovider_adapter_test.rs`:
 
 ```rust,ignore
 use mockito::Server;
-use paladin::infrastructure::adapters::llm::myprovider_adapter::*;
+use paladin_llm::myprovider::*;
 
 #[tokio::test]
 async fn test_successful_completion() {
@@ -364,7 +364,7 @@ Add comprehensive rustdoc to all public items:
 /// # Examples
 ///
 /// ```no_run
-/// use paladin::infrastructure::adapters::llm::myprovider_adapter::*;
+/// use paladin_llm::myprovider::*;
 ///
 /// let config = MyProviderConfig::from_env()?;
 /// let adapter = MyProviderAdapter::new(config)?;

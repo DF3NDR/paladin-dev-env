@@ -1149,7 +1149,7 @@ Plans:
   4. Every publishable crate resolves on crates.io at `0.10.0` (the `publish = false` `doc-examples` crate excluded), verified against the registry index and recorded in MILESTONES.md alongside the v0.9.0 entry
   5. The milestone is closed after the tag via `/gsd-complete-milestone v0.10.0`: the `## Milestones` row flips to Shipped, phase detail archives to `milestones/v0.10.0-ROADMAP.md`, and the next milestone starts at Phase 38
 
-**Plans**: 11 plans
+**Plans**: 7/11 plans executed
 
 Plans:
 **Wave 1**
@@ -1178,7 +1178,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 37-07-PLAN.md — Record the pre-merge CI evidence including the `coverage` job's conclusion and figure; last plan that commits to the feature branch
+- [x] 37-07-PLAN.md — Record the pre-merge CI evidence including the `coverage` job's conclusion and figure; last plan that commits to the feature branch
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
@@ -1233,7 +1233,7 @@ Plans:
 | 35. mdBook Currency | v0.10.0 | 10/10 | Complete    | 2026-09-17 |
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 13/13 | Complete    | 2026-09-18 |
 | 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 14/14 | Complete    | 2026-09-18 |
-| 37. v0.10.0 Crate Release | v0.10.0 | 0/11 | Planned | — |
+| 37. v0.10.0 Crate Release | v0.10.0 | 7/11 | In Progress | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

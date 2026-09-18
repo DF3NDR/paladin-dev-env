@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37
 current_phase_name: v0.10.0 Crate Release
 status: executing
-stopped_at: "Completed 37-06-PLAN.md (release PR #55 opened, D-12 pause hand-off, Task 3 checkpoint resolved -- CI green, PR merged pre-§11-tick, D-17 bootstrapped, §11 pre-tag sign-off recorded)"
-last_updated: "2026-09-18T21:43:03.009Z"
+stopped_at: "Completed 37-07-PLAN.md (pre-merge CI evidence recorded: every workflow run on the PR head SHA, 44/44 required-context tally, CodeQL results check filed as advisory, Coverage job success + verbatim 90.44% figure as sole SC2 evidence; Task 3 not applicable by deviation -- PR merged, remote branch deleted)"
+last_updated: "2026-09-18T21:57:29.753Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 37 execution started
 progress:
   total_phases: 18
   completed_phases: 17
   total_plans: 215
-  completed_plans: 210
+  completed_plans: 211
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `37-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 97%
+**Progress:** [██████████] 98%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -186,6 +186,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37 P03 | 53min | 2 tasks | 1 files |
 | Phase 37 P04 | 7min | 2 tasks | 5 files |
 | Phase 37 P05 | 14min | 2 tasks | 2 files |
+| Phase 37 P07 | 25min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -577,6 +578,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Section 12 cites the provenance block's literally-labeled Local re-seal head SHA (522ab1d4), listing the later per-gate doc-only commit SHAs alongside with their source-tree identity to it stated explicitly
 - [Phase ?]: Gate row 7's evidence pointer cites 37-CI-EVIDENCE.md rows 3-13 (not the tally's shorthand 4-13), matching the more precise prose naming row 3's check-changelogs sub-target as a hard assertion
 - [Phase ?]: DNS-outage semver re-run and zero-valued CHANGELOG topic readings are recorded in-row (gate rows 4 and 7), separate from the four-item Findings list the plan's action text names
+- [Phase ?]: Plan 37-07: SHA-scoped gh queries substituted for branch-scoped ones (feature/phase-33 remote deleted post-merge); 44/44 required-context tally computed live; red CodeQL results check recorded advisory (not a required context, maintainer disposition already on record); CI Coverage job success + verbatim 90.44% figure recorded as sole SC2 evidence; Task 3 (push) withheld as not-applicable-by-deviation.
 
 ### Pending Todos
 
@@ -1144,8 +1146,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T21:43:02.920Z
-**Stopped at:** Completed 37-06-PLAN.md (release PR #55 opened, D-12 pause hand-off, Task 3 checkpoint resolved -- CI green, PR merged pre-§11-tick, D-17 bootstrapped, §11 pre-tag sign-off recorded)
+**Last session:** 2026-09-18T21:57:01.800Z
+**Stopped at:** Completed 37-07-PLAN.md (pre-merge CI evidence recorded: every workflow run on the PR head SHA, 44/44 required-context tally, CodeQL results check filed as advisory, Coverage job success + verbatim 90.44% figure as sole SC2 evidence; Task 3 not applicable by deviation -- PR merged, remote branch deleted)
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

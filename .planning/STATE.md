@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
 status: executing
-stopped_at: Completed 36.1-05-PLAN.md
-last_updated: "2026-09-18T04:15:22.075Z"
+stopped_at: Completed 36.1-06-PLAN.md
+last_updated: "2026-09-18T04:24:37.756Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36.1 execution started
 progress:
   total_phases: 18
   completed_phases: 16
   total_plans: 204
-  completed_plans: 195
+  completed_plans: 196
 ---
 
 # Project State
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36.1 (Deferred Items Closure) — EXECUTING
-Plan: 6 of 14
+Plan: 7 of 14
 Status: Ready to execute
 Last activity: 2026-09-18 — Phase 36.1 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -171,6 +171,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36.1 P03 | 20min | 3 tasks | 4 files |
 | Phase 36.1 P04 | ~35min | 3 tasks | 9 files |
 | Phase 36.1 P05 | ~15min | 3 tasks | 7 files |
+| Phase 36.1 P06 | 6min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -540,6 +541,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: 36.1-03: contributing-providers.md's module-declaration line (pub mod myprovider_adapter;) left unfixed per nine-signal class-4 verdict — not the same relocated-path class as the two import-path fixes; no WINDOWS.md row minted (D-17's 12-row mapping has no slot)
 - [Phase ?]: Phase 36.1 plan 04: rebuilt testing-guide.md tests/ tree against ls -p tests truth (D-05), swept eleven OpenAiAdapter->OpenAIAdapter casing hits across seven pages (D-07), probed all four flagged battalion-patterns-guide.md bodies (all fail to compile, recorded for 36.1-13 to mint 4 waived unmet-truth ledger rows), and ran the docs.yml gate clean (zero broken links).
 - [Phase ?]: 36.1-05: closed six of the nineteen # Examples MISSING items (StructuredExecutorPort, NodeCachePort, RunSubmissionPort, ScheduleAdminPort, RunQueuePort, WebhookDeliveryRepositoryPort) with real executing doctests; re-measured paladin-ports at 142 passed doctests / 0 cargo doc warnings; MISSING count 19 -> 13
+- [Phase ?]: RunTracePort/AssistantAdminPort/AssistantRepositoryPort # Examples sections use inline Mutex<HashMap>-backed local structs implementing every trait method, never a storage-crate adapter
 
 ### Pending Todos
 
@@ -1107,8 +1109,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T04:15:16.795Z
-**Stopped at:** Completed 36.1-05-PLAN.md
+**Last session:** 2026-09-18T04:24:37.676Z
+**Stopped at:** Completed 36.1-06-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

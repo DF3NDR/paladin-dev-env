@@ -1103,7 +1103,7 @@ Plans:
 - [x] 36.1-03-PLAN.md — SC1 pages: provider-guide adapter path, CLI troubleshooting entries, illustrative CI/CD captions
 - [x] 36.1-04-PLAN.md — SC1 pages: rebuild the tests tree, sweep the adapter type casing across seven pages, run the docs gate
 - [x] 36.1-05-PLAN.md — `# Examples` for six lighter port traits
-- [ ] 36.1-06-PLAN.md — `# Examples` for the trace port and the two assistant ports
+- [x] 36.1-06-PLAN.md — `# Examples` for the trace port and the two assistant ports
 - [ ] 36.1-07-PLAN.md — `# Examples` for the three widest port traits; all twelve ports satisfied
 - [ ] 36.1-08-PLAN.md — `# Examples` for `ScheduleService` and `WebhookDeliveryService`
 - [ ] 36.1-09-PLAN.md — `# Examples` for `RunSubmissionService` and `RunInspectorService`

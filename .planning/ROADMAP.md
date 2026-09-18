@@ -1154,7 +1154,7 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 37-01-PLAN.md — Pre-flight (disk, clean tree, branch state), create `37-CI-EVIDENCE.md` end-to-end, and hand the `paladin-eval` first-publish bootstrap to the maintainer (D-17)
+- [x] 37-01-PLAN.md — Pre-flight (disk, clean tree, branch state), create `37-CI-EVIDENCE.md` end-to-end, and hand the `paladin-eval` first-publish bootstrap to the maintainer (D-17)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -321,8 +321,8 @@ target/37-06/pr-body.md` succeeded:
 
 | Workflow | Run ID (URL) | Event | Conclusion | SHA | Notes |
 |---|---|---|---|---|---|
-| `ci.yml` | [35382874018](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382874018) | `push` | `pending` | `1bb9406343b7fb965e0724ac7a689d45e4e5f61c` | Triggered by the D-01 push; status `queued` at time of recording. Plan 37-07 fills in the conclusion and the `coverage` job's printed percentage. |
-| `ci.yml` | [35382953376](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382953376) | `pull_request` | `pending` | `1bb9406343b7fb965e0724ac7a689d45e4e5f61c` | Triggered by PR #55's open against the same head SHA; status `queued` at time of recording. |
+| `ci.yml` | [35382874018](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382874018) | `push` | `success` | `1bb9406343b7fb965e0724ac7a689d45e4e5f61c` | Triggered by the D-01 push. Conclusion and job tally filled by plan 37-07 (this file's "Plan 37-07" section below): 37 jobs, 34 `success`, 3 `skipped` by design (`Benchmark Regression Signal (Non-Blocking)`, `Publish Dry Run` — tag-gated, `End-to-End Tests` — conditional job), 0 `failed`. |
+| `ci.yml` | [35382953376](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382953376) | `pull_request` | `success` | `1bb9406343b7fb965e0724ac7a689d45e4e5f61c` | Triggered by PR #55's open against the same head SHA. Conclusion and job tally filled by plan 37-07: 37 jobs, 35 `success`, 2 `skipped` by design (`Publish Dry Run` — tag-gated, `End-to-End Tests` — conditional job), 0 `failed`. |
 
 Both run IDs confirmed via `gh run list --branch feature/phase-33 --workflow ci.yml --limit 10
 --json databaseId,event,headSha,status,conclusion` filtered to `headSha ==
@@ -336,6 +336,108 @@ head SHA) passed together — `ALL VERIFY CHECKS PASSED (N=1, R=2)`.
 
 No merge, no tag, no workflow dispatch, no `gh run rerun`, and no force-push occurred in this
 plan. No credential-shaped text appears in the PR body or in this record.
+
+---
+
+### Plan 37-07 — every workflow run on the PR head SHA, and the required-context tally (2026-09-18)
+
+**Method substitution, disclosed per the dispatch's own instruction.** Plan 37-07's Task 1
+precondition text reads `gh run list --branch feature/phase-33 --workflow ci.yml ...`. By the
+time this plan ran, PR #55 was already merged (see "Maintainer acts and statements, 2026-09-18"
+above) and GitHub had deleted the remote `feature/phase-33` branch — a branch-scoped `gh run
+list` query against a deleted branch returns nothing useful. This plan substituted SHA-scoped
+queries instead: `gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=<sha>"` for the
+workflow-run list, `gh api repos/DF3NDR/paladin-dev-env/commits/<sha>/check-runs` for the
+per-job check-run list, `gh api repos/DF3NDR/paladin-dev-env/rules/branches/main` for the live
+required-context set, and `gh pr checks 55 --required` (the PR object itself still resolves by
+number after merge) for the required-check pass/skip tally. All four are read-only GETs against
+the same PR head SHA `1bb9406343b7fb965e0724ac7a689d45e4e5f61c` the pending rows above already
+named — no different commit is being evidenced, only a different query shape to reach it.
+
+**Every workflow run on the PR head SHA** (`gh api "repos/DF3NDR/paladin-dev-env/actions/runs?head_sha=1bb9406343b7fb965e0724ac7a689d45e4e5f61c"`,
+9 rows, all `status: completed`):
+
+| Workflow | Run ID (URL) | Event | Conclusion | SHA | Notes |
+|---|---|---|---|---|---|
+| `ci.yml` | [35382874018](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382874018) | `push` | `success` | `1bb94063` | 37 jobs: 34 `success`, 3 `skipped` by design (`Benchmark Regression Signal (Non-Blocking)`, `Publish Dry Run` — tag-gated, does not run pre-tag, `End-to-End Tests` — conditional job), 0 `failed`. |
+| `ci.yml` | [35382953376](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382953376) | `pull_request` | `success` | `1bb94063` | 37 jobs: 35 `success`, 2 `skipped` by design (`Publish Dry Run` — tag-gated, `End-to-End Tests` — conditional job), 0 `failed`. The `Coverage` job here is Task 2's evidence source below. |
+| `codeql.yml` | [35382874047](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382874047) | `push` | `success` | `1bb94063` | The **workflow run** (the analysis completing without error) — advisory-only per `security.instructions.md`. Distinct from the separate "CodeQL" results **check**, recorded below, which is red. |
+| `codeql.yml` | [35382953096](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382953096) | `pull_request` | `success` | `1bb94063` | Same distinction — advisory-only workflow-run conclusion, not the results check. |
+| `pre-commit` | [35382874020](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382874020) | `push` | `success` | `1bb94063` | Required context `pre-commit run --all-files`. |
+| `pre-commit` | [35382952999](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382952999) | `pull_request` | `success` | `1bb94063` | Required context `pre-commit run --all-files`. |
+| `feature-flags.yml` | [35382874128](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382874128) | `push` | `success` | `1bb94063` | Every `Build & Test (<feature>)` required context lives in this workflow's runs, not `ci.yml`'s. |
+| `feature-flags.yml` | [35382952857](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382952857) | `pull_request` | `success` | `1bb94063` | Same. |
+| `Docs` (`docs.yml`) | [35382952930](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382952930) | `pull_request` | `success` | `1bb94063` | PR-gated (`pull_request` trigger only) — this is the **first** `docs.yml` run for any commit on `feature/phase-33`, matching `33-CI-EVIDENCE.md`'s own "not run" row for the pre-PR state. No `push`-event row exists for `docs.yml` by design (it has no `push` trigger). Job: `Build MDBook`, `success`. |
+
+**Adjacent, non-required jobs on the same SHA** (recorded for completeness, not because either
+gates the PR — `security.instructions.md` and this file both treat `Docker Build` /
+`Kubernetes Smoke Test` as deliberately non-required):
+
+| Job | Push-event check-run | Conclusion | PR-event check-run | Conclusion |
+|---|---|---|---|---|
+| `Docker Build` | `105729270066` | `success` | `105730543368` | `success` |
+| `Kubernetes Smoke Test` | `105753476039` | `success` | `105754378951` | `success` |
+
+**Required-context tally, computed from the live ruleset, not asserted.**
+`gh api repos/DF3NDR/paladin-dev-env/rules/branches/main --jq '.[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context'`
+returned **44 unique required context names** (full list captured; includes every
+`Build & Test (<feature>)`, `Crate Isolation (<crate>)`, `Coverage`, `Code Quality`,
+`Security Audit`, `OSV Scanner`, `License & Dependency Policy`, `pre-commit run --all-files`,
+`Workflow Lint`, `Build MDBook`, `API Surface Tracking`, `Benchmark Compile Check`,
+`Integration Tests`, `Docker Integration Tests`, `Unit Tests (stable|beta)`,
+`Example Muster (Feature Matrix)`, `Feature Matrix Summary`, `CLI Snapshot Tests`,
+`CLI Isolation (library without cli feature)`, `End-to-End Tests`). **`CodeQL` is not among the
+44** — confirming it is not a required context on this ruleset, matching the `security.instructions.md`
+advisory-only posture. `Docker Build` and `Kubernetes Smoke Test` are also not among the 44.
+
+`gh pr checks 55 --required --json name,state,bucket,workflow` (the PR object still resolves by
+number post-merge) returned **87 required check-run entries** (the 44 names, each appearing once
+per triggering event — `push` and `pull_request` — for the workflows that run on both; `Docs`
+only triggers on `pull_request`, accounting for the odd count): **85 `pass`, 2 `skipping`, 0**
+anything else. Both `skipping` entries are `End-to-End Tests` (one per event) — named as
+**skipped, not passed**, per this plan's own instruction; `End-to-End Tests` is a conditional job
+this PR's diff did not trigger, not a required check that failed to run.
+
+**Tally: 44/44 required contexts satisfied** (0 failures; the only non-`pass` bucket is
+`End-to-End Tests`, correctly bucketed `skipping` by GitHub itself, not `pass` and not `fail`).
+
+**D-15 (the single-rerun infrastructure-flake exception) was not invoked.** No required check,
+and no run of any kind on this SHA, was red. There was nothing to classify and nothing to
+re-run. The dispatch's own note that D-15's `gh run rerun --failed` is unavailable post-merge is
+recorded here for completeness, not because it was needed: had a required check been red, this
+plan would have stopped (D-14) rather than attempt a rerun that could not change anything the
+maintainer can act on.
+
+**The separate "CodeQL" results check — advisory, red, independently re-verified (not
+re-triaged).** This is the code-scanning **results check** on the commit (distinct from the two
+`codeql.yml` **workflow runs** recorded green above). Re-verified read-only by this plan:
+
+- `gh api repos/DF3NDR/paladin-dev-env/check-runs/105726197798` → `conclusion: "failure"`,
+  `status: "completed"`, title `"10 new alerts including 10 high severity security
+  vulnerabilities"`, summary: *"New alerts in code changed by this pull request... Security
+  Alerts: 10 high... Alerts not introduced by this pull request might have been detected because
+  the code changes were too large."* (PR #55 carried 521 commits.)
+- `gh api repos/DF3NDR/paladin-dev-env/check-runs/105726197798/annotations` → 10 annotated
+  locations, cross-referenced by this plan against
+  `gh api "repos/DF3NDR/paladin-dev-env/code-scanning/alerts?ref=refs/heads/main&state=open"`
+  filtered to `rule.id == "rust/cleartext-logging"`: the 10 annotated locations match alert
+  numbers **#31, #32, #33, #38, #40, #43, #44, #45, #46, #47** exactly, one location each. All
+  ten carry `created_at: 2026-08-27T12:52:26Z` — already open on `main` before PR #55 existed.
+- **Not a required context** — confirmed above (44 required names, none `CodeQL`); no
+  `code_scanning` ruleset rule exists on `main`.
+- **Maintainer decision pointer:** the maintainer's verbatim reply — `"We are going to proceed
+  with 1."` (option 1 = proceed and record as advisory) — is already recorded with full
+  provenance in this file's "Maintainer acts and statements, 2026-09-18 (post-CI, pre-tag)" entry,
+  subsection (b), above. This plan does not re-quote it at length; it cites that entry as the
+  record of the decision and adds only the independently re-verified alert-number cross-reference
+  above, which that earlier entry did not itemize.
+- **Stated plainly:** the ten alerts were **not** re-triaged as false positives by this plan or by
+  any prior agent in this phase. They are carried forward as a named v0.11.0 triage finding, per
+  the maintainer's own "proceed and record as advisory" instruction, not dismissed or downgraded.
+- **This is not a D-14 stop.** `CodeQL`'s check-run conclusion is red, but it is not a required
+  context, and the maintainer has already made the disposition decision (advisory) with
+  provenance on record — the pre-declared condition for D-14 (a **required** check, or an
+  unresolved red with no maintainer disposition) does not apply here.
 
 ---
 

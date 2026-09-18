@@ -120,6 +120,22 @@ topic (rows 11 and 13) is a carried finding, not a fix, and `CHANGELOG.md`/`MIGR
 edited either way. `git status --porcelain CHANGELOG.md MIGRATION.md` confirmed empty after this
 task.
 
+### Task 2 head SHA note
+
+`git rev-parse HEAD` at Task 2 dispatch → `cb2ebf3ebb0a54aa25867f6fc58f10046f8e2b85` (Task 1's own
+evidence-file commit). The source tree under test (`crates/`, `src/`, `tests/`,
+`Cargo.toml`/`Cargo.lock`) is byte-identical to head `028e9726`'s — Task 1's commit touched only
+`.planning/phases/37-v0-10-0-crate-release/37-CI-EVIDENCE.md`. Both compiled gates below were
+hosted detached per the plan's long-running-command protocol (cold build, `target/` confirmed
+cold by plan 37-01's addendum); the command recorded is the plan's exact verbatim command, not the
+`target/37-02/run.sh` wrapper used to host it.
+
+| 14 | `cargo test --features web-server --test v0_9_config_boot` (D-06 gate row 2 — head `cb2ebf3e`, source tree == `028e9726`) | `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 2m 00s` (cold build) then `running 9 tests` / all 9 `ok` / `test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s` — same 9-test count as `29-CI-EVIDENCE.md` row 8 and `33-CI-EVIDENCE.md` row 6. This target also runs inside CI's `e2e-platform-api` job (`ci.yml:1341-1361`, asserts >= 9 tests selected) — the pre-merge CI run in plan 37-07 re-proves it | ✅ PASS |
+| 15 | `cargo test -p paladin-web --test openapi_golden_v0_9` (D-06 gate row 3 — head `cb2ebf3e`, source tree == `028e9726`) | `Finished \`test\` profile [unoptimized + debuginfo] target(s) in 42.42s` (cold build) then `running 7 tests` / all 7 `ok` / `test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s` — same 7-test count as `33-CI-EVIDENCE.md` row 7 (the legitimate 6→7 rise since Phase 29 already recorded there). This target also rides inside the normal `paladin-web` test sweep (default/`web-server` feature `Build & Test` jobs), not a standalone CI job — the pre-merge CI run in plan 37-07 re-proves it | ✅ PASS |
+
+`git status --porcelain -- crates src tests` confirmed empty after both commands (no source file
+modified).
+
 ---
 
 ## CI-run table

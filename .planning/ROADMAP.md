@@ -1119,7 +1119,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 36.1-13-PLAN.md — Twelve ledger rows plus row 38, the completed closure table, the closing gate sequence
+- [x] 36.1-13-PLAN.md — Twelve ledger rows plus row 38, the completed closure table, the closing gate sequence
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

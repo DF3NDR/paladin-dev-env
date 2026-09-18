@@ -560,7 +560,7 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   feature set rather than the current build's feature configuration, so the three-phase-old carried
   failure stops being re-logged (ROADMAP Phase 36.1 SC3; D-15, D-16)
 
-- [ ] **CURR-19**: `WINDOWS.md` rows 36 and 37 are verified `fixed` against Phase 36's output, row
+- [x] **CURR-19**: `WINDOWS.md` rows 36 and 37 are verified `fixed` against Phase 36's output, row
   38 is `fixed` by this phase's tool-error sanitization, and every open entry from the Phase 31,
   32, 34, 35 and 36 registers has exactly one row with status `fixed` or `waived` plus a reason —
   `gsd-tools windows status` reports `open_count: 0` and the closure table in `36.1-EVIDENCE.md`
@@ -573,7 +573,7 @@ prefix"); those phases mint their own `CURR-nn` numbers when planned.
   neither is left as an undated pointer, and `gsd-tools list-todos` still surfaces both
   (ROADMAP Phase 36.1 SC5; D-00k, D-22, D-23, D-24)
 
-- [ ] **CURR-21**: `make clean-code` (now including `doc-check` and `check-api-examples`),
+- [x] **CURR-21**: `make clean-code` (now including `doc-check` and `check-api-examples`),
   `make lint-shell`, `make security`, `cargo test --workspace`,
   `cargo test --workspace --all-features --no-fail-fast`, the `docs.yml` mdBook sequence with
   linkcheck, and `make api-surface` are green on the closing commit with their outputs captured;
@@ -710,9 +710,9 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CURR-16 | Phase 36.1 | Complete |
 | CURR-17 | Phase 36.1 | Complete |
 | CURR-18 | Phase 36.1 | Complete |
-| CURR-19 | Phase 36.1 | Pending |
+| CURR-19 | Phase 36.1 | Complete |
 | CURR-20 | Phase 36.1 | Complete |
-| CURR-21 | Phase 36.1 | Pending |
+| CURR-21 | Phase 36.1 | Complete |
 
 **Coverage:**
 

@@ -441,6 +441,79 @@ re-triaged).** This is the code-scanning **results check** on the commit (distin
 
 ---
 
+### Plan 37-07 — SC2: the CI `Coverage` job's conclusion and printed figure (2026-09-18)
+
+**The verdict rule, stated before the number, per the plan's own instruction: SC2 is satisfied
+if and only if the `Coverage` job's own conclusion is `success`.** The printed figure below is
+corroborating evidence, not the verdict — a non-`success` conclusion would be a D-14 stop
+regardless of what the printed figure read, and a `success` conclusion is not overturned by
+re-reading the number. Both instances of the job on this SHA are recorded because CI ran it
+twice (once per `push`, once per `pull_request`); neither overturns the other.
+
+**Job conclusions, verbatim (`gh api repos/DF3NDR/paladin-dev-env/commits/1bb9406343b7fb965e0724ac7a689d45e4e5f61c/check-runs`,
+filtered to `name == "Coverage"`):**
+
+| Run (event) | Job (check-run id) | Conclusion |
+|---|---|---|
+| `35382953376` (`pull_request`) | `105723181854` | `success` |
+| `35382874018` (`push`) | `105722928700` | `success` |
+
+**Both `success`. SC2 is satisfied.**
+
+**Printed figures, recovered from the "Coverage summary" step's log and recorded to the exact
+digits CI printed** — no rounding, no truncation, no re-derivation, no recomputation from any
+other source (`curl` against each job's `/logs` endpoint with a bearer token obtained via
+`gh auth token` and never printed, echoed, logged, or written to any file in this repository;
+the raw logs themselves were read only in-memory by this plan and were not committed anywhere):
+
+- **`pull_request` run (job `105723181854`):**
+  ```
+  Scope: --workspace --features integration-tests (the gated measurement)
+  Lines:     111771/123587 = 90.44%
+  Functions: 11785/14096 = 83.61%
+  ```
+- **`push` run (job `105722928700`):**
+  ```
+  Scope: --workspace --features integration-tests (the gated measurement)
+  Lines:     111774/123587 = 90.44%
+  Functions: 11786/14096 = 83.61%
+  ```
+
+The two runs' raw hit counts differ by a handful of lines/functions (111771 vs 111774 hit,
+11785 vs 11786 hit, out of the same 123587/14096 denominators) — ordinary run-to-run noise from
+async/timing-sensitive tests under instrumentation, not a regression between the two runs; both
+round to the identical printed percentage, `90.44%` lines / `83.61%` functions. This matches the
+figure already named in this file's own §11 sign-off brief (see "Maintainer acts and statements,
+2026-09-18," subsection (d), above), independently re-derived here from the job logs directly
+rather than merely repeated from that earlier mention.
+
+**The tool invocation CI used**, so a reader can see which comparison produced the verdict
+(`scripts/coverage.sh`, invoked by the `Measure coverage` step, delegated to from both `make
+coverage` and the CI job per this file's own house form):
+
+```
+cargo llvm-cov --workspace --features integration-tests,llm-all \
+    --lcov --output-path lcov.info --fail-under-lines "$FLOOR" -- --test-threads=1
+```
+
+**The configured floor is `82`** — read directly from `scripts/coverage.sh` (`FLOOR="${COVERAGE_FLOOR:-82}"`,
+line 35), not assumed; `.github/workflows/ci.yml`'s `coverage` job does not set a `COVERAGE_FLOOR`
+override in its `Measure coverage` step's `env:` block, so the default `82` is the floor CI
+actually gated on for both runs above — matching ADR-0006 (`.planning/decisions/0006-coverage-gate.md`)
+exactly.
+
+**CI-attributed (D-00e), not a local measurement.** Docker is absent from this devcontainer
+(`docker: command not found`, structurally unchanged since `33-CI-EVIDENCE.md` row 32 and every
+earlier local sweep in this phase) — `scripts/coverage.sh`'s Redis/MinIO service-probe chain has
+no target to resolve against outside a Docker network, so `make coverage` cannot complete here.
+This is the structural reason the gate is evidenced from CI alone; local reproduction was not
+attempted by this plan, consistent with plans 37-01 through 37-03. The
+`2026-08-13-verify-local-coverage-reproduction.md` todo remains re-homed to the maintainer per
+Phase 36.1 D-23 — recorded, not re-opened here. No local coverage figure, rounded, re-derived, or
+otherwise, appears anywhere in this file as a substitute for the CI job's own reading.
+
+---
+
 ## Registry verification (D-08)
 
 **Pre-bootstrap baseline for `paladin-eval` (this plan, plan 37-01, Task 1 step 4):**

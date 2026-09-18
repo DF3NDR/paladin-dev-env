@@ -88,6 +88,38 @@ set-equality check) is deliberately **not** run by this plan — it belongs to t
 re-seal sweep plan 37-02/37-03 owns; this task's scope is proving the path with one row, not
 running the whole gate set early.
 
+### Plan 37-02 head SHA (Task 1, dispatch)
+
+`git rev-parse HEAD` → `028e9726c2388da43d237af06926506bdd8760bf` — the tip of `feature/phase-33`
+at dispatch of plan 37-02 (tip of `docs(37-01): complete release-evidence tracer plan`), measured
+live, `git status --porcelain` empty, `df -BG --output=avail /workspace` → `135G`. Every row below
+through Task 3 ran against this exact SHA's source tree (`crates/`, `src/`, `tests/`,
+`Cargo.toml`/`Cargo.lock`) — the three task commits between rows only ever touch this evidence
+file itself, never a source file, so the code under test does not change between tasks even though
+`HEAD` advances with each task's own commit. Each row below is cross-referenced against this same
+head SHA rather than re-stating it per row.
+
+| 2 | `make check-migration-allowlist` (D-06 gate row 1, second half — head `028e9726`) | 15 `crate\|type` pairs in both the MIGRATION.md §9.2 register and `.cargo/semver-checks-allowlist.toml`, set-equal in both directions — identical pair count to `33-CI-EVIDENCE.md` row 4 and §11's own 15 | ✅ PASS |
+| 3 | `make check-gates` (D-06 gate row 1 bundle — head `028e9726`) | Per-crate CHANGELOG coverage 11/11; package-name allow-list 12/12; advisory-exception register 11 rows vs 11 `deny.toml` + 5 `.cargo/audit.toml` ignore entries, all satisfied; workflow inline-suppression scan: 7 files, 165 steps, 1 `cargo audit` invocation, 0 inline suppressions; workflow trigger-policy table 7/7; CodeQL dismissal register 6/6; plus row 2's set-equality check — all seven sub-targets exit 0 | ✅ PASS |
+| 4 | `U=$(grep -c '^## \[Unreleased\]' CHANGELOG.md; true); echo "$U"` (D-06 gate row 7, hard assertion — head `028e9726`) | `0` | ✅ PASS |
+| 5 | `H=$(grep -c '^## \[0.10.0\]' CHANGELOG.md; true); echo "$H"` (D-06 gate row 7, hard assertion — head `028e9726`) | `1` | ✅ PASS |
+| 6 | `N=$(cat CHANGELOG.md MIGRATION.md \| grep -c 'v0[.]11[.]0'; true); echo "$N"` (D-06 gate row 7, hard assertion, the withheld next-version string — head `028e9726`) | `0` | ✅ PASS |
+| 7 | `awk '/^## \[0.10.0\]/,/^## \[0.9/' CHANGELOG.md \| grep -ci 'rag'` (D-06 gate row 7, recorded reading, §11 topic 1 of 3 — head `028e9726`) | `22` (up from `33-CI-EVIDENCE.md` row 28's `17`; both non-zero, no regression) | ✅ PASS |
+| 8 | `awk '/^## \[0.10.0\]/,/^## \[0.9/' CHANGELOG.md \| grep -c 'TokenUsage'` (D-06 gate row 7, recorded reading, §11 topic 2 of 3 — head `028e9726`) | `4` (same as `33-CI-EVIDENCE.md` row 29) | ✅ PASS |
+| 9 | `awk '/^## \[0.10.0\]/,/^## \[0.9/' CHANGELOG.md \| grep -c 'Commissary'` (D-06 gate row 7, recorded reading, §11 topic 3 of 3 — head `028e9726`) | `15` (same as `33-CI-EVIDENCE.md` row 30) | ✅ PASS |
+| 10 | `awk '/^## \[0.10.0\]/,/^## \[0.9/' CHANGELOG.md \| grep -ci 'mdBook'` (D-06 gate row 7, recorded reading, documentation-phase topic 1 of 4, Phases 34-36.1 — head `028e9726`) | `1` | ✅ PASS |
+| 11 | `awk '/^## \[0.10.0\]/,/^## \[0.9/' CHANGELOG.md \| grep -ci 'rustdoc'` (D-06 gate row 7, recorded reading, documentation-phase topic 2 of 4 — head `028e9726`) | `0` — carried as a finding below, not a gate failure (see this task's action text and `## Findings carried forward (D-00d)`) | ⚠️ RECORDED, not a gate |
+| 12 | `awk '/^## \[0.10.0\]/,/^## \[0.9/' CHANGELOG.md \| grep -ci 'examples'` (D-06 gate row 7, recorded reading, documentation-phase topic 3 of 4 — head `028e9726`) | `7` | ✅ PASS |
+| 13 | `awk '/^## \[0.10.0\]/,/^## \[0.9/' CHANGELOG.md \| grep -ci 'intra-doc'` (D-06 gate row 7, recorded reading, documentation-phase topic 4 of 4 — head `028e9726`) | `0` — carried as a finding below, not a gate failure (see this task's action text and `## Findings carried forward (D-00d)`) | ⚠️ RECORDED, not a gate |
+
+Rows 4-13 are the split gate-row-7 assertion the plan's action text prescribes: rows 4-6 plus
+row 3's `check-changelogs` sub-target are the four hard assertions (all green, D-14 would stop the
+plan on any one of them going red); rows 7-13 are seven recorded topic-count readings, none of
+which is itself a red-gate condition per the plan's own text — a zero on a documentation-phase
+topic (rows 11 and 13) is a carried finding, not a fix, and `CHANGELOG.md`/`MIGRATION.md` were not
+edited either way. `git status --porcelain CHANGELOG.md MIGRATION.md` confirmed empty after this
+task.
+
 ---
 
 ## CI-run table
@@ -231,6 +263,21 @@ under CONTEXT `<deferred>`; currency fixes are v0.11.0 scope):
   release date. Recorded, not edited: neither the D-06 gate set nor
   `scripts/check-release-consistency.sh` reads the date (clause 2 matches only the version
   heading), so this is a currency finding, not a gate failure.
+
+### Plan 37-02, Task 1 — zero documentation-phase topic counts (2026-09-18)
+
+Local sweep rows 11 and 13 recorded `0` for the `rustdoc` and `intra-doc` topic-count readings
+inside the `[0.10.0]` CHANGELOG section, against the plan's own four documentation-phase topics
+(`mdBook`, `rustdoc`, `examples`, `intra-doc`). **Per the plan's action text this is explicitly not
+a red gate** — D-06 gate row 7's binding machine checks are `make check-changelogs` and
+`scripts/check-release-consistency.sh` clause 2 (both hard-asserted green in rows 3-4 above), not
+these topic-count readings. Recorded for the maintainer's awareness only; `CHANGELOG.md` was not
+edited. A spot grep of the `[0.10.0]` section's own `### Documentation` subsection (see rows 458,
+476-499 for line references) shows substantial rustdoc/intra-doc-adjacent prose (e.g. "The
+generated API documentation now builds warning-free," "a new code-quality gate keeps every future
+[doctest] from shipping without one") that does not literally contain the strings `rustdoc` or
+`intra-doc` — a wording gap, not a missing-content gap; left as-is per D-14 (this phase does not
+edit CHANGELOG.md prose to make a topic grep pass).
 
 ---
 

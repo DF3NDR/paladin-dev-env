@@ -55,6 +55,8 @@ pub use paladin_core::platform::container::structured::{SchemaRef, Structured, S
 /// `StructuredExecutorPort` is object-safe at the JSON level -- the generic,
 /// typed extension lives on the facade side, not on this trait.
 ///
+/// # Examples
+///
 /// ```
 /// use std::sync::Arc;
 /// use paladin_ports::output::structured_executor_port::StructuredExecutorPort;

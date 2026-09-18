@@ -182,6 +182,65 @@ coverage claim is real for the crates whose doctests actually execute and unmeas
 do not, and flipping the row to `satisfied` while leaving that number unwritten is the move this ADR
 exists to prevent.
 
+**Amendment, 2026-09-18, Phase 36.1 / plan 36.1-12 — Known crate-level suppressions.** Five
+workspace crates carry eight pre-existing crate-level `#![allow(rustdoc::...)]` attributes that
+sit *underneath* the zero-`warning:`-line bar this ADR ratifies — none of the diagnostics they
+hide were ever counted in Finding 2's 20-warning residue or in any Phase 16/36 closure table,
+because both were measured against the tree *with* these allows already in force. Phase 36's own
+deferred-items register (`.planning/phases/36-rustdoc-zero-warning-bar-examples-currency/
+deferred-items.md`, plan 36-12) opened this finding and offered two dispositions; this amendment
+exercises its option (b) — **kept and justified, not cleared, for v0.10.0**. Removing the eight
+and fixing what surfaces is a Phase-36-sized job (Phase 36's 143 `RD-nn` rows took 13 plans) and
+does not belong before the v0.10.0 tag.
+
+Each attribute, its file:line, the lint it suppresses, and the diagnostics it hides per crate when
+disabled — measured 2026-09-17 at commit `fed7b72e7d31b2e8cbca36bd66a9c53db6a920ea`, verbatim in
+`.planning/phases/36-rustdoc-zero-warning-bar-examples-currency/36-evidence/36-12-closing-measurement.txt`,
+and reconfirmed committed and unchanged at this amendment's own re-read of each site:
+
+| File:line | Lint suppressed | Crate | Diagnostics hidden (per-crate) |
+|---|---|---|---|
+| `src/lib.rs:117` | `rustdoc::broken_intra_doc_links` | `paladin-ai` (facade) | 108 (shared across the facade's three attributes below) |
+| `src/lib.rs:118` | `rustdoc::redundant_explicit_links` | `paladin-ai` (facade) | — |
+| `src/lib.rs:119` | `rustdoc::invalid_html_tags` | `paladin-ai` (facade) | — |
+| `crates/paladin-llm/src/lib.rs:49` | `rustdoc::broken_intra_doc_links` | `paladin-llm` | 69 |
+| `crates/paladin-ports/src/lib.rs:51` | `rustdoc::broken_intra_doc_links` (downgrades the crate's own `#![warn(...)]` one line above it) | `paladin-ports` | 119 (shared with the sibling attribute below) |
+| `crates/paladin-ports/src/lib.rs:52` | `rustdoc::redundant_explicit_links` | `paladin-ports` | — |
+| `crates/paladin-storage/src/lib.rs:19` | `rustdoc::broken_intra_doc_links` | `paladin-storage` | 10 |
+| `crates/paladin-notifications/src/lib.rs:14` | `rustdoc::broken_intra_doc_links` | `paladin-notifications` | 3 |
+
+Total: **309** content diagnostics across five crates (`paladin-ports` 119 + `paladin-ai` 108 +
+`paladin-llm` 69 + `paladin-storage` 10 + `paladin-notifications` 3).
+
+**Structural reason each is hard to clear in isolation.** Cross-crate documentation links that
+resolve when a doc comment is compiled inside the facade crate — which re-exports and links
+across every other crate's public surface — do not resolve when the identical doc comment is
+compiled in isolation inside its own leaf crate, because the target item simply is not in scope
+there. `crates/paladin-ports/src/lib.rs`'s own comment directly above its attribute already
+states this reason for that crate ("Some port files contain cross-crate doc links … that resolved
+in the original `paladin` crate but are unavailable in this isolated crate"); the same mechanism
+is why `paladin-llm`, `paladin-storage` and `paladin-notifications` carry the identical
+downgrade, and why the facade's own three attributes cover a different but related class
+(`redundant_explicit_links`, `invalid_html_tags`) that surfaces only once the facade's own
+higher link density is compiled.
+
+**The bar measures the tree with these allows in force.** The zero-`warning:`-line bar this ADR
+ratifies and Finding 1 quotes verbatim from `ci.yml:58` is real, and CI runs it on every push — but
+a green result is not a claim that `cargo doc --workspace --no-deps` produces no
+`rustdoc::broken_intra_doc_links` / `redundant_explicit_links` / `invalid_html_tags` diagnostic
+anywhere in the workspace. It is a claim that no such diagnostic surfaces through the paths these
+eight attributes leave open. 309 diagnostics exist beneath the bar today; the bar does not see
+them because these eight lines tell rustdoc not to look.
+
+**Owner and re-check trigger**, matching the reason text the corresponding `WINDOWS.md` ledger row
+carries (minted and waived by plan 36.1-13 against this same finding): kept for v0.10.0 per this
+amendment; owner **v0.11.0 rustdoc-suppressions phase or quick task**; re-check at the **v0.11.0
+planning kickoff, 2026-10-16**.
+
+**No `.rs` file was changed to produce this amendment.** All eight attributes remain exactly as
+committed — confirmed by re-reading each site this session — and `cargo doc --workspace --no-deps`
+was re-run immediately after writing this amendment and still emits zero `warning:` lines.
+
 ## Decision
 
 Under the D-00b precedence order (ADR → shipped tree → `.planning/codebase/` map →

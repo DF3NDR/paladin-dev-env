@@ -136,6 +136,51 @@ cold by plan 37-01's addendum); the command recorded is the plan's exact verbati
 `git status --porcelain -- crates src tests` confirmed empty after both commands (no source file
 modified).
 
+### Task 3 head SHA note
+
+`git rev-parse HEAD` at Task 3 dispatch (this continuation) → `af21ede92079493e3f965fb66bee2738d51154bc`
+(Task 2's own evidence-file commit). The source tree under test (`crates/`, `src/`, `tests/`,
+`Cargo.toml`/`Cargo.lock`) is byte-identical to head `028e9726`'s — Tasks 1 and 2 only ever touched
+`.planning/phases/37-v0-10-0-crate-release/37-CI-EVIDENCE.md`. Task 3 itself spans two runs of the
+MSRV and semver-checks gates: the MSRV gate (row 16) completed once, cleanly, before a host DNS
+outage and reboot at 16:22-16:35 UTC on 2026-09-18; the semver-checks loop was interrupted by that
+same outage after 7 of 11 packages, and — per the maintainer's decision recorded above under
+"Plan 37-02, Task 3 — environment interruption during the first semver-checks re-run (2026-09-18)"
+— was re-run exactly once, in full, after the outage. Rows 17-27 below are that single, complete,
+post-outage re-run; the interrupted run's own per-package results are recorded only in the finding
+above and in the preserved logs under `target/37-02/interrupted-20260918T1622Z/`, never as Local
+sweep rows (no gate row is recorded from a run that never produced a verdict).
+
+| 16 | `env RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --all-features --all-targets` (D-06 gate row 5, MSRV floor — head `af21ede9`, source tree == `028e9726`; CI's own flag set, no `--locked` passed, matching `ci.yml`'s `msrv` job) | `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 5m 07s`; `grep -c '^warning' target/37-02/g5-msrv.log` → `0` warnings; ran to completion at `end 2026-09-18T16:12:18Z`, **before** the 16:22 UTC outage, on a cold `target/` (post-`cargo clean`, per the pre-flight addendum above) — not re-run, per the maintainer's decision (only the semver loop was re-run) | ✅ PASS |
+
+Gate row 4 — `cargo semver-checks check-release --package <pkg> --default-features
+--baseline-version 0.9.0` against the `0.9.0` baseline, for the eleven crates named in
+`ci.yml`'s `semver` job. `paladin-eval` is excluded: it has no published `0.9.0` baseline (it did
+not exist at `0.9.0`), so the tool would error on a nonexistent baseline — the same underlying fact
+D-17 exists to close, and the exclusion is CI's own, not this phase's choice. Every one of the
+eleven runs below is from the single post-outage re-run authorized by the maintainer (loop started
+`2026-09-18T16:49:27Z`), all against head `af21ede9` / source tree `028e9726`, all printing the
+identical result shape §11 recorded (`major change` / `0 checks: 0 pass, 254 skip` / `Summary no
+semver update required`):
+
+| 17 | `cargo semver-checks check-release --package paladin-ai --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-ai v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [22.527s] paladin-ai` | ✅ PASS |
+| 18 | `cargo semver-checks check-release --package paladin-ai-core --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-ai-core v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [12.747s] paladin-ai-core` | ✅ PASS |
+| 19 | `cargo semver-checks check-release --package paladin-ports --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-ports v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [10.447s] paladin-ports` | ✅ PASS |
+| 20 | `cargo semver-checks check-release --package paladin-battalion --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-battalion v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [10.399s] paladin-battalion` | ✅ PASS |
+| 21 | `cargo semver-checks check-release --package paladin-herald --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-herald v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [7.051s] paladin-herald` | ✅ PASS |
+| 22 | `cargo semver-checks check-release --package paladin-llm --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-llm v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [10.907s] paladin-llm` | ✅ PASS |
+| 23 | `cargo semver-checks check-release --package paladin-memory --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-memory v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [7.409s] paladin-memory` | ✅ PASS |
+| 24 | `cargo semver-checks check-release --package paladin-storage --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-storage v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [63.756s] paladin-storage` | ✅ PASS |
+| 25 | `cargo semver-checks check-release --package paladin-notifications --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-notifications v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [157.253s] paladin-notifications` | ✅ PASS |
+| 26 | `cargo semver-checks check-release --package paladin-content --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-content v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [171.033s] paladin-content` | ✅ PASS |
+| 27 | `cargo semver-checks check-release --package paladin-web --default-features --baseline-version 0.9.0` (head `af21ede9`) | `Checking paladin-web v0.9.0 -> v0.10.0 (major change)` / `Checked [0.000s] 0 checks: 0 pass, 254 skip` / `Summary no semver update required` / `Finished [154.461s] paladin-web` | ✅ PASS |
+| 28 | Tally of rows 17-27 (D-06 gate row 4 — head `af21ede9`) | **11/11 packages exit `0`**, all printing the identical `major change` / `0 checks: 0 pass, 254 skip` / `no semver update required` shape §11 recorded; `paladin-eval` excluded (no published `0.9.0` baseline). `git status --porcelain -- crates src Cargo.toml Cargo.lock` confirmed empty after the full re-run | ✅ PASS |
+
+Full per-package logs (`start`/`end` timestamps, full `cargo semver-checks` output) live at
+`target/37-02/semver-paladin-{name}.log` and `.exit`, this single post-outage re-run's own files;
+the earlier, interrupted run's files are preserved separately at
+`target/37-02/interrupted-20260918T1622Z/` and are not this gate's evidence (see the finding above).
+
 ---
 
 ## CI-run table
@@ -279,6 +324,112 @@ under CONTEXT `<deferred>`; currency fixes are v0.11.0 scope):
   release date. Recorded, not edited: neither the D-06 gate set nor
   `scripts/check-release-consistency.sh` reads the date (clause 2 matches only the version
   heading), so this is a currency finding, not a gate failure.
+
+### Plan 37-02, Task 3 — environment interruption during the first semver-checks re-run (2026-09-18)
+
+**This is a dated, append-only finding recorded per the maintainer's decision below, before the
+re-run it authorizes was executed.**
+
+At 16:22 UTC on 2026-09-18 the host lost DNS resolution mid-run; the host then rebooted, coming
+back up at **2026-09-18 16:35:02** (`uptime -s`). The executor running plan 37-02's Task 3 at that
+moment was lost; a fresh continuation agent recorded this entry and performed the re-run described
+below.
+
+**The interrupted run:** `target/37-02/semver-loop.sh` (the plan's own unmodified wrapper around
+the plan's exact `cargo semver-checks check-release --package <pkg> --default-features
+--baseline-version 0.9.0` command, one log + one exit file per package) was started at
+`start 2026-09-18T16:12:29Z` (`target/37-02/interrupted-20260918T1622Z/semver-loop.log`), against
+head SHA `af21ede92079493e3f965fb66bee2738d51154bc` (Task 2's own commit; the source tree under
+test is unchanged from `028e9726`, per the Task 2 head SHA note above). Per-package exit codes from
+that run, in the order the loop iterates:
+
+| Package | Exit code |
+|---|---|
+| paladin-ai | `0` |
+| paladin-ai-core | `0` |
+| paladin-ports | `0` |
+| paladin-battalion | `0` |
+| paladin-herald | `0` |
+| paladin-llm | `0` |
+| paladin-memory | `0` |
+| paladin-storage | `101` |
+| paladin-notifications | `101` |
+| paladin-content | `101` |
+| paladin-web | **no exit file — killed by the reboot before the command could finish** |
+
+The first seven packages' logs each end `Summary no semver update required` — an ordinary,
+complete verdict, not affected by the outage.
+
+The last four packages never produced a semver verdict. The exact DNS-failure lines, quoted
+verbatim from their preserved logs:
+
+`target/37-02/interrupted-20260918T1622Z/semver-paladin-storage.log`:
+```
+error: `cargo metadata` exited with an error:     Updating crates.io index
+warning: spurious network error (3 tries remaining): [6] Could not resolve hostname (Could not resolve host: index.crates.io)
+warning: spurious network error (2 tries remaining): [6] Could not resolve hostname (Could not resolve host: index.crates.io)
+warning: spurious network error (1 try remaining): [6] Could not resolve hostname (Could not resolve host: index.crates.io)
+error: failed to get `paladin-storage` as a dependency of package `placeholder v0.0.0 (/workspace/target/semver-checks/registry-paladin_storage-0_9_0-x86_64_unknown_linux_gnu-ccbd4c2ebd266b33)`
+```
+ending: `[6] Could not resolve hostname (Could not resolve host: index.crates.io)` — exit `101` at
+`end 2026-09-18T16:22:26Z`.
+
+`target/37-02/interrupted-20260918T1622Z/semver-paladin-notifications.log`:
+```
+error: failed to retrieve index of crate versions from registry
+
+Caused by:
+    0: failed to read index metadata for crate 'paladin-notifications'
+    1: error sending request for url (https://index.crates.io/pa/la/paladin-notifications)
+    2: client error (Connect)
+    3: dns error
+    4: failed to lookup address information: Temporary failure in name resolution
+```
+exit `101` at `end 2026-09-18T16:22:27Z`.
+
+`target/37-02/interrupted-20260918T1622Z/semver-paladin-content.log`:
+```
+error: failed to retrieve index of crate versions from registry
+
+Caused by:
+    0: failed to read index metadata for crate 'paladin-content'
+    1: error sending request for url (https://index.crates.io/pa/la/paladin-content)
+    2: client error (Connect)
+    3: dns error
+    4: failed to lookup address information: Temporary failure in name resolution
+```
+exit `101` at `end 2026-09-18T16:22:28Z`.
+
+`target/37-02/interrupted-20260918T1622Z/semver-paladin-web.log` holds only
+`start 2026-09-18T16:22:28Z` — the reboot killed the process before it printed anything further, and
+no `.exit` file was ever written for it.
+
+**No semver verdict was produced for `paladin-storage`, `paladin-notifications`, `paladin-content`,
+or `paladin-web`.** Every one of the four failures traces to the loss of DNS resolution to
+`index.crates.io`, not to any lint, assertion, or code-shape finding — no `cargo semver-checks`
+lint ever evaluated a diff for these four packages.
+
+**Classification and its provenance:** the orchestrator stopped at the workflow's safe-resume gate
+(D-14 temperament) and put the question to the maintainer through the runtime's interactive
+question mechanism (`AskUserQuestion`), offering three options: "Record, then full re-run
+(Recommended)" / "Record, re-run only the 4" / "Treat as a D-14 stop". **The maintainer selected,
+verbatim option label: "Record, then full re-run (Recommended)".** The reading the maintainer
+accepted: these four invocations are classified **not-measured**, plainly not red — a red gate
+requires an actual `cargo semver-checks` verdict that failed an assertion, and none of these four
+ever reached that point. Re-running them is therefore not "re-running a locally-red gate hoping for
+a different answer" (which D-14/D-15 forbid); it is completing a measurement an environment fault
+prevented from ever producing a verdict. This authorization covers exactly **one** re-run of the
+full 11-package semver loop for this specific outage. It does not relax D-14 for anything else in
+this phase.
+
+**Where the preserved logs live:** the complete interrupted run — all 11 packages' `.log`/`.exit`
+pairs (or their absence, for `paladin-web`), plus `semver-loop.log` and `semver-loop.pid` — was
+moved, unmodified, to `target/37-02/interrupted-20260918T1622Z/` before any re-run was started, per
+the maintainer's decision. `target/37-02/semver-loop.sh` itself (the script that will be re-run) was
+left in place, unmodified.
+
+The re-run this finding authorizes, and its result, are recorded as gate row 4 in the Local sweep
+below (Task 3 continuation), dated separately.
 
 ### Plan 37-02, Task 1 — zero documentation-phase topic counts (2026-09-18)
 

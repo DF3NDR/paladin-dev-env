@@ -1138,7 +1138,7 @@ Plans:
 
 **Goal**: v0.10.0 is released, not merely releasable — the Phase 29 gates are re-sealed on the final post-documentation commit, the feature branch merges to `main`, `release.yml` cuts the `v0.10.0` tag on the merge commit per the Phase 29 two-SHA rule, every publishable crate is on crates.io at `0.10.0`, and the release evidence is recorded so the milestone can close.
 **Depends on**: Phase 35, Phase 36 (all documentation and example work landed); Phase 36.1 (deferred items closed or dispositioned before the tag); Phase 33 (the gate re-seal this phase repeats)
-**Requirements**: TBD — assigned at planning; may extend SHIP-04 in place per protocol item 3 rather than minting a near-duplicate
+**Requirements**: SHIP-05
 **Source**: Phase 29 D-17 / D-18 / D-21 (human-only §11 sign-off box; `0.10.0` bumped without a tag; tag cut on the `main` merge commit by `release.yml`); the v0.9.0 post-close release record in MILESTONES.md
 **UI hint**: no
 **Success Criteria** (what must be TRUE):

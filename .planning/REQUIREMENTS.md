@@ -320,6 +320,11 @@ FUT-09 remain v2, now with a named owner milestone.
   mdBook + rustdoc updated with no new broken intra-doc links, and the semver and MSRV CI jobs
   green on the release commit (overview §5 DoD 1, 3, 6, 7; X-08)
 
+- [ ] **SHIP-05**: v0.10.0 is released: the Phase 29 gate set is re-sealed on the final commit,
+  the annotated tag sits on the `main` merge commit, every publishable crate resolves on
+  crates.io at `0.10.0`, and the release evidence is recorded in MILESTONES.md (roadmap Phase 37
+  SC1-SC4; 37-CONTEXT.md D-07; Phase 29 D-18 / D-21)
+
 ### Token-Economy Vocabulary & Commissary Anchoring (`.project/Milestone_13-Token-Economy/Epic_1`, epic `VOCAB`)
 
 Docs-only, non-breaking. Source PRD: `prd-vocabulary-and-docs-foundation.md` (D-1, D-2, D-3,
@@ -671,6 +676,7 @@ Which phases cover which requirements. Populated during roadmap creation.
 | SHIP-02 | Phase 29 | Complete |
 | SHIP-03 | Phase 29 | Complete |
 | SHIP-04 | Phase 29 | Complete |
+| SHIP-05 | Phase 37 | Complete |
 | VOCAB-01 | Phase 30 | Complete |
 | VOCAB-02 | Phase 30 | Complete |
 | VOCAB-03 | Phase 30 | Complete |

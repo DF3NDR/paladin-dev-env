@@ -1201,3 +1201,26 @@ failed."
   unexercised and "linked (reported by maintainer)".
 - **Status: HARD STOP (D-16). SC3 is met (tag on the merge commit); SC4 is NOT met and cannot be
   met by this tag's pipeline as it stands.** Awaiting the maintainer.
+
+### Maintainer decision after D-16 diagnosis #2 — recovery path (2026-09-19)
+
+The orchestrator put three options to the maintainer in-session: **A** a `v0.10.1` patch release
+through the pipeline (runbook §4), as an inserted Phase 37.1; **B** complete `0.10.0` forward by
+hand-publishing `paladin-llm` and `paladin-storage` with a short-lived token, then re-run failed
+jobs; **C** pause. Maintainer's reply, verbatim: "A".
+
+Consequences recorded at the time of the decision:
+- Phase 37 stays OPEN. SC1-SC3 are evidenced above; **SC4 is unmet and will not be met by tag
+  `v0.10.0`** (3 of 12 crates at `0.10.0`: `paladin-ai-core`, `paladin-ports`, `paladin-herald`).
+  Under D-09 no plan of the post-tag wave (37-09, 37-10, 37-11) runs "by promise", and plan 37-08
+  has no SUMMARY yet — its close-out waits on what Phase 37.1 establishes.
+- Phase 37.1's minimum scope, as findings carried from this file: (1) `paladin-battalion`'s two
+  versioned dev-dependencies vs the `CRATES` order; (2) `scripts/create-or-reuse-release.sh:79`
+  `printf | head -n1` under `pipefail`; (3) a gate that exercises the real per-crate resolution
+  path, since `cargo publish --workspace --dry-run` is blind to ordering; (4) the twelve-manifest
+  bump to `0.10.1` with changelogs; (5) the disposition of the three orphaned `0.10.0` versions
+  (yank is the maintainer's alone, runbook §5); (6) how SHIP-05 / SC4 are re-worded or satisfied
+  when the released version is `0.10.1`; (7) carrying this branch's local-only `.planning/`
+  commits onto a branch cut from `origin/main` (they descend from `1bb94063`, not from the merge
+  commit `1d4a9724`, though the two trees are identical).
+- No agent re-ran, dispatched, published or yanked anything at any point.

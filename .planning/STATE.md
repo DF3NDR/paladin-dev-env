@@ -5,7 +5,7 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37
 current_phase_name: v0.10.0 Crate Release
 status: executing
-stopped_at: "Completed 37-07-PLAN.md (pre-merge CI evidence recorded: every workflow run on the PR head SHA, 44/44 required-context tally, CodeQL results check filed as advisory, Coverage job success + verbatim 90.44% figure as sole SC2 evidence; Task 3 not applicable by deviation -- PR merged, remote branch deleted)"
+stopped_at: Phase 37 OPEN and BLOCKED — v0.10.0 tagged but publish failed 3/12 (battalion dev-dep order); maintainer chose v0.10.1 via Phase 37.1
 last_updated: "2026-09-18T21:57:29.753Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 37 execution started

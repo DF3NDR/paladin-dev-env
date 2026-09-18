@@ -1174,7 +1174,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 37-06-PLAN.md — Push the branch, open the release PR (D-01), write the D-12 pause hand-off, and stop until CI concludes
+- [x] 37-06-PLAN.md — Push the branch, open the release PR (D-01), write the D-12 pause hand-off, and stop until CI concludes
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

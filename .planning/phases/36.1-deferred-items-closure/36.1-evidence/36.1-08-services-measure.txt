@@ -1,0 +1,60 @@
+36.1-08 — post-first-two-service-sections re-measurement
+Captured: 2026-09-18T04:41:28Z
+HEAD at capture: 5c2f56c7 docs(36.1): add # Examples to ScheduleService (D-10) (+ this plan's
+WebhookDeliveryService section, uncommitted at capture time, committed immediately after)
+
+## Command 1: cargo test -p paladin-ai --doc WebhookDeliveryService
+
+$ cargo test -p paladin-ai --doc WebhookDeliveryService
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+   Doc-tests paladin
+
+running 1 test
+test src/application/services/run/webhook/service.rs - application::services::run::webhook::service::WebhookDeliveryService (line 111) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 166 filtered out; finished in 0.10s
+
+all doctests ran in 2.90s; merged doctests compilation took 2.78s
+
+## Command 2: cargo doc --workspace --no-deps
+
+$ cargo doc --workspace --no-deps
+   Documenting paladin-ai-core v0.10.0 (/workspace/crates/paladin-core)
+    Checking paladin-llm v0.10.0 (/workspace/crates/paladin-llm)
+    Checking paladin-battalion v0.10.0 (/workspace/crates/paladin-battalion)
+    Checking paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+    Checking paladin-web v0.10.0 (/workspace/crates/paladin-web)
+ Documenting paladin-web v0.10.0 (/workspace/crates/paladin-web)
+ Documenting paladin-storage v0.10.0 (/workspace/crates/paladin-storage)
+    Checking paladin-memory v0.10.0 (/workspace/crates/paladin-memory)
+    Checking paladin-content v0.10.0 (/workspace/crates/paladin-content)
+ Documenting paladin-content v0.10.0 (/workspace/crates/paladin-content)
+ Documenting paladin-memory v0.10.0 (/workspace/crates/paladin-memory)
+ Documenting paladin-battalion v0.10.0 (/workspace/crates/paladin-battalion)
+ Documenting paladin-notifications v0.10.0 (/workspace/crates/paladin-notifications)
+ Documenting paladin-llm v0.10.0 (/workspace/crates/paladin-llm)
+    Checking paladin-ai v0.10.0 (/workspace)
+ Documenting paladin-ai v0.10.0 (/workspace)
+ Documenting paladin-eval v0.10.0 (/workspace/crates/paladin-eval)
+ Documenting paladin-doc-examples v0.10.0 (/workspace/crates/doc-examples)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 19.93s
+   Generated /workspace/target/doc/paladin/index.html and 13 other files
+
+$ cargo doc --workspace --no-deps 2>&1 | grep -c 'warning:'
+0
+
+Zero warning lines with this plan's two `# Examples` sections (ScheduleService,
+WebhookDeliveryService) in place -- the ADR-0033 bar (`cargo doc --workspace --no-deps`
+emits no line containing `warning:`) is unaffected by this plan's doc-comment-only diff.
+
+## scripts/check-public-api-examples.sh --list, filtered
+
+$ bash scripts/check-public-api-examples.sh --list | grep -E "ScheduleService|WebhookDeliveryService|^TOTAL"
+Service	ScheduleService	src/application/services/run/schedule/service.rs:207	OK
+Service	WebhookDeliveryService	src/application/services/run/webhook/service.rs:136	OK
+TOTAL: 101 entry points -- 96 OK, 5 MISSING, 0 SINGULAR
+
+MISSING dropped from 7 (before this plan) to 5 (after), matching this plan's two-item scope.
+Remaining 5 MISSING rows are RunSubmissionService, RunInspectorService, RunEventStreamService,
+AssistantService and WaypointRetentionService -- owned by plans 36.1-09 through 36.1-11 per the
+plan's own `artifacts_this_phase_produces` note.

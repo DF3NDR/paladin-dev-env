@@ -165,6 +165,49 @@ Observed state at discussion time (2026-09-18, HEAD `555c5285`): branch `feature
   half-published dependency chain on crates.io is permanent state; only forward completion or a
   yank changes it.
 
+### Planning-time addenda (added 2026-09-18 at `/gsd-plan-phase 37`, after research)
+
+Dated additions under D-00d's amend-at-source rule — nothing above this heading was edited.
+
+- **D-17:** `paladin-eval`'s first publish is bootstrapped by the **maintainer only**, with a
+  **dependency-free placeholder version**, at a blocking human-action checkpoint in the
+  **pre-merge wave**. Research Q3 (`37-RESEARCH.md`) found `paladin-eval` has never been published
+  (sparse index `404`, re-verified by the orchestrator 2026-09-18) and that crates.io Trusted
+  Publishing cannot perform a crate's first publish — so an unassisted release run would publish
+  ten of twelve crates, fail at `paladin-eval` (position 11) and skip the `paladin-ai` facade. A
+  pre-tag publish of the real `0.10.0` is impossible: it depends on five workspace crates at
+  `^0.10.0` that reach the registry only during the release run. The maintainer therefore
+  publishes a placeholder `paladin-eval` (e.g. `0.0.1`, no dependencies) from a scratch directory
+  **outside the repository** using a short-lived crates.io token, links the crate's Trusted
+  Publisher with the same triple as the other eleven crates (repository
+  `DF3NDR/paladin-dev-env`, workflow `release.yml`, environment `crates-io`), then revokes the
+  token. The agent never sees, requests, stores or handles the credential: it hands over the
+  steps, then verifies read-only that `paladin-eval` resolves on the sparse index **before** the
+  D-02 tag command is handed over. The Trusted Publisher link itself is attested by the maintainer
+  (it is not publicly queryable — the existing eleven rows read "linked (reported)" for the same
+  reason); after the release, a non-null `trustpub_data` on `paladin-eval` `0.10.0` is the
+  observable proof. The real `0.10.0` publish of all twelve crates stays with `release.yml` via
+  OIDC, and no tree change is made for the placeholder. This is consistent with D-00g — the token
+  is short-lived, maintainer-held and revoked, never a standing credential and never in the
+  repository, CI secrets or the agent's environment. The crates.io policy claim is MEDIUM
+  confidence (blog post plus search synthesis; the primary docs page is JS-rendered), and the
+  checkpoint text must tell the maintainer so. Chosen by the maintainer over a planned
+  complete-forward at release time (a deliberately red release run and a half-published chain).
+  — **Reversibility:** one-way — a published placeholder version can be yanked but never deleted.
+
+Orchestrator-verified tree facts the planner applies under D-00f (not new maintainer decisions):
+
+- D-06's target file: `29-ACCEPTANCE-AUDIT.md` is a 29-line **pointer**; the audit body and the
+  literal sign-off box SC1 names (`- [ ] **The v0.10.0 tag may be cut**`, line ~1549) live in the
+  corpus document `.project/v0.10.0/09-program-acceptance-audit.md`. D-06's own rationale — the box
+  sits in the same file that shows what was re-verified — is met by following the Phase 33
+  precedent exactly: the dated re-seal section is appended to the **corpus document** as a new
+  `## 12.` section, **and** the pointer file gains one dated re-seal paragraph naming it. The
+  existing §11 text and box wording are not edited.
+- D-13's open question is answered (research Q1): `release.yml` cannot be dry-run-dispatched before
+  a ref literally named `v0.10.0` exists, so D-13's own documented fallback applies — no dispatch,
+  no rc tag, no shadow tag; the reason is recorded in `37-CI-EVIDENCE.md`.
+
 ### Claude's Discretion
 
 - Who dispatches the D-13 dry run (it publishes nothing). Default: the agent may dispatch it

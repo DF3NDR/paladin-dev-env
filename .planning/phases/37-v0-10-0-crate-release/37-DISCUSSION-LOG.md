@@ -217,6 +217,27 @@ follow-up below. Recorded in CONTEXT.md `<specifics>` as the governing temperame
 Not presented as a fold question: Phase 36.1 D-00k / D-22…D-24 had already dispositioned both
 files the same day, so re-asking would have re-litigated a locked decision.
 
+## Planning-time question (2026-09-18, `/gsd-plan-phase 37`, after research)
+
+Research Q3 found `paladin-eval` never published (sparse index `404`) and that crates.io Trusted
+Publishing cannot perform a crate's first publish. The orchestrator re-verified the `404`, and
+established that the researcher's suggested remedy (maintainer publishes the real `0.10.0` before
+the tag) is impossible — `paladin-eval` `0.10.0` depends on five workspace crates at `^0.10.0`
+that are not on the registry until the release run publishes them.
+
+Asked: how should the plan handle the first publish?
+
+| Option | Outcome |
+|--------|---------|
+| Placeholder bootstrap pre-tag (recommended) | **Selected** — recorded as D-17 |
+| Planned complete-forward at release time | Not selected — a deliberately red release run |
+| Pause planning and decide out-of-band | Not selected |
+
+Two tree facts were recorded alongside D-17 as orchestrator-verified clarifications rather than
+maintainer decisions: D-06's re-seal section lands in the corpus document as `## 12.` (the phase
+file is a pointer; Phase 33 precedent), and D-13's documented fallback applies because the dry
+run cannot be dispatched before the tag exists.
+
 ## Session note
 
 While the workflow file was being read, the tool result carried a trailing block styled as a

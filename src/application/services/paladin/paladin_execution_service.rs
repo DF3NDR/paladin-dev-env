@@ -5970,6 +5970,70 @@ mod middleware_wiring_tests {
         );
     }
 
+    /// D-03 (ledger row 38): under the run-failing tool-error policy, a
+    /// credential embedded in a failing tool's error text must never reach
+    /// the structured `PaladinError::ArmamentFailed` error's `reason`
+    /// unredacted -- mirroring `a_secret_in_a_tool_error_never_reaches_the_
+    /// model` above, but for `ToolErrorMode::FailRun` rather than the
+    /// default `FeedToModel`. Covers the regular Arsenal-tool arm, which
+    /// `FailingArsenal` drives directly; the handoff arm's coverage is the
+    /// source-level guarantee from Task 1 (`sanitize_tool_text` is called
+    /// in exactly two places, one per arm) -- see this plan's SUMMARY for
+    /// why a handoff-arm pinning test was not added here (driving a
+    /// caller-controlled message through that arm would require either new
+    /// production scaffolding or exploiting `HandoffService`'s recursive
+    /// self-execution retry path, both out of this plan's bounded scope).
+    #[tokio::test]
+    async fn fail_run_redacts_a_secret_in_the_reason() {
+        let llm = Arc::new(
+            MockLlmAdapter::new().with_script(vec![MockScriptEntry::ToolCall {
+                name: "lookup".to_string(),
+                arguments: "{}".to_string(),
+            }]),
+        );
+        let arsenal = Arc::new(FailingArsenal::new(
+            "upstream rejected: Authorization: Bearer sk-live-abcdef0123456789",
+        ));
+        let service = make_service_with_arsenal(llm, arsenal.clone() as Arc<dyn ArsenalPort>)
+            .with_tool_error_config(ToolErrorConfig {
+                mode: ToolErrorMode::FailRun,
+                per_tool: HashMap::new(),
+            });
+        let paladin = make_paladin(1);
+
+        let err = service.execute(&paladin, "hi").await.unwrap_err();
+
+        match err {
+            PaladinError::ArmamentFailed { tool, reason } => {
+                assert_eq!(tool, "lookup");
+                assert!(
+                    !reason.contains("abcdef0123456789"),
+                    "credential leaked in reason, got {reason}"
+                );
+                // `paladin_llm::redaction::CREDENTIAL_PLACEHOLDER` is
+                // `pub(crate)` to that crate, so this asserts the literal
+                // it is defined as rather than importing it.
+                assert!(
+                    reason.contains("[REDACTED]"),
+                    "expected redaction placeholder, got {reason}"
+                );
+                // Proves the sanitizer was called directly, not the
+                // model-facing `format_error` block (which would prefix
+                // "Tool Execution" / "Result: FAILED" and double the
+                // structured error's own "tool `{tool}` failed: " prefix).
+                assert!(
+                    !reason.contains("Tool Execution"),
+                    "reason carries the model-facing block, got {reason}"
+                );
+                assert!(
+                    !reason.contains("Result: FAILED"),
+                    "reason carries the model-facing block, got {reason}"
+                );
+            }
+            other => panic!("expected PaladinError::ArmamentFailed, got {other:?}"),
+        }
+    }
+
     /// D-34: the handoff arm routes through the SAME tool-error policy and
     /// the same shared formatter as the Arsenal arm -- proven end to end by
     /// forcing a handoff to fail via `HandoffConfig.max_depth = 0` (an

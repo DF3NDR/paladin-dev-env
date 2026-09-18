@@ -100,14 +100,14 @@ tooling counts separately from the line-coverage gate.
     │   ├── paladin_builder_test.rs
     │   ├── paladin_entity_test.rs
     │   ├── scheduler_tests.rs
-    │   └── ...                # 20 more unit test files
+    │   └── ...                # 22 more unit test files
     ├── integration/           # Integration tests (some Docker-backed, serial-friendly)
     │   ├── mod.rs
     │   ├── battalion/
     │   ├── openai_provider_test.rs
     │   ├── redis_queue_integration_test.rs
     │   ├── v0_9_config_boot_test.rs
-    │   └── ...                # 55 more integration test files
+    │   └── ...                # 56 more integration test files
     ├── functional/            # End-to-end functional tests
     │   ├── content_fetching_pipeline_test.rs
     │   ├── content_lifecycle_test.rs

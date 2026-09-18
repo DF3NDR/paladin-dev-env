@@ -5,8 +5,8 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
 status: executing
-stopped_at: Completed 36.1-13-PLAN.md
-last_updated: "2026-09-18T05:53:38.393Z"
+stopped_at: "Phase 36.1 plan 36.1-14 at its blocking checkpoint: maintainer push of feature/phase-33 pending, then record the CI run in 36.1-CI-EVIDENCE.md and resume with /gsd-execute-phase 36.1"
+last_updated: "2026-09-18T06:00:05.925Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36.1 execution started
 progress:
@@ -1126,9 +1126,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T05:53:38.312Z
-**Stopped at:** Completed 36.1-13-PLAN.md
-**Resume file:** None
+**Last session:** 2026-09-18T06:00:05.831Z
+**Stopped at:** Phase 36.1 plan 36.1-14 at its blocking checkpoint: maintainer push of feature/phase-33 pending, then record the CI run in 36.1-CI-EVIDENCE.md and resume with /gsd-execute-phase 36.1
+**Resume file:** .planning/phases/36.1-deferred-items-closure/36.1-CI-EVIDENCE.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

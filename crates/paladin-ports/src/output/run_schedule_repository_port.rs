@@ -80,6 +80,113 @@ pub enum RunScheduleRepositoryError {
 ///
 /// Implementations must be `Send + Sync`: schedules are read and ticked
 /// concurrently across `ScheduleService` instances.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::HashMap;
+/// use std::sync::Mutex;
+///
+/// use async_trait::async_trait;
+/// use chrono::{DateTime, Utc};
+/// use paladin_core::platform::container::run_schedule::{
+///     RunSchedule, RunScheduleId, RunScheduleUpdate,
+/// };
+/// use paladin_ports::output::run_schedule_repository_port::{
+///     RunSchedulePage, RunScheduleRepositoryError, RunScheduleRepositoryPort,
+/// };
+///
+/// struct InMemorySchedules {
+///     schedules: Mutex<HashMap<RunScheduleId, RunSchedule>>,
+/// }
+///
+/// #[async_trait]
+/// impl RunScheduleRepositoryPort for InMemorySchedules {
+///     async fn insert(&self, schedule: RunSchedule) -> Result<(), RunScheduleRepositoryError> {
+///         self.schedules
+///             .lock()
+///             .unwrap()
+///             .insert(schedule.schedule_id.clone(), schedule);
+///         Ok(())
+///     }
+///
+///     async fn get(
+///         &self,
+///         schedule_id: &RunScheduleId,
+///     ) -> Result<Option<RunSchedule>, RunScheduleRepositoryError> {
+///         Ok(self.schedules.lock().unwrap().get(schedule_id).cloned())
+///     }
+///
+///     async fn list(
+///         &self,
+///         _limit: u32,
+///         _cursor: Option<RunScheduleId>,
+///     ) -> Result<RunSchedulePage, RunScheduleRepositoryError> {
+///         let items: Vec<RunSchedule> =
+///             self.schedules.lock().unwrap().values().cloned().collect();
+///         Ok(RunSchedulePage {
+///             items,
+///             next_cursor: None,
+///         })
+///     }
+///
+///     async fn update(
+///         &self,
+///         _schedule_id: &RunScheduleId,
+///         _update: RunScheduleUpdate,
+///     ) -> Result<(), RunScheduleRepositoryError> {
+///         Ok(())
+///     }
+///
+///     async fn delete(
+///         &self,
+///         _schedule_id: &RunScheduleId,
+///     ) -> Result<(), RunScheduleRepositoryError> {
+///         Ok(())
+///     }
+///
+///     async fn due(
+///         &self,
+///         _now: DateTime<Utc>,
+///         _limit: u32,
+///     ) -> Result<Vec<RunSchedule>, RunScheduleRepositoryError> {
+///         Ok(vec![])
+///     }
+///
+///     async fn claim_tick(
+///         &self,
+///         _schedule_id: &RunScheduleId,
+///         _expected_next: DateTime<Utc>,
+///         _new_last: DateTime<Utc>,
+///         _new_next: DateTime<Utc>,
+///     ) -> Result<bool, RunScheduleRepositoryError> {
+///         Ok(true)
+///     }
+///
+///     async fn increment_skipped(
+///         &self,
+///         _schedule_id: &RunScheduleId,
+///     ) -> Result<u64, RunScheduleRepositoryError> {
+///         Ok(1)
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let repo = InMemorySchedules {
+///         schedules: Mutex::new(HashMap::new()),
+///     };
+///     let schedule = RunSchedule::new(RunScheduleId::new_v7(), "assistant-1", "*/5 * * * *");
+///
+///     repo.insert(schedule).await.unwrap();
+///     let page = repo.list(10, None).await.unwrap();
+///     assert_eq!(
+///         page.items.len(),
+///         1,
+///         "the inserted schedule shows up in list"
+///     );
+/// }
+/// ```
 #[async_trait]
 pub trait RunScheduleRepositoryPort: Send + Sync {
     /// Persist a brand-new schedule.

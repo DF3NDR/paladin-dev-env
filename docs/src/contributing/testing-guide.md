@@ -76,25 +76,58 @@ tooling counts separately from the line-coverage gate.
 ### Directory Structure
 
 ```
-tests/
-├── lib.rs                    # Test utilities and common setup
-├── unit/                     # Unit tests (parallel execution)
-│   ├── mod.rs
-│   ├── paladin_tests.rs
-│   ├── garrison_tests.rs
-│   └── arsenal_tests.rs
-├── integration/              # Integration tests (serial execution)
-│   ├── mod.rs
-│   ├── redis_queue_test.rs
-│   ├── minio_storage_test.rs
-│   └── llm_provider_test.rs
-├── functional/               # End-to-end functional tests
-│   ├── mod.rs
-│   ├── content_lifecycle_test.rs
-│   └── battalion_execution_test.rs
-└── fixtures/                 # Test data and fixtures
-    ├── config.test.yml
-    └── sample_data.json
+.
+├── config.test.yml            # Test configuration file (repository root, sibling of tests/)
+└── tests/
+    ├── lib.rs                 # Test harness entry point
+    ├── functional.rs          # functional/ module declarations
+    ├── repository.rs          # repository/ module declarations
+    ├── evals.rs
+    ├── agent_orchestrator_bridge.rs
+    ├── cli_isolation_test.rs
+    ├── content_agent_bridge.rs
+    ├── content_ingestion_pipeline.rs
+    ├── event_trigger_pipeline.rs
+    ├── mcp_test_server.py
+    ├── paladin_server_smoke.rs
+    ├── queue_port_contract.rs
+    ├── web_server_e2e.rs
+    ├── unit/                  # Unit tests
+    │   ├── mod.rs
+    │   ├── arsenal/
+    │   ├── battalion/
+    │   ├── llm/
+    │   ├── paladin_builder_test.rs
+    │   ├── paladin_entity_test.rs
+    │   ├── scheduler_tests.rs
+    │   └── ...                # 20 more unit test files
+    ├── integration/           # Integration tests (some Docker-backed, serial-friendly)
+    │   ├── mod.rs
+    │   ├── battalion/
+    │   ├── openai_provider_test.rs
+    │   ├── redis_queue_integration_test.rs
+    │   ├── v0_9_config_boot_test.rs
+    │   └── ...                # 55 more integration test files
+    ├── functional/            # End-to-end functional tests
+    │   ├── content_fetching_pipeline_test.rs
+    │   ├── content_lifecycle_test.rs
+    │   ├── content_llm_analysis_pipeline_test.rs
+    │   └── paladin_tool_invocation_test.rs
+    ├── helpers/                # Shared test doubles and fixtures
+    │   ├── mod.rs
+    │   ├── e2e_fixtures.rs
+    │   ├── mock_arsenal_adapter.rs
+    │   ├── mock_llm_adapter.rs
+    │   └── mock_paladin_port.rs
+    ├── fixtures/               # Test data and fixtures
+    │   ├── README.md
+    │   ├── config/
+    │   ├── sample_article.txt
+    │   ├── sample_chart.png
+    │   └── sample_diagram.jpg
+    ├── cli/                    # CLI-level test binaries and snapshots
+    ├── repository/             # Repository adapter tests
+    └── scripts/                # CI helper script tests
 ```
 
 ### Test Module Naming
@@ -112,7 +145,7 @@ mod tests {
 }
 
 // Integration tests in tests/ directory
-// tests/integration/redis_queue_test.rs
+// tests/integration/redis_queue_integration_test.rs
 #[tokio::test]
 async fn test_redis_queue_operations() {
     // Test implementation
@@ -224,7 +257,7 @@ proptest! {
 ### Redis Integration Test
 
 ```rust,ignore
-// tests/integration/redis_queue_test.rs
+// tests/integration/redis_queue_integration_test.rs
 
 use paladin::infrastructure::adapters::queue::RedisQueueAdapter;
 use testcontainers::{clients, images};
@@ -367,7 +400,7 @@ async fn test_complete_content_processing_flow() {
 ### Battalion Execution Flow
 
 ```rust,ignore
-// tests/functional/battalion_execution_test.rs
+// tests/integration/battalion/formation_integration_test.rs
 
 #[tokio::test]
 async fn test_formation_sequential_execution() {

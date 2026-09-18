@@ -471,6 +471,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(result) => println!("   UNEXPECTED: run succeeded -- {:?}", result.output),
         Err(PaladinError::ArmamentFailed { tool, reason }) => {
             println!("   Run FAILED under the fail-run policy -- tool = {tool}");
+            println!(
+                "   NOTE: this reason is intentionally NOT redacted -- see the defect note below"
+            );
             println!("   reason = {reason}");
             println!(
                 "\n   NOTE (discovered during this example's own read_first research):\n   \

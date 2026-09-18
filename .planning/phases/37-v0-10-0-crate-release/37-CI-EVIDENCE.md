@@ -48,6 +48,30 @@ still hold. 18G free and a clean tree are recorded here specifically so that an 
 dirty-tree abort in plan 37-02/37-03 is legible as an environment stop under D-14, never
 mistaken for a red gate.
 
+**Addendum — 2026-09-18, post-Task-1 environment change (append-only, D-00d; nothing above this
+addendum is edited):** between Task 1 and this continuation, the maintainer reported acting on
+the 18G figure above. Obtained via the runtime's interactive question mechanism
+(`AskUserQuestion`), the maintainer's reply, verbatim:
+
+> "I ran `cargo clean` and now there is plenty of space."
+
+Re-measured live by this continuation, after that report:
+
+| Measurement | Command | Result |
+|---|---|---|
+| Free space on `/workspace` | `df -BG --output=avail,pcent /workspace` | **135G** available, 84% used |
+| Working tree cleanliness | `git status --porcelain` | Empty — clean tree |
+
+This satisfies plan 37-02's precondition text ("the figure recorded by plan 37-01 Task 1"), now
+current at 135G, well above both plan 37-02's (>= 20 GiB) and plan 37-03's (>= 40 GiB) thresholds.
+`target/` is confirmed cold (near-empty directory, no build artifacts) as a direct consequence of
+the `cargo clean` reported above — this is stated plainly so that plan 37-02/37-03 gate timings
+are read as cold-build timings, not as a regression against Task 1's or any prior phase's warm-cache
+figures. A separate, out-of-band `cargo clippy --workspace --all-targets --all-features -- -D
+warnings` cache warm-up was run by the orchestrator ahead of this continuation (finished clean, no
+warnings, 6m 23s) — that run was cache preparation for the commit hooks below, not a gate, and is
+not recorded as a Local sweep row.
+
 ---
 
 ## Local sweep
@@ -113,6 +137,43 @@ The full twelve-crate registry table (every publishable crate at `0.10.0`, per D
 from `cargo metadata`) is **not** run by this plan — v0.10.0 has not been published anywhere yet.
 That table is written by the post-tag wave plan once the real release run has completed.
 
+**Post-checkpoint registry state for `paladin-eval` (this plan, Task 3):**
+
+```
+curl -s -o /tmp/pe_post.json -w '%{http_code}' \
+  -H 'User-Agent: paladin-release-check (github.com/DF3NDR/paladin-dev-env)' \
+  https://index.crates.io/pa/la/paladin-eval
+```
+
+**HTTP status: `404`** (same `NoSuchKey` body shape as the pre-bootstrap baseline above —
+re-verified 2026-09-18, after Task 2's checkpoint resolved). No `vers` field present.
+
+**Maintainer's Task 2 reply, recorded verbatim** (obtained via the runtime's interactive question
+mechanism, `AskUserQuestion`, presented against the three listed options "Bootstrapped 0.0.1" /
+"Deferred" / "Not needed"; the maintainer answered in free text instead of selecting one):
+
+> "You'll provide specific instructions (short runbook) for the Owner Gated  requirement when the
+> requirement is needed and we will together make sure it is done properly."
+
+**Orchestrator's classification of that reply (the orchestrator's reading, not the maintainer's
+words): `deferred`.** Reasoning: the reply reports no publish and no placeholder version, so it is
+not "bootstrapped `<version>`"; it makes no claim that crates.io now supports a pending publisher,
+so it is not "not needed"; it postpones the act to the point of need and asks the agent to supply
+a short runbook then, to be worked through together. This is also the fail-safe branch of the
+three: it leaves plan 37-08's gate fully in force. The orchestrator stated this reading to the
+maintainer in-session.
+
+**Open obligation carried from this reply:** the agent owes the maintainer a short, specific D-17
+runbook at the point of need. First natural opportunity: the PR CI wait in plans 37-06/37-07. Hard
+deadline: before plan 37-08 Task 3's tag hand-off — per D-17's own instructions text, a `404` under
+a "deferred" reply withholds the tag command and halts the phase there until the bootstrap is
+actually done.
+
+**Reading this 404 correctly:** the continuing 404 is the expected state under "deferred" — it is
+**not** a failure of this plan (per Task 1's own note, and per this task's action text). The gate
+that actually consumes this fact sits in plan 37-08, immediately before the tag hand-off, and
+branches on the three-way reply captured verbatim above.
+
 ---
 
 ## Findings carried forward (D-00d)
@@ -121,6 +182,55 @@ Not populated by this plan. Task 3 appends the D-13 non-dispatch record and the 
 carried documentation findings here; later plans append further findings as they are observed.
 Nothing above this heading is edited by any later addition — additions are dated and appended
 only.
+
+### D-13 — dry-run dispatch not attempted (this plan, Task 3, 2026-09-18)
+
+No `workflow_dispatch` of `release.yml` was attempted, and no rc tag or non-`v` shadow tag was
+created.
+
+**Traced reason:** the dispatch's `tag` input is used both as the ref to resolve (`verify-tag-source`,
+`git rev-list -n 1 "$RELEASE_TAG"`) and as the literal version string matched against the
+CHANGELOG heading (`create-release`) and against every publishable crate's manifest
+(`check-release-consistency`). No single value satisfies all three constraints before a ref
+literally named `v0.10.0` exists:
+- `v0.10.0` / `0.10.0` (no such ref pre-tag) fails step 1 outright — `verify-tag-source` cannot
+  resolve it as a revision.
+- The exact 40-char merge-commit SHA resolves in step 1 but fails the changelog-heading match
+  (`create-release`) — no `## [<40-hex-chars>]` heading exists.
+- An existing older tag (e.g. `v0.9.0`) resolves and matches the changelog heading, but fails the
+  manifest match (`check-release-consistency` clause 1) — the manifest is `0.10.0`, the tag strips
+  to `0.9.0`.
+
+`37-RESEARCH.md` Q1 carries the full row-by-row trace over these four candidates. D-13's own
+fallback sentence — "if a dry run cannot be dispatched without a real tag, fall back to going
+straight to the tag and record why; do not substitute an rc tag" — is the authority applied here.
+
+**The theoretical non-`v`-prefixed shadow-tag escape hatch** (a lightweight tag literally named
+`0.10.0`, no leading `v`, which would resolve step 1 and match steps 3-6 without matching the
+`push: tags: v*.*.*` trigger glob) **was considered and rejected.** `37-RESEARCH.md` Q1 records it
+as traced but untested by design, and explicitly not recommended: it adds an extra pushed tag
+object outside the documented flow, for a low-value rehearsal, given the seven local gates already
+prove packaging validity (Q5). No such tag was created.
+
+### Carried documentation findings (this plan, Task 3, 2026-09-18)
+
+Recorded only; nothing below is fixed by this plan (D-14 — this phase does not edit docs pages
+under CONTEXT `<deferred>`; currency fixes are v0.11.0 scope):
+
+- `docs/src/appendix/release-automation.md`'s per-crate Trusted Publishing table and Credential
+  History ledger have no `paladin-eval` row — D-17's bootstrap (deferred, per the reply recorded
+  above) is not yet reflected there, and won't be until the bootstrap actually happens.
+- `docs/src/appendix/release-automation.md`'s "Canonical Publish Order" section still describes
+  the pre-`paladin-eval` eleven-crate order; `scripts/publish-crates.sh`'s `CRATES` array is the
+  live authority (twelve crates, `paladin-eval` at position 11 of 12).
+- `docs/src/contributing/development-setup.md` still states eleven publishable crates; the tree
+  (`cargo metadata`, live) says twelve — per D-00f, the shipped tree outranks any document.
+- `docs/src/appendix/release-recovery.md` §1's example loop enumerates eleven crate names, not
+  twelve.
+- `CHANGELOG.md`'s `[0.10.0]` heading carries the date `2026-09-10`, earlier than the actual
+  release date. Recorded, not edited: neither the D-06 gate set nor
+  `scripts/check-release-consistency.sh` reads the date (clause 2 matches only the version
+  heading), so this is a currency finding, not a gate failure.
 
 ---
 

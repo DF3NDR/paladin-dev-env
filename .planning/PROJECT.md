@@ -30,7 +30,11 @@ report ("22/22 examples compiling") and is stale — the shipped tree carries **
 under `examples/`, 4 of them declared `[[example]]` targets gating on non-default features
 (`vision`, `content-processing`, `web-server`); no crate under `crates/` ships its own
 `examples/` directory. The shipped tree outranks an ingested count under this project's precedence
-order. The gate REL-05 now expresses is "every example target builds", not a count.)
+order. The gate REL-05 now expresses is "every example target builds", not a count.) *(Corrected 2026-09-18,
+Phase 36.1: the 47/4/"no crate" figures above are themselves stale — the tree now
+carries **62** `.rs` files under `examples/`, **8** declared `[[example]]` targets, and
+`paladin-llm` ships its own `examples/` directory
+(`crates/paladin-llm/examples/live_vendor_smoke.rs`); no other crate under `crates/` does.)*
 
 ## What This Planning Corpus Is
 
@@ -602,7 +606,11 @@ and the codebase map):
   `04-release-measurement.md`**: "22 examples" restates the same Milestone 1 Epic 10 validation
   report amended above and in the Overview; the shipped tree carries 47 `.rs` files under
   `examples/`, 4 declared `[[example]]` targets, 0 crate-level `examples/` directories. See the
-  Overview amendment for the full figure and precedence-order rationale.)
+  Overview amendment for the full figure and precedence-order rationale.) *(Corrected 2026-09-18,
+  Phase 36.1: those figures are themselves stale — the tree now carries **62** `.rs` files under
+  `examples/`, **8** declared `[[example]]` targets, and `paladin-llm` ships its own `examples/`
+  directory (`crates/paladin-llm/examples/live_vendor_smoke.rs`); no other crate under `crates/`
+  does.)*
 
 **Milestones 2-3 — the capability build-out and its completion** (component-level file evidence in
 the tree, verified by direct inspection on `release/v0.7.0`; per-criterion confirmation is Phase 5):

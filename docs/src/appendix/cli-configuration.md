@@ -406,12 +406,14 @@ arsenal:
 - Verify garrison type is `"sqlite"`, not `"in_memory"`
 - Check database file path is correct and writable
 - Verify `ttl_seconds` hasn't expired old entries
-- Check that the `agent` command actually built a garrison: it reads `garrison.type` from the
-  paladin config and passes it to `instantiate_garrison`
-  (`src/application/cli/config/loader.rs`), which constructs the `GarrisonPort` implementation
-  (`InMemoryGarrison` or the SQLite-backed adapter) and hands it to
-  `PaladinExecutionService::new`. If `garrison.type` is unset, `instantiate_garrison` returns
-  `None` and the Paladin runs without memory — set `garrison.type` in the config to fix that.
+- Check that the `agent` command actually built a garrison: it reads the config's `garrison`
+  block and passes it to `instantiate_garrison` (`src/application/cli/config/loader.rs`), which
+  constructs the `GarrisonPort` implementation (`InMemoryGarrison` or the SQLite-backed adapter)
+  and hands it to `PaladinExecutionService::new`. If the whole `garrison:` block is absent from
+  the config, `instantiate_garrison` returns `None` and the Paladin runs without memory — add a
+  `garrison:` block with a `type` value. If `garrison:` is present but `type` is missing or
+  blank, config loading fails before the Paladin ever starts (`garrison.type` is a required
+  field with no default) — the symptom is a startup error, not silent memory loss.
 
 ### Arsenal Issues
 

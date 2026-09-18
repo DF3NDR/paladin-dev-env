@@ -406,7 +406,12 @@ arsenal:
 - Verify garrison type is `"sqlite"`, not `"in_memory"`
 - Check database file path is correct and writable
 - Verify `ttl_seconds` hasn't expired old entries
-- Check garrison is wired in agent command: verify no TODO at line 293
+- Check that the `agent` command actually built a garrison: it reads `garrison.type` from the
+  paladin config and passes it to `instantiate_garrison`
+  (`src/application/cli/config/loader.rs`), which constructs the `GarrisonPort` implementation
+  (`InMemoryGarrison` or the SQLite-backed adapter) and hands it to
+  `PaladinExecutionService::new`. If `garrison.type` is unset, `instantiate_garrison` returns
+  `None` and the Paladin runs without memory — set `garrison.type` in the config to fix that.
 
 ### Arsenal Issues
 
@@ -419,7 +424,12 @@ arsenal:
 - Check MCP server command is executable: `which <command>`
 - Test MCP server independently: run command with `--list-tools` (if supported)
 - Check arsenal registry logs for tool discovery errors
-- Verify arsenal is wired in agent command: verify no TODO at line 296
+- Check that the `agent` command actually built an arsenal: it reads `arsenal.mcp_servers` from
+  the paladin config and passes it to `instantiate_arsenal`
+  (`src/application/cli/config/loader.rs`), which builds an `ArsenalExecutionService` registered
+  against each configured server and hands it to `PaladinExecutionService::new`. An empty or
+  missing `arsenal.mcp_servers` list produces an arsenal with no tools registered — verify the
+  server's `name` entry appears under `arsenal.mcp_servers` in the config.
 
 #### MCP Server Connection Failed
 

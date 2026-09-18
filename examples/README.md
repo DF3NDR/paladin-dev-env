@@ -1809,6 +1809,12 @@ Chain of Command configuration.
 
 ## Advanced Examples
 
+> **Note:** the snippets below are illustrative pseudocode meant to convey a
+> pattern, not compiled or verified against the current API the way every
+> `### [name.rs](name.rs)` example above is (those all build and run in CI).
+> `load_config()`, `create_llm_adapter()` and `create_fallback_adapter()`
+> below are placeholders for your own code, not real Paladin functions.
+
 ### Error Handling Patterns
 
 Most examples include robust error handling:
@@ -1825,11 +1831,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let llm_adapter = create_llm_adapter(&config)
         .or_else(|_| create_fallback_adapter())?;
 
-    // Create Paladin with retries
+    // Create Paladin with retries (PaladinBuilder::retry_attempts, not
+    // max_retries/retry_delay -- there is no per-Paladin retry-delay setting)
     let paladin = PaladinBuilder::new(llm_adapter)
-        .max_retries(3)
-        .retry_delay(Duration::from_secs(1))
-        .build()?;
+        .retry_attempts(3)
+        .build()
+        .await?;
 
     // Execute with timeout
     let result = tokio::time::timeout(
@@ -1943,6 +1950,7 @@ Create a new example in `examples/my_example.rs`:
 
 ```rust
 use paladin::prelude::*;
+use paladin_llm::openai::adapter::{OpenAIAdapter, OpenAIConfig};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -1950,19 +1958,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Load API key
     let api_key = std::env::var("OPENAI_API_KEY")?;
 
-    // Create LLM adapter
-    let llm_adapter = Arc::new(
-        OpenAiAdapter::new()
-            .api_key(&api_key)
-            .model("gpt-4")
-            .build()?
+    // Create LLM adapter (OpenAIAdapter::new takes an OpenAIConfig, not a
+    // builder chain -- the model is set on PaladinBuilder below, per-request,
+    // not on the adapter itself)
+    let llm_adapter: Arc<dyn LlmPort> = Arc::new(
+        OpenAIAdapter::new(OpenAIConfig::new(api_key))?
     );
 
     // Create Paladin
     let paladin = PaladinBuilder::new(llm_adapter)
         .name("MyPaladin")
         .system_prompt("You are a helpful assistant.")
-        .build()?;
+        .model("gpt-4")
+        .build()
+        .await?;
 
     // Execute
     let response = paladin.execute("Hello!").await?;
@@ -2066,5 +2075,4 @@ Good example characteristics:
 ## Questions?
 
 - Check [Documentation](../docs/)
-- Open an [Issue](https://github.com/your-org/paladin/issues)
-- Join [Discord](https://discord.gg/paladin) (if available)
+- Open an [Issue](https://github.com/DF3NDR/paladin-dev-env/issues)

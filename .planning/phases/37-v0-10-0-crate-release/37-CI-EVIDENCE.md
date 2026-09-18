@@ -23,8 +23,16 @@ this phase, never retrofitted into this paragraph's original text (D-00d amend-a
   https://github.com/DF3NDR/paladin-dev-env/pull/55.
 - **Post-§11-tick final SHA (D-03):** `pending` — filled in after the maintainer ticks §11 in
   `.project/v0.10.0/09-program-acceptance-audit.md` and that tick commit is pushed.
-- **`main` merge commit (D-02, D-04):** `pending` — filled in after the maintainer merges the PR
-  with the merge-commit method.
+- **`main` merge commit (D-02, D-04):** `1d4a9724cc219b85856a23012543458d62559e47` — the
+  maintainer merged PR #55 with the merge-commit method at `2026-09-18T21:21:45Z` (parents
+  `8ed14aea05e9e5bca9695211da4c4ad6991e307b` and `1bb9406343b7fb965e0724ac7a689d45e4e5f61c`;
+  tree `d5e056d87a5716a7ec82f00805ff44069b6aff2e`, byte-identical to `1bb94063`'s own tree — an
+  independent re-verification by this continuation, not merely a repeated claim). **Note (process-
+  order deviation from D-03, recorded per D-00d, not edited away):** the "Post-§11-tick final SHA"
+  slot immediately above this one is **N/A-by-deviation** — no §11-tick commit preceded this
+  merge; the maintainer merged before ticking §11 (see the dated entry below, "Maintainer acts and
+  statements, 2026-09-18 (post-CI, pre-tag)," statement (a)). The in-session sign-off of record for
+  this head lives in that same entry, statement (d) — not a tick-commit SHA, because none exists.
 - **Tagged commit (D-02):** `pending` — filled in after the maintainer pushes the annotated
   `v0.10.0` tag; per D-00b this is provably the same commit as the merge commit above.
 
@@ -568,6 +576,157 @@ generated API documentation now builds warning-free," "a new code-quality gate k
 [doctest] from shipping without one") that does not literally contain the strings `rustdoc` or
 `intra-doc` — a wording gap, not a missing-content gap; left as-is per D-14 (this phase does not
 edit CHANGELOG.md prose to make a topic grep pass).
+
+### Maintainer acts and statements, 2026-09-18 (post-CI, pre-tag) — plan 37-06 continuation
+
+**Scope note.** Plan 37-06 Task 3 is a `checkpoint:human-verify` (`gate="blocking-human"`) whose
+own stated scope was narrower than what follows: confirm the PR reads correctly, then wait for
+`ci.yml` to conclude. Between that checkpoint's dispatch and this continuation, the maintainer
+acted well beyond the checkpoint's resume signal alone — merging the PR, resolving the D-17
+bootstrap, and delivering the §11 pre-tag sign-off in the same session. All four statements are
+recorded here, in one dated entry, rather than left to live only in chat, because the phase's own
+`` `` evidence discipline (D-00d, D-05) treats chat as non-durable. Each classification below is
+labelled as the **orchestrator's** reading; nothing is attributed to the maintainer as their own
+words except what appears inside quotation marks.
+
+**Independently re-verified facts (this continuation, read-only, 2026-09-18):**
+
+- `gh run list --branch feature/phase-33 --workflow ci.yml --json databaseId,event,headSha,status,conclusion`
+  filtered to head `1bb9406343b7fb965e0724ac7a689d45e4e5f61c`: both rows `status: "completed"`,
+  `conclusion: "success"` — run `35382874018` (`push`) and run `35382953376` (`pull_request`).
+- `gh pr view 55 --json state,mergeCommit,mergedAt,baseRefName,headRefName`: `state: "MERGED"`,
+  `mergedAt: "2026-09-18T21:21:45Z"`, `mergeCommit.oid: "1d4a9724cc219b85856a23012543458d62559e47"`,
+  base `main`, head `feature/phase-33`.
+- `git cat-file -p 1d4a9724cc219b85856a23012543458d62559e47`: two `parent` lines
+  (`8ed14aea05e9e5bca9695211da4c4ad6991e307b`, `1bb9406343b7fb965e0724ac7a689d45e4e5f61c`) — a true
+  merge commit, not a squash or rebase, satisfying D-04 despite the order deviation. `git
+  rev-parse 1d4a9724...^{tree}` equals `git rev-parse 1bb94063^{tree}` —
+  `d5e056d87a5716a7ec82f00805ff44069b6aff2e` both — the merge commit's tree is byte-identical to
+  the re-sealed PR head's tree, because `main` had not moved since the PR was opened. This is the
+  mitigation for the order deviation: nothing landed on `main` that the local seven-gate re-seal
+  and the CI run did not already cover.
+- `gh api repos/DF3NDR/paladin-dev-env/commits/1bb9406343b7fb965e0724ac7a689d45e4e5f61c/check-runs`
+  filtered to `name == "CodeQL"`: `conclusion: "failure"`, check-run id `105726197798`, summary
+  "10 new alerts including 10 high severity" (all `rust/cleartext-logging`).
+- `gh pr checks 55 --required --json name,state,bucket,workflow`: **44 unique required check
+  names**, none named `CodeQL`; of the (duplicated across the `push` and `pull_request` trigger
+  events) 87 required check-run entries this query returned, 85 `pass` and 2 `skipping` (both
+  `End-to-End Tests`, a conditional job not gating this PR), **zero required-check failures**. This
+  independently confirms the "44 required, none CodeQL" reading below is not merely repeated from
+  the orchestrator's own earlier report.
+- `curl -s -H 'User-Agent: paladin-release-check (github.com/DF3NDR/paladin-dev-env)'
+  https://index.crates.io/pa/la/paladin-eval`: HTTP `200` (was `404` at plan 37-01's pre-bootstrap
+  baseline and at plan 37-06 Task 3's own post-checkpoint re-check above). Body:
+  `{"name":"paladin-eval","vers":"0.0.1","deps":[],"cksum":"5652e4e010dbaf91c1d84896b119896b24ca550a168fd7dc4b0e50e58d996656","features":{},"yanked":false,"pubtime":"2026-09-18T21:17:04Z"}`.
+- `https://crates.io/api/v1/crates/paladin-eval` (same User-Agent): `published_by.login: "Am0rfu5"`;
+  `/owners` sub-resource: sole owner `Am0rfu5` — identical to `paladin-llm`'s own `/owners`
+  response, independently queried the same way. The `0.0.1` version's `trustpub_data` field reads
+  `null` — expected under a token-published placeholder, per the maintainer's own D-17 runbook
+  text; the observable non-null proof of the Trusted Publisher link is deferred to `0.10.0`
+  (plan 37-10), not this placeholder.
+
+**(a) Task 3 resume signal.** Presented via the runtime's interactive question mechanism
+(`AskUserQuestion`; options "Approved" / "Approved, haven't read it closely" / "Needs changes");
+the maintainer answered in free text, recorded verbatim:
+
+> "Approve and I merged already."
+
+**Orchestrator's reading:** the resume signal is `approved`; the maintainer additionally reports
+having merged PR #55 themselves, ahead of D-03's assumed order (local re-seal → push → PR CI green
+→ evidence appended → §11 tick → tick pushed → CI re-run on true final SHA → merge). This is a
+**process-order deviation from D-03**, made by the maintainer, their prerogative to make. It is
+recorded plainly, neither softened nor dramatised: the merge happened; D-04 (merge-commit method)
+was honoured per the two-parent commit and tree-identity check above; nothing was lost, because
+`main` had not moved and the tree the maintainer merged is byte-identical to the re-sealed,
+CI-green PR head.
+
+**(b) CodeQL results check.** The orchestrator diagnosed the failing check read-only (data restated
+above under "Independently re-verified facts"): ten `rust/cleartext-logging` alerts (#31, #32,
+#33, #38, #40, #43, #44, #45, #46, #47), every one created `2026-08-27` and already open on `main`
+before this PR — GitHub's own summary states alerts "not introduced by this pull request might have
+been detected because the code changes were too large" (PR #55 carried 521 commits). Not a
+required context (44 required names, none `CodeQL`; no `code_scanning` ruleset on `main`);
+`CLAUDE.md`'s own record treats CodeQL as advisory-only (see `.github/instructions/security.instructions.md`,
+"Known gap: no Rust SAST"). Phase 37 touched no file outside `.planning/` and `.project/`, so none
+of the ten alerts can be attributed to this phase's own diff. Three options were put to the
+maintainer via `AskUserQuestion` ("1. proceed and record as advisory" / "2. triage-dismiss first" /
+"3. treat as a stop"). The maintainer's reply, recorded verbatim:
+
+> "We are going to proceed with 1."
+
+**Orchestrator's reading:** proceed, record as advisory — consistent with the project's own
+existing CodeQL-advisory-only posture. **The ten alerts are carried forward as a named finding for
+v0.11.0 triage; this record does not classify them as false positives, and no alert was dismissed,
+triaged, or otherwise acted on by any agent in this session.**
+
+**(c) D-17 `paladin-eval` bootstrap.** This statement **supersedes the earlier "deferred" record**
+in the Registry verification (D-08) section above **without editing it** — that entry, and the
+orchestrator's `deferred` classification of the maintainer's earlier reply, stay exactly as
+written; this is a dated, appended update, not a correction. The maintainer's step-0 finding,
+recorded verbatim:
+
+> "No way to register a pending publisher.   There is no Trusted Publishing from Account Settings."
+
+**Orchestrator's note (not the maintainer's words):** crates.io configures Trusted Publishing
+per-crate, on a crate that already exists in the registry — which is exactly why a never-published
+crate cannot have one configured ahead of its first publish. This raises D-17's own MEDIUM-confidence
+premise (a blog post plus search synthesis, per `37-CONTEXT.md` D-17) to maintainer-confirmed for
+this repository. The maintainer published the placeholder from a scratch directory outside this
+repository (`/tmp/tmp.ReoF4L6ehW/paladin-eval`), supplying the crates.io token via a hidden
+`read -rs` prompt never shown to any agent — no credential text appears anywhere in this record.
+The maintainer's step statements, recorded verbatim:
+
+> "4. Trusted Publisher completed."
+
+> "5. Revoked"
+
+> "bootstrapped 0.0.1"
+
+The independent registry verification this continuation performed (restated above under
+"Independently re-verified facts") confirms the sparse-index and crates.io-API-visible half of
+this: HTTP `200` (was `404`), `vers=0.0.1`, `yanked=false`, `deps=0` (`0` entries in the `deps`
+array), `cksum=5652e4e010dbaf91c1d84896b119896b24ca550a168fd7dc4b0e50e58d996656`; `published_by`
+and sole `/owners` entry both `Am0rfu5`, matching `paladin-llm`'s own owner. **The Trusted
+Publisher link itself is not publicly queryable** — crates.io does not expose it over any
+unauthenticated endpoint this continuation could reach — so it is recorded here as **"linked
+(reported by maintainer)"**, exactly the same evidentiary status the existing eleven Trusted
+Publishing rows already carry in `docs/src/appendix/release-automation.md`, never upgraded to
+"verified" by this record. The observable, independently-checkable proof of the link is a non-null
+`trustpub_data` value on `paladin-eval` `0.10.0` at the real release (plan 37-10's own scope) —
+this placeholder's `trustpub_data` reads `null`, which is the expected shape for a token-published
+version and is not itself evidence for or against the Trusted Publisher link.
+
+**(d) §11 sign-off.** The orchestrator presented a sign-off brief covering: the merge-commit
+subject (`1d4a9724...`, tree `d5e056d8...` identical to the re-sealed PR head); the seven D-06
+gate rows and the 31 Local sweep rows plus corpus audit §12, all green; the 44/44 required-context
+read; the CI `Coverage` job's own success conclusion with `Lines: 111771/123587 = 90.44%` (against
+the 82% ADR-0006 floor) and `Functions: 11785/14096 = 83.61%`; the D-17 bootstrap as reported by the
+maintainer; and six carried findings named explicitly — the advisory-only CodeQL red, the two
+zero-valued CHANGELOG topic readings (`rustdoc`/`intra-doc`, Local sweep rows 11 and 13), the
+DNS-outage semver-checks interruption and its single authorized re-run, the stale "eleven crates"
+documentation-currency finding, this entry's own process-order deviation (merge before §11 tick),
+and the fact that `ci.yml` on the merge commit (run `35396397097`) was still `in_progress` at the
+time this sign-off was sought. The mechanism was the maintainer's own choice, offered via
+`AskUserQuestion`; the maintainer selected the option whose verbatim label read: "Sign in-session
+now, tick rides chore PR (Recommended)". The maintainer's sign-off statement, recorded **verbatim,
+including its own stray trailing quotation mark, reproduced exactly as replied** (no leading quote
+mark was present in the reply; none is added here):
+
+> I sign §11: the v0.10.0 tag may be cut on 1d4a9724, with the carried findings as recorded."
+
+**This in-session statement is the pre-tag sign-off of record for this head.** The physical `- [x]`
+tick on the §11 box in `.project/v0.10.0/09-program-acceptance-audit.md` remains the maintainer's
+own hand edit, still to be made — on `chore/37-close`, per D-10 and per `.planning/decisions`
+D-00a ("only the maintainer ticks the §11 sign-off box — never an agent, under any mode"). **No
+agent, including this continuation, has touched or may touch any sign-off box** — the box in
+`09-program-acceptance-audit.md` reads `- [ ] **The \`v0.10.0\` tag may be cut**`, unticked, at the
+time this entry is written, and neither that file nor `29-ACCEPTANCE-AUDIT.md` was opened for
+writing by this continuation.
+
+**Summary of this entry's own scope, for a later reader:** this is a **record-only** continuation
+dispatch. No push, no tag, no PR write, no workflow dispatch, and no gate re-run were performed
+here — only the read-only re-verifications listed above, this evidence-file append, the
+`.continue-here.md` supersession note (below), and the plan's own SUMMARY/STATE/ROADMAP updates.
 
 ---
 

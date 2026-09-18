@@ -233,7 +233,7 @@ impl LlmPort for MyProviderAdapter {
 Update `crates/paladin-llm/src/lib.rs`:
 
 ```rust,ignore
-pub mod myprovider_adapter;
+pub mod myprovider;
 ```
 
 ### Step 6: Update Provider Factory

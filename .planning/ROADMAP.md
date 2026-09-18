@@ -216,6 +216,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 - [x] **Phase 34: Documentation Currency Audit** - Audit the mdBook, the rustdoc corpus and the `examples/` / `doc-examples` programs against everything Phases 22-33 changed (and anything v0.9.0 left unwritten), producing one classified gap inventory that scopes Phases 35-36 (read-only; no docs change) (completed 2026-09-17)
 - [x] **Phase 35: mdBook Currency** - Close every mdBook gap the Phase 34 inventory records so the book describes the v0.10.0 tree — new pages where a capability shipped without one, corrected pages where the API or vocabulary changed, and `mdbook build` + linkcheck green (completed 2026-09-17)
 - [x] **Phase 36: Rustdoc Zero-Warning Bar & Examples Currency** - Take `cargo doc --workspace --no-deps` from 73 carried warnings to zero so CI's "Check documentation" step is green, resolve the 14 `--all-features` intra-doc links, and bring every `examples/` and `doc-examples` program current with the Phase 22-33 API (completed 2026-09-18)
+- [x] **Phase 36.1: Deferred Items Closure (INSERTED)** - Every deferred item Phases 30-35 recorded and left unowned is closed in the tree or explicitly dispositioned before v0.10.0 ships — the Phase 31/32/34/35/36 registers, ledger rows 36-38 and the two pending todos are walked item by item, and `WINDOWS.md` agrees with the registers (`open_count: 0`) (completed 2026-09-18)
 - [ ] **Phase 37: v0.10.0 Crate Release** - Re-seal the Phase 29 release gates on the post-documentation final commit, merge to `main`, cut the `v0.10.0` tag through `release.yml`, and confirm every publishable crate is on crates.io at `0.10.0`
 
 ## Phase Details
@@ -1190,7 +1191,7 @@ Plans:
 | 34. Documentation Currency Audit | v0.10.0 | 9/9 | Complete    | 2026-09-17 |
 | 35. mdBook Currency | v0.10.0 | 10/10 | Complete    | 2026-09-17 |
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 13/13 | Complete    | 2026-09-18 |
-| 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 0/14 | Planned | — |
+| 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 14/14 | Complete    | 2026-09-18 |
 | 37. v0.10.0 Crate Release | v0.10.0 | 0/0 | Not started | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits

@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 36.1
-current_phase_name: Deferred Items Closure
-status: verifying
-stopped_at: Completed 36.1-14-PLAN.md
-last_updated: "2026-09-18T09:51:32.215Z"
+current_phase: 37
+current_phase_name: v0.10.0 Crate Release
+status: planning
+stopped_at: Phase 36.1 complete (verification passed 6/6, review fixed, CI run 35329107346 green); Phase 37 ready to plan
+last_updated: "2026-09-18T10:18:49.816Z"
 last_activity: 2026-09-18
-last_activity_desc: Phase 36.1 execution started
+last_activity_desc: Phase 36.1 complete, transitioned to Phase 37
 progress:
   total_phases: 18
   completed_phases: 17
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-17 after Phase 34 completion)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 36.1 — Deferred Items Closure
+**Current focus:** Phase 37 — v0.10.0 Crate Release
 Phase 34 was verified 2026-09-17: `34-UAT.md` 47/47 passed (all nine SUMMARYs coverage-mode, every
 deliverable automated and the list confirmed by the maintainer; `34-check.sh --final` 8/8 re-run at UAT
 time), `34-VERIFICATION.md` `passed` 5/5, `34-SECURITY.md` `verified` with `threats_open: 0`.
@@ -61,10 +61,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 36.1 (Deferred Items Closure) — EXECUTING
-Plan: 14 of 14
-Status: Phase complete — ready for verification
-Last activity: 2026-09-18 — Phase 36.1 execution started
+Phase: 37 — v0.10.0 Crate Release
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-18 — Phase 36.1 complete, transitioned to Phase 37
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
@@ -73,7 +73,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 
 **Velocity:**
 
-- Total plans completed: 377
+- Total plans completed: 391
 - Average duration: —
 - Total execution time: —
 
@@ -116,6 +116,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | 34 | 9 | - | - |
 | 35 | 10 | - | - |
 | 36 | 13 | - | - |
+| 36.1 | 14 | - | - |
 
 *Updated after each plan completion*
 
@@ -1129,8 +1130,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 ## Session Continuity
 
 **Last session:** 2026-09-18T09:51:32.106Z
-**Stopped at:** Completed 36.1-14-PLAN.md
-**Resume file:** None
+**Stopped at:** Phase 36.1 complete (verification passed 6/6, review fixed, CI run 35329107346 green); Phase 37 ready to plan
+**Resume file:** .planning/phases/36.1-deferred-items-closure/36.1-VERIFICATION.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

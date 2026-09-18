@@ -1647,7 +1647,9 @@ impl PaladinExecutionService {
                                         ToolErrorMode::FailRun => {
                                             return Err(PaladinError::ArmamentFailed {
                                                 tool: effective_function_call.name.clone(),
-                                                reason: e.to_string(),
+                                                reason: ToolResultFormatter::sanitize_tool_text(
+                                                    &e.to_string(),
+                                                ),
                                             });
                                         }
                                     }
@@ -1768,7 +1770,10 @@ impl PaladinExecutionService {
                                                 ToolErrorMode::FailRun => {
                                                     return Err(PaladinError::ArmamentFailed {
                                                         tool: effective_call.tool_name.clone(),
-                                                        reason: e.to_string(),
+                                                        reason:
+                                                            ToolResultFormatter::sanitize_tool_text(
+                                                                &e.to_string(),
+                                                            ),
                                                     });
                                                 }
                                             }

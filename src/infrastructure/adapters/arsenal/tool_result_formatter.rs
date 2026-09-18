@@ -268,9 +268,16 @@ impl ToolResultFormatter {
     /// secret across the truncation boundary and leak the surviving tail
     /// (`.github/instructions/security.instructions.md`, T-26-03).
     ///
+    /// `pub(crate)`, not private (D-03, ledger row 38): `paladin_execution_
+    /// service`'s run-failing tool-error arms also call this directly, to
+    /// build `PaladinError::ArmamentFailed`'s `reason` from the same single
+    /// sanitization point this module's model-facing path already uses,
+    /// rather than reaching the model-facing `Self::format_error` block or
+    /// hand-rolling a second redaction path.
+    ///
     /// [`redact_secret_patterns`]: paladin_llm::redaction::redact_secret_patterns
     /// [`bounded_excerpt`]: paladin_llm::redaction::bounded_excerpt
-    fn sanitize_tool_text(text: &str) -> String {
+    pub(crate) fn sanitize_tool_text(text: &str) -> String {
         let redacted = paladin_llm::redaction::redact_secret_patterns(text);
         paladin_llm::redaction::bounded_excerpt(
             &redacted,

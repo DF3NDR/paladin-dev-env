@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 36.1
 current_phase_name: Deferred Items Closure
 status: executing
-stopped_at: Completed 36.1-03-PLAN.md
-last_updated: "2026-09-18T03:53:24.581Z"
+stopped_at: Completed 36.1-04-PLAN.md
+last_updated: "2026-09-18T04:03:02.549Z"
 last_activity: 2026-09-18
 last_activity_desc: Phase 36.1 execution started
 progress:
   total_phases: 18
   completed_phases: 16
   total_plans: 204
-  completed_plans: 193
+  completed_plans: 194
 ---
 
 # Project State
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 36.1 (Deferred Items Closure) — EXECUTING
-Plan: 4 of 14
+Plan: 5 of 14
 Status: Ready to execute
 Last activity: 2026-09-18 — Phase 36.1 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
@@ -169,6 +169,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 36.1 P01 | 20min | 2 tasks | 3 files |
 | Phase 36.1 P02 | 15min | 2 tasks | 2 files |
 | Phase 36.1 P03 | 20min | 3 tasks | 4 files |
+| Phase 36.1 P04 | ~35min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -536,6 +537,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: D-16 sweep confirmed RESEARCH.md assumption A2: zero non-cli_isolation failing targets under --all-features --no-fail-fast
 - [Phase ?]: Phase 36.1 plan 02: both run-failing tool-error arms (handoff and regular Arsenal-tool) sanitize PaladinError::ArmamentFailed's reason via ToolResultFormatter::sanitize_tool_text (widened to pub(crate) only, make api-surface unchanged); pinning test fail_run_redacts_a_secret_in_the_reason covers the regular arm, handoff arm covered by the Task 1 two-call-site source guarantee (commits 979f2a1d, e7284987)
 - [Phase ?]: 36.1-03: contributing-providers.md's module-declaration line (pub mod myprovider_adapter;) left unfixed per nine-signal class-4 verdict — not the same relocated-path class as the two import-path fixes; no WINDOWS.md row minted (D-17's 12-row mapping has no slot)
+- [Phase ?]: Phase 36.1 plan 04: rebuilt testing-guide.md tests/ tree against ls -p tests truth (D-05), swept eleven OpenAiAdapter->OpenAIAdapter casing hits across seven pages (D-07), probed all four flagged battalion-patterns-guide.md bodies (all fail to compile, recorded for 36.1-13 to mint 4 waived unmet-truth ledger rows), and ran the docs.yml gate clean (zero broken links).
 
 ### Pending Todos
 
@@ -1103,8 +1105,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T03:53:24.505Z
-**Stopped at:** Completed 36.1-03-PLAN.md
+**Last session:** 2026-09-18T04:03:02.467Z
+**Stopped at:** Completed 36.1-04-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

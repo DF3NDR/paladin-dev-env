@@ -1101,7 +1101,7 @@ Plans:
 
 - [x] 36.1-02-PLAN.md — Sanitize the tool-failure reason on both run-failing arms, with a pinning test (ledger row 38)
 - [x] 36.1-03-PLAN.md — SC1 pages: provider-guide adapter path, CLI troubleshooting entries, illustrative CI/CD captions
-- [ ] 36.1-04-PLAN.md — SC1 pages: rebuild the tests tree, sweep the adapter type casing across seven pages, run the docs gate
+- [x] 36.1-04-PLAN.md — SC1 pages: rebuild the tests tree, sweep the adapter type casing across seven pages, run the docs gate
 - [ ] 36.1-05-PLAN.md — `# Examples` for six lighter port traits
 - [ ] 36.1-06-PLAN.md — `# Examples` for the trace port and the two assistant ports
 - [ ] 36.1-07-PLAN.md — `# Examples` for the three widest port traits; all twelve ports satisfied

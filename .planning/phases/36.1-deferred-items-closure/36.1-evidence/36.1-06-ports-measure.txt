@@ -1,0 +1,40 @@
+Plan 36.1-06 — paladin-ports crate re-measurement
+Captured: 2026-09-18 (after adding # Examples to RunTracePort, AssistantAdminPort,
+AssistantRepositoryPort)
+
+===============================================================================
+$ cargo test -p paladin-ports --doc
+===============================================================================
+
+test result: ok. 145 passed; 0 failed; 94 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+all doctests ran in 2.86s; merged doctests compilation took 2.79s
+
+The three new sections added by this plan all appear in the passed set:
+  test crates/paladin-ports/src/output/run_trace_port.rs - output::run_trace_port::RunTracePort (line 132) ... ok
+  test crates/paladin-ports/src/input/assistant_admin_port.rs - input::assistant_admin_port::AssistantAdminPort (line 126) ... ok
+  test crates/paladin-ports/src/output/assistant_repository_port.rs - output::assistant_repository_port::AssistantRepositoryPort (line 121) ... ok
+
+===============================================================================
+$ cargo doc -p paladin-ports --no-deps
+===============================================================================
+
+ Documenting paladin-ports v0.10.0 (/workspace/crates/paladin-ports)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.90s
+   Generated /workspace/target/doc/paladin_ports/index.html
+
+Warning line count (`grep -c 'warning:'`): 0
+
+===============================================================================
+$ bash scripts/check-public-api-examples.sh --list  (relevant rows + summary)
+===============================================================================
+
+Port	RunTracePort	crates/paladin-ports/src/output/run_trace_port.rs:219	OK
+Port	AssistantRepositoryPort	crates/paladin-ports/src/output/assistant_repository_port.rs:302	OK
+Port	AssistantAdminPort	crates/paladin-ports/src/input/assistant_admin_port.rs:286	OK
+
+TOTAL: 101 entry points -- 91 OK, 10 MISSING, 0 SINGULAR
+
+Starting-point MISSING count for this plan was 13 (per dispatch context); this
+plan closes exactly three of them, landing the script's MISSING count at 10 --
+the expected result for plan 36.1-06.

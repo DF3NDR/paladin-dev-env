@@ -1,0 +1,81 @@
+# 36.1-05 — paladin-ports crate re-measurement after the first six `# Examples` sections
+#
+# Captured 2026-09-18, on the closing commit of plan 36.1-05 (Task 3), after all six sections
+# landed: StructuredExecutorPort, NodeCachePort, RunSubmissionPort, ScheduleAdminPort,
+# RunQueuePort, WebhookDeliveryRepositoryPort.
+
+## Command 1: cargo test -p paladin-ports --doc
+
+$ cargo test -p paladin-ports --doc
+
+   Doc-tests paladin_ports
+
+running 142 tests
+[... individual test lines omitted; full log kept in the executor's transcript ...]
+
+test result: ok. 142 passed; 0 failed; 94 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+all doctests ran in 2.58s; merged doctests compilation took 2.52s
+
+Zero failed. The six new sections' own doctests are included in the 142 passed:
+- output::structured_executor_port::StructuredExecutorPort (line 60) ... ok
+- output::node_cache_port::NodeCachePort (line 137) ... ok
+- input::run_submission_port::RunSubmissionPort (line 182) ... ok
+- input::schedule_admin_port::ScheduleAdminPort (line 92) ... ok
+- output::run_queue_port::RunQueuePort (line 117) ... ok
+- output::webhook_delivery_port::WebhookDeliveryRepositoryPort (line 80) ... ok
+
+## Command 2: cargo doc -p paladin-ports --no-deps
+
+$ cargo doc -p paladin-ports --no-deps
+    Checking paladin-ai-core v0.10.0 (/workspace/crates/paladin-core)
+ Documenting paladin-ports v0.10.0 (/workspace/crates/paladin-ports)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.03s
+   Generated /workspace/target/doc/paladin_ports/index.html
+
+$ grep -c 'warning:' <above output>
+0
+
+Zero warning lines. The six new doc blocks did not reopen the ADR-0033 rustdoc bar.
+
+## Command 3: scripts/check-public-api-examples.sh --list (MISSING count)
+
+$ bash scripts/check-public-api-examples.sh --list | tail -1
+TOTAL: 101 entry points -- 88 OK, 13 MISSING, 0 SINGULAR
+
+13 MISSING rows remain (down from 19 before this plan) -- the six this plan closed
+(StructuredExecutorPort, NodeCachePort, RunSubmissionPort, ScheduleAdminPort, RunQueuePort,
+WebhookDeliveryRepositoryPort) are confirmed gone from the MISSING set; all six report `OK`:
+
+Port	StructuredExecutorPort	crates/paladin-ports/src/output/structured_executor_port.rs:84	OK
+Port	NodeCachePort	crates/paladin-ports/src/output/node_cache_port.rs:195	OK
+Port	RunSubmissionPort	crates/paladin-ports/src/input/run_submission_port.rs:237	OK
+Port	ScheduleAdminPort	crates/paladin-ports/src/input/schedule_admin_port.rs:182	OK
+Port	RunQueuePort	crates/paladin-ports/src/output/run_queue_port.rs:183	OK
+Port	WebhookDeliveryRepositoryPort	crates/paladin-ports/src/output/webhook_delivery_port.rs:184	OK
+
+Remaining 13 MISSING rows (owned by plans 36.1-06 through 36.1-11, per the plan's own
+`<artifacts_this_phase_produces>` list):
+
+Port	RunTracePort	crates/paladin-ports/src/output/run_trace_port.rs:130	MISSING
+Port	RunRepositoryPort	crates/paladin-ports/src/output/run_repository_port.rs:145	MISSING
+Port	AssistantRepositoryPort	crates/paladin-ports/src/output/assistant_repository_port.rs:119	MISSING
+Port	RunScheduleRepositoryPort	crates/paladin-ports/src/output/run_schedule_repository_port.rs:84	MISSING
+Port	WaypointPort	crates/paladin-ports/src/output/waypoint_port.rs:167	MISSING
+Port	AssistantAdminPort	crates/paladin-ports/src/input/assistant_admin_port.rs:124	MISSING
+Service	ScheduleService	src/application/services/run/schedule/service.rs:143	MISSING
+Service	WebhookDeliveryService	src/application/services/run/webhook/service.rs:103	MISSING
+Service	RunInspectorService	src/application/services/run/inspector.rs:75	MISSING
+Service	RunEventStreamService	src/application/services/run/events.rs:764	MISSING
+Service	RunSubmissionService	src/application/services/run/submission.rs:105	MISSING
+Service	AssistantService	src/application/services/assistant/service.rs:29	MISSING
+Service	WaypointRetentionService	src/application/services/waypoint_retention.rs:73	MISSING
+
+Note: the plan's own acceptance criterion `bash scripts/check-public-api-examples.sh --list |
+grep -c MISSING` returns 14, not 13 -- the script's own `TOTAL: ... 13 MISSING ...` summary
+line itself contains the literal word "MISSING" and is counted by the blunt grep alongside the
+13 real per-item rows. The authoritative count is the 13 row-level entries and the `TOTAL`
+line's own "13 MISSING" figure, both confirmed above; this is a grep-artifact of the check
+wording, not a real discrepancy (mirrors the pre-existing `paladin_storage` prose cross-reference
+noted in `36.1-05-SUMMARY.md`'s Deviations section for the same reason: a blunt substring count
+catching a documentation string rather than a code import).

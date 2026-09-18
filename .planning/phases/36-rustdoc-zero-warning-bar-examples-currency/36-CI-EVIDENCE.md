@@ -122,10 +122,31 @@ remaining jobs' outcome.
 
 ---
 
+### Final run conclusion (appended 2026-09-18 01:39 UTC, after the run finished)
+
+The section above was written while the run was still in progress and is left unedited as the
+honest record of what was known at recording time. Run 35290763563 has since **completed**:
+
+| Field | Value |
+|---|---|
+| Overall | `status: completed`, `conclusion: success` (finished 2026-09-18T01:39:21Z) |
+| Jobs | 37 total — **34 `success`**, 3 `skipped` by design |
+| Skipped by design | `Benchmark Regression Signal (Non-Blocking)` (non-blocking), `Publish Dry Run` (tag-gated), `End-to-End Tests` (its own trigger condition) |
+| Jobs still running at recording time | `Integration Tests` → `success`; `Docker Build` → `success`; `Coverage` → `success`; `Kubernetes Smoke Test` → `success` |
+
+Nothing in the completed run changes any figure in the CI-run table above, and no job that was
+green at recording time regressed. The `Coverage` job is called out explicitly because it is the
+one gate this devcontainer cannot measure locally (no Docker); it concluded `success` on this
+head SHA.
+
+---
+
 *Phase: 36-rustdoc-zero-warning-bar-examples-currency*
-*Written: 2026-09-17. Updated: 2026-09-18 with the real CI run.*
-*Status: local sweep complete (8/8 green); CI run 35290763563 recorded — all four
+*Written: 2026-09-17. Updated: 2026-09-18 with the real CI run, then again with its final
+conclusion.*
+*Status: local sweep complete (8/8 green); CI run 35290763563 **completed `success`** — all four
 checkpoint-relevant jobs (`Code Quality`, `Unit Tests (stable)`, `Unit Tests (beta)`, `Example
 Muster (Feature Matrix)`) concluded `success`, with every measured figure matching the local
-closing measurement exactly. Overall run was still in progress (`Integration Tests`, `Docker
-Build` running) at recording time — see "Overall run status at recording time" above.*
+closing measurement exactly, and the whole run finished green (34 success, 3 skipped by design).
+See "Final run conclusion" above; the in-progress note below it is retained unedited as the
+record of what was known when the table was first written.*

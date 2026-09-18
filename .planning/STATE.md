@@ -6,9 +6,9 @@ current_phase: 36.1
 current_phase_name: Deferred Items Closure
 status: executing
 stopped_at: Phase 36.1 context gathered
-last_updated: "2026-09-18T03:20:50.862Z"
+last_updated: "2026-09-18T03:23:24.708Z"
 last_activity: 2026-09-18
-last_activity_desc: Phase 36 complete, transitioned to Phase 36.1
+last_activity_desc: Phase 36.1 execution started
 progress:
   total_phases: 18
   completed_phases: 16
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-17 after Phase 34 completion)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 36 — Rustdoc Zero-Warning Bar & Examples Currency
+**Current focus:** Phase 36.1 — Deferred Items Closure
 Phase 34 was verified 2026-09-17: `34-UAT.md` 47/47 passed (all nine SUMMARYs coverage-mode, every
 deliverable automated and the list confirmed by the maintainer; `34-check.sh --final` 8/8 re-run at UAT
 time), `34-VERIFICATION.md` `passed` 5/5, `34-SECURITY.md` `verified` with `threats_open: 0`.
@@ -61,10 +61,10 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 36.1 — Deferred Items Closure
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-09-18 — Phase 36 complete, transitioned to Phase 36.1
+Phase: 36.1 (Deferred Items Closure) — EXECUTING
+Plan: 1 of 14
+Status: Executing Phase 36.1
+Last activity: 2026-09-18 — Phase 36.1 execution started
 Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)

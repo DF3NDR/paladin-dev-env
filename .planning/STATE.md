@@ -4,11 +4,11 @@ milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
-status: planning
-stopped_at: Phase 37.1 context gathered — Phase 37 stays OPEN (SC1-SC3 met; SC4 unmet, 3/12 published at 0.10.0)
-last_updated: "2026-09-19T01:27:56.923Z"
+status: executing
+stopped_at: Phase 37.1 planned (16 plans, 16 sequential waves) — Phase 37 stays OPEN (SC1-SC3 met; SC4 unmet, 3/12 published at 0.10.0)
+last_updated: "2026-09-19T03:47:23.000Z"
 last_activity: 2026-09-19
-last_activity_desc: Phase 37.1 context gathered
+last_activity_desc: Phase 37.1 planned — 16 plans in 16 sequential waves, plan check passed
 progress:
   total_phases: 19
   completed_phases: 17
@@ -61,11 +61,12 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 37 (v0.10.0 Crate Release) — EXECUTING
-Plan: 6 of 11
+Phase: 37.1 (v0.10.1 Patch Release) — PLANNED
+Plan: 1 of 16
 Status: Ready to execute
-Last activity: 2026-09-18 — Phase 37 execution started
-Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
+Last activity: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed)
+Previous: 2026-09-19 — Phase 37.1 context gathered; Phase 37 OPEN and blocked on it (v0.10.0 tagged, 3/12 published)
+Earlier: 2026-09-18 — Phase 37 execution reached 37-08 and hard-stopped at the D-16 diagnosis
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 

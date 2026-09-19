@@ -147,6 +147,19 @@ jobs:
       - name: Check CodeQL dismissal register
         run: ./scripts/check-codeql-dismissals.sh
 
+      # SHIP-06/SC3 (Phase 37.1, plan 37.1-03): this gate is cheap and
+      # offline (pure `cargo metadata` analysis, no build) but must still
+      # run pre-merge on every pull request, not only after a merge to
+      # main. It is wired here rather than into the existing
+      # `publish-dry-run` job below (see that job's own comment) because
+      # that job is deliberately gated to push events on the default
+      # branch and widening its trigger is out of this phase's scope --
+      # this job already runs on every push and pull_request with no
+      # job-level `if:` condition, so adding a step here reaches pre-merge
+      # CI with no trigger-surface change at all.
+      - name: Check publish order
+        run: ./scripts/check-publish-order.sh
+
       # Closes a pre-existing gap (D-09b, plan 15.1-09): the sibling
       # check-workflow-suppressions_test.sh regression harness has existed
       # since Phase 12 but was wired only into `make test-shell-guards`,

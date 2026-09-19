@@ -58,7 +58,20 @@ tokio = { workspace = true, features = ["test-util"] }
 # In-memory WaypointPort fixture for the engine module's own unit tests
 # (Phase 22 Plan 01). No cycle: paladin-storage depends on paladin-core +
 # paladin-ports only, never on paladin-battalion.
-paladin-storage = { version = "0.10.0", path = "../paladin-storage" }
+# Path-only, no `version =` (plan 37.1-04, v0.10.0 release-day defect): a
+# workspace dev-dependency that carries a version requirement is resolved
+# against the LIVE registry at `cargo package`/`cargo publish` time even
+# when `--no-verify` skips the isolated build -- and paladin-battalion
+# publishes at CRATES position 4, before paladin-storage at position 10.
+# That forward-pointing edge is exactly what stopped the real v0.10.0
+# release after 3 of 12 crates. Dropping the version requirement makes
+# Cargo omit this entry from the published manifest entirely -- no
+# requirement, no registry lookup, no ordering constraint -- while local
+# dev/test builds still resolve it by path unchanged. `check-publish-order`
+# (SC3, plan 37.1-02/03) is the regression guard: it fails CI/`make
+# check-gates` if a versioned workspace dependency edge like this one ever
+# points forward in the publish order again.
+paladin-storage = { path = "../paladin-storage" }
 # MockLlmAdapter for LlmDecisionEvaluator / Commander StrategySelection::Semantic
 # tests (CF-05, Phase 23 Plan 03) and the redaction helper the DeltaMerged
 # value tests inject (plan 28-03 post-merge fix). Dev-only on purpose:
@@ -66,7 +79,15 @@ paladin-storage = { version = "0.10.0", path = "../paladin-storage" }
 # engine code receives its redactor through `TraceDispatcher::with_state_values`
 # (`ValueRedactor`) from the facade instead. No cycle: paladin-llm depends
 # only on paladin-core + paladin-ports, never on paladin-battalion.
-paladin-llm = { version = "0.10.0", path = "../paladin-llm" }
+# Path-only, no `version =` (plan 37.1-04, same v0.10.0 release-day defect):
+# paladin-battalion publishes at CRATES position 4, before paladin-llm at
+# position 5, so a versioned dev-dependency here is unresolvable against the
+# live registry at publish time -- the exact error `cargo publish` hit for
+# real (`failed to select a version for the requirement paladin-llm =
+# "^0.10.0"`). Path-only means Cargo strips this entry from the published
+# manifest entirely, imposing no ordering constraint, while local tests keep
+# resolving it by path. `check-publish-order` (SC3) now gates this edge.
+paladin-llm = { path = "../paladin-llm" }
 
 [[bench]]
 name = "battalion_benchmarks"

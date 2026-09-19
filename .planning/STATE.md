@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 37
-current_phase_name: v0.10.0 Crate Release
-status: executing
-stopped_at: Phase 37 OPEN and BLOCKED — v0.10.0 tagged but publish failed 3/12 (battalion dev-dep order); maintainer chose v0.10.1 via Phase 37.1
-last_updated: "2026-09-18T21:57:29.753Z"
-last_activity: 2026-09-18
-last_activity_desc: Phase 37 execution started
+current_phase: 37.1
+current_phase_name: v0.10.1 Patch Release
+status: planning
+stopped_at: Phase 37.1 context gathered — Phase 37 stays OPEN (SC1-SC3 met; SC4 unmet, 3/12 published at 0.10.0)
+last_updated: "2026-09-19T01:27:56.923Z"
+last_activity: 2026-09-19
+last_activity_desc: Phase 37.1 context gathered
 progress:
-  total_phases: 18
+  total_phases: 19
   completed_phases: 17
   total_plans: 215
   completed_plans: 211
@@ -1053,6 +1053,7 @@ requirement.
 - Phase 36 added: Rustdoc Zero-Warning Bar & Examples Currency — `cargo doc` 73→0 warnings so CI "Check documentation" is green, 14 `--all-features` intra-doc links resolved, `examples/` + `doc-examples` current (2026-09-17)
 - Phase 37 added: v0.10.0 Crate Release — re-seal the Phase 29 gates on the final commit, merge to `main`, `release.yml` tags `v0.10.0`, all publishable crates on crates.io at `0.10.0` (2026-09-17)
 - Phase 36.1 inserted after Phase 36: Deferred Items Closure — walk the Phase 31/32/34/35 deferred-items registers, WINDOWS.md #36-37 and the two pending todos; fix, waive with reason, or re-home each; bring WINDOWS.md back into agreement with the registers before Phase 37 tags v0.10.0 (URGENT)
+- Phase 37.1 inserted after Phase 37: v0.10.1 Patch Release — tag v0.10.0 published 3/12 crates (battalion versioned dev-dep vs CRATES order); maintainer chose recovery option A (URGENT)
 
 ## Deferred Items
 
@@ -1146,9 +1147,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T21:57:01.800Z
-**Stopped at:** Completed 37-07-PLAN.md (pre-merge CI evidence recorded: every workflow run on the PR head SHA, 44/44 required-context tally, CodeQL results check filed as advisory, Coverage job success + verbatim 90.44% figure as sole SC2 evidence; Task 3 not applicable by deviation -- PR merged, remote branch deleted)
-**Resume file:** None
+**Last session:** 2026-09-19T01:27:56.812Z
+**Stopped at:** Phase 37.1 context gathered
+**Resume file:** .planning/phases/37.1-v0-10-1-patch-release/37.1-CONTEXT.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

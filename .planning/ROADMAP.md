@@ -1196,6 +1196,28 @@ Plans:
 
 - [ ] 37-11-PLAN.md — The MILESTONES.md v0.10.0 release record, `37-READY-TO-CLOSE.md`, and the docs-only `chore/37-close` pull request
 
+### Phase 37.1: v0.10.1 Patch Release (INSERTED)
+
+**Goal**: v0.10.x is actually released — every publishable crate resolves on crates.io at one coherent version. Tag `v0.10.0` (on `main` merge commit `1d4a9724`) published only 3 of 12 crates (`paladin-ai-core`, `paladin-ports`, `paladin-herald`) before `publish-crates` failed deterministically at `paladin-battalion`; that tag's pipeline cannot complete forward because `release.yml` reads manifests and the `CRATES` order from the tag ref. The correction is a `0.10.1` patch release through the same pipeline via Trusted Publishing (release-recovery runbook §4), with the two defects that broke `v0.10.0` fixed and a gate that would have caught them.
+**Depends on**: Phase 37 (stays OPEN and blocked on this phase — its SC1-SC3 evidence, both D-16 diagnoses and the maintainer's recovery decision live in `phases/37-v0-10-0-crate-release/37-CI-EVIDENCE.md`; its plans 37-09..37-11 and 37-08's SUMMARY are re-planned against what this phase ships)
+**Requirements**: TBD — assigned at planning. Open question for discuss: whether `SHIP-05` ("v0.10.0 is released", status `Pending`) is amended at source to name the version that actually ships, or a new `SHIP-06` is minted (`SHIP` is an existing prefix; extension protocol item 3)
+**Source**: `phases/37-v0-10-0-crate-release/37-CI-EVIDENCE.md` §"D-16 read-only diagnosis" (#1 and #2) and §"Maintainer decision after D-16 diagnosis #2" (maintainer's verbatim reply: "A"); `docs/src/appendix/release-recovery.md` §4-§5
+**UI hint**: no
+**Success Criteria** (what must be TRUE) — DRAFT, seeded from the Phase 37 findings; `/gsd-discuss-phase 37.1` owns the final wording:
+
+  1. `paladin-battalion` packages and publishes at its `CRATES` position against the live index: its two versioned workspace dev-dependencies (`paladin-llm`, `paladin-storage`, introduced by Phases 23 and 28) no longer require a crate that publishes later — by path-only dev-dependencies, by re-ordering `CRATES`, or both (the choice is a discuss-phase decision).
+  2. `scripts/create-or-reuse-release.sh` no longer fails on response size: the `printf … | head -n1` under `set -o pipefail` at line 79 (an `EPIPE` race that a 46 KB release response lost repeatedly) is replaced by a form with no early-closing reader, and a test feeds it a response larger than the pipe buffer.
+  3. A gate exercises the real per-crate resolution path, not only `cargo publish --workspace --dry-run` (which resolves siblings from a local overlay and is structurally blind to ordering — Phase 37 Local sweep row 29 was green and true): for every `CRATES` position, each versioned workspace dependency INCLUDING dev-dependencies appears earlier in the array; it runs in `make publish-dry-run`/`release-check` and in CI, and it fails on the `1d4a9724` tree.
+  4. All twelve publishable manifests, their changelogs and `MIGRATION.md`/allowlist rows read `0.10.1`; the Phase 29 gate set is re-sealed on the final commit; the release PR merges to `main` with a merge commit; the maintainer signs off BEFORE the merge this time (Phase 37 recorded the inverted order as a deviation) and pushes an annotated `v0.10.1` tag on that merge commit after `ci.yml` is green on it.
+  5. `release.yml` runs green for `v0.10.1` and every publishable crate (derived from `cargo metadata`, never hard-coded) resolves on the crates.io sparse index at `0.10.1`, `yanked = false`; `paladin-eval`'s first pipeline publish shows non-null `trustpub_data` — the first observable proof of the Trusted Publisher link the maintainer reported on 2026-09-18.
+  6. The three orphaned `0.10.0` versions are explicitly dispositioned — left, or yanked by the maintainer alone with a yank-register row (runbook §5) — and MILESTONES.md, the GitHub Release for `v0.10.0` (exists, 0 assets) and Phase 37's open plans tell the true story: `v0.10.0` tagged and partially published, `v0.10.1` the release.
+
+**Plans**: 0 plans
+
+Plans:
+
+- [ ] TBD (run /gsd-plan-phase 37.1 to break down)
+
 ## Progress
 
 | Phase | Milestone | Plans Complete | Status | Completed |

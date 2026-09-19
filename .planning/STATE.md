@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: Completed 37.1-01-PLAN.md — release/v0.10.1 cut and cherry-picked, 37.1-CI-EVIDENCE.md opened
-last_updated: "2026-09-19T11:09:35.793Z"
+stopped_at: Completed 37.1-02-PLAN.md
+last_updated: "2026-09-19T11:27:12.366Z"
 last_activity: 2026-09-19
 last_activity_desc: Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed)
 progress:
   total_phases: 19
   completed_phases: 17
   total_plans: 231
-  completed_plans: 211
+  completed_plans: 213
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `37-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [█████████░] 91%
+**Progress:** [█████████░] 92%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 37.1 (v0.10.1 Patch Release) — PLANNED
-Plan: 2 of 16
+Plan: 3 of 16
 Status: Ready to execute
 Last activity: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed)
 Previous: 2026-09-19 — Phase 37.1 context gathered; Phase 37 OPEN and blocked on it (v0.10.0 tagged, 3/12 published)
@@ -189,6 +189,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37 P05 | 14min | 2 tasks | 2 files |
 | Phase 37 P07 | 25min | 2 tasks | 1 files |
 | Phase 37.1 P01 | ~20min | 2 tasks | 2 files |
+| Phase 37.1 P02 | ~40min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -582,6 +583,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: DNS-outage semver re-run and zero-valued CHANGELOG topic readings are recorded in-row (gate rows 4 and 7), separate from the four-item Findings list the plan's action text names
 - [Phase ?]: Plan 37-07: SHA-scoped gh queries substituted for branch-scoped ones (feature/phase-33 remote deleted post-merge); 44/44 required-context tally computed live; red CodeQL results check recorded advisory (not a required context, maintainer disposition already on record); CI Coverage job success + verbatim 90.44% figure recorded as sole SC2 evidence; Task 3 (push) withheld as not-applicable-by-deviation.
 - [Phase ?]: Phase 37.1 Plan 01: cut release/v0.10.1 from origin/main's merge commit 1d4a9724 and cherry-picked the 24 local-only .planning commits from feature/phase-33 (1bb94063..b6d44416) onto it in order, live-resolved per D-06; opened 37.1-CI-EVIDENCE.md in house form and appended a dated old-to-new SHA map plus forward pointer to 37-CI-EVIDENCE.md (D-11, D-00d)
+- [Phase ?]: Publish-order dependency resolution reads the metadata entry's name field, never rename -- avoids resolving an aliased local dependency (e.g. paladin-core) to the wrong crate name
 
 ### Pending Todos
 
@@ -1150,8 +1152,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-19T11:09:35.709Z
-**Stopped at:** Completed 37.1-01-PLAN.md — release/v0.10.1 cut and cherry-picked, 37.1-CI-EVIDENCE.md opened
+**Last session:** 2026-09-19T11:27:12.215Z
+**Stopped at:** Completed 37.1-02-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

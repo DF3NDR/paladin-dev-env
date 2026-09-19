@@ -1224,3 +1224,53 @@ Consequences recorded at the time of the decision:
   commits onto a branch cut from `origin/main` (they descend from `1bb94063`, not from the merge
   commit `1d4a9724`, though the two trees are identical).
 - No agent re-ran, dispatched, published or yanked anything at any point.
+
+---
+
+### 2026-09-19 (append-only, D-00d) — Old→new SHA map: `feature/phase-33` local-only commits replayed onto `release/v0.10.1` (Phase 37.1, D-06)
+
+Per CONTEXT.md D-06, Phase 37.1 cut a new branch `release/v0.10.1` from this branch's own base
+commit `1d4a9724cc219b85856a23012543458d62559e47` and cherry-picked every local-only `.planning/`
+commit that lived on `feature/phase-33` (the range `1bb94063..b6d44416`, 24 commits at replay time,
+oldest-to-newest, one range invocation, no conflicts, no merge commit) onto it. The SHAs below
+changed as a direct consequence: cherry-pick always mints a new commit object, even with an
+identical tree and message, because the parent changed (from `1bb94063` to `1d4a9724`). **This is
+accepted, not a defect** — none of the old SHAs were ever pushed to `origin`, so nothing on the
+remote cites them, and `feature/phase-33` itself is retired untouched (still resolving to
+`b6d444162f9c037fe987db853e361c7a3b6c8425`, verified live at Phase 37.1's Task 1). The map below
+exists so this file's own in-prose citations (`9154aba7`, `e463936a`, `4e48d55f`, `d969100c`,
+`cc1e56a7`, `eaa07b67`, among others) stay resolvable after the rewrite: look up the old short SHA
+below, read across to its replayed counterpart on `release/v0.10.1`.
+
+| Old SHA (`feature/phase-33`, unpushed) | New SHA (`release/v0.10.1`) | Subject |
+|---|---|---|
+| eaa07b67 | 0e21c319 | docs(37-06): push feature/phase-33 and open release PR #55 |
+| fea13781 | fa2cb160 | docs(37-06): write D-12 pause hand-off pair |
+| 85c4890a | bfab5c17 | docs(37-06): record CI conclusions, merge, D-17 bootstrap, and §11 pre-tag sign-off |
+| b242971e | 7c309694 | docs(37-06): append SUPERSEDED-IN-PART note to the pause hand-off |
+| f966add1 | 4362219a | docs(37-06): add plan summary |
+| aa6e2d84 | f874bd72 | docs(37-06): complete release PR plan |
+| 623fc92e | bffcd475 | docs(37-07): record every workflow run on the PR head SHA |
+| 98ae409a | 8800fa06 | docs(37-07): record the CI Coverage job as the sole SC2 evidence |
+| 4144a3c3 | 62b6f1ef | docs(37-07): add plan summary |
+| cc1e56a7 | e539c1b7 | docs(37-07): complete pre-merge CI evidence plan |
+| d969100c | 64bfebc8 | docs(37-08): record Task 1 deviation resolution and Task 2 read-only post-merge verification |
+| 4e48d55f | 888dbeef | docs(37): record D-16 read-only diagnosis of the red v0.10.0 release run |
+| e463936a | bd9059b0 | docs(37): record D-16 diagnosis #2 — partial publish 3/12, battalion dev-dep ordering defect |
+| 9154aba7 | e925a33f | docs(37): record recovery decision A and mark Phase 37 open, blocked on 37.1 |
+| 7294aeac | 99c829f8 | docs(37.1): capture phase context |
+| 45b011cd | 92eaf437 | docs(state): record phase 37.1 context session |
+| d6ffacc9 | a154de13 | docs(37.1): research v0.10.1 patch release phase domain |
+| 09ee109f | 70d0d067 | docs(phase-37.1): add validation strategy |
+| 312742df | 1cf2fd40 | docs(37.1): map codebase patterns for planning |
+| 81093480 | da126368 | docs(37.1): create phase plan |
+| 888d2dd7 | e7a7b1d9 | docs(37.1): make gate verification run the gates, not grep for their names |
+| d114988d | 17103741 | docs(37.1): close the last three unasserted-criterion gaps |
+| 2bd39650 | 07cb82e8 | docs(37.1): harden two verify assertions against silent-zero shapes |
+| b6d44416 | 8b5df4d8 | docs(37.1): record planning completion in project state |
+
+**Forward pointer:** Phase 37.1's own CI evidence — the local sweep, CI-run and registry tables for
+the `release/v0.10.1` work this SHA map anchors — lives in
+`.planning/phases/37.1-v0-10-1-patch-release/37.1-CI-EVIDENCE.md`, not in this file. This file
+stays sealed at the SHAs Phase 37 verified; nothing above this dated section was edited to produce
+it (D-00d amend-at-source, D-11).

@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: Completed 37.1-03-PLAN.md
-last_updated: "2026-09-19T11:41:52.548Z"
+stopped_at: Completed 37.1-04-PLAN.md
+last_updated: "2026-09-19T12:06:16.452Z"
 last_activity: 2026-09-19
 last_activity_desc: Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed)
 progress:
   total_phases: 19
   completed_phases: 17
   total_plans: 231
-  completed_plans: 214
+  completed_plans: 215
 ---
 
 # Project State
@@ -62,7 +62,7 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 37.1 (v0.10.1 Patch Release) — PLANNED
-Plan: 4 of 16
+Plan: 5 of 16
 Status: Ready to execute
 Last activity: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed)
 Previous: 2026-09-19 — Phase 37.1 context gathered; Phase 37 OPEN and blocked on it (v0.10.0 tagged, 3/12 published)
@@ -191,6 +191,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37.1 P01 | ~20min | 2 tasks | 2 files |
 | Phase 37.1 P02 | ~40min | 3 tasks | 5 files |
 | Phase 37.1 P03 | ~25min | 3 tasks | 3 files |
+| Phase 37.1 P04 | ~16min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -587,6 +588,8 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Publish-order dependency resolution reads the metadata entry's name field, never rename -- avoids resolving an aliased local dependency (e.g. paladin-core) to the wrong crate name
 - [Phase ?]: CI job choice: License & Dependency Policy, not Publish Dry Run -- that job never runs pre-merge (push+main only)
 - [Phase ?]: make check-gates left red on purpose at end of plan 37.1-03 -- battalion fix is plan 37.1-04's work (D-08 stage 1)
+- [Phase ?]: Phase 37.1 Plan 04: manifest fix (drop version requirement) chosen over reordering scripts/publish-crates.sh's CRATES array for the paladin-battalion publish-order defect -- smaller diff, zero risk to the proven publish loop
+- [Phase ?]: Phase 37.1 Plan 04: 3 remaining versioned workspace dev-dependency edges (herald->ports, root->web, root->eval) recorded as a live-derived finding and deliberately left versioned -- workspace-wide path-only rule deferred to v0.11.0 per CONTEXT.md
 
 ### Pending Todos
 
@@ -1155,8 +1158,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-19T11:41:52.459Z
-**Stopped at:** Completed 37.1-03-PLAN.md
+**Last session:** 2026-09-19T12:06:09.758Z
+**Stopped at:** Completed 37.1-04-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

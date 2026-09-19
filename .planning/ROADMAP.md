@@ -1289,7 +1289,7 @@ Plans:
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 13/13 | Complete    | 2026-09-18 |
 | 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 14/14 | Complete    | 2026-09-18 |
 | 37. v0.10.0 Crate Release | v0.10.0 | 7/11 | In Progress | — |
-| 37.1 v0.10.1 Patch Release (INSERTED) | v0.10.0 | 3/16 | In Progress | — |
+| 37.1 v0.10.1 Patch Release (INSERTED) | v0.10.0 | 4/16 | In Progress | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

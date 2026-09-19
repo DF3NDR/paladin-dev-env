@@ -1225,7 +1225,7 @@ Plans:
 
 **Wave 1-6 — build wave** *(D-08 stage 1: red is expected and fixed inside the six success criteria)*
 
-- [ ] 37.1-01-PLAN.md — Cut `release/v0.10.1` from `1d4a9724`, cherry-pick the live `.planning/` range, open `37.1-CI-EVIDENCE.md` and map the rewritten SHAs
+- [x] 37.1-01-PLAN.md — Cut `release/v0.10.1` from `1d4a9724`, cherry-pick the live `.planning/` range, open `37.1-CI-EVIDENCE.md` and map the rewritten SHAs
 - [ ] 37.1-02-PLAN.md — The publish-order gate and its committed regression harness, proven red against a real capture of the `1d4a9724` tree (SC3)
 - [ ] 37.1-03-PLAN.md — Wire the gate into `make check-gates` and into a CI job that actually runs on pull requests, and record why not the dry-run job (SC3)
 - [ ] 37.1-04-PLAN.md — Make `paladin-battalion`'s two workspace dev-dependencies path-only; the gate turns green on the live tree (SC1)

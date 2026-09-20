@@ -7,6 +7,15 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-20
+
+Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source change in
+this crate; the committed `openapi.json` baseline's `info.version` field was regenerated
+(`UPDATE_OPENAPI=1 cargo test -p paladin-web openapi_matches_committed_baseline`) to keep
+`openapi::tests::openapi_matches_committed_baseline` green, since the spec derives its version
+from `CARGO_PKG_VERSION` at build time — a data-file update, not a behavior change. See the root
+`CHANGELOG.md`'s `[0.10.1]` section for the two release-pipeline defects this patch fixes.
+
 ## [0.10.0] - 2026-09-10
 
 ### Added

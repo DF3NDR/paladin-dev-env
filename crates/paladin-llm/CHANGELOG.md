@@ -13,6 +13,12 @@ and this project follows lockstep workspace versioning.
   bounded-allocates caller-prioritised material into a `Stockpile` (`Commissary::dispense`),
   never dropping shed items silently; see `src/services/commissary.rs`.
 
+## [0.10.1] - 2026-09-20
+
+Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source
+change in this crate — see the root `CHANGELOG.md`'s `[0.10.1]` section for the two
+release-pipeline defects this patch fixes.
+
 ## [0.10.0] - 2026-09-10
 
 ### Added

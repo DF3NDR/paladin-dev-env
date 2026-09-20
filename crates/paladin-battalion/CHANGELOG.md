@@ -7,6 +7,18 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-09-20
+
+### Fixed
+
+- The two workspace `[dev-dependencies]` (`paladin-llm`, `paladin-storage`) that carried a
+  version requirement, and so pointed forward in the publish order — this crate publishes before
+  either of them — are now path-only. Cargo omits a path-only dev-dependency with no version
+  requirement from the published manifest entirely, so this crate's published manifest genuinely
+  differs from `0.10.0`'s even though no library source changed; local dev/test builds still
+  resolve both by path, unchanged. This was the defect that stopped the real `v0.10.0` release
+  after 3 of 12 crates; see the root `CHANGELOG.md`'s `[0.10.1]` section.
+
 ## [0.10.0] - 2026-09-10
 
 ### Added

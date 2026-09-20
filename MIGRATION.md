@@ -11,6 +11,14 @@
 > overview §5.4's Definition of Done also requires is added separately, by this same closing phase
 > (Phase 29, plan 29-06), and links back to this file.
 
+> **2026-09-20 addendum:** this title and every section below it describe the v0.10.0
+> **milestone's feature scope**, which a patch release does not change, so the title is not
+> rewritten here. The version that actually shipped through the release pipeline is **v0.10.1** —
+> the `v0.10.0` tag published only 3 of 12 crates before stopping at a publish-order defect;
+> `v0.10.1` republishes the full set at one coherent version with that defect and one other fixed.
+> See `CHANGELOG.md`'s `[0.10.1]` section for what changed. Nothing in this migration guide's
+> technical content is affected — the patch ships no library source change and no API change.
+
 ## 9.1 Behavioral changes (user-visible without code changes)
 
 | ID | Change | Who is affected | Required user action |

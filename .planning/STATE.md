@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: Completed 37.1-04-PLAN.md
-last_updated: "2026-09-20T22:59:49.978Z"
+stopped_at: Completed 37.1-05-PLAN.md
+last_updated: "2026-09-20T23:19:17.702Z"
 last_activity: 2026-09-20
-last_activity_desc: Phase 37.1 execution resumed at plan 37.1-05 (waves 5-16 remaining)
+last_activity_desc: Phase 37.1 plan 37.1-05 completed (SC2 EPIPE fix; waves 6-16 remaining)
 progress:
   total_phases: 19
   completed_phases: 17
   total_plans: 231
-  completed_plans: 215
+  completed_plans: 216
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `37-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [█████████░] 93%
+**Progress:** [█████████░] 94%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,10 +62,11 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 37.1 (v0.10.1 Patch Release) — EXECUTING
-Plan: 5 of 16
-Status: Executing Phase 37.1
-Last activity: 2026-09-20 — Phase 37.1 execution resumed at plan 37.1-05 (waves 5-16 remaining)
-Previous: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed); waves 1-4 executed (plans 37.1-01..04)
+Plan: 6 of 16
+Status: Ready to execute
+Last activity: 2026-09-20 — Phase 37.1 plan 37.1-05 executed (SC2 EPIPE race fixed in create-or-reuse-release.sh; waves 6-16 remaining)
+Previous: 2026-09-20 — Phase 37.1 execution resumed at plan 37.1-05 (waves 5-16 remaining)
+Earlier: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed); waves 1-4 executed (plans 37.1-01..04)
 Earlier: 2026-09-19 — Phase 37.1 context gathered; Phase 37 OPEN and blocked on it (v0.10.0 tagged, 3/12 published)
 Earlier: 2026-09-18 — Phase 37 execution reached 37-08 and hard-stopped at the D-16 diagnosis
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
@@ -193,6 +194,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37.1 P02 | ~40min | 3 tasks | 5 files |
 | Phase 37.1 P03 | ~25min | 3 tasks | 3 files |
 | Phase 37.1 P04 | ~16min | 3 tasks | 2 files |
+| Phase 37.1 P05 | ~9min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -591,6 +593,9 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: make check-gates left red on purpose at end of plan 37.1-03 -- battalion fix is plan 37.1-04's work (D-08 stage 1)
 - [Phase ?]: Phase 37.1 Plan 04: manifest fix (drop version requirement) chosen over reordering scripts/publish-crates.sh's CRATES array for the paladin-battalion publish-order defect -- smaller diff, zero risk to the proven publish loop
 - [Phase ?]: Phase 37.1 Plan 04: 3 remaining versioned workspace dev-dependency edges (herald->ports, root->web, root->eval) recorded as a live-derived finding and deliberately left versioned -- workspace-wide path-only rule deferred to v0.11.0 per CONTEXT.md
+- [Phase ?]: Phase 37.1 Plan 05: parameter expansion (not a here-string or EOF-draining sed) chosen for _cor_gh_call's status-line extraction fix -- removes the whole subprocess-and-pipe mechanism the EPIPE pipefail race depends on, not merely tunes around it
+- [Phase ?]: Phase 37.1 Plan 05: regression payload sized at 200000 chars via named PADDING_SIZE variable, far above the ~70KB non-trigger / ~100KB+ reliable-trigger thresholds measured -- avoids a marginally-sized test that passes against broken code by chance
+- [Phase ?]: Phase 37.1 Plan 05: three further early-closing-reader-under-pipefail sites (check-deprecations.sh, check-doc-examples.sh x2, check-public-api-examples.sh) swept and recorded as findings, deliberately not fixed -- assigned to the deferred wider release-tooling audit per D-00d
 
 ### Pending Todos
 
@@ -1159,8 +1164,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-19T12:06:09.758Z
-**Stopped at:** Completed 37.1-04-PLAN.md
+**Last session:** 2026-09-20T23:19:17.592Z
+**Stopped at:** Completed 37.1-05-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

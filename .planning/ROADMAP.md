@@ -1229,7 +1229,7 @@ Plans:
 - [x] 37.1-02-PLAN.md — The publish-order gate and its committed regression harness, proven red against a real capture of the `1d4a9724` tree (SC3)
 - [x] 37.1-03-PLAN.md — Wire the gate into `make check-gates` and into a CI job that actually runs on pull requests, and record why not the dry-run job (SC3)
 - [x] 37.1-04-PLAN.md — Make `paladin-battalion`'s two workspace dev-dependencies path-only; the gate turns green on the live tree (SC1)
-- [ ] 37.1-05-PLAN.md — Replace the response-size race in `create-or-reuse-release.sh` with parameter expansion, with a 200 KB regression case and the sweep findings (SC2)
+- [x] 37.1-05-PLAN.md — Replace the response-size race in `create-or-reuse-release.sh` with parameter expansion, with a 200 KB regression case and the sweep findings (SC2)
 - [ ] 37.1-06-PLAN.md — Bump fourteen manifests, the lockfile, twelve changelogs and the migration note to `0.10.1`; record the three no-work findings (SC4)
 
 **Wave 7-10 — re-seal, pull request and sign-off** *(D-08 stage 2: a red gate is a hard stop; nothing is fixed)*

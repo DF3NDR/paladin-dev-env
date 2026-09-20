@@ -6,9 +6,9 @@ current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
 stopped_at: Completed 37.1-04-PLAN.md
-last_updated: "2026-09-19T12:06:16.452Z"
-last_activity: 2026-09-19
-last_activity_desc: Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed)
+last_updated: "2026-09-20T22:59:49.978Z"
+last_activity: 2026-09-20
+last_activity_desc: Phase 37.1 execution resumed at plan 37.1-05 (waves 5-16 remaining)
 progress:
   total_phases: 19
   completed_phases: 17
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-17 after Phase 34 completion)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 37 — v0.10.0 Crate Release
+**Current focus:** Phase 37.1 — v0.10.1 Patch Release
 Phase 34 was verified 2026-09-17: `34-UAT.md` 47/47 passed (all nine SUMMARYs coverage-mode, every
 deliverable automated and the list confirmed by the maintainer; `34-check.sh --final` 8/8 re-run at UAT
 time), `34-VERIFICATION.md` `passed` 5/5, `34-SECURITY.md` `verified` with `threats_open: 0`.
@@ -61,11 +61,12 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 37.1 (v0.10.1 Patch Release) — PLANNED
+Phase: 37.1 (v0.10.1 Patch Release) — EXECUTING
 Plan: 5 of 16
-Status: Ready to execute
-Last activity: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed)
-Previous: 2026-09-19 — Phase 37.1 context gathered; Phase 37 OPEN and blocked on it (v0.10.0 tagged, 3/12 published)
+Status: Executing Phase 37.1
+Last activity: 2026-09-20 — Phase 37.1 execution resumed at plan 37.1-05 (waves 5-16 remaining)
+Previous: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed); waves 1-4 executed (plans 37.1-01..04)
+Earlier: 2026-09-19 — Phase 37.1 context gathered; Phase 37 OPEN and blocked on it (v0.10.0 tagged, 3/12 published)
 Earlier: 2026-09-18 — Phase 37 execution reached 37-08 and hard-stopped at the D-16 diagnosis
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)

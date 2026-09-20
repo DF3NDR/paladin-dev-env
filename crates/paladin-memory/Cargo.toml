@@ -1,6 +1,6 @@
 [package]
 name = "paladin-memory"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -22,8 +22,8 @@ qdrant = ["dep:qdrant-client"]
 content-processing = ["dep:tiktoken-rs"]
 
 [dependencies]
-paladin-core = { package = "paladin-ai-core", version = "0.10.0", path = "../paladin-core" }
-paladin-ports = { version = "0.10.0", path = "../paladin-ports" }
+paladin-core = { package = "paladin-ai-core", version = "0.10.1", path = "../paladin-core" }
+paladin-ports = { version = "0.10.1", path = "../paladin-ports" }
 # The first UNCONDITIONAL PRODUCTION lateral adapter->adapter edge in the workspace
 # (Phase 33, D-01): paladin-battalion takes paladin-llm as a dev-dependency only and
 # paladin-content takes it optionally behind its `llm` feature, so this is a new kind
@@ -31,7 +31,7 @@ paladin-ports = { version = "0.10.0", path = "../paladin-ports" }
 # on paladin-core and paladin-ports. `default-features = false` keeps reqwest/rand out
 # of this crate -- `commissary` and `window` are unconditional modules in paladin-llm,
 # so a featureless build is enough for RagRetrievalService's Commissary::dispense call.
-paladin-llm = { version = "0.10.0", path = "../paladin-llm", default-features = false }
+paladin-llm = { version = "0.10.1", path = "../paladin-llm", default-features = false }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

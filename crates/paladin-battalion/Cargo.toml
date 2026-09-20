@@ -1,6 +1,6 @@
 [package]
 name = "paladin-battalion"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Am0rfu5"]
@@ -13,8 +13,8 @@ categories = ["development-tools", "asynchronous", "api-bindings"]
 documentation = "https://docs.rs/paladin-battalion"
 
 [dependencies]
-paladin-core  = { package = "paladin-ai-core", version = "0.10.0", path = "../paladin-core" }
-paladin-ports = { version = "0.10.0", path = "../paladin-ports" }
+paladin-core  = { package = "paladin-ai-core", version = "0.10.1", path = "../paladin-core" }
+paladin-ports = { version = "0.10.1", path = "../paladin-ports" }
 tokio         = { workspace = true }
 async-trait   = { workspace = true }
 serde         = { workspace = true }

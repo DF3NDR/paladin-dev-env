@@ -1,0 +1,105 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-09-18T19:00:05Z",
+  "phase": "37",
+  "phase_name": "v0.10.0 Crate Release",
+  "phase_dir": ".planning/phases/37-v0-10-0-crate-release",
+  "plan": 6,
+  "task": 3,
+  "total_tasks": 3,
+  "status": "paused",
+  "completed_tasks": [
+    {
+      "id": 1,
+      "name": "Push feature/phase-33 and open the release pull request to main",
+      "status": "done",
+      "commit": "eaa07b67"
+    },
+    {
+      "id": 2,
+      "name": "Write the D-12 pause hand-off pair naming the exact resume condition",
+      "status": "in_progress",
+      "progress": "Writing .continue-here.md and this HANDOFF.json; commit follows immediately after."
+    }
+  ],
+  "remaining_tasks": [
+    {
+      "id": 3,
+      "name": "Confirm the release PR reads correctly, then stop until CI concludes",
+      "status": "not_started",
+      "type": "checkpoint:human-verify",
+      "gate": "blocking-human"
+    }
+  ],
+  "blockers": [
+    {
+      "description": "paladin-eval first-publish bootstrap (D-17) still reads 404 on the sparse index; maintainer's reply classified 'deferred' (short runbook owed at point of need, before plan 37-08 Task 3's tag hand-off).",
+      "type": "human_action",
+      "workaround": "Not a blocker for this stop — only for plan 37-08's tag hand-off."
+    }
+  ],
+  "async_jobs": [
+    {
+      "manifest": null,
+      "job_id": "35382874018",
+      "backend": "github-actions",
+      "workflow": "ci.yml",
+      "event": "push",
+      "head_sha": "1bb9406343b7fb965e0724ac7a689d45e4e5f61c",
+      "status": "queued",
+      "submit_command": "git push origin feature/phase-33",
+      "submitted_at": "2026-09-18T18:54:15Z",
+      "expected_artifacts": ["ci.yml run conclusion", "coverage job conclusion + percentage"],
+      "verification_command": "gh run list --branch feature/phase-33 --workflow ci.yml --json headSha,event,status,conclusion",
+      "resume_command": "gh run view 35382874018 --json status,conclusion",
+      "run_url": "https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382874018"
+    },
+    {
+      "manifest": null,
+      "job_id": "35382953376",
+      "backend": "github-actions",
+      "workflow": "ci.yml",
+      "event": "pull_request",
+      "head_sha": "1bb9406343b7fb965e0724ac7a689d45e4e5f61c",
+      "status": "queued",
+      "submit_command": "gh pr create --base main --head feature/phase-33 --title \"release: v0.10.0 — Durable Agent Execution Runtime\" --body-file target/37-06/pr-body.md",
+      "submitted_at": "2026-09-18T18:55:03Z",
+      "expected_artifacts": ["ci.yml run conclusion", "coverage job conclusion + percentage"],
+      "verification_command": "gh run list --branch feature/phase-33 --workflow ci.yml --json headSha,event,status,conclusion",
+      "resume_command": "gh run view 35382953376 --json status,conclusion",
+      "run_url": "https://github.com/DF3NDR/paladin-dev-env/actions/runs/35382953376"
+    }
+  ],
+  "human_actions_pending": [
+    {
+      "action": "Confirm ci.yml has CONCLUDED (not queued, not in progress) on head 1bb9406343b7fb965e0724ac7a689d45e4e5f61c for both the push and pull_request trigger events, via: gh run list --branch feature/phase-33 --workflow ci.yml --json headSha,event,status,conclusion",
+      "context": "This is the resume condition for this stop (D-12). ci.yml takes roughly 60-90 minutes on this repository.",
+      "blocking": true
+    },
+    {
+      "action": "Read PR #55 (https://github.com/DF3NDR/paladin-dev-env/pull/55) and confirm the body reads correctly: base main / head feature/phase-33, merge-commit instructions present, do-not-tag-yet note present, D-17 line accurate.",
+      "context": "The PR body is still editable and nothing downstream has happened yet.",
+      "blocking": false
+    },
+    {
+      "action": "The next stop's resume condition (plan 37-08, named here verbatim so the phase's shape is visible): tag v0.10.0 exists on origin and points at a commit contained in main.",
+      "context": "Not this stop's condition — recorded for forward visibility only.",
+      "blocking": false
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "D-03 order: local re-seal -> push -> PR CI green including coverage >= 82% -> evidence appended -> maintainer ticks §11 -> tick commit pushed -> CI re-runs on true final SHA -> merge.",
+      "rationale": "The tick must be the last content commit on feature/phase-33 so the maintainer signs what is visible.",
+      "phase": "37"
+    },
+    {
+      "decision": "D-09 two-wave split: pre-merge wave (plans 37-01..37-08) and post-tag wave (plans 37-09..37-11) around the D-02 merge+tag checkpoint.",
+      "rationale": "This phase's goal is 'released', not merely 'releasable' — a VERIFICATION that passes SC3-4 by promise defeats that goal.",
+      "phase": "37"
+    }
+  ],
+  "uncommitted_files": [],
+  "next_action": "Confirm ci.yml has concluded (both push and pull_request events) on head 1bb9406343b7fb965e0724ac7a689d45e4e5f61c, then read the maintainer's reply to this checkpoint before dispatching plan 37-07.",
+  "context_notes": "Plan 37-06 Task 1 (push + PR) and Task 2 (this hand-off pair) are complete and committed. Task 3 is a checkpoint:human-verify with gate=\"blocking-human\" and is a genuine hard stop -- nothing has been merged, tagged, ticked, or published. No background watcher was left running."
+}

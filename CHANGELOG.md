@@ -5,7 +5,51 @@ All notable changes to the Paladin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1] - 2026-09-20
+
+Patch release. Fixes the two defects that stopped the `v0.10.0` release pipeline partway through
+(3 of 12 crates published) and adds the gate that would have caught the ordering defect before
+merge. No library source change; no public API change.
+
+### Fixed
+
+- **`paladin-battalion`'s publish-order defect (SHIP-06).** `crates/paladin-battalion/Cargo.toml`
+  carried two *versioned* workspace `[dev-dependencies]` (`paladin-llm`, `paladin-storage`) that
+  point forward in the publish order — `paladin-battalion` publishes before either of them, so
+  `cargo publish` could not resolve them against the live registry, and the real `v0.10.0` release
+  stopped there after publishing 3 of 12 crates. Both entries are now path-only, so Cargo omits
+  them from the published manifest entirely and imposes no registry-ordering constraint; local
+  dev/test builds still resolve them by path, unchanged.
+- **`scripts/create-or-reuse-release.sh`'s `_cor_gh_call` EPIPE race.** The status-line extraction
+  piped a captured GitHub API response through `head -n1` under `set -o pipefail`; a response body
+  larger than the pipe buffer could trigger `head`'s early close and abort the whole script with
+  `SIGPIPE` (exit 141) before the release body was ever read — the real failure mode hit on the
+  `v0.10.0` release day. The extraction now uses pure bash parameter expansion, removing the
+  subprocess and the pipe the race depended on entirely.
+- **`API Surface Tracking`'s floating nightly.** The CI job installed whichever `nightly` was
+  newest, and its baseline is rustdoc output. On 2026-09-21 a new nightly (rustc `bba531001`)
+  began rendering derived return types as `-> Self`, and the required check went red on a
+  documentation-only commit: 303 baseline lines differed with no public item added, removed or
+  changed. The nightly is now chosen through one variable, `PUBLIC_API_TOOLCHAIN`: `ci.yml` sets it
+  to a dated nightly and installs that same name, and `scripts/extract-public-api.sh` passes it to
+  cargo as `+<toolchain>` (unset, it is the local `nightly`, as before). A non-nightly value is
+  refused, because `cargo-public-api` would silently swap it for plain `nightly`.
+
+### Added
+
+- A new publish-order gate, `scripts/check-publish-order.sh` (wired into `make check-gates` and
+  CI), that statically asserts every versioned workspace dependency — normal, build and dev — of
+  every crate in the publish order appears earlier in that order, derived from `cargo metadata`
+  rather than a second hand-maintained copy of the order. This is the check the `paladin-battalion`
+  defect above should have failed before merge; it is proven red against the `v0.10.0` manifests
+  and green on the fixed tree.
+
 ## [0.10.0] - 2026-09-10
+
+**2026-09-20:** this tag's release run published only 3 of the 12 publishable crates
+(`paladin-ai-core`, `paladin-ports`, `paladin-herald`) before stopping at the `paladin-battalion`
+publish-order defect described under `[0.10.1]` above. Superseded by `v0.10.1`, which republishes
+the full set at one coherent version.
 
 ### Behavioral changes
 

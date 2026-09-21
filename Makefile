@@ -202,6 +202,10 @@ check-codeql-dismissals: ## Verify CODEQL-DISMISSALS.md is schema-complete, non-
 check-migration-allowlist: ## Verify MIGRATION.md §9.2 register is set-equal to .cargo/semver-checks-allowlist.toml (row-level, PRIM-05)
 	@./scripts/check-migration-allowlist.sh
 
+.PHONY: check-publish-order
+check-publish-order: ## Verify every versioned workspace dependency (normal, build and dev) of each publishable crate appears earlier in the CRATES publish order (SHIP-06/SC3)
+	@./scripts/check-publish-order.sh
+
 .PHONY: check-release-consistency
 # Deliberately NOT part of check-gates: every sibling guard above is a
 # no-argument offline check runnable against the current tree as-is: this
@@ -217,7 +221,7 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 	@./scripts/check-release-consistency.sh --tag "$(RELEASE_TAG)"
 
 .PHONY: check-gates
-check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist ## Run all offline release-gate guards
+check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order ## Run all offline release-gate guards
 
 .PHONY: test-shell-guards
 # Loops over every tests/scripts/*_test.sh rather than a hardcoded list, so

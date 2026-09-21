@@ -1,0 +1,6447 @@
+{
+  "packages": [
+    {
+      "name": "paladin-ai",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724#paladin-ai@0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "Enterprise AI orchestration framework with multi-agent coordination patterns",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "argon2",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.5.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "axum",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8.4",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "base64",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.22",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "blake3",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "bytes",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.10.1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chacha20poly1305",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.10",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "clap",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^4.5.40",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [
+            "derive",
+            "cargo",
+            "env"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "colored",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2.1",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "comfy-table",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^7.1",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "config",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.15.11",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "console",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.15",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "dialoguer",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.11",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "dotenv",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.15.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "env_logger",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.11.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "futures",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3.31",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "glob",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3.4",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "hmac",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.12",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "http",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "indicatif",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.17",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "lazy_static",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.4.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "lock_api",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.12",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "log",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.21",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "md5",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "mime_guess",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2.0.5",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "murmur3",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.5.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "once_cell",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.19.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "openssl",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.10",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "opentelemetry",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.32.0",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": false,
+          "features": [
+            "trace"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "opentelemetry-otlp",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.32.0",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": false,
+          "features": [
+            "http-proto",
+            "reqwest-client",
+            "trace"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "opentelemetry_sdk",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.32.1",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": false,
+          "features": [
+            "trace"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-battalion",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-battalion"
+        },
+        {
+          "name": "paladin-content",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-content"
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "paladin-eval",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-eval"
+        },
+        {
+          "name": "paladin-herald",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-herald"
+        },
+        {
+          "name": "paladin-llm",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": false,
+          "features": [
+            "mock"
+          ],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm"
+        },
+        {
+          "name": "paladin-memory",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "sqlite"
+          ],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-memory"
+        },
+        {
+          "name": "paladin-notifications",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-notifications"
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "paladin-storage",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "sqlite"
+          ],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-storage"
+        },
+        {
+          "name": "paladin-web",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-web"
+        },
+        {
+          "name": "petgraph",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.6",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "qdrant-client",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.14",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "rand",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "regex",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.11.1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "reqwest",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.12.4",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "json",
+            "blocking",
+            "stream"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "reqwest",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.13",
+          "kind": null,
+          "rename": "reqwest_mcp",
+          "optional": false,
+          "uses_default_features": false,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "rmcp",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "=2.1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": false,
+          "features": [
+            "client",
+            "transport-child-process",
+            "transport-streamable-http-client",
+            "transport-streamable-http-client-reqwest",
+            "reqwest"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "schemars",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_yaml",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.9",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "sha2",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.10.9",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "sqlx",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": false,
+          "features": [
+            "runtime-tokio-rustls",
+            "sqlite",
+            "chrono",
+            "uuid",
+            "json",
+            "migrate",
+            "macros"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tempfile",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^3.10.1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio-cron-scheduler",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.13",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio-util",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.7",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "toml",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8.23",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tracing-subscriber",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "env-filter"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "url",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2.5.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "urlencoding",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2.1.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde",
+            "fast-rng",
+            "macro-diagnostics"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "zeroize",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "axum",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8.4",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "criterion",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.5",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "async_tokio"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "insta",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.34",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "mockito",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.7.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "opentelemetry-proto",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.32",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": false,
+          "features": [
+            "gen-tonic-messages",
+            "trace"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "opentelemetry_sdk",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.32.1",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "testing"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-eval",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-eval"
+        },
+        {
+          "name": "paladin-web",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-web"
+        },
+        {
+          "name": "proptest",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.4",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "prost",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.14",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "redis",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.32.2",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "aio",
+            "tokio-comp"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "rmcp",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "=2.1.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": false,
+          "features": [
+            "server",
+            "transport-streamable-http-server"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serial_test",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^3.2.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tempfile",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^3.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "testcontainers",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.24.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "testcontainers-modules",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.12.1",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "minio"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full",
+            "test-util"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio-test",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tower",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.5",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "util"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "wiremock",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.6",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "paladin",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/src/main.rs",
+          "edition": "2024",
+          "required-features": [
+            "cli"
+          ],
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "paladin-cli",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/src/bin/paladin-cli.rs",
+          "edition": "2024",
+          "required-features": [
+            "cli"
+          ],
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "bin"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "paladin-server",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/src/bin/paladin-server.rs",
+          "edition": "2024",
+          "required-features": [
+            "web-server"
+          ],
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "agent_handoffs",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/agent_handoffs.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "agent_runtime_middleware",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/agent_runtime_middleware.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "arsenal_stdio_tools",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/arsenal_stdio_tools.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "arsenal_streamable_http_tools",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/arsenal_streamable_http_tools.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "autonomous_full_config",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/autonomous_full_config.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "autonomous_planning",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/autonomous_planning.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "autonomous_prompt_generation",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/autonomous_prompt_generation.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "basic_paladin",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/basic_paladin.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "battalion_checkpoint_recovery",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/battalion_checkpoint_recovery.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "campaign_workflow",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/campaign_workflow.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "chain_of_command_delegation",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/chain_of_command_delegation.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "citadel_autosave",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/citadel_autosave.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "citadel_restore",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/citadel_restore.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "commander_auto",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/commander_auto.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "commander_basic",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/commander_basic.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "commander_council",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/commander_council.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "commander_full_config",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/commander_full_config.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "commander_grove",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/commander_grove.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "commander_with_metadata_export",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/commander_with_metadata_export.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "conclave_expert_panel",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/conclave_expert_panel.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "control_flow_dynamic_routing",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/control_flow_dynamic_routing.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "council_discussion",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/council_discussion.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "document_processing",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/document_processing.rs",
+          "edition": "2024",
+          "required-features": [
+            "content-processing"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "dynamic_temperature",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/dynamic_temperature.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "eval_scenarios_demo",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/eval_scenarios_demo.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "formation_sequential",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/formation_sequential.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "garrison_in_memory",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/garrison_in_memory.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "garrison_persistent",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/garrison_persistent.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "garrison_semantic_search",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/garrison_semantic_search.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "graceful_shutdown",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/graceful_shutdown.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "grove_routing",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/grove_routing.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "herald_custom_formatter",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/herald_custom_formatter.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "herald_json_output",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/herald_json_output.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "herald_markdown_output",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/herald_markdown_output.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "herald_streaming",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/herald_streaming.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "http_service_host",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/http_service_host.rs",
+          "edition": "2024",
+          "required-features": [
+            "web-server"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "human_in_the_loop_gate",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/human_in_the_loop_gate.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "llm_provider_selection",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/llm_provider_selection.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "maneuver_basic",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/maneuver_basic.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "maneuver_dynamic_flow",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/maneuver_dynamic_flow.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "maneuver_nested_flow",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/maneuver_nested_flow.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "muster_baseline",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/muster_baseline.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "node_result_cache",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/node_result_cache.rs",
+          "edition": "2024",
+          "required-features": [
+            "redis-cache"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "observability_otel_export",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/observability_otel_export.rs",
+          "edition": "2024",
+          "required-features": [
+            "otel"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "observability_tracing",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/observability_tracing.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "paladin_with_config",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/paladin_with_config.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "paladin_with_rag",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/paladin_with_rag.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "paladin_with_sanctum",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/paladin_with_sanctum.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "phalanx_parallel",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/phalanx_parallel.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "platform_api_client",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/platform_api_client.rs",
+          "edition": "2024",
+          "required-features": [
+            "web-server",
+            "dev-ui"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "sanctum_adapter_migration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/sanctum_adapter_migration.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "sanctum_basic_inmemory",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/sanctum_basic_inmemory.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "sanctum_configuration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/sanctum_configuration.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "sanctum_qdrant_production",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/sanctum_qdrant_production.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "sanctum_rag_retrieval",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/sanctum_rag_retrieval.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "structured_output_schema",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/structured_output_schema.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "token_economy_commissary",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/token_economy_commissary.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "vision_analysis",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/vision_analysis.rs",
+          "edition": "2024",
+          "required-features": [
+            "vision",
+            "llm-openai"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "vision_battalion",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/vision_battalion.rs",
+          "edition": "2024",
+          "required-features": [
+            "vision",
+            "llm-openai"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "war_engine_configuration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/war_engine_configuration.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "war_engine_memory_baseline",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/war_engine_memory_baseline.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "webhook_receiver",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/examples/webhook_receiver.rs",
+          "edition": "2024",
+          "required-features": [
+            "web-server"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "aegis_retry_stress",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/aegis_retry_stress_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "agent_orchestrator_bridge",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/agent_orchestrator_bridge.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "citadel_integration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/citadel_integration_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "cli",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/cli/mod.rs",
+          "edition": "2024",
+          "required-features": [
+            "cli"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "cli_isolation",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/cli_isolation_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "content_agent_bridge",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/content_agent_bridge.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "content_ingestion_pipeline",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/content_ingestion_pipeline.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "e2e_approval_gate",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/e2e_approval_gate_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "e2e_compensation_chain",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/e2e_compensation_chain_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "e2e_crash_resume",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/e2e_crash_resume_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "e2e_muster_defer_order",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/e2e_muster_defer_order_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "e2e_platform_api",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/e2e_platform_api_test.rs",
+          "edition": "2024",
+          "required-features": [
+            "web-server"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "evals",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/evals.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "event_trigger_pipeline",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/event_trigger_pipeline.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "functional",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/functional.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "golden_bridge_equivalence",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/golden_bridge_equivalence_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "in_memory_sanctum_integration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/in_memory_sanctum_tests.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "lib",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/lib.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "multi_parley_suspension",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/multi_parley_suspension_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "ollama_docker",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/ollama_docker_test.rs",
+          "edition": "2024",
+          "required-features": [
+            "integration-tests",
+            "llm-ollama"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "openai_embedding_integration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/openai_embedding_tests.rs",
+          "edition": "2024",
+          "required-features": [
+            "openai-embeddings"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "paladin_garrison_integration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/paladin_garrison_integration_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "paladin_server_smoke",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/paladin_server_smoke.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "parley_resume_stress",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/parley_resume_stress_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "qdrant_sanctum_integration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/qdrant_sanctum_tests.rs",
+          "edition": "2024",
+          "required-features": [
+            "qdrant"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "queue_port_contract",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/queue_port_contract.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "rag_commissary",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/rag_commissary_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "rag_integration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/rag_integration_tests.rs",
+          "edition": "2024",
+          "required-features": [
+            "qdrant"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "repository",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/repository.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "subgraph_formation_in_campaign",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/subgraph_formation_in_campaign_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "system_log_integration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/system_log_integration_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "unit",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/unit/mod.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "v0_9_config_boot",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/v0_9_config_boot_test.rs",
+          "edition": "2024",
+          "required-features": [
+            "web-server"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "vision_integration",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/vision_integration_test.rs",
+          "edition": "2024",
+          "required-features": [
+            "vision",
+            "llm-openai",
+            "llm-anthropic"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "war_engine_tracer",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/war_engine_tracer_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "waypoint_retention_fault_injection",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/integration/waypoint_retention_fault_injection_test.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "web_server_e2e",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/tests/web_server_e2e.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "bench"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "config_benchmarks",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/benches/config_benchmarks.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "bench"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "engine_benchmarks",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/benches/engine_benchmarks.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        }
+      ],
+      "features": {
+        "cli": [
+          "dep:clap",
+          "dep:dialoguer",
+          "dep:indicatif",
+          "dep:console",
+          "dep:serde_yaml",
+          "dep:colored",
+          "dep:comfy-table",
+          "dep:paladin-eval",
+          "dep:glob",
+          "paladin-herald/table",
+          "paladin-herald/color"
+        ],
+        "content-processing": [
+          "dep:paladin-content",
+          "paladin-content/web-scraping",
+          "paladin-content/rss",
+          "paladin-content/news-api",
+          "paladin-content/tiktoken",
+          "paladin-content/llm",
+          "paladin-memory/content-processing"
+        ],
+        "default": [
+          "llm-openai",
+          "llm-anthropic",
+          "llm-deepseek"
+        ],
+        "dev-ui": [
+          "paladin-web/dev-ui"
+        ],
+        "full": [
+          "llm-all",
+          "content-processing",
+          "web-server",
+          "notifications",
+          "storage",
+          "vision",
+          "redis-queue",
+          "s3-storage",
+          "openai-embeddings",
+          "qdrant",
+          "cli"
+        ],
+        "integration-tests": [],
+        "live-api-tests": [],
+        "llm-all": [
+          "llm-openai",
+          "llm-anthropic",
+          "llm-deepseek",
+          "llm-kimi",
+          "llm-qwen",
+          "llm-grok",
+          "llm-ollama",
+          "llm-gemini",
+          "llm-openai-compatible"
+        ],
+        "llm-anthropic": [
+          "paladin-llm/anthropic"
+        ],
+        "llm-deepseek": [
+          "paladin-llm/deepseek"
+        ],
+        "llm-gemini": [
+          "paladin-llm/gemini"
+        ],
+        "llm-grok": [
+          "paladin-llm/grok"
+        ],
+        "llm-kimi": [
+          "paladin-llm/kimi"
+        ],
+        "llm-ollama": [
+          "paladin-llm/ollama"
+        ],
+        "llm-openai": [
+          "paladin-llm/openai"
+        ],
+        "llm-openai-compatible": [
+          "paladin-llm/openai-compatible"
+        ],
+        "llm-qwen": [
+          "paladin-llm/qwen"
+        ],
+        "notifications": [
+          "dep:paladin-notifications",
+          "paladin-notifications/email",
+          "paladin-notifications/push",
+          "paladin-notifications/system"
+        ],
+        "openai-embeddings": [
+          "paladin-llm/openai-embeddings"
+        ],
+        "otel": [
+          "dep:opentelemetry",
+          "dep:opentelemetry_sdk",
+          "dep:opentelemetry-otlp"
+        ],
+        "qdrant": [
+          "qdrant-client",
+          "paladin-memory/qdrant"
+        ],
+        "qdrant-client": [
+          "dep:qdrant-client"
+        ],
+        "redis-cache": [
+          "paladin-storage/redis-cache"
+        ],
+        "redis-queue": [
+          "paladin-storage/redis-queue"
+        ],
+        "s3-storage": [
+          "paladin-storage/s3"
+        ],
+        "storage": [
+          "storage-mysql",
+          "storage-postgres"
+        ],
+        "storage-mysql": [
+          "paladin-storage/mysql"
+        ],
+        "storage-postgres": [
+          "paladin-storage/postgres"
+        ],
+        "vendored-openssl": [
+          "dep:openssl",
+          "openssl/vendored"
+        ],
+        "vision": [
+          "paladin-llm/vision"
+        ],
+        "web-server": [
+          "dep:paladin-web",
+          "dep:axum"
+        ]
+      },
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/Cargo.toml",
+      "metadata": {
+        "cargo-semver-checks": {
+          "lints": {
+            "constructible_struct_adds_field": "allow"
+          }
+        }
+      },
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "asynchronous",
+        "api-bindings"
+      ],
+      "keywords": [
+        "ai",
+        "agents",
+        "orchestration",
+        "llm",
+        "multi-agent"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://df3ndr.github.io/paladin-dev-env/",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-battalion",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-battalion#0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "Multi-agent orchestration runtime for the Paladin framework — Formation, Phalanx, Campaign, Chain of Command, Conclave, Council, Grove, Maneuver, Commander",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "blake3",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "futures",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3.31",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "log",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.21",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "petgraph",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.6",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "rand",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "regex",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.11.1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "schemars",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio-util",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.7",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "criterion",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.5",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "async_tokio"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-llm",
+          "source": null,
+          "req": "*",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm"
+        },
+        {
+          "name": "paladin-storage",
+          "source": null,
+          "req": "*",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-storage"
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full",
+            "test-util"
+          ],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_battalion",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-battalion/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "export_golden",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-battalion/tests/export_golden.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "graph_doc_round_trip",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-battalion/tests/graph_doc_round_trip.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "bench"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "battalion_benchmarks",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-battalion/benches/battalion_benchmarks.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        }
+      ],
+      "features": {},
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-battalion/Cargo.toml",
+      "metadata": null,
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "asynchronous",
+        "api-bindings"
+      ],
+      "keywords": [
+        "ai",
+        "agents",
+        "orchestration",
+        "multi-agent",
+        "workflow"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-battalion",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-ai-core",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core#paladin-ai-core@0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "Pure domain types for the Paladin framework — zero infrastructure dependencies",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "blake3",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "futures",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3.31",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "murmur3",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.5.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "petgraph",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.6",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "regex",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.11.1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "sha2",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.10.9",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "url",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2.5.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "rand",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_core",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        }
+      ],
+      "features": {},
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core/Cargo.toml",
+      "metadata": {
+        "cargo-semver-checks": {
+          "lints": {
+            "enum_marked_non_exhaustive": "allow",
+            "constructible_struct_adds_field": "allow",
+            "inherent_method_missing": "allow",
+            "struct_pub_field_missing": "allow",
+            "struct_marked_non_exhaustive": "allow"
+          }
+        }
+      },
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "asynchronous",
+        "api-bindings"
+      ],
+      "keywords": [
+        "ai",
+        "agents",
+        "framework",
+        "orchestration",
+        "domain"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-ai-core",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-ports",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports#0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "Port trait definitions (hexagonal architecture contracts) for the Paladin framework",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "futures",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "log",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.21",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "md5",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.7",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "mime_guess",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "=0.10.0",
+          "kind": null,
+          "rename": "paladin_core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_ports",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        }
+      ],
+      "features": {},
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports/Cargo.toml",
+      "metadata": {
+        "cargo-semver-checks": {
+          "lints": {
+            "enum_marked_non_exhaustive": "allow",
+            "struct_marked_non_exhaustive": "allow"
+          }
+        }
+      },
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "asynchronous",
+        "api-bindings"
+      ],
+      "keywords": [
+        "ai",
+        "agents",
+        "hexagonal",
+        "ports",
+        "traits"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-ports",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-llm",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm#0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "LLM provider adapters for the Paladin framework — major hosted providers plus a generic OpenAI-compatible adapter for any other endpoint; see README for the full list",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "base64",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.22",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "futures",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "log",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.21",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "rand",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "reqwest",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.12.4",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [
+            "json",
+            "json",
+            "stream"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "criterion",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.5",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "mockito",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.7.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio-test",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_llm",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "example"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "live_vendor_smoke",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm/examples/live_vendor_smoke.rs",
+          "edition": "2024",
+          "required-features": [
+            "kimi",
+            "qwen",
+            "grok",
+            "gemini"
+          ],
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "bench"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "llm_serialization_benchmarks",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm/benches/llm_serialization_benchmarks.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        }
+      ],
+      "features": {
+        "anthropic": [
+          "dep:reqwest",
+          "dep:rand"
+        ],
+        "deepseek": [
+          "dep:reqwest",
+          "dep:rand"
+        ],
+        "default": [
+          "openai",
+          "mock"
+        ],
+        "gemini": [
+          "dep:reqwest",
+          "dep:rand"
+        ],
+        "grok": [
+          "dep:reqwest",
+          "dep:rand"
+        ],
+        "kimi": [
+          "dep:reqwest",
+          "dep:rand"
+        ],
+        "mock": [],
+        "ollama": [
+          "dep:reqwest",
+          "dep:rand"
+        ],
+        "openai": [
+          "dep:reqwest",
+          "dep:rand"
+        ],
+        "openai-compatible": [
+          "dep:reqwest",
+          "dep:rand"
+        ],
+        "openai-embeddings": [
+          "openai"
+        ],
+        "qwen": [
+          "dep:reqwest",
+          "dep:rand"
+        ],
+        "vision": [
+          "openai",
+          "dep:base64"
+        ]
+      },
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm/Cargo.toml",
+      "metadata": null,
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "asynchronous",
+        "api-bindings"
+      ],
+      "keywords": [
+        "ai",
+        "llm",
+        "openai-compatible",
+        "gemini",
+        "agents"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-llm",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-storage",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-storage#0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "SQL-backed repository adapters for the Paladin framework (SQLite and MySQL)",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono-tz",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.10",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "croner",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "redis",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.32.2",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [
+            "aio",
+            "tokio-comp",
+            "connection-manager",
+            "script",
+            "safe_iterators"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "rust-s3",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.35.1",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "sqlx",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": false,
+          "features": [
+            "runtime-tokio-rustls",
+            "sqlite",
+            "chrono",
+            "uuid",
+            "json",
+            "migrate",
+            "macros"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio-cron-scheduler",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.13",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "url",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tempfile",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^3.10.1",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_storage",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-storage/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        }
+      ],
+      "features": {
+        "mysql": [
+          "dep:sqlx",
+          "sqlx/mysql"
+        ],
+        "postgres": [
+          "dep:sqlx",
+          "sqlx/postgres"
+        ],
+        "redis-cache": [
+          "dep:redis"
+        ],
+        "redis-queue": [
+          "dep:redis"
+        ],
+        "s3": [
+          "dep:rust-s3"
+        ],
+        "scheduler": [
+          "dep:tokio-cron-scheduler"
+        ],
+        "sqlite": [
+          "dep:sqlx",
+          "sqlx/sqlite"
+        ]
+      },
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-storage/Cargo.toml",
+      "metadata": null,
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "asynchronous",
+        "api-bindings"
+      ],
+      "keywords": [
+        "ai",
+        "storage",
+        "sqlite",
+        "mysql",
+        "sqlx"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-storage",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-content",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-content#0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "Content processing adapters and use-case services for the Paladin framework",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "futures",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "paladin-llm",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm"
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "pdf-extract",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.7",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "regex",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.11.1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "reqwest",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.12.4",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "json",
+            "blocking"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "rss",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2.0",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "scraper",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.23.1",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tiktoken-rs",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.6.0",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "url",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2.5.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "urlencoding",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2.1.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "mockito",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.7.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tempfile",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^3.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_content",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-content/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        }
+      ],
+      "features": {
+        "llm": [
+          "dep:paladin-llm"
+        ],
+        "news-api": [],
+        "rss": [
+          "dep:rss"
+        ],
+        "tiktoken": [
+          "dep:tiktoken-rs"
+        ],
+        "web-scraping": [
+          "dep:scraper"
+        ]
+      },
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-content/Cargo.toml",
+      "metadata": null,
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "asynchronous",
+        "api-bindings"
+      ],
+      "keywords": [
+        "ai",
+        "content",
+        "ingestion",
+        "analysis",
+        "processing"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-content",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-eval",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-eval#0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "Deterministic evaluation harness for Paladin agent graphs — a serde scenario file format, a scripted LlmPort, and assertions evaluated over a captured trace record (OBS-04).",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "futures",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "glob",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3.4",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "libtest-mimic",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-battalion",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-battalion"
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "paladin-llm",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": false,
+          "features": [
+            "mock"
+          ],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm"
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "paladin-storage",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "sqlite"
+          ],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-storage"
+        },
+        {
+          "name": "regex",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.11.1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "schemars",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_yaml",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.9",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "insta",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.34",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_eval",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-eval/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "assertion_snapshots",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-eval/tests/assertion_snapshots.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "schema_golden",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-eval/tests/schema_golden.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        }
+      ],
+      "features": {
+        "live": [
+          "paladin-llm/openai",
+          "paladin-llm/anthropic",
+          "paladin-llm/deepseek"
+        ]
+      },
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-eval/Cargo.toml",
+      "metadata": null,
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools::testing",
+        "development-tools",
+        "asynchronous"
+      ],
+      "keywords": [
+        "ai",
+        "agents",
+        "testing",
+        "evaluation",
+        "orchestration"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-eval",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-herald",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-herald#0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "Herald output-formatter adapters for the Paladin framework (JSON, Markdown, Table)",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "colored",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2.1",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "comfy-table",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^7.1",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_herald",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-herald/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        }
+      ],
+      "features": {
+        "color": [
+          "dep:colored"
+        ],
+        "default": [],
+        "table": [
+          "dep:comfy-table"
+        ]
+      },
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-herald/Cargo.toml",
+      "metadata": null,
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "command-line-interface"
+      ],
+      "keywords": [
+        "ai",
+        "herald",
+        "formatting",
+        "output",
+        "cli"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-herald",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-memory",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-memory#0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "Memory adapters for the Paladin framework — Garrison (conversation history) and Sanctum (vector search)",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "futures",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "log",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.21",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "paladin-llm",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": false,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm"
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "qdrant-client",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.14",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "sqlx",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": false,
+          "features": [
+            "runtime-tokio-rustls",
+            "sqlite",
+            "chrono",
+            "uuid",
+            "json",
+            "migrate",
+            "macros"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tiktoken-rs",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.6.0",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "criterion",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.5",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "async_tokio"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "proptest",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.4",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tempfile",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^3.10.1",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio-test",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_memory",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-memory/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "bench"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "garrison_benchmarks",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-memory/benches/garrison_benchmarks.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        },
+        {
+          "kind": [
+            "bench"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "sanctum_benchmarks",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-memory/benches/sanctum_benchmarks.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": false
+        }
+      ],
+      "features": {
+        "content-processing": [
+          "dep:tiktoken-rs"
+        ],
+        "default": [],
+        "qdrant": [
+          "dep:qdrant-client"
+        ],
+        "sqlite": [
+          "dep:sqlx"
+        ]
+      },
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-memory/Cargo.toml",
+      "metadata": null,
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "asynchronous",
+        "api-bindings"
+      ],
+      "keywords": [
+        "ai",
+        "memory",
+        "vector",
+        "garrison",
+        "sanctum"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-memory",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-notifications",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-notifications#0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "Notification adapter implementations for the Paladin framework (email, push, system)",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "handlebars",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^6.3.2",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "lettre",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.11.17",
+          "kind": null,
+          "rename": null,
+          "optional": true,
+          "uses_default_features": true,
+          "features": [
+            "smtp-transport",
+            "pool",
+            "hostname",
+            "builder"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_notifications",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-notifications/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        }
+      ],
+      "features": {
+        "email": [
+          "dep:lettre",
+          "dep:handlebars"
+        ],
+        "push": [],
+        "system": []
+      },
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-notifications/Cargo.toml",
+      "metadata": null,
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "asynchronous",
+        "api-bindings"
+      ],
+      "keywords": [
+        "ai",
+        "notifications",
+        "email",
+        "push",
+        "system"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-notifications",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-web",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-web#0.10.0",
+      "license": "MIT OR Apache-2.0",
+      "license_file": null,
+      "description": "Web server adapters for the Paladin AI orchestration framework (axum)",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-stream",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "axum",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8.4",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "base64",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.22",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "futures",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.3",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "log",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.21",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "reqwest",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.12.4",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "json"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "thiserror",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tower",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.5",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tower-http",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.6",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "cors",
+            "limit",
+            "timeout"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tower_governor",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "axum"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "utoipa",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^5",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "axum_extras",
+            "chrono",
+            "uuid"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "utoipa-axum",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.2",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "utoipa-swagger-ui",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^9",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "axum",
+            "vendored"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "http-body-util",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "mockito",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.7.0",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tower",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.5",
+          "kind": "dev",
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "util"
+          ],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_web",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-web/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": true,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "auth_rbac",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-web/tests/auth_rbac.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        },
+        {
+          "kind": [
+            "test"
+          ],
+          "crate_types": [
+            "bin"
+          ],
+          "name": "openapi_golden_v0_9",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-web/tests/openapi_golden_v0_9.rs",
+          "edition": "2024",
+          "doc": false,
+          "doctest": false,
+          "test": true
+        }
+      ],
+      "features": {
+        "default": [],
+        "dev-ui": []
+      },
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-web/Cargo.toml",
+      "metadata": {
+        "cargo-semver-checks": {
+          "lints": {
+            "function_requires_different_generic_type_params": "allow",
+            "struct_marked_non_exhaustive": "allow",
+            "constructible_struct_adds_field": "allow",
+            "struct_pub_field_missing": "allow"
+          }
+        }
+      },
+      "publish": null,
+      "authors": [
+        "Am0rfu5"
+      ],
+      "categories": [
+        "development-tools",
+        "asynchronous",
+        "api-bindings"
+      ],
+      "keywords": [
+        "ai",
+        "web",
+        "axum",
+        "http",
+        "orchestration"
+      ],
+      "readme": "README.md",
+      "repository": "https://github.com/DF3NDR/paladin-dev-env",
+      "homepage": null,
+      "documentation": "https://docs.rs/paladin-web",
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": "1.88"
+    },
+    {
+      "name": "paladin-doc-examples",
+      "version": "0.10.0",
+      "id": "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/doc-examples#paladin-doc-examples@0.10.0",
+      "license": null,
+      "license_file": null,
+      "description": "Compile-verified documentation examples for the Paladin book (not published)",
+      "source": null,
+      "dependencies": [
+        {
+          "name": "async-trait",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.1.88",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "axum",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.8.4",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "chrono",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.4.38",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "paladin-ai",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "web-server"
+          ],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724"
+        },
+        {
+          "name": "paladin-battalion",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-battalion"
+        },
+        {
+          "name": "paladin-content",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "llm",
+            "news-api"
+          ],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-content"
+        },
+        {
+          "name": "paladin-ai-core",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": "paladin-core",
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core"
+        },
+        {
+          "name": "paladin-llm",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "openai",
+            "mock"
+          ],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm"
+        },
+        {
+          "name": "paladin-memory",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-memory"
+        },
+        {
+          "name": "paladin-ports",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports"
+        },
+        {
+          "name": "paladin-storage",
+          "source": null,
+          "req": "^0.10.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "redis-queue"
+          ],
+          "target": null,
+          "registry": null,
+          "path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-storage"
+        },
+        {
+          "name": "reqwest",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^0.12.4",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "json"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "derive"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "serde_json",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "tokio",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "full"
+          ],
+          "target": null,
+          "registry": null
+        },
+        {
+          "name": "uuid",
+          "source": "registry+https://github.com/rust-lang/crates.io-index",
+          "req": "^1.8.0",
+          "kind": null,
+          "rename": null,
+          "optional": false,
+          "uses_default_features": true,
+          "features": [
+            "v4",
+            "v7",
+            "serde"
+          ],
+          "target": null,
+          "registry": null
+        }
+      ],
+      "targets": [
+        {
+          "kind": [
+            "lib"
+          ],
+          "crate_types": [
+            "lib"
+          ],
+          "name": "paladin_doc_examples",
+          "src_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/doc-examples/src/lib.rs",
+          "edition": "2024",
+          "doc": true,
+          "doctest": false,
+          "test": true
+        }
+      ],
+      "features": {},
+      "manifest_path": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/doc-examples/Cargo.toml",
+      "metadata": null,
+      "publish": [],
+      "authors": [],
+      "categories": [],
+      "keywords": [],
+      "readme": null,
+      "repository": null,
+      "homepage": null,
+      "documentation": null,
+      "edition": "2024",
+      "links": null,
+      "default_run": null,
+      "rust_version": null
+    }
+  ],
+  "workspace_members": [
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724#paladin-ai@0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-battalion#0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-core#paladin-ai-core@0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-ports#0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-llm#0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-storage#0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-content#0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-eval#0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-herald#0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-memory#0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-notifications#0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/paladin-web#0.10.0",
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/crates/doc-examples#paladin-doc-examples@0.10.0"
+  ],
+  "workspace_default_members": [
+    "path+file:///tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724#paladin-ai@0.10.0"
+  ],
+  "resolve": null,
+  "target_directory": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/target",
+  "build_directory": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724/target",
+  "version": 1,
+  "workspace_root": "/tmp/claude-1000/-workspace/2e84b02e-a005-4cc1-84b8-18410a27680c/scratchpad/wt-1d4a9724",
+  "metadata": null
+}

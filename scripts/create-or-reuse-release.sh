@@ -76,7 +76,8 @@ _cor_gh_call() {
     fi
 
     local status_line
-    status_line=$(printf '%s\n' "${raw}" | head -n1 | tr -d '\r')
+    status_line="${raw%%$'\n'*}"
+    status_line="${status_line//$'\r'/}"
     HTTP_STATUS=$(printf '%s' "${status_line}" | sed -nE 's#^HTTP/[0-9.]+ ([0-9]{3}).*#\1#p')
     if [ -z "${HTTP_STATUS}" ]; then
         HTTP_STATUS="000"

@@ -1149,7 +1149,7 @@ Plans:
   4. Every publishable crate resolves on crates.io at `0.10.0` (the `publish = false` `doc-examples` crate excluded), verified against the registry index and recorded in MILESTONES.md alongside the v0.9.0 entry
   5. The milestone is closed after the tag via `/gsd-complete-milestone v0.10.0`: the `## Milestones` row flips to Shipped, phase detail archives to `milestones/v0.10.0-ROADMAP.md`, and the next milestone starts at Phase 38
 
-**Plans**: 11 plans
+**Plans**: 7/11 plans executed
 
 Plans:
 **Wave 1**
@@ -1174,11 +1174,11 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 37-06-PLAN.md — Push the branch, open the release PR (D-01), write the D-12 pause hand-off, and stop until CI concludes
+- [x] 37-06-PLAN.md — Push the branch, open the release PR (D-01), write the D-12 pause hand-off, and stop until CI concludes
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 37-07-PLAN.md — Record the pre-merge CI evidence including the `coverage` job's conclusion and figure; last plan that commits to the feature branch
+- [x] 37-07-PLAN.md — Record the pre-merge CI evidence including the `coverage` job's conclusion and figure; last plan that commits to the feature branch
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
@@ -1195,6 +1195,61 @@ Plans:
 **Wave 11** *(blocked on Wave 10 completion)*
 
 - [ ] 37-11-PLAN.md — The MILESTONES.md v0.10.0 release record, `37-READY-TO-CLOSE.md`, and the docs-only `chore/37-close` pull request
+
+### Phase 37.1: v0.10.1 Patch Release (INSERTED)
+
+**Goal**: v0.10.x is actually released — every publishable crate resolves on crates.io at one coherent version. Tag `v0.10.0` (on `main` merge commit `1d4a9724`) published only 3 of 12 crates (`paladin-ai-core`, `paladin-ports`, `paladin-herald`) before `publish-crates` failed deterministically at `paladin-battalion`; that tag's pipeline cannot complete forward because `release.yml` reads manifests and the `CRATES` order from the tag ref. The correction is a `0.10.1` patch release through the same pipeline via Trusted Publishing (release-recovery runbook §4), with the two defects that broke `v0.10.0` fixed and a gate that would have caught them.
+**Depends on**: Phase 37 (stays OPEN and blocked on this phase — its SC1-SC3 evidence, both D-16 diagnoses and the maintainer's recovery decision live in `phases/37-v0-10-0-crate-release/37-CI-EVIDENCE.md`; its plans 37-09..37-11 and 37-08's SUMMARY are re-planned against what this phase ships)
+**Requirements**: SHIP-06 (**Resolved at discuss-phase, 2026-09-19, by `37.1-CONTEXT.md` D-02**: a new `SHIP-06` — "v0.10.1 is released" — is minted and mapped to this phase rather than amending `SHIP-05` to name a different version. `SHIP-05` keeps its original text, is never ticked, gains a dated amend-at-source note, and its traceability status reads *superseded* — because what it literally says never became true. `SHIP` is an existing prefix, per extension protocol item 3. `SHIP-06` is minted in `REQUIREMENTS.md` by plan `37.1-15`, which is where the release-completion bookkeeping lands per D-12.)
+**Source**: `phases/37-v0-10-0-crate-release/37-CI-EVIDENCE.md` §"D-16 read-only diagnosis" (#1 and #2) and §"Maintainer decision after D-16 diagnosis #2" (maintainer's verbatim reply: "A"); `docs/src/appendix/release-recovery.md` §4-§5
+**UI hint**: no
+**Success Criteria** (what must be TRUE) — DRAFT, seeded from the Phase 37 findings; `/gsd-discuss-phase 37.1` owns the final wording:
+
+  1. `paladin-battalion` packages and publishes at its `CRATES` position against the live index: its two versioned workspace dev-dependencies (`paladin-llm`, `paladin-storage`, introduced by Phases 23 and 28) no longer require a crate that publishes later — by path-only dev-dependencies, by re-ordering `CRATES`, or both (the choice is a discuss-phase decision).
+  2. `scripts/create-or-reuse-release.sh` no longer fails on response size: the `printf … | head -n1` under `set -o pipefail` at line 79 (an `EPIPE` race that a 46 KB release response lost repeatedly) is replaced by a form with no early-closing reader, and a test feeds it a response larger than the pipe buffer.
+  3. A gate exercises the real per-crate resolution path, not only `cargo publish --workspace --dry-run` (which resolves siblings from a local overlay and is structurally blind to ordering — Phase 37 Local sweep row 29 was green and true): for every `CRATES` position, each versioned workspace dependency INCLUDING dev-dependencies appears earlier in the array; it runs in `make publish-dry-run`/`release-check` and in CI, and it fails on the `1d4a9724` tree.
+  4. All twelve publishable manifests, their changelogs and `MIGRATION.md`/allowlist rows read `0.10.1`; the Phase 29 gate set is re-sealed on the final commit; the release PR merges to `main` with a merge commit; the maintainer signs off BEFORE the merge this time (Phase 37 recorded the inverted order as a deviation) and pushes an annotated `v0.10.1` tag on that merge commit after `ci.yml` is green on it.
+  5. `release.yml` runs green for `v0.10.1` and every publishable crate (derived from `cargo metadata`, never hard-coded) resolves on the crates.io sparse index at `0.10.1`, `yanked = false`; `paladin-eval`'s first pipeline publish shows non-null `trustpub_data` — the first observable proof of the Trusted Publisher link the maintainer reported on 2026-09-18.
+  6. The three orphaned `0.10.0` versions are explicitly dispositioned — left, or yanked by the maintainer alone with a yank-register row (runbook §5) — and MILESTONES.md, the GitHub Release for `v0.10.0` (exists, 0 assets) and Phase 37's open plans tell the true story: `v0.10.0` tagged and partially published, `v0.10.1` the release.
+
+**Plans**: 16 plans
+
+Wave layout follows the split locked by `37.1-CONTEXT.md` § Claude's Discretion: **build wave**
+(waves 1-6) → **re-seal, pull request and sign-off** (waves 7-10) → **maintainer merge and tag
+checkpoint** (wave 11) → **post-tag wave** (waves 12-16). Every wave is sequential: each plan's
+`files_modified` overlaps its predecessor's on the shared evidence file, and the release sequence
+is inherently ordered. Inside the build wave the publish-order gate lands *before* the battalion
+fix on purpose, so SC1 is verified by a real gate going red-to-green rather than by assertion.
+
+Plans:
+
+**Wave 1-6 — build wave** *(D-08 stage 1: red is expected and fixed inside the six success criteria)*
+
+- [x] 37.1-01-PLAN.md — Cut `release/v0.10.1` from `1d4a9724`, cherry-pick the live `.planning/` range, open `37.1-CI-EVIDENCE.md` and map the rewritten SHAs
+- [x] 37.1-02-PLAN.md — The publish-order gate and its committed regression harness, proven red against a real capture of the `1d4a9724` tree (SC3)
+- [x] 37.1-03-PLAN.md — Wire the gate into `make check-gates` and into a CI job that actually runs on pull requests, and record why not the dry-run job (SC3)
+- [x] 37.1-04-PLAN.md — Make `paladin-battalion`'s two workspace dev-dependencies path-only; the gate turns green on the live tree (SC1)
+- [x] 37.1-05-PLAN.md — Replace the response-size race in `create-or-reuse-release.sh` with parameter expansion, with a 200 KB regression case and the sweep findings (SC2)
+- [x] 37.1-06-PLAN.md — Bump fourteen manifests, the lockfile, twelve changelogs and the migration note to `0.10.1`; record the three no-work findings (SC4)
+
+**Wave 7-10 — re-seal, pull request and sign-off** *(D-08 stage 2: a red gate is a hard stop; nothing is fixed)*
+
+- [x] 37.1-07-PLAN.md — Run the eight-row gate set plus the house sweep on the candidate head and append corpus audit `## 13.` with its own fresh unticked box (SC4, D-09)
+- [x] 37.1-08-PLAN.md — Push the branch, open the single release pull request, and hard-stop with a resume file (D-07, D-00i)
+- [x] 37.1-09-PLAN.md — Record every run on the pull request head including the coverage figure and the publish-order step's execution proof, then the maintainer's sign-off checkpoint (D-00a, D-00e)
+- [x] 37.1-10-PLAN.md — Verify read-only that the ticked box is on the remote at the pull request head, then hard-stop for the checks on that true final commit (D-10)
+
+**Wave 11 — maintainer merge and tag checkpoint**
+
+- [ ] 37.1-11-PLAN.md — Record the tick-commit checks, present the one-way reversibility decision, hand over the merge-and-tag runbook, and hard-stop (D-00b, D-00c, D-10)
+
+**Wave 12-16 — post-tag wave**
+
+- [ ] 37.1-12-PLAN.md — Prove the tag equals the merge commit, cut `chore/37.1-close`, and record the release run's per-crate publish outcomes (SC5, D-12)
+- [ ] 37.1-13-PLAN.md — Registry verification: one index row per derived publishable crate, count-asserted, plus the `trustpub_data` proof (SC5, D-00f/D-00h)
+- [ ] 37.1-14-PLAN.md — The yank checkpoint and its register rows, and the `v0.10.0` release-object banner and pre-release flip (SC6, D-01, D-03)
+- [ ] 37.1-15-PLAN.md — MILESTONES.md telling both tags, `SHIP-06` minted and `SHIP-05` superseded at source, and Phase 37's bookkeeping (SC6, D-02, D-04, D-05)
+- [ ] 37.1-16-PLAN.md — `37.1-READY-TO-CLOSE.md`, the documentation-only close-out pull request, and the merge checkpoint (D-12)
 
 ## Progress
 
@@ -1233,7 +1288,8 @@ Plans:
 | 35. mdBook Currency | v0.10.0 | 10/10 | Complete    | 2026-09-17 |
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 13/13 | Complete    | 2026-09-18 |
 | 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 14/14 | Complete    | 2026-09-18 |
-| 37. v0.10.0 Crate Release | v0.10.0 | 0/11 | Planned | — |
+| 37. v0.10.0 Crate Release | v0.10.0 | 7/11 | In Progress | — |
+| 37.1 v0.10.1 Patch Release (INSERTED) | v0.10.0 | 10/16 | In Progress | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

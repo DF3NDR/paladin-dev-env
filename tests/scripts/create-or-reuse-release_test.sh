@@ -349,6 +349,24 @@ else
     FAILED=$((FAILED + 1))
 fi
 
+# --- Case 9: lookup 200 with a response body larger than the pipe buffer --
+#     (SC2 regression -- `printf | head -n1` under `pipefail` can abort with
+#     the signal-driven exit status on a large-enough response; the fixed
+#     extraction must handle this identically to a small body). The padding
+#     size is computed from a named variable, not pasted inline, and sized
+#     well above the ~70 KB non-trigger threshold measured in RESEARCH.md so
+#     the assertion cannot pass against the broken script by chance. --------
+DIR9="${SCRATCH}/case9"
+mkdir -p "${DIR9}"
+write_gh_stub "${DIR9}"
+PADDING_SIZE=200000
+PADDING="$(head -c "${PADDING_SIZE}" /dev/zero | tr '\0' 'a')"
+echo "200" > "${DIR9}/lookup_status"
+printf '{"upload_url":"https://example.com/upload-9","padding":"%s"}\n' "${PADDING}" > "${DIR9}/lookup_body"
+assert_silent "${DIR9}" "lookup 200 with a response body larger than the pipe buffer (${PADDING_SIZE}+ chars) reuses the release" \
+    --tag v1.2.3 --repo test/repo
+assert_call_count "${DIR9}" "large-body lookup 200 makes no create call" 0
+
 # --- Missing --tag: usage error. -------------------------------------------
 DIR_MISSING_TAG="${SCRATCH}/case-missing-tag"
 mkdir -p "${DIR_MISSING_TAG}"

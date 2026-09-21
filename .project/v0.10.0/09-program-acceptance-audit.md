@@ -1624,8 +1624,248 @@ basis, at the phase's own checkpoint (plan 37-08), never against a box this sect
 
 ---
 
+## 13. Re-seal for the v0.10.1 release (Phase 37.1, SHIP-06)
+
+Tag `v0.10.0` (cut on merge commit `1d4a9724`) published only 3 of 12 crates and then failed
+deterministically at `paladin-battalion` — that tag's pipeline cannot complete forward, because
+`release.yml` reads manifests and the `CRATES` order from the tag ref and the tag cannot move.
+This section re-seals the release-gate set for the corrected pipeline: the `paladin-battalion`
+publish-order defect fixed, the `create-or-reuse-release.sh` EPIPE race fixed, a new
+publish-order gate added and proven both red-on-the-real-defect and green-on-the-fix, and all
+fourteen workspace manifests bumped `0.10.0` → `0.10.1`. Two things changed relative to §12's own
+seven-gate shape: an **eighth row** is added for the new publish-order gate (SC3) — the gate that
+would have caught what §12's own row 6 (`make publish-dry-run`) was green and blind to, because
+`cargo publish --workspace --dry-run` resolves sibling crates from a local overlay rather than the
+live registry — and every row is now read at `0.10.1`, not `0.10.0`. **This section covers the
+release that actually publishes, not merely releasability**: unlike §11 (SHIP-04, releasability)
+and §12 (SHIP-05, a release that was cut but only 25% published), SHIP-06 is closed only once the
+corrected pipeline runs `release.yml` end-to-end and every publishable crate lands on crates.io at
+one coherent version — the local re-seal below is this phase's own precondition for opening that
+pipeline, not the closing evidence for it.
+
+**Head SHA this section's gates were measured on:** `fbdefec9c13f5d28d2127aa2da6da990a5285482` —
+`release/v0.10.1`'s tip at this plan's (37.1-07) Task 1 dispatch, the same head named in this
+plan's own `<sequential_execution>` block and re-confirmed live via `git rev-parse HEAD`
+immediately before any gate ran, with `git status --porcelain` empty at that same moment.
+`git diff --stat 5b73de30..fbdefec9` (the manifest/changelog/migration bump commit through this
+head) touches exactly four paths — `.planning/ROADMAP.md`, `.planning/STATE.md`,
+`37.1-06-SUMMARY.md` and `37.1-CI-EVIDENCE.md` — all under `.planning/`, none of them read by any
+of the eight gates below. **The measured tree is therefore identical, outside `.planning/`, to
+the tree plan 37.1-06's own final commit (`896227ee`) produced**, and later commits made by this
+plan itself (this section, the pointer paragraph, `37.1-CI-EVIDENCE.md`'s own evidence rows, this
+plan's SUMMARY, STATE.md/ROADMAP.md) are documentation-only under `.planning/` and this audit
+file — none of which any of the eight gates reads. **No red gate was observed anywhere in this
+sweep**: D-08 stage 2 is in force from this plan onward (any red gate, locally or in PR CI, is a
+hard stop with nothing fixed), and it was never invoked — every row below passed on its first run.
+
+| # | Gate | Command | SHA | Result | Evidence |
+|---|------|---------|-----|--------|----------|
+| 1 | `MIGRATION.md` no-TBD marker + §9.2 register ↔ semver-checks allowlist set-equality | `grep -c TBD MIGRATION.md` then `make check-migration-allowlist` | `fbdefec9` | `COUNT=0`; 15 `crate\|type` pairs in both `MIGRATION.md` §9.2 and `.cargo/semver-checks-allowlist.toml`, set-equal in both directions — unchanged from §11/§12's own 15 (this phase adds no new deliberate-breaking type). **PASS** | `37.1-CI-EVIDENCE.md` Local sweep row 31. **No PR run reconfirms this row**: `make check-migration-allowlist` is not wired into any `ci.yml` job — confirmed by inspecting `.github/workflows/ci.yml`'s License & Dependency Policy job step list, which runs `check-changelogs.sh`, `check-crate-names.sh`, `check-advisory-register.sh`, `check-workflow-suppressions.sh`, `check-workflow-triggers.sh`, `check-codeql-dismissals.sh` and `check-publish-order.sh`, but not `check-migration-allowlist.sh`. This local sweep row remains the only proof for this gate; recorded here rather than silently assumed CI-covered (plan 37.1-09, `37.1-CI-EVIDENCE.md` "Plan 37.1-09" section). |
+| 2 | `v0_9_config_boot` frozen compat target | `cargo test --features web-server --test v0_9_config_boot` | `fbdefec9` | 9 passed, 0 failed — same 9-test count as §11/§12. **PASS** | `37.1-CI-EVIDENCE.md` Local sweep row 32. **Reconfirmed on PR #56**: the `E2E Platform API (PRD 06 acceptance-1 lifecycle + SHIP-02 boot proof)` job (run [35550981869](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35550981869), job `106185557961`) is the only CI job that runs this test binary (per `ci.yml`'s own comment: no other job selects `web-server` + `v0_9_config_boot`), and its log reads `running 9 tests`, conclusion `success` — same 9-test count, on head `7749f161919f3d5f85f20fa36eba7ad800434f97` (plan 37.1-09). |
+| 3 | OpenAPI golden diff (path-restricted) | `cargo test -p paladin-web --test openapi_golden_v0_9` | `fbdefec9` | 7 passed, 0 failed — same 7-test count as §11/§12. **PASS** | `37.1-CI-EVIDENCE.md` Local sweep row 33. **Reconfirmed on PR #56**: the `Integration Tests` job (run [35550981869](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35550981869), job `106185557708`)'s "Run broad workspace integration suite" step runs `cargo test --workspace --features integration-tests`, which picks up this test binary; its log reads `Running .../openapi_golden_v0_9-...` then `running 7 tests`, conclusion `success` — same 7-test count, on head `7749f161919f3d5f85f20fa36eba7ad800434f97` (plan 37.1-09). |
+| 4 | `cargo semver-checks` for the eleven baselined crates vs `0.9.0` | `cargo semver-checks check-release --package <pkg> --default-features --baseline-version 0.9.0`, once per crate, list derived live from `cargo metadata` minus `paladin-eval` | `fbdefec9` | List asserted at exactly 11 entries before looping. **11/11 PASS**, each `Checking <pkg> v0.9.0 -> v0.10.1 (major change)` / `0 checks: 0 pass, 254 skip` / `no semver update required`, identical shape to §11/§12 at the same baseline. `paladin-eval` excluded — no published `0.9.0` baseline (it did not exist until Phase 28's bootstrap). **PASS (11/11)** | `37.1-CI-EVIDENCE.md` Local sweep row 34 and its per-crate detail table. **Reconfirmed on PR #56**: the `Semver Checks (vs v0.9.0)` job (run [35550981869](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35550981869)) concluded `success` on head `7749f161919f3d5f85f20fa36eba7ad800434f97` (plan 37.1-09; not one of the 44 required contexts, but present in the run list and green). |
+| 5 | MSRV floor, toolchain 1.88 | `env RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --all-features --all-targets` | `fbdefec9` | `Finished` in 2m 18s, 0 errors, 0 warnings. **PASS** | `37.1-CI-EVIDENCE.md` Local sweep row 35. **Reconfirmed on PR #56**: the `MSRV (Rust 1.88)` job (run [35550981869](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35550981869)) concluded `success` on head `7749f161919f3d5f85f20fa36eba7ad800434f97` (plan 37.1-09; not one of the 44 required contexts, but present in the run list and green). |
+| 6 | `make publish-dry-run` — twelve crates, dependency order | `make publish-dry-run` | `fbdefec9` | Exit 0; 40/40 `test result:` lines `ok`, 0 failed; `cargo audit` reported the same 10 allowed pre-existing warnings as the house sweep below, no new advisory; `cargo publish --workspace --dry-run` uploaded all 12 publishable crates in dependency order, each aborting on dry run as expected; `paladin-doc-examples` (`publish = false`) correctly absent. **PASS (12/12, dependency order)** | `37.1-CI-EVIDENCE.md` Local sweep row 36. **Not reconfirmed by PR #56 — recorded plainly, not silently assumed:** CI's `Publish Dry Run` job read `skipping`/SKIPPED on both the `push` and `pull_request` rows for head `7749f161919f3d5f85f20fa36eba7ad800434f97`, because that job's own `if: github.event_name == 'push' && github.ref == 'refs/heads/main'` condition never fires on a release branch or a pull request (the same pre-existing gap this section's own Findings list already names below — "the existing `Publish Dry Run` CI job ... never ran on a pull request at all"). This local sweep row remains the only pre-merge proof for this gate on this release; it is not a red gate (the job did not run, it did not fail), but it is also not CI-corroborated (plan 37.1-09). |
+| 7 | `CHANGELOG.md` `[0.10.1]` completeness | `make check-gates` (bundles `check-changelogs` and, since this phase, `check-publish-order`) plus hard-assertion greps | `fbdefec9` | All eight `check-gates` guards individually OK; `## [Unreleased]` count `0`; `## [0.10.1]` count `1`; `## [0.10.2]`/`## [0.11.0]` counts `0`; `v0[.]11[.]0` count `0` in `MIGRATION.md`. **PASS** | `37.1-CI-EVIDENCE.md` Local sweep row 37. **Reconfirmed on PR #56**: the `License & Dependency Policy` job (run [35550981869](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35550981869), job `106185557981`)'s "Check per-crate changelogs" step (`./scripts/check-changelogs.sh`) is part of the same job conclusion recorded below for row 8, `success`, on head `7749f161919f3d5f85f20fa36eba7ad800434f97` (plan 37.1-09). |
+| **8 (new, this phase)** | Publish-order gate (SC3), invoked through the `make` target CI also invokes | `make check-publish-order` (= `./scripts/check-publish-order.sh`) | `fbdefec9` | `✅ OK: 12 crate(s) checked in publish order; every versioned workspace dependency (normal, dev and build) resolves to an earlier CRATES position, and CRATES exactly matches the cargo-metadata publishable set.` **PASS.** This is the gate that would have caught the `v0.10.0` defect: proven **red** on a real `git worktree` capture of the tagged commit `1d4a9724` (naming `paladin-battalion`'s forward-pointing `paladin-llm`/`paladin-storage` dev-dependency edges, `37.1-CI-EVIDENCE.md` Local sweep row 3) and on the then-still-unfixed live tree (rows 6, 9, 10), then **green** the moment the manifest fix landed (row 11) and again at this re-seal (row 38) — the same command CI's License & Dependency Policy job invokes, so local and CI evidence describe the same command. **Now confirmed to have actually executed pre-merge on this release's own pull request, not merely to exist in the workflow file**: the `License & Dependency Policy` job (run [35550981869](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35550981869), job `106185557981`, `pull_request` event on head `7749f161919f3d5f85f20fa36eba7ad800434f97`)'s "Check publish order" step ran `./scripts/check-publish-order.sh` and printed the identical `✅ OK: 12 crate(s) checked in publish order...` line, step and job conclusion both `success` (plan 37.1-09). This is the two separate facts the local run and the CI run each establish: the local run proves the gate is correct (red on the real defect, green on the fix); the CI run proves the gate actually ran, pre-merge, in the gating context — the exact class of failure ("a gate that exists but did not execute pre-merge") this phase exists to fix. | `37.1-CI-EVIDENCE.md` Local sweep rows 3, 6, 9-11 (red-on-tagged-tree and red-on-then-unfixed-live-tree proof), row 38 (this re-seal's green), and the "Plan 37.1-09" CI-run table section (the pre-merge execution proof) |
+
+Two further gates §11/§12 record as outside their own numbered table are carried forward here
+unchanged in kind. The **82% workspace line-coverage floor** (ADR-0006) was **CI-attributed, not a
+local pass, at the time this section was first written** — this devcontainer has no Docker and no
+reachable Redis/MinIO endpoint, so `make coverage` cannot complete locally and was not attempted by
+any plan in this phase's local sweep. **That reading is now in**, filled by plan 37.1-09 from the
+job's own printed output, not expected or carried forward from any prior figure: CI's `Coverage`
+job (run [35550981869](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35550981869), job
+`106185558049`, `pull_request` event) concluded `success` on head
+`7749f161919f3d5f85f20fa36eba7ad800434f97` (PR #56) and printed, in its own "Coverage summary"
+step: `Lines:     111770/123587 = 90.44%`. **90.44% clears the 82% floor by 8.44 percentage
+points.** Full log excerpt and provenance: `37.1-CI-EVIDENCE.md`'s "Plan 37.1-09" CI-run table
+section. The **house sweep** — `make clean-code` (format-and-lint
+composite), `make security` (`cargo audit` + `cargo deny check`) and `make api-surface` — all ran
+green on `fbdefec9`: the API-surface baseline is unmodified at 3959 items (unchanged from
+§11/§12), and `cargo audit`'s 10 allowed pre-existing warnings are unchanged in count and
+membership from §11/§12's own recorded set (`dotenv`, `fxhash`, `number_prefix`, `paste`,
+`rustls-pemfile`, `smartstring`, `event-listener`, `scc` — unmaintained/unsound — plus `chacha20`
+and `spin`, both yanked-transitive), all satisfied against `.cargo/audit.toml`/`deny.toml`. **The
+standing statement carried from every prior re-seal applies unchanged**: no static taint analysis
+of first-party Rust gates a merge in this repository — `cargo-audit`/`cargo-deny` scan the
+dependency graph, `clippy -D warnings` is a lint, and `codeql.yml` runs Rust static analysis
+advisory-only (disqualified as a required-check-grade Rust SAST at CodeQL `2.26.3`,
+`.github/instructions/security.instructions.md`) — the manual credential-handling review remains
+the primary control, and this phase touches no credential-handling path. Full detail:
+`37.1-CI-EVIDENCE.md`'s House sweep entries (Task 2).
+
+**Findings:**
+- *(2026-09-20, plan 37.1-05, owner: the deferred wider release-tooling audit named in
+  `37.1-CONTEXT.md` § Deferred Ideas)* — fixing `scripts/create-or-reuse-release.sh:79`'s
+  `printf | head -n1` EPIPE race (SC2) did not close the underlying early-closing-reader-under-
+  `pipefail` risk class tree-wide. Three further, unfixed instances of the same shape were found
+  and recorded, not fixed: `scripts/check-deprecations.sh:32`, `scripts/check-doc-examples.sh:142`,
+  `scripts/check-doc-examples.sh:164` and `scripts/check-public-api-examples.sh:136` (four line
+  citations across three files) — `check-doc-examples.sh:164` (a diagnostic re-invocation of
+  `cargo check` inside an already-failed branch, fed by compiler-error output that routinely
+  exceeds the pipe buffer) is named as the highest realistic trigger rate among them.
+- *(2026-09-20, plan 37.1-06, owner: no fix needed — the field genuinely does not exist)* —
+  `.cargo/semver-checks-allowlist.toml` carries no version field of any kind on any of its 18
+  entries; `37.1-CONTEXT.md`'s own SC4 wording ("allowlist rows read 0.10.1") corresponds to
+  nothing mechanical in this file, and no task in this phase edits it.
+- *(2026-09-20, plan 37.1-06, owner: intentional, D-00d / RESEARCH.md Pitfall 4 / T-37.1-22)* —
+  `MIGRATION.md`'s title stays "Upgrading from v0.9.0 to v0.10.0" (byte-identical to the base
+  commit); a dated addendum naming `0.10.1` was appended beneath the existing scope note rather
+  than rewriting the title, which would misrepresent a pipeline-only patch as a new feature
+  milestone.
+- *(first recorded Phase 37 plan 37-02, re-confirmed 2026-09-20 plan 37.1-06, owner: a v0.11.0
+  docs-currency fix, `37.1-CONTEXT.md` § Deferred Ideas)* — the stale "eleven crates" count
+  persists in `docs/src/contributing/development-setup.md` (line 651) and elsewhere; the tree
+  (`cargo metadata`) has carried twelve publishable crates since `paladin-eval`'s Phase 28
+  bootstrap.
+- *(first recorded Phase 37 plan 37-02, re-confirmed 2026-09-20 plan 37.1-06, owner: same
+  v0.11.0 docs-currency fix)* — `CHANGELOG.md`'s `[0.10.0]` heading still carries the date
+  `2026-09-10`, earlier than that tag's actual cut/release date; a dated superseded line was
+  appended beneath it (per this plan's own SC4 work) but the heading date itself was left intact,
+  matching the instruction to leave the section's pre-existing text alone.
+- *(first recorded plan 37.1-02/03, owner: closed by this phase's own new gate, not further work)*
+  — the existing `Publish Dry Run` CI job (`.github/workflows/ci.yml`) is gated
+  `if: github.event_name == 'push' && github.ref == 'refs/heads/main'` and therefore **never ran
+  on a pull request at all** — worse than "green and blind" to publish order, since pre-merge it
+  did not gate at all. This is exactly why the new publish-order gate (row 8 above) was wired into
+  the **License & Dependency Policy** job instead, which has no job-level `if:` condition and runs
+  on every push and pull request; widening the Publish Dry Run job's own trigger was deliberately
+  not done (out of this phase's scope).
+
+**Evidence basis, now complete — this section, this phase's full local sweep, and pull request
+#56's own CI-run table including a green `Coverage` job at 90.44% against the 82% floor:** this
+section (§13, above, including this plan's own additions naming the PR run that reconfirmed each
+gate row); `37.1-CI-EVIDENCE.md`'s complete Local sweep table (rows 1-38, this section's own eight
+gates plus the house sweep); and `37.1-CI-EVIDENCE.md`'s "Plan 37.1-09" CI-run table section — all
+124 checks on head `7749f161919f3d5f85f20fa36eba7ad800434f97` read (118 `SUCCESS`, 6 `SKIPPED`,
+0 `FAILURE`), the 44 required contexts from `main`'s live ruleset cross-checked with none absent
+and none failed (only the conditional `End-to-End Tests` skipped), the publish-order gate proven to
+have executed pre-merge by name, and the `Coverage` job's own printed figure read and recorded
+against the floor. The maintainer reads all of the above, then decides:**
+
+- [x] **The `v0.10.1` tag may be cut** — evidence: this section (§13) in full, plus
+  `.planning/phases/37.1-v0-10-1-patch-release/37.1-CI-EVIDENCE.md`'s complete Local sweep table
+  (this section's own eight gates plus the house sweep) and, once `release/v0.10.1`'s pull request
+  is opened, its CI-run table (including the `coverage` job this devcontainer cannot measure).
+  Unticked, as designed — **this box is minted fresh by this section and belongs to this release
+  alone**: unlike §12 (which extended §11's existing box rather than minting a new one, because
+  §11's box already covered a `v0.10.0` that was tagged but never fully published), §13's box
+  covers a version that has not yet been tagged at all, per D-09. It is closed by a human — the
+  maintainer, and nobody else — at this phase's own sign-off checkpoint, never by this audit or
+  any agent, under any mode (Phase 29 D-17, Phase 37 D-00a, this phase's D-00a).
+
+---
+
+## 14. Re-seal after the API-surface nightly pin (Phase 37.1, SHIP-06)
+
+**Why this second re-seal exists.** §13's own sign-off box was ticked by the maintainer on commit
+`529e70782168739c003582f3d9db1fbf02fd9614` — that tick stands, in full, as history; it is not
+edited, reused or re-pointed by this section. After that tick, the required `API Surface Tracking`
+check went **red** on that same commit: CI's API Surface Tracking job installs `rustup toolchain
+install nightly` with no pin, and the nightly that resolved on 2026-09-21 (`bba531001`) renders
+derived `Clone`/etc. return types as `-> Self` where the committed baseline spells out the fully
+qualified path — a 606-line diff (303 real changes, doubled by the failure step's own log) with
+**zero** public item actually added, removed or changed. This is recorded in full in
+`37.1-CI-EVIDENCE.md`'s dated entry "RED required check on the tick commit". The maintainer's
+verbatim reply was **"Pin it."** — their say-so, under D-08, to return to the build wave. Three
+build-wave commits followed: `b13a8553` (recorded the red finding), `d4dc0e96` (a failing
+regression harness, red 10/15 against the unpinned script), and `d2f1a811` (the fix — a
+`PUBLIC_API_TOOLCHAIN: nightly-2026-09-20` pin in both `.github/workflows/ci.yml` and
+`scripts/extract-public-api.sh`, plus a `CHANGELOG.md` `[0.10.1]` Fixed bullet; harness green
+15/15). Per D-08, the re-seal restarts from the top on this corrected head rather than resuming
+from the failed row — this section is that full restart, mirroring §13's own shape at the new head.
+**This box — not §13's, which is already closed — is the one the merge now waits on.** PR CI's own
+per-check conclusions on this new head (`d2f1a811`, or whatever head it is pushed as) are filled in
+below before this box is presented to the maintainer for their decision; the local sweep and house
+sweep recorded here are already complete and green.
+
+**Head SHA this section's gates were measured on:** `d2f1a81131fa8d504065cceed412909c06143b95` —
+`release/v0.10.1`'s tip at this dispatch, re-confirmed live via `git rev-parse HEAD` immediately
+before the first gate ran, with `git status --porcelain` empty at that moment and after every gate
+below. `git diff --stat fbdefec9..d2f1a811 -- . ':!.planning' ':!.project'` (§13's own measured
+head through this one, restricted to files a gate could read) touches exactly four paths:
+`.github/workflows/ci.yml`, `CHANGELOG.md`, `scripts/extract-public-api.sh` and
+`tests/scripts/extract-public-api_test.sh` — the CI-workflow toolchain pin, its script-side
+counterpart, the new regression harness, and the changelog bullet documenting the fix. No
+public-surface source file and no manifest was touched. **No red gate was observed anywhere in
+this sweep**: every row below passed on its first run; D-08 stage 2's hard-stop was never invoked.
+
+| # | Gate | Command | SHA | Result | Evidence |
+|---|------|---------|-----|--------|----------|
+| 1 | `MIGRATION.md` no-TBD marker + §9.2 register ↔ semver-checks allowlist set-equality | `grep -c TBD MIGRATION.md` then `make check-migration-allowlist` | `d2f1a811` | `COUNT=0`; 15 `crate\|type` pairs in both `MIGRATION.md` §9.2 and `.cargo/semver-checks-allowlist.toml`, set-equal in both directions — unchanged from every prior re-seal's own 15. **PASS** | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 1 |
+| 2 | `v0_9_config_boot` frozen compat target | `cargo test --features web-server --test v0_9_config_boot` | `d2f1a811` | 9 passed, 0 failed — same 9-test count as every prior re-seal. **PASS** | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 2 |
+| 3 | OpenAPI golden diff (path-restricted) | `cargo test -p paladin-web --test openapi_golden_v0_9` | `d2f1a811` | 7 passed, 0 failed — same 7-test count as every prior re-seal. **PASS** | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 3 |
+| 4 | `cargo semver-checks` for the eleven baselined crates vs `0.9.0` | `cargo semver-checks check-release --package <pkg> --default-features --baseline-version 0.9.0`, once per crate, list derived live from `cargo metadata` minus `paladin-eval` | `d2f1a811` | List asserted at exactly 11 entries before looping. **11/11 PASS**, each `Checking <pkg> v0.9.0 -> v0.10.1 (major change)` / `0 checks: 0 pass, 254 skip` / `no semver update required`, identical shape to every prior re-seal at the same baseline. `paladin-eval` excluded — no published `0.9.0` baseline. **PASS (11/11)** | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 4 and its per-crate detail table |
+| 5 | MSRV floor, toolchain 1.88 | `env RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --all-features --all-targets` | `d2f1a811` | `Finished` in 1m 27s, 0 errors, 0 warnings. **PASS** | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 5 |
+| 6 | `make publish-dry-run` — twelve crates, dependency order | `make publish-dry-run` | `d2f1a811` | Exit 0; 40/40 `test result:` lines `ok`, 0 failed; `cargo audit` reported the same 10 allowed pre-existing warnings as the house sweep below, no new advisory; `cargo publish --workspace --dry-run` uploaded all 12 publishable crates in dependency order; `paladin-doc-examples` (`publish = false`) correctly absent. **PASS (12/12, dependency order)** | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 6 |
+| 7 | `CHANGELOG.md` `[0.10.1]` completeness | `make check-gates` (bundles all eight guards, including `check-publish-order`) plus hard-assertion greps | `d2f1a811` | All eight `check-gates` guards individually OK; `## [Unreleased]` count `0`; `## [0.10.1]` count `1`; `## [0.10.2]`/`## [0.11.0]` counts `0` in `CHANGELOG.md`. **PASS** | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 7 |
+| **8** | Publish-order gate (SC3), invoked through the `make` target CI also invokes | `make check-publish-order` (= `./scripts/check-publish-order.sh`) | `d2f1a811` | `✅ OK: 12 crate(s) checked in publish order; every versioned workspace dependency (normal, dev and build) resolves to an earlier CRATES position, and CRATES exactly matches the cargo-metadata publishable set.` **PASS.** Same command CI's License & Dependency Policy job invokes, so local and CI evidence describe the same command. **Pre-merge execution proof for this head is now filled**: the `Check publish order` step inside the License & Dependency Policy job (job `106403327775`, PR #56's `pull_request` run `35620879265`) printed the identical `✅ OK: 12 crate(s)...` line, proving the gate executed pre-merge on this pull request, not merely present in the workflow file. | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 8; "CI-run table — re-sealed head d2f1a811" section, publish-order gate proof block; §13 row 8 above (the original pre-merge execution proof on H1, unaffected by this re-seal) |
+
+Two further gates are carried forward here unchanged in kind, exactly as §11/§12/§13 record them.
+The **82% workspace line-coverage floor** (ADR-0006) could not be measured locally in this
+devcontainer (no Docker, no reachable Redis/MinIO endpoint, so `make coverage` cannot complete) —
+**it is now measured, not attributed: the Coverage job (job `106403328509`, PR #56's
+`pull_request` run `35620879265`, head `d2f1a81131fa8d504065cceed412909c06143b95`) printed
+`Lines: 111771/123587 = 90.44%`, which clears the 82% floor by 8.44 percentage points.** The full
+per-run/per-job CI-run table for this head — all 9 workflow runs, the 44-required-context tally
+(43 pass, 1 conditional skip, none absent, none failed), and the one non-required
+Docker-Hub-connection-reset failure (`Ollama Integration Tests (live server)`, recorded verbatim,
+nothing fixed) — is filled in `37.1-CI-EVIDENCE.md`'s "CI-run table — re-sealed head d2f1a811"
+section. The **house sweep** — `make clean-code`, `make security`, `make api-surface` (default
+local nightly), plus two rows new to this re-seal (the pinned-toolchain `nightly-2026-09-20`
+API-surface check, and the 13-suite `make test-shell-guards` run including the now-green
+`extract-public-api_test.sh` harness) — all ran green on `d2f1a811`: the API-surface baseline is
+unmodified at 3959 items under both the default local nightly and the CI-pinned
+`nightly-2026-09-20` (unchanged from every prior re-seal), and `cargo audit`'s 10 allowed
+pre-existing warnings are unchanged in count and membership from every prior re-seal's own recorded
+set. The standing statement carried from every prior re-seal applies unchanged: no static taint
+analysis of first-party Rust gates a merge in this repository. Full detail:
+`37.1-CI-EVIDENCE.md`'s "Re-seal #2 on d2f1a811" and "CI-run table — re-sealed head d2f1a811"
+sections.
+
+**Findings:**
+- *(2026-09-21, owner: this section itself, closed by the fix it describes)* — the `API Surface
+  Tracking` required check went red on §13's own tick commit (`529e7078`) because CI's toolchain
+  install step for that job was an unpinned, floating `nightly` — the exact class of drift a dated
+  pin exists to prevent. Fixed by `d2f1a811` (`PUBLIC_API_TOOLCHAIN: nightly-2026-09-20`, in both
+  `ci.yml` and `scripts/extract-public-api.sh`), proven with real toolchains before landing:
+  `nightly-2026-09-20` (`feaadeeac`, CI's last-green hash) → exit 0, unchanged, 3959 items;
+  `nightly-2026-09-21` (`bba531001`) → exit 1, 303 lines, all `Self`. No public item was ever
+  added, removed or changed by the underlying rustdoc-rendering drift itself.
+- All findings carried in §13 above (the three unswept EPIPE-shaped pipelines, the version-less
+  semver allowlist, `MIGRATION.md`'s retained title, the stale "eleven crates" docs count, the
+  previous release section's date, and the pre-merge blindness of the existing Publish Dry Run job)
+  remain unchanged and are not repeated here — this section adds no new work item beyond the one
+  named above, and does not re-open any of §13's own closed items.
+
+**Evidence basis this section's box rests on, now complete:** this section (§14, above); this
+re-seal's complete local sweep and house sweep in `37.1-CI-EVIDENCE.md`'s "Re-seal #2 on d2f1a811"
+section; and this head's own pull-request CI-run table in `37.1-CI-EVIDENCE.md`'s "CI-run table —
+re-sealed head d2f1a811" section — every one of the 9 workflow runs, the 44-required-context tally
+(43 pass, 1 conditional skip, none absent, none failed), the pinned-toolchain proof for `API
+Surface Tracking`, the publish-order gate's pre-merge execution proof, and a `Coverage` job that
+printed `90.44%` against the 82% floor. The maintainer reads all of the above, now complete, then
+decides:
+
+- [x] **The `v0.10.1` tag may be cut (re-confirmed on the re-sealed head)** — evidence: this
+  section (§14) in full, plus `.planning/phases/37.1-v0-10-1-patch-release/37.1-CI-EVIDENCE.md`'s
+  "Re-seal #2 on d2f1a811" section (this section's own eight gates plus the house sweep) and, once
+  this head's pull request is opened or updated, its CI-run table (including the `coverage` job
+  this devcontainer cannot measure). Unticked, as designed — **this box is minted fresh by this
+  section and belongs to this re-sealed head alone**: §13's own box, ticked by the maintainer on
+  commit `529e7078`, stands as history and is not reused, re-pointed or overwritten here — a
+  required check went red on that commit after the tick, so a fresh confirmation on the corrected
+  head is what this box exists to capture. It is closed by a human — the maintainer, and nobody
+  else — at this phase's own sign-off checkpoint, never by this audit or any agent, under any mode
+  (Phase 29 D-17, Phase 37 D-00a, this phase's D-00a).
+
+---
+
 *Corpus document: `.project/v0.10.0/09-program-acceptance-audit.md`*
 *Phase: 29-program-gates-release*
 *Sections 1-5 by plan 29-04; sections 6-9 by plan 29-07; section 10 by plan 29-09.*
 *Section 11 by Phase 33 plan 33-06 (COMM-04 re-seal after Phases 30-33).*
 *Section 12 by Phase 37 plan 37-05 (SHIP-05 release re-seal).*
+*Section 13 by Phase 37.1 plan 37.1-07 (SHIP-06 re-seal for the v0.10.1 release).*
+*Section 14 by Phase 37.1 (SHIP-06 re-seal #2 after the API-surface nightly pin).*

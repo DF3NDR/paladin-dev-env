@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 37
-current_phase_name: v0.10.0 Crate Release
+current_phase: 37.1
+current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: Completed 37-05-PLAN.md (acceptance-audit section 12 re-seal, pointer paragraph)
-last_updated: "2026-09-18T18:36:30.047Z"
-last_activity: 2026-09-18
-last_activity_desc: Phase 37 execution started
+stopped_at: Re-seal #2's CI evidence complete on d2f1a811 -- every workflow run and per-job conclusion on that head recorded (44/44 required contexts present, 43 pass + 1 conditional skip, none failed), the pinned nightly-2026-09-20/feaadeeac toolchain proven by name in the API Surface Tracking job's own log, the publish-order gate's pre-merge execution proof recorded, and the Coverage job's real printed figure (90.44%, clears the 82% floor) recorded. Corpus audit section 14's row 8 and coverage entry filled and the evidence-basis sentence above its box updated; the box itself (line 1851) is untouched and still unticked. One non-required Docker-Hub connection-reset failure (Ollama Integration Tests) and one non-required in-progress state (Kubernetes Smoke Test) recorded as read, nothing fixed. Recorded in 37.1-RESEAL-2.md (not a plan SUMMARY). Not pushed. Next: present section 14's box to the maintainer for their re-confirmation, then one push, then CI on that tick commit, then plan 37.1-11.
+last_updated: "2026-09-21T17:50:00.000Z"
+last_activity: 2026-09-21
+last_activity_desc: "Phase 37.1 re-seal #2's CI evidence completed on head d2f1a811: repeated plan 37.1-09's Tasks 1-2 on the new head -- full per-run/per-job CI-run table recorded (9 runs, 44/44 required contexts present, 0 failed, 1 conditional skip), the API-surface-toolchain pin proven by name from the job's own log, the publish-order gate's pre-merge proof recorded, the Coverage job's real figure (90.44%) recorded against the 82% floor; corpus audit section 14 updated (row 8, coverage entry, evidence-basis sentence) with its sign-off box untouched and still unticked; two local commits (d4fe8edd, 4f3df7ef), nothing pushed"
 progress:
-  total_phases: 18
+  total_phases: 19
   completed_phases: 17
-  total_plans: 215
-  completed_plans: 209
+  total_plans: 231
+  completed_plans: 220
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-17 after Phase 34 completion)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 37 — v0.10.0 Crate Release
+**Current focus:** Phase 37.1 — v0.10.1 Patch Release
 Phase 34 was verified 2026-09-17: `34-UAT.md` 47/47 passed (all nine SUMMARYs coverage-mode, every
 deliverable automated and the list confirmed by the maintainer; `34-check.sh --final` 8/8 re-run at UAT
 time), `34-VERIFICATION.md` `passed` 5/5, `34-SECURITY.md` `verified` with `threats_open: 0`.
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `37-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 97%
+**Progress:** [██████████] 95%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -61,11 +61,20 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 37 (v0.10.0 Crate Release) — EXECUTING
-Plan: 6 of 11
-Status: Ready to execute
-Last activity: 2026-09-18 — Phase 37 execution started
-Previous: 2026-09-17 — Phase 33 complete; Phases 34-37 (Release Readiness) added to ROADMAP.md
+Phase: 37.1 (v0.10.1 Patch Release) — STOPPED
+Plan: 11 of 16
+Status: STOPPED — re-seal #2's CI evidence is now complete on head `d2f1a811`. Every one of the 9 workflow runs on that head was recorded per-job (not the aggregate): 44/44 required contexts present, 43 `pass` + 1 conditional `skipping` (`End-to-End Tests`), zero absent, zero failed. `API Surface Tracking` = `success`, and its own log names the pinned toolchain by name (`nightly-2026-09-20` resolving to `1.100.0-nightly (feaadeeac 2026-09-19)`) — the fix from `d2f1a811` confirmed working on CI's own runners. The publish-order gate's pre-merge execution proof was read from the License & Dependency Policy job's own log (`✅ OK: 12 crate(s)...`). The Coverage job printed `Lines: 111771/123587 = 90.44%`, clearing the 82% ADR-0006 floor by 8.44 points. One non-required failure was recorded verbatim, nothing fixed: `Ollama Integration Tests (live server)` hit a Docker Hub token-endpoint connection reset (the same job succeeded on the `push` run for the same head — a transient flake, not a retired image); `Kubernetes Smoke Test` was `in_progress` at the single read and is not a required context. Corpus audit section 14 (`.project/v0.10.0/09-program-acceptance-audit.md`) gained: row 8's pre-merge proof, a filled coverage entry (figure/job/run/head), and an updated evidence-basis sentence above its sign-off box — the box itself (line 1851, `- [ ] **The \`v0.10.1\` tag may be cut (re-confirmed on the re-sealed head)**`) is untouched, character for character, still unticked; section 13's own tick (`529e7078`) stands untouched as history. Recorded in `.planning/phases/37.1-v0-10-1-patch-release/37.1-RESEAL-2.md` (not a plan SUMMARY, deliberately outside the GSD glob) and in `37.1-CI-EVIDENCE.md`'s new "CI-run table — re-sealed head d2f1a811" section. Two local commits (`d4fe8edd`, `4f3df7ef`); `git status --porcelain` empty; **nothing pushed**. Next: present section 14's box to the maintainer for their re-confirmation, then one push, then CI on that tick commit, then plan 37.1-11.
+Last activity: 2026-09-21 — Phase 37.1 re-seal #2's CI evidence completed on head d2f1a811: repeated plan 37.1-09's Tasks 1-2 on the new head — the full per-run/per-job CI-run table (commit `d4fe8edd`) and section 14's rows/coverage entry/evidence-basis sentence (commit `4f3df7ef`), box untouched and still unticked; zero pushes.
+Previous: 2026-09-21 — Build wave reopened on the maintainer's "Pin it." after the API Surface Tracking check went red on tick commit 529e7078 (unpinned floating nightly rendering drift, zero real public-API change); fixed by pinning PUBLIC_API_TOOLCHAIN to nightly-2026-09-20 in ci.yml and extract-public-api.sh, with a TDD-ordered regression harness (red 10/15 at d4dc0e96, green 15/15 at d2f1a811) and a CHANGELOG Fixed bullet.
+Earlier: 2026-09-21 — Phase 37.1 plan 37.1-10 executed (read-only verification that the maintainer's sign-off tick is present on origin/release/v0.10.1 at PR #56's head, exactly one box ticked vs base, tick commit identity recorded and confirmed at the branch tip; rewrote .continue-here.md for the tick-commit CI wait; zero commits, zero pushes by this plan per its own house rule)
+Earlier: 2026-09-21 — Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)
+Earlier: 2026-09-21 — Phase 37.1 plan 37.1-07 executed (SC4 gate re-seal: all eight D-09 gates plus the house sweep re-run green on candidate head fbdefec9, no red gate observed, D-08 stage 2 never invoked; corpus audit gained append-only section 13 with its own fresh unticked sign-off box "The v0.10.1 tag may be cut"; pointer file gained one dated paragraph; waves 8-16 remaining)
+Earlier: 2026-09-20 — Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
+Earlier: 2026-09-20 — Phase 37.1 plan 37.1-05 executed (SC2 EPIPE race fixed in create-or-reuse-release.sh; waves 6-16 remaining)
+Earlier: 2026-09-20 — Phase 37.1 execution resumed at plan 37.1-05 (waves 5-16 remaining)
+Earlier: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed); waves 1-4 executed (plans 37.1-01..04)
+Earlier: 2026-09-19 — Phase 37.1 context gathered; Phase 37 OPEN and blocked on it (v0.10.0 tagged, 3/12 published)
+Earlier: 2026-09-18 — Phase 37 execution reached 37-08 and hard-stopped at the D-16 diagnosis
 Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
 Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
 
@@ -186,6 +195,17 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37 P03 | 53min | 2 tasks | 1 files |
 | Phase 37 P04 | 7min | 2 tasks | 5 files |
 | Phase 37 P05 | 14min | 2 tasks | 2 files |
+| Phase 37 P07 | 25min | 2 tasks | 1 files |
+| Phase 37.1 P01 | ~20min | 2 tasks | 2 files |
+| Phase 37.1 P02 | ~40min | 3 tasks | 5 files |
+| Phase 37.1 P03 | ~25min | 3 tasks | 3 files |
+| Phase 37.1 P04 | ~16min | 3 tasks | 2 files |
+| Phase 37.1 P05 | ~9min | 3 tasks | 3 files |
+| Phase 37.1 P06 | ~28min | 3 tasks | 29 files |
+| Phase 37.1 P07 | ~2h30min | 3 tasks | 3 files |
+| Phase 37.1 P08 | ~35min | 2 tasks | 3 files |
+| Phase 37.1 P09 | ~1h10min | 2 tasks | 2 files |
+| Phase 37.1 P10 | ~20min | 2 tasks | 2 files (uncommitted) |
 
 ## Accumulated Context
 
@@ -577,6 +597,22 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Section 12 cites the provenance block's literally-labeled Local re-seal head SHA (522ab1d4), listing the later per-gate doc-only commit SHAs alongside with their source-tree identity to it stated explicitly
 - [Phase ?]: Gate row 7's evidence pointer cites 37-CI-EVIDENCE.md rows 3-13 (not the tally's shorthand 4-13), matching the more precise prose naming row 3's check-changelogs sub-target as a hard assertion
 - [Phase ?]: DNS-outage semver re-run and zero-valued CHANGELOG topic readings are recorded in-row (gate rows 4 and 7), separate from the four-item Findings list the plan's action text names
+- [Phase ?]: Plan 37-07: SHA-scoped gh queries substituted for branch-scoped ones (feature/phase-33 remote deleted post-merge); 44/44 required-context tally computed live; red CodeQL results check recorded advisory (not a required context, maintainer disposition already on record); CI Coverage job success + verbatim 90.44% figure recorded as sole SC2 evidence; Task 3 (push) withheld as not-applicable-by-deviation.
+- [Phase ?]: Phase 37.1 Plan 01: cut release/v0.10.1 from origin/main's merge commit 1d4a9724 and cherry-picked the 24 local-only .planning commits from feature/phase-33 (1bb94063..b6d44416) onto it in order, live-resolved per D-06; opened 37.1-CI-EVIDENCE.md in house form and appended a dated old-to-new SHA map plus forward pointer to 37-CI-EVIDENCE.md (D-11, D-00d)
+- [Phase ?]: Publish-order dependency resolution reads the metadata entry's name field, never rename -- avoids resolving an aliased local dependency (e.g. paladin-core) to the wrong crate name
+- [Phase ?]: CI job choice: License & Dependency Policy, not Publish Dry Run -- that job never runs pre-merge (push+main only)
+- [Phase ?]: make check-gates left red on purpose at end of plan 37.1-03 -- battalion fix is plan 37.1-04's work (D-08 stage 1)
+- [Phase ?]: Phase 37.1 Plan 04: manifest fix (drop version requirement) chosen over reordering scripts/publish-crates.sh's CRATES array for the paladin-battalion publish-order defect -- smaller diff, zero risk to the proven publish loop
+- [Phase ?]: Phase 37.1 Plan 04: 3 remaining versioned workspace dev-dependency edges (herald->ports, root->web, root->eval) recorded as a live-derived finding and deliberately left versioned -- workspace-wide path-only rule deferred to v0.11.0 per CONTEXT.md
+- [Phase ?]: Phase 37.1 Plan 05: parameter expansion (not a here-string or EOF-draining sed) chosen for _cor_gh_call's status-line extraction fix -- removes the whole subprocess-and-pipe mechanism the EPIPE pipefail race depends on, not merely tunes around it
+- [Phase ?]: Phase 37.1 Plan 05: regression payload sized at 200000 chars via named PADDING_SIZE variable, far above the ~70KB non-trigger / ~100KB+ reliable-trigger thresholds measured -- avoids a marginally-sized test that passes against broken code by chance
+- [Phase ?]: Phase 37.1 Plan 05: three further early-closing-reader-under-pipefail sites (check-deprecations.sh, check-doc-examples.sh x2, check-public-api-examples.sh) swept and recorded as findings, deliberately not fixed -- assigned to the deferred wider release-tooling audit per D-00d
+- [Phase ?]: Phase 37.1 plan 06: version bump 0.10.0 -> 0.10.1 across all fourteen manifests + lockfile + OpenAPI baseline (plan-gap fix, Rule 3); twelve changelogs and MIGRATION.md addendum added; four pre-existing paladin-battalion Cargo.toml comment lines describing the real v0.10.0 release-day defect kept untouched as historical prose (D-00d); all six release gates plus make test verified green on head 896227ee
+- [Phase ?]: Phase 37.1 plan 07: re-sealed all eight D-09 release gates green on candidate head fbdefec9 (no red observed, D-08 stage 2 never invoked); corpus audit gained a new append-only section 13 with its own fresh unticked sign-off box (D-09), distinct from section 12's box reuse
+- [Phase ?]: Plan 37.1-08: parent-pointer convention substitutes for the plan's self-referential-SHA verify defect — the final pushed head is identified by three read-only commands (fetch+rev-parse, gh pr view headRefOid, and a .planning-only diff against a named parent commit) rather than embedded in a file that cannot contain its own commit's hash.
+- [Phase ?]: Plan 37.1-08: PR #56 opened release/v0.10.1 -> main with a curated four-part body (what broke in v0.10.0, what changed, the eight-gate re-seal, and pointers); autoMergeRequest confirmed null by a single live read, no merge/approve/tag performed.
+- [Phase ?]: PR #56's 124 checks read per-job against main's live 44-context ruleset: 118 SUCCESS, 6 SKIPPED, 0 FAILURE; Coverage job printed 90.44% (clears 82% floor); publish-order gate's Check publish order step proven to have executed pre-merge by name
+- [Phase ?]: Section 13's gate rows point at PR #56's runs; two rows (migration-allowlist, publish-dry-run) recorded as NOT CI-corroborated rather than assumed covered; sign-off box left untouched, still unticked
 
 ### Pending Todos
 
@@ -1051,6 +1087,7 @@ requirement.
 - Phase 36 added: Rustdoc Zero-Warning Bar & Examples Currency — `cargo doc` 73→0 warnings so CI "Check documentation" is green, 14 `--all-features` intra-doc links resolved, `examples/` + `doc-examples` current (2026-09-17)
 - Phase 37 added: v0.10.0 Crate Release — re-seal the Phase 29 gates on the final commit, merge to `main`, `release.yml` tags `v0.10.0`, all publishable crates on crates.io at `0.10.0` (2026-09-17)
 - Phase 36.1 inserted after Phase 36: Deferred Items Closure — walk the Phase 31/32/34/35 deferred-items registers, WINDOWS.md #36-37 and the two pending todos; fix, waive with reason, or re-home each; bring WINDOWS.md back into agreement with the registers before Phase 37 tags v0.10.0 (URGENT)
+- Phase 37.1 inserted after Phase 37: v0.10.1 Patch Release — tag v0.10.0 published 3/12 crates (battalion versioned dev-dep vs CRATES order); maintainer chose recovery option A (URGENT)
 
 ## Deferred Items
 
@@ -1144,9 +1181,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-18T18:36:29.933Z
-**Stopped at:** Completed 37-05-PLAN.md (acceptance-audit section 12 re-seal, pointer paragraph)
-**Resume file:** None
+**Last session:** 2026-09-21T09:00:40.896Z
+**Stopped at:** Completed 37.1-09-PLAN.md Tasks 1-2 (CI evidence recorded, section 13 wired); Task 3 blocking checkpoint presented to maintainer, not resolved -- awaiting the sign-off tick and, separately, the maintainer's decision on how commits reach release/v0.10.1 (per 37.1-08's still-open GH013 ruleset blocker)
+**Resume file:** .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

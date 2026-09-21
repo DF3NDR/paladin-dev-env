@@ -1848,7 +1848,7 @@ Surface Tracking`, the publish-order gate's pre-merge execution proof, and a `Co
 printed `90.44%` against the 82% floor. The maintainer reads all of the above, now complete, then
 decides:
 
-- [ ] **The `v0.10.1` tag may be cut (re-confirmed on the re-sealed head)** — evidence: this
+- [x] **The `v0.10.1` tag may be cut (re-confirmed on the re-sealed head)** — evidence: this
   section (§14) in full, plus `.planning/phases/37.1-v0-10-1-patch-release/37.1-CI-EVIDENCE.md`'s
   "Re-seal #2 on d2f1a811" section (this section's own eight gates plus the house sweep) and, once
   this head's pull request is opened or updated, its CI-run table (including the `coverage` job

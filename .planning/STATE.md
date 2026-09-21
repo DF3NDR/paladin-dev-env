@@ -5,7 +5,7 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: "Completed 37.1-08-PLAN.md: pushed release/v0.10.1, opened PR #56, wrote .continue-here.md, HARD STOP awaiting PR CI conclusions on the final head"
+stopped_at: "Completed 37.1-08-PLAN.md: pushed release/v0.10.1 (H1 7749f161), opened PR #56, wrote .continue-here.md; push #2 REJECTED by the Protect release branches ruleset (GH013), so the plan-08 bookkeeping commits are local-only; HARD STOP awaiting PR CI conclusions on H1 and the maintainer's decision on how updates reach the branch"
 last_updated: "2026-09-21T01:40:23.493Z"
 last_activity: 2026-09-21
 last_activity_desc: "Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)"
@@ -63,7 +63,7 @@ names. See MILESTONES.md.
 
 Phase: 37.1 (v0.10.1 Patch Release) — STOPPED
 Plan: 9 of 16
-Status: STOPPED — hard stop per D-00i; awaiting external confirmation that every required PR check has concluded on the final pushed head of release/v0.10.1 (PR #56). Resume file: .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md
+Status: STOPPED — hard stop per D-00i; awaiting (1) external confirmation that every required PR check has concluded on H1 `7749f161` — the remote head of release/v0.10.1 and PR #56's head, because push #2 was rejected by the Protect release branches ruleset (GH013) — and (2) the maintainer's decision on how further commits, including their own section-13 tick commit, reach that branch. Resume file: .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md
 Last activity: 2026-09-21 — Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)
 Previous: 2026-09-21 — Phase 37.1 plan 37.1-07 executed (SC4 gate re-seal: all eight D-09 gates plus the house sweep re-run green on candidate head fbdefec9, no red gate observed, D-08 stage 2 never invoked; corpus audit gained append-only section 13 with its own fresh unticked sign-off box "The v0.10.1 tag may be cut"; pointer file gained one dated paragraph; waves 8-16 remaining)
 Earlier: 2026-09-20 — Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
@@ -1175,7 +1175,7 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 ## Session Continuity
 
 **Last session:** 2026-09-21T01:40:23.385Z
-**Stopped at:** Completed 37.1-08-PLAN.md: pushed release/v0.10.1, opened PR #56, wrote .continue-here.md, HARD STOP awaiting PR CI conclusions on the final head
+**Stopped at:** Completed 37.1-08-PLAN.md: pushed release/v0.10.1 (H1 7749f161), opened PR #56, wrote .continue-here.md; push #2 REJECTED by the Protect release branches ruleset (GH013), so the plan-08 bookkeeping commits are local-only; HARD STOP awaiting PR CI conclusions on H1 and the maintainer's decision on how updates reach the branch
 **Resume file:** .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

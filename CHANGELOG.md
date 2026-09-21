@@ -26,6 +26,14 @@ merge. No library source change; no public API change.
   `SIGPIPE` (exit 141) before the release body was ever read — the real failure mode hit on the
   `v0.10.0` release day. The extraction now uses pure bash parameter expansion, removing the
   subprocess and the pipe the race depended on entirely.
+- **`API Surface Tracking`'s floating nightly.** The CI job installed whichever `nightly` was
+  newest, and its baseline is rustdoc output. On 2026-09-21 a new nightly (rustc `bba531001`)
+  began rendering derived return types as `-> Self`, and the required check went red on a
+  documentation-only commit: 303 baseline lines differed with no public item added, removed or
+  changed. The nightly is now chosen through one variable, `PUBLIC_API_TOOLCHAIN`: `ci.yml` sets it
+  to a dated nightly and installs that same name, and `scripts/extract-public-api.sh` passes it to
+  cargo as `+<toolchain>` (unset, it is the local `nightly`, as before). A non-nightly value is
+  refused, because `cargo-public-api` would silently swap it for plain `nightly`.
 
 ### Added
 

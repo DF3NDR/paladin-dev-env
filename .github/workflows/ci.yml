@@ -217,6 +217,16 @@ jobs:
   api-surface:
     name: API Surface Tracking
     runs-on: ubuntu-latest
+    env:
+      # Pinned, never floating. The baseline is rustdoc output, and rustdoc's
+      # rendering changes between nightlies: on 2026-09-21 a floating
+      # `nightly` (rustc bba531001 2026-09-20) rendered 606 derived return
+      # types as `-> Self` and turned this required check red on a
+      # documentation-only commit. scripts/extract-public-api.sh reads this
+      # variable and passes it to cargo as `+<toolchain>`; the install step
+      # below uses the same variable, so there is one literal to move. Move
+      # it together with a regenerated .project/current-exports.txt.
+      PUBLIC_API_TOOLCHAIN: nightly-2026-09-20
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -225,7 +235,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install nightly toolchain
-        run: rustup toolchain install nightly
+        run: rustup toolchain install "${PUBLIC_API_TOOLCHAIN}"
 
       - name: Install cargo-public-api
         run: cargo install cargo-public-api

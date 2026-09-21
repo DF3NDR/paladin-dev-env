@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: Completed 37.1-07-PLAN.md
-last_updated: "2026-09-21T01:08:42.722Z"
-last_activity: 2026-09-20
-last_activity_desc: Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
+stopped_at: "Completed 37.1-08-PLAN.md: pushed release/v0.10.1, opened PR #56, wrote .continue-here.md, HARD STOP awaiting PR CI conclusions on the final head"
+last_updated: "2026-09-21T01:40:23.493Z"
+last_activity: 2026-09-21
+last_activity_desc: "Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)"
 progress:
   total_phases: 19
   completed_phases: 17
   total_plans: 231
-  completed_plans: 217
+  completed_plans: 218
 ---
 
 # Project State
@@ -61,11 +61,12 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 37.1 (v0.10.1 Patch Release) — EXECUTING
-Plan: 8 of 16
-Status: Ready to execute
-Last activity: 2026-09-21 — Phase 37.1 plan 37.1-07 executed (SC4 gate re-seal: all eight D-09 gates plus the house sweep re-run green on candidate head fbdefec9, no red gate observed, D-08 stage 2 never invoked; corpus audit gained append-only section 13 with its own fresh unticked sign-off box "The v0.10.1 tag may be cut"; pointer file gained one dated paragraph; waves 8-16 remaining)
-Previous: 2026-09-20 — Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
+Phase: 37.1 (v0.10.1 Patch Release) — STOPPED
+Plan: 9 of 16
+Status: STOPPED — hard stop per D-00i; awaiting external confirmation that every required PR check has concluded on the final pushed head of release/v0.10.1 (PR #56). Resume file: .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md
+Last activity: 2026-09-21 — Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)
+Previous: 2026-09-21 — Phase 37.1 plan 37.1-07 executed (SC4 gate re-seal: all eight D-09 gates plus the house sweep re-run green on candidate head fbdefec9, no red gate observed, D-08 stage 2 never invoked; corpus audit gained append-only section 13 with its own fresh unticked sign-off box "The v0.10.1 tag may be cut"; pointer file gained one dated paragraph; waves 8-16 remaining)
+Earlier: 2026-09-20 — Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
 Earlier: 2026-09-20 — Phase 37.1 plan 37.1-05 executed (SC2 EPIPE race fixed in create-or-reuse-release.sh; waves 6-16 remaining)
 Earlier: 2026-09-20 — Phase 37.1 execution resumed at plan 37.1-05 (waves 5-16 remaining)
 Earlier: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed); waves 1-4 executed (plans 37.1-01..04)
@@ -199,6 +200,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37.1 P05 | ~9min | 3 tasks | 3 files |
 | Phase 37.1 P06 | ~28min | 3 tasks | 29 files |
 | Phase 37.1 P07 | ~2h30min | 3 tasks | 3 files |
+| Phase 37.1 P08 | ~35min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -602,6 +604,8 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 37.1 Plan 05: three further early-closing-reader-under-pipefail sites (check-deprecations.sh, check-doc-examples.sh x2, check-public-api-examples.sh) swept and recorded as findings, deliberately not fixed -- assigned to the deferred wider release-tooling audit per D-00d
 - [Phase ?]: Phase 37.1 plan 06: version bump 0.10.0 -> 0.10.1 across all fourteen manifests + lockfile + OpenAPI baseline (plan-gap fix, Rule 3); twelve changelogs and MIGRATION.md addendum added; four pre-existing paladin-battalion Cargo.toml comment lines describing the real v0.10.0 release-day defect kept untouched as historical prose (D-00d); all six release gates plus make test verified green on head 896227ee
 - [Phase ?]: Phase 37.1 plan 07: re-sealed all eight D-09 release gates green on candidate head fbdefec9 (no red observed, D-08 stage 2 never invoked); corpus audit gained a new append-only section 13 with its own fresh unticked sign-off box (D-09), distinct from section 12's box reuse
+- [Phase ?]: Plan 37.1-08: parent-pointer convention substitutes for the plan's self-referential-SHA verify defect — the final pushed head is identified by three read-only commands (fetch+rev-parse, gh pr view headRefOid, and a .planning-only diff against a named parent commit) rather than embedded in a file that cannot contain its own commit's hash.
+- [Phase ?]: Plan 37.1-08: PR #56 opened release/v0.10.1 -> main with a curated four-part body (what broke in v0.10.0, what changed, the eight-gate re-seal, and pointers); autoMergeRequest confirmed null by a single live read, no merge/approve/tag performed.
 
 ### Pending Todos
 
@@ -1170,9 +1174,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-21T01:08:30.152Z
-**Stopped at:** Completed 37.1-07-PLAN.md
-**Resume file:** None
+**Last session:** 2026-09-21T01:40:23.385Z
+**Stopped at:** Completed 37.1-08-PLAN.md: pushed release/v0.10.1, opened PR #56, wrote .continue-here.md, HARD STOP awaiting PR CI conclusions on the final head
+**Resume file:** .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

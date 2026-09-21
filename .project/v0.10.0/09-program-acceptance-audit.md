@@ -1800,16 +1800,19 @@ this sweep**: every row below passed on its first run; D-08 stage 2's hard-stop 
 | 5 | MSRV floor, toolchain 1.88 | `env RUSTUP_TOOLCHAIN=1.88 cargo check --workspace --all-features --all-targets` | `d2f1a811` | `Finished` in 1m 27s, 0 errors, 0 warnings. **PASS** | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 5 |
 | 6 | `make publish-dry-run` — twelve crates, dependency order | `make publish-dry-run` | `d2f1a811` | Exit 0; 40/40 `test result:` lines `ok`, 0 failed; `cargo audit` reported the same 10 allowed pre-existing warnings as the house sweep below, no new advisory; `cargo publish --workspace --dry-run` uploaded all 12 publishable crates in dependency order; `paladin-doc-examples` (`publish = false`) correctly absent. **PASS (12/12, dependency order)** | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 6 |
 | 7 | `CHANGELOG.md` `[0.10.1]` completeness | `make check-gates` (bundles all eight guards, including `check-publish-order`) plus hard-assertion greps | `d2f1a811` | All eight `check-gates` guards individually OK; `## [Unreleased]` count `0`; `## [0.10.1]` count `1`; `## [0.10.2]`/`## [0.11.0]` counts `0` in `CHANGELOG.md`. **PASS** | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 7 |
-| **8** | Publish-order gate (SC3), invoked through the `make` target CI also invokes | `make check-publish-order` (= `./scripts/check-publish-order.sh`) | `d2f1a811` | `✅ OK: 12 crate(s) checked in publish order; every versioned workspace dependency (normal, dev and build) resolves to an earlier CRATES position, and CRATES exactly matches the cargo-metadata publishable set.` **PASS.** Same command CI's License & Dependency Policy job invokes, so local and CI evidence describe the same command — pre-merge execution proof for this new head is filled in once its own PR/CI run concludes, exactly as §13's own row 8 was filled by plan 37.1-09 after PR #56's run. | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 8; §13 row 8 above (the original pre-merge execution proof on H1, unaffected by this re-seal) |
+| **8** | Publish-order gate (SC3), invoked through the `make` target CI also invokes | `make check-publish-order` (= `./scripts/check-publish-order.sh`) | `d2f1a811` | `✅ OK: 12 crate(s) checked in publish order; every versioned workspace dependency (normal, dev and build) resolves to an earlier CRATES position, and CRATES exactly matches the cargo-metadata publishable set.` **PASS.** Same command CI's License & Dependency Policy job invokes, so local and CI evidence describe the same command. **Pre-merge execution proof for this head is now filled**: the `Check publish order` step inside the License & Dependency Policy job (job `106403327775`, PR #56's `pull_request` run `35620879265`) printed the identical `✅ OK: 12 crate(s)...` line, proving the gate executed pre-merge on this pull request, not merely present in the workflow file. | `37.1-CI-EVIDENCE.md` "Re-seal #2 on d2f1a811" row 8; "CI-run table — re-sealed head d2f1a811" section, publish-order gate proof block; §13 row 8 above (the original pre-merge execution proof on H1, unaffected by this re-seal) |
 
 Two further gates are carried forward here unchanged in kind, exactly as §11/§12/§13 record them.
-The **82% workspace line-coverage floor** (ADR-0006) is **CI-attributed, not measured locally, at
-the time this section was first written** — this devcontainer has no Docker and no reachable
-Redis/MinIO endpoint, so `make coverage` cannot complete locally and was not attempted. **The
-PR-CI rows for this new head — including the `Coverage` job's own printed figure and the full
-124-check tally — are filled in by a later plan, before this section's box below is presented to
-the maintainer**, exactly as §13's own coverage entry was filled in only after PR #56's run
-concluded. The **house sweep** — `make clean-code`, `make security`, `make api-surface` (default
+The **82% workspace line-coverage floor** (ADR-0006) could not be measured locally in this
+devcontainer (no Docker, no reachable Redis/MinIO endpoint, so `make coverage` cannot complete) —
+**it is now measured, not attributed: the Coverage job (job `106403328509`, PR #56's
+`pull_request` run `35620879265`, head `d2f1a81131fa8d504065cceed412909c06143b95`) printed
+`Lines: 111771/123587 = 90.44%`, which clears the 82% floor by 8.44 percentage points.** The full
+per-run/per-job CI-run table for this head — all 9 workflow runs, the 44-required-context tally
+(43 pass, 1 conditional skip, none absent, none failed), and the one non-required
+Docker-Hub-connection-reset failure (`Ollama Integration Tests (live server)`, recorded verbatim,
+nothing fixed) — is filled in `37.1-CI-EVIDENCE.md`'s "CI-run table — re-sealed head d2f1a811"
+section. The **house sweep** — `make clean-code`, `make security`, `make api-surface` (default
 local nightly), plus two rows new to this re-seal (the pinned-toolchain `nightly-2026-09-20`
 API-surface check, and the 13-suite `make test-shell-guards` run including the now-green
 `extract-public-api_test.sh` harness) — all ran green on `d2f1a811`: the API-surface baseline is
@@ -1818,7 +1821,8 @@ unmodified at 3959 items under both the default local nightly and the CI-pinned
 pre-existing warnings are unchanged in count and membership from every prior re-seal's own recorded
 set. The standing statement carried from every prior re-seal applies unchanged: no static taint
 analysis of first-party Rust gates a merge in this repository. Full detail:
-`37.1-CI-EVIDENCE.md`'s "Re-seal #2 on d2f1a811" section.
+`37.1-CI-EVIDENCE.md`'s "Re-seal #2 on d2f1a811" and "CI-run table — re-sealed head d2f1a811"
+sections.
 
 **Findings:**
 - *(2026-09-21, owner: this section itself, closed by the fix it describes)* — the `API Surface
@@ -1835,11 +1839,14 @@ analysis of first-party Rust gates a merge in this repository. Full detail:
   remain unchanged and are not repeated here — this section adds no new work item beyond the one
   named above, and does not re-open any of §13's own closed items.
 
-**Evidence basis this section's box will rest on, once complete:** this section (§14, above); this
+**Evidence basis this section's box rests on, now complete:** this section (§14, above); this
 re-seal's complete local sweep and house sweep in `37.1-CI-EVIDENCE.md`'s "Re-seal #2 on d2f1a811"
-section; and — to be filled in before the box below is presented — this head's own pull-request
-CI-run table, including a green `Coverage` job against the 82% floor. The maintainer reads all of
-the above, once complete, then decides:
+section; and this head's own pull-request CI-run table in `37.1-CI-EVIDENCE.md`'s "CI-run table —
+re-sealed head d2f1a811" section — every one of the 9 workflow runs, the 44-required-context tally
+(43 pass, 1 conditional skip, none absent, none failed), the pinned-toolchain proof for `API
+Surface Tracking`, the publish-order gate's pre-merge execution proof, and a `Coverage` job that
+printed `90.44%` against the 82% floor. The maintainer reads all of the above, now complete, then
+decides:
 
 - [ ] **The `v0.10.1` tag may be cut (re-confirmed on the re-sealed head)** — evidence: this
   section (§14) in full, plus `.planning/phases/37.1-v0-10-1-patch-release/37.1-CI-EVIDENCE.md`'s

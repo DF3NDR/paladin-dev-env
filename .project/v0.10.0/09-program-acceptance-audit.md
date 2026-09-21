@@ -1744,7 +1744,7 @@ and none failed (only the conditional `End-to-End Tests` skipped), the publish-o
 have executed pre-merge by name, and the `Coverage` job's own printed figure read and recorded
 against the floor. The maintainer reads all of the above, then decides:**
 
-- [ ] **The `v0.10.1` tag may be cut** — evidence: this section (§13) in full, plus
+- [x] **The `v0.10.1` tag may be cut** — evidence: this section (§13) in full, plus
   `.planning/phases/37.1-v0-10-1-patch-release/37.1-CI-EVIDENCE.md`'s complete Local sweep table
   (this section's own eight gates plus the house sweep) and, once `release/v0.10.1`'s pull request
   is opened, its CI-run table (including the `coverage` job this devcontainer cannot measure).

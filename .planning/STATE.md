@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: Completed 37.1-06-PLAN.md
-last_updated: "2026-09-21T00:00:49.915Z"
+stopped_at: Completed 37.1-07-PLAN.md
+last_updated: "2026-09-21T01:08:42.722Z"
 last_activity: 2026-09-20
-last_activity_desc: Phase 37.1 plan 37.1-05 executed (SC2 EPIPE race fixed in create-or-reuse-release.sh; waves 6-16 remaining)
+last_activity_desc: Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
 progress:
   total_phases: 19
   completed_phases: 17
@@ -62,10 +62,11 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 37.1 (v0.10.1 Patch Release) — EXECUTING
-Plan: 7 of 16
+Plan: 8 of 16
 Status: Ready to execute
-Last activity: 2026-09-20 — Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
-Previous: 2026-09-20 — Phase 37.1 plan 37.1-05 executed (SC2 EPIPE race fixed in create-or-reuse-release.sh; waves 6-16 remaining)
+Last activity: 2026-09-21 — Phase 37.1 plan 37.1-07 executed (SC4 gate re-seal: all eight D-09 gates plus the house sweep re-run green on candidate head fbdefec9, no red gate observed, D-08 stage 2 never invoked; corpus audit gained append-only section 13 with its own fresh unticked sign-off box "The v0.10.1 tag may be cut"; pointer file gained one dated paragraph; waves 8-16 remaining)
+Previous: 2026-09-20 — Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
+Earlier: 2026-09-20 — Phase 37.1 plan 37.1-05 executed (SC2 EPIPE race fixed in create-or-reuse-release.sh; waves 6-16 remaining)
 Earlier: 2026-09-20 — Phase 37.1 execution resumed at plan 37.1-05 (waves 5-16 remaining)
 Earlier: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed); waves 1-4 executed (plans 37.1-01..04)
 Earlier: 2026-09-19 — Phase 37.1 context gathered; Phase 37 OPEN and blocked on it (v0.10.0 tagged, 3/12 published)
@@ -197,6 +198,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37.1 P04 | ~16min | 3 tasks | 2 files |
 | Phase 37.1 P05 | ~9min | 3 tasks | 3 files |
 | Phase 37.1 P06 | ~28min | 3 tasks | 29 files |
+| Phase 37.1 P07 | ~2h30min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -599,6 +601,7 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 37.1 Plan 05: regression payload sized at 200000 chars via named PADDING_SIZE variable, far above the ~70KB non-trigger / ~100KB+ reliable-trigger thresholds measured -- avoids a marginally-sized test that passes against broken code by chance
 - [Phase ?]: Phase 37.1 Plan 05: three further early-closing-reader-under-pipefail sites (check-deprecations.sh, check-doc-examples.sh x2, check-public-api-examples.sh) swept and recorded as findings, deliberately not fixed -- assigned to the deferred wider release-tooling audit per D-00d
 - [Phase ?]: Phase 37.1 plan 06: version bump 0.10.0 -> 0.10.1 across all fourteen manifests + lockfile + OpenAPI baseline (plan-gap fix, Rule 3); twelve changelogs and MIGRATION.md addendum added; four pre-existing paladin-battalion Cargo.toml comment lines describing the real v0.10.0 release-day defect kept untouched as historical prose (D-00d); all six release gates plus make test verified green on head 896227ee
+- [Phase ?]: Phase 37.1 plan 07: re-sealed all eight D-09 release gates green on candidate head fbdefec9 (no red observed, D-08 stage 2 never invoked); corpus audit gained a new append-only section 13 with its own fresh unticked sign-off box (D-09), distinct from section 12's box reuse
 
 ### Pending Todos
 
@@ -1167,8 +1170,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-21T00:00:49.801Z
-**Stopped at:** Completed 37.1-06-PLAN.md
+**Last session:** 2026-09-21T01:08:30.152Z
+**Stopped at:** Completed 37.1-07-PLAN.md
 **Resume file:** None
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

@@ -1237,7 +1237,7 @@ Plans:
 - [x] 37.1-07-PLAN.md — Run the eight-row gate set plus the house sweep on the candidate head and append corpus audit `## 13.` with its own fresh unticked box (SC4, D-09)
 - [x] 37.1-08-PLAN.md — Push the branch, open the single release pull request, and hard-stop with a resume file (D-07, D-00i)
 - [x] 37.1-09-PLAN.md — Record every run on the pull request head including the coverage figure and the publish-order step's execution proof, then the maintainer's sign-off checkpoint (D-00a, D-00e)
-- [ ] 37.1-10-PLAN.md — Verify read-only that the ticked box is on the remote at the pull request head, then hard-stop for the checks on that true final commit (D-10)
+- [x] 37.1-10-PLAN.md — Verify read-only that the ticked box is on the remote at the pull request head, then hard-stop for the checks on that true final commit (D-10)
 
 **Wave 11 — maintainer merge and tag checkpoint**
 
@@ -1289,7 +1289,7 @@ Plans:
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 13/13 | Complete    | 2026-09-18 |
 | 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 14/14 | Complete    | 2026-09-18 |
 | 37. v0.10.0 Crate Release | v0.10.0 | 7/11 | In Progress | — |
-| 37.1 v0.10.1 Patch Release (INSERTED) | v0.10.0 | 9/16 | In Progress | — |
+| 37.1 v0.10.1 Patch Release (INSERTED) | v0.10.0 | 10/16 | In Progress | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

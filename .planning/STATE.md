@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: Completed 37.1-09-PLAN.md Tasks 1-2 (CI evidence recorded, section 13 wired); Task 3 blocking checkpoint presented to maintainer, not resolved -- awaiting the sign-off tick and, separately, the maintainer's decision on how commits reach release/v0.10.1 (per 37.1-08's still-open GH013 ruleset blocker)
-last_updated: "2026-09-21T09:00:41.168Z"
+stopped_at: Completed 37.1-10-PLAN.md (both tasks) -- verified read-only, from the remote, that the maintainer's tick is present on origin/release/v0.10.1 at PR #56's head (529e7078); rewrote .continue-here.md for the tick-commit CI wait and hard-stopped. Plan 37.1-10 added no commit -- the tick commit remains the branch tip. Resume: plan 37.1-11 reads required-check conclusions on the tick commit.
+last_updated: "2026-09-21T11:55:00.000Z"
 last_activity: 2026-09-21
-last_activity_desc: "Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)"
+last_activity_desc: "Phase 37.1 plan 37.1-10 executed (read-only verification that the maintainer's sign-off tick is present on origin/release/v0.10.1 at PR #56's head, exactly one box ticked vs base, tick commit identity recorded and confirmed at the branch tip; rewrote .continue-here.md for the tick-commit CI wait; zero commits, zero pushes by this plan per its own house rule)"
 progress:
   total_phases: 19
   completed_phases: 17
@@ -62,9 +62,9 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 37.1 (v0.10.1 Patch Release) — STOPPED
-Plan: 10 of 16
-Status: STOPPED — plan 37.1-09's Tasks 1-2 complete (all 124 PR #56 checks read per-job against main's live 44-context ruleset: 118 SUCCESS, 6 SKIPPED, 0 FAILURE; publish-order gate proven to have executed pre-merge by name; Coverage job's printed figure 90.44% recorded against the 82% floor; section 13 wired to that evidence, sign-off box untouched and still unticked). Task 3 (blocking checkpoint) presented the exact sign-off edit to the maintainer and stopped without making it — awaiting the maintainer's tick + commit SHA, and separately their still-open decision (unchanged from plan 37.1-08) on how commits reach release/v0.10.1 under the Protect release branches ruleset (GH013). Resume file: .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md
-Last activity: 2026-09-21 — Phase 37.1 plan 37.1-09 executed (Tasks 1-2: recorded every PR #56 check on H1 per-job, proved the publish-order gate ran pre-merge, recorded the real coverage figure 90.44% vs the 82% floor, wired section 13's rows and coverage entry to that evidence; Task 3: presented the exact sign-off edit to the maintainer at a blocking checkpoint, made no edit, and stopped)
+Plan: 11 of 16
+Status: STOPPED — plan 37.1-10 verified, read-only from the remote (`git show <sha>:<path>`, not the working tree), that the maintainer's tick is present at origin/release/v0.10.1's tip = PR #56's headRefOid = 529e70782168739c003582f3d9db1fbf02fd9614; section 13's box reads ticked at that commit, ticked-box count exactly one greater than the base commit's 0; tick commit identity (author/committer Am0rfu5, dated 2026-09-21T11:36:54Z) recorded and confirmed to be the only box-state transition in the phase's own commit range. The push blocker recorded in the prior .continue-here.md is RESOLVED (maintainer added a temporary repository-admin bypass to ruleset 20868128, pushed the accumulated commits, then ticked and pushed the sign-off). Plan 37.1-10 rewrote .continue-here.md for the tick-commit CI wait and made NO commit and NO push of its own -- the tick commit remains the branch's last content commit, exactly as its own house rule requires. Resume file: .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md (rewritten, left uncommitted alongside this plan's other outputs -- see 37.1-10-SUMMARY.md for the full uncommitted-files list; plan 37.1-12 commits them on chore/37.1-close).
+Last activity: 2026-09-21 — Phase 37.1 plan 37.1-10 executed (Task 1: read-only remote verification that the maintainer's sign-off tick is present and at the tip, ticked-box count and tick-commit identity recorded in 37.1-CI-EVIDENCE.md; Task 2: rewrote .continue-here.md naming the tick commit as the true final commit and the required contexts to wait on, hard-stopped with nothing running; zero commits/zero pushes throughout, per the plan's own zero-commit rule)
 Previous: 2026-09-21 — Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)
 Earlier: 2026-09-21 — Phase 37.1 plan 37.1-07 executed (SC4 gate re-seal: all eight D-09 gates plus the house sweep re-run green on candidate head fbdefec9, no red gate observed, D-08 stage 2 never invoked; corpus audit gained append-only section 13 with its own fresh unticked sign-off box "The v0.10.1 tag may be cut"; pointer file gained one dated paragraph; waves 8-16 remaining)
 Earlier: 2026-09-20 — Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
@@ -203,6 +203,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37.1 P07 | ~2h30min | 3 tasks | 3 files |
 | Phase 37.1 P08 | ~35min | 2 tasks | 3 files |
 | Phase 37.1 P09 | ~1h10min | 2 tasks | 2 files |
+| Phase 37.1 P10 | ~20min | 2 tasks | 2 files (uncommitted) |
 
 ## Accumulated Context
 

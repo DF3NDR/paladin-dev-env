@@ -1236,7 +1236,7 @@ Plans:
 
 - [x] 37.1-07-PLAN.md — Run the eight-row gate set plus the house sweep on the candidate head and append corpus audit `## 13.` with its own fresh unticked box (SC4, D-09)
 - [x] 37.1-08-PLAN.md — Push the branch, open the single release pull request, and hard-stop with a resume file (D-07, D-00i)
-- [ ] 37.1-09-PLAN.md — Record every run on the pull request head including the coverage figure and the publish-order step's execution proof, then the maintainer's sign-off checkpoint (D-00a, D-00e)
+- [x] 37.1-09-PLAN.md — Record every run on the pull request head including the coverage figure and the publish-order step's execution proof, then the maintainer's sign-off checkpoint (D-00a, D-00e)
 - [ ] 37.1-10-PLAN.md — Verify read-only that the ticked box is on the remote at the pull request head, then hard-stop for the checks on that true final commit (D-10)
 
 **Wave 11 — maintainer merge and tag checkpoint**

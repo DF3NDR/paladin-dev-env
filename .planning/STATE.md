@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: "Completed 37.1-08-PLAN.md: pushed release/v0.10.1 (H1 7749f161), opened PR #56, wrote .continue-here.md; push #2 REJECTED by the Protect release branches ruleset (GH013), so the plan-08 bookkeeping commits are local-only; HARD STOP awaiting PR CI conclusions on H1 and the maintainer's decision on how updates reach the branch"
-last_updated: "2026-09-21T01:40:23.493Z"
+stopped_at: Completed 37.1-09-PLAN.md Tasks 1-2 (CI evidence recorded, section 13 wired); Task 3 blocking checkpoint presented to maintainer, not resolved -- awaiting the sign-off tick and, separately, the maintainer's decision on how commits reach release/v0.10.1 (per 37.1-08's still-open GH013 ruleset blocker)
+last_updated: "2026-09-21T09:00:41.168Z"
 last_activity: 2026-09-21
 last_activity_desc: "Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)"
 progress:
   total_phases: 19
   completed_phases: 17
   total_plans: 231
-  completed_plans: 218
+  completed_plans: 220
 ---
 
 # Project State
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `37-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [█████████░] 94%
+**Progress:** [██████████] 95%
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -62,10 +62,11 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 37.1 (v0.10.1 Patch Release) — STOPPED
-Plan: 9 of 16
-Status: STOPPED — hard stop per D-00i; awaiting (1) external confirmation that every required PR check has concluded on H1 `7749f161` — the remote head of release/v0.10.1 and PR #56's head, because push #2 was rejected by the Protect release branches ruleset (GH013) — and (2) the maintainer's decision on how further commits, including their own section-13 tick commit, reach that branch. Resume file: .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md
-Last activity: 2026-09-21 — Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)
-Previous: 2026-09-21 — Phase 37.1 plan 37.1-07 executed (SC4 gate re-seal: all eight D-09 gates plus the house sweep re-run green on candidate head fbdefec9, no red gate observed, D-08 stage 2 never invoked; corpus audit gained append-only section 13 with its own fresh unticked sign-off box "The v0.10.1 tag may be cut"; pointer file gained one dated paragraph; waves 8-16 remaining)
+Plan: 10 of 16
+Status: STOPPED — plan 37.1-09's Tasks 1-2 complete (all 124 PR #56 checks read per-job against main's live 44-context ruleset: 118 SUCCESS, 6 SKIPPED, 0 FAILURE; publish-order gate proven to have executed pre-merge by name; Coverage job's printed figure 90.44% recorded against the 82% floor; section 13 wired to that evidence, sign-off box untouched and still unticked). Task 3 (blocking checkpoint) presented the exact sign-off edit to the maintainer and stopped without making it — awaiting the maintainer's tick + commit SHA, and separately their still-open decision (unchanged from plan 37.1-08) on how commits reach release/v0.10.1 under the Protect release branches ruleset (GH013). Resume file: .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md
+Last activity: 2026-09-21 — Phase 37.1 plan 37.1-09 executed (Tasks 1-2: recorded every PR #56 check on H1 per-job, proved the publish-order gate ran pre-merge, recorded the real coverage figure 90.44% vs the 82% floor, wired section 13's rows and coverage entry to that evidence; Task 3: presented the exact sign-off edit to the maintainer at a blocking checkpoint, made no edit, and stopped)
+Previous: 2026-09-21 — Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)
+Earlier: 2026-09-21 — Phase 37.1 plan 37.1-07 executed (SC4 gate re-seal: all eight D-09 gates plus the house sweep re-run green on candidate head fbdefec9, no red gate observed, D-08 stage 2 never invoked; corpus audit gained append-only section 13 with its own fresh unticked sign-off box "The v0.10.1 tag may be cut"; pointer file gained one dated paragraph; waves 8-16 remaining)
 Earlier: 2026-09-20 — Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
 Earlier: 2026-09-20 — Phase 37.1 plan 37.1-05 executed (SC2 EPIPE race fixed in create-or-reuse-release.sh; waves 6-16 remaining)
 Earlier: 2026-09-20 — Phase 37.1 execution resumed at plan 37.1-05 (waves 5-16 remaining)
@@ -201,6 +202,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | Phase 37.1 P06 | ~28min | 3 tasks | 29 files |
 | Phase 37.1 P07 | ~2h30min | 3 tasks | 3 files |
 | Phase 37.1 P08 | ~35min | 2 tasks | 3 files |
+| Phase 37.1 P09 | ~1h10min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -606,6 +608,8 @@ Entering them here would fabricate authority the corpus does not contain.
 - [Phase ?]: Phase 37.1 plan 07: re-sealed all eight D-09 release gates green on candidate head fbdefec9 (no red observed, D-08 stage 2 never invoked); corpus audit gained a new append-only section 13 with its own fresh unticked sign-off box (D-09), distinct from section 12's box reuse
 - [Phase ?]: Plan 37.1-08: parent-pointer convention substitutes for the plan's self-referential-SHA verify defect — the final pushed head is identified by three read-only commands (fetch+rev-parse, gh pr view headRefOid, and a .planning-only diff against a named parent commit) rather than embedded in a file that cannot contain its own commit's hash.
 - [Phase ?]: Plan 37.1-08: PR #56 opened release/v0.10.1 -> main with a curated four-part body (what broke in v0.10.0, what changed, the eight-gate re-seal, and pointers); autoMergeRequest confirmed null by a single live read, no merge/approve/tag performed.
+- [Phase ?]: PR #56's 124 checks read per-job against main's live 44-context ruleset: 118 SUCCESS, 6 SKIPPED, 0 FAILURE; Coverage job printed 90.44% (clears 82% floor); publish-order gate's Check publish order step proven to have executed pre-merge by name
+- [Phase ?]: Section 13's gate rows point at PR #56's runs; two rows (migration-allowlist, publish-dry-run) recorded as NOT CI-corroborated rather than assumed covered; sign-off box left untouched, still unticked
 
 ### Pending Todos
 
@@ -1174,8 +1178,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-21T01:40:23.385Z
-**Stopped at:** Completed 37.1-08-PLAN.md: pushed release/v0.10.1 (H1 7749f161), opened PR #56, wrote .continue-here.md; push #2 REJECTED by the Protect release branches ruleset (GH013), so the plan-08 bookkeeping commits are local-only; HARD STOP awaiting PR CI conclusions on H1 and the maintainer's decision on how updates reach the branch
+**Last session:** 2026-09-21T09:00:40.896Z
+**Stopped at:** Completed 37.1-09-PLAN.md Tasks 1-2 (CI evidence recorded, section 13 wired); Task 3 blocking checkpoint presented to maintainer, not resolved -- awaiting the sign-off tick and, separately, the maintainer's decision on how commits reach release/v0.10.1 (per 37.1-08's still-open GH013 ruleset blocker)
 **Resume file:** .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

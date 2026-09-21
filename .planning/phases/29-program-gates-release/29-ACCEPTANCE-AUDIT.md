@@ -52,3 +52,21 @@ its own new, fresh sign-off box** — "The `v0.10.1` tag may be cut" — rather 
 per D-09, §11's box belongs to a version (`v0.10.0`) that was tagged but only partially published,
 and re-pointing or ticking it for `v0.10.1` would overwrite that history. §13's box is closed by
 the maintainer alone, at this phase's own sign-off checkpoint, never by an agent.
+
+**Re-sealed a second time on `d2f1a81131fa8d504065cceed412909c06143b95`, 2026-09-21.** The
+maintainer ticked §13's box on commit `529e7078`, and then the required `API Surface Tracking`
+check went red on that same commit: CI's toolchain install for that job was an unpinned, floating
+`nightly`, and the 2026-09-21 nightly rendered derived return types differently from the nightly
+§13's own PR run used — a rendering-only diff with zero public items actually added, removed or
+changed. The maintainer's reply, "Pin it.", authorized returning to the build wave under D-08; the
+fix (`PUBLIC_API_TOOLCHAIN: nightly-2026-09-20`, pinned in `ci.yml` and
+`scripts/extract-public-api.sh`, with a regression harness) landed at `d2f1a811`, and Phase 37.1
+re-ran the full release-gate list — all eight numbered rows plus the house sweep — on that
+corrected head, appending the result as `## 14. Re-seal after the API-surface nightly pin (Phase
+37.1, SHIP-06)` in the corpus document. This pointer's ten-section scope is otherwise unchanged.
+Full verbatim evidence lives in `.planning/phases/37.1-v0-10-1-patch-release/37.1-CI-EVIDENCE.md`'s
+"Re-seal #2 on d2f1a811" section. **Section 14 mints its own fresh, unticked sign-off box**,
+distinct from §13's already-ticked one: §13's box stands as history and is not reused, re-pointed
+or overwritten — a required check went red on that commit after the tick, so §14's box is the one
+a fresh confirmation on the corrected head now waits on. It is closed by the maintainer alone, at
+this phase's own sign-off checkpoint, never by an agent.

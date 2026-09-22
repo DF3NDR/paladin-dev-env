@@ -5,10 +5,10 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: "v0.10.1 IS RELEASED; plan 37.1-13 recorded the formal count-asserted registry-verification table (12/12 crates at 0.10.1 with index checksums, none yanked) and the trusted-publishing proof (paladin-eval's non-null trustpub_data, contrasted with its null bootstrap reading, corroborated by two further crates); plan 37.1-14 Tasks 1-2 recorded the maintainer's prior out-of-band yank of the three 0.10.0 orphans (verbatim \"all three yanked\") and appended the three yank-register rows to docs/src/appendix/release-recovery.md; plan 37.1-14 Task 3 (banner the v0.10.0 release object and flip it to pre-release) is presented as a blocking-human checkpoint, drafted but not yet run"
+stopped_at: "Phase 37.1 at READY-TO-CLOSE: v0.10.1 released (tag f7dae267, run 35659477719, 12/12 crates, orphans yanked, v0.10.0 bannered), close-out PR #57 merged as e282a264; next: maintainer runs /gsd-verify-work 37 and 37.1, then /gsd-audit-milestone and /gsd-complete-milestone"
 last_updated: "2026-09-22T00:09:21.000Z"
 last_activity: 2026-09-22
-last_activity_desc: "Phase 37.1 plan 37.1-13 executed in full on chore/37.1-close: derived the 12 publishable crates live from cargo metadata, probed index.crates.io for each at 0.10.1 (checksum + not-yanked reading recorded, count asserted equal to the derived count), recorded the trusted-publishing proof (paladin-eval's 0.10.1 trustpub_data non-null with run_id/sha matching the release, contrasted against its null bootstrap reading, corroborated by paladin-ai and paladin-battalion), and consolidated the phase's eight carried findings into one dated list. Recorded, as a deviation, that the three previous-version orphans could not be read as pre-yank (still not-yanked) because the maintainer had already yanked them out-of-band earlier in this same session, immediately after plan 37.1-12 Task 3's own not-yanked reading satisfied the D-01 ordering precondition. Plan 37.1-14 Tasks 1-2 then executed: Task 1's checkpoint was resolved by that prior maintainer act (verbatim \"all three yanked\") and recorded rather than re-presented; Task 2 re-confirmed all three read-only at 0.10.0 (yanked:true) and appended one register row per crate to docs/src/appendix/release-recovery.md's Yank register. Plan 37.1-14 Task 3 (the v0.10.0 release-object banner/pre-release flip) was drafted -- notice text, byte-identity-verified new body, exact gh release edit commands -- and presented as a blocking-human checkpoint; nothing was run. Nothing merged, tagged, published, re-run, dispatched, yanked or edited on a published object by any agent."
+last_activity_desc: "Phase 37.1 plan 16 complete; PR #57 merged; phase at ready-to-close"
 progress:
   total_phases: 19
   completed_phases: 17
@@ -62,8 +62,8 @@ names. See MILESTONES.md.
 ## Current Position
 
 Phase: 37.1 (v0.10.1 Patch Release) — IN PROGRESS on `chore/37.1-close`
-Plan: 13 of 16
-Status: v0.10.1 IS RELEASED. Tag `v0.10.1` on merge commit `f7dae2676580786e9541fefee8f787623b46c70f` = `origin/main`; release run `35659477719` succeeded on attempt 3 (a Trusted Publisher environment-name typo on `paladin-eval` fixed by the maintainer between attempts); 12/12 publishable crates live at `0.10.1`; the three orphaned `0.10.0` versions yanked. Plans 37.1-11 and 37.1-12 recorded the merge/tag/release evidence retroactively on `chore/37.1-close` (cut from the tagged `origin/main`). Next is plan 37.1-13 (the formal registry-verification table, SC5, D-00f/D-00h). Resume file: .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md (committed on chore/37.1-close)
+Plan: 16 of 16
+Status: READY TO CLOSE — all 16 plans complete; phase verification and milestone close are the maintainer's next commands
 Last activity: 2026-09-21 — Phase 37.1 plans 37.1-11 and 37.1-12 executed as a recording pass after the maintainer's merge, tag and completed release: tick-commit CI evidence (9 runs, 124 checks, 0 failed), the N/A-by-deviation checkpoint record, the tag-equality proof, `chore/37.1-close` cut with an empty stray-commit range, and the release run's three-attempt record with the publish job's own per-crate table (12/12 live, 3 orphaned 0.10.0 versions yanked).
 Previous: 2026-09-21 — Phase 37.1 re-seal #2's CI evidence completed on head d2f1a811: repeated plan 37.1-09's Tasks 1-2 on the new head — the full per-run/per-job CI-run table (commit `d4fe8edd`) and section 14's rows/coverage entry/evidence-basis sentence (commit `4f3df7ef`), box untouched and still unticked; zero pushes.
 Earlier: 2026-09-21 — Build wave reopened on the maintainer's "Pin it." after the API Surface Tracking check went red on tick commit 529e7078 (unpinned floating nightly rendering drift, zero real public-API change); fixed by pinning PUBLIC_API_TOOLCHAIN to nightly-2026-09-20 in ci.yml and extract-public-api.sh, with a TDD-ordered regression harness (red 10/15 at d4dc0e96, green 15/15 at d2f1a811) and a CHANGELOG Fixed bullet.
@@ -1183,7 +1183,7 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 ## Session Continuity
 
 **Last session:** 2026-09-21T23:35:00.000Z
-**Stopped at:** v0.10.1 IS RELEASED (tag `v0.10.1` on merge commit `f7dae267` = `origin/main`; release run `35659477719` succeeded on attempt 3; 12/12 crates live; 3 orphaned `0.10.0` versions yanked). Plans 37.1-11 and 37.1-12 recorded the merge/tag/release evidence on `chore/37.1-close`. Next is plan 37.1-13 (formal registry-verification table, SC5, D-00f/D-00h).
+**Stopped at:** Phase 37.1 at READY-TO-CLOSE: v0.10.1 released (tag f7dae267, run 35659477719, 12/12 crates, orphans yanked, v0.10.0 bannered), close-out PR #57 merged as e282a264; next: maintainer runs /gsd-verify-work 37 and 37.1, then /gsd-audit-milestone and /gsd-complete-milestone
 **Resume file:** .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md (committed on chore/37.1-close)
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).

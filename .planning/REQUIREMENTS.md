@@ -324,6 +324,34 @@ FUT-09 remain v2, now with a named owner milestone.
   the annotated tag sits on the `main` merge commit, every publishable crate resolves on
   crates.io at `0.10.0`, and the release evidence is recorded in MILESTONES.md (roadmap Phase 37
   SC1-SC4; 37-CONTEXT.md D-07; Phase 29 D-18 / D-21)
+  **Amended 2026-09-22 (Phase 37.1, D-02):** Tagged `v0.10.0` on merge commit `1d4a9724` on
+  2026-09-18; `release.yml` published only 3 of 12 crates before failing deterministically at
+  `paladin-battalion`, and that tag's pipeline cannot complete forward because `release.yml`
+  reads manifests and the `CRATES` order from the tag ref, which cannot move. What this
+  requirement literally says — that v0.10.0 is released — never became true, so its checkbox
+  stays unticked. **Superseded by `SHIP-06`** below, which covers the release that actually
+  shipped. See `.planning/phases/37-v0-10-0-crate-release/37-CI-EVIDENCE.md` §"D-16 read-only
+  diagnosis" and §"D-16 read-only diagnosis #2" for the traced causes.
+
+- [x] **SHIP-06**: v0.10.1 is released: `paladin-battalion` packages and publishes at its
+  `CRATES` position against the live index with no forward-pointing versioned workspace
+  dev-dependency; `scripts/create-or-reuse-release.sh`'s response-size race is fixed and gated by
+  a regression test; a gate exercises the real per-crate resolution path (including
+  dev-dependencies) in `make publish-dry-run`/`release-check` and in CI; the twelve publishable
+  manifests, changelogs and `MIGRATION.md`/allowlist rows read `0.10.1`, the Phase 29 gate set is
+  re-sealed on the final commit, and the release PR merges to `main` with an annotated `v0.10.1`
+  tag on that merge commit; `release.yml` runs green and every publishable crate (derived from
+  `cargo metadata`, never hard-coded) resolves on the crates.io sparse index at `0.10.1`,
+  `yanked = false`, with `paladin-eval`'s first pipeline publish carrying non-null
+  `trustpub_data`; and the three orphaned `0.10.0` versions are explicitly dispositioned (Phase
+  37.1, `37.1-CONTEXT.md` D-02; roadmap Phase 37.1 SC1-SC6)
+  **Status: satisfied.** All six criteria are true and recorded: both defects
+  fixed and gated (`37.1-CI-EVIDENCE.md` § Local sweep), the gate set re-sealed on the final
+  commit (corpus audit §13), the `v0.10.1` tag on merge commit `f7dae267` (`37.1-CI-EVIDENCE.md`
+  § "Plan 37.1-12 Task 1"), all 12 publishable crates resolving at `0.10.1` (`37.1-CI-EVIDENCE.md`
+  § "Registry verification"), the three orphans yanked by the maintainer with one register row
+  each (`docs/src/appendix/release-recovery.md` §5), and the release evidence recorded in
+  `MILESTONES.md`.
 
 ### Token-Economy Vocabulary & Commissary Anchoring (`.project/Milestone_13-Token-Economy/Epic_1`, epic `VOCAB`)
 
@@ -676,7 +704,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 | SHIP-02 | Phase 29 | Complete |
 | SHIP-03 | Phase 29 | Complete |
 | SHIP-04 | Phase 29 | Complete |
-| SHIP-05 | Phase 37 | Pending |
+| SHIP-05 | Phase 37 | Superseded |
+| SHIP-06 | Phase 37.1 | Complete |
 | VOCAB-01 | Phase 30 | Complete |
 | VOCAB-02 | Phase 30 | Complete |
 | VOCAB-03 | Phase 30 | Complete |

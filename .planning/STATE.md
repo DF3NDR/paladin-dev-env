@@ -5,15 +5,15 @@ milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
-stopped_at: "v0.10.1 IS RELEASED (tag v0.10.1 on merge commit f7dae267 = origin/main, release run 35659477719 succeeded on attempt 3, 12/12 crates live, 3 orphaned 0.10.0 versions yanked); plans 37.1-11 and 37.1-12 recorded the merge/tag/release evidence on chore/37.1-close; next is plan 37.1-13 (formal registry-verification table, SC5, D-00f/D-00h)"
-last_updated: "2026-09-21T23:35:00.000Z"
-last_activity: 2026-09-21
-last_activity_desc: "Phase 37.1 plans 37.1-11 and 37.1-12 executed as a recording pass on chore/37.1-close, after the maintainer had already merged PR #56, pushed tag v0.10.1, and completed the release forward through a Trusted Publisher environment-name fix (paladin-eval: crates.io -> crates-io) and one maintainer re-run. Recorded: the tick commit's full per-run/per-job CI evidence (9 runs, 124 checks, 0 failed); the N/A-by-deviation record for the merge/tag checkpoints the maintainer performed directly; the tag-equality proof (tag commit == PR merge commit, two parents, annotated, tag-after-green precondition held); the close-out branch chore/37.1-close cut from the tagged origin/main with an empty stray-commit range; the release run's three attempts and the publish job's own per-crate outcome table (10 already-at-this-version, 2 published-now on attempt 3); all 12 crates cross-checked against cargo metadata and probed live on the sparse index (12/12 live, none yanked); the three orphaned 0.10.0 versions confirmed yanked. Nothing merged, tagged, published, re-run, dispatched or yanked by any agent."
+stopped_at: "v0.10.1 IS RELEASED; plan 37.1-13 recorded the formal count-asserted registry-verification table (12/12 crates at 0.10.1 with index checksums, none yanked) and the trusted-publishing proof (paladin-eval's non-null trustpub_data, contrasted with its null bootstrap reading, corroborated by two further crates); plan 37.1-14 Tasks 1-2 recorded the maintainer's prior out-of-band yank of the three 0.10.0 orphans (verbatim \"all three yanked\") and appended the three yank-register rows to docs/src/appendix/release-recovery.md; plan 37.1-14 Task 3 (banner the v0.10.0 release object and flip it to pre-release) is presented as a blocking-human checkpoint, drafted but not yet run"
+last_updated: "2026-09-22T00:09:21.000Z"
+last_activity: 2026-09-22
+last_activity_desc: "Phase 37.1 plan 37.1-13 executed in full on chore/37.1-close: derived the 12 publishable crates live from cargo metadata, probed index.crates.io for each at 0.10.1 (checksum + not-yanked reading recorded, count asserted equal to the derived count), recorded the trusted-publishing proof (paladin-eval's 0.10.1 trustpub_data non-null with run_id/sha matching the release, contrasted against its null bootstrap reading, corroborated by paladin-ai and paladin-battalion), and consolidated the phase's eight carried findings into one dated list. Recorded, as a deviation, that the three previous-version orphans could not be read as pre-yank (still not-yanked) because the maintainer had already yanked them out-of-band earlier in this same session, immediately after plan 37.1-12 Task 3's own not-yanked reading satisfied the D-01 ordering precondition. Plan 37.1-14 Tasks 1-2 then executed: Task 1's checkpoint was resolved by that prior maintainer act (verbatim \"all three yanked\") and recorded rather than re-presented; Task 2 re-confirmed all three read-only at 0.10.0 (yanked:true) and appended one register row per crate to docs/src/appendix/release-recovery.md's Yank register. Plan 37.1-14 Task 3 (the v0.10.0 release-object banner/pre-release flip) was drafted -- notice text, byte-identity-verified new body, exact gh release edit commands -- and presented as a blocking-human checkpoint; nothing was run. Nothing merged, tagged, published, re-run, dispatched, yanked or edited on a published object by any agent."
 progress:
   total_phases: 19
   completed_phases: 17
   total_plans: 231
-  completed_plans: 222
+  completed_plans: 223
 ---
 
 # Project State

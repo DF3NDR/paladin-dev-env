@@ -1246,7 +1246,7 @@ Plans:
 **Wave 12-16 — post-tag wave**
 
 - [x] 37.1-12-PLAN.md — Prove the tag equals the merge commit, cut `chore/37.1-close`, and record the release run's per-crate publish outcomes (SC5, D-12)
-- [ ] 37.1-13-PLAN.md — Registry verification: one index row per derived publishable crate, count-asserted, plus the `trustpub_data` proof (SC5, D-00f/D-00h)
+- [x] 37.1-13-PLAN.md — Registry verification: one index row per derived publishable crate, count-asserted, plus the `trustpub_data` proof (SC5, D-00f/D-00h)
 - [ ] 37.1-14-PLAN.md — The yank checkpoint and its register rows, and the `v0.10.0` release-object banner and pre-release flip (SC6, D-01, D-03)
 - [ ] 37.1-15-PLAN.md — MILESTONES.md telling both tags, `SHIP-06` minted and `SHIP-05` superseded at source, and Phase 37's bookkeeping (SC6, D-02, D-04, D-05)
 - [ ] 37.1-16-PLAN.md — `37.1-READY-TO-CLOSE.md`, the documentation-only close-out pull request, and the merge checkpoint (D-12)
@@ -1289,7 +1289,7 @@ Plans:
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 13/13 | Complete    | 2026-09-18 |
 | 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 14/14 | Complete    | 2026-09-18 |
 | 37. v0.10.0 Crate Release | v0.10.0 | 7/11 | In Progress | — |
-| 37.1 v0.10.1 Patch Release (INSERTED) | v0.10.0 | 12/16 | In Progress | — |
+| 37.1 v0.10.1 Patch Release (INSERTED) | v0.10.0 | 13/16 | In Progress | — |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

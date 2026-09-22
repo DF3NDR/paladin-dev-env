@@ -1,5 +1,84 @@
 # Milestones
 
+## v0.10.0 Durable Agent Execution Runtime (Released: 2026-09-21; milestone close pending)
+
+**Phases completed (release-relevant):** Phase 37 (v0.10.0 Crate Release, SC1-SC3 met, SC4
+superseded — see below) and Phase 37.1 (v0.10.1 Patch Release, `SHIP-06`); the milestone's other
+phases (22-36.1) are recorded in `ROADMAP.md`'s progress table and are not restated here.
+**Git range (this record):** `1d4a9724` (`v0.10.0` merge commit) → `f7dae267` (`v0.10.1` merge
+commit)
+
+This entry tells both tags plainly, in the shape the v0.9.0 entry above uses.
+
+**`v0.10.0` — tagged, only 3 of 12 crates published.** Annotated tag `v0.10.0` (object
+`9282f4da38bb19f75ce3ed488c10454bdf254990`, tagger `Am0rfu5`, message "v0.10.0 Durable Agent
+Execution Runtime") sits on `main` merge commit `1d4a9724cc219b85856a23012543458d62559e47`
+(PR #55). `release.yml` run
+[35404826303](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35404826303) published only
+`paladin-ai-core`, `paladin-ports` and `paladin-herald` at `0.10.0` before `publish-crates` failed
+deterministically at `paladin-battalion` (position 4 of 12). Two defects caused this:
+
+1. **A response-size race in `scripts/create-or-reuse-release.sh:79`** — `printf '%s\n' "${raw}" |
+   head -n1` under `set -o pipefail` takes an `EPIPE` when `head` closes the pipe before `printf`
+   finishes writing a large response; the `v0.10.0` release body (46,274 bytes) crossed the
+   threshold that `v0.9.0`'s smaller body (25,677 bytes) never had. This first blocked
+   `Create Release` itself; the maintainer's manual retries eventually won the race.
+2. **`paladin-battalion`'s two versioned workspace dev-dependencies** (`paladin-llm`,
+   `paladin-storage`, introduced by Phases 23 and 28) named a registry `version` that could only
+   resolve once those crates were already published — but `CRATES` publishes `paladin-battalion`
+   at position 4, before `paladin-llm` (5) and `paladin-storage` (10). There is no true dependency
+   cycle; this is an ordering defect.
+
+**Why the local dry-run gate was green and blind.** `make publish-dry-run` (Local sweep row 29)
+ran `cargo publish --workspace --dry-run`, which resolves sibling crates from a local workspace
+overlay rather than the live registry index — so it is structurally incapable of seeing the
+per-crate resolution order the real `cargo publish` loop depends on. The row was green and its
+underlying command genuinely passed; it was simply blind to this class of defect. Phase 37.1
+plan `37.1-02` built a gate that exercises the real per-crate resolution path and proved it red on
+this exact tree before fixing it.
+
+**`v0.10.1` — the release.** Annotated tag `v0.10.1` (object
+`7593ab4dc1217ef23d6f8c14f8c8b817d42ec0ae`, tagger `Am0rfu5`, `2026-09-21T21:50:30Z`) sits on
+`main` merge commit `f7dae2676580786e9541fefee8f787623b46c70f` (PR #56; `tree(merge) ==
+tree(tick)`; two parents — `1d4a9724` the previous `main` tip, `f3fc061d` the maintainer's
+re-confirmation tick). Both defects above were fixed (path-only dev-dependencies for
+`paladin-battalion`; the `pipefail`-safe line-79 rewrite with a >64 KiB regression test) and a new
+ordering gate was wired into `make check-gates` and CI. `release.yml` run
+[35659477719](https://github.com/DF3NDR/paladin-dev-env/actions/runs/35659477719), attempt 3:
+`success`. (Attempt 1 failed with `403 Forbidden` publishing `paladin-eval` — a Trusted Publisher
+environment-name mismatch, `crates.io` configured instead of `crates-io`; attempt 2 predated the
+maintainer's fix; attempt 3, after the fix, published the remaining two crates and completed
+12/12.)
+
+All **12** publishable crates (`cargo metadata --format-version 1`, `publish != false` — the
+live-derived count this phase used throughout, not copied from any document) are
+**registry-verified** at `0.10.1`: one sparse-index row per crate, each carrying its checksum and
+a `yanked: false` reading, count-asserted against the same live-derived figure — see
+[`37.1-CI-EVIDENCE.md` § "Registry verification"](phases/37.1-v0-10-1-patch-release/37.1-CI-EVIDENCE.md).
+Publishing went through **Trusted Publishing** with no standing registry credential at any point;
+`paladin-eval`'s `0.10.1` entry is that pipeline's first publish of this crate and carries
+non-null `trustpub_data` (`run_id 35659477719`, `sha` matching the tag's peeled commit) — the
+observable proof of the Trusted Publisher link — contrasted against its earlier token-published
+`0.0.1` bootstrap version's `trustpub_data: null` reading.
+
+**Yank disposition.** The three orphaned `0.10.0` versions (`paladin-ai-core`, `paladin-ports`,
+`paladin-herald`) were yanked by the maintainer, with their own credential, only after the
+registry read every publishable crate at `0.10.1` and not-yanked — never by an agent. One
+register row per crate (never a summarising row) is recorded in
+[`docs/src/appendix/release-recovery.md` §5](../docs/src/appendix/release-recovery.md), reason
+"not defective — orphaned partial publish of `v0.10.0`, superseded by `0.10.1`". Separately, the
+`v0.10.0` GitHub Release object was kept (never deleted), bannered with a short dated notice
+pointing at `v0.10.1`, and flipped to pre-release so `v0.10.1` reads as "Latest" — its existing
+43,373-byte body preserved byte-for-byte below the notice, and the `v0.10.0` tag itself was never
+moved, deleted or re-pointed (still `1d4a9724`).
+
+**Requirement status.** `SHIP-06` ("v0.10.1 is released") is minted and satisfied. `SHIP-05`
+("v0.10.0 is released") keeps its original text, is never ticked, and reads *superseded* — what
+it literally said never became true, because `v0.10.0`'s own pipeline cannot complete forward
+once tagged. See `REQUIREMENTS.md`.
+
+---
+
 ## v0.9.0 Security Tooling (Shipped: 2026-09-01)
 
 **Phases completed:** 4 phases (18-21), 25 plans

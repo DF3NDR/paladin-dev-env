@@ -184,6 +184,9 @@ force a distorted fit into a contract it does not belong to.
 
 | Version | Crates | Reason | Owner | Date |
 |---|---|---|---|---|
+| 0.10.0 | `paladin-ai-core` | Not defective — orphaned partial publish of `v0.10.0`, superseded by `0.10.1`. | Am0rfu5 | 2026-09-21 |
+| 0.10.0 | `paladin-ports` | Not defective — orphaned partial publish of `v0.10.0`, superseded by `0.10.1`. | Am0rfu5 | 2026-09-21 |
+| 0.10.0 | `paladin-herald` | Not defective — orphaned partial publish of `v0.10.0`, superseded by `0.10.1`. | Am0rfu5 | 2026-09-21 |
 
 ## 6. When the gate blocks the release
 

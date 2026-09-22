@@ -6,14 +6,14 @@ current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 status: executing
 stopped_at: "Phase 37.1 at READY-TO-CLOSE: v0.10.1 released (tag f7dae267, run 35659477719, 12/12 crates, orphans yanked, v0.10.0 bannered), close-out PR #57 merged as e282a264; next: maintainer runs /gsd-verify-work 37 and 37.1, then /gsd-audit-milestone and /gsd-complete-milestone"
-last_updated: "2026-09-22T00:09:21.000Z"
+last_updated: "2026-09-22T21:49:09.504Z"
 last_activity: 2026-09-22
-last_activity_desc: "Phase 37.1 plan 16 complete; PR #57 merged; phase at ready-to-close"
+last_activity_desc: "Phase 37 verified and marked complete (37-UAT.md 12/12, 37-VERIFICATION.md passed); Phase 37.1 still at ready-to-close"
 progress:
   total_phases: 19
-  completed_phases: 17
+  completed_phases: 18
   total_plans: 231
-  completed_plans: 223
+  completed_plans: 228
 ---
 
 # Project State
@@ -63,9 +63,10 @@ names. See MILESTONES.md.
 
 Phase: 37.1 (v0.10.1 Patch Release) — IN PROGRESS on `chore/37.1-close`
 Plan: 16 of 16
-Status: READY TO CLOSE — all 16 plans complete; phase verification and milestone close are the maintainer's next commands
-Last activity: 2026-09-21 — Phase 37.1 plans 37.1-11 and 37.1-12 executed as a recording pass after the maintainer's merge, tag and completed release: tick-commit CI evidence (9 runs, 124 checks, 0 failed), the N/A-by-deviation checkpoint record, the tag-equality proof, `chore/37.1-close` cut with an empty stray-commit range, and the release run's three-attempt record with the publish job's own per-crate table (12/12 live, 3 orphaned 0.10.0 versions yanked).
-Previous: 2026-09-21 — Phase 37.1 re-seal #2's CI evidence completed on head d2f1a811: repeated plan 37.1-09's Tasks 1-2 on the new head — the full per-run/per-job CI-run table (commit `d4fe8edd`) and section 14's rows/coverage entry/evidence-basis sentence (commit `4f3df7ef`), box untouched and still unticked; zero pushes.
+Status: READY TO CLOSE — all 16 plans complete; Phase 37 is verified and closed (below); Phase 37.1's own verification and the milestone close are the maintainer's next commands
+Last activity: 2026-09-22 — Phase 37 verified and marked complete: `37-UAT.md` 12/12 passed (eight executed plans, legacy prose extraction; plans 37-09..37-11 superseded by Phase 37.1), `37-VERIFICATION.md` `passed` 5/5 with SC4 stated as superseded by `SHIP-06` and SC5 (milestone close) still pending; `SHIP-05` left unticked and superseded per the D-02 amend-at-source note; ROADMAP Phase 37 checkbox ticked, progress row Complete with the SC4 supersession kept. Next: `/gsd-verify-work 37.1`, then `/gsd-audit-milestone` and `/gsd-complete-milestone v0.10.0`.
+Previous: 2026-09-21 — Phase 37.1 plans 37.1-11 and 37.1-12 executed as a recording pass after the maintainer's merge, tag and completed release: tick-commit CI evidence (9 runs, 124 checks, 0 failed), the N/A-by-deviation checkpoint record, the tag-equality proof, `chore/37.1-close` cut with an empty stray-commit range, and the release run's three-attempt record with the publish job's own per-crate table (12/12 live, 3 orphaned 0.10.0 versions yanked).
+Earlier: 2026-09-21 — Phase 37.1 re-seal #2's CI evidence completed on head d2f1a811: repeated plan 37.1-09's Tasks 1-2 on the new head — the full per-run/per-job CI-run table (commit `d4fe8edd`) and section 14's rows/coverage entry/evidence-basis sentence (commit `4f3df7ef`), box untouched and still unticked; zero pushes.
 Earlier: 2026-09-21 — Build wave reopened on the maintainer's "Pin it." after the API Surface Tracking check went red on tick commit 529e7078 (unpinned floating nightly rendering drift, zero real public-API change); fixed by pinning PUBLIC_API_TOOLCHAIN to nightly-2026-09-20 in ci.yml and extract-public-api.sh, with a TDD-ordered regression harness (red 10/15 at d4dc0e96, green 15/15 at d2f1a811) and a CHANGELOG Fixed bullet.
 Earlier: 2026-09-21 — Phase 37.1 plan 37.1-10 executed (read-only verification that the maintainer's sign-off tick is present on origin/release/v0.10.1 at PR #56's head, exactly one box ticked vs base, tick commit identity recorded and confirmed at the branch tip; rewrote .continue-here.md for the tick-commit CI wait; zero commits, zero pushes by this plan per its own house rule)
 Earlier: 2026-09-21 — Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)
@@ -83,7 +84,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 
 **Velocity:**
 
-- Total plans completed: 391
+- Total plans completed: 399
 - Average duration: —
 - Total execution time: —
 
@@ -127,6 +128,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | 35 | 10 | - | - |
 | 36 | 13 | - | - |
 | 36.1 | 14 | - | - |
+| 37 | 8 | - | - |
 
 *Updated after each plan completion*
 

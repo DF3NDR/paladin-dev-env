@@ -266,6 +266,134 @@ project's history (`v0.8.1-rc.5`).
   named human backstops). The rehearsal budget (five rc tags, three live pipeline runs) replaced
   the re-verification loops that consumed v0.8.0.
 
+## Milestone: v0.10.0 — Durable Agent Execution Runtime
+
+**Shipped:** 2026-09-23 (closed; `v0.10.0` tagged 2026-09-18, `v0.10.1` released 2026-09-21)
+**Phases:** 19 (22-37.1, three inserted) | **Plans:** 231 (228 executed, 3 superseded) | **Commits:** 1,678
+
+### What Was Built
+
+The runtime the framework had been promising. A cyclic superstep engine (`WarGraph`/`WarEngine`)
+over typed Battlefield state, one Waypoint per superstep across three storage backends under a
+single 13-function contract suite, and resume with zero re-execution — including a persisted
+frontier and intra-superstep fan-out progress. Node-driven control flow (Directive, Muster, nested
+Battalion subgraphs, LLM-evaluated edges behind a fail-closed registry that fixed BUG-01). Parley
+pause/resume with total-before-write validation, Chronicle replay/fork, batch-wide graceful
+shutdown. Aegis per-node fault tolerance with a table-driven transience taxonomy, provider
+fallback and node caching. An execution-middleware agent runtime with twelve built-ins, the Vault,
+structured output. A background-run platform API on durable queue and repository ports with a
+lease-heartbeating worker pool, versioned assistants, schedules and SSRF-guarded signed webhooks.
+A twelve-variant trace stream with log/OTel/SSE sinks, Mermaid/DOT exporters and the new
+`paladin-eval` crate. Then, mid-milestone and before the tag: lossless six-field token accounting
+end to end, one counting contract and one window resolver, RAG rationed through the Commissary;
+and a documentation-currency programme that inventoried the debt read-only before closing every
+row by ID (mdBook current, `cargo doc` 65 → 0 warnings and `--all-features` 77 → 0, 14 new
+example programs, 101/101 public-API doctests). Released to crates.io as `0.10.1` after the
+`v0.10.0` tag published 3 of 12 crates.
+
+### What Worked
+
+- **One contract suite per port, run unchanged against every adapter.** `WaypointPort` (13
+  functions, three stores), `RunRepositoryPort` (14 clauses, SQLite + Postgres), `RunQueuePort`
+  (in-memory + Redis Lua), `NodeCachePort` (9 cases). New backends were a migration and a
+  `use`, never a re-derivation of semantics; the Postgres Tier-2 run confirmed it live.
+- **Red committed before green, visible in history.** BUG-01, BUG-03, BUG-04, the `EPIPE`
+  regression (a 200,000-character case observed red first), the API-surface pin harness
+  (10/15 red → 15/15 green). Every defect fix in this milestone can be checked out at its failing
+  commit.
+- **Inventory before editing.** Phase 34 measured the documentation debt in one read-only pass —
+  and found the carried "14 unresolved links" was really 77 `--all-features` errors across eight
+  crates (5.5× undersized) plus 65 default-feature warnings. Phases 35-36 then closed rows by ID
+  with set-equality reconciliation both ways, so nothing was fixed twice or skipped once.
+- **Inserted phases for discovered scope, each with its own verification.** 22.1 (engine
+  readiness defects + measured MSRV), 36.1 (deferred registers to `open_count: 0` before the tag),
+  37.1 (the patch release). None was folded into a running phase's tail; all three closed
+  `passed`.
+- **Gates re-sealed on the final commit, three times** (Phases 33, 37, 37.1), with a corpus
+  acceptance audit whose sign-off boxes an agent is forbidden to tick. The Phase 37.1 re-seal was
+  what let the maintainer merge a 23-day, 1,678-commit milestone on one PR read.
+- **Independent re-derivation against live state, again.** Verifiers for 37 and 37.1 read
+  crates.io's sparse index (checksum, `yanked`, `trustpub_data`), the GitHub API and the git
+  remote directly; the "12 publishable crates" count was derived from `cargo metadata` every time
+  it was used, never copied.
+
+### What Was Inefficient
+
+- **The first real release stalled at crate 4 of 12 on a defect the local gate was structurally
+  blind to.** `make publish-dry-run` runs `cargo publish --workspace --dry-run`, which resolves
+  sibling crates from the workspace overlay, not the registry — so `paladin-battalion`'s two
+  forward-pointing *versioned* dev-dependencies (introduced in Phases 23 and 28) were green
+  locally and fatal live. v0.9.0's lesson ("rehearse the pipeline") had been learned for the
+  *artifact* path on rc tags; v0.10.0 went to a real tag with no rc rehearsal of the *publish*
+  path. A second, unrelated `EPIPE` race in the release script fired only because this release
+  body was the first to exceed ~46 KB.
+- **The biggest phase needed the most rework.** Phase 27 (26 plans) verified 12/17 and needed
+  eight gap-closure plans (27-19..27-26); Phases 24 and 35 also re-verified from `gaps_found`,
+  and 22 from `human_needed`. Four re-verification passes against v0.9.0's zero.
+- **A PRD acceptance bar written without a baseline.** PRD 07's ≤ 3 % tracing-overhead criterion
+  was missed by 6-7× (+22 %/+18 %) and *accepted* rather than met (D-16). The bar predated any
+  measurement of the dispatcher it constrains.
+- **"Complete" twice before shipped.** Phases 22-29 closed 2026-09-10 with `0.10.0` bumped and
+  untagged; the milestone was then extended with Phases 30-33 (2026-09-14) and 34-37
+  (2026-09-17). The untagged bump made this legitimate, but eleven more days of scope shipped
+  under a version number that had already been declared done — and the ROADMAP's milestone row
+  read "Phases 22-33", then "22-37", while the truth was 22-37.1.
+- **Planning artefacts on the wrong branch.** `.planning/` commits accumulated on
+  `feature/phase-33`; Phase 37.1's first plan was cherry-picking 24 of them onto the release
+  branch. Zero conflicts, but pure tax.
+- **External breakage with no upstream.** Docker Hub deleted the community MinIO images
+  mid-milestone; two quick tasks restored green with a pin to the last quay.io release, which is
+  terminal — a frozen third-party image now underpins four CI jobs.
+- **Nyquist validation is optional and therefore skipped.** Seven of nineteen phases closed with
+  `VALIDATION.md` at `draft`; the step is not on the phase-close critical path, so it does not
+  happen.
+
+### Patterns Established
+
+- **Fail-closed registries for anything named in a document** — edge evaluators, retry predicates,
+  error handlers: an unknown name is an error at compile-time of the graph, never a silent default.
+- **Redact, then bound.** Every external response body that reaches an error or a log passes the
+  redaction pass before truncation, on character boundaries (`map_http_status`, `FailRun`).
+- **`#[non_exhaustive]` on every public enum a phase touches** (X-10), with a `MIGRATION.md` §9.2
+  row and a `cargo semver-checks` allowlist row for each break — no shims, by ADR-0051.
+- **Amend at source with a dated note; never rewrite the record.** SHIP-05 stays unticked with its
+  supersession note; stale PROJECT.md counts carry a *(Corrected …)* paragraph beside them.
+- **`WINDOWS.md` as the cross-phase defect ledger**, `open_count` gating `/gsd-ship`, and a
+  dedicated closure phase (36.1) that walks every register before a tag.
+- **Human-only acts named as such.** Sign-off boxes, yanks, token revocations and ruleset changes
+  are recorded as the maintainer's, performed in-session, and written down verbatim — never done by
+  an agent under an assumed order.
+- **Offline gates that exercise the real resolution path.** `scripts/check-publish-order.sh`
+  derives the per-crate publish order from `cargo metadata` and fails on the exact tree that broke
+  `v0.10.0`; wired into `make check-gates` and the PR-time CI job, not the push-to-main-only one.
+
+### Key Lessons
+
+1. **A dry run that resolves from a local overlay is not a rehearsal of publishing.** The gate
+   was green and its command genuinely passed; it simply could not see the class of defect. When
+   a gate cannot observe a failure mode, build one that can — or rehearse the real path on a
+   throwaway tag before the real one.
+2. **Acceptance bars need a measured baseline before they are written.** A ≤ 3 % overhead
+   criterion authored with no dispatcher to measure became a 6-7× miss that had to be accepted.
+   Write the bar after the first measurement, or write it as "measure and record".
+3. **Inventory before fixing, and reconcile the inventory both ways.** The 5.5× undercount would
+   have become five phases of "done" against a wrong denominator.
+4. **Insert a phase instead of stretching one.** Every inserted phase closed with its own
+   verification; the scope that was folded into a running phase's tail (Phase 22.1's BUG-04
+   promotion, Phase 37's D-16 diagnosis) is where the timeline blurred.
+5. **Extending a "complete" milestone is cheap only if the record moves with it.** The ROADMAP
+   milestone row lagged the phase list twice; the close had to reconstruct 22-37.1 from three
+   different "in progress" sentences.
+
+### Cost Observations
+
+- Sessions: not tracked per-milestone
+- Notable: 1,678 commits over 23 days for 231 plans — 7× v0.9.0's commit count and the largest
+  milestone by every measure; four re-verification passes (v0.9.0 had none); 16 code reviews and
+  17 security passes recorded; three inserted phases; two release runs and three publish attempts
+  to reach 12/12 crates. The documentation programme (Phases 34-36.1, 46 plans) was the price of
+  shipping twelve phases of runtime work with the mdBook and rustdoc trailing behind.
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -275,6 +403,7 @@ project's history (`v0.8.1-rc.5`).
 | v0.7.1 | — | 4 | First milestone with protected decisions. The corpus had 0 locked ADRs across twelve prior milestones and eighteen months; this one produced 9. |
 | v0.8.0 | — | 14 | First milestone to disqualify a tool by measurement (Snyk probe), and the first to apply live branch protection. Four phases needed a second verification pass. |
 | v0.9.0 | — | 4 | First milestone proven by live pipeline rehearsals (five throwaway rc tags, three real release runs); first fully-green release run; standing publish credential eliminated. Zero failed verification passes. |
+| v0.10.0 | — | 19 | Largest milestone by every measure (231 plans, 1,678 commits, 23 days). First with three inserted phases and a dedicated deferred-items closure phase before the tag; first real release to stall mid-publish (3/12) and be finished by a patch release through the same pipeline; first milestone extended twice after its phases were declared complete. Four re-verification passes. |
 
 ### Cumulative Quality
 
@@ -283,6 +412,7 @@ project's history (`v0.8.1-rc.5`).
 | v0.7.1 | 2,924 passing (+185 doc tests) | 85.92% (floor 84%) | 0 new dependencies |
 | v0.8.0 | 428 workspace unit + 247 `paladin-llm` crate-scoped; 96/96 doctests | 82.39% (floor 82, ADR-0006) | 6 new LLM providers, no new heavyweight deps |
 | v0.9.0 | +294 shell-harness assertions (177 Phase 20 + 117 Phase 21) over the release tooling | unchanged (floor 82, ADR-0006 — no first-party `.rs` changes required it) | 0 new runtime dependencies (workflow + script work) |
+| v0.10.0 | 3,708 workspace tests passing (Phase 37.1 sweep, 0 failed); 462 doctests at Phase 34; 101/101 public-API entry points with `# Examples`; `cargo doc` 0 warnings under both ADR-0033 bars | 90.44% (CI, PR #56; floor 82, ADR-0006) | 1 new publishable crate (`paladin-eval`); one new lateral crate edge (`paladin-memory` → `paladin-llm`); external additions (OTel export, Redis cache/queue) feature-gated and recorded in `MIGRATION.md` §9.3 |
 
 ### Top Lessons (Verified Across Milestones)
 
@@ -298,7 +428,12 @@ project's history (`v0.8.1-rc.5`).
 4. **Rehearse the pipeline; do not re-read it.** New in v0.9.0: the binary-attachment defect
    survived every prior *reading* of `release.yml` and fell to the first *run* that asserted its
    outputs. Live rehearsal on throwaway tags is now the proof standard for pipeline work.
+5. **A gate is only as real as the environment it runs in.** New in v0.10.0, and the direct heir
+   of lessons 2 and 4: `make publish-dry-run` was green on the exact tree that failed live because
+   it resolved crates from the workspace overlay, not the registry. Every gate now gets asked what
+   it *cannot* see — and the answer for publish order became an offline `cargo metadata` gate that
+   fails on the broken tree.
 
 ---
 
-*Next milestone: v0.9.0 Security Tooling (Phase 18). Start with `/gsd-discuss-phase 18`.*
+*Next milestone: not yet defined — run `/gsd-new-milestone`; new phases start at Phase 38.*

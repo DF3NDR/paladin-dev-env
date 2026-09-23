@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
-current_phase: 37.1
-status: completed
+status: Awaiting next milestone
 stopped_at: "Phase 37.1 complete — v0.10.1 released and verified (37.1-UAT.md 53/53, 37.1-VERIFICATION.md passed 6/6); all 19 phases of milestone v0.10.0 complete; next: /gsd-audit-milestone v0.10.0, then /gsd-complete-milestone v0.10.0"
-last_updated: "2026-09-23T13:31:48.601Z"
+last_updated: "2026-09-23T17:20:44.281Z"
 last_activity: 2026-09-23
-last_activity_desc: "Phase 37.1 verified and marked complete (37.1-UAT.md 53/53, 37.1-VERIFICATION.md passed 6/6); all 19 phases of milestone v0.10.0 complete, ready to close"
+last_activity_desc: Milestone v0.10.0 completed and archived
 progress:
   total_phases: 19
   completed_phases: 19
   total_plans: 231
   completed_plans: 228
+current_phase: 37.1
 current_phase_name: v0.10.1 Patch Release
 ---
 
@@ -20,66 +20,39 @@ current_phase_name: v0.10.1 Patch Release
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-23 after Phase 37.1 completion)
+See: .planning/PROJECT.md (updated 2026-09-23 after the v0.10.0 milestone close)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Milestone v0.10.0 close — Phase 37.1 verified 2026-09-23 (`37.1-UAT.md` 53/53, `37.1-VERIFICATION.md` 6/6); next `/gsd-audit-milestone v0.10.0`
-Phase 34 was verified 2026-09-17: `34-UAT.md` 47/47 passed (all nine SUMMARYs coverage-mode, every
-deliverable automated and the list confirmed by the maintainer; `34-check.sh --final` 8/8 re-run at UAT
-time), `34-VERIFICATION.md` `passed` 5/5, `34-SECURITY.md` `verified` with `threats_open: 0`.
-`0.10.0` tag is not yet cut. Phases 30-33 (Token Economy) are closed. Phase 33 was verified 2026-09-17:
-`33-UAT.md` 23/23 passed (22 coverage-mode automated passes + the maintainer's human acceptance of corpus
-audit §11 and `33-CI-EVIDENCE.md`), `33-SECURITY.md` `verified` with `threats_open: 0`, `33-VALIDATION.md`
-`validated`, `33-VERIFICATION.md` `passed`. The §11 sign-off box itself stays unticked in the corpus file
-until the maintainer ticks it by hand at tag time (Phase 29 D-17). Next: `/gsd-complete-milestone v0.10.0`.
-Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job supplies the one gate this
-devcontainer cannot measure and a real pre-merge run is appended to `37-CI-EVIDENCE.md`'s CI-run table;
-the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
+**Current focus:** Planning the next milestone — `/gsd-new-milestone` (questioning → research →
+requirements → roadmap); new phases start at Phase 38. `.planning/REQUIREMENTS.md` is absent by
+design until then (the v0.10.0 file is archived).
 
-**Progress:** [██████████] 100% — 19/19 phases; 228/231 plans (3 Phase 37 plans superseded by Phase 37.1)
+**Progress:** milestone v0.10.0 closed — 19/19 phases; 228/231 plans executed (3 Phase 37 plans
+superseded by Phase 37.1). No phase is planned.
 
-**Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
-plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
-`milestones/v0.9.0-ROADMAP.md`, `v0.9.0-REQUIREMENTS.md`, `v0.9.0-MILESTONE-AUDIT.md` (status
-`tech_debt`, 0 blockers) and `v0.9.0-phases/`. **Released for real post-close (2026-09-01):**
-tag `v0.9.0` on merge commit `0b5d4106`, release run `33542459191` fully green, all eleven crates
-on crates.io at `0.9.0` — first stable release since 0.5.1; release numbers now track milestone
-names. See MILESTONES.md.
+**Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
+(22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
+(`495483ef..6a08c293`, 2026-09-01 → 2026-09-23). Archived to `milestones/v0.10.0-ROADMAP.md`,
+`v0.10.0-REQUIREMENTS.md`, `v0.10.0-MILESTONE-AUDIT.md` (status `tech_debt`, 0 gaps) and
+`v0.10.0-phases/`. Released as two tags: `v0.10.0` on merge commit `1d4a9724` (2026-09-18;
+published 3 of 12 crates, since yanked) and `v0.10.1` on merge commit `f7dae267` (2026-09-21; run
+`35659477719`, all 12 publishable crates on crates.io at `0.10.1`). Closeout type
+`override_closeout` — see *Deferred Items*. Full record: MILESTONES.md.
 
-**Prior:** v0.8.0 shipped 2026-08-24 — 14 phases, 149 plans, 65/65 requirements,
-1,014 commits (`be2ff05..48ac11a5`). Archived to `milestones/v0.8.0-ROADMAP.md`,
-`v0.8.0-REQUIREMENTS.md`, `v0.8.0-MILESTONE-AUDIT.md` and `v0.8.0-phases/`.
-
-> ✅ **The milestone-boundary discrepancy flagged at Phase 16 close is resolved.** The ROADMAP
-> `## Milestones` table's four stale "Not started" cells — Milestone 4-6 (7-8), Milestone 7-8
-> (9-11), Milestone 9-12 + Deferred-QA (12-16) and Provider Expansion (17) — were refreshed to
-> "Shipped v0.8.0" as part of this close, and all five blocks were scoped into one milestone. The
-> version identity is settled too: the milestone is labelled **v0.8.0**, matching every Cargo
-> manifest and the dated CHANGELOG section, rather than the `v0.7.2` the roadmap had carried.
+**Prior:** v0.9.0 "Security Tooling" shipped 2026-09-01 (4 phases, 25 plans, 20/20 requirements,
+240 commits; tag `v0.9.0` on `0b5d4106`, all eleven crates at `0.9.0`); v0.8.0 shipped 2026-08-24
+(14 phases, 149 plans, 65/65); v0.7.1 shipped 2026-08-04 (4 phases, 38 plans, 25/25). All archived
+under `milestones/`.
 
 ## Current Position
 
-Phase: 37.1 (v0.10.1 Patch Release) — COMPLETE (verified 2026-09-23)
-Plan: 16 of 16
-Status: ALL PHASES COMPLETE — milestone v0.10.0 ready to close; `/gsd-audit-milestone v0.10.0` then `/gsd-complete-milestone v0.10.0` are the maintainer's next commands
-Last activity: 2026-09-23 — Phase 37.1 verified and marked complete: `37.1-UAT.md` 53/53 passed (10 maintainer-confirmed checkpoints plus 43 coverage-mode automated passes), `37.1-VERIFICATION.md` `passed` 6/6 (SC1-SC6 independently re-derived against the tree, GitHub and crates.io); `COVERAGE.md` declares no external API integration for the api-coverage gate (the detector fired on the plan's own "integrates no external API" sentence); `SHIP-06` complete, `SHIP-05` left superseded and unticked; ROADMAP progress row Complete; `.continue-here.md` removed. `37.1-VALIDATION.md` remains `draft` (`/gsd-validate-phase 37.1` advisory, as for Phase 37). Next: `/gsd-audit-milestone v0.10.0`, then `/gsd-complete-milestone v0.10.0`.
-Previous: 2026-09-22 — Phase 37 verified and marked complete: `37-UAT.md` 12/12 passed (eight executed plans, legacy prose extraction; plans 37-09..37-11 superseded by Phase 37.1), `37-VERIFICATION.md` `passed` 5/5 with SC4 stated as superseded by `SHIP-06` and SC5 (milestone close) still pending; `SHIP-05` left unticked and superseded per the D-02 amend-at-source note; ROADMAP Phase 37 checkbox ticked, progress row Complete with the SC4 supersession kept. Next: `/gsd-verify-work 37.1`, then `/gsd-audit-milestone` and `/gsd-complete-milestone v0.10.0`.
-Earlier: 2026-09-21 — Phase 37.1 plans 37.1-11 and 37.1-12 executed as a recording pass after the maintainer's merge, tag and completed release: tick-commit CI evidence (9 runs, 124 checks, 0 failed), the N/A-by-deviation checkpoint record, the tag-equality proof, `chore/37.1-close` cut with an empty stray-commit range, and the release run's three-attempt record with the publish job's own per-crate table (12/12 live, 3 orphaned 0.10.0 versions yanked).
-Earlier: 2026-09-21 — Phase 37.1 re-seal #2's CI evidence completed on head d2f1a811: repeated plan 37.1-09's Tasks 1-2 on the new head — the full per-run/per-job CI-run table (commit `d4fe8edd`) and section 14's rows/coverage entry/evidence-basis sentence (commit `4f3df7ef`), box untouched and still unticked; zero pushes.
-Earlier: 2026-09-21 — Build wave reopened on the maintainer's "Pin it." after the API Surface Tracking check went red on tick commit 529e7078 (unpinned floating nightly rendering drift, zero real public-API change); fixed by pinning PUBLIC_API_TOOLCHAIN to nightly-2026-09-20 in ci.yml and extract-public-api.sh, with a TDD-ordered regression harness (red 10/15 at d4dc0e96, green 15/15 at d2f1a811) and a CHANGELOG Fixed bullet.
-Earlier: 2026-09-21 — Phase 37.1 plan 37.1-10 executed (read-only verification that the maintainer's sign-off tick is present on origin/release/v0.10.1 at PR #56's head, exactly one box ticked vs base, tick commit identity recorded and confirmed at the branch tip; rewrote .continue-here.md for the tick-commit CI wait; zero commits, zero pushes by this plan per its own house rule)
-Earlier: 2026-09-21 — Phase 37.1 plan 37.1-08 executed (pushed release/v0.10.1, opened release PR #56 against main with a curated four-part body and the eight-gate re-seal summary; autoMergeRequest confirmed null by a single live read; wrote the D-00i resume file naming the Coverage and License & Dependency Policy checks; phase stops here until PR CI concludes)
-Earlier: 2026-09-21 — Phase 37.1 plan 37.1-07 executed (SC4 gate re-seal: all eight D-09 gates plus the house sweep re-run green on candidate head fbdefec9, no red gate observed, D-08 stage 2 never invoked; corpus audit gained append-only section 13 with its own fresh unticked sign-off box "The v0.10.1 tag may be cut"; pointer file gained one dated paragraph; waves 8-16 remaining)
-Earlier: 2026-09-20 — Phase 37.1 plan 37.1-06 executed (SC4 version bump 0.10.0 -> 0.10.1 across all fourteen manifests, lockfile and the OpenAPI baseline; twelve changelogs + MIGRATION.md addendum; all six release gates plus make test verified green on head 896227ee; build wave now closed)
-Earlier: 2026-09-20 — Phase 37.1 plan 37.1-05 executed (SC2 EPIPE race fixed in create-or-reuse-release.sh; waves 6-16 remaining)
-Earlier: 2026-09-20 — Phase 37.1 execution resumed at plan 37.1-05 (waves 5-16 remaining)
-Earlier: 2026-09-19 — Phase 37.1 planned (16 plans, 16 sequential waves; plan check passed); waves 1-4 executed (plans 37.1-01..04)
-Earlier: 2026-09-19 — Phase 37.1 context gathered; Phase 37 OPEN and blocked on it (v0.10.0 tagged, 3/12 published)
-Earlier: 2026-09-18 — Phase 37 execution reached 37-08 and hard-stopped at the D-16 diagnosis
-Earlier: 2026-09-16 — Completed quick task 260916-h40: regenerated API surface baseline for Phase 32 window exports and added pre-push API surface gate
-Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetched from archived GitHub release with sha256 check (dl.min.io returns 410)
+Phase: Milestone v0.10.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-09-23 — Milestone v0.10.0 completed and archived (`/gsd-complete-milestone v0.10.0`): closeout type `override_closeout`; two open todos acknowledged; Phase 37's superseded plans recorded; ROADMAP collapsed, PROJECT.md evolved, RETROSPECTIVE.md extended; tag `v0.10.0` pre-existing (2026-09-18), no new tag
+Previous: 2026-09-23 — Milestone audit written (`v0.10.0-MILESTONE-AUDIT.md`, status `tech_debt`, 88/89 requirements, 0 gaps); Phase 37.1 verified and marked complete (`37.1-UAT.md` 53/53, `37.1-VERIFICATION.md` 6/6)
 
 ## Performance Metrics
 
@@ -216,853 +189,84 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 
 ### Decisions
 
-**Phase 33 (closed 2026-09-16, verified 2026-09-17) — recorded as D-01 … D-20 in `33-CONTEXT.md`; the ones
-later phases most need:**
-
-- D-01/D-03: `paladin-memory` takes `paladin-llm` (`default-features = false`) as an unconditional production
-  dependency — the workspace's first lateral adapter-to-adapter edge; `reqwest` never enters the normal graph.
-
-- D-12: `RagRetrievalService::retrieve_context` / `format_for_prompt` break their published return type to
-  `RagRetrievalResult` with no forwarding shim (ADR-0051 clean break); `retrieve_context_with_timeout` follows.
-
-- D-08/D-09: `ConsignmentItem` priority is rank order (`u8::try_from(rank)`), label is the memory UUID —
-  never content — so "highest score retained" is structural and no memory body reaches a shed record or log.
-
-- D-15/D-16: one shared `rag_omission_marker` helper in `paladin-memory` is the only place the omission line
-  is built; both renderers read the budget from `RagRetrievalResult::allotted_tokens`; the facade's
-  RAG-success `info!` gains only `shed=`.
-
-- D-10(a)/D-05: a single memory larger than the whole budget is retained truncated (never dropped);
-  `rag.max_tokens` beyond `u32::MAX` is a typed `BudgetTooLarge` error, never an `as` cast or clamp.
-
-**Phase 32 (closed 2026-09-16) — recorded as D-01 … D-16 in `32-CONTEXT.md`; the ones later
-phases must honor:**
-
-- D-01/D-02: the context window is resolved by exactly one function, `paladin_llm::window::
-  resolve_context_window`, with a `WindowFallbackPolicy` enum (`Default(n)` / `Strict`) — never a
-  `bool` — and a labelled `WindowSource`; the facade's duplicate `LimitSource` is gone.
-
-- D-04/D-05: `Commissary::new` calls the resolver once under `Strict` (no config table, so the
-  "no invented window" refusal survives as `CommissaryError::UndeclaredContextWindow`, byte-identical);
-  `HistoryTrimmer::resolve_limit` is a thin call under `Default(config.default_context_tokens)`.
-
-- D-06/D-08: exactness is a property of the counter instance — `TokenCounterPort::is_exact`
-  defaults `false`, tiktoken returns `true`, and `Commissary` reads it live from the port; the
-  `is_exact_counter` constructor argument is a clean break with no forwarding shim.
-
-- D-09/D-10: the legacy `garrison::TokenCounter` trait and `TokenCounterFactory` were deleted
-  outright (the `#[deprecated]` escape hatch was not needed); `TiktokenCounter`'s only counting
-  path is its port impl.
-
-- D-13/D-14: equivalence is proven by TDD-ordered fixture tests committed green before the
-  resolver existed (not `insta`); semver discovery is empirical per feature set — `cargo-semver-checks`
-  0.50.0 has no lint for an inherent method's parameter count, so the `Commissary::new` break is
-  recorded in `CHANGELOG.md` only, with `MIGRATION.md` §9.2 rows for the two lints that did fire.
-
-**Phase 29 (closed 2026-09-10) — recorded as D-01 … D-25 in `29-CONTEXT.md`; the ones later
-milestones must honor:**
-
-- D-04: the `cargo semver-checks` allowlist ↔ `MIGRATION.md` §9.2 CI check is row-level
-  (`crate | type` pair set-equality in both directions, no wildcards); D-01 makes "no TBD" in
-  `MIGRATION.md` a durable CI gate.
-
-- D-07/D-08/D-09: backward compatibility is proven by two ordinary `cargo test` targets — the
-  frozen v0.9.0 config boot test (`v0_9_config_boot`, `501` never `404` for every v0.10 route
-  family) and the path-restricted OpenAPI golden diff with `$ref` closure — gated on every PR.
-
-- D-12/D-17: audit findings are recorded, never fixed silently (fix set bounded to docs, tests
-  and citations); the seven judgment-tier sign-off boxes in the acceptance audit are ticked only
-  by a human, never by an agent.
-
-- D-16: the Phase 28 tracing-overhead FAIL (+22.18 % / +18.46 % vs ≤3 %) is accepted for
-  v0.10.0 as a documented deviation (audit, observability docs, CHANGELOG, WINDOWS.md row 35);
-  reaffirmed by the maintainer at Phase 29 UAT.
-
-- D-18/D-21: the `0.10.0` bump lands on the feature branch with no tag — the tag is cut on the
-  `main` merge commit (`release.yml` `verify-tag-source`); "the release commit" means both the
-  PR head and that merge commit, with evidence recorded for both.
-
-- D-24: `WINDOWS.md` rows are never deleted — only moved to `fixed` or `waived` with a per-row
-  reason (`open_count: 0`, 35 rows: 9 fixed, 26 waived).
-
-**Phase 28 (closed 2026-09-09) — recorded as D-01 … D-41 in `28-CONTEXT.md`; the ones later
-phases must honor:**
-
-- D-02/D-03: `TraceRecord` is a `#[serde(flatten)]` envelope over the `#[serde(tag = "kind")]`
-  `TraceEvent`; one per-run `seq` authority (the engine's `TraceDispatcher`) reached only through
-  `TraceEmitter` handles (below-engine producers via the `RUN_TRACE_EMITTER` task-local). The
-  `NodeProgress`/`ParleyRaised` payload fields are `progress`/`parley_kind`, not the PRD's literal
-  `kind` (it would collide with the enum tag).
-
-- D-05: state values are never traced by default — opt-in, redacted before truncation, then capped.
-
-- D-14/D-15/D-16: the run event bus has one producer (`RunEventBusSink`); the wire `seq` stays the
-  bus counter and payloads carry `trace_seq`; `RunStreamMode::Replay` reads persisted `run_traces`
-  (migration 006, pruned with Waypoint retention).
-
-- D-27/D-33 + ADR-0048: `paladin-eval` is a published composition crate depending downward on the
-  leaf crates; the facade's only dependency on it is optional, behind `cli`.
-
-- D-35: live eval mode needs `--live` AND `PALADIN_EVAL_LIVE=1` AND a provider key — never in
-  default CI.
-
-- D-37: the ≤3 % tracing-overhead bar was measured and FAILED (log sink +22.18 %, composite
-  +18.46 %, `28-BENCH-EVIDENCE.md`); non-CI-gating by decision, accepted by maintainer sign-off at
-  close-out UAT (2026-09-09).
-
-**Phase 23 (closed 2026-09-04) — recorded as D-01 … D-30 in `23-CONTEXT.md`; the ones later
-phases must honor:**
-
-- D-05/D-06: BUG-01 fixed fail-closed in one RED-then-GREEN commit pair through a registered
-  `EdgeConditionEvaluator`; M-B-01 is the program's sole sanctioned behavioral break (worked
-  example in `MIGRATION.md` §9.1).
-
-- D-07: `StateNode::run` returns `Result<Directive, NodeError>`; `From<StateDelta>` keeps
-  plain-delta nodes source-compatible.
-
-- D-14: mid-muster resume rides intra-superstep progress Waypoints — `MusterProgress` is a stored
-  payload contract from v0.10.0 onward, so any shape change needs a data migration.
-
-- D-18: `GRAPH_FINGERPRINT_VERSION` is `v3`; every `EngineLimits` field (including
-  `max_muster_tasks`) stays excluded from the hash.
-
-- D-20/D-21: child subgraph checkpoints run under an injective `ThreadId::child`; the child
-  inherits the parent engine wholesale but uses its own graph's limits.
-
-- D-26: LLM-evaluated routing and `StrategySelection::Semantic` are code-configured only — no env
-  var, cargo feature or config field may switch them on.
-
-Decisions are logged in PROJECT.md Key Decisions table — **empty by evidence, and now finally so.**
-**All 263 corpus documents are ingested and 0 ADR-typed and 0 SPEC-typed documents exist among
-them.** Nothing is locked, and nothing ever was: no LOCKED-vs-LOCKED contradiction was possible in
-any run, which is why 69 competing variants produced 0 blockers.
-
-**This is itself a corpus-level finding worth stating.** Twelve milestones, eighteen months and 554
-requirements produced **not one protected decision**. Every technical position in this project's
-history sits at PRD or DOC precedence and is auto-overridable by the next document that mentions
-it — and mechanical precedence has already produced at least one architecturally wrong answer, a
-PRD outranking an Approved-status decision record whose rule would reintroduce the exact upward
-dependency that decision removed. Everything asserted in the ingested PRDs and DOCs is supersedable,
-including by shipped code: run 2 produced eight documented supersessions, run 3 eleven more
-(including the whole monolith → workspace path migration), run 4 eleven more plus the corpus's
-first document-supersedes-document notice, and run 5 twelve more plus **the first case of a later
-run correcting an earlier run's direct code verification.**
-
-First entries expected from Phase 1 (six ADRs, one per competing variant pair), Phase 5 (four
-recorded answers), Phase 7 (six more), Phases 9-10 (the RustSec exception set, the licence posture,
-the leaf-crate dependency rule, the PDF capability and the `cargo doc` bar), Phase 12 (the advisory
-governance schema and the ADR-promotion decision), Phase 13 (the two Milestone 12 seams) and
-Phase 14 (the token mechanism).
-
-**Eleven ADR candidates now exist, none entered as a locked decision. The two with a live
-operational cost are the same subject from two different milestones:**
-
-0a. **`Milestone_10/Epic_2/prd-dependency-security-license-compliance.md` FR-1 + §8** (run 5) — the
-    audit-suppression single-source invariant, with "no inline advisory-ignore flags remain in CI"
-    as an explicit success metric. **The tree violates it today** → SUPPLY-01. Promoting this
-    together with candidate 0 below would turn the run-5 supply-chain finding from an observation
-    into a gate → SUPPLY-03.
-0b. **Four further run-5 candidates**, in descending consequence:
-    `M9/Epic_5/prd-user-admin-system-completion.md` §6.1 (the opaque-bearer-token decision — **the
-    only decision in the corpus a later milestone contradicts in prose while silently preserving in
-    code** → WEB-01); `M9/Epic_4/prd-agent-orchestrator-bridge.md` §6.1 (**the cleanest ADR-shaped
-    section anywhere** — four-criterion table, `(CHOSEN)` column, rejected option preserved);
-    `M12/Epic_1/prd-agent-registry-execution-api.md` §7 + OQ-2 (the `AgentProvisioner` placement,
-    recorded as a default rather than a decision → ORCH-04a); and
-    `Deferred-QA-CICD-Completion/DEFERRED_COVERAGE.md` (a named sign-off and an unreached review
-    trigger, weakened by two stale paths and stale baselines → DEFER-01 … DEFER-03).
-
-0. **`Milestone_7/Epic_4/rustsec-remediation-plan.md`** (run 4) — a formal risk acceptance with
-   **owner Platform Security** and **review/expiry target 2026-09-30**. **The only item in all 153
-   documents carrying an expiry date.** Nothing else in `.planning/` surfaces that date; SEC-01 is
-   what carries it forward. The other three run-4 candidates — `cost-benefit-assessment.md`
-   (self-approval block, named approver, 2026-05-25),
-   `license-compatibility-decision-checklist.md` (approver `DF3NDR`, 2026-05-28) and
-   `facade-cleanup-RECONCILIATION-2026-06-04.md` (an explicit supersession notice that resolved six
-   open decisions in execution) — are recorded in PROJECT.md Key Decisions.
-
-1. **`Milestone_5/Epic_1/decisions/battalion-result-upward-dependency-decision.md`** (run 3) — the
-   only decision/options pair in all 263 documents. `Status: Approved`, `Decision Date: 2026-05-13`,
-   `Chosen Option: Option A`, with a Rationale, a Rejected Options section and an implementation
-   checklist. Settles where `PaladinResult`, `StopReason`, `TokenUsage`, `RegistryError` and
-   `HandoffError` live; shipped code implements it. Manifest-typed **DOC**, so a PRD published two
-   days later outranks it — and that PRD's FR-10 ("types must not be split across crates") would
-   undo the fix. **Strongest candidate in the corpus, and the one with real consequences if left
-   unprotected.** Two caveats: it settles *location* for five types only, and despite its filename
-   it **never mentions `BattalionResult`**.
-
-2. **`Epic_17.5/epic17-5.md`** (run 2) — the CLI belongs in `src/application/cli` because "CLI is an
-   input adapter in the application layer, not infrastructure". Already applied in code (`src/cli`
-   is absent from the tree), also outranked by a PRD that says otherwise.
-
-Promoting either requires re-tagging the source document via `--manifest` and re-running ingest.
-Entering them here would fabricate authority the corpus does not contain.
-
-**Decisions applied by direction, not derived** (ingest run 5 — the final run, from the user):
-
-1. **All 69 competing variants stay unmerged.** No winners picked, in any run. PROJECT.md Key
-   Decisions stays **empty with its evidence note**, and the corpus-level finding — 0 locked
-   decisions across 263 documents, every technical decision in twelve milestones auto-overridable —
-   is recorded prominently in PROJECT.md Context along with all eleven accumulated ADR candidates.
-
-2. **New phases start at Phase 12.** Phases 1-11 unchanged and unrenumbered; `### Phase N:` headers
-   preserved verbatim. Six fresh ID prefixes used, as suggested by the synthesizer: `SUPPLY-*`,
-   `ORCH-*`, `WEB-*`, `PIPE-*`, `DEFER-*`, `DOCS-*`. Seventeen prefixes are now spent.
-
-3. **Completed work is not re-planned.** M9 100%, M10 100%, M11 92.0%, M12 99.0%. Every shipped
-   artefact goes into the 120-row *Milestone 9-12 as-shipped ledger*, not into a phase.
-
-4. **The forward scope is the deferred registers plus the verified defects — not stale checkbox
-   counts.** The three deferred registers (M8 `deferred-features`/`deferred-items`, Deferred-QA
-   `DEFERRED_COVERAGE` + `prd-deferred-qa-completion` + Epic_25 `prd-cicd-pipeline-enhancement`)
-   and the eight verified-open findings are what became Phases 12-16.
-
-5. **Auth is a genuine forward-work item with a security dimension.** No `jsonwebtoken` dependency
-   exists anywhere; the only `AuthPort` implementation is M9's in-process hashed store, whose own
-   PRD warned a multi-process deployment would need a shared store — and M12 Epic 7 shipped
-   `k8s/deployment.yaml`. Recorded as WEB-01 (the mechanism) and WEB-02 (the store), not as a
-   ledger note.
-
-6. **The `deny.toml` "out of sync" framing is withdrawn.** `deny.toml` **is** in sync with
-   `.cargo/audit.toml` on all five vulnerability advisories. SEC-01 was **corrected in place** with
-   a callout; the real gap — 13 of 15 suppressions with no owner and no expiry, against a Milestone
-   10 Epic 2 origin policy mandating a single documented exception process — is SUPPLY-02. The
-   earlier framing is not repeated anywhere.
-
-7. **Coverage tooling is partially built, not absent.** `.codecov.yml` does not exist and `ci.yml`
-   has no coverage gate — but `integration-tests.yml:117-123` does run `cargo llvm-cov` and
-   `codecov-action@v3`. PIPE-02 is scoped as *superseding the integration-only path*, and nowhere
-   states that coverage tooling is entirely missing.
-
-8. **DEBT-01 was extended in place, not duplicated** — six stale `project/current-exports.txt`
-   references became nine, four of them written into Milestone 12 requirements in June 2026. It
-   also **shed** the four `actions-rs` references it had absorbed in run 3; those move to PIPE-04,
-   which owns the full eight-reference action-modernization sweep.
-
-**Decisions applied by direction, not derived** (ingest run 4, from the user):
-
-1. The RustSec exception sprawl is **genuine forward work**, not a ledger note. Recorded as SEC-01
-   with the exact per-file counts read from the tree on 2026-07-30: `rustsec-remediation-plan.md`
-   documents 2 risk-accepted advisories (owner Platform Security, expiry 2026-09-30);
-   `ci.yml:406` passes exactly those 2 as `--ignore` flags; `.cargo/audit.toml` `[advisories]
-   ignore` holds **5**; `deny.toml` `[advisories] ignore` holds **15**. *(The user's brief cited 7
-   and 17 — those are the counts of RUSTSEC IDs **mentioned** in each file, which include
-   `RUSTSEC-2026-0185` quinn-proto and `-0190` anyhow named in comments as **upgraded rather than
-   ignored**. The substance is unchanged and confirmed: four divergent surfaces, 13 suppressions
-   with no risk-acceptance record, and a two-month expiry.)* A fifth fact was found during
-   verification and added: `ci.yml` runs **two** independent, differently-configured `cargo audit`
-   jobs (`:77` bare, `:406` with two inline ignores).
-
-2. The `api-surface` defect was **extended, not duplicated** — DEBT-01 now records the sixth stale
-   reference, M8 Epic 7 FR-10, which writes the broken path into an ingested requirement. No new
-   requirement was created for it.
-
-3. `facade-cleanup-RECONCILIATION-2026-06-04.md` is the **authoritative account of Milestone 8**,
-   superseding the Epic 1 audit and the Epic 3 disposition (HARD-02). Milestone 8 Epic 6 is complete
-   despite being recorded "not verified", Epic 3 is complete in substance, and `paladin-herald`
-   exists in the tree — which is why the earlier "9 crates" figure was wrong.
-
-4. The v0.1.0-rc.1 release is **history** (HARD-03). No rc.1 artefact is treated as current state,
-   and REL-01 must not converge on an rc.1 figure.
-
-5. All 53 competing variants stay **unmerged**. No winners picked. PROJECT.md Key Decisions stays
-   empty with its evidence note; the six ADR candidates are named in context only.
-
-**Decisions applied by direction, not derived** (ingest run 3, from the user):
-
-1. The workspace decomposition SHIPPED. All crates exist and are documented in the codebase map.
-   No forward phases were created for Milestone 5 extraction work.
-
-2. The Milestone 6 relocations SHIPPED (`application_settings.rs` deleted, orchestration services
-   under `src/application/services/`, Maneuver DSL under `crates/paladin-battalion/src/maneuver/`,
-   `CircuitBreaker` under `src/infrastructure/resilience/`). Not re-planned.
-
-3. The `battalion-result-upward-dependency-decision.md` pair is recorded accurately and **not**
-   overclaimed: it creates no locked decision, it settles the location of five value/error types,
-   and it does **not** resolve the run-1 `BattalionResult` field-set variant.
-
-4. The verified open defects from the run-3 verification ARE genuine forward work and became
-   DEBT-01 … DEBT-05. Stale open-checkbox counts did not.
-
-**Decisions applied by direction, not derived** (ingest run 2, from the user):
-
-1. Milestone 3 epic numbering — the plan/epic-definition numbering is authoritative
-   (19 Herald, 20 Vision, 21 Autonomous, 22 Battalion hardening, 23 CLI/Config, 24 Test hardening).
-   The `RELEASE_NOTES_MILESTONE_3.md` mapping is a documentation defect and is not used as a
-   provenance key anywhere in `ROADMAP.md` or `REQUIREMENTS.md`.
-
-2. Conclave, Council, Grove, Maneuver, Sentinel vision and the Qdrant Sanctum adapter are verified
-   shipped. No forward phases or requirements were created for them; they are in the as-shipped
-   ledger.
-
-3. The Epic 13 vs Epic 20 vision API surfaces coexist (`vision_llm_port.rs` and `vision_port.rs`
-   both exist). Recorded as coexistence, not as a variant awaiting resolution.
-
-4. Open checkbox counts are not a backlog. Only the six blocks listed under "Not yet verified" in
-   `intel/code-verification.md` may be recorded as unverified candidates, explicitly labelled.
-
-- [Phase ?]: Confirmed workspace coverage measurement of record: 84.79% line coverage (61,404 lines, 9,340 missed), human-approved 2026-07-31T15:30:27Z; RECON-07 resolved
-- [Phase ?]: Recorded two accepted observations as context for ADR-0006 and VERIFY-05: 84.79% is ~24pts above stale Milestone-1 baselines (delta noted, not explained); function coverage 77.34% is ~7pts below line coverage 84.79%
-- [Phase ?]: ADR-0006: coverage gate = 84% hard-fail floor (measured 84.79%, workspace default-feature scope, option-a); 80% target retired as superseded (deviation from D-09); Herald >=95%/autonomous >=90% preserved, handed to VERIFY-05
-- [Phase ?]: ADR-0006 wired into PROJECT.md/ROADMAP.md/REQUIREMENTS.md/ledger: 84% workspace coverage floor is the single binding number, 80% retired as superseded per D-09 deviation; RECON-07 satisfied gated on adr-parser.cjs
-- [Phase ?]: Phase 3 Plan 01: reproduced ADR-0006 coverage pipeline verbatim at HEAD bb35554d — measured 85.56% workspace line coverage, PASS against 84.00% floor by 1.56pp; zero-coverage set unchanged from Phase 1 (5 files); 9 of QUAL-02's 11 named offenders contradicted; ratchet trigger not met (1.56pt < 2pt), ADR-0006 not amended
-- [Phase ?]: FaultyPaladinPort's fail_until_attempt counter is global across every Paladin executed through one port instance, not per-Paladin — tests are designed around this shared-counter semantics
-- [Phase ?]: fail_paladin(name) is an additive, chainable builder method so a single FaultyPaladinPort instance can fail more than one named Paladin
-- [Phase ?]: Phase 3 Plan 03: extended the existing hermetic rmcp+axum FixtureServer instead of a parallel wiremock harness for the five MCP failure-mode tests (supersedes CONTEXT.md D-11's wiremock framing per Research Pattern 3)
-- [Phase ?]: Phase 3 Plan 03: malformed-response fixture returns its truncated tools/list body as text/plain, not application/json -- rmcp's client silently swallows a malformed-but-json-labeled 200 body as an accepted no-op (verified against vendored rmcp-2.1.0 source), which would hang the test instead of failing loud
-- [Phase ?]: Phase 3 Plan 03: the 'absent arguments' bad-arguments shape is asserted directly against the fixture's extract_echo_message helper, not through MCPClient::invoke_tool -- rmcp's CallToolRequestParams::with_arguments always wraps its map in Some(..), even when empty, so the public client API cannot construct that wire shape
-- [Phase ?]: Phase 3 Plan 05: refactored redis.rs's eight private key/serialization helpers off &self to free functions (private-surface-only, byte-identical key formats), then added its first #[cfg(test)] mod tests -- 11 Docker-free unit tests covering config defaults, all six key builders, priority-key collision-freedom, serialize/deserialize round-trip, error mapping, and get_priority_levels order. Live-server paths recorded deferred with reason, owner Phase 15 (PIPE).
-- [Phase ?]: Phase 3 Plan 05: QUAL-02 NOT marked complete -- requirements ready-ids reports it blocked because sibling plans 03-06/03-07/03-08 also carry QUAL-02 and haven't produced SUMMARY.md yet; final adjudication happens in 03-07 against the exit coverage measurement.
-- [Phase ?]: Phase 3 Plan 06: closed file_storage_port.rs, arsenal_port.rs and paladin-llm/error.rs zero-coverage entries with #[cfg(test)] unit tests (32 new tests); FileStorageUtils defaults exercised via the trait's existing () implementor rather than a new empty-impl struct (that impl block would not compile, the trait has no default bodies); arsenal_port.rs's 2 missed lines confirmed from 03-coverage-measurement.md as ArsenalRegistry::list's default body; LlmProviderError->LlmError conversion given its first caller across all 9 variants plus an exhaustiveness witness. No pub API or Cargo.toml changed in either crate.
-- [Phase ?]: Phase 3 Plan 04: sequential-only cargo bench execution (no concurrent measurement across targets) to avoid CPU-timing contamination; killed an accidentally-queued second bench process by exact PID after pkill self-matched its own invoking shell
-- [Phase ?]: Phase 3 Plan 04: P50/P95/P99 derived from criterion's internal SavedSample sample.json (times[i]/iters[i] per-iteration transform, nearest-rank round((n-1)*p), jq round() i.e. round-half-away-from-zero as the tie-break, verified against a real tied index) for all 39 sample.json files this run produced; 2026-05-27 run retained in place under a superseded callout with no cross-run delta computed
-- [Phase ?]: Phase 3 Plan 04: examples/muster_baseline.rs added as a new recorded harness for memory-per-Paladin (479 bytes, via /proc/self/status VmRSS delta across 1000 constructed Paladins) and startup time, since criterion produces neither metric family
-- [Phase ?]: Phase 3 Plan 07: exit coverage measurement at HEAD 1ad8be5 -- measured 85.92% workspace line coverage, PASS against 84.00% floor by 1.92pp (up from entry's 1.56pp); 4 of 5 entry zero-coverage files closed (redis.rs, file_storage_port.rs, paladin-llm/error.rs, arsenal_port.rs), src/bin/paladin-server.rs deferred to Phase 5/VERIFY-05; ratchet trigger not met (1.92pt < 2pt), ADR-0006 not amended
-- [Phase ?]: Phase 3 Plan 07: QUAL-03 critical-path exerciser evidence established at D-19 bar for all three paths (Paladin execution, Battalion orchestration, tool invocation) via 5 verified passing integration tests; percentage clause recorded superseded by ADR-0006 with zero coverage percentages introduced; amendment lands at source in plan 03-08
-- [Phase ?]: Phase 3 Plan 08: QUAL-02 and QUAL-03 amended at source in REQUIREMENTS.md with dated provenance (original text retained); ROADMAP criterion 2 and the milestone ledger amended to match; human confirmed both coverage figures (85.56% entry / 85.92% exit) and the ratchet non-trigger decision (1.92pt delta, 0.08pt short of the 2pt trigger, approver declined the offered floor-raise) via blocking checkpoint, recorded in 03-coverage-measurement.md
-- [Phase ?]: 06-07: Verdict distribution 118-row total recomputed by counting rather than assumed unchanged after ledger amendments — count only REQ-*-keyed rows, cluster-table verdicts are a separate bookkeeping layer
-- [Phase ?]: 06-07: REQ-vision-security-encryption legend verdict stays present, unproven (documentation-only resolution, no new exerciser); recorded disposition is deliberately unimposed, consumer-facing utility (D-16/D-17)
-- [Phase ?]: 06-07: CI-job deferral (Epic 24 cluster 8.0) recorded bidirectionally per D-10 — ledger points at PIPE-01/PIPE-02, PIPE-01/PIPE-02 point back at the ledger
-- [Phase 11]: FACADE-01 — D5's 17 `println!` occurrences are **not** converted to `log::*`. All 17 across 6 files are `///`/`//!` doc-comment lines inside fenced code blocks (the same grep filtered to non-doc lines returns 0), so conversion would degrade the rustdoc examples the lines exist to illustrate. Closed by a recorded per-occurrence disposition; ROADMAP criterion 1 amended at source with the original text retained
-- [Phase 11]: FACADE-02 / ADR-0034 — D1–D4 get verbs, owners and triggers instead of effort ratings. The `user_service.rs` split is **withdrawn** into three non-overlapping owners: the split owned by nobody, full relocation by the run-3 v2 tech-debt item, tests by DEFER-02/Phase 15. ADR-0034 discloses that ADR-0031 was authored under Phase 10 `--auto`, is flagged `⚠ HUMAN REVIEW` and has never been human-ratified — any future phase executing a D3/D4 edge must confirm it with a human first
-- [Phase 11]: FACADE-03 / ADR-0035 — the `paladin-ml` leaf-crate placement condition is promoted out of DOC precedence into an ADR **without** creating the crate or reintroducing the adapter (`ls crates/` still 11). The `user.rs` recovery pointer is corrected from a mutable branch name to the immutable SHA `3d48768` in runnable `git show` form
-- [Phase 11]: FACADE-04 — the 20-row Milestone 9 candidate triage resolves to **14 done / 6 not a candidate / 0 still open**, superseding two mutually inconsistent RESEARCH.md figures. `paladin-arsenal` and `paladin-sanctum` are recorded as artefacts of a mis-written table, not future crates
-- [Phase 11]: ADR allocation — two ADRs (0034 for the D1–D4 set, 0035 for `paladin-ml`) rather than five or one-plus-ledger-rows. Accepted cost: a coarser supersession unit, since a future phase revisiting only D3's verdict must supersede an ADR that also carries D1, D2 and D4. Human-confirmed at UAT
-- [Phase ?]: Phase 12 checkpoint (12-01 Task 3) RESOLVED 2026-08-09: a human selected option-a — proceed as planned with ADR-0036 and the D-08 guard. This authorizes plans 12-02, 12-03 and 12-04 to execute as written and ratifies D-01, D-08 and D-00l (previously unconfirmed ⚠ HUMAN REVIEW decisions). Obtained via the runtime's interactive question mechanism (`AskUserQuestion` → `option-a — ADR-0036 + guard`) after the orchestrator declined to auto-select under `--auto`; provenance recorded in 12-01-SUMMARY.md Checkpoint Status.
-- [Phase ?]: 12-02: sibling script (not a 4th check-advisory-register.sh clause) chosen for the D-08 guard — TOML-vs-YAML parser separation and the new root-directory override contract
-- [Phase ?]: ADR-0036 (Accepted, conforms) promotes PROMOTION.md Part B candidate 7 in the source PRD's §8 two-file framing (.cargo/audit.toml AND deny.toml), citing ADR-0024 as the sibling governing suppression contents without superseding it
-- [Phase ?]: Code Locations/Considered Options rewritten as single-physical-line bullets after the structural self-check showed adr-parser.cjs's per-line splitEntries inflating key_files to 29 and options_considered to 19 against 13/4 real bullets; fixed to 12/12 and 4/4 before commit
-- [Phase ?]: SUPPLY-03's checkbox and traceability row deliberately left Pending; requirements-completed left empty in 12-03-SUMMARY.md — plan 12-04 owns SUPPLY-03's closure and PROMOTION.md's single writer in the final wave
-- [Phase ?]: PROMOTION.md's Part A step 5 procedural text was left untouched despite causing a grep-count-2 vs expected-1 mismatch in the plan's own verify script — the actual Next free ADR number state line is correct and singular; editing Part A prose would be a fourth unauthorized PROMOTION.md edit
-- [Phase ?]: Phase 13 / ORCH-01 hand-off written carrying Milestone 10's verdict class in both halves: 100% complete and one acceptance criterion false, and as of 2026-08-08 no longer false
-- [Phase ?]: Recorded both v0.8.1-rc.3 and v0.8.1-rc.4 rehearsals in full — rc.4 is the only live proof of Phase 20's own gate and recovery scripts, and it found and fixed two real gate bugs (Findings 5, 6)
-- [Phase ?]: Assumption A3 (OIDC token exchange survives a same-tag re-run) proven twice, independently re-verified against crates.io trustpub_data.run_id rather than transcribed from workflow self-reports
-- [Phase ?]: CURR-01…05 minted 1:1 against ROADMAP Phase 34's five success criteria; SC5 read-only gate diffs against the fixed Phase 34 start SHA, not git merge-base HEAD main, since main is 7 phases behind
-- [Phase ?]: Compiled the D-08 shipped-surface checklist (91 SS-nn rows, 13 phase tables) into 34-AUDIT.md §1 before any mdBook/rustdoc/examples page is judged; confirmed the three D-10 ubiquitous-language lists by line-anchored grep and recorded a genuine fourth partial list at docs/src/introduction.md for a later sweep
-- [Phase ?]: Phase 34 plan 03: measured the mdBook build/linkcheck/gate baseline green; settled 18 root/getting-started/architecture/api-reference page verdicts (12 stale via MB-04..MB-17, 6 current); confirmed upgrading.md agrees with MIGRATION.md §9.1/§9.8 4/4 and 7/7 with zero disagreements; both crate-map.md pages and architecture/overview.md found missing paladin-eval/paladin-herald and the Phase 33 paladin-memory->paladin-llm edge
-- [Phase ?]: Phase 34 plan 04: settled 40 mdBook page verdicts (26 current, 14 stale via MB-18..MB-36) plus the Phase 22 superstep-engine missing-page decision (row 94, MB-30, deferred in Phase 23, never picked up); genuine live-code-verified defects included control-flow.md still describing Parley as unimplemented (Phase 24 shipped it), fault-tolerance.md's stale fingerprint version (v5 vs live v6), sanctum-vector-memory.md's entirely absent Phase 33 RAG surface, cicd.md's fabricated CI/Release Pipeline job samples, and testing-guide.md's coverage command missing the ,llm-all feature flag scripts/coverage.sh actually runs
-- [Phase ?]: Phase 34 plan 05: settled all 34 remaining appendix page verdicts, closing the 93-page mdBook partition (current 38, stale 55, missing 1); disproved an initial pre-hexagonal-import-path staleness assumption empirically (paladin::core::/paladin::application::services:: style imports are maintained backward-compatible re-exports and compile fine); found a systemic paladin::paladin_ports:: double-nesting import defect across 5 pages, integration-tests.md missing 26 of 60 live test files, and security-scanning.md's Snyk framing contradicting the project's own dated decision record
-- [Phase ?]: Phase 34 plan 06: enumerated 65 default-feature rustdoc warnings as RD-02..RD-66 (36 location-less, recovered by full quoted-snippet grep, zero ambiguous fallbacks); wrote 34-rustdoc-rows.sh (crate attribution by summary-line chunking, not stream position) for plan 34-07 reuse; recorded the workspace all-features run's 17-error/4-crate floor (paladin-memory 1, paladin-web 8, paladin-storage 1, paladin-ai facade 7), correcting D-14's single-crate abort prose with a third independent measurement (no paladin-ai-core in this run's abort set at all)
-- [Phase ?]: 34-07: per-crate all-features sweep is the true rustdoc floor - 77 content errors across 8 red crates, not 14 (paladin-ai-core alone) or 17 (workspace partial view); 63-item undersizing corrected for Phase 36
-- [Phase ?]: 34-07: extended 34-rustdoc-rows.sh with a crate-override argument since a single-crate -p <crate> capture never prints the summary line the default attribution pass depends on
-- [Phase ?]: 34-07: entry-point # Examples-heading gate scope drift (76->101) and its 19 violations routed to deferred-items.md per D-00e, not fixed or minted as RD-nn/EX-nn/MB-nn rows
-- [Phase ?]: Examples build/currency sweep (plan 34-08): all 60 examples/doc-examples programs build green under the exact CI feature sets; zero obsolete-API hits; two http_service_host rows marked stale on a server-router-parity claim; examples/README.md carries two new stale findings (11 undocumented programs, stale PaladinResult code-snippet fields); 59-row capability gap list for Phase 22-33 items no example demonstrates
-- [Phase ?]: Phase 34 plan 34-09: assembled the Phase 35 work list (60 MB-nn, missing superstep-engine page MB-30 leading) and Phase 36 work list (143 RD-nn grouped by crate with same-source-line cross-references, 64 EX-nn work items + 58 confirmed-current listed separately); both-directions reconciliation proven by diff; closed deferred-items.md (5 entries, 4 plans) and 34-AUDIT.md §7; proved SC5 over the whole phase range against the pinned Phase 34 start SHA (main lags 7 phases behind); fixed a 34-check.sh assertion (b) bug that treated the designed §5/§6 double-reference as a duplicate-ID error
-- [Phase ?]: Phase 36 plan 36-01: proved the bare-shorthand intra-doc link technique -- rustdoc resolves a //! module doc's link scope to the CRATE ROOT, not the enclosing submodule, so a same-file pub-use re-export needs the full crate-relative path (crate::token_counter::heuristic::HeuristicTokenCounter), not a bare shorthand or self::-prefixed path; closed RD-01/66/126 (paladin-memory), RD-51/127 (paladin-ports), RD-46/128 (paladin-storage) via D-05/D-06; added examples/token_economy_commissary.rs (EX-109,111,112,113,114,115) and its README section; seeded 36-EVIDENCE.md + 36-evidence/ for the rest of the phase; zero drift against the 73-line/65-diagnostic default baseline and the 101-exit all-features bar; make api-surface unchanged across all 6 commits
-- [Phase ?]: Phase 36 plan 36-02: closed all 72 paladin-battalion rustdoc rows (34 location groups) -- confirmed the 36-01 crate-root //! link-scope finding generalizes to engine/mod.rs (a non-leaf mod.rs, not just a leaf submodule); zero visibility widened, zero lint suppressions, one atomic commit 9994eed5
-- [Phase ?]: Phase 36 plan 36-03: closed all 28 paladin-ai-core rustdoc rows (14 location groups) -- confirmed a cross-crate unresolved link (directive.rs's StateNode::run, owned by paladin-battalion) is a D-05 de-link situation, not a D-06 dependency-adding one; trace.rs's ten-target //! header confirmed the crate-root link-scope rule at its densest single doc block; webhook.rs's security-invariant prose verified byte-identical; one atomic commit 71a47dc9
-- [Phase ?]: 36-04: http_status.rs unclosed-HTML-tag pair fixed by reflowing the code span onto one source line -- a code span crossing a //! doc-comment line break is not treated as continuous by rustdoc's HTML-tag scanner even when backticks balance across the two lines
-- [Phase ?]: 36-04: dev_ui_controller.rs's RunInspectorPort/InspectorView::supersteps/dev_ui_inspector_page links resolved with explicit crate-relative paths (D-06), not de-linked -- all three are public and reachable
-- [Phase ?]: Every fix in plan 36-05 is a plain [`ident`] -> `ident` de-link; all seven targets are genuinely private (no pub/pub(crate)), confirmed by grep before editing each one
-- [Phase ?]: Both RD-137 (cli) and RD-142 (otel) feature-gated rows confirmed co-gated with their doc'd item before editing, closing D-07 in place with no gate annotation
-- [Phase ?]: war_engine_configuration.rs/control_flow_dynamic_routing.rs headers avoid literally naming provider-key env vars to satisfy the plan's own 0-count acceptance grep while still stating D-29's no-key-needed claim generically
-- [Phase ?]: control_flow_dynamic_routing.rs EX-70 runs an actual mustering graph against the overridden APP_ENGINE_MAX_MUSTER_TASKS limit, not just before/after prints, so the cap-in-force truth is independently verifiable from stdout
-- [Phase ?]: 36-07: Replay-then-resume-with-the-opposite-decision (not fork-with-an-edit) demonstrates the Gate example's divergent result, since a Gate's own dispatch reads no pre-existing state.
-- [Phase ?]: 36-07: A withheld response substituted with an unrelated ParleyId (not an empty responses vec) demonstrates resume_with's typed rejection, since an empty submission with one outstanding parley is a valid partial AwaitingInput, not an error.
-- [Phase ?]: 36-07: graceful_shutdown.rs mirrors paladin-server.rs's own graceful_shutdown ? shutdown_grace_secs : 0 derivation so the toggle's exit-immediately vs. wait-and-drain contrast is observable through the same ShutdownCoordinator API.
-- [Phase ?]: 36-08: HistoryTrimmer's model-context-limit resolver tries the config table before the LLM port's own declared capabilities -- a standalone-trimmer demo must name the model explicitly and override model_context_limits for it, or MockLlmAdapter's 4096-token reported window silently shadows a smaller default_context_tokens
-- [Phase ?]: 36-08: InMemorySanctum's HashMap-backed storage has per-process randomized iteration order -- a RAG example seeding several memories at tied similarity scores needs a deterministic, content-hash-derived embedding (not one constant vector) for reproducible ranking across runs
-- [Phase ?]: 36-08: Discovered (not fixed, D-18 docs-only boundary): PaladinError::ArmamentFailed's FailRun arms in paladin_execution_service.rs build reason from raw e.to_string(), bypassing ToolResultFormatter's redact-then-bound sanitizer their own doc comment promises -- recorded as WINDOWS.md #38
-- [Phase ?]: http_service_host.rs/doc-examples: mount ThreadApiState/RunApiState unwired (matches server's off-by-default behavior) rather than wiring a working backend, closing EX-33/EX-55 without duplicating platform_api_client.rs's demonstration
-- [Phase ?]: platform_api_client.rs bypasses build_run_api (which needs a real provider credential via paladin_port_from_settings) and hand-wires the same collaborators with a local MockEnginePort, using paladin_storage in-memory adapters for every store
-- [Phase ?]: Thread state/resume/history and the dev-ui inspector are demonstrated against a Waypoint-less thread (Agent-kind assistant never touches the waypoint store) and documented as a scope deviation rather than building a full Workflow-based paused-thread demo
-- [Phase ?]: Phase 36 plan 36-10: closed EX-81/82 (node-result cache + enable toggle, gated redis-cache, build-only), EX-100/101/102/108 (trace envelope, TraceConfig via build_run_sink, PALADIN_TRACE_OTEL_ENABLED toggle, persisted trace history), EX-103 (OTLP export sink, gated otel, build-only) and EX-105/106/107 (eval scenario declaration, PALADIN_EVAL_LIVE toggle via check_live_mode's typed refusal, CLI eval-run form) -- ten more of the fifty-nine Phase 34 gap rows closed, fifty-four of fifty-nine now closed; zero make api-surface drift across four commits
-- [Phase ?]: Phase 36 Plan 11: all three tasks' README edits landed in one commit per D-26; fixed a pre-existing Demonstrates-line-count defect in cli_configs/maneuver.yaml (Rule 1) so the plan's own cross-check invariant could pass.
-- [Phase ?]: Both ADR-0033 rustdoc bars + doctests wired into make clean-code, pre-push, and CI lint job (D-11/D-12/D-13); per-crate all-features sweep deliberately excluded from doc-check (workspace command already gates).
-- [Phase ?]: scripts/check-all-examples.sh rewritten to mirror CI's Example Muster 7-invocation feature split exactly (D-14); webhook_receiver folded into the existing web-server step rather than given its own, since acceptance criteria count distinct required-features lists, not targets.
-- [Phase ?]: Phase 36 closure: all 207 audit rows (143 RD-nn + 64 EX-nn) traced by ID to a commit in 36-EVIDENCE.md; no row omitted or invented
-- [Phase ?]: WINDOWS.md rows 36 and 37 resolved to fixed via gsd-tools only; CHANGELOG.md [0.10.0] Documentation section gained four reader-facing Phase 36 bullets
-- [Phase ?]: Real pushed-branch CI run 35290763563 recorded proving the new all-features rustdoc documentation gate (D-12); every CI figure matched the local closing measurement exactly, no D-03 disagreement to arbitrate
-- [Phase ?]: D-15 rewrite: cli_isolation guard now asserts Cargo.toml's [features] default array via toml crate instead of build cfg
-- [Phase ?]: D-20 closure table: 36.1-EVIDENCE.md seeded with all 17 lines; line 1 (cli_isolation) completed, 16 pending for plan 36.1-13
-- [Phase ?]: D-16 sweep confirmed RESEARCH.md assumption A2: zero non-cli_isolation failing targets under --all-features --no-fail-fast
-- [Phase ?]: Phase 36.1 plan 02: both run-failing tool-error arms (handoff and regular Arsenal-tool) sanitize PaladinError::ArmamentFailed's reason via ToolResultFormatter::sanitize_tool_text (widened to pub(crate) only, make api-surface unchanged); pinning test fail_run_redacts_a_secret_in_the_reason covers the regular arm, handoff arm covered by the Task 1 two-call-site source guarantee (commits 979f2a1d, e7284987)
-- [Phase ?]: 36.1-03: contributing-providers.md's module-declaration line (pub mod myprovider_adapter;) left unfixed per nine-signal class-4 verdict — not the same relocated-path class as the two import-path fixes; no WINDOWS.md row minted (D-17's 12-row mapping has no slot)
-- [Phase ?]: Phase 36.1 plan 04: rebuilt testing-guide.md tests/ tree against ls -p tests truth (D-05), swept eleven OpenAiAdapter->OpenAIAdapter casing hits across seven pages (D-07), probed all four flagged battalion-patterns-guide.md bodies (all fail to compile, recorded for 36.1-13 to mint 4 waived unmet-truth ledger rows), and ran the docs.yml gate clean (zero broken links).
-- [Phase ?]: 36.1-05: closed six of the nineteen # Examples MISSING items (StructuredExecutorPort, NodeCachePort, RunSubmissionPort, ScheduleAdminPort, RunQueuePort, WebhookDeliveryRepositoryPort) with real executing doctests; re-measured paladin-ports at 142 passed doctests / 0 cargo doc warnings; MISSING count 19 -> 13
-- [Phase ?]: RunTracePort/AssistantAdminPort/AssistantRepositoryPort # Examples sections use inline Mutex<HashMap>-backed local structs implementing every trait method, never a storage-crate adapter
-- [Phase ?]: Phase 36.1 plan 36.1-07: closed the last three port-trait # Examples gaps (RunRepositoryPort 11 methods, RunScheduleRepositoryPort 8 methods, WaypointPort 7 methods, inline in-memory adapters); plan's read_first undercounted method totals for the first two (stale relative to trait growth) -- implemented all required methods per D-10's compile-and-pass bar; public-API examples script now reports exactly 7 MISSING, all Service kind, zero Port
-- [Phase ?]: 36.1-08: ScheduleService/WebhookDeliveryService # Examples built from shipped in-memory adapters (schedule/webhook/run repos) plus an inline RunSubmissionPort fixture copied from that port's own doctest; WebhookDeliveryService's fallible constructor propagated via ? in a wrapping fn rather than unwrapped. MISSING count 7 -> 5 (D-09, D-10).
-- [Phase ?]: Phase 36.1 plan 09: RunSubmissionService and RunInspectorService # Examples sections both settled the unverified AssistantResolver collaborator (RESEARCH.md A1) by reusing the shipped, in-tree CodeWorkflowResolver::new() -- no inline resolver impl was needed; both doctests construct from real shipped in-memory adapters and pass under cargo test -p paladin-ai --doc
-- [Phase ?]: Phase 36.1 plan 10: RunEventStreamService's example stops at construction (never calls stream/awaits an event, per T-36.1-39); wiring proven via Arc::strong_count(&bus)==2 instead of a stream call
-- [Phase ?]: Phase 36.1 plan 10: AssistantService's unverified registries collaborator turned out to have a real zero-argument constructor (EngineRegistries::new()/Default) -- no not-run fence or fabricated constructor was needed; missing count after this plan is exactly 1 (WaypointRetentionService), handed to plan 36.1-11
-- [Phase ?]: 36.1-11: wired the public-API # Examples gate in three places (make/pre-push/CI) in the same commit as the 19th fix (D-12); CURR-17 stays pending until 36.1-12's PROJECT.md correction lands
-- [Phase ?]: Phase 36.1 Plan 12: PROJECT.md's stale examples figures corrected in place at both occurrences (62 .rs files, 8 declared [[example]] targets, paladin-llm as the sole crate with its own examples/ dir), verified against the tree before writing
-- [Phase ?]: Phase 36.1 Plan 12: ADR-0033 amended with the eight kept crate-level rustdoc suppressions (309 hidden diagnostics across 5 crates), owner v0.11.0 rustdoc-suppressions phase, re-check 2026-10-16; no .rs file changed, cargo doc stays zero warnings
-- [Phase ?]: Phase 36.1 Plan 13: WINDOWS.md reconciled with every open Phase 31/32/34/35/36 deferred-item register — sixteen new rows (ids 40-55: 11 fixed, 5 waived) plus row 38 resolved; open_count: 0, total_count: 55 (one row higher than expected because an accidental probe row, id 39, was minted while verifying the ledger CLI's syntax and waived transparently rather than hidden).
-- [Phase ?]: Phase 36.1 Plan 13: all seven D-25 closing gates ran on the closing commit; cargo test --workspace failed transiently on its first attempt (3 unrelated tests, 30s timeouts, environmental resource contention after two CPU-heavy gates) and was recorded verbatim per D-25, then a full unfiltered re-run confirmed 0 failures. make api-surface unchanged (3959 items).
-- [Phase ?]: 36.1-14: recorded live-read CI run 35329107346 proving the public-API # Examples heading step (D-12); independently cross-checked via gh api job logs, no disagreement requiring reconciliation, row 7 doctests recorded on its own merits
-- [Phase ?]: D-17 checkpoint: maintainer reply classified as deferred (verbatim recorded in 37-CI-EVIDENCE.md); runbook owed before plan 37-08's tag hand-off
-- [Phase ?]: D-13 dry-run dispatch confirmed not attempted per traced Q1 conclusion; no rc/shadow tag created
-- [Phase ?]: Environment addendum: maintainer ran cargo clean; free space re-baselined at 135G for plan 37-02/37-03 preconditions (Task 1's 18G figure preserved, not edited)
-- [Phase ?]: 37-02: Interrupted semver-checks run (host DNS outage + reboot) classified not-measured, not red; maintainer authorized exactly one full 11-package re-run of the unmodified semver-loop.sh (verbatim: 'Record, then full re-run (Recommended)'); MSRV recorded from the pre-outage log, not re-run
-- [Phase ?]: Gate row 6 (make publish-dry-run) and Task 2's adjacent checks (make security, make api-surface) hosted detached with real exit codes, polled with repeated foreground waits, never run in foreground (33m32s > 600s ceiling)
-- [Phase ?]: Local sweep closed: 31 numbered rows, 29 unconditional local passes, 2 named carried conditions, 0 CI-attributed rows; 82% ADR-0006 coverage floor named CI-attributed in an appended (not replacing) Summary addendum
-- [Phase ?]: 37-04: Traceability table's 'Complete' status column tracks trace completeness (row populated), not requirement satisfaction — SHIP-05's traceability row reads Complete while its definition-row checkbox stays unchecked until the crates ship.
-- [Phase ?]: Section 12 cites the provenance block's literally-labeled Local re-seal head SHA (522ab1d4), listing the later per-gate doc-only commit SHAs alongside with their source-tree identity to it stated explicitly
-- [Phase ?]: Gate row 7's evidence pointer cites 37-CI-EVIDENCE.md rows 3-13 (not the tally's shorthand 4-13), matching the more precise prose naming row 3's check-changelogs sub-target as a hard assertion
-- [Phase ?]: DNS-outage semver re-run and zero-valued CHANGELOG topic readings are recorded in-row (gate rows 4 and 7), separate from the four-item Findings list the plan's action text names
-- [Phase ?]: Plan 37-07: SHA-scoped gh queries substituted for branch-scoped ones (feature/phase-33 remote deleted post-merge); 44/44 required-context tally computed live; red CodeQL results check recorded advisory (not a required context, maintainer disposition already on record); CI Coverage job success + verbatim 90.44% figure recorded as sole SC2 evidence; Task 3 (push) withheld as not-applicable-by-deviation.
-- [Phase ?]: Phase 37.1 Plan 01: cut release/v0.10.1 from origin/main's merge commit 1d4a9724 and cherry-picked the 24 local-only .planning commits from feature/phase-33 (1bb94063..b6d44416) onto it in order, live-resolved per D-06; opened 37.1-CI-EVIDENCE.md in house form and appended a dated old-to-new SHA map plus forward pointer to 37-CI-EVIDENCE.md (D-11, D-00d)
-- [Phase ?]: Publish-order dependency resolution reads the metadata entry's name field, never rename -- avoids resolving an aliased local dependency (e.g. paladin-core) to the wrong crate name
-- [Phase ?]: CI job choice: License & Dependency Policy, not Publish Dry Run -- that job never runs pre-merge (push+main only)
-- [Phase ?]: make check-gates left red on purpose at end of plan 37.1-03 -- battalion fix is plan 37.1-04's work (D-08 stage 1)
-- [Phase ?]: Phase 37.1 Plan 04: manifest fix (drop version requirement) chosen over reordering scripts/publish-crates.sh's CRATES array for the paladin-battalion publish-order defect -- smaller diff, zero risk to the proven publish loop
-- [Phase ?]: Phase 37.1 Plan 04: 3 remaining versioned workspace dev-dependency edges (herald->ports, root->web, root->eval) recorded as a live-derived finding and deliberately left versioned -- workspace-wide path-only rule deferred to v0.11.0 per CONTEXT.md
-- [Phase ?]: Phase 37.1 Plan 05: parameter expansion (not a here-string or EOF-draining sed) chosen for _cor_gh_call's status-line extraction fix -- removes the whole subprocess-and-pipe mechanism the EPIPE pipefail race depends on, not merely tunes around it
-- [Phase ?]: Phase 37.1 Plan 05: regression payload sized at 200000 chars via named PADDING_SIZE variable, far above the ~70KB non-trigger / ~100KB+ reliable-trigger thresholds measured -- avoids a marginally-sized test that passes against broken code by chance
-- [Phase ?]: Phase 37.1 Plan 05: three further early-closing-reader-under-pipefail sites (check-deprecations.sh, check-doc-examples.sh x2, check-public-api-examples.sh) swept and recorded as findings, deliberately not fixed -- assigned to the deferred wider release-tooling audit per D-00d
-- [Phase ?]: Phase 37.1 plan 06: version bump 0.10.0 -> 0.10.1 across all fourteen manifests + lockfile + OpenAPI baseline (plan-gap fix, Rule 3); twelve changelogs and MIGRATION.md addendum added; four pre-existing paladin-battalion Cargo.toml comment lines describing the real v0.10.0 release-day defect kept untouched as historical prose (D-00d); all six release gates plus make test verified green on head 896227ee
-- [Phase ?]: Phase 37.1 plan 07: re-sealed all eight D-09 release gates green on candidate head fbdefec9 (no red observed, D-08 stage 2 never invoked); corpus audit gained a new append-only section 13 with its own fresh unticked sign-off box (D-09), distinct from section 12's box reuse
-- [Phase ?]: Plan 37.1-08: parent-pointer convention substitutes for the plan's self-referential-SHA verify defect — the final pushed head is identified by three read-only commands (fetch+rev-parse, gh pr view headRefOid, and a .planning-only diff against a named parent commit) rather than embedded in a file that cannot contain its own commit's hash.
-- [Phase ?]: Plan 37.1-08: PR #56 opened release/v0.10.1 -> main with a curated four-part body (what broke in v0.10.0, what changed, the eight-gate re-seal, and pointers); autoMergeRequest confirmed null by a single live read, no merge/approve/tag performed.
-- [Phase ?]: PR #56's 124 checks read per-job against main's live 44-context ruleset: 118 SUCCESS, 6 SKIPPED, 0 FAILURE; Coverage job printed 90.44% (clears 82% floor); publish-order gate's Check publish order step proven to have executed pre-merge by name
-- [Phase ?]: Section 13's gate rows point at PR #56's runs; two rows (migration-allowlist, publish-dry-run) recorded as NOT CI-corroborated rather than assumed covered; sign-off box left untouched, still unticked
+**Cleared at the v0.10.0 close (2026-09-23).** Every phase-level decision this section carried for
+Phases 22-37.1 is recorded in its own `NN-CONTEXT.md` (and the SUMMARY decision lists) under
+`milestones/v0.10.0-phases/`; the locked ones are ADRs in `.planning/decisions/` and the
+`## Key Decisions` table in PROJECT.md. Only what a later milestone must honour is kept here:
+
+- **Two-officer token model** — `Commissary` (input-side rationing) is kept and anchored;
+  `Treasurer` (output-side spend governance) is reserved for Milestone 14, not built (ADR-0049,
+  ADR-0050). `TokenBudget`, `TokenCounterPort`, `TokenUsage`, `max_tokens` are not renamed.
+- **X-03 supersession is scoped** — clean breaks were allowed for Phases 31-33 only (ADR-0051); any
+  further removal before v0.11.0 needs its own recorded supersession.
+- **`paladin-memory` → `paladin-llm`** (`default-features = false`) is the workspace's one lateral
+  adapter-to-adapter edge (Phase 33 D-01/D-03); `reqwest` never enters the normal graph through it.
+- **MSRV 1.88, measured** from the `time` ≥ 0.3.47 / `rmcp` `process-wrap` chain, single-sourced in
+  `workspace.package.rust-version` and enforced by the `msrv` CI job (Phase 22.1; `MIGRATION.md`
+  §9.3).
+- **Accepted deviations, to revisit** — tracing overhead +22.18 % (log sink) / +18.46 % (composite)
+  against PRD 07's ≤ 3 % bar (Phase 28 D-16/D-37, `WINDOWS.md` row 35); run-inspection routes
+  authenticated but single-tenant (Phase 27 WR-03, row 32); legacy `Runnable::Agent` runs emit no
+  SSE/webhook events (WR-02, row 31); SSE `done` reports `halted` for a caller-cancelled run whose
+  persisted status is `Cancelled` (Phase 27 D-14).
+- **Release mechanics** — tags are cut on `main` merge commits per the Phase 29 two-SHA rule; the
+  `.project/v0.10.0/09-program-acceptance-audit.md` sign-off boxes are ticked by a human, never an
+  agent (Phase 29 D-17, Phase 37 D-00a); `make publish-dry-run` resolves from the local workspace
+  overlay and is blind to registry publish order — `scripts/check-publish-order.sh` in
+  `make check-gates` and CI is the gate for that class (Phase 37.1).
+- **Partial-publish recovery** — maintainer's option A: a patch release through the same pipeline,
+  the failed tag left in place and its GitHub Release bannered/pre-release, orphaned crate
+  versions yanked by the maintainer only after the patch is registry-verified, one register row
+  per crate in `docs/src/appendix/release-recovery.md` §5 (Phase 37.1 D-02).
+
+The pre-close text of this section (Phase 33/32/29/28/23 decision digests and the tool-appended
+`[Phase ?]` bullets back to Phase 3) is in this file's git history at commit `6a08c293`.
 
 ### Pending Todos
 
-- `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md` — evaluate RustFS as the dev/test object store; the quay.io MinIO pin from quick task 260913-15w is terminal (no newer community tags will exist).
+Both acknowledged as deferred at the v0.10.0 close (see *Deferred Items*); neither is resolved.
+
+- `todos/pending/2026-08-13-verify-local-coverage-reproduction.md` — user-owned; walk the
+  documented `make services-up` → `make coverage` procedure on a Docker-capable machine and confirm
+  it reproduces the CI figure (now 90.44 %, not the 82.39 % the todo quotes). `recheck_by:
+  2026-10-16`.
+- `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md` — evaluate RustFS as the
+  dev/test object store (FUT-10); the quay.io MinIO pin from quick task 260913-15w is terminal.
+  `recheck_by: 2026-10-16`.
 
 ### Blockers/Concerns
 
-**Phase 33 close (verified 2026-09-17): no blockers.** 6 plans in 4 waves; verification `passed`; UAT 23/23
-(`33-UAT.md`: 22 coverage-mode automated passes + one human acceptance of corpus audit §11 /
-`33-CI-EVIDENCE.md`); `33-SECURITY.md` `verified`, `threats_open: 0`; `33-VALIDATION.md` `validated`;
-`33-REVIEW.md` 0 critical / 3 advisory warnings, IN-01 fixed in `33-REVIEW-FIX.md`. Carried, pre-existing,
-none introduced here: (a) `cargo doc --workspace --no-deps` at 73 warnings (up 1 from Phase 32's 72, zero in
-files this phase touched) — not a gate per SHIP-04; (b) the 82 % coverage floor is CI-attributed, not locally
-measurable (no Docker) — read from the CI `coverage` job once `feature/phase-33` is pushed; (c) the
-`cargo-semver-checks` 0.50.0 coverage gap for inherent-method return-type changes (`33-05-SUMMARY.md`),
-covered by `MIGRATION.md` §9.2 rows instead. Note for milestone close: the corpus audit §11 tag box is
-deliberately still unticked — the maintainer ticks it by hand at tag time (Phase 29 D-17).
+**No blockers at the v0.10.0 close (2026-09-23).** All 19 phases `passed`; `WINDOWS.md`
+`open_count: 0`; audit `tech_debt` with 0 gaps. The per-phase close notes this section carried for
+Phases 23-33 are resolved and archived with their phases (`milestones/v0.10.0-phases/`); the
+five-run ingest concern register (run 5's eight verified-open findings and the runs 1-4
+carry-forward) was disposed by Phases 5-16 and is preserved in this file's git history at commit
+`6a08c293`. Open concerns carried into the next milestone:
 
-**Phase 32 close (2026-09-16): no blockers.** 5 plans in 4 waves; verification `passed` 5/5
-roadmap truths; UAT 22/22 (`32-UAT.md`: 21 coverage-mode automated passes + one human confirmation
-of the gate evidence); `32-SECURITY.md` `verified`, `threats_open: 0`; `32-VALIDATION.md` and
-`32-REVIEW.md` present. Release gates (`32-05-SUMMARY.md`): `make clean-code`, `make security`,
-mdbook, doctests green; coverage 90.25 % local; workspace tests 6771 passed / 1 pre-existing
-`cli_isolation` failure. Carried, all pre-existing and none introduced here: (a) `RUSTDOCFLAGS="-D
-warnings" cargo doc --workspace --all-features --no-deps` stays RED (14 unresolved intra-doc links in
-`paladin-ai-core`'s graph-fingerprinting and webhook-delivery docs — a subset of the 77 warnings
-Phase 31 measured; accepted at UAT Test 22 as the Phase 31 precedent); (b) the `--all-features`
-`cli_isolation` test conflict; (c) the broken `[HeuristicTokenCounter]` intra-doc link logged by plan
-32-03 in `deferred-items.md`. Note for Phase 33: the api-coverage gate detected one `consume api`
-signal that `COVERAGE.md` overrides as "no external API" — re-check that declaration when RAG
-retrieval gains a production caller.
-
-**Phase 29 close (2026-09-10): no blockers.** 9 plans in 5 waves; verification `passed` 4/4 roadmap
-truths (18/18 plan-level must-haves reproduced); UAT 3/3 human checkpoints passed (`29-UAT.md`,
-`640570eb`); `29-SECURITY.md` `verified`, `threats_open: 0` (37/37, two accepted risks: R-29-01
-test-composition auth default, R-29-02 the D-16 tracing overhead); `29-VALIDATION.md` present. Code
-review WR-01…03 fixed (`a30e1ce1`, `6891b77c`, `59e4e5f8`). Phase 28's carried concern (1) is closed:
-WINDOWS.md row 35 now records the D-16 adjudication; (4) is closed: #33/#34 waived by plan 29-08
-(`35293e6e`). Carried into the milestone close: (a) Phase 28's production-wiring caveat (replay,
-trace persistence, `dev-ui` router not wired at the composition root) and the OTel
-`SimpleSpanProcessor` note remain open follow-ups for a later milestone. (b) The real `docs.yml`
-"Build MDBook" required check and the `semver`/`msrv` jobs on the Phase 29 head SHA were passed at
-UAT Test 2 by the maintainer; `29-CI-EVIDENCE.md` still records the pre-push state and cites run
-`34365812871` on `77912ac8` — update it if a written record of the post-push run is wanted.
-(c) The seven judgment-tier sign-off boxes in `.project/v0.10.0/09-program-acceptance-audit.md`
-were accepted at UAT Test 1 but still read `- [ ]` on disk at close — tick and commit them if the
-audit file itself should carry the sign-off. (d) `tag v0.10.0` is deliberately absent; it is cut on
-the `main` merge commit by the release workflow after `/gsd-ship`.
-
-**Phase 28 close (2026-09-09): no blockers.** 17 plans in 8 waves; verification `passed` 4/4 roadmap
-truths (51/51 artifacts, 32/32 key links); UAT 2/2 human checkpoints passed (`28-UAT.md`,
-`a9d4a2ee`); `28-SECURITY.md` `verified`, `threats_open: 0` (75/75); `28-VALIDATION.md` present.
-Close-out gates (`28-17-SUMMARY.md`, `28-CI-EVIDENCE.md`): coverage 90.28 % on `ff78a6b5`,
-api-surface baseline regenerated (3936 items — closes the carried Phase 25/26 concern), semver
-allowlist set-equality PASS, ADR-0048, `MIGRATION.md` §9.2–9.7 filled. Carried concerns: (1) PRD 07
-criterion 6 (≤3 % tracing overhead) measured FAIL at +22.18 %/+18.46 % on the synthetic
-all-Function-node bench — the maintainer signed it off at UAT, but no WINDOWS.md entry records the
-adjudication (only #33/#34 exist for this phase); add one if a written record is wanted before
-v0.10.0 ships. (2) Production-wiring caveat from `28-SECURITY.md`: replay, trace persistence and the
-`dev-ui` router are not wired at the composition root — re-secure whichever phase wires them.
-(3) The OTel sink uses `SimpleSpanProcessor` (one OTLP POST per span), unoptimized. (4) WINDOWS
-#33 (reduced `parley`/`done` SSE payload content) and #34 (`run export` derives no fired edges from
-Waypoints without a real graph) remain open.
-
-**Phase 26 close (2026-09-07): no blockers.** 21 plans in 14 waves (two executors in flight at most; per-executor worktree merges), verification `passed` 10/10 and re-verified after the code-review fix pass (`26-REVIEW.md`: CR-01 unredacted `ArmamentResult` text, CR-02 dropped after_model Finish, WR-01 `key=` false positives, WR-02 structured path bypasses middleware [documented], WR-03 unredacted tool output — all closed in `26-REVIEW-FIX.md`; IN-01 JWT heuristic false positive left open, advisory). Release gates recorded in `26-21-SUMMARY.md`: coverage 89.58 %, semver 11/11, MSRV 1.88, `make security`, api-surface regenerated (3057). Carried concerns: (1) CI "Check documentation" fails on ~60 pre-existing rustdoc warnings (none from Phase 26 after `93f22cce`); (2) Docker tiers CI/UAT-only; (3) Resolved: `26-SECURITY.md` written 2026-09-07 (`eb9051a2`, status `verified`, `threats_open: 0`). Learnings folded into `~/.claude/projects/-workspace/memory/gsd-run-mechanics-paladin.md`.
-
-**Phase 25 close (2026-09-06): no blockers.** UAT 76/76 passed (`25-UAT.md`: 72 deliverables
-auto-passed from SUMMARY coverage blocks, 4 human checkpoints; the CI-only Redis node-cache and
-Postgres Waypoint tiers were read green on runs `34042790005` and `34051074633`). Carried concerns:
-(1) The `api-surface` CI job had been red since Phase 24: `.project/current-exports.txt` was last
-regenerated at plan 23-12 and Phases 24 + 25 added 123 public items (purely additive) without
-regenerating it. Fixed by `0e5c106c` (gap G-25-1); no close-out plan runs
-`scripts/check-api-surface.sh`, so add it to the X-10/X-11 gate list from Phase 26 on. (2)
-Resolved: `25-05-SUMMARY.md`'s coverage block labelled one verification `kind: doc`, which `uat
-classify-coverage` rejects — `83133f00` changed it to `kind: other` so D1 auto-passes on re-run.
-(3) Resolved: `25-SECURITY.md` (`1860bb00`, status `verified`, `threats_open: 0`) and
-`25-VALIDATION.md` (`aee5134e`, status `validated`, `nyquist_compliant: true`) were produced on
-2026-09-06 after the transition to Phase 26. (4) Phase 23's carried concern (3) is closed: plan
-25-12 replaced the E2E-3 mock attempt-counter seam with a real per-task Aegis retry.
-
-**Phase 24 close (2026-09-05): no blockers.** Carried concern from UAT: the untracked, gitignored
-local `config.yml` in the devcontainer no longer deserialises into `Settings` (it lacks
-`llm.deepseek.api_key` unless `DEEPSEEK_API_KEY` is exported, and `rag.retrieval_trigger`, which has
-been a required field since `e5c58f4a`, 2026-01-30). Pre-existing, unrelated to Phase 24; the
-tracked `config.test.yml` boots `paladin-server` cleanly. Regenerate the local file from
-`config.example.yml` or add the two fields.
-
-**Phase 23 close (2026-09-04): no blockers.** Carried concerns: (1) Docker is unavailable in the
-devcontainer, so the Postgres Tier-2 Waypoint contract suite is provable only through CI's
-`postgres-integration` job — its SKIP-path and declared-count guards make a green job sufficient
-evidence; route it to UAT, never mark it passed locally. (2) `MIGRATION.md`'s remaining `TBD` rows
-are owned by Phase 24 (HITL-04 / M-B-02), Phase 26 (RT-07) and Phase 29 (SHIP-01/02). (3) The
-E2E-3 recovering-worker half is exercised through a mock attempt counter at a marked Phase 25 /
-FT-FR-06 seam, not a real Aegis retry — Phase 25 must replace the seam.
-
-**No blockers. 0 across all five ingest runs.** Everything below is a concern with an owning
-requirement.
-
-**— Run 5 (final): eight verified-open findings and two corrections —**
-
-- **⚠ CORRECTION to a run-4 finding — do not repeat the earlier framing.** Run 4 recorded
-  `deny.toml` as out of sync with `.cargo/audit.toml`, mirroring "only the original two" advisories.
-  **That is withdrawn.** Both files carry the same **five** vulnerability advisories
-  (`RUSTSEC-2023-0071`, `-2025-0111`, `-2026-0187`, `-2026-0194`, `-2026-0195`); `deny.toml`'s ten
-  extra entries are *unmaintained* notices, a different class, labelled as such and authorised by
-  M10 Epic 4 FR-1 step 5. **The real gap is that 13 of the 15 suppressions carry documented
-  reasoning but no named owner and no expiry**, against an M10 Epic 2 origin policy that mandates a
-  single documented exception process — and FR-3's own four-field schema requires neither, so the
-  configs comply and the policy is the gap. Separately, the three 2026 **vulnerability** ignores are
-  authorised by **no** ingested document (FR-3 and §5 name exactly two). SEC-01 corrected in place;
-  SUPPLY-02 carries the corrected scope.
-
-- **🔴 A completed milestone's own acceptance criterion is false.** `ci.yml` has **two jobs with the
-  identical display name `Security Audit`**: `:60-77` runs a bare `cargo audit` under a comment
-  declaring `.cargo/audit.toml` the single source of truth (compliant), and `:389-406` runs
-  `cargo audit --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2025-0111` — 2 of the 5 advisories.
-  (**Corrected by Phase 12 (plan 12-01), dated 2026-08-09, citing `ci.yml:465-482` and commit `cb75b2b`:**
-  this citation was already stale — the job actually sat at `ci.yml:465-482`, deleted
-  by Phase 9's plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed; see `REQUIREMENTS.md`'s
-  "Verified by Phase 12" block.)
-  `cargo audit` scans `Cargo.lock` irrespective of features, so **the two jobs are configured to
-  reach different verdicts on the same tree.** Mechanism: the Epic 25 PRD's Appendix B tabulates
-  the pre-M10 pipeline as 7 jobs, #4 being `security`; M10 Epic 2 **added** the compliant job
-  without removing its predecessor, and Epic 4's non-goals then froze the area. Milestone 10 is
-  recorded 100% complete with 0 open checkboxes. **Fix: delete 18 lines** → SUPPLY-01.
-
-- **🔴 The agent API is documented as JWT and implemented as opaque tokens.**
-  `grep -rn "jsonwebtoken" Cargo.toml crates/*/Cargo.toml` returns **nothing**. The only `AuthPort`
-  implementation is `src/infrastructure/adapters/auth/in_memory_token_auth_adapter.rs` — M9 Epic 5's
-  opaque, in-process, hashed store, chosen deliberately with JWT as an explicit non-goal. Yet
-  `crates/paladin-web/src/agent_auth.rs` documents its verifier as JWT throughout, and M12 Epic 5's
-  **Open Question 4** is unanswered *because it is unanswerable for the shipped adapter*: an opaque
-  store has no signing secret and no algorithm. **This is the only variant in five runs that shipped
-  code cannot settle** — the tree carries the M12 shape and the M9 mechanism at once → WEB-01,
-  variant group 29.
-
-- **🔴 And it has a multi-replica correctness edge.** M9 Epic 5 §6.1 recorded the trade-off in its
-  own words — "tokens are validated against an in-process store, so a multi-process deployment would
-  later need a shared store" — and M12 Epic 7 then shipped `k8s/deployment.yaml` with liveness and
-  readiness probes. **Under more than one replica, a token issued by one pod will not verify on
-  another.** Neither document references the other, and no requirement in the 263-document corpus
-  covers the shared store → WEB-02. Not a scaling optimisation; a correctness question.
-
-- **`ProviderCapabilities` over-reports.** All three LLM adapters declare tool-calling capability
-  and hardcode `function_call: None`; `crates/paladin-ports/src/output/llm_port.rs` has no `tools`
-  field, and greps for `struct ToolDefinition`, `struct ToolCall` and `tool_calls` return zero
-  across `paladin-ports` and `paladin-llm`. **Correctable today, independent of whether Epic 27 is
-  ever built** → WEB-03 (the flag), WEB-04 (the scope).
-
-- **Deferred-QA Epics 25-27 are verified unbuilt, item by item.** No `cli-tests` job, no
-  `bench-check` job, no `coverage` job, no `.codecov.yml`, no Makefile coverage targets (the
-  `Makefile` has no `llvm-cov` reference at all), eight deprecated GitHub Actions, the architecture
-  document frozen at exactly 311 lines with zero of seven newer subsystems and zero Mermaid
-  diagrams, `docs/assets/` empty, no `docs/DEMOS.md`, and no `tools`/`ToolDefinition`/`ToolCall`
-  symbols. **Only one FR-25.2 item is closed** — the dangling `on: schedule` block is gone
-  → Phases 15 and 16. *Note the scoping correction*: coverage tooling is **partially built** —
-  `integration-tests.yml:117-123` does run `cargo llvm-cov` and `codecov-action@v3`.
-
-- **The corpus's largest documentation gap was hidden by a relocation.**
-  `docs/src/appendix/design-and-architecture.md` is **exactly 311 lines** — the same figure its own
-  PRD cites as the *pre-rewrite* state — with Commander 0, Council 0, Conclave 0, Grove 0,
-  Maneuver 0, Sanctum 0, Sentinel 0 and zero mermaid blocks. All seven are verified shipped. M11
-  Epic 2 relocated the file into `appendix/`, and M11 Epic 3's non-goals exempt exactly that chapter
-  from rewriting. **Invisible for two milestones** → DOCS-02.
-
-- **The Epic 28/29 mock prerequisite does not exist.** No `tests/common/` directory; mocks live at
-  `tests/helpers/{mock_llm_adapter,mock_arsenal_adapter,mock_paladin_port}.rs` — a different
-  location and a disjoint set. None of `MockUserRepository`, `MockLogPort`,
-  `MockNotificationService`, `MockEventSource` or `MockTriggerExecutor` exists. ~6-10 of the 35-45
-  estimated hours are this infrastructure → DEFER-01.
-
-- **⚠ Two registers propose incompatible next actions on `user_service.rs`.** Deferred-QA Epic 28
-  plans to **test** it to ≥ 80%; M8 `deferred-items.md` D2 plans to **split** it. Run 4 established
-  `deferred-items.md` as the highest-fidelity document in the corpus. Splitting first is cheaper but
-  changes Epic 28's estimate and mock set. **Do not schedule independently** → FACADE-02 ↔ DEFER-02.
-
-- **Epic 29's coverage baseline is stale in both path and number.** `DEFERRED_COVERAGE.md` records
-  `listener_service.rs` at 602 LOC / ~57.83% dated 2026-02-14; the module ships as
-  `src/application/services/orchestration/listener.rs` after the M6 relocation, and M9 Epic 2 added
-  match/no-match/fan-out/rate-limit/dispatch tests against it. **Scope real, arithmetic not**
-  → DEFER-03.
-
-- **`project/current-exports.txt` is now at nine stale references** — five in tooling
-  (`scripts/check-api-surface.sh:6`, `scripts/extract-public-api.sh:6`, `ci.yml:171,181,186`) and
-  five in requirement text (M8 Epic 7 FR-10 plus M12 Epic 1 §7, Epic 5 §7, Epic 6 `cross_refs`,
-  Epic 7 FR-4.6). The M12 ones were written in June 2026, months after commit `928c6d5` renamed the
-  directory. **Unchanged across three ingest runs; the longest-lived unfixed defect in the corpus
-  and the cheapest to close** → DEBT-01, extended in place.
-
-- **Milestone 11's 26 open items are the only genuinely open checkbox count in all 542** — six
-  user-guide updates, eight deployment/operations updates, and the linkcheck report review. All
-  fourteen target files exist, so **file existence settles nothing**; verify by content → DOCS-01.
-
-- **Two Milestone 12 seams were recorded as defaults rather than decisions.** Where
-  `AgentProvisioner` lives (Epic 1 OQ-2 defaults to `paladin-web`, while the shipped queue-worker
-  and sidecar topology pages describe would-be second consumers), and whether Garrison/Arsenal
-  wiring for HTTP-served agents is planned scope or permanent (stated once, in a non-goal, against a
-  decision matrix M11 Epic 6 FR-8 makes "the single source of routing") → ORCH-04.
-
-- **A sixth position on the coverage gate.** The Deferred-QA parent PRD mandates a **78% hard
-  gate**; Epic 25 specifies a **phased 70 → 74 → 78 ramp**. The parent PRD's own OQ-3 asks exactly
-  this and is recorded Open; the child Epic answered it unilaterally. Measured coverage is 76-77%,
-  so 78% fails on day one and 70% passes. Joins 80 / 85 / 75-layered / 80-Epic-24 → variant group
-  30, PIPE-02.
-
-- **The predicted fifth milestone-numbering collision did not occur.** Four instances exist from
-  runs 2-4; run 5's provenance keys resolve directly against directory numbering → ORCH-05 records
-  the prediction closed.
-
-- **✅ Closed by run 5: the last shipped subsystem without an ingested requirement.** Milestone 12's
-  Axum HTTP API surface — auth, rate limiting, OpenAPI, SSE streaming — now has 34 requirements
-  across seven Epics. **Every shipped subsystem in this workspace now has at least one ingested
-  requirement behind it.**
-
-- **✅ Closed by run 5: the ingest itself.** All 263 documents covered. No run 6.
-
-**— Carried forward from runs 1-4 —**
-
-- **🗓 The only deadline in this project is 2026-09-30, and it is a security acceptance.**
-  `Milestone_7/Epic_4/rustsec-remediation-plan.md` formally risk-accepts two advisories
-  (`RUSTSEC-2023-0071` rsa, `RUSTSEC-2025-0111` tokio-tar) with **owner Platform Security
-  (Milestone 7)** and a **review/expiry target of 2026-09-30** — roughly two months from this
-  ingest. It is the only dated item in all 263 documents, and nothing in `.planning/` other than
-  SEC-01 surfaces it.
-
-- **The RustSec exception set is encoded four different ways.** *(**Run-5 correction:** the
-  "`deny.toml` violates its own stated invariant" half of this entry is **withdrawn** — the two
-  files are in sync on all five vulnerability advisories. See the run-5 correction above. The
-  four-surface count and the 13-without-owner-or-expiry finding stand.)* Verified by direct file
-  reads on 2026-07-30: the plan documents **2**;
-  `.cargo/audit.toml` `[advisories] ignore` holds **5** (the 2 plus `RUSTSEC-2026-0187` lopdf via
-  `pdf-extract`, `-0194` and `-0195` quick-xml via `rust-s3`/`aws-creds`); `deny.toml`
-  `[advisories] ignore` holds **15** (those 5 plus 10 unmaintained notices) under a header claiming
-  "the same advisory IDs are mirrored here … Keep these two files in sync"; and `ci.yml` runs
-  **two independent `cargo audit` jobs** — `:77` bare (reading audit.toml's 5) and `:406` with the
-  original 2 passed inline. `make audit` is bare; `cargo deny check` gates at `:105`.
-  **Thirteen of `deny.toml`'s fifteen have no entry in the formal risk-acceptance register** — they
-  carry inline reasoning but no owner and no expiry, against acceptance criteria that require both.
-  Both tools gate CI. Tracked as SEC-01. *(Note for continuity: counting RUSTSEC IDs **mentioned**
-  rather than **suppressed** gives 7 and 17, because `RUSTSEC-2026-0185` quinn-proto and `-0190`
-  anyhow are named in comments as upgraded rather than ignored. The `ignore` arrays are 5 and 15.)*
-
-- **A defect is now written into a requirement, not just into code.** M8 Epic 7 FR-10
-  (`REQ-web-api-baseline-changelog`) mandates
-  `./scripts/extract-public-api.sh project/current-exports.txt` — the path that has been stale since
-  commit `928c6d5` renamed `project/` to `.project/`. All five original references are unchanged.
-  DEBT-01 was **extended** to cover the requirement text as well as the two script defaults and the
-  three workflow lines; no duplicate requirement was created.
-
-- **The licence has three answers and one of them is signed.** A decision checklist with approver
-  `DF3NDR` (2026-05-28) and a 551-package inventory records `MIT OR Apache-2.0`; the M7 Epic 4 PRD
-  and overview say MIT; the shipped root `Cargo.toml` says `license = "MIT"`. The dual-licence rule
-  was the stated basis for accepting `r-efi`'s `MIT OR Apache-2.0 OR LGPL-2.1-or-later`. `deny.toml`
-  already follows the checklist. SEC-02 — do not resolve by inference.
-
-- **Two open architecture questions from run 4, both worth surfacing rather than assuming.**
-  (1) The extracted-crate dependency rule is stated absolutely — "No extracted crate may depend on
-  another extracted crate" — and violated once by `crates/paladin-content`'s optional `paladin-llm`
-  edge, which the same PRD's §4.4 anticipated without amending the rule → HARD-05, and the strongest
-  SPEC candidate in run 4. (2) `paladin-content` declares `pdf = []` gating **nothing** and the
-  facade's `content-processing` omits `pdf` entirely, yet `.cargo/audit.toml` suppresses an advisory
-  on the grounds that `pdf-extract` **is** in the graph → HARD-06, which SEC-01 depends on.
-
-- **Three small verified defects on a published crate family.** `crates/paladin-herald/` has a
-  README but **no `CHANGELOG.md`**, against a criterion the Epic 4 completion summary records as Met
-  (the crate was created after Epic 4 closed) → SEC-04. `Dockerfile.chef:25-33` enumerates nine
-  crate manifests and omits `paladin-herald`, so the cache-tightness FR-01 exists to deliver is not
-  achieved → SEC-05. And the crates.io name-collision guardrail the publish-verification document
-  asked for does not exist; collisions cost Epic 4 two package renames and a NO-GO cycle → SEC-03.
-
-- **Milestone 8 shipped beyond its own planning documents, and two of its epics are complete despite
-  their records.** The 2026-06-04 reconciliation found the Epic 1 audit and Epic 3 disposition had
-  mis-described ~4,400 LOC of orphaned uncompiled duplicates as "active bridges that stay", then
-  executed the relocations Epic 3 had deferred to Milestone 9 — 15 commits, ~10,250 net LOC removed,
-  and a new `paladin-herald` crate created inside an Epic whose non-goals forbade exactly that.
-  Epic 6 is filed "Not verified; low priority" and is complete; Epic 3 is filed "PUNTED" and is
-  complete in substance. Milestone 8's three open checkboxes are contradicted by code. HARD-02
-  records the reconciliation as authoritative.
-
-- **`infrastructure-adapter-disposition.md` was a live trap for ingest run 5.** *(**Run-5
-  outcome:** run 5 read the Milestone 9 documents directly rather than through this record, and did
-  **not** re-plan any relocation — `code-verification.md` verified the whole M9 orchestrator
-  subsystem shipped. The trap did not spring, but FACADE-04 still stands: the list remains
-  uncorrected in the source, and `paladin-arsenal` / `paladin-sanctum` still name crates that do not
-  exist.)* The Epic 3 PRD §6
-  designates it "the authoritative cross-reference for the §4.3 M9 flags" — the document Milestone 9
-  was meant to read — and it records all 20 rows as "Stays", names two crates that do not exist
-  (`paladin-arsenal`, `paladin-sanctum`), and disagrees with its own governing PRD on two rows.
-  Milestone 9 is recorded 100% complete. **FACADE-04 still stands** — run 5 bypassed this record
-  and re-planned nothing, but the list remains uncorrected at source.
-
-- **Checkbox state is the least reliable signal in this project — and it is wrong in both
-  directions.** Precedence is **shipped tree > `.planning/codebase/` > `intel/code-verification.md`
-  > PRD > DOC > checkbox.** Runs 1 and 2 found checkboxes *understating* shipped reality (Chain of
-  Command and Herald wiring; Conclave 129 open and shipped; Sanctum/Qdrant 111 open and shipped).
-  Run 3 found the first *accurate* count — Milestone 4's 20 open items, corroborated by zero
-  `#[deprecated]` annotations in the tree — **and** the first count that *overstates* completion:
-  Milestone 4 Epic 3's CLI-isolation list is fully checked while three CLI-only dependencies remain
-  unconditional. Verify each count against the tree before implementing anything.
-
-- **Five verified open defects in Milestone 4-6 scope, all small, all confirmed against the tree
-  on 2026-07-30.** (1) The `api-surface` CI job fails on every run: `ci.yml:171,181,186` and both
-  `scripts/{check-api-surface,extract-public-api}.sh` defaults point at
-  `project/current-exports.txt`, but the directory was renamed in commit `928c6d5` and the baseline
-  lives at `.project/current-exports.txt` — so the only automated public-API guard is inert, and
-  `check-deprecations.sh` never runs. (2) `grep -rn '#\[deprecated' src crates` returns 0 against
-  Milestone 4 Epic 2 FR-8. (3) `crates/paladin-ports/Cargo.toml:18` sets `[lib] doctest = false`
-  deferring the fix to an unwritten "Task 7.0", and `ci.yml:225` excludes the crate from `--doc`.
-  (4) `structopt`, `colored` and `comfy-table` are still unconditional root dependencies.
-  (5) Three `TokenUsage` structs ship (`token_usage.rs:13`, `battalion/mod.rs:497`,
-  `llm_analysis_service.rs:51`). Tracked as DEBT-01 … DEBT-05.
-
-- **Two structural questions gate Milestone 4-6 planning rather than its content.** The
-  milestone/tier numbering collision (the Milestone 4-6 overviews number themselves "Milestone
-  1/2/3" by refactoring tier, and PRDs cross-reference "Milestone 1 / Epic 2" meaning Milestone 4
-  Epic 2) → ARCH-02; and the Milestone 6 facade re-export policy, where the overview requires
-  backward-compatible re-exports and both PRDs forbid them, which decides whether Milestone 6 was a
-  breaking change requiring a major version bump → ARCH-04.
-
-- **Five documented positions would break things if applied literally**: `vision` gating
-  `chacha20poly1305`/`zeroize` (would break `cargo build --no-default-features`), the MCP transport
-  feature flags, `web-server` gating actix-web, a `paladin-cli` crate, and
-  `src/application/use_cases/` as the orchestration home. All five are contradicted by shipped
-  code → ARCH-05.
-
-- **One verified open defect in Milestone 2-3 scope.** `grove_service.rs:537` builds its routing
-  request with `model: "gpt-4".to_string(), // TODO: Make configurable` in production code
-  (`#[cfg(test)]` begins at line 732), so Grove routing ignores the configured provider. This is the
-  same defect class Epic 21 removed elsewhere, and it means Epic 22's "all inline TODOs resolved"
-  criterion is unmet. Tracked as CLOSE-01.
-
-- **Three open-checkbox blocks still unverified** — Epic 22 hardening (81), Epic 14 autonomous
-  (45), Epic 24 test hardening (29). These are the only run-2 blocks `code-verification.md` leaves
-  unchecked, and they are *claims*, not work. VERIFY-02 resolves them; CLOSE-02 acts on whatever
-  they prove.
-
-- **30 competing variant groups / 60 entries / 69 warnings preserved unmerged** across all five
-  runs (6 groups from run 1, 10 from run 2, 4 from run 3, 8 from run 4, 2 from run 5; fourteen of
-  run 5's sixteen warnings are not `-v1`/`-v2` pairs and are listed separately). No winners picked —
-  deliberately, and at the user's explicit direction, in every run. **Run 5 produced the only
-  variant shipped code cannot settle**: group 29's token mechanism, where the tree carries the
-  Milestone 12 shape and the Milestone 9 mechanism simultaneously. Recording answers is RECON-02 … RECON-07, VERIFY-03 … VERIFY-06,
-  ARCH-03, ARCH-04, SEC-01, SEC-02 and HARD-01 … HARD-07. **Run 4 is the run where shipped code
-  settles the most**: six of its eight new groups carry a `settled-by` pointer, which is a fact
-  about the tree rather than a decision. The one genuine surprise is group 23 — the two publish
-  dry-run forms turned out to **coexist**, per-crate in `release.yml:410` and workspace-wide in
-  `ci.yml:644`, which the documents alone could not reveal.
-  Highest-consequence now: **ownership of `PaladinResult` / `StopReason` / `TokenUsage`** (group
-  19 — the one place where mechanical precedence gives the architecturally wrong answer, because a
-  PRD outranks an Approved-status decision record and its FR-10 would reintroduce the upward
-  dependency the decision removed), the coverage gate (4 positions), the handoff tool name and
-  parameters (3 names / 2 parameter sets), the Grove routing threshold (3 names / 3 defaults), and
-  the `paladin-core` dependency allowlist (declared exhaustive at 6, ships 14).
-
-- **Three run-1/run-2 variants were CLOSED by run-3 code verification** — recorded as facts about
-  the tree, not decisions. `BattalionResult` resolves to a merged superset at `battalion/mod.rs:549`
-  satisfying all three consumers (so RECON-03 became a recording task and GAP-07 lost its code
-  change); `BattalionConfig` resolves to the Epic 4 form exactly and `CommanderConfig` does not
-  exist anywhere, collapsing the three-owner `metadata_output_dir` warning to one owner; and the
-  competing `ErrorStrategy` variant sets turned out to be two distinct enums in two crates, which
-  Milestone 6 physically separated. No entry was deleted.
-
-- **Two contradictions are live in shipped code**: `formation.rs:109` rejects fewer than 2 Paladins
-  while the Commander's Auto rule routes a single Paladin to Formation; and `require_api_key()` in
-  the live-API test harness panics by design, reversing the graceful-skip criterion in both the
-  Epic 23 and Epic 24 PRDs.
-
-- **A documentation defect is propagating epic numbers.** `RELEASE_NOTES_MILESTONE_3.md` assigns
-  Milestone 3 Epics 19-23 to four Milestone **2** features, and four further documents mislabel
-  epics in cross-references. Epic numbers are the corpus's provenance keys, so this misroutes any
-  lookup. VERIFY-03 fixes it at the source.
-
-- **Two release-notes claims are verified absent from the tree**:
-  `RoutingStrategy::PerformanceBased` with "dynamic learning" (also contradicts Epic 16 non-goal
-  NG-3), and the Council/Maneuver API forms that disagree with the shipped surfaces. Do not plan
-  against them.
-
-- **A security requirement vanished between PRDs without a recorded decision.** Epic 13 FR-11
-  required encryption at rest for temporarily stored image data, memory zeroization and retention
-  policies; Epic 20 completed the vision pipeline with none of it and dropped `EncryptionError`
-  from the error enum. No artefact for it was found in the tree. VERIFY-04 establishes whether the
-  drop was conscious.
-
-- **Quality numbers are below their own gates and the gate has four positions**: 80% (nine
-  Milestone-1 PRDs), 85% (unit-test-improvements), 75% overall with a layered per-tier table
-  (Milestone 3 plan), 80%/70% re-asserted (Epic 24). Measured: 60.88% unit / 67.79% integration at
-  Milestone 1, ~78% overall at Milestone 3. Plus module-scoped gates at 95% (Herald) and 90%
-  (autonomous). No performance baseline document exists.
-
-- **Reported test totals are not a monotonic series**: 999 → 1,292 → 1,674 → 1,628 → 853 across
-  the corpus. No figure is authoritative; none is used as a gate.
-
-- **All `src/...` paths in the run-1 and run-2 corpus are historical — and several run-3 paths
-  are too.** Those PRDs assume a single-crate layout; the workspace was decomposed in Milestone 5
-  (run 3) into what is now **ten library crates plus a `doc-examples` crate plus the root
-  `paladin-ai` facade** — not the "9-crate workspace" this planning set previously recorded, and not
-  the six the Milestone 5/6 overviews assume. Milestone 6 then moved several things Milestone 5 had
-  just placed (the Maneuver parser out of `paladin-core`, `CircuitBreaker` into infrastructure), and
-  the Milestone 6 Epic 2 PRD's own target directory `src/application/use_cases/` no longer exists.
-  Resolve locations through `.planning/codebase/` or the tree, never through a PRD.
-
-- **~~Five shipped crates have no ingested requirement~~ — closed by run 4.** All ten library
-  crates now have one: `paladin-storage`, `paladin-notifications`, `paladin-content` and
-  `paladin-web` from M7 Epic 1's extraction PRD and its cost-benefit gate, and `paladin-herald` from
-  the 2026-06-04 reconciliation rather than from any PRD. What still ships without a requirement is
-  Milestone 12's Axum HTTP API surface (auth, rate limiting, OpenAPI, SSE streaming) — run 5.
-
-- **Version metadata disagrees three ways**: branch `release/v0.7.0`, `Cargo.toml` 0.6.0 (root
-  package and every workspace crate path dependency), tag v0.5.1. REL-01 converges them, but
-  ARCH-04's answer on whether Milestone 6 was a breaking change determines what they converge *to*.
-
-- **Edition is mixed and the documents disagree too**: root plus nine crates on `edition = "2024"`,
-  `crates/paladin-ports` and `crates/paladin-notifications` on `"2021"`. Milestone 5 Epics 1-4
-  require 2021; Epic 5 and the milestone overview require 2024. ARCH-03(a) records the answer,
-  REL-02 applies it.
-
-- **~~Four~~ Eight deprecated GitHub Action references remain**, against Milestone 5 Epic 6's
-  "low-risk improvement that should not be deferred" and Deferred-QA FR-25.1. Run 5 completed the
-  count: `actions-rs/toolchain@v1` at `ci.yml:147`, `:317`, `:507` and `integration-tests.yml:71`;
-  `actions/cache@v3` at `integration-tests.yml:78`, `:84`, `:90`; `codecov/codecov-action@v3` at
-  `integration-tests.yml:123`. **Moved out of DEBT-01 into PIPE-04**, which owns the full sweep;
-  DEBT-01 keeps only the `project/current-exports.txt` baseline path. Recorded so neither is
-  planned twice.
-
-- **No `.planning/config.json`** — granularity `standard` and sequential phase IDs assumed in all
-  five runs. Phase IDs are plain (`Phase 12` … `Phase 16`), not milestone-prefixed and not
-  project-coded. **No phase in this roadmap is a UI/frontend phase** — Paladin is a Rust library
-  and HTTP service with mdbook documentation, so no `UI hint` annotation is carried and
-  `/gsd-ui-phase` is not applicable.
-
-- **✅ No ingest runs pending. The ingest is complete.** All five runs are done and all 263
-  documents are covered. Any future addition follows the Roadmap Extension Protocol: **new phases
-  start at Phase 17**, Phases 1-16 are never renumbered, and **seventeen** ID prefixes are spent
-  (`RECON`, `GAP`, `QUAL`, `REL`, `VERIFY`, `CLOSE`, `ARCH`, `DEBT`, `SEC`, `HARD`, `FACADE`,
-  `SUPPLY`, `ORCH`, `WEB`, `PIPE`, `DEFER`, `DOCS`).
-  **`Milestones-8-11_Dependency-Graph.md` is now spent**: run 5 confirmed every dependency it
-  described was honoured and every release gate it named was cut — M9 100% at v0.3.0, M10 100% at
-  v0.4.0, M11 92% at v0.5.0, M12 99% at v0.6.0, which is exactly where the tree sits. Keep its
-  dependency semantics as a pattern; the schedule is history.
-
-- **Hygiene, not planning**: one ingested source document
-  (`Milestone_3-Completion/Post-Epic_24-cleanup/LIVE_API_TESTS_FIX.md`) contains a plaintext OpenAI
-  API key in its body. The value was never copied into any `.planning/` file. The user has confirmed
-  it is rotated. Redacting the source document and running a repository-wide secret scan is still
-  recommended — the same value may appear in `.env` history or coverage artefacts.
+- **Coverage is CI-attributed, not locally measurable** — this devcontainer has no Docker; the
+  82 % floor (ADR-0006) is read from the CI `coverage` job (90.44 % at PR #56). The local
+  reproduction walkthrough is the pending user-owned todo above.
+- **Tracing overhead** accepted at 6-7× the PRD bar (D-16); `TraceDispatcher::emit` /
+  `LogTraceSink` serialisation is the named optimisation target.
+- **Webhook SSRF guard does not pin the resolved address** between check and connect — DNS
+  rebinding is a documented limitation (`src/application/services/run/webhook/ssrf.rs` module docs,
+  `security.instructions.md`).
+- **Terminal MinIO pin** — no newer community `minio/minio` or `mc` tag will ever exist; the
+  dev/test stack and the Kubernetes smoke test depend on a frozen third-party image (FUT-10 todo).
+- **`cargo-semver-checks` 0.50.0 coverage gap** for inherent-method return-type and tool-coverage
+  classes — covered by `MIGRATION.md` §9.2 rows instead (Phases 32/33).
+- **Nyquist validation** — seven v0.10.0 phases at `VALIDATION.md` `status: draft` (22, 24, 29,
+  30, 34, 36, 36.1) and Phase 28 at `nyquist_compliant: false`; archived phases 05-21 likewise
+  unreconciled. `/gsd-validate-phase <N>` each; coverage TODO, not a compliance failure.
+- **Bookkeeping drift in the corpus acceptance audit** — the seven §11 judgment-tier sign-off boxes
+  and the `v0.10.0` tag box in `.project/v0.10.0/09-program-acceptance-audit.md` are still `- [ ]`
+  on disk although 29-UAT recorded the pass and the tag was cut; tick by hand or annotate as
+  superseded by §13 (v0.10.1, ticked).
+- **`release/*` ruleset bypass** granted temporarily on 2026-09-21 for the v0.10.1 push must be
+  removed now that PR #56 is merged.
+- **Phase 37 reads incomplete to `init.manager`** (8 of 11 plans with SUMMARYs; 37-09..37-11
+  superseded) — expected, documented in MILESTONES.md *Known Gaps*; do not "fix" by fabricating
+  SUMMARYs.
 
 ### Quick Tasks Completed
 
@@ -1095,6 +299,26 @@ requirement.
 - Phase 37.1 inserted after Phase 37: v0.10.1 Patch Release — tag v0.10.0 published 3/12 crates (battalion versioned dev-dep vs CRATES order); maintainer chose recovery option A (URGENT)
 
 ## Deferred Items
+
+### Acknowledged at v0.10.0 milestone close (2026-09-23)
+
+**Verification overrides: 0** — all 19 phases (22-37.1) report `verification_status: passed` with
+`behavior_unverified: 0`. **Phase-completion override: 1** — Phase 37 reads `phase_complete: false`
+because plans 37-09, 37-10 and 37-11 were superseded by Phase 37.1 (dated notes in the plan files,
+no SUMMARY) after the `v0.10.0` tag published 3 of 12 crates; its `37-VERIFICATION.md` is `passed`
+5/5 with SC4 stated as superseded. **Requirement gap acknowledged: 1** — SHIP-05 superseded by
+SHIP-06, deliberately unticked (MILESTONES.md *Known Gaps*). **Open artifacts acknowledged: 2** —
+both pending todos, each already dispositioned as deferred past v0.10.0 by Phase 36.1 (CURR-20)
+with `recheck_by: 2026-10-16`. Closeout type `override_closeout`.
+
+| Category | Item | Status | Deferred At |
+|----------|------|--------|-------------|
+| todo | `2026-08-13-verify-local-coverage-reproduction` | Open — owner: repo maintainer. Walk `make services-up` → `make coverage` on a Docker-capable machine and confirm the CI figure reproduces (CI now 90.44 %). Carries no `resolves_phase` tag by design | v0.8.0 close; re-acknowledged v0.9.0 and v0.10.0 |
+| todo | `2026-09-13-evaluate-rustfs-replacement-for-minio` | Open — owner: repo maintainer; FUT-10 in the archived requirements. The quay.io MinIO pin (quick task 260913-15w) is terminal | Phase 36.1 (2026-09-18); acknowledged v0.10.0 close |
+| phase | Phase 37 plans 37-09..37-11 | Superseded by Phase 37.1 — never executed; scope (post-publish verification, milestone-close recording for `v0.10.0`) delivered under `v0.10.1` | Phase 37.1 (2026-09-19) |
+| requirement | SHIP-05 | Superseded by SHIP-06; amend-at-source note dated 2026-09-22 in `milestones/v0.10.0-REQUIREMENTS.md` | Phase 37.1 |
+| testing | Nyquist validation unreconciled for Phases 22, 24, 29, 30, 34, 36, 36.1 (`draft`) and 28 (`nyquist_compliant: false`) | Coverage TODO, not a compliance failure — `/gsd-validate-phase <N>`. Joins the same open item for archived Phases 05-21 | v0.10.0 close |
+| debt | Audit `tech_debt` register (tracing overhead D-16; `WINDOWS.md` waived rows 23-25, 29-35, 45, 51-55; §11 sign-off boxes; IN-01/IN-02; SSE `done` collapse; three roadmap-level v2 lines; Milestone 14 reserved) | Inventoried with owners in `milestones/v0.10.0-MILESTONE-AUDIT.md`, not duplicated here | v0.10.0 close |
 
 ### Acknowledged at v0.9.0 milestone close (2026-09-01)
 
@@ -1186,81 +410,32 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-23T13:35:00.000Z
-**Stopped at:** Phase 37.1 complete — v0.10.1 released and verified (37.1-UAT.md 53/53, 37.1-VERIFICATION.md passed 6/6); all 19 phases of milestone v0.10.0 complete; next: /gsd-audit-milestone v0.10.0, then /gsd-complete-milestone v0.10.0
-**Resume file:** None (Phase 37.1 closed; its `.continue-here.md` was removed at transition)
-Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
-`threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
-Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.
-See the milestone-boundary note under Project Reference before planning Phase 12.
+**Last session:** 2026-09-23 — `/gsd-complete-milestone v0.10.0` on branch `chore/37.1-post-close`.
+**Stopped at:** Milestone v0.10.0 closed and archived; `.planning/REQUIREMENTS.md` removed for the
+next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
+RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
+not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.
+**Resume file:** None.
+**Branch state:** the close commits sit on `chore/37.1-post-close`; open a PR to `main` (the
+repository enforces PR-only merges to `main`, ADR-0043/0044) — `.planning/`-only, no crate change,
+no tag.
 
-**Stopped at: ingest run 5 of 5 merged into PROJECT.md, REQUIREMENTS.md, ROADMAP.md and STATE.md.
-THE INGEST IS COMPLETE.**
-
-What run 5 produced:
-
-- **120 run-5 requirements** recorded in a new *Milestone 9-12 as-shipped ledger* — the largest of
-  the five, with 37 verified-shipped rows and a new verdict class, `Shipped, one acceptance
-  criterion false`, earned by Milestone 10. Enumerated and cross-checked against
-  `intel/requirements.md`: 120 rows, 120 distinct IDs, zero missing, zero extra.
-
-- **24 forward requirements across Phases 12-16** — SUPPLY-01 … SUPPLY-03, ORCH-01 … ORCH-05,
-  WEB-01 … WEB-04, PIPE-01 … PIPE-05, DEFER-01 … DEFER-03, DOCS-01 … DOCS-04. Forward total: **86
-  across 16 phases.**
-
-- **4 new variant entries across 2 new groups** (29: token mechanism; 30: coverage threshold),
-  plus 14 run-5 warnings recorded as unsettled positions that are not `-v1`/`-v2` pairs. **All 69
-  cumulative variants preserved unmerged; no winners picked.**
-
-- **12 supersession chains**, including the first case in five runs of a later run **correcting an
-  earlier run's direct code verification**.
-
-- **Two in-place edits, no duplicates**: DEBT-01 extended (six stale `project/current-exports.txt`
-  references became nine) and shed its four `actions-rs` references to PIPE-04; SEC-01 corrected
-  (the `deny.toml` out-of-sync finding withdrawn, with SUPPLY-01/SUPPLY-02 carrying the corrected
-  scope).
-
-- **Phases 1-11 unchanged and unrenumbered.** The Milestone 7-8 detail block was wrapped in
-  `<details>` per protocol item 2 with its `### Phase N:` headers intact, and the ROADMAP Overview
-  was rewritten so the file reads as one roadmap rather than five appended fragments. All 16
-  `### Phase N:` headers verified present and matching the 16 summary checklist entries.
-
-Resume file: .planning/phases/26-agent-runtime-enhancements/26-VERIFICATION.md
-
-**Next ingest run: none. There is no run 6.** All 263 documents in `.project/` are covered — 199
-classified plus 64 task lists measured deterministically. Every shipped subsystem in the workspace
-now has at least one ingested requirement behind it.
-
-**Next action:** plan Phase 1 (`/gsd-plan-phase 1`) and work the roadmap in numeric order, **or**
-take the four cheapest verified items first, none of which depends on anything — SUPPLY-01 (delete
-`ci.yml:389-406`; 18 lines, and a Milestone 10 acceptance criterion becomes true), DEBT-01 (nine
-stale references; the `api-surface` job has been red since commit `928c6d5`), WEB-03
-(`ProviderCapabilities` stops over-reporting), and WEB-01/WEB-02 (the token mechanism, which has a
-correctness consequence under the shipped Kubernetes Deployment).
-(**Corrected by Phase 12 (plan 12-01), dated 2026-08-09, citing `ci.yml:465-482` and commit `cb75b2b`:**
-this SUPPLY-01 citation was already stale — the deleted job actually sat at `ci.yml:465-482`, removed by Phase 9's
-plan 09-06 in commit `cb75b2b`. SUPPLY-01 is closed, not a live cheap-item candidate; see
-`REQUIREMENTS.md`'s "Verified by Phase 12" block.)
-
-**Two things to carry into any planning session:**
-
-1. **Phase 9 carries the only date in the corpus** — a RustSec risk acceptance expiring
-   **2026-09-30**, roughly two months out. Numeric order puts it ninth; urgency does not. Phase 12
-   should run with or before it.
-
-2. **FACADE-02's D2 and DEFER-02 must be sequenced together.** One splits `user_service.rs`, the
-   other tests it to ≥ 80%. Doing them independently means doing the work twice.
+**Next action:** `/gsd-new-milestone` — new phases start at Phase 38. Candidate scope is listed
+under *Next Milestone Goals* in PROJECT.md (Milestone 14 Treasurer, the FUT-01…10 v2 list, the
+accepted deviations D-16 / rows 31-32, the Nyquist backfill, RustFS). Housekeeping that needs no
+milestone: remove the temporary `release/*` ruleset bypass; tick or annotate the corpus audit §11
+boxes; `/gsd-validate-phase` for the seven `draft` phases.
 
 ## Operator Next Steps
 
-- Phase 36 UAT + security closed 2026-09-18 (retroactively, after execution): `36-UAT.md` 59/59 passed (all 13 SUMMARYs coverage-mode, every deliverable automated and the maintainer confirmed the roll-up, `3b38037a`), `36-SECURITY.md` `verified` (`threats_open: 0`, 64/64 — 51 mitigate + 13 accept, L1 grep-depth per ASVS level 1, `b349f331`). ROADMAP/STATE were already transitioned to Phase 36.1 by `/gsd-execute-phase`'s inline transition (`ebc54cdf`) before this UAT session ran — no further transition needed.
-- Next: `/gsd-plan-phase 36.1` (0 plans on disk yet — Deferred Items Closure) to break down the deferred-items registers, the two open `WINDOWS.md` rows, and the two `todos/pending/` items before `/gsd-complete-milestone v0.10.0`.
-- Phase 32 closed 2026-09-16: UAT 22/22 passed (`32-UAT.md`, `edaf690b`), `32-VERIFICATION.md` `passed` (5/5), `32-SECURITY.md` `verified` (`threats_open: 0`), `32-VALIDATION.md` and `32-REVIEW.md` present. The `cargo doc -D warnings` RED gate is carried forward as pre-existing (Phase 31 precedent), not fixed.
-- Next: `/gsd-discuss-phase 33` (no `33-CONTEXT.md` yet) then `/gsd-plan-phase 33` — Commissary In-Tree Adoption (COMM-*, RAG rations via `Commissary::dispense`; re-seal the Phase 29 release gates on the final commit). `/gsd-complete-milestone v0.10.0` stays deferred to after that re-seal.
-- Phase 30 closed 2026-09-14: UAT 10/10 passed (`30-UAT.md`, `19a28185` — nine coverage-mode automated passes + one human confirmation), `30-VERIFICATION.md` `passed` (scoped re-verification `bc275c1c` after a one-field SUMMARY metadata fix), `30-SECURITY.md` `verified` (`threats_open: 0`, 11/11). Three non-threat doc-precision observations (O-30-01..03: `configuration.md` Anthropic row says "required" but `ANTHROPIC_MAX_TOKENS` defaults to 4096; Garrison/RAG owner column says `src/config/` but the structs live in `crates/paladin-memory/src/config/`; `vision.*.max_tokens` is an unlisted fifth surface) recorded in `30-SECURITY.md` for a docs follow-up.
-- Next: `/gsd-discuss-phase 31` (no `31-CONTEXT.md` yet) then `/gsd-plan-phase 31` — Lossless Token Accounting (keystone; breaking under ADR-0051). `/gsd-complete-milestone v0.10.0` stays deferred to after Phase 33's release re-seal (COMM-04).
-- Phase 29 closed 2026-09-10: UAT 3/3 passed (`29-UAT.md`, `640570eb`), `29-VERIFICATION.md` `passed`, `29-SECURITY.md` `verified` (`threats_open: 0`, 37/37). **v0.10.0 milestone: all 9 phases complete.**
-- Next: `/gsd-complete-milestone v0.10.0` — archive the milestone; then `/gsd-ship 29` for the feature-branch PR (the `v0.10.0` tag is cut on the `main` merge commit by `release.yml`, never on this branch).
-- Housekeeping before the PR: tick the seven maintainer sign-off boxes in `.project/v0.10.0/09-program-acceptance-audit.md` if the file should carry them (accepted at UAT but still `- [ ]` on disk), and refresh `29-CI-EVIDENCE.md` with the post-push run identifiers.
-- Phase 28 closed 2026-09-09: UAT 2/2 passed (`28-UAT.md`, `a9d4a2ee`), `28-VERIFICATION.md` `passed`, `28-SECURITY.md` `verified` (`threats_open: 0`, 75/75). Carried: the production-wiring caveat (replay / trace persistence / `dev-ui` router not wired at the composition root — re-secure the phase that wires them) and the D-37 bench-overhead deviation signed off at UAT without a WINDOWS.md entry.
-- Next: `/gsd-discuss-phase 29` (no `29-CONTEXT.md` yet) then `/gsd-plan-phase 29` — SHIP-01…04, the v0.10.0 release phase. `/gsd-ship 28` is available for the feature-branch PR.
+- **Milestone v0.10.0 closed 2026-09-23** (`override_closeout`; two todos acknowledged; Phase 37's
+  three superseded plans and SHIP-05 recorded as known gaps). Archives under `milestones/v0.10.0-*`;
+  record in MILESTONES.md; lessons in RETROSPECTIVE.md.
+- **Next:** open a PR for `chore/37.1-post-close` → `main` (planning-only), then `/clear` and
+  `/gsd-new-milestone`. New phases start at Phase 38; `.planning/REQUIREMENTS.md` is recreated by
+  that command.
+- **Housekeeping, no milestone needed:** remove the temporary `release/*` ruleset bypass granted
+  2026-09-21 (PR #56 is merged); tick or annotate the seven §11 sign-off boxes and the `v0.10.0`
+  tag box in `.project/v0.10.0/09-program-acceptance-audit.md` (§13 for v0.10.1 is ticked);
+  `/gsd-validate-phase` 22, 24, 28, 29, 30, 34, 36, 36.1 (advisory).
+- **Recheck by 2026-10-16:** the two pending todos (`todos/pending/`).

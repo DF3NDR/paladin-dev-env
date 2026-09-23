@@ -1,14 +1,135 @@
 # Milestones
 
-## v0.10.0 Durable Agent Execution Runtime (Released: 2026-09-21; milestone close pending)
+## v0.10.0 Durable Agent Execution Runtime (Shipped: 2026-09-23)
 
-**Phases completed (release-relevant):** Phase 37 (v0.10.0 Crate Release, SC1-SC3 met, SC4
-superseded — see below) and Phase 37.1 (v0.10.1 Patch Release, `SHIP-06`); the milestone's other
-phases (22-36.1) are recorded in `ROADMAP.md`'s progress table and are not restated here.
-**Git range (this record):** `1d4a9724` (`v0.10.0` merge commit) → `f7dae267` (`v0.10.1` merge
-commit)
+**Phases completed:** 19 phases (22-37.1, including inserted 22.1, 36.1 and 37.1), 231 plans
+(228 executed, 3 superseded — plans 37-09..37-11 were overtaken by Phase 37.1), 574 tasks
+**Requirements:** 88/89 satisfied (ENG-01…08, CF-01…05, HITL-01…05, FT-01…06, RT-01…07,
+PLAT-01…06, OBS-01…04, SHIP-01…04, SHIP-06, VOCAB-01…07, ACCT-01…05, PRIM-01…05, COMM-01…04,
+CURR-01…21); SHIP-05 superseded by SHIP-06 (see *Known Gaps*)
+**Timeline:** 2026-09-01 → 2026-09-23 (23 days, 1,678 commits since tag `v0.9.0`)
+**Git range:** `495483ef` (milestone opened) → `6a08c293` (close)
+**Closeout type:** override_closeout — 0 unverified phases (all 19 `VERIFICATION.md` files read
+`passed`, `behavior_unverified: 0`); 1 phase the tooling reads as incomplete (Phase 37: 8 of 11
+plans executed, 3 superseded without a SUMMARY, by design); 2 open artifacts acknowledged (both
+`todos/pending/` files already dispositioned as deferred past v0.10.0 by Phase 36.1, CURR-20);
+see STATE.md *Deferred Items*
+**Audit:** `milestones/v0.10.0-MILESTONE-AUDIT.md` (status `tech_debt` — 88/89 requirements,
+19/19 phases, 10/10 integration seams wired, 6/6 E2E flows, 0 gaps; debt items recorded with
+owners)
+**Tags:** `v0.10.0` on merge commit `1d4a9724` (2026-09-18; published 3 of 12 crates, all three
+since yanked; GitHub Release kept, bannered, flipped to pre-release) and `v0.10.1` on merge commit
+`f7dae267` (2026-09-21; release run `35659477719` green, all 12 publishable crates on crates.io
+at `0.10.1` via Trusted Publishing). The milestone identity is `v0.10.0`; the crates a consumer
+installs are `0.10.1`.
 
-This entry tells both tags plainly, in the shape the v0.9.0 entry above uses.
+**Delivered:** Paladin is now a durable agent execution runtime rather than a pattern-oriented
+orchestration library: a cyclic superstep engine over typed shared state that checkpoints every
+superstep and resumes with zero re-execution, pauses indefinitely for a human, retries and falls
+back per node, runs in the background behind a durable queue and a versioned HTTP platform API,
+emits a machine-consumable trace stream with a regression harness to assert on it, accounts for
+every token losslessly and rations context through one officer — with the whole surface
+documented to currency and published to crates.io at one coherent version.
+
+**Key accomplishments:**
+
+- **A durable superstep engine, proven by crash-resume rather than described (Phases 22-24).**
+  `WarGraph`/`WarEngine` run cycle-permitting graphs over a typed `Battlefield` with deterministic
+  delta merge, persist exactly one `Waypoint` per superstep to in-memory, SQLite or Postgres
+  stores that all pass one 13-function `WaypointPort` contract suite, and resume from any
+  Waypoint (including a persisted `FrontierSnapshot` and intra-superstep `MusterProgress`) with
+  zero re-execution. Control flow is node-driven (`Directive`/`NextStep`, Muster fan-out, nested
+  Battalion subgraphs, LLM-evaluated edges behind a fail-closed registry that fixed BUG-01);
+  Parley pauses a run into an `AwaitingInput` Waypoint, `resume_with` validates every response
+  before writing anything, Chronicle replay/fork proves mainline immutability byte-for-byte, and
+  cancellation drains a whole in-flight batch against one grace deadline. Two engine readiness
+  defects (BUG-03 cycle-bootstrap starvation, BUG-04 resume-frontier loss) landed test-first in
+  the inserted Phase 22.1, which also measured the MSRV at 1.88 instead of declaring it.
+
+- **Fault tolerance and an agent runtime a consumer can shape (Phases 25-26).** A table-driven
+  `Transience` taxonomy on every error enum, structured `NodeError`, per-node `Aegis`
+  retry/timeout/typed handlers, a chain-composing `FallbackLlmAdapter` that never hops after a
+  streamed chunk, and node result caching (in-memory + Redis) with a shared contract suite. On
+  the agent side: an ordered `ExecutionMiddleware` chain proven byte-identical on an empty chain,
+  twelve built-ins under one `AgentRuntimeConfig` (call/token/tool limits, guardrails, history
+  trimming, summarization, Vault recall), the `Vault` long-term memory vocabulary and first
+  adapter, and `ResponseFormat` structured output reaching the wire on four adapter paths.
+
+- **A background-run platform and observability that other tools can consume (Phases 27-28).**
+  `POST /v1/runs` persists, enqueues and executes on a `RunWorkerPool` with lease heartbeats,
+  resume-not-restart redelivery and drain-on-shutdown, over `RunQueuePort` (in-memory + Redis
+  ZSET/Lua) and `RunRepositoryPort` whose partial unique index *is* the 409 ThreadBusy invariant;
+  `WarGraphDoc` gives graphs a schema-derived document form; versioned assistants, schedules and
+  HMAC-signed webhooks with a table-tested SSRF guard at write and send time. A twelve-variant
+  `TraceEvent` envelope with panic-isolated composite sinks (log, OTel, SSE), a `RunTracePort`
+  with three adapters, Mermaid/DOT exporters frozen by golden files, and the new `paladin-eval`
+  crate (scenario format, scripted `ScenarioLlm`, twelve evaluators).
+
+- **Token economy without loss and without a second vocabulary (Phases 30-33).** ADR-0049/0050/0051
+  fixed the two-officer model (`Commissary` kept, `Treasurer` reserved for Milestone 14) and the
+  units-plain/roles-medieval naming rule; six-field `TokenUsage` now travels intact from the LLM
+  port through `RunFinished`, both heralds and the HTTP edge (`from_total` deleted, ~99 literal
+  sites migrated), with terminal-chunk streaming usage parity on every adapter; one counting
+  contract (`TokenCounterPort::is_exact`) and one shared `resolve_context_window` replace two
+  independent walks and the duplicate `paladin-memory` trait; RAG retrieval rations through
+  `Commissary::dispense` with shed records and an omission marker — the last silent-truncation
+  path in the tree, closed with a proptest and an ungated integration test.
+
+- **Program gates that were re-sealed, not re-read (Phases 29, 33, 37, 37.1).** `MIGRATION.md`
+  complete with a CI grep-gate against placeholder markers, a frozen v0.9 config that boots v0.10
+  with every new subsystem inert, an OpenAPI golden diff over the six v0.9 routes, a 138-row
+  per-FR evidence table, three program E2E scenarios plus their eval dogfood copies, the `semver`
+  job comparing `crate | type` pairs, `WINDOWS.md` triaged to `open_count: 0` — and the full gate
+  set re-run on the final commit three separate times (Phase 33, Phase 37, Phase 37.1).
+
+- **Documentation brought to currency by inventory first, then closed by ID (Phases 34-36.1).**
+  One read-only audit measured the debt (94 mdBook rows, 143 rustdoc rows — the carried "14
+  unresolved links" was undersized 5.5×, 122 example rows) before anything was edited; every row
+  was then closed by ID: the superstep-engine guide written with compile-verified `doc-examples`
+  modules, the CLI appendix rebuilt from live `--help`, `cargo doc` taken from 65 warnings to
+  zero and the `--all-features` bar from 77 errors to zero with no visibility widened, 14 new
+  offline example programs, all 101 public-API entry points carrying a `# Examples` doctest
+  behind a new gate, and every deferred register walked to `open_count: 0` before the tag.
+
+- **The release itself — and the second one that finished it (Phases 37, 37.1).** `v0.10.0` was
+  tagged on `main` by the documented flow and its pipeline published 3 of 12 crates before a
+  publish-order defect the local dry-run gate was structurally blind to; Phase 37.1 fixed both
+  defects (path-only workspace dev-dependencies; the `EPIPE` race in
+  `create-or-reuse-release.sh`, with a 200,000-character regression case), built an offline
+  `cargo metadata`-driven publish-order gate proven red on the broken tree and wired into
+  `make check-gates` and CI, and released `v0.10.1` with all twelve crates registry-verified
+  (`yanked: false`, `paladin-eval`'s first pipeline publish carrying `trustpub_data`) and the
+  three orphans yanked by the maintainer with one register row each.
+
+### Known Gaps
+
+- **SHIP-05 — superseded, deliberately unticked.** "v0.10.0 is released" never became literally
+  true: the `v0.10.0` tag's pipeline cannot complete forward because `release.yml` reads the
+  `CRATES` order from the tag ref. The outcome it was written to secure is delivered by SHIP-06
+  (`v0.10.1`). Recorded at source in `milestones/v0.10.0-REQUIREMENTS.md` (amend-at-source note
+  dated 2026-09-22) and in `37-VERIFICATION.md`.
+- **Phase 37 plans 37-09..37-11 — superseded, never executed.** Their scope (post-publish
+  verification and milestone-close recording for `v0.10.0`) moved into Phase 37.1; the plan files
+  carry dated supersession notes and no SUMMARY, which is why `init.manager` reads Phase 37 as
+  incomplete although its verification passed.
+
+**Known deferred items:** the audit's `tech_debt` register, with owners — the accepted tracing
+overhead deviation (+22.18 % log sink / +18.46 % composite against PRD 07's ≤ 3 % bar; D-16,
+`WINDOWS.md` row 35, candidate optimisation target `TraceDispatcher::emit`); the legacy
+`Runnable::Agent` path emitting no SSE bus events or webhook deliveries (row 31) and the
+single-tenant scoping of the run-inspection routes (row 32); the SSE `done` event reporting
+`halted` for a caller-cancelled run whose persisted status is `Cancelled` (D-14); the seven
+judgment-tier sign-off boxes in `.project/v0.10.0/09-program-acceptance-audit.md` §11 still
+`- [ ]` on disk although 29-UAT recorded the pass; seven phases (22, 24, 29, 30, 34, 36, 36.1)
+with `VALIDATION.md` at `status: draft` and Phase 28's at `nyquist_compliant: false` pending a
+re-run; the terminal quay.io MinIO pin and its RustFS evaluation (FUT-10, todo); the user-owned
+coverage-reproduction walkthrough carried since v0.8.0; the three roadmap-level v2 debt lines
+(oversized service files, clone/lock contention, allowlist drift); and Milestone 14 (Treasurer),
+reserved by ADR-0050 and not roadmapped. Also carried, from `security.instructions.md`: the
+webhook SSRF guard does not pin the resolved address between check and connect (DNS rebinding is
+a documented limitation).
+
+### Release record — the two tags
 
 **`v0.10.0` — tagged, only 3 of 12 crates published.** Annotated tag `v0.10.0` (object
 `9282f4da38bb19f75ce3ed488c10454bdf254990`, tagger `Am0rfu5`, message "v0.10.0 Durable Agent
@@ -23,6 +144,7 @@ deterministically at `paladin-battalion` (position 4 of 12). Two defects caused 
    finishes writing a large response; the `v0.10.0` release body (46,274 bytes) crossed the
    threshold that `v0.9.0`'s smaller body (25,677 bytes) never had. This first blocked
    `Create Release` itself; the maintainer's manual retries eventually won the race.
+
 2. **`paladin-battalion`'s two versioned workspace dev-dependencies** (`paladin-llm`,
    `paladin-storage`, introduced by Phases 23 and 28) named a registry `version` that could only
    resolve once those crates were already published — but `CRATES` publishes `paladin-battalion`
@@ -90,6 +212,7 @@ artifact acknowledged (the same user-owned coverage-reproduction todo carried fr
 close); see STATE.md *Deferred Items*
 **Audit:** `milestones/v0.9.0-MILESTONE-AUDIT.md` (status `tech_debt` — all requirements
 satisfied, no critical blockers, 8 debt items recorded with owners)
+
 - ~~**No git tag was cut**~~ (**Superseded 2026-09-01, hours after the close**: the user directed
   a release-number reconciliation — planning milestones and release versions now share one line —
   and **v0.9.0 was released for real** through the documented PR-merge flow: PR #50 bumped all

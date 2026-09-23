@@ -218,6 +218,7 @@ Phase artifacts: `milestones/v0.9.0-phases/`
 - [x] **Phase 36: Rustdoc Zero-Warning Bar & Examples Currency** - Take `cargo doc --workspace --no-deps` from 73 carried warnings to zero so CI's "Check documentation" step is green, resolve the 14 `--all-features` intra-doc links, and bring every `examples/` and `doc-examples` program current with the Phase 22-33 API (completed 2026-09-18)
 - [x] **Phase 36.1: Deferred Items Closure (INSERTED)** - Every deferred item Phases 30-35 recorded and left unowned is closed in the tree or explicitly dispositioned before v0.10.0 ships — the Phase 31/32/34/35/36 registers, ledger rows 36-38 and the two pending todos are walked item by item, and `WINDOWS.md` agrees with the registers (`open_count: 0`) (completed 2026-09-18)
 - [x] **Phase 37: v0.10.0 Crate Release** - Re-seal the Phase 29 release gates on the post-documentation final commit, merge to `main`, cut the `v0.10.0` tag through `release.yml`, and confirm every publishable crate is on crates.io at `0.10.0` (completed 2026-09-22)
+- [x] **Phase 37.1: v0.10.1 Patch Release (INSERTED)** - Correct the partial `v0.10.0` publish with a `0.10.1` patch release through the same pipeline: fix the two defects that broke `v0.10.0` (`paladin-battalion`'s forward-pointing versioned dev-dependencies and the `create-or-reuse-release.sh` `EPIPE` race), add a per-crate publish-order gate that fails on the `1d4a9724` tree, and confirm every publishable crate is on crates.io at `0.10.1` (completed 2026-09-23)
 
 ## Phase Details
 
@@ -1221,6 +1222,8 @@ Plans:
 
 **Plans**: 16 plans
 
+**Status (2026-09-23)**: Complete — `v0.10.1` released and verified: `37.1-UAT.md` 53/53 passed, `37.1-VERIFICATION.md` `passed` 6/6 (SC1-SC6). `SHIP-06` complete; `SHIP-05` superseded, never ticked. Milestone close (`/gsd-audit-milestone`, `/gsd-complete-milestone v0.10.0`) is the maintainer's next act.
+
 Wave layout follows the split locked by `37.1-CONTEXT.md` § Claude's Discretion: **build wave**
 (waves 1-6) → **re-seal, pull request and sign-off** (waves 7-10) → **maintainer merge and tag
 checkpoint** (wave 11) → **post-tag wave** (waves 12-16). Every wave is sequential: each plan's
@@ -1296,7 +1299,7 @@ Plans:
 | 36. Rustdoc Zero-Warning Bar & Examples Currency | v0.10.0 | 13/13 | Complete    | 2026-09-18 |
 | 36.1. Deferred Items Closure (INSERTED) | v0.10.0 | 14/14 | Complete    | 2026-09-18 |
 | 37. v0.10.0 Crate Release | v0.10.0 | 8/11 (3 superseded) | Complete — SC1-SC3 met; SC4 superseded by `SHIP-06` | 2026-09-22 |
-| 37.1 v0.10.1 Patch Release (INSERTED) | v0.10.0 | 16/16 | Ready to close | 2026-09-22 |
+| 37.1 v0.10.1 Patch Release (INSERTED) | v0.10.0 | 16/16 | Complete — v0.10.1 released; SC1-SC6 verified 6/6 | 2026-09-23 |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see

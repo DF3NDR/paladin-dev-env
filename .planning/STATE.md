@@ -3,29 +3,29 @@ gsd_state_version: 1.0
 milestone: v0.10.0
 milestone_name: Durable Agent Execution Runtime
 current_phase: 37.1
-current_phase_name: v0.10.1 Patch Release
-status: executing
-stopped_at: "Phase 37.1 at READY-TO-CLOSE: v0.10.1 released (tag f7dae267, run 35659477719, 12/12 crates, orphans yanked, v0.10.0 bannered), close-out PR #57 merged as e282a264; next: maintainer runs /gsd-verify-work 37 and 37.1, then /gsd-audit-milestone and /gsd-complete-milestone"
-last_updated: "2026-09-22T21:49:09.504Z"
-last_activity: 2026-09-22
-last_activity_desc: "Phase 37 verified and marked complete (37-UAT.md 12/12, 37-VERIFICATION.md passed); Phase 37.1 still at ready-to-close"
+status: completed
+stopped_at: "Phase 37.1 complete — v0.10.1 released and verified (37.1-UAT.md 53/53, 37.1-VERIFICATION.md passed 6/6); all 19 phases of milestone v0.10.0 complete; next: /gsd-audit-milestone v0.10.0, then /gsd-complete-milestone v0.10.0"
+last_updated: "2026-09-23T13:31:48.601Z"
+last_activity: 2026-09-23
+last_activity_desc: "Phase 37.1 verified and marked complete (37.1-UAT.md 53/53, 37.1-VERIFICATION.md passed 6/6); all 19 phases of milestone v0.10.0 complete, ready to close"
 progress:
   total_phases: 19
-  completed_phases: 18
+  completed_phases: 19
   total_plans: 231
   completed_plans: 228
+current_phase_name: v0.10.1 Patch Release
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-17 after Phase 34 completion)
+See: .planning/PROJECT.md (updated 2026-09-23 after Phase 37.1 completion)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 37.1 — v0.10.1 Patch Release
+**Current focus:** Milestone v0.10.0 close — Phase 37.1 verified 2026-09-23 (`37.1-UAT.md` 53/53, `37.1-VERIFICATION.md` 6/6); next `/gsd-audit-milestone v0.10.0`
 Phase 34 was verified 2026-09-17: `34-UAT.md` 47/47 passed (all nine SUMMARYs coverage-mode, every
 deliverable automated and the list confirmed by the maintainer; `34-check.sh --final` 8/8 re-run at UAT
 time), `34-VERIFICATION.md` `passed` 5/5, `34-SECURITY.md` `verified` with `threats_open: 0`.
@@ -38,7 +38,7 @@ Before that, push `feature/phase-33` (or open the PR) so the CI `coverage` job s
 devcontainer cannot measure and a real pre-merge run is appended to `37-CI-EVIDENCE.md`'s CI-run table;
 the tag is cut on the `main` merge commit by `release.yml` per Phase 29 D-21's two-SHA rule.
 
-**Progress:** [██████████] 95%
+**Progress:** [██████████] 100% — 19/19 phases; 228/231 plans (3 Phase 37 plans superseded by Phase 37.1)
 
 **Previous milestone:** v0.9.0 "Security Tooling" shipped 2026-09-01 — 4 phases (18-21), 25
 plans, 20/20 requirements, 240 commits (`48ac11a5..3957d701`). Archived to
@@ -61,11 +61,12 @@ names. See MILESTONES.md.
 
 ## Current Position
 
-Phase: 37.1 (v0.10.1 Patch Release) — IN PROGRESS on `chore/37.1-close`
+Phase: 37.1 (v0.10.1 Patch Release) — COMPLETE (verified 2026-09-23)
 Plan: 16 of 16
-Status: READY TO CLOSE — all 16 plans complete; Phase 37 is verified and closed (below); Phase 37.1's own verification and the milestone close are the maintainer's next commands
-Last activity: 2026-09-22 — Phase 37 verified and marked complete: `37-UAT.md` 12/12 passed (eight executed plans, legacy prose extraction; plans 37-09..37-11 superseded by Phase 37.1), `37-VERIFICATION.md` `passed` 5/5 with SC4 stated as superseded by `SHIP-06` and SC5 (milestone close) still pending; `SHIP-05` left unticked and superseded per the D-02 amend-at-source note; ROADMAP Phase 37 checkbox ticked, progress row Complete with the SC4 supersession kept. Next: `/gsd-verify-work 37.1`, then `/gsd-audit-milestone` and `/gsd-complete-milestone v0.10.0`.
-Previous: 2026-09-21 — Phase 37.1 plans 37.1-11 and 37.1-12 executed as a recording pass after the maintainer's merge, tag and completed release: tick-commit CI evidence (9 runs, 124 checks, 0 failed), the N/A-by-deviation checkpoint record, the tag-equality proof, `chore/37.1-close` cut with an empty stray-commit range, and the release run's three-attempt record with the publish job's own per-crate table (12/12 live, 3 orphaned 0.10.0 versions yanked).
+Status: ALL PHASES COMPLETE — milestone v0.10.0 ready to close; `/gsd-audit-milestone v0.10.0` then `/gsd-complete-milestone v0.10.0` are the maintainer's next commands
+Last activity: 2026-09-23 — Phase 37.1 verified and marked complete: `37.1-UAT.md` 53/53 passed (10 maintainer-confirmed checkpoints plus 43 coverage-mode automated passes), `37.1-VERIFICATION.md` `passed` 6/6 (SC1-SC6 independently re-derived against the tree, GitHub and crates.io); `COVERAGE.md` declares no external API integration for the api-coverage gate (the detector fired on the plan's own "integrates no external API" sentence); `SHIP-06` complete, `SHIP-05` left superseded and unticked; ROADMAP progress row Complete; `.continue-here.md` removed. `37.1-VALIDATION.md` remains `draft` (`/gsd-validate-phase 37.1` advisory, as for Phase 37). Next: `/gsd-audit-milestone v0.10.0`, then `/gsd-complete-milestone v0.10.0`.
+Previous: 2026-09-22 — Phase 37 verified and marked complete: `37-UAT.md` 12/12 passed (eight executed plans, legacy prose extraction; plans 37-09..37-11 superseded by Phase 37.1), `37-VERIFICATION.md` `passed` 5/5 with SC4 stated as superseded by `SHIP-06` and SC5 (milestone close) still pending; `SHIP-05` left unticked and superseded per the D-02 amend-at-source note; ROADMAP Phase 37 checkbox ticked, progress row Complete with the SC4 supersession kept. Next: `/gsd-verify-work 37.1`, then `/gsd-audit-milestone` and `/gsd-complete-milestone v0.10.0`.
+Earlier: 2026-09-21 — Phase 37.1 plans 37.1-11 and 37.1-12 executed as a recording pass after the maintainer's merge, tag and completed release: tick-commit CI evidence (9 runs, 124 checks, 0 failed), the N/A-by-deviation checkpoint record, the tag-equality proof, `chore/37.1-close` cut with an empty stray-commit range, and the release run's three-attempt record with the publish job's own per-crate table (12/12 live, 3 orphaned 0.10.0 versions yanked).
 Earlier: 2026-09-21 — Phase 37.1 re-seal #2's CI evidence completed on head d2f1a811: repeated plan 37.1-09's Tasks 1-2 on the new head — the full per-run/per-job CI-run table (commit `d4fe8edd`) and section 14's rows/coverage entry/evidence-basis sentence (commit `4f3df7ef`), box untouched and still unticked; zero pushes.
 Earlier: 2026-09-21 — Build wave reopened on the maintainer's "Pin it." after the API Surface Tracking check went red on tick commit 529e7078 (unpinned floating nightly rendering drift, zero real public-API change); fixed by pinning PUBLIC_API_TOOLCHAIN to nightly-2026-09-20 in ci.yml and extract-public-api.sh, with a TDD-ordered regression harness (red 10/15 at d4dc0e96, green 15/15 at d2f1a811) and a CHANGELOG Fixed bullet.
 Earlier: 2026-09-21 — Phase 37.1 plan 37.1-10 executed (read-only verification that the maintainer's sign-off tick is present on origin/release/v0.10.1 at PR #56's head, exactly one box ticked vs base, tick commit identity recorded and confirmed at the branch tip; rewrote .continue-here.md for the tick-commit CI wait; zero commits, zero pushes by this plan per its own house rule)
@@ -84,7 +85,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 
 **Velocity:**
 
-- Total plans completed: 399
+- Total plans completed: 415
 - Average duration: —
 - Total execution time: —
 
@@ -129,6 +130,7 @@ Earlier: 2026-09-13 — Completed quick task 260913-h7l: CI mc client now fetche
 | 36 | 13 | - | - |
 | 36.1 | 14 | - | - |
 | 37 | 8 | - | - |
+| 37.1 | 16 | - | - |
 
 *Updated after each plan completion*
 
@@ -1184,9 +1186,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-21T23:35:00.000Z
-**Stopped at:** Phase 37.1 at READY-TO-CLOSE: v0.10.1 released (tag f7dae267, run 35659477719, 12/12 crates, orphans yanked, v0.10.0 bannered), close-out PR #57 merged as e282a264; next: maintainer runs /gsd-verify-work 37 and 37.1, then /gsd-audit-milestone and /gsd-complete-milestone
-**Resume file:** .planning/phases/37.1-v0-10-1-patch-release/.continue-here.md (committed on chore/37.1-close)
+**Last session:** 2026-09-23T13:35:00.000Z
+**Stopped at:** Phase 37.1 complete — v0.10.1 released and verified (37.1-UAT.md 53/53, 37.1-VERIFICATION.md passed 6/6); all 19 phases of milestone v0.10.0 complete; next: /gsd-audit-milestone v0.10.0, then /gsd-complete-milestone v0.10.0
+**Resume file:** None (Phase 37.1 closed; its `.continue-here.md` was removed at transition)
 Phase 11 closed with UAT 3/3 passed, canonical verification `passed`, and security
 `threats_open: 0` (34 threats: 24 mitigate verified closed, 10 accept documented).
 Phases 1-4 complete and archived to `.planning/milestones/v0.7.1-phases/`.

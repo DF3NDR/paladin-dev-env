@@ -849,6 +849,13 @@ source of truth). Eight categories, mirroring the epic structure plus program-le
   status and a three-check currency verdict plus the undemonstrated-capability gap list (CURR-03); Phase 35/36
   work lists sized and ordered with non-doc findings in `deferred-items.md` (CURR-04); commits `.planning/`-only
   over the whole phase range (CURR-05) (Release Readiness, roadmap-time addition 2026-09-17)
+- [x] **SHIP-06** (✓ Phase 37.1, released 2026-09-21, verified 2026-09-23) — `v0.10.1` released through `release.yml` via Trusted
+  Publishing: `paladin-battalion`'s two workspace dev-dependencies path-only, the `create-or-reuse-release.sh` `EPIPE` race
+  replaced, a per-crate publish-order gate red on `1d4a9724` and wired into `make check-gates` and CI, twelve manifests at
+  `0.10.1`, sign-off tick before the merge commit, all 12 publishable crates registry-verified (`yanked: false`, non-null
+  `trustpub_data`), the three orphaned `0.10.0` versions yanked and registered, `v0.10.0` Release bannered/pre-release
+- [ ] **SHIP-05** — superseded by `SHIP-06` (never ticked, by design): tag `v0.10.0` on `1d4a9724` published only 3 of 12
+  crates before `publish-crates` failed at `paladin-battalion`; the literal requirement never became true (Phase 37, 2026-09-18)
 
 *(The long-form forward-scope listing that previously lived here — the 90 ingest-derived
 requirements across Phases 5-16 plus Phase 17's `PROV-*` additions — shipped with v0.8.0 and is
@@ -1864,3 +1871,5 @@ CURR-06…10 validated, 10/10 plans, verification 9/9; 15 of 17 phases, 177/177 
 `/gsd-validate-phase 35` advisory).*
 
 *Last updated: 2026-09-18 after Phase 36.1 completion (Deferred Items Closure: five registers, ledger rows 36-38 and two todos dispositioned, `open_count: 0`, CURR-16…21 validated, 14/14 plans, verification 6/6, CI run 35329107346 green; 17 of 18 phases, 204/204 plans; next: `/gsd-plan-phase 37` v0.10.0 Crate Release, `/gsd-secure-phase 36.1` and `/gsd-validate-phase 36.1` advisory).*
+
+*Last updated: 2026-09-23 after Phase 37.1 completion (v0.10.1 Patch Release: `v0.10.1` tagged on merge commit `f7dae267`, release run `35659477719` green, 12/12 crates on crates.io at `0.10.1`, three `0.10.0` orphans yanked, `SHIP-06` validated and `SHIP-05` superseded; 16/16 plans, UAT 53/53, verification 6/6; 19 of 19 phases, 228/231 plans with 3 Phase 37 plans superseded; next: `/gsd-audit-milestone v0.10.0` then `/gsd-complete-milestone v0.10.0`, `/gsd-validate-phase 37` and `/gsd-validate-phase 37.1` advisory).*

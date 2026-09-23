@@ -262,8 +262,10 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
   and the `v0.10.0` tag box in `.project/v0.10.0/09-program-acceptance-audit.md` are still `- [ ]`
   on disk although 29-UAT recorded the pass and the tag was cut; tick by hand or annotate as
   superseded by §13 (v0.10.1, ticked).
-- **`release/*` ruleset bypass** granted temporarily on 2026-09-21 for the v0.10.1 push must be
-  removed now that PR #56 is merged.
+- ~~**`release/*` ruleset bypass** granted temporarily on 2026-09-21 for the v0.10.1 push must be
+  removed now that PR #56 is merged.~~ **Removed 2026-09-23** — ruleset `20868128` is back to the
+  checked-in shape (`bypass_actors: []`, `current_user_can_bypass: never`); `release/*` branches
+  accept one push again, so plan repeat pushes as PRs into the branch.
 - **Phase 37 reads incomplete to `init.manager`** (8 of 11 plans with SUMMARYs; 37-09..37-11
   superseded) — expected, documented in MILESTONES.md *Known Gaps*; do not "fix" by fabricating
   SUMMARYs.
@@ -423,8 +425,8 @@ no tag.
 **Next action:** `/gsd-new-milestone` — new phases start at Phase 38. Candidate scope is listed
 under *Next Milestone Goals* in PROJECT.md (Milestone 14 Treasurer, the FUT-01…10 v2 list, the
 accepted deviations D-16 / rows 31-32, the Nyquist backfill, RustFS). Housekeeping that needs no
-milestone: remove the temporary `release/*` ruleset bypass; tick or annotate the corpus audit §11
-boxes; `/gsd-validate-phase` for the seven `draft` phases.
+milestone: tick or annotate the corpus audit §11 boxes (the `release/*` ruleset bypass was removed
+2026-09-23); `/gsd-validate-phase` for the seven `draft` phases.
 
 ## Operator Next Steps
 
@@ -434,8 +436,8 @@ boxes; `/gsd-validate-phase` for the seven `draft` phases.
 - **Next:** open a PR for `chore/37.1-post-close` → `main` (planning-only), then `/clear` and
   `/gsd-new-milestone`. New phases start at Phase 38; `.planning/REQUIREMENTS.md` is recreated by
   that command.
-- **Housekeeping, no milestone needed:** remove the temporary `release/*` ruleset bypass granted
-  2026-09-21 (PR #56 is merged); tick or annotate the seven §11 sign-off boxes and the `v0.10.0`
+- **Housekeeping, no milestone needed:** ~~remove the temporary `release/*` ruleset bypass~~ (done
+  2026-09-23, ruleset `20868128` matches `.github/rulesets/protect-release-branches.json`); tick or annotate the seven §11 sign-off boxes and the `v0.10.0`
   tag box in `.project/v0.10.0/09-program-acceptance-audit.md` (§13 for v0.10.1 is ticked);
   `/gsd-validate-phase` 22, 24, 28, 29, 30, 34, 36, 36.1 (advisory).
 - **Recheck by 2026-10-16:** the two pending todos (`todos/pending/`).

@@ -2,6 +2,7 @@
 created: 2026-09-13T00:00:00Z
 title: Evaluate replacing MinIO with RustFS in the dev/test stack
 area: infrastructure
+resolves_phase: 45
 severity: major
 files:
   - docker/docker-compose.test.yml

@@ -400,28 +400,54 @@ What v0.9.0 settled, in one paragraph each:
   proven end-to-end on `v0.8.1-rc.5`, the first fully-green release run in this project's
   history, with every declared human check closed by recorded UAT.
 
-## Next Milestone Goals
+## Current Milestone: v0.11.0 Treasurer Spend Governance
 
-**Not yet defined** — `/gsd-new-milestone` runs the questioning → research → requirements →
-roadmap chain and writes a fresh `.planning/REQUIREMENTS.md`. Candidates the v0.10.0 close leaves
-on the table, none of them committed:
+**Goal:** Give Paladin an output-side Treasurer that prices token usage in currency, keeps a durable
+spend ledger, enforces rolling per-tenant and per-API-key allowances, and paces requests against
+provider rate limits. Alongside it, close the debt v0.10.0 carried forward and ship v0.11.0 to
+crates.io.
 
-- **Milestone 14 — Treasurer** (output-side, cross-run spend governance: allowances, per-model
-  pricing, `cost_estimate`), reserved by ADR-0050 with a design corpus already in
-  `.project/Milestone_14-Treasurer/`; FUT-08 (per-token cost in currency) and FUT-09 (rate-limit
-  pacing / cache-stampede locks) are its natural first requirements.
-- **The v2 list carried in `milestones/v0.10.0-REQUIREMENTS.md`:** FUT-01 hand-polished SDKs,
-  FUT-02 graphical studio, FUT-03 HA storage replication, FUT-04 billing/metering, FUT-05
-  multi-tenant RBAC, FUT-06 automatic Vault write policies, FUT-07 LLM-as-judge eval scoring,
-  FUT-10 RustFS as the dev/test object store (the quay.io MinIO pin is terminal).
-- **Accepted deviations worth closing:** tracing overhead at +22 %/+18 % against PRD 07's ≤ 3 % bar
-  (D-16, `WINDOWS.md` row 35 — `TraceDispatcher::emit`/`LogTraceSink` serialisation is the named
-  target); per-caller scoping of `GET /runs*` (row 32); SSE/webhook emission for the legacy
-  `Runnable::Agent` path (row 31); the SSE `done` event's `halted`-vs-`Cancelled` collapse (D-14).
-- **Hygiene:** Nyquist validation for the seven `draft` phases (22, 24, 29, 30, 34, 36, 36.1) and
-  Phase 28's `nyquist_compliant: false`; the `.project/v0.10.0/09-program-acceptance-audit.md`
-  §11 sign-off boxes still `- [ ]` on disk; the three roadmap-level v2 debt lines (oversized
-  service files, clone/lock contention, dependency-allowlist drift).
+**Source of truth:** `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD
+`prd-treasurer-spend-governance.md`, R1-R6). Its "v0.12.0+" version target reflected sequencing
+behind Milestone 13, whose hard prerequisite (lossless `TokenUsage`, ACCT-01...05) shipped in v0.10.0
+Phases 30-33. The PRD's open operator question is answered: **full governance** (operator-confirmed
+2026-09-24).
+
+**Target features:**
+- **Pricing and cost (FUT-08, R1/R2):** an operator-configured per-model price table (prompt /
+  completion / cache / reasoning; nothing bundled), and `ExecutionMetadata.cost_estimate` populated
+  end-to-end. It stays `None` for a model with no configured price.
+- **Treasurer and allowances (R3):** a `Treasurer` service and a new `allowance` config key per
+  tenant and per API key. Allowances reset over rolling periods, with an optional lifetime cap. A
+  draw is refused at admission when the allowance is already exhausted, and a run in flight halts
+  cleanly (typed error, checkpoint kept, resumable) when a draw would overspend. The Treasurer
+  installs the per-run `TokenBudget` rather than replacing it.
+- **Spend ledger (R5):** a new ledger port with in-memory, SQLite and Postgres adapters (the
+  `RunRepositoryPort` pattern). Spend shows up in heralds, the CLI and traces.
+- **Rate pacing (FUT-09, R4):** in-process back-off on 429 / `Retry-After`, pacing shared across
+  workers through Redis, and a distributed cache-stampede lock.
+- **Legacy API clean break:** remove Battalion `RetryPolicy` / `ErrorStrategy` / `NodeError`, the
+  legacy Formation/Phalanx/Campaign timeout handling, and `PaladinError::LlmError(String)`. This
+  needs a recorded X-03 supersession, `MIGRATION.md` §9.2 rows and `cargo semver-checks` allowlist
+  entries.
+- **RustFS (FUT-10):** replace the terminal quay.io MinIO pin in the dev/test stack, CI and the
+  Kubernetes smoke test.
+- **Platform deviations:** scope `GET /runs*` per caller (`WINDOWS.md` row 32); SSE and webhook
+  emission for legacy `Runnable::Agent` runs (row 31); SSE `done` reports `Cancelled`, not
+  `halted`, for a caller-cancelled run (D-14).
+- **Tracing overhead (D-16, row 35):** optimise `TraceDispatcher::emit` / `LogTraceSink`
+  serialisation toward PRD 07's ≤ 3 % bar.
+- **Docs currency:** the audit-owned fixes (eleven → twelve publishable crates, the `paladin-eval`
+  Trusted Publishing and Credential History rows, the CHANGELOG `[0.10.0]` heading date), plus the
+  Treasurer mdBook page, configuration docs and MIGRATION entries (R6).
+- **Hygiene and release:** Nyquist validation for Phases 22, 24, 29, 30, 34, 36 and 36.1 (`draft`)
+  plus Phase 28; the three roadmap-level v2 debt lines; a closing crates.io v0.11.0 release phase.
+
+**Key context:** new phases start at **Phase 38**. `Treasurer` stays a framework-only word and must
+never mix with the downstream `GarrisonTreasury` fixture term. The two-officer model (ADR-0049,
+ADR-0050) holds: the Commissary is untouched, and `TokenBudget`, `TokenCounterPort`, `TokenUsage`
+and `max_tokens` are not renamed. The existing rules still apply: MSRV 1.88, the 82 % coverage
+floor (ADR-0006), and tags cut on `main` merge commits (the Phase 29 two-SHA rule).
 
 ## Previous Milestone: v0.10.0 Durable Agent Execution Runtime (shipped 2026-09-23)
 
@@ -933,28 +959,28 @@ while the code ships):
 
 ### Active
 
-**No active requirements — the v0.10.0 set shipped and moved to Validated on 2026-09-23.** The
-next milestone's requirements are minted by `/gsd-new-milestone` into a fresh
-`.planning/REQUIREMENTS.md` (the v0.10.0 file is archived at
-`milestones/v0.10.0-REQUIREMENTS.md`, including its v2 list FUT-01 … FUT-10 and Out of Scope
-table).
+**Milestone v0.11.0 "Treasurer Spend Governance"** — scoped requirements (REQ-IDs) are minted into
+`.planning/REQUIREMENTS.md` by `/gsd-new-milestone`. Scope summary (see *Current Milestone*):
 
-Carried-in open items (tracked, not requirements; adopted by a phase only by explicit decision):
+- [ ] Operator-configured per-model pricing → currency cost; `cost_estimate` populated (FUT-08)
+- [ ] `Treasurer` service with rolling per-tenant / per-API-key allowances that refuse at admission
+      and halt a run in flight cleanly
+- [ ] Durable spend ledger (port + in-memory / SQLite / Postgres) surfaced in heralds, CLI, traces
+- [ ] Rate pacing on 429 / `Retry-After`, Redis-shared pacing, and a stampede lock (FUT-09)
+- [ ] Legacy Battalion error/retry/timeout surfaces and `PaladinError::LlmError` removed (X-03 supersession)
+- [ ] RustFS replaces the terminal MinIO pin (FUT-10)
+- [ ] `GET /runs*` per-caller scoping; `Runnable::Agent` SSE/webhook emission; SSE `done` → `Cancelled`
+- [ ] Tracing overhead toward the ≤ 3 % bar
+- [ ] Docs currency and Treasurer docs; Nyquist hygiene; v2 debt lines; v0.11.0 crates.io release
+
+Carried-in open items (tracked, not requirements):
 
 - The user-owned local coverage-reproduction walkthrough (STATE.md *Deferred Items*, carried since
   the v0.8.0 close; `recheck_by: 2026-10-16`).
-- The RustFS-for-MinIO evaluation (FUT-10; `todos/pending/2026-09-13-…`; `recheck_by: 2026-10-16`).
-- Nyquist validation unreconciled for archived phases 05-21 and for v0.10.0 phases 22, 24, 29,
-  30, 34, 36, 36.1 (`draft`) plus 28 (`nyquist_compliant: false`).
+- Nyquist validation unreconciled for archived phases 05-21.
 - The v0.10.0 audit's `tech_debt` register (owners named in
   `milestones/v0.10.0-MILESTONE-AUDIT.md`) and the five v0.9.0 debt items in
   `milestones/v0.9.0-MILESTONE-AUDIT.md`.
-
-*(The long-form forward-scope listing that previously lived here — the 90 ingest-derived
-requirements across Phases 5-16 plus Phase 17's `PROV-*` additions — shipped with v0.8.0 and is
-preserved verbatim in `.planning/milestones/v0.8.0-REQUIREMENTS.md` and this file's git history;
-it is not restated because every item in it is either Validated above or recorded in the
-archives.)*
 
 ### Out of Scope
 
@@ -2030,3 +2056,7 @@ moved to Validated; Active emptied; Out of Scope audited with three settled posi
 Context stamped; Key Decisions gained ADR-0042 … 0047 rows, outcomes for ADR-0049 … 0051 and the
 carried phase-level decisions; Constraints updated for `paladin-eval` and MSRV 1.88. Next:
 `/gsd-new-milestone` — new phases start at Phase 38.*
+
+*Last updated: 2026-09-24 at the start of milestone v0.11.0 "Treasurer Spend Governance"
+(`/gsd-new-milestone`): *Next Milestone Goals* replaced by *Current Milestone*; Active re-seeded;
+new phases start at Phase 38.*

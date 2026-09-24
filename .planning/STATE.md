@@ -1,36 +1,32 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.10.0
-milestone_name: Durable Agent Execution Runtime
-status: Awaiting next milestone
-stopped_at: "Phase 37.1 complete — v0.10.1 released and verified (37.1-UAT.md 53/53, 37.1-VERIFICATION.md passed 6/6); all 19 phases of milestone v0.10.0 complete; next: /gsd-audit-milestone v0.10.0, then /gsd-complete-milestone v0.10.0"
-last_updated: "2026-09-23T17:20:44.281Z"
-last_activity: 2026-09-23
-last_activity_desc: Milestone v0.10.0 completed and archived
+milestone: v0.11.0
+milestone_name: Treasurer Spend Governance
+status: planning
+last_updated: "2026-09-24T20:27:04.640Z"
+last_activity: 2026-09-24
 progress:
-  total_phases: 19
-  completed_phases: 19
-  total_plans: 231
-  completed_plans: 228
-current_phase: 37.1
-current_phase_name: v0.10.1 Patch Release
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-23 after the v0.10.0 milestone close)
+See: .planning/PROJECT.md (updated 2026-09-24 at the start of milestone v0.11.0)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Planning the next milestone — `/gsd-new-milestone` (questioning → research →
-requirements → roadmap); new phases start at Phase 38. `.planning/REQUIREMENTS.md` is absent by
-design until then (the v0.10.0 file is archived).
+**Current focus:** Milestone v0.11.0 "Treasurer Spend Governance": defining requirements and
+roadmap (`/gsd-new-milestone`). Source of truth: `.project/Milestone_14-Treasurer/` plus the
+supporting scope in PROJECT.md *Current Milestone*. New phases start at Phase 38.
 
-**Progress:** milestone v0.10.0 closed — 19/19 phases; 228/231 plans executed (3 Phase 37 plans
-superseded by Phase 37.1). No phase is planned.
+**Progress:** v0.11.0 started 2026-09-24; no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -48,11 +44,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: Milestone v0.10.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-09-23 — Milestone v0.10.0 completed and archived (`/gsd-complete-milestone v0.10.0`): closeout type `override_closeout`; two open todos acknowledged; Phase 37's superseded plans recorded; ROADMAP collapsed, PROJECT.md evolved, RETROSPECTIVE.md extended; tag `v0.10.0` pre-existing (2026-09-18), no new tag
-Previous: 2026-09-23 — Milestone audit written (`v0.10.0-MILESTONE-AUDIT.md`, status `tech_debt`, 88/89 requirements, 0 gaps); Phase 37.1 verified and marked complete (`37.1-UAT.md` 53/53, `37.1-VERIFICATION.md` 6/6)
+Status: Defining requirements
+Last activity: 2026-09-24 — Milestone v0.11.0 started
 
 ## Performance Metrics
 
@@ -197,23 +192,29 @@ Phases 22-37.1 is recorded in its own `NN-CONTEXT.md` (and the SUMMARY decision 
 - **Two-officer token model** — `Commissary` (input-side rationing) is kept and anchored;
   `Treasurer` (output-side spend governance) is reserved for Milestone 14, not built (ADR-0049,
   ADR-0050). `TokenBudget`, `TokenCounterPort`, `TokenUsage`, `max_tokens` are not renamed.
+
 - **X-03 supersession is scoped** — clean breaks were allowed for Phases 31-33 only (ADR-0051); any
   further removal before v0.11.0 needs its own recorded supersession.
+
 - **`paladin-memory` → `paladin-llm`** (`default-features = false`) is the workspace's one lateral
   adapter-to-adapter edge (Phase 33 D-01/D-03); `reqwest` never enters the normal graph through it.
+
 - **MSRV 1.88, measured** from the `time` ≥ 0.3.47 / `rmcp` `process-wrap` chain, single-sourced in
   `workspace.package.rust-version` and enforced by the `msrv` CI job (Phase 22.1; `MIGRATION.md`
   §9.3).
+
 - **Accepted deviations, to revisit** — tracing overhead +22.18 % (log sink) / +18.46 % (composite)
   against PRD 07's ≤ 3 % bar (Phase 28 D-16/D-37, `WINDOWS.md` row 35); run-inspection routes
   authenticated but single-tenant (Phase 27 WR-03, row 32); legacy `Runnable::Agent` runs emit no
   SSE/webhook events (WR-02, row 31); SSE `done` reports `halted` for a caller-cancelled run whose
   persisted status is `Cancelled` (Phase 27 D-14).
+
 - **Release mechanics** — tags are cut on `main` merge commits per the Phase 29 two-SHA rule; the
   `.project/v0.10.0/09-program-acceptance-audit.md` sign-off boxes are ticked by a human, never an
   agent (Phase 29 D-17, Phase 37 D-00a); `make publish-dry-run` resolves from the local workspace
   overlay and is blind to registry publish order — `scripts/check-publish-order.sh` in
   `make check-gates` and CI is the gate for that class (Phase 37.1).
+
 - **Partial-publish recovery** — maintainer's option A: a patch release through the same pipeline,
   the failed tag left in place and its GitHub Release bannered/pre-release, orphaned crate
   versions yanked by the maintainer only after the patch is registry-verified, one register row
@@ -230,6 +231,7 @@ Both acknowledged as deferred at the v0.10.0 close (see *Deferred Items*); neith
   documented `make services-up` → `make coverage` procedure on a Docker-capable machine and confirm
   it reproduces the CI figure (now 90.44 %, not the 82.39 % the todo quotes). `recheck_by:
   2026-10-16`.
+
 - `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md` — evaluate RustFS as the
   dev/test object store (FUT-10); the quay.io MinIO pin from quick task 260913-15w is terminal.
   `recheck_by: 2026-10-16`.
@@ -246,26 +248,34 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
 - **Coverage is CI-attributed, not locally measurable** — this devcontainer has no Docker; the
   82 % floor (ADR-0006) is read from the CI `coverage` job (90.44 % at PR #56). The local
   reproduction walkthrough is the pending user-owned todo above.
+
 - **Tracing overhead** accepted at 6-7× the PRD bar (D-16); `TraceDispatcher::emit` /
   `LogTraceSink` serialisation is the named optimisation target.
+
 - **Webhook SSRF guard does not pin the resolved address** between check and connect — DNS
   rebinding is a documented limitation (`src/application/services/run/webhook/ssrf.rs` module docs,
   `security.instructions.md`).
+
 - **Terminal MinIO pin** — no newer community `minio/minio` or `mc` tag will ever exist; the
   dev/test stack and the Kubernetes smoke test depend on a frozen third-party image (FUT-10 todo).
+
 - **`cargo-semver-checks` 0.50.0 coverage gap** for inherent-method return-type and tool-coverage
   classes — covered by `MIGRATION.md` §9.2 rows instead (Phases 32/33).
+
 - **Nyquist validation** — seven v0.10.0 phases at `VALIDATION.md` `status: draft` (22, 24, 29,
   30, 34, 36, 36.1) and Phase 28 at `nyquist_compliant: false`; archived phases 05-21 likewise
   unreconciled. `/gsd-validate-phase <N>` each; coverage TODO, not a compliance failure.
+
 - **Bookkeeping drift in the corpus acceptance audit** — the seven §11 judgment-tier sign-off boxes
   and the `v0.10.0` tag box in `.project/v0.10.0/09-program-acceptance-audit.md` are still `- [ ]`
   on disk although 29-UAT recorded the pass and the tag was cut; tick by hand or annotate as
   superseded by §13 (v0.10.1, ticked).
+
 - ~~**`release/*` ruleset bypass** granted temporarily on 2026-09-21 for the v0.10.1 push must be
   removed now that PR #56 is merged.~~ **Removed 2026-09-23** — ruleset `20868128` is back to the
   checked-in shape (`bypass_actors: []`, `current_user_can_bypass: never`); `release/*` branches
   accept one push again, so plan repeat pushes as PRs into the branch.
+
 - **Phase 37 reads incomplete to `init.manager`** (8 of 11 plans with SUMMARYs; 37-09..37-11
   superseded) — expected, documented in MILESTONES.md *Known Gaps*; do not "fix" by fabricating
   SUMMARYs.
@@ -433,11 +443,14 @@ milestone: tick or annotate the corpus audit §11 boxes (the `release/*` ruleset
 - **Milestone v0.10.0 closed 2026-09-23** (`override_closeout`; two todos acknowledged; Phase 37's
   three superseded plans and SHIP-05 recorded as known gaps). Archives under `milestones/v0.10.0-*`;
   record in MILESTONES.md; lessons in RETROSPECTIVE.md.
+
 - **Next:** open a PR for `chore/37.1-post-close` → `main` (planning-only), then `/clear` and
   `/gsd-new-milestone`. New phases start at Phase 38; `.planning/REQUIREMENTS.md` is recreated by
   that command.
+
 - **Housekeeping, no milestone needed:** ~~remove the temporary `release/*` ruleset bypass~~ (done
   2026-09-23, ruleset `20868128` matches `.github/rulesets/protect-release-branches.json`); tick or annotate the seven §11 sign-off boxes and the `v0.10.0`
   tag box in `.project/v0.10.0/09-program-acceptance-audit.md` (§13 for v0.10.1 is ticked);
   `/gsd-validate-phase` 22, 24, 28, 29, 30, 34, 36, 36.1 (advisory).
+
 - **Recheck by 2026-10-16:** the two pending todos (`todos/pending/`).

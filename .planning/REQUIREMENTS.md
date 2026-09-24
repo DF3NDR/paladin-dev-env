@@ -182,12 +182,48 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
+| PRICE-01 | Phase 38 | Pending |
+| PRICE-02 | Phase 38 | Pending |
+| PRICE-03 | Phase 38 | Pending |
+| LEDGR-01 | Phase 39 | Pending |
+| LEDGR-02 | Phase 39 | Pending |
+| LEDGR-03 | Phase 39 | Pending |
+| LEDGR-04 | Phase 39 | Pending |
+| TENANT-01 | Phase 40 | Pending |
+| TENANT-02 | Phase 40 | Pending |
+| ALLOW-01 | Phase 41 | Pending |
+| ALLOW-02 | Phase 41 | Pending |
+| ALLOW-03 | Phase 42 | Pending |
+| ALLOW-04 | Phase 41 | Pending |
+| ALLOW-05 | Phase 42 | Pending |
+| PACE-01 | Phase 43 | Pending |
+| PACE-02 | Phase 43 | Pending |
+| PACE-03 | Phase 43 | Pending |
+| PACE-04 | Phase 43 | Pending |
+| PACE-05 | Phase 43 | Pending |
+| LEGACY-01 | Phase 44 | Pending |
+| LEGACY-02 | Phase 44 | Pending |
+| LEGACY-03 | Phase 44 | Pending |
+| LEGACY-04 | Phase 44 | Pending |
+| STORE-01 | Phase 45 | Pending |
+| STORE-02 | Phase 45 | Pending |
+| STORE-03 | Phase 45 | Pending |
+| PLAT-07 | Phase 40 | Pending |
+| PLAT-08 | Phase 45 | Pending |
+| PLAT-09 | Phase 42 | Pending |
+| OBS-05 | Phase 45 | Pending |
+| CURR-22 | Phase 46 | Pending |
+| CURR-23 | Phase 46 | Pending |
+| CURR-24 | Phase 46 | Pending |
+| CURR-25 | Phase 46 | Pending |
+| SHIP-07 | Phase 47 | Pending |
 
 **Coverage:**
 - v1 requirements: 35 total
-- Mapped to phases: 0
-- Unmapped: 35 ⚠️
+- Mapped to phases: 35
+- Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-24*
-*Last updated: 2026-09-24 after operator scoping in `/gsd-new-milestone`*
+*Last updated: 2026-09-24 — roadmap created (`/gsd-new-project` roadmapper), Phases 38-47, 35/35
+requirements mapped, 100% coverage*

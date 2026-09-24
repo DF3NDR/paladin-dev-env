@@ -6,7 +6,7 @@ status: planning
 last_updated: "2026-09-24T20:27:04.640Z"
 last_activity: 2026-09-24
 progress:
-  total_phases: 0
+  total_phases: 10
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -22,11 +22,13 @@ See: .planning/PROJECT.md (updated 2026-09-24 at the start of milestone v0.11.0)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Milestone v0.11.0 "Treasurer Spend Governance": defining requirements and
-roadmap (`/gsd-new-milestone`). Source of truth: `.project/Milestone_14-Treasurer/` plus the
-supporting scope in PROJECT.md *Current Milestone*. New phases start at Phase 38.
+**Current focus:** Milestone v0.11.0 "Treasurer Spend Governance": roadmap created
+(`/gsd-new-project` roadmapper), 10 phases (38-47), 35/35 requirements mapped. Source of truth:
+`.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
+Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** v0.11.0 started 2026-09-24; no phase planned yet.
+**Progress:** v0.11.0 started 2026-09-24; roadmap created 2026-09-24 (Phases 38-47, 35/35
+requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -44,10 +46,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: Not started (next: Phase 38 — Design Seams & Pricing/Cost Producer)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-09-24 — Milestone v0.11.0 started
+Status: Roadmap created, awaiting approval
+Last activity: 2026-09-24 — Roadmap created: Phases 38-47, 35/35 requirements mapped, 100% coverage
 
 ## Performance Metrics
 

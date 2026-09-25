@@ -69,8 +69,15 @@ the plans that follow in this same phase):
 | 0049 | `commissary-design-and-rename` | `Commissary` design (`verify_fits` guard + `dispense` allocator, fail-loud/never-silent) and the Quartermaster→Commissary rename rationale, with the nine-name rejected list, reconstructed from the abandoned-branch historical record and the port commits (Phase 30, plan 30-01) |
 | 0050 | `treasurer-reservation` | `Treasurer` reserved for cross-run spend governance (allowances, pricing, `cost_estimate` production, pacing), installs rather than replaces the per-run `TokenBudget`, built in Milestone 14, with the downstream `GarrisonTreasury` guardrail (Phase 30, plan 30-02) |
 | 0051 | `token-economy-versioning-x03-supersession` | Token-economy Phases 31-33 land as clean breaks inside the untagged v0.10.0, superseding corpus rule X-03 for those three phases only, on the operator's 2026-09-14 decision (Phase 30, plan 30-02) |
+| 0052 | `mid-run-treasurer-enforcement` | Mid-run Treasurer enforcement attachment point across `WarEngine` and `PaladinExecutionService` — metering at the `LlmPort` pricing decorator on both paths, halt at the engine superstep boundary and the agent-loop `TokenBudget` cutoff (D-13, Phase 38, plan 38-01) |
 
-**Next free ADR number: 0052**
+**Next free ADR number: 0053**
+
+*Dated note, 2026-09-25 (plan 38-01):* the line advances by **one**, from 0052 to 0053, because
+Phase 38 plan 38-01 authored ADR-0052 (the mid-run Treasurer enforcement attachment point, D-13).
+`ls .planning/decisions/0052-*.md` (re-run before writing this note) confirms the file exists with
+the expected number, not skipped or reused, and no existing index row above was renumbered,
+reworded or reordered.
 
 *Dated note, 2026-09-14 (plan 30-02):* the line advances by **two**, from 0050 to 0052, because
 Phase 30 plan 30-02 authored ADR-0050 (the `Treasurer` reservation, with the downstream guardrail,

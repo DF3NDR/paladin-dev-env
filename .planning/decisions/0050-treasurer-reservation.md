@@ -93,6 +93,18 @@ flag, config key or file bearing the reserved name exists anywhere under `crates
 after this ADR lands — the 0/0 symbol-scoped grep is the exit condition this record establishes,
 not a target for a future scaffold.
 
+*Dated note, 2026-09-25 (Phase 38, plan 38-01):* the 0/0 code-symbol exit condition above was the
+**reservation-period** invariant, not a permanent freeze — Milestone 14 now introduces code under
+the reserved name exactly as this ADR's `When` paragraph planned. The first symbols land in
+Phase 38: the `treasurer:` config section, `TreasurerConfig`
+(`src/config/treasurer.rs`), and rustdoc stating `ExecutionMetadata.cost_estimate` is produced by
+the Treasurer. A reader who re-runs `grep -rn Treasurer crates src` after Phase 38 and finds real
+declarations, not just rustdoc-only hits, should read this note, not conclude the reservation was
+broken. The framework-only guardrail (no collision with the downstream `GarrisonTreasury` fixture
+term), the install-not-replace relationship to the per-run `TokenBudget`, and the two-officer
+model all stand unchanged. See ADR-0052 for the mid-run enforcement attachment point this
+milestone's code builds toward.
+
 ## Downstream Consumers
 
 - **Milestone 14** (`.project/Milestone_14-Treasurer/`) — the owning milestone that builds against this reservation once its hard prerequisite (Phase 31) has landed.

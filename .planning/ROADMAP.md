@@ -276,7 +276,36 @@ ledger model — recorded before any dependent phase begins.
      reserved rustdoc note now reads "produced by the Treasurer".
   4. Two ADRs are on record — the mid-run enforcement attachment point and the ledger balance
      model — and the Phase 39/41/42 plans reference them rather than re-opening the question.
-**Plans**: TBD
+**Plans**: 9 plans (6 waves)
+
+Plans:
+
+**Wave 1**
+
+- [ ] 38-01-PLAN.md — ADR-0052 (mid-run Treasurer enforcement attachment point) and ADR-0053 (append-only, derive-on-read ledger; row kinds, i64 nano-unit amounts, settlement key) with the PROMOTION.md index, one blocking checkpoint on settlement granularity (D-13..D-16)
+
+**Wave 2** *(blocked on Wave 1)*
+
+- [ ] 38-02-PLAN.md — tracer: a priced streamed agent call reaches `ExecutionMetadata` and the markdown herald (`0.0225 USD`); `Cost`/`PriceTable`/`CostTally` arithmetic pinned per axis (PRICE-02, PRICE-03)
+
+**Wave 3** *(blocked on Wave 2)*
+
+- [ ] 38-03-PLAN.md — the `treasurer:` config section (exact decimal parsing, boot validation) and pricing installed on both production run paths (PRICE-01)
+- [ ] 38-04-PLAN.md — `LlmResponse.cost` with every literal migrated and the break registered; non-streaming and fallback-hop pricing (PRICE-03)
+- [ ] 38-05-PLAN.md — JSON herald currency field; table herald renders real metadata and cost (PRICE-03)
+- [ ] 38-06-PLAN.md — `NodeFinished.cost`/`RunFinished.cost` carriers and `TraceDispatcher::total_cost` (PRICE-03)
+
+**Wave 4** *(blocked on Wave 3)*
+
+- [ ] 38-07-PLAN.md — `PaladinResult.cost`, agent-loop cost accumulation, and the engine bridge from each Paladin attempt to `NodeFinished.cost` (PRICE-03)
+
+**Wave 5** *(blocked on Wave 4)*
+
+- [ ] 38-08-PLAN.md — engine-path `ExecutionMetadata` producer: `from_run_finished`, `HeraldTraceSink`, `RunWorkerPool::with_herald` (PRICE-03)
+
+**Wave 6** *(blocked on Wave 5)*
+
+- [ ] 38-09-PLAN.md — closeout: `cargo semver-checks` measurement and registration, CHANGELOG, API-surface refresh, full gate suite (PRICE-01..03)
 **Research flag**: yes — the engine-path-vs-agent-loop attachment point for mid-run `TokenBudget`
 enforcement is, per research, the single largest open architectural question this milestone
 surfaces; needs an ADR-level design pass before Phase 42 planning.
@@ -468,7 +497,7 @@ feature work)
 | 17. Additional LLM Provider Adapters | v0.8.0 | 22/22 | ✅ Complete | 2026-08-23 |
 | 18-21 | v0.9.0 | 25/25 | ✅ Shipped | 2026-09-01 |
 | 22-37.1 | v0.10.0 | 231/231 (228 executed, 3 superseded) | ✅ Shipped | 2026-09-23 |
-| 38. Design Seams & Pricing/Cost Producer | v0.11.0 | 0/TBD | Not started | - |
+| 38. Design Seams & Pricing/Cost Producer | v0.11.0 | 0/9 | Planned | - |
 | 39. Spend Ledger | v0.11.0 | 0/TBD | Not started | - |
 | 40. Tenant Identity & Run-Read Scoping | v0.11.0 | 0/TBD | Not started | - |
 | 41. Admission-Time Allowance Enforcement | v0.11.0 | 0/TBD | Not started | - |

@@ -27,6 +27,8 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [ ] **PRICE-02**: A pure function maps a `TokenUsage` and the price table to an exact cost in
   fixed-point integer micro-units (no `f64` accumulation), unit-tested per token type including
   cache and reasoning tokens
+  *(Amended 2026-09-25, Phase 38 plan 38-01: the cost unit is i64 nano-units (1e-9), a finer scale
+  that satisfies "micro-units" — see 38-CONTEXT.md D-02 and ADR-0053.)*
 - [ ] **PRICE-03**: A completed run reports its currency cost in `ExecutionMetadata.cost_estimate`
   end-to-end; a model with no configured price yields `None` (never `0`), and the field's reserved
   rustdoc note is updated to "produced by the Treasurer"

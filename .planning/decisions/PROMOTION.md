@@ -70,14 +70,23 @@ the plans that follow in this same phase):
 | 0050 | `treasurer-reservation` | `Treasurer` reserved for cross-run spend governance (allowances, pricing, `cost_estimate` production, pacing), installs rather than replaces the per-run `TokenBudget`, built in Milestone 14, with the downstream `GarrisonTreasury` guardrail (Phase 30, plan 30-02) |
 | 0051 | `token-economy-versioning-x03-supersession` | Token-economy Phases 31-33 land as clean breaks inside the untagged v0.10.0, superseding corpus rule X-03 for those three phases only, on the operator's 2026-09-14 decision (Phase 30, plan 30-02) |
 | 0052 | `mid-run-treasurer-enforcement` | Mid-run Treasurer enforcement attachment point across `WarEngine` and `PaladinExecutionService` — metering at the `LlmPort` pricing decorator on both paths, halt at the engine superstep boundary and the agent-loop `TokenBudget` cutoff (D-13, Phase 38, plan 38-01) |
+| 0053 | `ledger-balance-model` | Treasury ledger balance model — append-only, derive-on-read; reserve/settle/release row kinds; `i64` nano-unit amounts with ISO 4217 currency; settlement idempotency key `(run_id, superstep, attempt)` with superstep-aggregate settlement granularity, D-15 kept unamended (D-14/D-15, Phase 38, plan 38-01) |
 
-**Next free ADR number: 0053**
+**Next free ADR number: 0054**
 
-*Dated note, 2026-09-25 (plan 38-01):* the line advances by **one**, from 0052 to 0053, because
-Phase 38 plan 38-01 authored ADR-0052 (the mid-run Treasurer enforcement attachment point, D-13).
-`ls .planning/decisions/0052-*.md` (re-run before writing this note) confirms the file exists with
-the expected number, not skipped or reused, and no existing index row above was renumbered,
-reworded or reordered.
+*Dated note, 2026-09-25 (plan 38-01, ADR-0053):* the line advances by **one**, from 0053 to 0054,
+because Phase 38 plan 38-01 authored ADR-0053 (the treasury ledger balance model, D-14/D-15) after
+the settlement granularity checkpoint resolved by operator decision on 2026-09-25
+(superstep-aggregate, D-15's key `(run_id, superstep, attempt)` kept unamended). `ls
+.planning/decisions/0053-*.md` (re-run before writing this note) confirms the file exists with the
+expected number, not skipped or reused, and no existing index row above was renumbered, reworded
+or reordered.
+
+*Dated note, 2026-09-25 (plan 38-01, ADR-0052):* the line advances by **one**, from 0052 to 0053,
+because Phase 38 plan 38-01 authored ADR-0052 (the mid-run Treasurer enforcement attachment point,
+D-13). `ls .planning/decisions/0052-*.md` (re-run before writing this note) confirms the file
+exists with the expected number, not skipped or reused, and no existing index row above was
+renumbered, reworded or reordered.
 
 *Dated note, 2026-09-14 (plan 30-02):* the line advances by **two**, from 0050 to 0052, because
 Phase 30 plan 30-02 authored ADR-0050 (the `Treasurer` reservation, with the downstream guardrail,

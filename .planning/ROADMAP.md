@@ -271,6 +271,8 @@ ledger model — recorded before any dependent phase begins.
      is rejected at config validation, not accepted silently.
   2. For any `TokenUsage`, cost is computed as an exact fixed-point integer micro-unit value with no
      `f64` accumulation, unit-tested per token type including cache and reasoning tokens.
+     *(Amended 2026-09-25, Phase 38 plan 38-01: the cost unit is i64 nano-units (1e-9), a finer
+     scale that satisfies "micro-units" — see 38-CONTEXT.md D-02 and ADR-0053.)*
   3. A completed run's `ExecutionMetadata.cost_estimate` carries the currency cost end-to-end when
      its model has a configured price, and is `None` — never `0` — when it does not; the field's
      reserved rustdoc note now reads "produced by the Treasurer".

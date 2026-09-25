@@ -479,12 +479,99 @@ impl PriceTable {
     }
 }
 
+/// A run-level running total of [`Cost`]s across every priced LLM call in that run (D-10).
+///
+/// Wraps a private three-state accumulator: **empty** (no call recorded yet), **priced** (a
+/// running [`Cost`] sum), or **unknown** (poisoned). A single `None` cost, or a currency
+/// mismatch between two recorded costs, moves the tally to the unknown state permanently — once
+/// poisoned, no later priced call can un-poison it. This is deliberate: **if any priced call in
+/// a run was unpriced, the run cost is `None`, never a partial sum** (D-10) — a run total must
+/// never understate spend by silently dropping the calls it could not price. This is the single
+/// implementation both `TraceDispatcher::total_cost` (38-06) and the agent loop (38-07) use.
+///
+/// `Default` yields the empty state, not a zero figure — consistent with [`Cost`] itself
+/// carrying no `Default`.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::cost::{Cost, CostError, CostTally, CurrencyCode};
+///
+/// let usd = CurrencyCode::new("USD")?;
+/// let mut tally = CostTally::new();
+/// assert_eq!(tally.total(), None);
+///
+/// tally.record_call(Some(&Cost::new(1_000, usd.clone())));
+/// tally.record_call(Some(&Cost::new(500, usd.clone())));
+/// assert_eq!(tally.total(), Some(Cost::new(1_500, usd.clone())));
+///
+/// // One unpriced call poisons the run total, permanently.
+/// tally.record_call(None);
+/// tally.record_call(Some(&Cost::new(500, usd)));
+/// assert_eq!(tally.total(), None);
+/// # Ok::<(), CostError>(())
+/// ```
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CostTally {
+    state: CostTallyState,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+enum CostTallyState {
+    #[default]
+    Empty,
+    Priced(Cost),
+    Unknown,
+}
+
+impl CostTally {
+    /// Construct an empty tally (nothing recorded yet).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record one known LLM call's cost.
+    ///
+    /// `Some(cost)` accumulates through [`Cost::checked_add`] (a currency mismatch against the
+    /// running total moves the tally to the unknown/poisoned state); `None` moves the tally to
+    /// the unknown state and it stays there regardless of any later call.
+    pub fn record_call(&mut self, cost: Option<&Cost>) {
+        self.state = match (&self.state, cost) {
+            (CostTallyState::Unknown, _) => CostTallyState::Unknown,
+            (_, None) => CostTallyState::Unknown,
+            (CostTallyState::Empty, Some(c)) => CostTallyState::Priced(c.clone()),
+            (CostTallyState::Priced(acc), Some(c)) => acc
+                .checked_add(c)
+                .map_or(CostTallyState::Unknown, CostTallyState::Priced),
+        };
+    }
+
+    /// Record one engine `NodeFinished`-shaped call: a node that reported the default
+    /// (all-zero, no sub-counts) [`TokenUsage`] and no cost is treated as neutral — a
+    /// non-Paladin node, a cache hit, or a failed attempt that billed nothing — and does not
+    /// affect the tally. Any other usage/cost pair delegates to [`CostTally::record_call`].
+    pub fn record_node(&mut self, usage: &TokenUsage, cost: Option<&Cost>) {
+        if cost.is_none() && *usage == TokenUsage::default() {
+            return;
+        }
+        self.record_call(cost);
+    }
+
+    /// The run's total cost: `Some` only when every recorded call was priced in one currency.
+    pub fn total(&self) -> Option<Cost> {
+        match &self.state {
+            CostTallyState::Priced(cost) => Some(cost.clone()),
+            CostTallyState::Empty | CostTallyState::Unknown => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn gpt4_row_prices_1000_prompt_2000_completion_at_22_500_000_nanos() {
+    fn prompt_completion_only() {
         let usage = TokenUsage::new(1_000, 2_000);
         let row = PriceRow::new(2_500_000_000, 10_000_000_000).unwrap();
         let usd = CurrencyCode::new("USD").unwrap();
@@ -493,5 +580,324 @@ mod tests {
 
         assert_eq!(cost.nanos(), 22_500_000);
         assert_eq!(cost.currency(), &usd);
+    }
+
+    #[test]
+    fn cache_axes_subtract_from_base() {
+        let usage = TokenUsage::new(1_000, 0)
+            .with_cache_read(400)
+            .with_cache_write(100);
+        let row = PriceRow::new(3_000_000_000, 0)
+            .unwrap()
+            .with_cache_read(300_000_000)
+            .unwrap()
+            .with_cache_write(3_750_000_000)
+            .unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let cost = cost_of_call(&usage, &row, &usd);
+
+        assert_eq!(cost.nanos(), 1_995_000);
+    }
+
+    #[test]
+    fn full_cache_hit_differs_from_no_cache() {
+        let row = PriceRow::new(3_000_000_000, 0)
+            .unwrap()
+            .with_cache_read(300_000_000)
+            .unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let full_hit = TokenUsage::new(1_000, 0).with_cache_read(1_000);
+        let no_cache = TokenUsage::new(1_000, 0);
+
+        assert_eq!(cost_of_call(&full_hit, &row, &usd).nanos(), 300_000);
+        assert_eq!(cost_of_call(&no_cache, &row, &usd).nanos(), 3_000_000);
+    }
+
+    #[test]
+    fn omitted_cache_prices_bill_at_prompt_price() {
+        let row = PriceRow::new(2_000_000_000, 0).unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let with_cache = TokenUsage::new(1_000, 0).with_cache_read(400);
+        let plain = TokenUsage::new(1_000, 0);
+
+        assert_eq!(
+            cost_of_call(&with_cache, &row, &usd),
+            cost_of_call(&plain, &row, &usd)
+        );
+    }
+
+    #[test]
+    fn reasoning_axis_subtracts_from_base() {
+        let usage = TokenUsage::new(0, 1_000).with_reasoning(300);
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let priced_reasoning = PriceRow::new(0, 10_000_000_000)
+            .unwrap()
+            .with_reasoning(20_000_000_000)
+            .unwrap();
+        assert_eq!(
+            cost_of_call(&usage, &priced_reasoning, &usd).nanos(),
+            13_000_000
+        );
+
+        let no_reasoning_price = PriceRow::new(0, 10_000_000_000).unwrap();
+        assert_eq!(
+            cost_of_call(&usage, &no_reasoning_price, &usd).nanos(),
+            10_000_000
+        );
+    }
+
+    #[test]
+    fn none_sub_counts_are_zero() {
+        let usage = TokenUsage::new(1_000, 500);
+        // Deliberately near-zero cache/reasoning prices: if a `None` sub-count were ever
+        // mistaken for a fully-cached/fully-reasoning call, the result would collapse toward
+        // zero instead of the full base prompt/completion cost.
+        let row = PriceRow::new(2_000_000_000, 5_000_000_000)
+            .unwrap()
+            .with_cache_read(1)
+            .unwrap()
+            .with_cache_write(1)
+            .unwrap()
+            .with_reasoning(1)
+            .unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let cost = cost_of_call(&usage, &row, &usd);
+
+        assert_eq!(cost.nanos(), 4_500_000);
+    }
+
+    #[test]
+    fn sub_micro_price_does_not_round_to_zero() {
+        let usage = TokenUsage::new(1, 0);
+        let row = PriceRow::new(150_000_000, 0).unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let cost = cost_of_call(&usage, &row, &usd);
+
+        assert_eq!(cost.nanos(), 150);
+    }
+
+    #[test]
+    fn half_up_rounding_boundaries() {
+        let row = PriceRow::new(1, 0).unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        assert_eq!(
+            cost_of_call(&TokenUsage::new(500_000, 0), &row, &usd).nanos(),
+            1
+        );
+        assert_eq!(
+            cost_of_call(&TokenUsage::new(499_999, 0), &row, &usd).nanos(),
+            0
+        );
+        assert_eq!(
+            cost_of_call(&TokenUsage::new(1_500_000, 0), &row, &usd).nanos(),
+            2
+        );
+    }
+
+    #[test]
+    fn rounds_once_per_call_not_per_axis() {
+        let usage = TokenUsage::new(400_000, 400_000);
+        let row = PriceRow::new(1, 1).unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let cost = cost_of_call(&usage, &row, &usd);
+
+        // Per-axis rounding would give (400_000+500_000)/1_000_000 = 0 for each axis and 0
+        // total; rounding once over the summed products gives 1.
+        assert_eq!(cost.nanos(), 1);
+    }
+
+    #[test]
+    fn zero_tokens_on_priced_row_is_some_zero() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let row = PriceRow::new(2_500_000_000, 10_000_000_000).unwrap();
+        let table = PriceTable::new(usd.clone()).with_row("gpt-4", row);
+
+        let cost = table.price("gpt-4", &TokenUsage::default());
+
+        assert_eq!(cost, Some(Cost::new(0, usd)));
+    }
+
+    #[test]
+    fn containment_violations_are_clamped() {
+        let usage = TokenUsage::new(100, 500)
+            .with_cache_read(80)
+            .with_cache_write(40)
+            .with_reasoning(900);
+        let row = PriceRow::new(1_000_000, 4_000_000)
+            .unwrap()
+            .with_cache_read(2_000_000)
+            .unwrap()
+            .with_cache_write(3_000_000)
+            .unwrap()
+            .with_reasoning(5_000_000)
+            .unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        // Must not panic despite cache_read + cache_write > prompt_tokens and
+        // reasoning > completion_tokens.
+        let cost = cost_of_call(&usage, &row, &usd);
+
+        // Billed as 80 cache_read + 20 cache_write + 0 base prompt, and 500 reasoning + 0 base
+        // completion (each sub-count clamped to its reported parent count).
+        assert_eq!(cost.nanos(), 2_720);
+    }
+
+    #[test]
+    fn saturates_at_i64_max() {
+        let usage = TokenUsage::new(u32::MAX, u32::MAX);
+        let row = PriceRow::new(i64::MAX, i64::MAX).unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let cost = cost_of_call(&usage, &row, &usd);
+
+        assert_eq!(cost.nanos(), i64::MAX);
+    }
+
+    #[test]
+    fn price_row_rejects_negative_axis() {
+        assert!(matches!(
+            PriceRow::new(-1, 0),
+            Err(CostError::NegativePrice {
+                axis: "prompt",
+                nanos_per_million: -1
+            })
+        ));
+        assert!(matches!(
+            PriceRow::new(0, -1),
+            Err(CostError::NegativePrice {
+                axis: "completion",
+                nanos_per_million: -1
+            })
+        ));
+
+        let row = PriceRow::new(0, 0).unwrap();
+        assert!(matches!(
+            row.clone().with_cache_read(-5),
+            Err(CostError::NegativePrice {
+                axis: "cache_read",
+                nanos_per_million: -5
+            })
+        ));
+        assert!(matches!(
+            row.clone().with_cache_write(-5),
+            Err(CostError::NegativePrice {
+                axis: "cache_write",
+                nanos_per_million: -5
+            })
+        ));
+        assert!(matches!(
+            row.with_reasoning(-5),
+            Err(CostError::NegativePrice {
+                axis: "reasoning",
+                nanos_per_million: -5
+            })
+        ));
+
+        // Zero is valid on every axis.
+        assert!(PriceRow::new(0, 0).is_ok());
+    }
+
+    #[test]
+    fn currency_code_validation() {
+        assert!(CurrencyCode::new("USD").is_ok());
+        assert!(CurrencyCode::new("EUR").is_ok());
+        assert!(CurrencyCode::new("usd").is_err());
+        assert!(CurrencyCode::new("US").is_err());
+        assert!(CurrencyCode::new("USDX").is_err());
+        assert!(CurrencyCode::new("").is_err());
+        assert!(CurrencyCode::new("U5D").is_err());
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let json = serde_json::to_string(&usd).unwrap();
+        assert_eq!(json, "\"USD\"");
+        let round_tripped: CurrencyCode = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, usd);
+
+        let err = serde_json::from_str::<CurrencyCode>("\"usd\"");
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn price_table_lookup_is_exact_and_case_sensitive() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let row = PriceRow::new(2_500_000_000, 10_000_000_000).unwrap();
+        let table = PriceTable::new(usd).with_row("gpt-4", row);
+        let usage = TokenUsage::new(1_000, 2_000);
+
+        assert!(table.price("gpt-4", &usage).is_some());
+        assert!(table.price("GPT-4", &usage).is_none());
+        assert!(table.price("gpt-4-0613", &usage).is_none());
+    }
+
+    #[test]
+    fn cost_checked_add_and_option_sum() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let eur = CurrencyCode::new("EUR").unwrap();
+
+        let a = Cost::new(1_000, usd.clone());
+        let b = Cost::new(500, usd.clone());
+        let c = Cost::new(1, eur);
+
+        assert_eq!(a.checked_add(&c), None);
+
+        let empty: Vec<Cost> = Vec::new();
+        let empty_sum: Option<Cost> = empty.into_iter().sum();
+        assert_eq!(empty_sum, None);
+
+        let two_usd: Option<Cost> = vec![a.clone(), b.clone()].into_iter().sum();
+        assert_eq!(two_usd, Some(Cost::new(1_500, usd.clone())));
+
+        let mixed: Option<Cost> = vec![a, b, c].into_iter().sum();
+        assert_eq!(mixed, None);
+    }
+
+    #[test]
+    fn cost_tally_rules() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let eur = CurrencyCode::new("EUR").unwrap();
+
+        let tally = CostTally::new();
+        assert_eq!(tally.total(), None);
+
+        let a = Cost::new(1_000, usd.clone());
+        let b = Cost::new(500, usd.clone());
+        let mut summed = CostTally::new();
+        summed.record_call(Some(&a));
+        summed.record_call(Some(&b));
+        assert_eq!(summed.total(), Some(Cost::new(1_500, usd.clone())));
+
+        let mut poisoned = CostTally::new();
+        poisoned.record_call(Some(&a));
+        poisoned.record_call(None);
+        poisoned.record_call(Some(&b));
+        assert_eq!(poisoned.total(), None);
+
+        let mut neutral = CostTally::new();
+        neutral.record_call(Some(&a));
+        neutral.record_node(&TokenUsage::default(), None);
+        assert_eq!(neutral.total(), Some(a.clone()));
+
+        let mut poisoned_node = CostTally::new();
+        poisoned_node.record_call(Some(&a));
+        poisoned_node.record_node(&TokenUsage::new(5, 5), None);
+        assert_eq!(poisoned_node.total(), None);
+
+        let mut mismatched = CostTally::new();
+        mismatched.record_call(Some(&a));
+        mismatched.record_call(Some(&Cost::new(1, eur)));
+        assert_eq!(mismatched.total(), None);
+
+        let mut saturating = CostTally::new();
+        saturating.record_call(Some(&Cost::new(i64::MAX, usd.clone())));
+        saturating.record_call(Some(&Cost::new(1, usd.clone())));
+        assert_eq!(saturating.total(), Some(Cost::new(i64::MAX, usd)));
     }
 }

@@ -293,7 +293,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1)*
 
-- [ ] 38-02-PLAN.md — tracer: a priced streamed agent call reaches `ExecutionMetadata` and the markdown herald (`0.0225 USD`); `Cost`/`PriceTable`/`CostTally` arithmetic pinned per axis (PRICE-02, PRICE-03)
+- [x] 38-02-PLAN.md — tracer: a priced streamed agent call reaches `ExecutionMetadata` and the markdown herald (`0.0225 USD`); `Cost`/`PriceTable`/`CostTally` arithmetic pinned per axis (PRICE-02, PRICE-03)
 
 **Wave 3** *(blocked on Wave 2)*
 

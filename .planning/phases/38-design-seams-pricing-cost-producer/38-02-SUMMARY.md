@@ -180,3 +180,13 @@ None - no external service configuration required.
 ---
 *Phase: 38-design-seams-pricing-cost-producer*
 *Completed: 2026-09-25*
+
+## Self-Check: PASSED
+
+All created files and commit hashes verified present on disk / in `git log --oneline --all`:
+- `crates/paladin-core/src/platform/container/cost.rs` — FOUND
+- `crates/paladin-llm/src/pricing.rs` — FOUND
+- `.planning/phases/38-design-seams-pricing-cost-producer/38-02-SUMMARY.md` — FOUND
+- `c57d2127` (Task 1) — FOUND
+- `6deeae08` (Task 2) — FOUND
+- `b2c699ac` (SUMMARY commit) — FOUND

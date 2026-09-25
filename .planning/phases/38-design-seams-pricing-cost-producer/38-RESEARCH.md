@@ -644,10 +644,17 @@ let priced: Arc<dyn LlmPort> = if price_table.is_empty() {
 **If this table is empty:** N/A — two low-risk assumptions recorded above, both explicitly flagged
 as within-discretion or independently registry-verified.
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+*Both questions below were resolved during planning (plan-checker pass, 2026-09-25); the inline
+`RESOLVED` line under each names the plan that implements the answer.*
 
 1. **Where exactly should the pricing decorator be constructed — inside `LlmProviderFactory::create`
    itself, or as a wrapping call at each of the two call sites?**
+   - **RESOLVED:** wrap at the two facade call sites (`paladin_port_from_settings` and
+     `build_agent`/`build_agent_with_llm`), not inside `LlmProviderFactory::create` — implemented by
+     plan 38-03 Task 2 (its must-haves read "wrap at both facade call sites"); `provider_factory.rs`
+     stays provider-selection-only.
    - What we know: both `paladin_port_from_settings` (engine) and `build_agent`/`build_agent_with_llm`
      (agent loop) call `LlmProviderFactory::create(&provider)` and both need the same wrapping.
    - What's unclear: `LlmProviderFactory::create` doesn't currently take a `PriceTable` parameter,
@@ -661,6 +668,9 @@ as within-discretion or independently registry-verified.
 
 2. **Does a fallback hop's `LlmResponse.model` differ from the originally-requested model, and does
    that matter for pricing?**
+   - **RESOLVED:** yes, and the decorator prices the *served* response's `model`, composed outside
+     `FallbackLlmAdapter` — implemented and proven by plan 38-04 Task 2's
+     `prices_the_served_model_after_fallback_hop` test (threat T-38-14).
    - What we know: `FallbackLlmAdapter::generate` returns whichever provider's `LlmResponse` actually
      served the call, with that provider's own `model` field (each provider adapter sets `model` from
      its own response, not the request) and `served_by` metadata recording which provider served it.

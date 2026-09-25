@@ -259,6 +259,7 @@ and future milestones are detailed below, which is what keeps this file a consta
 milestone. Phases 38-47 (v0.11.0 Treasurer Spend Governance) are detailed below.*
 
 ### Phase 38: Design Seams & Pricing/Cost Producer
+
 **Goal**: An operator can price every LLM call in a configured currency and see an honest per-run
 cost, with the two gating architecture decisions — the mid-run Treasurer enforcement attachment
 point across `WarEngine` and `PaladinExecutionService`, and derive-on-read vs a running-balance
@@ -266,16 +267,20 @@ ledger model — recorded before any dependent phase begins.
 **Depends on**: Nothing (first phase of v0.11.0)
 **Requirements**: PRICE-01, PRICE-02, PRICE-03
 **Success Criteria** (what must be TRUE):
+
   1. Operator can configure a per-model price table (prompt, completion, cache-read, cache-write,
      reasoning) as decimal strings; the default table is empty, and a negative or malformed price
      is rejected at config validation, not accepted silently.
+
   2. For any `TokenUsage`, cost is computed as an exact fixed-point integer micro-unit value with no
      `f64` accumulation, unit-tested per token type including cache and reasoning tokens.
      *(Amended 2026-09-25, Phase 38 plan 38-01: the cost unit is i64 nano-units (1e-9), a finer
      scale that satisfies "micro-units" — see 38-CONTEXT.md D-02 and ADR-0053.)*
+
   3. A completed run's `ExecutionMetadata.cost_estimate` carries the currency cost end-to-end when
      its model has a configured price, and is `None` — never `0` — when it does not; the field's
      reserved rustdoc note now reads "produced by the Treasurer".
+
   4. Two ADRs are on record — the mid-run enforcement attachment point and the ledger balance
      model — and the Phase 39/41/42 plans reference them rather than re-opening the question.
 **Plans**: 9 plans (6 waves)
@@ -284,7 +289,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 38-01-PLAN.md — ADR-0052 (mid-run Treasurer enforcement attachment point) and ADR-0053 (append-only, derive-on-read ledger; row kinds, i64 nano-unit amounts, settlement key) with the PROMOTION.md index, one blocking checkpoint on settlement granularity (D-13..D-16)
+- [x] 38-01-PLAN.md — ADR-0052 (mid-run Treasurer enforcement attachment point) and ADR-0053 (append-only, derive-on-read ledger; row kinds, i64 nano-unit amounts, settlement key) with the PROMOTION.md index, one blocking checkpoint on settlement granularity (D-13..D-16)
 
 **Wave 2** *(blocked on Wave 1)*
 
@@ -308,73 +313,92 @@ Plans:
 **Wave 6** *(blocked on Wave 5)*
 
 - [ ] 38-09-PLAN.md — closeout: `cargo semver-checks` measurement and registration, CHANGELOG, API-surface refresh, full gate suite (PRICE-01..03)
+
 **Research flag**: yes — the engine-path-vs-agent-loop attachment point for mid-run `TokenBudget`
 enforcement is, per research, the single largest open architectural question this milestone
 surfaces; needs an ADR-level design pass before Phase 42 planning.
 
 ### Phase 39: Spend Ledger
+
 **Goal**: A durable, race-proof spend ledger exists that every later Treasurer phase can draw
 against and query.
 **Depends on**: Phase 38 (cost function to persist; reserve/settle schema decision)
 **Requirements**: LEDGR-01, LEDGR-02, LEDGR-03, LEDGR-04
 **Success Criteria** (what must be TRUE):
+
   1. One shared `TreasuryLedgerPort` contract-test suite passes unmodified against in-memory,
      SQLite and Postgres adapters, backed by a `007` migration in both
      `crates/paladin-storage/migrations/{sqlite,postgres}/`.
+
   2. When N concurrent draws race against a balance that only N−1 of them fit, exactly N−1 succeed
      and one is refused, on every adapter.
+
   3. Settling the same run/superstep/attempt twice — via lease redelivery, resume, retry or model
      fallback — charges it exactly once.
+
   4. Operator can view spend per tenant, API key, run and model over a time window from the CLI,
      and that spend appears in herald output and trace events.
 **Plans**: TBD
 
 ### Phase 40: Tenant Identity & Run-Read Scoping
+
 **Goal**: Every run is attributable to the tenant and API key that submitted it, and no caller can
 read another caller's runs.
 **Depends on**: Phase 38 (shares the milestone's config/identity conventions); independent of
 Phase 39
 **Requirements**: TENANT-01, TENANT-02, PLAT-07
 **Success Criteria** (what must be TRUE):
+
   1. Every API key in operator config maps to a tenant, the authenticated `Principal` carries
      `tenant_id`, and a caller cannot assert a different tenant than its own key's mapping.
+
   2. Every submitted run records its submitting principal (API key id and tenant).
   3. `GET /runs` and every `/runs/{id}*` read route return only runs the calling principal may
      see — another caller's run returns 404 — enforced by one shared authorization function used
      on every such route, not duplicated per endpoint.
+
   4. The breaking `Principal` change is recorded in `MIGRATION.md` §9.2 and the
      `cargo semver-checks` allowlist.
 **Plans**: TBD
 
 ### Phase 41: Admission-Time Allowance Enforcement
+
 **Goal**: A tenant or API key that has exhausted its allowance is stopped before a run is ever
 persisted, and the operator gets an early warning before that happens.
 **Depends on**: Phase 39 (ledger to evaluate spend against), Phase 40 (identity carrier)
 **Requirements**: ALLOW-01, ALLOW-02, ALLOW-04
 **Success Criteria** (what must be TRUE):
+
   1. Operator can configure a rolling-period allowance (with an optional lifetime cap) per tenant
      and per API key, distinct from every existing `max_tokens` meaning; window boundaries are
      computed from the store or server clock, never a worker's local clock.
+
   2. Submitting a run while the caller's tenant or API-key allowance is exhausted is refused with a
      typed error before any run row is written.
+
   3. Crossing a configurable warn threshold (e.g. 80%) emits exactly one trace event plus a herald
      and webhook notice per window, without blocking the run.
 **Plans**: TBD
 
 ### Phase 42: Mid-Run Halt & SSE Terminal Status
+
 **Goal**: A run that would overspend mid-flight stops cleanly and resumably instead of running
 unchecked, and the SSE stream reports the run's real terminal status.
 **Depends on**: Phase 38 (attachment-point ADR), Phase 41 (Treasurer facade's admission slice)
 **Requirements**: ALLOW-03, ALLOW-05, PLAT-09
 **Success Criteria** (what must be TRUE):
+
   1. A run in flight whose next draw would overspend halts cleanly — typed Treasurer error, status
      `Halted`, last checkpoint kept — on both an engine-driven (`WarEngine`) run and an agent-loop
      (`PaladinExecutionService`) run.
+
   2. A halted run resumes and completes once the allowance is replenished or the window resets,
      continuing from its last checkpoint rather than re-executing.
+
   3. The Treasurer derives the per-run `TokenBudget` from the remaining allowance and works
      alongside `TokenBudget`, `ModelCallLimit`, `ToolCallLimit` and the Commissary without replacing
      any of them; a guard test keeps `Treasurer` a framework-only word.
+
   4. The SSE `done` event matches the persisted run status — `Cancelled` for a caller-cancelled run,
      `Halted` with the Treasurer reason for a spend halt.
 **Plans**: TBD
@@ -383,20 +407,26 @@ have durable multi-step runs); the streaming settle-on-nonexistent-usage pitfall
 handling by reusing `TokenBudget`'s existing cutoff mechanism rather than inventing a second one.
 
 ### Phase 43: Rate Pacing
+
 **Goal**: Outbound LLM calls back off on provider 429s instead of thrashing, in-process and across
 the whole worker fleet, without ever leaving a run unpaced.
 **Depends on**: Phase 38 (design seams only) — parallel-schedulable alongside Phases 39-42
 **Requirements**: PACE-01, PACE-02, PACE-03, PACE-04, PACE-05
 **Success Criteria** (what must be TRUE):
+
   1. `LlmError::RateLimitExceeded` carries a retry delay parsed from `Retry-After` (delta-seconds or
      HTTP-date) and from provider rate-limit headers, with header names verified against official
      OpenAI and Anthropic documentation.
+
   2. A mocked 429 against any `FallbackLlmAdapter` hop proves back-off with jitter — the retry delay
      is honored as a minimum — rather than immediate-retry thrash.
+
   3. With Redis configured, a 429 on one worker measurably slows every worker sharing that
      provider/model's pacing state, through an atomic Lua script using the Redis server clock.
+
   4. A distributed stampede lock (set-if-absent with expiry, fencing token, delete-only-if-owner)
      stops concurrent workers from issuing the same cached request twice.
+
   5. When Redis is unavailable, pacing degrades to conservative per-process pacing with a trace
      warning; a run is never left unpaced — covered by a test.
 **Plans**: TBD
@@ -405,23 +435,29 @@ fail-open-vs-fail-closed decision on Redis unavailability is a genuine open desi
 does not resolve; needs deeper phase-specific research.
 
 ### Phase 44: Legacy Clean-Break Removal
+
 **Goal**: The superseded Battalion error/retry/timeout surfaces and the untyped `LlmError` string
 variant are gone from the tree, with every removal recorded.
 **Depends on**: Phase 43 (sequenced after the Treasurer feature phases to avoid diff conflicts with
 concurrently touched files)
 **Requirements**: LEGACY-01, LEGACY-02, LEGACY-03, LEGACY-04
 **Success Criteria** (what must be TRUE):
+
   1. `battalion::RetryPolicy`, `battalion::ErrorStrategy` and `battalion::NodeError` no longer
      exist, while the same-named Aegis and Flow types are untouched and still compile.
+
   2. Formation, Phalanx and Campaign no longer carry their own legacy timeout handling — Aegis
      timeouts are the only timeout path for those patterns.
+
   3. `PaladinError::LlmError(String)` no longer exists, and `conclave_execution_service.rs`'s retry
      check uses the typed `LlmFailure`/`Transience` taxonomy instead of string matching.
+
   4. The X-03 supersession is recorded in an ADR, and every removal has a `MIGRATION.md` §9.2 row,
      a `cargo semver-checks` allowlist entry, and updated examples/docs.
 **Plans**: TBD
 
 ### Phase 45: RustFS Swap & Platform/Observability Deviations
+
 **Goal**: The dev/test/CI object store runs on a maintained, pinned image instead of a terminal
 MinIO pin, and two standing accepted deviations (legacy-agent SSE/webhook silence, tracing
 overhead) are closed or re-measured.
@@ -429,16 +465,21 @@ overhead) are closed or re-measured.
 independent of the Treasurer phases
 **Requirements**: STORE-01, STORE-02, STORE-03, PLAT-08, OBS-05
 **Success Criteria** (what must be TRUE):
+
   1. The dev/test compose stack and the Coverage, Integration Tests, Docker Integration Tests and
      Kubernetes Smoke Test CI jobs run against RustFS pinned to an exact tag, bucket bootstrap
      replaces `mc`, and no MinIO image remains in any live configuration.
+
   2. The `FileStoragePort` contract suite (presigned URLs, multipart uploads, ETags) passes against
      RustFS using the existing S3 adapter; a new adapter behind a feature flag is added only if
      that suite fails.
+
   3. Storage docs record the decision on whether the production Kubernetes manifest also moves to
      RustFS.
+
   4. A legacy `Runnable::Agent` run emits SSE live events and webhook deliveries the same way a
      graph run does.
+
   5. `LogTraceSink`/`TraceDispatcher::emit` skip serialization when logging is disabled and reuse
      their buffers; the tracing-overhead benchmark is re-measured and either meets PRD 07's ≤3% bar
      or a new accepted figure is recorded.
@@ -448,30 +489,37 @@ format) is MEDIUM-confidence only; the phase's first work item should close this
 `FileStoragePort` contract-test suite before any adapter code is written.
 
 ### Phase 46: Docs Currency & Hygiene
+
 **Goal**: The v0.10.0 audit's docs debt is closed, v0.11.0's own surface is documented, and the
 milestone's validation/tech-debt bookkeeping is current.
 **Depends on**: Phase 45 (documents everything the milestone shipped, so it runs last among
 feature work)
 **Requirements**: CURR-22, CURR-23, CURR-24, CURR-25
 **Success Criteria** (what must be TRUE):
+
   1. The v0.10.0 acceptance-audit docs fixes are closed: "twelve publishable crates" appears in
      `development-setup.md`, `release-automation.md` and `release-recovery.md`; `paladin-eval` has
      Trusted Publishing and Credential History rows; the CHANGELOG `[0.10.0]` heading date is
      corrected.
+
   2. A Treasurer mdBook page, a configuration reference for pricing/`allowance`/the warn threshold,
      and a v0.10 → v0.11 `MIGRATION.md` guide are published and reachable from the book's
      navigation.
+
   3. Nyquist validation for Phases 22, 24, 29, 30, 34, 36 and 36.1 is out of `draft`, and Phase 28
      is either `nyquist_compliant` or its gaps are explicitly recorded.
+
   4. Each of the three v2 debt lines (oversized service files, clone/lock contention,
      dependency-allowlist drift) is fixed or carries a written waiver.
 **Plans**: TBD
 
 ### Phase 47: v0.11.0 Crate Release
+
 **Goal**: v0.11.0 ships to crates.io with every gate green.
 **Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release)
 **Requirements**: SHIP-07
 **Success Criteria** (what must be TRUE):
+
   1. All 12 publishable crates are live on crates.io at version `0.11.0`.
   2. The release tag is cut on a `main` merge commit, per the two-SHA rule.
   3. CHANGELOG and MIGRATION.md are complete for v0.11.0, and the publish-order gate is green on

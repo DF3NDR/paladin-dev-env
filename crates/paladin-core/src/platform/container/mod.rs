@@ -10,6 +10,9 @@ pub mod citadel_error;
 pub mod comment;
 pub mod content;
 pub mod content_list;
+/// Treasurer cost arithmetic (PRICE-02): `Cost`, `CurrencyCode`, `PriceRow`, `PriceTable`,
+/// `cost_of_call`, `CostTally` — pure fixed-point `i64` nano-unit cost, no floating point.
+pub mod cost;
 pub mod directive;
 pub mod document;
 pub mod execution_result;

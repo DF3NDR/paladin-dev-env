@@ -226,6 +226,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use paladin_core::platform::container::content::ContentItem;
+use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::prompt::PromptItem;
 use paladin_core::platform::container::transience::Transience;
 
@@ -1064,6 +1065,13 @@ pub struct StreamingResponse {
     /// never a locally-computed estimate.
     #[serde(default)]
     pub usage: Option<TokenUsage>,
+    /// Cost of this call, set by a pricing decorator (`PricingLlmAdapter` in
+    /// `paladin-llm`, D-09) on the terminal chunk only, from that chunk's own
+    /// `usage`. `None` on every other chunk, for a model with no configured
+    /// price row, and when the terminal chunk reported no usage at all
+    /// (D-00c -- never a fabricated zero).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<Cost>,
 }
 
 impl StreamingResponse {
@@ -1086,6 +1094,7 @@ impl StreamingResponse {
             delta: text.into(),
             finish_reason: None,
             usage: None,
+            cost: None,
         }
     }
 
@@ -1109,6 +1118,7 @@ impl StreamingResponse {
             delta: String::new(),
             finish_reason: Some(finish_reason),
             usage: None,
+            cost: None,
         }
     }
 
@@ -1125,6 +1135,26 @@ impl StreamingResponse {
     /// ```
     pub fn with_usage(mut self, usage: TokenUsage) -> Self {
         self.usage = Some(usage);
+        self
+    }
+
+    /// Chainable: attach a priced cost to this chunk (D-09/D-10), set by a pricing decorator on
+    /// the terminal chunk only.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_ports::output::llm_port::{FinishReason, StreamingResponse, TokenUsage};
+    ///
+    /// let cost = Cost::new(22_500_000, CurrencyCode::new("USD").unwrap());
+    /// let chunk = StreamingResponse::terminal(FinishReason::Stop)
+    ///     .with_usage(TokenUsage::new(1_000, 2_000))
+    ///     .with_cost(cost.clone());
+    /// assert_eq!(chunk.cost, Some(cost));
+    /// ```
+    pub fn with_cost(mut self, cost: Cost) -> Self {
+        self.cost = Some(cost);
         self
     }
 }

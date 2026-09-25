@@ -5,6 +5,31 @@ All notable changes to the Paladin project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Treasurer cost arithmetic and the streamed cost producer (PRICE-02, PRICE-03; Phase 38 plan
+  38-02).** `paladin-core::platform::container::cost` adds `Cost` (`i64` nano-unit amount plus a
+  validated `CurrencyCode`), `PriceRow`/`PriceTable` (nano-units per 1M tokens, keyed by bare
+  model name), the pure `cost_of_call` function, and `CostTally` (the single "unpriced poisons
+  the run total, never a partial sum" implementation both the engine and agent loop will share).
+  Every intermediate product is computed in `i128`, rounded half-up exactly once per call, and
+  saturates into `i64` — no floating point anywhere in the module. `paladin-llm::pricing` adds
+  `PricingLlmAdapter`, a `FallbackLlmAdapter`-shaped decorator that prices a streamed call's
+  terminal chunk from its own usage, with a process-wide, capacity-bounded warn-once log line
+  per unpriced model name. `StreamingResponse` (`paladin-ports`) and `ChunkMetadata`
+  (`paladin-ports`) both gain an additive `Option<Cost>` field (both `#[non_exhaustive]`, so no
+  downstream struct literal breaks), and `ChunkMetadata` additionally gains an
+  `Option<ExecutionMetadata>` `execution` field. `ExecutionMetadataBuilder::cost` is the one
+  display-edge conversion from the authoritative nanos figure to `ExecutionMetadata`'s `f64`
+  `cost_estimate`; `ExecutionMetadata::cost_currency`/`cost_display` read the currency back.
+  `PaladinExecutionService::execute_stream` now builds a real `ExecutionMetadata` on every final
+  streamed chunk (priced or not) and exposes it through the new
+  `PaladinExecutionService::finalize_stream_output`, mirroring `format_result` for the streaming
+  path. `MarkdownHerald::finalize_stream` renders `0.0450 USD` instead of a hard-coded `$` prefix.
+  Purely additive — no `MIGRATION.md` §9.2 row (D-00g).
+
 ## [0.10.1] - 2026-09-20
 
 Patch release. Fixes the two defects that stopped the `v0.10.0` release pipeline partway through

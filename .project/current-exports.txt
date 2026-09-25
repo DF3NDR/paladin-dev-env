@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-09-16 17:49:43 UTC
+# Public API Surface - Generated 2026-09-25 17:36:51 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -2742,6 +2742,7 @@ pub fn paladin::application::services::paladin::paladin_execution_service::Palad
 pub async fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::execute(&self, &paladin_core::platform::container::paladin::Paladin, &str) -> core::result::Result<paladin_core::platform::container::execution_result::PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
 pub async fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::execute_observed(&self, &paladin_core::platform::container::paladin::Paladin, &str, &paladin_core::platform::container::heartbeat::HeartbeatHandle) -> core::result::Result<paladin_core::platform::container::execution_result::PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
 pub async fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::execute_scoped(&self, &paladin_core::platform::container::paladin::Paladin, &str, core::option::Option<&paladin_core::platform::container::heartbeat::HeartbeatHandle>, &paladin_core::platform::container::run_scope::RunScope) -> core::result::Result<paladin_core::platform::container::execution_result::PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
+pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::finalize_stream_output(&self, &paladin_core::platform::container::herald::ExecutionMetadata) -> core::result::Result<core::option::Option<alloc::string::String>, paladin_core::platform::container::paladin_error::PaladinError>
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::format_result(&self, &paladin_core::platform::container::execution_result::PaladinResult, &paladin_core::platform::container::paladin::Paladin) -> core::result::Result<core::option::Option<alloc::string::String>, paladin_core::platform::container::paladin_error::PaladinError>
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::new(alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>, alloc::sync::Arc<paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker>, core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::garrison_port::GarrisonPort>>, core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::arsenal_port::ArsenalPort>>) -> Self
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::orchestrator_port(&self) -> core::option::Option<&alloc::sync::Arc<dyn paladin_ports::output::orchestrator_port::OrchestratorPort>>
@@ -7921,4 +7922,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 3959
+Total public items: 3960

@@ -381,7 +381,9 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
+use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+use paladin_core::platform::container::herald::ExecutionMetadata;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::run_scope::RunScope;
@@ -431,11 +433,26 @@ pub struct ChunkMetadata {
     /// (D-17) -- never a locally-computed estimate.
     #[serde(default)]
     pub usage: Option<TokenUsage>,
+
+    /// Cost of the terminal call, populated only on the final chunk when the
+    /// model had a configured price (D-09/D-10). `None` on every other
+    /// chunk, for an unpriced model, and when the terminal chunk reported no
+    /// usage at all (D-00c -- never a fabricated zero).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<Cost>,
+
+    /// The agent loop's own [`ExecutionMetadata`] for this run, populated
+    /// only on the final chunk (D-12) -- the streamed-completion producer
+    /// builds it from `execution_id`, timing, `model_used`, usage and cost,
+    /// then hands it to `Herald::finalize_stream`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ExecutionMetadata>,
 }
 
 impl ChunkMetadata {
     /// Construct empty chunk metadata: no token hint, no loop count, no
-    /// usage. Chain the `with_*` builders to set any of them.
+    /// usage, no cost, no execution metadata. Chain the `with_*` builders to
+    /// set any of them.
     ///
     /// # Examples
     ///
@@ -446,12 +463,16 @@ impl ChunkMetadata {
     /// assert!(metadata.tokens.is_none());
     /// assert!(metadata.loop_count.is_none());
     /// assert!(metadata.usage.is_none());
+    /// assert!(metadata.cost.is_none());
+    /// assert!(metadata.execution.is_none());
     /// ```
     pub fn new() -> Self {
         Self {
             tokens: None,
             loop_count: None,
             usage: None,
+            cost: None,
+            execution: None,
         }
     }
 
@@ -480,6 +501,51 @@ impl ChunkMetadata {
     /// ```
     pub fn with_usage(mut self, usage: TokenUsage) -> Self {
         self.usage = Some(usage);
+        self
+    }
+
+    /// Chainable: attach a priced cost to this chunk (D-09/D-10).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_ports::output::paladin_port::ChunkMetadata;
+    ///
+    /// let cost = Cost::new(22_500_000, CurrencyCode::new("USD").unwrap());
+    /// let metadata = ChunkMetadata::new().with_cost(cost.clone());
+    /// assert_eq!(metadata.cost, Some(cost));
+    /// ```
+    pub fn with_cost(mut self, cost: Cost) -> Self {
+        self.cost = Some(cost);
+        self
+    }
+
+    /// Chainable: attach the run's [`ExecutionMetadata`] to this chunk
+    /// (D-12), built by the streamed-completion producer.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use paladin_ports::output::paladin_port::ChunkMetadata;
+    /// use uuid::Uuid;
+    ///
+    /// let execution = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1_000, 2_000))
+    ///     .build()
+    ///     .expect("valid metadata");
+    ///
+    /// let metadata = ChunkMetadata::new().with_execution(execution);
+    /// assert!(metadata.execution.is_some());
+    /// ```
+    pub fn with_execution(mut self, execution: ExecutionMetadata) -> Self {
+        self.execution = Some(execution);
         self
     }
 }

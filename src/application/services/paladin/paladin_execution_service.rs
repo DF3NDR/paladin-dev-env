@@ -68,7 +68,7 @@ use crate::core::base::entity::node::Node;
 use crate::core::platform::container::arsenal::{ArmamentCall, ArsenalError};
 use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
 use crate::core::platform::container::heartbeat::HeartbeatHandle;
-use crate::core::platform::container::herald::Herald;
+use crate::core::platform::container::herald::{ExecutionMetadata, Herald};
 use crate::core::platform::container::paladin::Paladin;
 use crate::core::platform::container::prompt::{
     PromptData, PromptItem, PromptParameters, PromptType, UserPrompt,
@@ -908,6 +908,39 @@ impl PaladinExecutionService {
         if let Some(ref herald) = self.herald {
             // Herald now uses actual PaladinResult directly - no conversion needed!
             let formatted = herald.format_paladin_result(result).map_err(|e| {
+                PaladinError::ExecutionError(format!("Herald formatting failed: {}", e))
+            })?;
+            Ok(Some(formatted))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Finalizes a streamed execution using the configured Herald (D-12).
+    ///
+    /// The agent loop's streamed-completion producer (`execute_stream_inner`) builds
+    /// `metadata` -- including any cost the pricing decorator attached (D-09) -- and attaches it
+    /// to the final `PaladinStreamChunk` via `ChunkMetadata::with_execution`. This method hands
+    /// that same metadata to `Herald::finalize_stream`, mirroring [`Self::format_result`] for
+    /// the streaming path.
+    ///
+    /// # Arguments
+    ///
+    /// * `metadata` - The `ExecutionMetadata` produced for this streamed run
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(formatted_output)` if a Herald is configured, `None` if not.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PaladinError::ExecutionError` if formatting fails.
+    pub fn finalize_stream_output(
+        &self,
+        metadata: &ExecutionMetadata,
+    ) -> Result<Option<String>, PaladinError> {
+        if let Some(ref herald) = self.herald {
+            let formatted = herald.finalize_stream(metadata).map_err(|e| {
                 PaladinError::ExecutionError(format!("Herald formatting failed: {}", e))
             })?;
             Ok(Some(formatted))
@@ -3156,6 +3189,12 @@ impl PaladinExecutionService {
         // exactly the no-history inputs renders byte-identically to the
         // old hardcoded `format!("{}\n\nUser: {}\n", ..)` (D-02).
         let run_id = uuid::Uuid::new_v4();
+        // D-12: captured before the provider stream opens (and, for the
+        // no-model-call `Finish` branch below, before any model call is even
+        // attempted) so the streamed-completion producer has a real start
+        // time and model name on every exit path.
+        let started_at = chrono::Utc::now();
+        let model_used = paladin.node.model.clone();
         let assembly =
             PromptAssembly::new(paladin.node.system_prompt.clone(), input, "", vec![], None);
         let mut middleware_cx = ModelCallContext::new(run_id, paladin, assembly);
@@ -3165,14 +3204,18 @@ impl PaladinExecutionService {
         let prompt = match before_outcome {
             BeforeOutcome::Continue { .. } => middleware_cx.assembly.render(),
             BeforeOutcome::Finish { result, .. } => {
-                // No model call at all: emit the finished output as the
-                // sole, final chunk.
+                // No model call at all: emit the finished output as the sole,
+                // final chunk, still carrying a produced ExecutionMetadata
+                // (D-12) -- no usage, no cost, but a real execution record.
+                let execution =
+                    Self::stream_execution_metadata(run_id, started_at, &model_used, None, None);
+                let metadata = execution.map(|exec| ChunkMetadata::new().with_execution(exec));
                 let (tx, rx) = mpsc::channel::<Result<PaladinStreamChunk, PaladinError>>(1);
                 let _ = tx
                     .send(Ok(PaladinStreamChunk {
                         text: result.output,
                         is_final: true,
-                        metadata: None,
+                        metadata,
                     }))
                     .await;
                 return Ok(rx);
@@ -3206,7 +3249,7 @@ impl PaladinExecutionService {
         };
 
         let request = LlmRequest::new(
-            paladin.node.model.clone(),
+            model_used.clone(),
             PromptItem {
                 node: Node::new(prompt_data, Some("stream".to_string())),
             },
@@ -3238,6 +3281,11 @@ impl PaladinExecutionService {
         // `self`) purely to name the provider in the no-usage warning below
         // -- never any request/response content.
         let provider_name = self.llm_port.get_provider_name();
+        // D-12: `Uuid` is `Copy`; cloned into the spawned task explicitly
+        // (rather than relying on the implicit `Copy` move) so the intent
+        // reads at the call site -- every final chunk's `ExecutionMetadata`
+        // is stamped with the SAME execution id as this call's `run_id`.
+        let execution_id = run_id;
 
         tokio::spawn(async move {
             use futures::StreamExt;
@@ -3262,17 +3310,39 @@ impl PaladinExecutionService {
                         // recorded decision (Milestone 14); do not "fix"
                         // this by wiring the counter in.
                         let metadata = if is_final {
-                            match resp.usage.clone() {
-                                Some(usage) => Some(ChunkMetadata::new().with_usage(usage)),
-                                None => {
-                                    warn!(
-                                        "streamed call to provider \"{provider_name}\" ended \
-                                         without a reported usage; recording a default usage \
-                                         rather than a TokenCounterPort estimate (D-17)"
-                                    );
-                                    None
-                                }
+                            let usage = resp.usage.clone();
+                            if usage.is_none() {
+                                warn!(
+                                    "streamed call to provider \"{provider_name}\" ended \
+                                     without a reported usage; recording a default usage \
+                                     rather than a TokenCounterPort estimate (D-17)"
+                                );
                             }
+                            // D-09/D-10: the pricing decorator (if any)
+                            // stamped `cost` on this SAME terminal
+                            // `StreamingResponse` -- never fabricated here.
+                            let cost = resp.cost.clone();
+                            let mut chunk_metadata = ChunkMetadata::new();
+                            if let Some(usage) = usage.clone() {
+                                chunk_metadata = chunk_metadata.with_usage(usage);
+                            }
+                            if let Some(cost) = cost.clone() {
+                                chunk_metadata = chunk_metadata.with_cost(cost);
+                            }
+                            // D-12: the streamed-completion producer -- built
+                            // on every terminal chunk, usage or no usage,
+                            // priced or not.
+                            let execution = Self::stream_execution_metadata(
+                                execution_id,
+                                started_at,
+                                &model_used,
+                                usage.as_ref(),
+                                cost.as_ref(),
+                            );
+                            if let Some(execution) = execution {
+                                chunk_metadata = chunk_metadata.with_execution(execution);
+                            }
+                            Some(chunk_metadata)
                         } else {
                             None
                         };
@@ -3301,17 +3371,58 @@ impl PaladinExecutionService {
                     }
                 }
             }
-            // Provider stream ended without an explicit final marker — emit one.
+            // Provider stream ended without an explicit final marker — emit
+            // one, still carrying a produced ExecutionMetadata (D-12) with
+            // no usage and no cost (the stream never reported a terminal
+            // chunk to read either from).
+            let execution =
+                Self::stream_execution_metadata(execution_id, started_at, &model_used, None, None);
+            let metadata = execution.map(|exec| ChunkMetadata::new().with_execution(exec));
             let _ = tx
                 .send(Ok(PaladinStreamChunk {
                     text: String::new(),
                     is_final: true,
-                    metadata: None,
+                    metadata,
                 }))
                 .await;
         });
 
         Ok(rx)
+    }
+
+    /// Build the streamed agent loop's `ExecutionMetadata` (D-12) for one final chunk:
+    /// `execution_id`/`started_at`/`model_used` identify the run, `usage` becomes
+    /// `token_usage` (falling back to `TokenUsage::default()` when the provider reported none),
+    /// and `cost` is attached through `ExecutionMetadataBuilder::cost` only when `Some` -- never
+    /// a fabricated zero (D-00c). `end_time` is stamped `now` and `calculate_duration()` is
+    /// called before returning. A builder error (missing required field) is logged once at
+    /// `warn!` and yields `None` rather than panicking.
+    fn stream_execution_metadata(
+        execution_id: uuid::Uuid,
+        started_at: chrono::DateTime<chrono::Utc>,
+        model_used: &str,
+        usage: Option<&paladin_core::platform::container::token_usage::TokenUsage>,
+        cost: Option<&paladin_core::platform::container::cost::Cost>,
+    ) -> Option<ExecutionMetadata> {
+        let mut builder = ExecutionMetadata::builder()
+            .execution_id(execution_id)
+            .start_time(started_at)
+            .end_time(chrono::Utc::now())
+            .model_used(model_used.to_string())
+            .token_usage(usage.cloned().unwrap_or_default());
+        if let Some(cost) = cost {
+            builder = builder.cost(cost);
+        }
+        match builder.build() {
+            Ok(mut metadata) => {
+                metadata.calculate_duration();
+                Some(metadata)
+            }
+            Err(e) => {
+                warn!("failed to build streamed ExecutionMetadata: {e}");
+                None
+            }
+        }
     }
 }
 
@@ -6709,5 +6820,152 @@ mod structured_output_tests {
              repair loop -- run_structured (paladin-ports) owns the only \
              bounded attempt loop"
         );
+    }
+}
+
+/// Plan 38-02's tracer: a priced streamed agent call reaches
+/// `ExecutionMetadata` and the markdown herald (D-09, D-12).
+#[cfg(test)]
+mod streamed_cost_tests {
+    use super::*;
+    use crate::core::base::entity::node::Node;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_herald::MarkdownHerald;
+    use paladin_herald::markdown_herald::MarkdownHeraldConfig;
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_llm::pricing::PricingLlmAdapter;
+
+    fn make_paladin(model: &str) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            model: model.to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            ..Default::default()
+        };
+        Node::new(data, None)
+    }
+
+    fn plain_markdown_herald() -> Arc<dyn Herald> {
+        Arc::new(MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        }))
+    }
+
+    fn make_service(llm: Arc<dyn LlmPort>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_herald(plain_markdown_herald())
+    }
+
+    async fn drain_final_chunk(
+        service: &PaladinExecutionService,
+        paladin: &Paladin,
+    ) -> ChunkMetadata {
+        let mut stream = service.execute_stream(paladin, "hi").await.unwrap();
+        loop {
+            let item = stream.recv().await.expect("stream must emit a final chunk");
+            let chunk = item.unwrap();
+            if chunk.is_final {
+                return chunk
+                    .metadata
+                    .expect("the final chunk must carry ChunkMetadata (D-12)");
+            }
+        }
+    }
+
+    /// A streamed agent call through `PaladinExecutionService::execute_stream`, whose
+    /// `LlmPort` is wrapped by `PricingLlmAdapter` over a USD table pricing `gpt-4` at
+    /// prompt 2.50 / completion 10.00 per 1M tokens, ends with a final chunk whose
+    /// `ChunkMetadata` carries `Cost` 22_500_000 nanos USD for 1_000 prompt / 2_000
+    /// completion tokens and an `ExecutionMetadata` whose `cost_estimate` is
+    /// `Some(0.0225)`; handing that metadata to `finalize_stream_output` with a
+    /// `MarkdownHerald` yields text containing `0.0225 USD` and no dollar sign.
+    #[tokio::test]
+    async fn streamed_priced_call_produces_execution_metadata_cost() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let service = make_service(llm);
+        let paladin = make_paladin("gpt-4");
+
+        let metadata = drain_final_chunk(&service, &paladin).await;
+
+        let cost = metadata
+            .cost
+            .as_ref()
+            .expect("a priced model must carry a cost");
+        assert_eq!(cost.nanos(), 22_500_000);
+        assert_eq!(cost.currency().as_str(), "USD");
+
+        let execution = metadata
+            .execution
+            .as_ref()
+            .expect("the final chunk must carry ExecutionMetadata (D-12)");
+        assert_eq!(execution.cost_estimate, Some(0.0225));
+
+        let text = service
+            .finalize_stream_output(execution)
+            .unwrap()
+            .expect("a herald is configured");
+        assert!(text.contains("0.0225 USD"), "{text}");
+        assert!(
+            !text.contains('$'),
+            "no dollar sign once a currency is configured: {text}"
+        );
+    }
+
+    /// The same streamed call against a model with no price row ends with cost `None` on
+    /// `ChunkMetadata`, an `ExecutionMetadata` whose `cost_estimate` is `None` (never
+    /// `Some(0.0)`), and herald text with no `Cost` line (D-00c, D-08).
+    #[tokio::test]
+    async fn streamed_unpriced_call_reports_no_cost() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let service = make_service(llm);
+        let paladin = make_paladin("tracer-unpriced-model");
+
+        let metadata = drain_final_chunk(&service, &paladin).await;
+
+        assert!(
+            metadata.cost.is_none(),
+            "an unpriced model must never carry a cost"
+        );
+
+        let execution = metadata
+            .execution
+            .as_ref()
+            .expect("the final chunk must carry ExecutionMetadata even when unpriced (D-12)");
+        assert_eq!(
+            execution.cost_estimate, None,
+            "an unpriced model's cost_estimate must be None, never Some(0.0) (D-00c)"
+        );
+
+        let text = service
+            .finalize_stream_output(execution)
+            .unwrap()
+            .expect("a herald is configured");
+        assert!(!text.contains("Cost"), "{text}");
     }
 }

@@ -419,8 +419,8 @@ impl Herald for MarkdownHerald {
             output.push_str(&self.format_field("Duration", &format!("{}ms", duration)));
         }
         output.push_str(&self.token_usage_block(&metadata.token_usage));
-        if let Some(cost) = metadata.cost_estimate {
-            output.push_str(&self.format_field("Cost", &format!("${:.4}", cost)));
+        if let Some(display) = metadata.cost_display() {
+            output.push_str(&self.format_field("Cost", &display));
         }
 
         Ok(output)
@@ -851,6 +851,34 @@ mod tests {
         assert!(formatted.contains("### Execution Metadata"));
         assert!(formatted.contains("1234ms"));
         assert!(formatted.contains("500"));
+    }
+
+    #[test]
+    fn finalize_stream_renders_currency_code() {
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+        let cost = Cost::new(45_000_000, CurrencyCode::new("USD").unwrap());
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("gpt-4".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .duration_ms(1234)
+            .cost(&cost)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+        assert!(formatted.contains("0.0450 USD"), "{formatted}");
+        assert!(
+            !formatted.contains('$'),
+            "no dollar sign once a currency is configured: {formatted}"
+        );
     }
 
     #[test]

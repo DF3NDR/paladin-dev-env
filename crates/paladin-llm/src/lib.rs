@@ -89,6 +89,10 @@ pub mod http_status;
 /// LLM-backed content analysis service orchestration.
 #[allow(missing_docs)]
 pub mod llm_analysis_service;
+/// Treasurer per-call pricing (D-08/D-09, ADR-0052): [`pricing::PricingLlmAdapter`] decorates
+/// an `Arc<dyn LlmPort>` with cost from an operator [`paladin_core::platform::container::cost::PriceTable`].
+/// Not feature-gated — it needs no provider adapter itself, mirroring [`fallback`].
+pub mod pricing;
 /// Factory for selecting provider adapters from runtime configuration.
 #[allow(missing_docs)]
 pub mod provider_factory;

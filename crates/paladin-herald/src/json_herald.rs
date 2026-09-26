@@ -210,6 +210,7 @@ impl Herald for JsonHerald {
             "usage": metadata.token_usage,
             "total_tokens": metadata.token_usage.total_tokens,
             "cost_estimate": metadata.cost_estimate,
+            "currency": metadata.cost_currency(),
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
 

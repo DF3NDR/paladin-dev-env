@@ -642,6 +642,152 @@ mod tests {
         assert_eq!(dispatcher.dropped_count(), 0);
     }
 
+    // --- Task 2 (TDD): TraceDispatcher::total_cost, the synchronous twin
+    // of total_usage (D-10, engine/mod.rs D-02/D-04/D-11) -----------------
+
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+
+    fn usd() -> CurrencyCode {
+        CurrencyCode::new("USD").unwrap()
+    }
+
+    fn node_finished_with_cost(
+        node: &str,
+        usage: TokenUsage,
+        cost: Option<Cost>,
+    ) -> TraceEvent {
+        TraceEvent::NodeFinished {
+            superstep: 1,
+            node_id: NodeId::new(node),
+            attempt: 1,
+            outcome: paladin_core::platform::container::waypoint::NodeOutcomeKind::Succeeded,
+            duration_ms: 1,
+            usage,
+            cost,
+            cache_hit: false,
+        }
+    }
+
+    /// D-10: two priced `NodeFinished` events (10_000 and 32_500 nanos USD)
+    /// plus one neutral non-Paladin `NodeFinished` (default usage, no cost)
+    /// sum to `Some(42_500 nanos USD)` -- the neutral event must not
+    /// poison the tally.
+    #[tokio::test]
+    async fn total_cost_sums_priced_nodes_and_ignores_neutral_ones() {
+        let dispatcher = TraceDispatcher::new(
+            ThreadId::new("total-cost-sums").unwrap(),
+            None,
+            Some(RecordingTraceSink::new()),
+        );
+
+        dispatcher.emit(node_finished_with_cost(
+            "n1",
+            TokenUsage::new(100, 50),
+            Some(Cost::new(10_000, usd())),
+        ));
+        dispatcher.emit(node_finished_with_cost(
+            "n2",
+            TokenUsage::new(300, 100),
+            Some(Cost::new(32_500, usd())),
+        ));
+        dispatcher.emit(node_finished_with_cost(
+            "n3",
+            TokenUsage::default(),
+            None,
+        ));
+
+        assert_eq!(dispatcher.total_cost(), Some(Cost::new(42_500, usd())));
+    }
+
+    /// D-10: adding one `NodeFinished` with non-zero usage and `cost: None`
+    /// poisons the run total permanently -- `total_cost()` is `None`, never
+    /// a partial sum.
+    #[tokio::test]
+    async fn total_cost_is_none_once_any_call_is_unpriced() {
+        let dispatcher = TraceDispatcher::new(
+            ThreadId::new("total-cost-poisoned").unwrap(),
+            None,
+            Some(RecordingTraceSink::new()),
+        );
+
+        dispatcher.emit(node_finished_with_cost(
+            "n1",
+            TokenUsage::new(100, 50),
+            Some(Cost::new(10_000, usd())),
+        ));
+        dispatcher.emit(node_finished_with_cost(
+            "n2",
+            TokenUsage::new(300, 100),
+            Some(Cost::new(32_500, usd())),
+        ));
+        dispatcher.emit(node_finished_with_cost(
+            "n3",
+            TokenUsage::new(10, 10),
+            None,
+        ));
+
+        assert_eq!(dispatcher.total_cost(), None);
+    }
+
+    /// A dispatcher built with no sink configured reports `None` after
+    /// emitting priced events -- mirrors `total_usage`'s own no-sink
+    /// contract.
+    #[tokio::test]
+    async fn total_cost_is_none_without_a_sink() {
+        let dispatcher = TraceDispatcher::new(ThreadId::new("total-cost-no-sink").unwrap(), None, None);
+
+        dispatcher.emit(node_finished_with_cost(
+            "n1",
+            TokenUsage::new(100, 50),
+            Some(Cost::new(10_000, usd())),
+        ));
+
+        assert_eq!(dispatcher.total_cost(), None);
+    }
+
+    /// A `RunFinished` emitted with `cost: trace.total_cost()` after the
+    /// priced events is recorded by the sink with `cost` equal to
+    /// `Some(42_500 nanos USD)` (D-11a).
+    #[tokio::test]
+    async fn run_finished_carries_total_cost() {
+        let sink = RecordingTraceSink::new();
+        let dispatcher = TraceDispatcher::new(
+            ThreadId::new("run-finished-carries-total-cost").unwrap(),
+            None,
+            Some(sink.clone()),
+        );
+
+        dispatcher.emit(node_finished_with_cost(
+            "n1",
+            TokenUsage::new(100, 50),
+            Some(Cost::new(10_000, usd())),
+        ));
+        dispatcher.emit(node_finished_with_cost(
+            "n2",
+            TokenUsage::new(300, 100),
+            Some(Cost::new(32_500, usd())),
+        ));
+        dispatcher.emit(TraceEvent::RunFinished {
+            status: paladin_ports::output::trace_sink_port::RunFinishStatus::Completed,
+            total_supersteps: 1,
+            usage: dispatcher.total_usage(),
+            cost: dispatcher.total_cost(),
+            duration_ms: 1,
+            trace_dropped_total: 0,
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let records = sink.events().await;
+        let run_finished_cost = records
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { cost, .. } => Some(cost.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(run_finished_cost, Some(Cost::new(42_500, usd())));
+    }
+
     #[tokio::test]
     async fn recording_sink_receives_emitted_events_in_order() {
         let sink = RecordingTraceSink::new();

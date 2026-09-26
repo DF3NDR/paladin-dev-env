@@ -511,24 +511,39 @@ pub async fn build_run_api(
             .with_shutdown_grace(Duration::from_secs(engine_config.shutdown_grace_secs)),
     );
 
-    let pool = Arc::new(
-        RunWorkerPool::new(
-            base_engine,
-            Arc::clone(&erased_store),
-            Arc::clone(&run_repository),
-            Arc::clone(&run_queue),
-            Arc::clone(&resolver),
-            Duration::from_secs(configs.run_worker.lease_seconds),
-        )
-        .with_shutdown_coordinator(coordinator.clone())
-        .with_paladin_port(Arc::clone(&paladin_port))
-        .with_engine_factory(engine_factory)
-        .with_cancellation_probing(Duration::from_millis(
-            configs.run_worker.min_probe_interval_ms,
-        ))
-        .with_event_bus(Arc::clone(&event_bus))
-        .with_webhook_deliveries(Arc::clone(&webhook_repository)),
-    );
+    // D-12: attach an operator-configured herald (`settings.herald` is `Some`) so every
+    // engine run this pool dispatches hands its `RunFinished` event to it (D-11b). Absent
+    // a `herald:` config section, no herald is attached and the untraced-for-cost path is
+    // unchanged.
+    let herald = match settings.herald {
+        Some(_) => Some(
+            settings
+                .create_default_herald()
+                .map_err(|e| format!("invalid herald configuration: {e}"))?,
+        ),
+        None => None,
+    };
+
+    let mut pool = RunWorkerPool::new(
+        base_engine,
+        Arc::clone(&erased_store),
+        Arc::clone(&run_repository),
+        Arc::clone(&run_queue),
+        Arc::clone(&resolver),
+        Duration::from_secs(configs.run_worker.lease_seconds),
+    )
+    .with_shutdown_coordinator(coordinator.clone())
+    .with_paladin_port(Arc::clone(&paladin_port))
+    .with_engine_factory(engine_factory)
+    .with_cancellation_probing(Duration::from_millis(
+        configs.run_worker.min_probe_interval_ms,
+    ))
+    .with_event_bus(Arc::clone(&event_bus))
+    .with_webhook_deliveries(Arc::clone(&webhook_repository));
+    if let Some(herald) = herald {
+        pool = pool.with_herald(herald);
+    }
+    let pool = Arc::new(pool);
 
     let mut tasks = Arc::clone(&pool).spawn(RunWorkerOptions::from(&configs.run_worker));
 

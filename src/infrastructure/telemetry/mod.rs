@@ -18,7 +18,14 @@
 //! and where [`PersistingTraceSink`] (28-11, OBS-FR-07) joins it behind
 //! `trace.persist` AND an available [`RunTracePort`] -- a build/run with no
 //! persistence backend wired never attaches it either.
+//!
+//! [`HeraldTraceSink`] (38-08, D-12) is composed separately, by
+//! `RunWorkerPool::run_once`, alongside [`build_run_sink`]'s own output — it hands each
+//! run's `RunFinished` record to an operator-configured [`Herald`](paladin_core::platform::container::herald::Herald)
+//! rather than a trace-observability backend, so it stays out of this function's own
+//! "which observability backends are attached" decision.
 
+pub mod herald_sink;
 pub mod log_sink;
 #[cfg(feature = "otel")]
 pub mod otel_sink;
@@ -31,6 +38,7 @@ use paladin_ports::output::trace_sink_port::{CompositeSink, TraceSink};
 
 use crate::config::trace::TraceConfig;
 
+pub use herald_sink::HeraldTraceSink;
 pub use log_sink::LogTraceSink;
 #[cfg(feature = "otel")]
 pub use otel_sink::OtelTraceSink;

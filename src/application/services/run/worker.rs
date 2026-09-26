@@ -37,8 +37,11 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
-use paladin_battalion::engine::{EngineError, RunOutcome, TraceDispatcher, WarEngine};
+use paladin_battalion::engine::{
+    EngineError, NodeSpec, RunOutcome, TraceDispatcher, WarEngine, WarGraph,
+};
 use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
+use paladin_core::platform::container::herald::Herald;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{ParleyRequest, ParleyResponse};
 use paladin_core::platform::container::run::{
@@ -53,12 +56,14 @@ use paladin_ports::output::run_repository_port::{
     RunOutcomeRecord, RunRepositoryError, RunRepositoryPort,
 };
 use paladin_ports::output::run_trace_port::RunTracePort;
-use paladin_ports::output::trace_sink_port::{RUN_TRACE_EMITTER, TraceEmitter, TraceSink};
+use paladin_ports::output::trace_sink_port::{
+    CompositeSink, RUN_TRACE_EMITTER, TraceEmitter, TraceSink,
+};
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
 use crate::config::trace::TraceConfig;
-use crate::infrastructure::telemetry::build_run_sink;
+use crate::infrastructure::telemetry::{HeraldTraceSink, build_run_sink};
 
 use super::cancel::{DbCancellationProbe, LocalRunTokens};
 use super::events::{RunEventBus, RunEventBusSink};
@@ -88,6 +93,32 @@ async fn with_run_trace_scope<F: std::future::Future>(
     match emitter {
         Some(emitter) => RUN_TRACE_EMITTER.scope(Arc::clone(emitter), fut).await,
         None => fut.await,
+    }
+}
+
+/// This run's model label for [`HeraldTraceSink`] (D-12, the `model_used`
+/// discretion item): the distinct `paladin.node.model` values of every
+/// [`NodeSpec::Paladin`] node in `graph.node_order()` order -- `"none"` when
+/// the graph has no Paladin node, the bare model name when every Paladin
+/// node declares the SAME model, `"mixed"` when they declare more than one
+/// distinct model. The per-call [`Cost`](paladin_core::platform::container::cost::Cost)
+/// already prices each model correctly regardless of this label; it exists
+/// only to give the produced [`ExecutionMetadata`](paladin_core::platform::container::herald::ExecutionMetadata)'s
+/// `model_used` field a sensible value for a mixed-model graph.
+fn run_model_label(graph: &WarGraph) -> String {
+    let mut models: Vec<&str> = Vec::new();
+    for node_id in graph.node_order() {
+        if let Some(NodeSpec::Paladin { paladin, .. }) = graph.node(node_id) {
+            let model = paladin.node.model.as_str();
+            if !models.contains(&model) {
+                models.push(model);
+            }
+        }
+    }
+    match models.as_slice() {
+        [] => "none".to_string(),
+        [only] => only.to_string(),
+        _ => "mixed".to_string(),
     }
 }
 
@@ -533,6 +564,19 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// regardless of `trace_config.persist` -- matching that function's own
     /// documented "no port available is a no-op, not an error" contract.
     run_trace_port: Option<Arc<dyn RunTracePort>>,
+    /// The operator-configured [`Herald`] (D-12, D-11b), wired via
+    /// [`RunWorkerPool::with_herald`]: `run_once` composes a
+    /// [`HeraldTraceSink`] labeled with [`run_model_label`] alongside
+    /// whatever [`crate::infrastructure::telemetry::build_run_sink`] itself
+    /// produces, so every run this pool dispatches through
+    /// [`Self::engine_factory`] hands its `RunFinished` event to this
+    /// herald. `None` (the default) means no herald is attached and the
+    /// untraced-for-cost path stays exactly as every prior plan left it --
+    /// matching `trace_config`/`run_trace_port`'s own documented "a pool
+    /// that never calls the builder is unaffected" contract. Has no effect
+    /// on the shared-engine ("no factory") path, exactly like
+    /// `trace_config`/`run_trace_port` above.
+    herald: Option<Arc<dyn Herald>>,
 }
 
 impl<W: WaypointPort + 'static> RunWorkerPool<W> {
@@ -572,6 +616,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             webhook_deliveries: None,
             trace_config: TraceConfig::default(),
             run_trace_port: None,
+            herald: None,
         }
     }
 
@@ -673,6 +718,18 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// `build_run_sink`'s own "no port available" contract.
     pub fn with_run_trace_port(mut self, port: Arc<dyn RunTracePort>) -> Self {
         self.run_trace_port = Some(port);
+        self
+    }
+
+    /// Wire an operator-configured [`Herald`] (D-12, D-11b): `run_once` composes a
+    /// [`HeraldTraceSink`] labeled with this run's [`run_model_label`] alongside whatever
+    /// [`crate::infrastructure::telemetry::build_run_sink`] itself produces, so every run
+    /// dispatched through [`Self::engine_factory`] hands its `RunFinished` event to
+    /// `herald`. Only takes effect on the [`Self::with_engine_factory`] path, exactly like
+    /// [`Self::with_trace_config`]/[`Self::with_run_trace_port`]. A pool that never calls
+    /// this builder attaches no herald -- the untraced-for-cost path stays zero-cost.
+    pub fn with_herald(mut self, herald: Arc<dyn Herald>) -> Self {
+        self.herald = Some(herald);
         self
     }
 
@@ -858,32 +915,49 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 let bus_sink = self.event_bus.as_ref().map(|bus| {
                     Arc::new(RunEventBusSink::new(Arc::clone(bus))) as Arc<dyn TraceSink>
                 });
-                let run_trace_emitter =
-                    match build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone())
-                    {
-                        Some(sink) => {
-                            let dispatcher = Arc::new(TraceDispatcher::with_capacity(
-                                run.thread_id.clone(),
-                                Some(run.run_id.clone()),
-                                Some(sink.clone()),
-                                self.trace_config.channel_capacity,
-                            ));
-                            engine = engine
-                                .with_trace_sink(sink)
-                                .with_trace_capacity(self.trace_config.channel_capacity)
-                                .with_bound_trace_dispatcher(run.thread_id.clone(), dispatcher);
-                            // `trace_emitter()` returns the SAME dispatcher
-                            // `with_bound_trace_dispatcher` just bound
-                            // (28-06's own `with_bound_trace`/
-                            // `trace_emitter` doc comments): the canonical
-                            // accessor, not a second cast of the local
-                            // `dispatcher` variable, so this handle is
-                            // provably the one `start`/`resume*` itself
-                            // will use once dispatch begins below.
-                            Some(engine.trace_emitter())
-                        }
-                        None => None,
-                    };
+                let base_sink =
+                    build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone());
+                // D-12: compose a HeraldTraceSink alongside build_run_sink's own
+                // output, only when this pool has an operator herald wired
+                // (RunWorkerPool::with_herald) -- a pool with no herald composes
+                // exactly as before, so the untraced-for-cost path stays zero-cost.
+                let herald_sink = self.herald.as_ref().map(|herald| {
+                    Arc::new(HeraldTraceSink::new(
+                        Arc::clone(herald),
+                        run_model_label(&graph),
+                    )) as Arc<dyn TraceSink>
+                });
+                let composed_sink = match (base_sink, herald_sink) {
+                    (None, None) => None,
+                    (Some(sink), None) | (None, Some(sink)) => Some(sink),
+                    (Some(base), Some(herald)) => {
+                        Some(Arc::new(CompositeSink::new(vec![base, herald])) as Arc<dyn TraceSink>)
+                    }
+                };
+                let run_trace_emitter = match composed_sink {
+                    Some(sink) => {
+                        let dispatcher = Arc::new(TraceDispatcher::with_capacity(
+                            run.thread_id.clone(),
+                            Some(run.run_id.clone()),
+                            Some(sink.clone()),
+                            self.trace_config.channel_capacity,
+                        ));
+                        engine = engine
+                            .with_trace_sink(sink)
+                            .with_trace_capacity(self.trace_config.channel_capacity)
+                            .with_bound_trace_dispatcher(run.thread_id.clone(), dispatcher);
+                        // `trace_emitter()` returns the SAME dispatcher
+                        // `with_bound_trace_dispatcher` just bound
+                        // (28-06's own `with_bound_trace`/
+                        // `trace_emitter` doc comments): the canonical
+                        // accessor, not a second cast of the local
+                        // `dispatcher` variable, so this handle is
+                        // provably the one `start`/`resume*` itself
+                        // will use once dispatch begins below.
+                        Some(engine.trace_emitter())
+                    }
+                    None => None,
+                };
                 (
                     Arc::new(engine),
                     Some(run.run_id.clone()),
@@ -1766,5 +1840,98 @@ mod tests {
 
         let run_after = repository.get(&run_id).await.unwrap().unwrap();
         assert_eq!(run_after.status, RunStatus::Failed);
+    }
+
+    // --- run_model_label (D-12, model_used discretion item) ---------
+
+    fn labeled_paladin(name: &str, model: &str) -> Paladin {
+        use paladin_core::base::entity::node::Node;
+        use paladin_core::platform::container::paladin::PaladinData;
+
+        let data = PaladinData {
+            name: name.to_string(),
+            model: model.to_string(),
+            ..Default::default()
+        };
+        Node::new(data, Some(name.to_string()))
+    }
+
+    #[test]
+    fn run_model_label_names_single_mixed_or_none() {
+        use paladin_battalion::engine::{InputMapping, NodeSpec};
+        use paladin_core::platform::container::battlefield::{DispatchRule, FieldName, FieldSpec};
+        use paladin_core::platform::container::waypoint::NodeId;
+
+        let field = FieldName::new("summary").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+
+        // Zero Paladin nodes -> "none".
+        let empty_graph = WarGraph::new(schema.clone(), EngineLimits::default());
+        assert_eq!(run_model_label(&empty_graph), "none");
+
+        // One Paladin node -> its own model.
+        let mut single_graph = WarGraph::new(schema.clone(), EngineLimits::default());
+        let n1 = NodeId::new("n1");
+        single_graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("n1", "gpt-4"),
+                InputMapping::new("go"),
+                field.clone(),
+            ),
+        );
+        single_graph.add_entry(n1);
+        assert_eq!(run_model_label(&single_graph), "gpt-4");
+
+        // Two Paladin nodes declaring the SAME model -> that model, not "mixed".
+        let mut same_model_graph = WarGraph::new(schema.clone(), EngineLimits::default());
+        let a1 = NodeId::new("a1");
+        let a2 = NodeId::new("a2");
+        same_model_graph.add_node(
+            a1.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("a1", "gpt-4"),
+                InputMapping::new("go"),
+                field.clone(),
+            ),
+        );
+        same_model_graph.add_node(
+            a2.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("a2", "gpt-4"),
+                InputMapping::new("go"),
+                field.clone(),
+            ),
+        );
+        same_model_graph.add_entry(a1);
+        assert_eq!(run_model_label(&same_model_graph), "gpt-4");
+
+        // Two Paladin nodes declaring DIFFERENT models -> "mixed".
+        let mut mixed_graph = WarGraph::new(schema, EngineLimits::default());
+        let m1 = NodeId::new("m1");
+        let m2 = NodeId::new("m2");
+        mixed_graph.add_node(
+            m1.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("m1", "gpt-4"),
+                InputMapping::new("go"),
+                field.clone(),
+            ),
+        );
+        mixed_graph.add_node(
+            m2.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("m2", "claude-3-5-sonnet-20241022"),
+                InputMapping::new("go"),
+                field,
+            ),
+        );
+        mixed_graph.add_entry(m1);
+        assert_eq!(run_model_label(&mixed_graph), "mixed");
     }
 }

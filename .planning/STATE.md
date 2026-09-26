@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 38
 current_phase_name: design-seams-pricing-cost-producer
 status: executing
-stopped_at: Completed 38-07-PLAN.md
-last_updated: "2026-09-26T14:35:53.365Z"
+stopped_at: Completed 38-08-PLAN.md
+last_updated: "2026-09-26T15:03:50.127Z"
 last_activity: 2026-09-26
 last_activity_desc: Phase 38 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [████████░░] 78%
+**Progress:** [█████████░] 89%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,7 +50,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 38 (design-seams-pricing-cost-producer) — EXECUTING
-Plan: 4 of 9
+Plan: 5 of 9
 Status: Ready to execute
 Last activity: 2026-09-26 — Phase 38 execution started
 
@@ -191,6 +191,7 @@ Last activity: 2026-09-26 — Phase 38 execution started
 | Phase 38 P05 | 9min | 2 tasks | 2 files |
 | Phase 38 P06 | ~28min | 2 tasks | 18 files |
 | Phase 38 P07 | ~25min | 3 tasks | 8 files |
+| Phase 38 P08 | ~26min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -243,6 +244,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 38]: All three heralds (markdown, JSON, table) now render cost exclusively through ExecutionMetadata::cost_display()/cost_currency(); table herald acceptance-grep for removed placeholder literals forbids them anywhere in the file, so regression tests must build forbidden strings from non-contiguous fragments rather than writing them verbatim. — 38-05 closes D-04/D-11 for the JSON and table heralds (markdown done in 38-02) and research Pitfall 4 (table herald ignored its argument).
 - [Phase 38]: 38-06: TraceDispatcher::total_cost added as the synchronous twin of total_usage, folded via CostTally::record_node inside emit() itself; all five WarEngine RunFinished emission sites populated with cost: trace.total_cost(). The engine's real Paladin-attempt NodeFinished site stays cost: None pending 38-07's per-attempt wiring.
 - [Phase 38]: execute_structured_call forwards response.cost.clone() beside usage, even though Task 2's action text names only the reasoning loop -- required so Task 3's structured-output arm (structured.raw.cost) has a real value to read, matching D-10's "cost rides beside usage everywhere usage travels" rule.
+- [Phase 38]: 38-08: HeraldTraceSink wired the engine path's ExecutionMetadata producer into RunWorkerPool; end-to-end engine tests attach HeraldTraceSink directly to a bare WarEngine (mirroring tracer_e2e.rs), not through the full RunWorkerPool/queue/repository harness -- proving the price-table-to-rendered-herald-text chain without unrelated harness weight.
 
 ### Pending Todos
 
@@ -443,8 +445,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-26T14:35:53.346Z
-**Stopped at:** Completed 38-07-PLAN.md
+**Last session:** 2026-09-26T15:03:50.101Z
+**Stopped at:** Completed 38-08-PLAN.md
 next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
 RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
 not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.

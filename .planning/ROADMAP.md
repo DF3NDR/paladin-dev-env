@@ -308,7 +308,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4)*
 
-- [ ] 38-08-PLAN.md — engine-path `ExecutionMetadata` producer: `from_run_finished`, `HeraldTraceSink`, `RunWorkerPool::with_herald` (PRICE-03)
+- [x] 38-08-PLAN.md — engine-path `ExecutionMetadata` producer: `from_run_finished`, `HeraldTraceSink`, `RunWorkerPool::with_herald` (PRICE-03)
 
 **Wave 6** *(blocked on Wave 5)*
 

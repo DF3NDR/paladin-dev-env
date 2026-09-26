@@ -57,13 +57,52 @@ enum PriceParseError {
 /// floating point is used anywhere in this function; the integer part is accumulated with
 /// `checked_mul`/`checked_add`, and the fractional digits are right-padded to nine places and
 /// added as a nano-unit remainder.
-///
-/// # STUB (RED phase)
-///
-/// Deliberately wrong: always returns [`PriceParseError::Malformed`]. Replaced with the real
-/// exact-arithmetic parser in the GREEN commit that follows.
-fn parse_price_nanos_per_million(_raw: &str) -> Result<i64, PriceParseError> {
-    Err(PriceParseError::Malformed)
+fn parse_price_nanos_per_million(raw: &str) -> Result<i64, PriceParseError> {
+    let mut parts = raw.splitn(2, '.');
+    let int_part = parts.next().unwrap_or_default();
+    let frac_part = parts.next();
+
+    if int_part.is_empty() || !int_part.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(PriceParseError::Malformed);
+    }
+
+    let mut int_value: i64 = 0;
+    for b in int_part.bytes() {
+        let digit = i64::from(b - b'0');
+        int_value = int_value
+            .checked_mul(10)
+            .ok_or(PriceParseError::Overflow)?
+            .checked_add(digit)
+            .ok_or(PriceParseError::Overflow)?;
+    }
+
+    let frac_digits = match frac_part {
+        None => String::new(),
+        Some(fp) => {
+            if fp.is_empty() || !fp.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(PriceParseError::Malformed);
+            }
+            if fp.len() > 9 {
+                return Err(PriceParseError::TooManyDecimalPlaces);
+            }
+            fp.to_string()
+        }
+    };
+
+    // Right-pad to nine digits so `"5"` (tenths) and `"5000000"` (nine places already) both
+    // resolve to the same nano-unit remainder. `padded` is always exactly nine ASCII digits by
+    // construction, so this cannot fail to parse.
+    let padded = format!("{frac_digits:0<9}");
+    let frac_value: i64 = padded
+        .parse()
+        .map_err(|_| PriceParseError::Malformed)?;
+
+    let scaled_int = int_value
+        .checked_mul(1_000_000_000)
+        .ok_or(PriceParseError::Overflow)?;
+    scaled_int
+        .checked_add(frac_value)
+        .ok_or(PriceParseError::Overflow)
 }
 
 /// One model's per-1M-token price row, as operator-entered decimal strings (D-01, D-06).
@@ -154,12 +193,6 @@ impl TreasurerConfig {
     /// A `String` naming the first validation failure: a malformed currency, an empty model
     /// key, or a price axis that is negative, non-decimal, has more than nine decimal places,
     /// or exceeds the largest representable price.
-    ///
-    /// # STUB (RED phase)
-    ///
-    /// Deliberately incomplete: never inspects `self.pricing`, so every non-empty table is
-    /// silently treated as empty. Replaced with the real per-row builder in the GREEN commit
-    /// that follows.
     pub fn price_table(&self) -> Result<PriceTable, String> {
         let currency = CurrencyCode::new(&self.currency).map_err(|_| {
             format!(
@@ -167,7 +200,43 @@ impl TreasurerConfig {
                 self.currency
             )
         })?;
-        Ok(PriceTable::new(currency))
+
+        let mut table = PriceTable::new(currency);
+
+        for (model, row_cfg) in &self.pricing {
+            if model.is_empty() {
+                return Err("treasurer.pricing keys must be non-empty model names".to_string());
+            }
+
+            let prompt = Self::parse_axis(model, "prompt", &row_cfg.prompt)?;
+            let completion = Self::parse_axis(model, "completion", &row_cfg.completion)?;
+
+            let mut price_row = PriceRow::new(prompt, completion)
+                .map_err(|e| format!("treasurer.pricing.{model}: {e}"))?;
+
+            if let Some(raw) = &row_cfg.cache_read {
+                let value = Self::parse_axis(model, "cache_read", raw)?;
+                price_row = price_row
+                    .with_cache_read(value)
+                    .map_err(|e| format!("treasurer.pricing.{model}: {e}"))?;
+            }
+            if let Some(raw) = &row_cfg.cache_write {
+                let value = Self::parse_axis(model, "cache_write", raw)?;
+                price_row = price_row
+                    .with_cache_write(value)
+                    .map_err(|e| format!("treasurer.pricing.{model}: {e}"))?;
+            }
+            if let Some(raw) = &row_cfg.reasoning {
+                let value = Self::parse_axis(model, "reasoning", raw)?;
+                price_row = price_row
+                    .with_reasoning(value)
+                    .map_err(|e| format!("treasurer.pricing.{model}: {e}"))?;
+            }
+
+            table = table.with_row(model.clone(), price_row);
+        }
+
+        Ok(table)
     }
 
     /// Validate this configuration without discarding a built [`PriceTable`].
@@ -184,7 +253,6 @@ impl TreasurerConfig {
         self.price_table().map(|_| ())
     }
 
-    #[allow(dead_code)]
     fn parse_axis(model: &str, axis: &str, raw: &str) -> Result<i64, String> {
         parse_price_nanos_per_million(raw).map_err(|e| match e {
             PriceParseError::Malformed => format!(

@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 38
 current_phase_name: design-seams-pricing-cost-producer
 status: executing
-stopped_at: Completed 38-02-PLAN.md
-last_updated: "2026-09-25T18:01:52.364Z"
-last_activity: 2026-09-25
-last_activity_desc: Phase 38 execution started
+stopped_at: Completed 38-03-PLAN.md
+last_updated: "2026-09-26T01:05:04.527Z"
+last_activity: 2026-09-26
+last_activity_desc: Completed 38-03-PLAN.md
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 2
+  completed_plans: 3
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [██░░░░░░░░] 22%
+**Progress:** [███░░░░░░░] 33%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,9 +50,9 @@ under `milestones/`.
 ## Current Position
 
 Phase: 38 (design-seams-pricing-cost-producer) — EXECUTING
-Plan: 3 of 9
-Status: Ready to execute
-Last activity: 2026-09-25 — Phase 38 execution started
+Plan: 4 of 9
+Status: Executing Phase 38 (plans 01-03 complete)
+Last activity: 2026-09-26 — Completed 38-03-PLAN.md
 
 ## Performance Metrics
 
@@ -186,6 +186,7 @@ Last activity: 2026-09-25 — Phase 38 execution started
 | Phase 37.1 P10 | ~20min | 2 tasks | 2 files (uncommitted) |
 | Phase 38 P01 | ~5min | 2 tasks | 7 files |
 | Phase 38 P02 | 57min | 2 tasks | 10 files |
+| Phase 38 P03 | 23min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -233,6 +234,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: ADR-0052: mid-run Treasurer enforcement — metering at LlmPort pricing decorator both paths, halt at WarEngine superstep boundary + agent-loop TokenBudget cutoff
 - [Phase ?]: ADR-0053: append-only derive-on-read ledger; superstep-aggregate settlement selected at plan 38-01 checkpoint, D-15 key (run_id, superstep, attempt) kept unamended
 - [Phase ?]: 38-02: CostTally (Empty/Priced/Unknown poisoning accumulator) added for run-level cost totals shared by TraceDispatcher::total_cost (38-06) and the agent loop (38-07); Task 1's cost_of_call arithmetic needed no correction under the 17-test contract.
+- [Phase 38]: Hand-rolled exact-integer decimal parser instead of rust_decimal for treasurer.pricing (no new dependency). — Narrow grammar (digits + optional 1-9-digit fraction) is simple to prove exact with checked_mul/checked_add; keeps dependency count flat (no Cargo.lock/deny/audit/MSRV change, no package-legitimacy checkpoint).
 
 ### Pending Todos
 
@@ -433,8 +435,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-25T18:01:52.345Z
-**Stopped at:** Completed 38-02-PLAN.md
+**Last session:** 2026-09-26T01:04:27.248Z
+**Stopped at:** Completed 38-03-PLAN.md
 next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
 RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
 not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.

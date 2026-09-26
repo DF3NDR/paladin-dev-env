@@ -15,8 +15,11 @@
 //!
 //! The adapter holds only its immutable price table and delegates every identity method
 //! (`validate_model`, `get_available_models`, `get_provider_name`, `get_capabilities`)
-//! unchanged. `generate` is unchanged in this task -- 38-04 adds non-streaming pricing with
-//! `LlmResponse.cost`.
+//! unchanged. `generate` prices `response.model` -- the model that actually SERVED the call,
+//! which may differ from the requested model after a `FallbackLlmAdapter` hop (D-05); a
+//! stream prices the REQUEST's model, since [`StreamingResponse`] carries no served-model
+//! string of its own. Both paths share one `price_or_warn` so the pricing/warn-once rule
+//! cannot diverge between them.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -25,7 +28,8 @@ use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use async_trait::async_trait;
 use futures::stream::{Stream, StreamExt};
-use paladin_core::platform::container::cost::PriceTable;
+use paladin_core::platform::container::cost::{Cost, PriceTable};
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
@@ -114,6 +118,26 @@ impl PricingLlmAdapter {
     pub fn new(inner: Arc<dyn LlmPort>, table: Arc<PriceTable>) -> Self {
         Self { inner, table }
     }
+
+    /// Price `usage` for `model` against `table`, emitting the once-per-model-per-process
+    /// `warn!` line (D-08) when unpriced -- never a fabricated zero (D-00c). Shared by
+    /// `generate` and the `generate_stream` terminal-chunk mapper so the pricing/warn-once
+    /// rule cannot diverge between the two run paths (D-09).
+    fn price_or_warn(table: &PriceTable, model: &str, usage: &TokenUsage) -> Option<Cost> {
+        match table.price(model, usage) {
+            Some(cost) => Some(cost),
+            None => {
+                if UNPRICED_MODEL_WARNINGS.should_warn(model) {
+                    log::warn!(
+                        target: PRICING_LOG_TARGET,
+                        "no price configured for model {model:?}; its cost is reported as \
+                         unknown until a treasurer.pricing entry is added for it"
+                    );
+                }
+                None
+            }
+        }
+    }
 }
 
 /// Wrap `inner` with pricing from `table`, UNLESS `table` is empty -- an operator who never
@@ -128,20 +152,25 @@ pub fn with_pricing(inner: Arc<dyn LlmPort>, table: &Arc<PriceTable>) -> Arc<dyn
 
 #[async_trait]
 impl LlmPort for PricingLlmAdapter {
-    /// Unchanged in this task -- delegates to `inner`. 38-04 adds pricing here
-    /// (`LlmResponse.cost`, D-10).
+    /// Prices the RESERVED response's own `model` and `usage` (D-05, D-09) -- the model that
+    /// actually SERVED the call, which may differ from the requested model after a
+    /// `FallbackLlmAdapter` hop composed inside this decorator
+    /// (`Pricing(Fallback(..))`). `None` when no price row exists for that model (D-00c);
+    /// errors pass through untouched.
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        self.inner.generate(request).await
+        let mut response = self.inner.generate(request).await?;
+        response.cost = Self::price_or_warn(&self.table, &response.model, &response.usage);
+        Ok(response)
     }
 
     /// Prices the terminal chunk of the delegated stream from ITS OWN usage against the
-    /// request's model (D-09): a chunk whose `finish_reason.is_some()` and whose `usage` is
-    /// `Some` gets [`StreamingResponse::with_cost`] when [`PriceTable::price`] answers `Some`;
-    /// when it answers `None`, the model is unpriced and gets exactly one `warn!` line per
-    /// distinct model name per process (D-08) -- never a fabricated zero. A terminal chunk with
-    /// no usage at all gets no cost and no pricing warning (the execution service already warns
-    /// about the missing usage, Phase 31 D-17). Every non-terminal chunk passes through
-    /// unchanged.
+    /// request's model (D-09, Phase 31 contract -- `StreamingResponse` carries no served-model
+    /// string of its own): a chunk whose `finish_reason.is_some()` and whose `usage` is `Some`
+    /// gets [`StreamingResponse::with_cost`] when [`Self::price_or_warn`] answers `Some`; when
+    /// it answers `None`, the model is unpriced and gets exactly one `warn!` line per distinct
+    /// model name per process (D-08) -- never a fabricated zero. A terminal chunk with no usage
+    /// at all gets no cost and no pricing warning (the execution service already warns about
+    /// the missing usage, Phase 31 D-17). Every non-terminal chunk passes through unchanged.
     async fn generate_stream(
         &self,
         request: LlmRequest,
@@ -157,18 +186,9 @@ impl LlmPort for PricingLlmAdapter {
                 let Some(usage) = chunk.usage.clone() else {
                     return chunk;
                 };
-                match table.price(&model, &usage) {
+                match Self::price_or_warn(&table, &model, &usage) {
                     Some(cost) => chunk.with_cost(cost),
-                    None => {
-                        if UNPRICED_MODEL_WARNINGS.should_warn(&model) {
-                            log::warn!(
-                                target: PRICING_LOG_TARGET,
-                                "no price configured for model {model:?}; its cost is reported \
-                                 as unknown until a treasurer.pricing entry is added for it"
-                            );
-                        }
-                        chunk
-                    }
+                    None => chunk,
                 }
             })
         });

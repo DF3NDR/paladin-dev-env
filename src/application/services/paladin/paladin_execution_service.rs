@@ -1513,7 +1513,10 @@ impl PaladinExecutionService {
                     return Ok(PaladinResult {
                         output: accumulated_output,
                         usage: usage.clone(),
-                        cost: None,
+                        // Same tally every other return path reports: a `before_model`
+                        // stop on loop N must not discard the cost of loops 1..N-1
+                        // (Phase 38 code review CR-01).
+                        cost: cost_tally.total(),
                         execution_time_ms: start_time.elapsed().as_millis() as u64,
                         loop_count: loop_num,
                         stop_reason: effective_result.stop_reason,

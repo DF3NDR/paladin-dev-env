@@ -68,7 +68,7 @@ findings:
   warning: 2
   info: 1
   total: 4
-status: issues_found
+status: issues_found  # CR-01 resolved in-phase; WR-01/WR-02/IN-01 remain advisory
 ---
 
 # Phase 38: Code Review Report
@@ -113,6 +113,11 @@ phase otherwise enforces everywhere else.
 ## Critical Issues
 
 ### CR-01: Agent-loop early return drops already-accumulated cost instead of `cost_tally.total()`
+
+> **Resolved 2026-09-26 by the execute-phase orchestrator** — the `before_model` early return now
+> reports `cost: cost_tally.total()` like the other three return paths (commit noted in the phase
+> git log as `fix(38): ...`). Verified: `cargo test -p paladin-ai --lib paladin_execution_service`
+> (65 passed), `cargo clippy -p paladin-ai --lib -- -D warnings` clean, `cargo fmt --check` clean.
 
 **File:** `src/application/services/paladin/paladin_execution_service.rs:1513-1523`
 **Issue:** Inside `execute_internal`'s reasoning loop, when `run_before(...)` returns

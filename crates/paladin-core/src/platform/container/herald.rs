@@ -865,4 +865,114 @@ mod tests {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<MockHerald>();
     }
+
+    mod from_run_finished_tests {
+        use super::*;
+        use crate::platform::container::cost::{Cost, CurrencyCode};
+        use crate::platform::container::run::RunId;
+        use crate::platform::container::trace::{RunFinishStatus, TraceEvent, TraceRecord};
+        use crate::platform::container::waypoint::{NodeId, NodeOutcomeKind, ThreadId};
+
+        fn thread_id() -> ThreadId {
+            ThreadId::new("t-from-run-finished").unwrap()
+        }
+
+        fn run_finished_record(
+            status: RunFinishStatus,
+            usage: TokenUsage,
+            cost: Option<Cost>,
+            duration_ms: u64,
+        ) -> TraceRecord {
+            TraceRecord {
+                thread_id: thread_id(),
+                run_id: Some(RunId::new_v7()),
+                seq: 1,
+                at: Utc::now(),
+                event: TraceEvent::RunFinished {
+                    status,
+                    total_supersteps: 3,
+                    usage,
+                    cost,
+                    duration_ms,
+                    trace_dropped_total: 0,
+                },
+            }
+        }
+
+        #[test]
+        fn from_run_finished_builds_priced_metadata() {
+            let cost = Cost::new(22_500_000, CurrencyCode::new("USD").unwrap());
+            let record = run_finished_record(
+                RunFinishStatus::Completed,
+                TokenUsage::new(1_000, 2_000),
+                Some(cost),
+                1_500,
+            );
+
+            let metadata = ExecutionMetadata::from_run_finished(&record, "gpt-4")
+                .expect("RunFinished record produces metadata");
+
+            let run_uuid = record.run_id.as_ref().unwrap().as_str();
+            assert_eq!(metadata.execution_id.to_string(), run_uuid);
+            assert_eq!(metadata.end_time, Some(record.at));
+            assert_eq!(
+                metadata.start_time,
+                record.at - chrono::Duration::milliseconds(1_500)
+            );
+            assert_eq!(metadata.duration_ms, Some(1_500));
+            assert_eq!(metadata.model_used, "gpt-4");
+            assert_eq!(metadata.cost_estimate, Some(0.0225));
+            assert_eq!(metadata.cost_currency(), Some("USD"));
+            assert_eq!(metadata.error_count, 0);
+        }
+
+        #[test]
+        fn from_run_finished_unpriced_has_no_cost() {
+            let record = run_finished_record(
+                RunFinishStatus::Completed,
+                TokenUsage::new(1_000, 2_000),
+                None,
+                1_000,
+            );
+
+            let metadata = ExecutionMetadata::from_run_finished(&record, "gpt-4")
+                .expect("RunFinished record produces metadata");
+
+            assert_eq!(metadata.cost_estimate, None);
+            assert_eq!(metadata.cost_currency(), None);
+        }
+
+        #[test]
+        fn from_run_finished_ignores_other_events() {
+            let record = TraceRecord {
+                thread_id: thread_id(),
+                run_id: Some(RunId::new_v7()),
+                seq: 1,
+                at: Utc::now(),
+                event: TraceEvent::NodeFinished {
+                    superstep: 1,
+                    node_id: NodeId::new("n1"),
+                    attempt: 1,
+                    outcome: NodeOutcomeKind::Succeeded,
+                    duration_ms: 10,
+                    usage: TokenUsage::default(),
+                    cost: None,
+                    cache_hit: false,
+                },
+            };
+
+            assert!(ExecutionMetadata::from_run_finished(&record, "gpt-4").is_none());
+        }
+
+        #[test]
+        fn from_run_finished_counts_failure() {
+            let record =
+                run_finished_record(RunFinishStatus::Failed, TokenUsage::default(), None, 500);
+
+            let metadata = ExecutionMetadata::from_run_finished(&record, "gpt-4")
+                .expect("RunFinished record produces metadata");
+
+            assert_eq!(metadata.error_count, 1);
+        }
+    }
 }

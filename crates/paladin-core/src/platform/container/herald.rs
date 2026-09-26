@@ -573,7 +573,8 @@ impl ExecutionMetadata {
         })
     }
 
-    /// Build [`ExecutionMetadata`] from a completed run's [`TraceEvent::RunFinished`]
+    /// Build [`ExecutionMetadata`] from a completed run's
+    /// [`TraceEvent::RunFinished`](crate::platform::container::trace::TraceEvent::RunFinished)
     /// (D-12): the engine-path producer that hands the Treasurer's per-run cost — and every
     /// other run-level figure a `TraceDispatcher` already accumulated — to
     /// [`Herald::finalize_stream`]. This is the engine's counterpart to the agent loop's own

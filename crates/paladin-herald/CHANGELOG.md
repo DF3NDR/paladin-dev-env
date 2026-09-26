@@ -7,6 +7,16 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- All three heralds (markdown, JSON, table) render a run's cost exclusively through
+  `ExecutionMetadata::cost_display()`/`cost_currency()`: four decimals plus the ISO currency
+  code (e.g. `0.0450 USD`), never a hard-coded `$` (PRICE-03).
+- `TableHerald::finalize_stream` renders the run's real metadata (model, duration, token split,
+  errors, and a currency-coded cost row when priced) instead of four hard-coded placeholder rows.
+- `JsonHerald::finalize_stream` emits a `currency` field beside `cost_estimate` (`null` for both
+  when the run was unpriced).
+
 ## [0.10.1] - 2026-09-20
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source

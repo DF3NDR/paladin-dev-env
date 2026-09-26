@@ -3,9 +3,12 @@
 //! This module is the pure fixed-point cost arithmetic the Treasurer (Milestone 14) is built
 //! on. Three properties hold everywhere in this file:
 //!
-//! - **One operator currency, no FX (D-00b).** A [`Cost`] amount is `i64` nano-units (1e-9) of
-//!   a single [`CurrencyCode`]; there is no multi-currency conversion hook anywhere here.
-//! - **Prices are nano-units per 1M tokens (D-01).** A [`PriceRow`] axis (e.g. `prompt`) is the
+//! - **One operator currency, no FX (D-00b).** A [`crate::platform::container::cost::Cost`]
+//!   amount is `i64` nano-units (1e-9) of a single
+//!   [`crate::platform::container::cost::CurrencyCode`]; there is no multi-currency conversion
+//!   hook anywhere here.
+//! - **Prices are nano-units per 1M tokens (D-01).** A
+//!   [`crate::platform::container::cost::PriceRow`] axis (e.g. `prompt`) is the
 //!   cost, in nano-units of the table's currency, of one million tokens on that axis — the same
 //!   scale every provider's published price sheet uses (`"2.50"` per 1M becomes
 //!   `2_500_000_000` nano-units per 1M).

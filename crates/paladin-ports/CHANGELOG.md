@@ -7,6 +7,15 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `LlmResponse.cost: Option<Cost>` additive field, priced by `paladin_llm`'s
+  `PricingLlmAdapter::generate` from the response's own served model (PRICE-03; see
+  `MIGRATION.md` §9.2).
+- `StreamingResponse.cost: Option<Cost>` and `ChunkMetadata.cost: Option<Cost>` /
+  `ChunkMetadata.execution: Option<ExecutionMetadata>` additive fields on the two
+  `#[non_exhaustive]` port types the streaming path carries (PRICE-03).
+
 ## [0.10.1] - 2026-09-20
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source

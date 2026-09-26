@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-09-26 01:00:23 UTC
+# Public API Surface - Generated 2026-09-26 16:39:16 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -3661,6 +3661,7 @@ pub fn paladin::application::services::run::worker::RunWorkerPool<W>::spawn(allo
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_cancellation_probing(self, core::time::Duration) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_engine_factory(self, alloc::sync::Arc<(dyn core::ops::function::Fn(tokio_util::sync::cancellation_token::CancellationToken) -> paladin_battalion::engine::WarEngine<W> + core::marker::Send + core::marker::Sync)>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_event_bus(self, alloc::sync::Arc<paladin::application::services::run::events::RunEventBus>) -> Self
+pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_herald(self, alloc::sync::Arc<dyn paladin_core::platform::container::herald::Herald>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_paladin_port(self, alloc::sync::Arc<dyn paladin_ports::output::paladin_port::PaladinPort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_run_trace_port(self, alloc::sync::Arc<dyn paladin_ports::output::run_trace_port::RunTracePort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_shutdown_coordinator(self, paladin_battalion::engine::shutdown::ShutdownCoordinator) -> Self
@@ -3934,6 +3935,7 @@ pub fn paladin::application::services::run::worker::RunWorkerPool<W>::spawn(allo
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_cancellation_probing(self, core::time::Duration) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_engine_factory(self, alloc::sync::Arc<(dyn core::ops::function::Fn(tokio_util::sync::cancellation_token::CancellationToken) -> paladin_battalion::engine::WarEngine<W> + core::marker::Send + core::marker::Sync)>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_event_bus(self, alloc::sync::Arc<paladin::application::services::run::events::RunEventBus>) -> Self
+pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_herald(self, alloc::sync::Arc<dyn paladin_core::platform::container::herald::Herald>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_paladin_port(self, alloc::sync::Arc<dyn paladin_ports::output::paladin_port::PaladinPort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_run_trace_port(self, alloc::sync::Arc<dyn paladin_ports::output::run_trace_port::RunTracePort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_shutdown_coordinator(self, paladin_battalion::engine::shutdown::ShutdownCoordinator) -> Self
@@ -7601,6 +7603,22 @@ impl core::marker::UnsafeUnpin for paladin::infrastructure::security::encryption
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::infrastructure::security::encryption::SecureData
 impl core::panic::unwind_safe::UnwindSafe for paladin::infrastructure::security::encryption::SecureData
 pub mod paladin::infrastructure::telemetry
+pub mod paladin::infrastructure::telemetry::herald_sink
+pub struct paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+pub fn paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink::new(alloc::sync::Arc<dyn paladin_core::platform::container::herald::Herald>, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Debug for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+pub fn paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin_ports::output::trace_sink_port::TraceSink for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+pub fn paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink::on_event<'life0, 'async_trait>(&'life0 self, paladin_core::platform::container::trace::TraceRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), paladin_ports::output::trace_sink_port::TraceSinkError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl core::marker::Freeze for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl core::marker::Send for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl core::marker::Sync for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl core::marker::Unpin for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl core::marker::UnsafeUnpin for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl !core::panic::unwind_safe::UnwindSafe for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+pub const paladin::infrastructure::telemetry::herald_sink::HERALD_LOG_TARGET: &str
 pub mod paladin::infrastructure::telemetry::log_sink
 pub struct paladin::infrastructure::telemetry::log_sink::LogTraceSink
 impl paladin::infrastructure::telemetry::log_sink::LogTraceSink
@@ -7636,6 +7654,20 @@ impl core::marker::UnsafeUnpin for paladin::infrastructure::telemetry::persistin
 impl !core::panic::unwind_safe::RefUnwindSafe for paladin::infrastructure::telemetry::persisting_sink::PersistingTraceSink
 impl !core::panic::unwind_safe::UnwindSafe for paladin::infrastructure::telemetry::persisting_sink::PersistingTraceSink
 pub const paladin::infrastructure::telemetry::persisting_sink::DEFAULT_FLUSH_THRESHOLD: usize
+pub struct paladin::infrastructure::telemetry::HeraldTraceSink
+impl paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+pub fn paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink::new(alloc::sync::Arc<dyn paladin_core::platform::container::herald::Herald>, impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Debug for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+pub fn paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin_ports::output::trace_sink_port::TraceSink for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+pub fn paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink::on_event<'life0, 'async_trait>(&'life0 self, paladin_core::platform::container::trace::TraceRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), paladin_ports::output::trace_sink_port::TraceSinkError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
+impl core::marker::Freeze for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl core::marker::Send for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl core::marker::Sync for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl core::marker::Unpin for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl core::marker::UnsafeUnpin for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl !core::panic::unwind_safe::UnwindSafe for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
 pub struct paladin::infrastructure::telemetry::LogTraceSink
 impl paladin::infrastructure::telemetry::log_sink::LogTraceSink
 pub fn paladin::infrastructure::telemetry::log_sink::LogTraceSink::new() -> Self
@@ -8034,4 +8066,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4013
+Total public items: 4025

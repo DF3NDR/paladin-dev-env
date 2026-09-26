@@ -7,6 +7,18 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `TraceDispatcher::total_cost()`, the synchronous twin of `total_usage()`, folding every priced
+  `TraceEvent::NodeFinished` via `CostTally::record_node` inside `emit()` itself (PRICE-03).
+
+### Changed
+
+- All five `WarEngine` `RunFinished` emission sites now populate `cost: trace.total_cost()`
+  beside `usage: trace.total_usage()`, and each real Paladin-attempt `NodeFinished.cost` carries
+  that attempt's own priced `PaladinResult.cost` — never a placeholder — so a run's total cost is
+  a real, end-to-end figure (PRICE-03).
+
 ## [0.10.1] - 2026-09-20
 
 ### Fixed

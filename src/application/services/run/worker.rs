@@ -722,9 +722,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     }
 
     /// Wire an operator-configured [`Herald`] (D-12, D-11b): `run_once` composes a
-    /// [`HeraldTraceSink`] labeled with this run's [`run_model_label`] alongside whatever
+    /// [`HeraldTraceSink`] labeled with this run's `run_model_label` alongside whatever
     /// [`crate::infrastructure::telemetry::build_run_sink`] itself produces, so every run
-    /// dispatched through [`Self::engine_factory`] hands its `RunFinished` event to
+    /// dispatched through the per-run `engine_factory` hands its `RunFinished` event to
     /// `herald`. Only takes effect on the [`Self::with_engine_factory`] path, exactly like
     /// [`Self::with_trace_config`]/[`Self::with_run_trace_port`]. A pool that never calls
     /// this builder attaches no herald -- the untraced-for-cost path stays zero-cost.

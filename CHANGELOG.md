@@ -48,6 +48,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path. `MarkdownHerald::finalize_stream` renders `0.0450 USD` instead of a hard-coded `$` prefix.
   Purely additive — no `MIGRATION.md` §9.2 row (D-00g).
 
+- **ADR-0052/ADR-0053 — Treasurer attachment point and ledger balance model (PRICE-02, PRICE-03;
+  Phase 38 plan 38-01).** Two accepted ADRs, recorded before any pricing code landed: metering
+  lives in the `PricingLlmAdapter` decorator at the `LlmPort` boundary on both run paths, with the
+  halt raised at the `WarEngine` superstep boundary and the agent loop's existing `TokenBudget`
+  cutoff (ADR-0052); the treasury ledger Phase 39 implements is append-only with the balance
+  derived on read, `reserve`/`settle`/`release` row kinds, `i64` nano-unit amounts and a
+  `(run_id, superstep, attempt)` settlement idempotency key at superstep-aggregate granularity
+  (ADR-0053).
+
+- **Cost priced on the non-streaming `LlmPort::generate` path (PRICE-03; Phase 38 plan 38-04).**
+  `LlmResponse` (`paladin-ports`) gains an additive `cost: Option<Cost>` field, positioned directly
+  after `usage`; `PricingLlmAdapter::generate` prices each response from its own served model and
+  usage — surviving a `FallbackLlmAdapter` hop to a differently-named model — via a
+  `price_or_warn(table, model, usage)` helper shared with the streaming path, so the pricing/
+  warn-once rule (D-08) cannot diverge between the two. See `MIGRATION.md` §9.2.
+
+- **JSON and table heralds render cost and currency (PRICE-03; Phase 38 plan 38-05).**
+  `JsonHerald::finalize_stream` emits a `currency` field beside `cost_estimate` (`null` for both
+  when unpriced); `TableHerald::finalize_stream` renders the run's real `ExecutionMetadata`
+  (model, duration, prompt/completion tokens plus any reported cache/reasoning sub-counts, total,
+  errors, and a currency-coded `Cost` row only when priced) in place of four hard-coded
+  placeholder rows.
+
+- **Cost carried on the trace stream and summed per run, on both run paths (PRICE-03; Phase 38
+  plans 38-06, 38-07).** `TraceEvent::NodeFinished`/`RunFinished` (`paladin-core`) gain additive
+  `cost: Option<Cost>` fields; `TraceDispatcher::total_cost()` folds every priced node
+  synchronously inside `emit()` itself — never the async consumer — the same "one unpriced call
+  poisons the run total, never a partial sum" rule `CostTally` already enforces, and all five
+  `WarEngine` `RunFinished` emission sites populate `cost: trace.total_cost()`. `PaladinResult`
+  (`paladin-core`) gains an additive `cost: Option<Cost>` field; the agent loop's per-run
+  `CostTally` sums each model call's cost beside its usage, and the engine's `NodeDispatchResult`
+  bridges each Paladin attempt's own real cost into that attempt's `NodeFinished.cost`, so
+  `RunFinished.cost` is a real, end-to-end figure on both run paths — never a fabricated zero when
+  any call was unpriced. See `MIGRATION.md` §9.2.
+
+- **`ExecutionMetadata::from_run_finished` and `HeraldTraceSink` — the engine-path cost producer
+  (PRICE-03; Phase 38 plan 38-08).** `ExecutionMetadata::from_run_finished(record, model_used)`
+  builds a real `ExecutionMetadata` from a completed run's `TraceEvent::RunFinished`; the new
+  `HeraldTraceSink` (`src/infrastructure/telemetry/herald_sink.rs`) hands it to an
+  operator-configured `Herald`'s `finalize_stream` on every engine run, wired in via
+  `RunWorkerPool::with_herald` and `build_run_api`'s `settings.herald` config
+  (`Settings::create_default_herald`). The `cost_estimate`/`total_cost()` rustdoc reserved-note
+  on `ExecutionMetadata` now reads "produced by the Treasurer" instead of "no in-tree producer
+  yet," on both run paths.
+
+### Changed
+
+- Heralds print a run's cost as four decimals followed by its ISO currency code (e.g.
+  `0.0450 USD`), never a hard-coded `$` (D-04; Phase 38 plans 38-02, 38-05).
+- The table herald's `finalize_stream` renders the run's real `ExecutionMetadata` (model,
+  duration, token split, errors, cost) instead of four hard-coded placeholder rows (`3.45s`,
+  `950`, `Paladins Executed`, `Success Rate`) that ignored the argument entirely (research
+  Pitfall 4; Phase 38 plan 38-05).
+- The agent loop's final streamed chunk always carries a `ChunkMetadata.execution:
+  Option<ExecutionMetadata>` payload, produced whether or not the run was priced (Phase 38 plan
+  38-02).
+- `LlmResponse`, `PaladinResult`, `TraceEvent::NodeFinished`/`RunFinished`, `StreamingResponse` and
+  `ChunkMetadata` each gain a `cost: Option<Cost>` field beside `usage`; a full struct literal of
+  the first three (`LlmResponse`, `PaladinResult`, `TraceEvent::NodeFinished`/`RunFinished`) needs
+  `cost: None` added — see `MIGRATION.md` §9.2 (Phase 38 plans 38-02, 38-04, 38-06, 38-07).
+
 ## [0.10.1] - 2026-09-20
 
 Patch release. Fixes the two defects that stopped the `v0.10.0` release pipeline partway through

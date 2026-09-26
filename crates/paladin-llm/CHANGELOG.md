@@ -12,6 +12,10 @@ and this project follows lockstep workspace versioning.
   against a provider's declared context window (`Commissary::verify_fits`) and
   bounded-allocates caller-prioritised material into a `Stockpile` (`Commissary::dispense`),
   never dropping shed items silently; see `src/services/commissary.rs`.
+- `pricing` module: `PricingLlmAdapter`/`with_pricing`, a `FallbackLlmAdapter`-shaped `LlmPort`
+  decorator that prices every call — streaming and non-streaming — at the served model's own
+  usage, with a process-wide, capacity-bounded warn-once log line per unpriced model name
+  (PRICE-02, PRICE-03).
 
 ## [0.10.1] - 2026-09-20
 

@@ -7,6 +7,24 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `platform::container::cost` module: `Cost`, `CurrencyCode`, `CostError`, `PriceRow`,
+  `PriceTable`, `cost_of_call`, `CostTally` — pure `i64` nano-unit fixed-point cost arithmetic, no
+  floating point anywhere in the module (PRICE-02).
+- `PaladinResult.cost: Option<Cost>` and `TraceEvent::NodeFinished`/`RunFinished.cost:
+  Option<Cost>` additive fields, riding beside `usage` everywhere it travels (PRICE-03; see the
+  root `CHANGELOG.md` and `MIGRATION.md` §9.2).
+- `TraceDispatcher::total_cost()`, the synchronous twin of `total_usage()`.
+- `ExecutionMetadataBuilder::cost`, `ExecutionMetadata::cost_currency`/`cost_display`, and
+  `ExecutionMetadata::from_run_finished(record, model_used)` — the engine-path producer built
+  from a completed run's `TraceEvent::RunFinished`.
+
+### Changed
+
+- The `cost_estimate`/`total_cost()` rustdoc reserved-note on `ExecutionMetadata` now reads
+  "produced by the Treasurer" instead of "no in-tree producer yet" (D-12).
+
 ## [0.10.1] - 2026-09-20
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source

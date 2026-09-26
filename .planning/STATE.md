@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 38
 current_phase_name: design-seams-pricing-cost-producer
 status: executing
-stopped_at: Completed 38-04-PLAN.md
-last_updated: "2026-09-26T12:55:48.996Z"
+stopped_at: Completed 38-05-PLAN.md
+last_updated: "2026-09-26T13:06:43.423Z"
 last_activity: 2026-09-26
 last_activity_desc: Phase 38 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 4
+  completed_plans: 5
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [████░░░░░░] 44%
+**Progress:** [██████░░░░] 56%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,8 +50,8 @@ under `milestones/`.
 ## Current Position
 
 Phase: 38 (design-seams-pricing-cost-producer) — EXECUTING
-Plan: 1 of 9
-Status: Executing Phase 38
+Plan: 2 of 9
+Status: Ready to execute
 Last activity: 2026-09-26 — Phase 38 execution started
 
 ## Performance Metrics
@@ -188,6 +188,7 @@ Last activity: 2026-09-26 — Phase 38 execution started
 | Phase 38 P02 | 57min | 2 tasks | 10 files |
 | Phase 38 P03 | 23min | 2 tasks | 10 files |
 | Phase 38 P04 | 95min | 2 tasks | 43 files |
+| Phase 38 P05 | 9min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -237,6 +238,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 38-02: CostTally (Empty/Priced/Unknown poisoning accumulator) added for run-level cost totals shared by TraceDispatcher::total_cost (38-06) and the agent loop (38-07); Task 1's cost_of_call arithmetic needed no correction under the 17-test contract.
 - [Phase 38]: Hand-rolled exact-integer decimal parser instead of rust_decimal for treasurer.pricing (no new dependency). — Narrow grammar (digits + optional 1-9-digit fraction) is simple to prove exact with checked_mul/checked_add; keeps dependency count flat (no Cargo.lock/deny/audit/MSRV change, no package-legitimacy checkpoint).
 - [Phase ?]: PricingLlmAdapter::generate prices response.model/response.usage via a shared price_or_warn helper, surviving FallbackLlmAdapter hops to differently-named models — 38-04: D-09/D-05 -- one shared helper keeps the pricing/warn-once rule identical on both the streaming and non-streaming run paths
+- [Phase 38]: All three heralds (markdown, JSON, table) now render cost exclusively through ExecutionMetadata::cost_display()/cost_currency(); table herald acceptance-grep for removed placeholder literals forbids them anywhere in the file, so regression tests must build forbidden strings from non-contiguous fragments rather than writing them verbatim. — 38-05 closes D-04/D-11 for the JSON and table heralds (markdown done in 38-02) and research Pitfall 4 (table herald ignored its argument).
 
 ### Pending Todos
 
@@ -437,8 +439,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-26T02:43:38.931Z
-**Stopped at:** Completed 38-04-PLAN.md
+**Last session:** 2026-09-26T13:06:43.403Z
+**Stopped at:** Completed 38-05-PLAN.md
 next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
 RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
 not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.

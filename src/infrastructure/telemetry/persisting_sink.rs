@@ -175,6 +175,7 @@ mod tests {
                 status: paladin_ports::output::trace_sink_port::RunFinishStatus::Completed,
                 total_supersteps: 1,
                 usage: TokenUsage::default(),
+                cost: None,
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },

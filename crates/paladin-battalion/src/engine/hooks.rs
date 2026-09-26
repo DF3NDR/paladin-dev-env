@@ -622,6 +622,7 @@ mod tests {
             status: paladin_ports::output::trace_sink_port::RunFinishStatus::Completed,
             total_supersteps: 0,
             usage: TokenUsage::default(),
+            cost: None,
             duration_ms: 0,
             trace_dropped_total: 0,
         }
@@ -1113,6 +1114,7 @@ mod tests {
                             outcome: paladin_core::platform::container::waypoint::NodeOutcomeKind::Succeeded,
                             duration_ms: 0,
                             usage: TokenUsage::default(),
+                            cost: None,
                             cache_hit: false,
                         });
                     }

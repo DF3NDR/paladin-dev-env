@@ -964,6 +964,7 @@ mod tests {
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 5,
                     usage: TokenUsage::new(0, 0),
+                    cost: None,
                     cache_hit: false,
                 },
                 true,
@@ -1016,6 +1017,7 @@ mod tests {
                     status: RunFinishStatus::Completed,
                     total_supersteps: 1,
                     usage: TokenUsage::new(0, 0),
+                    cost: None,
                     duration_ms: 5,
                     trace_dropped_total: 0,
                 },
@@ -1027,6 +1029,7 @@ mod tests {
                     status: RunFinishStatus::Failed,
                     total_supersteps: 1,
                     usage: TokenUsage::new(0, 0),
+                    cost: None,
                     duration_ms: 5,
                     trace_dropped_total: 0,
                 },
@@ -1090,6 +1093,7 @@ mod tests {
                     status,
                     total_supersteps: 3,
                     usage: TokenUsage::new(10, 0),
+                    cost: None,
                     duration_ms: 20,
                     trace_dropped_total: 0,
                 },
@@ -1145,6 +1149,7 @@ mod tests {
                 outcome: NodeOutcomeKind::Failed,
                 duration_ms: 5,
                 usage: TokenUsage::new(0, 0),
+                cost: None,
                 cache_hit: false,
             },
         );
@@ -1179,6 +1184,7 @@ mod tests {
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
                 usage,
+                cost: None,
                 cache_hit: false,
             },
         );
@@ -1205,6 +1211,7 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
                 usage,
+                cost: None,
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },
@@ -1217,6 +1224,61 @@ mod tests {
         assert!(usage_value["cache_read_tokens"].is_null());
         assert!(usage_value["cache_write_tokens"].is_null());
         assert!(usage_value["reasoning_tokens"].is_null());
+    }
+
+    /// D-11: the SSE bridge (`map_trace_event`) exposes no spend on the
+    /// Run API's stream in this phase -- even when the underlying
+    /// `TraceEvent` carries a `Some` cost, the `node_finished` and `done`
+    /// payloads carry exactly their pre-phase keys, with no `cost` key
+    /// anywhere (T-38-19).
+    #[test]
+    fn sse_payloads_carry_no_spend_field() {
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+
+        let thread_id = ThreadId::new("t1").unwrap();
+        let usd = CurrencyCode::new("USD").unwrap();
+        let cost = Cost::new(42_500, usd);
+
+        let node_finished_record = wrap(
+            thread_id.clone(),
+            1,
+            TraceEvent::NodeFinished {
+                superstep: 1,
+                node_id: NodeId::new("n1"),
+                attempt: 1,
+                outcome: NodeOutcomeKind::Succeeded,
+                duration_ms: 5,
+                usage: TokenUsage::new(1_000, 2_000),
+                cost: Some(cost.clone()),
+                cache_hit: false,
+            },
+        );
+        let (_, kind, payload) =
+            map_trace_event(node_finished_record).expect("NodeFinished must map");
+        assert_eq!(kind, RunStreamEventKind::NodeFinished);
+        assert!(
+            payload.get("cost").is_none(),
+            "node_finished payload must carry no cost key: {payload}"
+        );
+
+        let done_record = wrap(
+            thread_id,
+            2,
+            TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 1,
+                usage: TokenUsage::new(1_000, 2_000),
+                cost: Some(cost),
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        );
+        let (_, kind, payload) = map_trace_event(done_record).expect("RunFinished must map");
+        assert_eq!(kind, RunStreamEventKind::Done);
+        assert!(
+            payload.get("cost").is_none(),
+            "done payload must carry no cost key: {payload}"
+        );
     }
 
     /// Every mapped wire event's payload carries `trace_seq` equal to the

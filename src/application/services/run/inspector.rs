@@ -894,6 +894,7 @@ mod tests {
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 10,
                     usage: TokenUsage::new(5, 0),
+                    cost: None,
                     cache_hit: false,
                 },
             ),

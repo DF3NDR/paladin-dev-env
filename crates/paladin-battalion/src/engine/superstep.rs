@@ -2565,6 +2565,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             outcome: NodeOutcomeKind::Succeeded,
                             duration_ms,
                             usage: TokenUsage::default(),
+                            cost: None,
                             cache_hit: true,
                         });
                         return NodeTaskOutput {
@@ -2744,6 +2745,10 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             outcome: node_outcome_kind(&outcome),
                             duration_ms,
                             usage: usage.clone(),
+                            // 38-07 replaces this with the real per-attempt
+                            // Paladin cost; every other node kind stays
+                            // `None` (D-10).
+                            cost: None,
                             // Plan 25-13 is the only plan that sets this
                             // `true` (a served-from-cache outcome).
                             cache_hit: false,

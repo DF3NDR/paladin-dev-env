@@ -471,6 +471,7 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 0,
                 usage: TokenUsage::default(),
+                cost: None,
                 duration_ms: 0,
                 trace_dropped_total: 0,
             },

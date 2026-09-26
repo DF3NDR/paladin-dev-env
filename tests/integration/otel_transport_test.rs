@@ -162,6 +162,7 @@ async fn export_one_fixture_run(sink: &OtelTraceSink) {
             outcome: NodeOutcomeKind::Succeeded,
             duration_ms: 1,
             usage: paladin_ports::output::llm_port::TokenUsage::new(0, 0),
+            cost: None,
             cache_hit: false,
         },
     })
@@ -177,6 +178,7 @@ async fn export_one_fixture_run(sink: &OtelTraceSink) {
             status: RunFinishStatus::Completed,
             total_supersteps: 1,
             usage: paladin_ports::output::llm_port::TokenUsage::new(0, 0),
+            cost: None,
             duration_ms: 1,
             trace_dropped_total: 0,
         },

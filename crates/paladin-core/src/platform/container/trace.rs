@@ -64,6 +64,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::platform::container::battlefield::FieldName;
+use crate::platform::container::cost::Cost;
 use crate::platform::container::parley::{ParleyId, ParleyKind};
 use crate::platform::container::run::RunId;
 use crate::platform::container::token_usage::TokenUsage;
@@ -246,6 +247,15 @@ pub enum TraceEvent {
         /// Token usage for this attempt (ACCT-02, D-07, D-11).
         /// `TokenUsage::default()` for a non-Paladin node or a cache hit.
         usage: TokenUsage,
+        /// This attempt's currency cost, as priced at the `LlmPort` boundary
+        /// (D-09, D-10). `None` for a non-Paladin node, a cache hit, a
+        /// failed attempt, or a Paladin attempt whose model had no
+        /// configured price row -- never a fabricated zero (D-00c).
+        /// `#[serde(default)]` so a `run_traces` row persisted before this
+        /// field existed deserializes with `cost == None`, byte-identical
+        /// to the pre-field JSON shape (the `served_by`/D-25 precedent).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost: Option<Cost>,
         /// Whether this attempt's outcome was served from the node cache
         /// (FT-06) instead of by executing the node.
         cache_hit: bool,
@@ -301,6 +311,16 @@ pub enum TraceEvent {
         /// `TraceDispatcher` saw, exact the instant the final `emit`
         /// returns (ACCT-02, D-07, D-11).
         usage: TokenUsage,
+        /// This run's total currency cost, as folded by
+        /// `TraceDispatcher::total_cost()` through `CostTally` over every
+        /// `NodeFinished.cost` this run's `TraceDispatcher` saw (D-10,
+        /// D-11a). `None` when nothing in the run was priced or any priced
+        /// call was unpriced -- never a partial sum. `#[serde(default)]` so
+        /// a `run_traces` row persisted before this field existed
+        /// deserializes with `cost == None`, byte-identical to the
+        /// pre-field JSON shape (the `served_by`/D-25 precedent).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cost: Option<Cost>,
         /// Total wall-clock duration of this run, in milliseconds.
         duration_ms: u64,
         /// The dispatching `TraceDispatcher`'s own drop count at the moment
@@ -402,6 +422,7 @@ mod tests {
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
                 usage: TokenUsage::default(),
+                cost: None,
                 cache_hit: false,
             },
             TraceEvent::EdgeEvaluated {
@@ -434,6 +455,7 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
                 usage: TokenUsage::default(),
+                cost: None,
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },
@@ -552,5 +574,76 @@ mod tests {
     #[test]
     fn trace_schema_version_is_one() {
         assert_eq!(TRACE_SCHEMA_VERSION, "1");
+    }
+
+    /// D-10: a `run_traces` row written before `cost` existed on either
+    /// `NodeFinished` or `RunFinished` -- no `cost` key at all -- round-trips
+    /// with `cost == None` on both, byte-identical to the pre-field JSON
+    /// shape (the `served_by`/D-25 precedent).
+    #[test]
+    fn node_and_run_finished_without_cost_key_deserialize_to_none() {
+        let node_json = r#"{"thread_id":"t1","seq":1,"at":"2026-01-01T00:00:00Z","kind":"node_finished","superstep":1,"node_id":"n1","attempt":1,"outcome":"Succeeded","duration_ms":5,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"cache_hit":false}"#;
+        let node_record: TraceRecord = serde_json::from_str(node_json).unwrap();
+        match node_record.event {
+            TraceEvent::NodeFinished { cost, .. } => assert_eq!(cost, None),
+            other => panic!("expected NodeFinished, got {other:?}"),
+        }
+
+        let run_json = r#"{"thread_id":"t1","seq":2,"at":"2026-01-01T00:00:00Z","kind":"run_finished","status":"completed","total_supersteps":1,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"duration_ms":5,"trace_dropped_total":0}"#;
+        let run_record: TraceRecord = serde_json::from_str(run_json).unwrap();
+        match run_record.event {
+            TraceEvent::RunFinished { cost, .. } => assert_eq!(cost, None),
+            other => panic!("expected RunFinished, got {other:?}"),
+        }
+    }
+
+    /// D-10: a `TraceRecord` whose `RunFinished.cost` is `Some` serializes
+    /// to one flat object containing a `cost` object with `nanos` and
+    /// `currency` -- the line `LogTraceSink` writes -- while a `None` cost
+    /// emits no `cost` key at all.
+    #[test]
+    fn priced_run_finished_serializes_cost_object() {
+        use crate::platform::container::cost::{Cost, CurrencyCode};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let priced = TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq: 1,
+            at: Utc::now(),
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 1,
+                usage: TokenUsage::default(),
+                cost: Some(Cost::new(42_500, usd)),
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        };
+        let json = serde_json::to_string(&priced).unwrap();
+        assert!(
+            json.contains(r#""cost":{"nanos":42500,"currency":"USD"}"#),
+            "priced cost must serialize as one flat nanos/currency object: {json}"
+        );
+
+        let unpriced = TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq: 2,
+            at: Utc::now(),
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 1,
+                usage: TokenUsage::default(),
+                cost: None,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        };
+        let unpriced_json = serde_json::to_string(&unpriced).unwrap();
+        assert!(
+            !unpriced_json.contains("\"cost\""),
+            "a None cost must emit no cost key: {unpriced_json}"
+        );
     }
 }

@@ -40,6 +40,7 @@ use futures::FutureExt;
 use tokio::sync::mpsc;
 
 use paladin_core::platform::container::battlefield::{Battlefield, StateDelta};
+use paladin_core::platform::container::cost::{Cost, CostTally};
 use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::waypoint::ThreadId;
@@ -98,6 +99,16 @@ struct TraceQueue {
     /// mutex is recovered with `PoisonError::into_inner` on a poisoned lock
     /// (library code must not panic) rather than `.unwrap()`/`.expect()`.
     usage: Mutex<TokenUsage>,
+    /// This dispatcher's own run-level cost tally (D-10) -- the synchronous
+    /// twin of `usage` above, folding every `TraceEvent::NodeFinished`'s
+    /// `(usage, cost)` pair through `CostTally::record_node` synchronously
+    /// inside [`TraceDispatcher::emit`] (never by the async consumer task),
+    /// exactly like `usage`'s own accumulation guarantee. Readable via
+    /// [`TraceDispatcher::total_cost`], and what
+    /// `TraceEvent::RunFinished.cost` is populated from at this run's
+    /// `WarEngine::start`/`resume*` call site. Recovered with
+    /// `PoisonError::into_inner` on a poisoned lock, same as `usage`.
+    cost: Mutex<CostTally>,
 }
 
 /// The engine-owned trace event dispatcher (ENG-FR-21, D-03): sits between
@@ -214,6 +225,7 @@ impl TraceDispatcher {
             sink_panics: AtomicU64::new(0),
             superstep_count: AtomicU64::new(0),
             usage: Mutex::new(TokenUsage::default()),
+            cost: Mutex::new(CostTally::new()),
         });
         // Capacity 1: the doorbell only ever needs to prove "there is at
         // least one more thing to check for" -- the consumer always drains
@@ -307,12 +319,17 @@ impl TraceDispatcher {
             TraceEvent::SuperstepStarted { .. } => {
                 queue.superstep_count.fetch_add(1, Ordering::SeqCst);
             }
-            TraceEvent::NodeFinished { usage, .. } => {
+            TraceEvent::NodeFinished { usage, cost, .. } => {
                 let mut total = queue
                     .usage
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 *total += usage.clone();
+                let mut cost_total = queue
+                    .cost
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                cost_total.record_node(usage, cost.as_ref());
             }
             _ => {}
         }
@@ -395,6 +412,24 @@ impl TraceDispatcher {
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .clone()
             })
+    }
+
+    /// This run's total currency cost across every `TraceEvent::NodeFinished`
+    /// record stamped so far (D-10) -- the synchronous twin of
+    /// [`TraceDispatcher::total_usage`], what `WarEngine::start`/`resume*`
+    /// reads to populate `RunFinished.cost`. Folded through `CostTally`
+    /// (D-00c's None-propagation rule): `None` when nothing has been priced
+    /// yet or any priced call was unpriced -- never a partial sum. Exact the
+    /// instant the last `emit` returns, same guarantee as `total_usage`.
+    /// `None` with no sink configured (mirroring every other counter here).
+    pub fn total_cost(&self) -> Option<Cost> {
+        self.inner.as_ref().and_then(|(queue, _)| {
+            queue
+                .cost
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .total()
+        })
     }
 
     /// Enable opt-in value inclusion on `TraceEvent::DeltaMerged
@@ -651,11 +686,7 @@ mod tests {
         CurrencyCode::new("USD").unwrap()
     }
 
-    fn node_finished_with_cost(
-        node: &str,
-        usage: TokenUsage,
-        cost: Option<Cost>,
-    ) -> TraceEvent {
+    fn node_finished_with_cost(node: &str, usage: TokenUsage, cost: Option<Cost>) -> TraceEvent {
         TraceEvent::NodeFinished {
             superstep: 1,
             node_id: NodeId::new(node),
@@ -690,11 +721,7 @@ mod tests {
             TokenUsage::new(300, 100),
             Some(Cost::new(32_500, usd())),
         ));
-        dispatcher.emit(node_finished_with_cost(
-            "n3",
-            TokenUsage::default(),
-            None,
-        ));
+        dispatcher.emit(node_finished_with_cost("n3", TokenUsage::default(), None));
 
         assert_eq!(dispatcher.total_cost(), Some(Cost::new(42_500, usd())));
     }
@@ -720,11 +747,7 @@ mod tests {
             TokenUsage::new(300, 100),
             Some(Cost::new(32_500, usd())),
         ));
-        dispatcher.emit(node_finished_with_cost(
-            "n3",
-            TokenUsage::new(10, 10),
-            None,
-        ));
+        dispatcher.emit(node_finished_with_cost("n3", TokenUsage::new(10, 10), None));
 
         assert_eq!(dispatcher.total_cost(), None);
     }
@@ -734,7 +757,8 @@ mod tests {
     /// contract.
     #[tokio::test]
     async fn total_cost_is_none_without_a_sink() {
-        let dispatcher = TraceDispatcher::new(ThreadId::new("total-cost-no-sink").unwrap(), None, None);
+        let dispatcher =
+            TraceDispatcher::new(ThreadId::new("total-cost-no-sink").unwrap(), None, None);
 
         dispatcher.emit(node_finished_with_cost(
             "n1",

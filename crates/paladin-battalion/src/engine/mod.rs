@@ -2090,7 +2090,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             status: run_finish_status(&outcome),
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
-            cost: None,
+            cost: trace.total_cost(),
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2205,7 +2205,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                 status: RunFinishStatus::Completed,
                 total_supersteps: trace.superstep_count(),
                 usage: trace.total_usage(),
-                cost: None,
+                cost: trace.total_cost(),
                 duration_ms: run_started_at.elapsed().as_millis() as u64,
                 trace_dropped_total: 0,
             });
@@ -2325,7 +2325,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             status: run_finish_status(&outcome),
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
-            cost: None,
+            cost: trace.total_cost(),
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2680,7 +2680,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             status: run_finish_status(&outcome),
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
-            cost: None,
+            cost: trace.total_cost(),
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2851,7 +2851,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             status: run_finish_status(&outcome),
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
-            cost: None,
+            cost: trace.total_cost(),
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });

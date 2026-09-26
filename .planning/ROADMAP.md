@@ -300,7 +300,7 @@ Plans:
 - [x] 38-03-PLAN.md — the `treasurer:` config section (exact decimal parsing, boot validation) and pricing installed on both production run paths (PRICE-01)
 - [x] 38-04-PLAN.md — `LlmResponse.cost` with every literal migrated and the break registered; non-streaming and fallback-hop pricing (PRICE-03)
 - [x] 38-05-PLAN.md — JSON herald currency field; table herald renders real metadata and cost (PRICE-03)
-- [ ] 38-06-PLAN.md — `NodeFinished.cost`/`RunFinished.cost` carriers and `TraceDispatcher::total_cost` (PRICE-03)
+- [x] 38-06-PLAN.md — `NodeFinished.cost`/`RunFinished.cost` carriers and `TraceDispatcher::total_cost` (PRICE-03)
 
 **Wave 4** *(blocked on Wave 3)*
 

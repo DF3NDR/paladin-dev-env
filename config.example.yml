@@ -227,6 +227,38 @@ agent_runtime:
   vault_tools:
     enabled: false
 
+# Operator-configured per-model price table (PRICE-01, D-07). Every field below is IDENTICAL
+# to what TreasurerConfig::default() produces -- the whole `treasurer:` section may be OMITTED
+# ENTIRELY with no behavior change: a config file with no `treasurer:` key resolves to an empty
+# pricing table in "USD" and no LLM call is priced. No price ships with Paladin -- every price
+# in effect comes from the operator's own `pricing` entries below.
+#
+# Each price is a DECIMAL STRING in nano-units (1e-9) per 1,000,000 tokens -- copy a provider's
+# published price-sheet figure verbatim, e.g. "2.50" for $2.50 per 1M tokens. No scientific
+# notation, no thousands separator, no sign, at most 9 digits after the decimal point.
+#
+# `prompt` and `completion` are REQUIRED for every model row; a row missing either fails to
+# load rather than silently billing at a fallback price. `cache_read`, `cache_write` and
+# `reasoning` are OPTIONAL -- when omitted, those tokens bill at the `prompt` (cache axes) or
+# `completion` (reasoning) price, because TokenUsage already counts cache tokens inside
+# prompt_tokens and reasoning tokens inside completion_tokens. An unrecognized axis name (e.g.
+# a `cache_reads` typo) is a load error, never a silently-ignored key.
+#
+# `currency` is an ISO 4217 three-letter code, exactly three ASCII uppercase letters (e.g.
+# "USD", "EUR") -- overridable via APP_TREASURER_CURRENCY; `pricing` is config-file only, no
+# environment-variable form.
+treasurer:
+  currency: "USD"
+  pricing: {}
+  # pricing:
+  #   gpt-4:
+  #     prompt: "2.50"
+  #     completion: "10.00"
+  #     cache_read: "0.25"
+  #   claude-3-5-sonnet-20241022:
+  #     prompt: "3.00"
+  #     completion: "15.00"
+
 # Runtime trace pipeline configuration (X-09, D-36). Every field below is
 # written out explicitly and is IDENTICAL to what TraceConfig::default()
 # produces -- the whole `trace:` section may be OMITTED ENTIRELY with no

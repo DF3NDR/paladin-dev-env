@@ -11,6 +11,7 @@ pub mod container {
     pub use paladin_core::platform::container::comment;
     pub use paladin_core::platform::container::content;
     pub use paladin_core::platform::container::content_list;
+    pub use paladin_core::platform::container::cost;
     pub use paladin_core::platform::container::document;
     pub use paladin_core::platform::container::execution_result;
     pub use paladin_core::platform::container::garrison;

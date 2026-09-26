@@ -304,7 +304,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3)*
 
-- [ ] 38-07-PLAN.md — `PaladinResult.cost`, agent-loop cost accumulation, and the engine bridge from each Paladin attempt to `NodeFinished.cost` (PRICE-03)
+- [x] 38-07-PLAN.md — `PaladinResult.cost`, agent-loop cost accumulation, and the engine bridge from each Paladin attempt to `NodeFinished.cost` (PRICE-03)
 
 **Wave 5** *(blocked on Wave 4)*
 

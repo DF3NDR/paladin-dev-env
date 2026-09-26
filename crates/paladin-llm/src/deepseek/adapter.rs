@@ -723,6 +723,7 @@ impl LlmPort for DeepSeekAdapter {
                 content,
                 finish_reason,
                 usage,
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,

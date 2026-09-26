@@ -215,6 +215,7 @@ mod tests {
             content: "response".to_string(),
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::default(),
+            cost: None,
             created_at: chrono::Utc::now(),
             metadata: Default::default(),
             function_call: None,

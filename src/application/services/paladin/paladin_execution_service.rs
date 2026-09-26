@@ -3519,6 +3519,7 @@ mod tests {
                 content: "the answer".to_string(),
                 finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
                 usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
@@ -3904,6 +3905,7 @@ mod tests {
                 content: "calling lookup".to_string(),
                 finish_reason: paladin_ports::output::llm_port::FinishReason::FunctionCall,
                 usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall {

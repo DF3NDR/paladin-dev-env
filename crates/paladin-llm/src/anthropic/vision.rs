@@ -423,6 +423,7 @@ impl VisionCapableLlm for AnthropicAdapter {
                 api_response.usage.input_tokens,
                 api_response.usage.output_tokens,
             ),
+            cost: None,
             created_at: Utc::now(),
             metadata: Default::default(),
             function_call: None,

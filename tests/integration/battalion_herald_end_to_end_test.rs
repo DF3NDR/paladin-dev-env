@@ -52,6 +52,7 @@ impl LlmPort for MockLlmPort {
             content: "unused".to_string(),
             finish_reason: FinishReason::Stop,
             usage: LlmTokenUsage::new(0, 0),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,

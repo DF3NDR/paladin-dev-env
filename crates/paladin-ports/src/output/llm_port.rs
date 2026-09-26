@@ -143,6 +143,7 @@
 //!             content: "Response from local LLM".to_string(),
 //!             finish_reason: FinishReason::Stop,
 //!             usage: TokenUsage::new(10, 20),
+//!             cost: None,
 //!             created_at: Utc::now(),
 //!             metadata: HashMap::new(),
 //!             function_call: None,
@@ -852,9 +853,13 @@ impl LlmRequest {
 /// println!("  Completion: {}", response.usage.completion_tokens);
 /// println!("  Total: {}", response.usage.total_tokens);
 ///
-/// // Calculate approximate cost (example: $0.03 per 1K tokens)
-/// let cost = (response.usage.total_tokens as f64 / 1000.0) * 0.03;
-/// println!("Estimated cost: ${:.4}", cost);
+/// // Cost is computed by a pricing decorator (`paladin_llm::pricing::PricingLlmAdapter`,
+/// // D-09) from `response.model` and `response.usage` -- never re-derived here from a bare
+/// // total token count with a floating-point multiplier (D-00e, D-02).
+/// match &response.cost {
+///     Some(cost) => println!("Cost: {} nanos {}", cost.nanos(), cost.currency()),
+///     None => println!("Cost: unpriced (no pricing configured for this model)"),
+/// }
 /// # }
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -871,6 +876,15 @@ pub struct LlmResponse {
     pub finish_reason: FinishReason,
     /// Token usage statistics
     pub usage: TokenUsage,
+    /// Cost of this call, computed by a pricing decorator
+    /// (`paladin_llm::pricing::PricingLlmAdapter`, D-09) from this response's own `model` and
+    /// `usage`. `None` when no pricing decorator is installed, or when the model has no
+    /// configured price row -- never a fabricated zero (D-00c). Absent from serialized JSON
+    /// when `None`, so a `LlmResponse` document persisted before this field existed
+    /// deserializes with `cost == None`, byte-identical to what it deserialized to before
+    /// (the `served_by` precedent, D-25).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<Cost>,
     /// When this response was created (UTC)
     pub created_at: DateTime<Utc>,
     /// Additional provider-specific information
@@ -1803,6 +1817,40 @@ mod tests {
         let json = serde_json::to_value(&json_schema).unwrap();
         let round_tripped: ResponseFormat = serde_json::from_value(json).unwrap();
         assert_eq!(json_schema, round_tripped);
+    }
+
+    fn sample_llm_response() -> LlmResponse {
+        LlmResponse {
+            id: Uuid::new_v4(),
+            request_id: Uuid::new_v4(),
+            model: "gpt-4".to_string(),
+            content: "hello".to_string(),
+            finish_reason: FinishReason::Stop,
+            usage: TokenUsage::new(1, 2),
+            cost: None,
+            created_at: Utc::now(),
+            metadata: HashMap::new(),
+            function_call: None,
+        }
+    }
+
+    /// D-10/D-00c: a `LlmResponse` JSON document persisted before `cost` existed (no `cost`
+    /// key at all) deserializes with `cost == None` (`#[serde(default)]`), and a `cost: None`
+    /// response serializes with no `cost` key at all (`skip_serializing_if`) -- so legacy
+    /// documents stay byte-identical.
+    #[test]
+    fn llm_response_without_cost_key_deserializes_to_none() {
+        let response = sample_llm_response();
+        assert!(response.cost.is_none());
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(
+            !json.as_object().unwrap().contains_key("cost"),
+            "a None cost must be absent from serialized JSON, not present as null"
+        );
+
+        let deserialized: LlmResponse = serde_json::from_value(json).unwrap();
+        assert!(deserialized.cost.is_none());
     }
 
     /// D-28: compile-time guard for the prohibition -- `ProviderCapabilities`

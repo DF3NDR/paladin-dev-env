@@ -329,6 +329,7 @@ mod tests {
                 content: self.response.lock().unwrap().clone(),
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(10, 5),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,

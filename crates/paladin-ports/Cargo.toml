@@ -54,6 +54,16 @@ mime_guess = "2"
 # no new lint id and no Cargo.toml change needed; two new
 # `.cargo/semver-checks-allowlist.toml` entries mirror this crate's existing
 # suppression on the two new `crate | type` pairs.
+#
+# X-10.6 deliberate-breaking suppression (D-10, MIGRATION.md §9.2, PRICE-03, Phase 38 plan 38-04).
+# `LlmResponse` gained the additive `cost: Option<Cost>` field, priced per call by the
+# `PricingLlmAdapter` decorator at the `LlmPort` boundary (D-09). It stays constructible,
+# NOT `#[non_exhaustive]` (X-10.3 option (b), the `PaladinResult`/`Settings` precedent) --
+# `#[serde(default, skip_serializing_if)]` keeps legacy JSON byte-identical and deserialising
+# as `None`. Register/remove this suppression only in the same commit as the matching
+# MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entry (kept set-equal by
+# CI's `semver` job).
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 struct_marked_non_exhaustive = "allow"
+constructible_struct_adds_field = "allow"

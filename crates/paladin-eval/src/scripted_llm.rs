@@ -276,6 +276,7 @@ impl ScenarioLlm {
                 content: text.clone(),
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(0, 0),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
@@ -287,6 +288,7 @@ impl ScenarioLlm {
                 content: format!("Calling tool: {name}"),
                 finish_reason: FinishReason::FunctionCall,
                 usage: TokenUsage::new(0, 0),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall {

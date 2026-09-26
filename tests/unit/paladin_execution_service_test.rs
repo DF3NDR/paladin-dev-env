@@ -92,6 +92,7 @@ impl LlmPort for MockLlmPort {
                 content,
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(10, 20),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 metadata: std::collections::HashMap::new(),
                 function_call: None,

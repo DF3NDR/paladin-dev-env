@@ -27,6 +27,7 @@ fn sample_response(request_id: Uuid) -> LlmResponse {
         content: "All benchmark migration checks completed successfully.".to_string(),
         finish_reason: FinishReason::Stop,
         usage: TokenUsage::new(58, 24),
+        cost: None,
         created_at: Utc::now(),
         metadata: HashMap::new(),
         function_call: None,

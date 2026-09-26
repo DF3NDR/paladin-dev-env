@@ -301,6 +301,7 @@ impl AnthropicAdapter {
             content,
             finish_reason,
             usage: map_claude_usage(&response.usage),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,

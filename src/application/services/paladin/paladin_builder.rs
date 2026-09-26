@@ -2019,6 +2019,7 @@ mod tests {
                 content: "CREATIVE".to_string(),
                 finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
                 usage: Default::default(),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 function_call: None,
                 metadata: Default::default(),

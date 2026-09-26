@@ -429,6 +429,7 @@ impl VisionCapableLlm for OpenAIAdapter {
                 api_response.usage.prompt_tokens,
                 api_response.usage.completion_tokens,
             ),
+            cost: None,
             created_at: Utc::now(),
             metadata: Default::default(),
             function_call: None,

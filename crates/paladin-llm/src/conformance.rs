@@ -602,6 +602,7 @@ mod tests {
                 content: parsed.content,
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(parsed.usage.prompt_tokens, parsed.usage.completion_tokens),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 metadata: Default::default(),
                 function_call: None,

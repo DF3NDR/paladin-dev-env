@@ -25,6 +25,7 @@ impl LlmPort for MockLlmPort {
             content: "Test response".to_string(),
             model: "test".to_string(),
             usage: TokenUsage::new(10, 20),
+            cost: None,
             finish_reason: FinishReason::Stop,
             created_at: Utc::now(),
             metadata: HashMap::new(),

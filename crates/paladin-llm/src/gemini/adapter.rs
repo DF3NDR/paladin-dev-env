@@ -493,6 +493,7 @@ impl GeminiAdapter {
             content,
             finish_reason,
             usage: map_gemini_usage(&usage),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,

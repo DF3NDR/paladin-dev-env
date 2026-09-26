@@ -201,6 +201,7 @@ impl LlmPort for MockLlmPort {
             content: response_content,
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(150, 200),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,

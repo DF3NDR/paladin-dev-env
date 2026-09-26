@@ -186,6 +186,7 @@ impl LlmPort for MockLlmAdapter {
                 content,
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(10, 20),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
@@ -200,6 +201,7 @@ impl LlmPort for MockLlmAdapter {
                 content: format!("Calling tool: {}", tool_name),
                 finish_reason: FinishReason::FunctionCall,
                 usage: TokenUsage::new(10, 15),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall {
@@ -217,6 +219,7 @@ impl LlmPort for MockLlmAdapter {
                     content,
                     finish_reason: FinishReason::Stop,
                     usage: TokenUsage::new(10, 20),
+                    cost: None,
                     created_at: Utc::now(),
                     metadata: HashMap::new(),
                     function_call: None,

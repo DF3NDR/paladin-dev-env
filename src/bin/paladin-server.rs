@@ -76,6 +76,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     info!("Loading configuration from '{config_path}'");
     let settings = Settings::load_from_file(&config_path)?;
 
+    // Boot-time half of PRICE-01: a bad treasurer.pricing entry (or APP_TREASURER_CURRENCY
+    // override) stops the server here, before any agent, provider or engine is built.
+    settings
+        .get_treasurer_config()
+        .validate()
+        .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
+
     // Build the resident agents and the runtime provisioner from the same config.
     // `build_agent_registry` validates the config first, so misconfiguration fails here
     // with a specific message rather than mid-serve.

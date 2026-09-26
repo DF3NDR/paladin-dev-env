@@ -14,9 +14,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use paladin_core::platform::container::cost::PriceTable;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::user::UserRole;
+use paladin_llm::pricing::with_pricing;
 use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError};
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
@@ -157,11 +159,16 @@ pub(crate) async fn build_agent_with_llm(
 
 /// Build a `(Paladin, executor)` pair from a definition, resolving the provider via the
 /// factory. Shared by config load and runtime provisioning.
+///
+/// `price_table` wraps the resolved provider with [`with_pricing`] (D-09, ADR-0052) BEFORE
+/// `build_agent_with_llm` composes the execution service, outside any fallback composition --
+/// an empty table installs no extra layer at all.
 pub(crate) async fn build_agent(
     def: &AgentDefinition,
     factory: &LlmProviderFactory,
     default_provider: &str,
     breaker: Arc<CircuitBreaker>,
+    price_table: &Arc<PriceTable>,
 ) -> Result<BuiltAgent, HostBuildError> {
     let provider = resolve_provider(def, default_provider);
     let llm = factory
@@ -171,6 +178,7 @@ pub(crate) async fn build_agent(
             provider,
             source,
         })?;
+    let llm = with_pricing(llm, price_table);
     build_agent_with_llm(def, llm, breaker).await
 }
 
@@ -264,9 +272,11 @@ pub fn validate_config(settings: &Settings) -> Result<(), HostBuildError> {
 
 /// Build a populated [`AgentRegistry`] from the `agents` section of `settings`.
 ///
-/// Runs [`validate_config`] first (fail-fast), then constructs each agent via
-/// `build_agent`. A validation failure, an unresolvable provider, or a build failure
-/// aborts with a descriptive [`HostBuildError`] naming the agent.
+/// Runs [`validate_config`] first (fail-fast), then builds the operator's `treasurer.pricing`
+/// table (PRICE-01) -- an invalid price aborts here, before any agent or provider is built --
+/// and constructs each agent via `build_agent`, priced by that table. A validation failure, an
+/// invalid treasurer configuration, an unresolvable provider, or a build failure aborts with a
+/// descriptive [`HostBuildError`] naming the agent (or `"treasurer"` for a pricing failure).
 ///
 /// # Errors
 ///
@@ -277,11 +287,23 @@ pub async fn build_agent_registry(settings: &Settings) -> Result<AgentRegistry, 
     let factory = LlmProviderFactory::new();
     let default_provider = default_provider_name(settings);
     let breaker = default_circuit_breaker();
+    let price_table = Arc::new(settings.get_treasurer_config().price_table().map_err(
+        |reason| HostBuildError::Build {
+            id: "treasurer".to_string(),
+            source: PaladinError::ConfigurationError(reason),
+        },
+    )?);
 
     let registry = AgentRegistry::new();
     for def in &settings.agents {
-        let (paladin, executor, streamer) =
-            build_agent(def, &factory, &default_provider, Arc::clone(&breaker)).await?;
+        let (paladin, executor, streamer) = build_agent(
+            def,
+            &factory,
+            &default_provider,
+            Arc::clone(&breaker),
+            &price_table,
+        )
+        .await?;
         register_built(
             &registry,
             &def.id,
@@ -298,7 +320,13 @@ pub async fn build_agent_registry(settings: &Settings) -> Result<AgentRegistry, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::cost::{CurrencyCode, PriceRow};
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_llm::mock::MockLlmAdapter;
+
+    fn empty_price_table() -> Arc<PriceTable> {
+        Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()))
+    }
 
     fn base(id: &str) -> AgentDefinition {
         AgentDefinition {
@@ -353,11 +381,87 @@ mod tests {
 
         // Note: `(Paladin, Arc<dyn PaladinExecutorPort>)` is not `Debug`, so we match on
         // the result rather than using `expect_err`.
-        let result = build_agent(&def, &factory, "openai", default_circuit_breaker()).await;
+        let result = build_agent(
+            &def,
+            &factory,
+            "openai",
+            default_circuit_breaker(),
+            &empty_price_table(),
+        )
+        .await;
         assert!(
             matches!(result, Err(HostBuildError::Provider { .. })),
             "unknown provider must yield a Provider error"
         );
+    }
+
+    #[tokio::test]
+    async fn build_agent_registry_rejects_invalid_treasurer_price() {
+        let mut settings = Settings::default(); // agents is empty
+        settings.treasurer.pricing.insert(
+            "gpt-4".to_string(),
+            crate::config::PriceRowConfig {
+                prompt: "-1".to_string(),
+                completion: "1.00".to_string(),
+                cache_read: None,
+                cache_write: None,
+                reasoning: None,
+            },
+        );
+
+        let err = build_agent_registry(&settings)
+            .await
+            .err()
+            .expect("an invalid treasurer price must abort registry build");
+        assert!(
+            matches!(err, HostBuildError::Build { .. }),
+            "got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("treasurer.pricing.gpt-4.prompt"),
+            "error must name the offending config path: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn priced_agent_stream_reports_cost() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock: Arc<dyn LlmPort> = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let priced = with_pricing(mock, &table);
+
+        let (paladin, _executor, streamer) =
+            build_agent_with_llm(&base("gpt-4"), priced, default_circuit_breaker())
+                .await
+                .expect("builds");
+        let streamer = streamer.expect("execution service is streaming-capable");
+
+        let mut stream = streamer
+            .execute_stream(&paladin, "hi")
+            .await
+            .expect("stream starts");
+        let metadata = loop {
+            let item = stream.recv().await.expect("stream must emit a final chunk");
+            let chunk = item.expect("chunk must not error");
+            if chunk.is_final {
+                break chunk
+                    .metadata
+                    .expect("the final chunk must carry ChunkMetadata");
+            }
+        };
+
+        let cost = metadata
+            .cost
+            .as_ref()
+            .expect("the exact composition build_agent performs must carry a cost");
+        assert_eq!(cost.nanos(), 22_500_000);
+        assert_eq!(cost.currency().as_str(), "USD");
     }
 
     #[tokio::test]

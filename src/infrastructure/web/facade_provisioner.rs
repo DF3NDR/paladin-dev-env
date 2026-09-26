@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use paladin_core::platform::container::execution_result::PaladinResult;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_llm::pricing::with_pricing;
 use paladin_llm::provider_factory::LlmProviderFactory;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
@@ -20,6 +21,7 @@ use paladin_web::{AgentProvisioner, AgentSpec, ProvisionError, ProvisionedAgent}
 use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
 use crate::config::agents::AgentDefinition;
 use crate::config::settings::Settings;
+use crate::config::treasurer::TreasurerConfig;
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use crate::infrastructure::web::agent_host::{
     HostBuildError, build_agent, default_circuit_breaker, default_provider_name,
@@ -31,21 +33,36 @@ pub struct FacadeProvisioner {
     factory: LlmProviderFactory,
     default_provider: String,
     breaker: Arc<CircuitBreaker>,
+    treasurer: TreasurerConfig,
 }
 
 impl FacadeProvisioner {
     /// Create a provisioner with an explicit default provider and circuit breaker.
+    ///
+    /// The treasurer configuration defaults to [`TreasurerConfig::default()`] (empty pricing
+    /// table) -- use [`FacadeProvisioner::with_treasurer`] to price runtime-provisioned agents.
     pub fn new(default_provider: impl Into<String>, breaker: Arc<CircuitBreaker>) -> Self {
         Self {
             factory: LlmProviderFactory::new(),
             default_provider: default_provider.into(),
             breaker,
+            treasurer: TreasurerConfig::default(),
         }
     }
 
-    /// Create a provisioner whose defaults match the config-load builder for `settings`.
+    /// Create a provisioner whose defaults match the config-load builder for `settings`,
+    /// including its `treasurer.pricing` table (PRICE-01, D-09).
     pub fn from_settings(settings: &Settings) -> Self {
         Self::new(default_provider_name(settings), default_circuit_breaker())
+            .with_treasurer(settings.get_treasurer_config())
+    }
+
+    /// Set the treasurer (pricing) configuration this provisioner's runtime-provisioned
+    /// agents are priced from (D-09). An empty table (the default) installs no pricing
+    /// decorator on any agent this provisioner builds.
+    pub fn with_treasurer(mut self, config: TreasurerConfig) -> Self {
+        self.treasurer = config;
+        self
     }
 }
 
@@ -88,11 +105,20 @@ impl PaladinPort for EngineExecutionPort {
 ///
 /// # Errors
 ///
-/// Returns a [`HostBuildError::Provider`] if the resolved default provider cannot be
-/// constructed (an unknown provider name, or a missing API key).
+/// Returns a [`HostBuildError::Build`] naming `treasurer.pricing` if the operator's
+/// `treasurer.pricing` table is invalid (checked FIRST, before any provider is resolved, so an
+/// invalid price fails hermetically). Returns a [`HostBuildError::Provider`] if the resolved
+/// default provider cannot be constructed (an unknown provider name, or a missing API key).
 pub fn paladin_port_from_settings(
     settings: &Settings,
 ) -> Result<Arc<dyn PaladinPort>, HostBuildError> {
+    let price_table = Arc::new(settings.get_treasurer_config().price_table().map_err(
+        |reason| HostBuildError::Build {
+            id: "run-engine".to_string(),
+            source: PaladinError::ConfigurationError(reason),
+        },
+    )?);
+
     let factory = LlmProviderFactory::new();
     let provider = default_provider_name(settings);
     let llm = factory
@@ -102,6 +128,7 @@ pub fn paladin_port_from_settings(
             provider,
             source,
         })?;
+    let llm = with_pricing(llm, &price_table);
     let service = Arc::new(PaladinExecutionService::new(
         llm,
         default_circuit_breaker(),
@@ -137,12 +164,18 @@ fn spec_to_definition(spec: &AgentSpec) -> AgentDefinition {
 #[async_trait]
 impl AgentProvisioner for FacadeProvisioner {
     async fn provision(&self, spec: &AgentSpec) -> Result<ProvisionedAgent, ProvisionError> {
+        let price_table = Arc::new(
+            self.treasurer
+                .price_table()
+                .map_err(|reason| ProvisionError::Failed(format!("invalid treasurer configuration: {reason}")))?,
+        );
         let def = spec_to_definition(spec);
         let (paladin, executor, streamer) = build_agent(
             &def,
             &self.factory,
             &self.default_provider,
             Arc::clone(&self.breaker),
+            &price_table,
         )
         .await
         .map_err(|err| match &err {
@@ -211,6 +244,63 @@ mod tests {
             matches!(err, HostBuildError::Provider { .. }),
             "unknown provider must map to HostBuildError::Provider, got {err:?}"
         );
+    }
+
+    fn invalid_treasurer() -> TreasurerConfig {
+        let mut treasurer = TreasurerConfig::default();
+        treasurer.pricing.insert(
+            "gpt-4".to_string(),
+            crate::config::PriceRowConfig {
+                prompt: "-1".to_string(),
+                completion: "1.00".to_string(),
+                cache_read: None,
+                cache_write: None,
+                reasoning: None,
+            },
+        );
+        treasurer
+    }
+
+    #[test]
+    fn paladin_port_from_settings_rejects_invalid_treasurer_price() {
+        // Checked BEFORE any provider is resolved, so this fails hermetically even with no
+        // API keys and no default provider configured beyond Settings::default().
+        let settings = Settings {
+            treasurer: invalid_treasurer(),
+            ..Settings::default()
+        };
+
+        let err = paladin_port_from_settings(&settings)
+            .err()
+            .expect("invalid treasurer price must error");
+        assert!(
+            matches!(err, HostBuildError::Build { .. }),
+            "got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("treasurer.pricing.gpt-4.prompt"),
+            "error must name the offending config path: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn provisioner_rejects_invalid_treasurer_price() {
+        let provisioner = FacadeProvisioner::new("openai", default_circuit_breaker())
+            .with_treasurer(invalid_treasurer());
+
+        // `ProvisionedAgent` is not `Debug` (it carries a `Paladin`/`Arc<dyn ...>`), so match
+        // on the result rather than `expect`/`unwrap` the whole `Result`.
+        let result = provisioner.provision(&sample_spec("x")).await;
+        assert!(
+            matches!(result, Err(ProvisionError::Failed(_))),
+            "invalid treasurer price must map to ProvisionError::Failed"
+        );
+        if let Err(ProvisionError::Failed(msg)) = result {
+            assert!(
+                msg.contains("invalid treasurer configuration"),
+                "got {msg:?}"
+            );
+        }
     }
 
     #[tokio::test]

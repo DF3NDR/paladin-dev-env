@@ -413,10 +413,7 @@ mod tests {
             .await
             .err()
             .expect("an invalid treasurer price must abort registry build");
-        assert!(
-            matches!(err, HostBuildError::Build { .. }),
-            "got {err:?}"
-        );
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
         assert!(
             err.to_string().contains("treasurer.pricing.gpt-4.prompt"),
             "error must name the offending config path: {err}"

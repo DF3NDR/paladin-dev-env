@@ -93,9 +93,7 @@ fn parse_price_nanos_per_million(raw: &str) -> Result<i64, PriceParseError> {
     // resolve to the same nano-unit remainder. `padded` is always exactly nine ASCII digits by
     // construction, so this cannot fail to parse.
     let padded = format!("{frac_digits:0<9}");
-    let frac_value: i64 = padded
-        .parse()
-        .map_err(|_| PriceParseError::Malformed)?;
+    let frac_value: i64 = padded.parse().map_err(|_| PriceParseError::Malformed)?;
 
     let scaled_int = int_value
         .checked_mul(1_000_000_000)
@@ -397,10 +395,7 @@ mod tests {
 
         let overflow = TreasurerConfig {
             currency: "USD".to_string(),
-            pricing: BTreeMap::from([(
-                "gpt-4".to_string(),
-                row("9223372036.854775808", "1.00"),
-            )]),
+            pricing: BTreeMap::from([("gpt-4".to_string(), row("9223372036.854775808", "1.00"))]),
         };
         let err = overflow.price_table().expect_err("should be rejected");
         assert!(err.contains("largest representable price"), "{err}");

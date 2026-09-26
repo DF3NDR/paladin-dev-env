@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Operator-configured treasurer price table, wired into both production run paths (PRICE-01,
+  PRICE-03; Phase 38 plan 38-03).** A new `treasurer:` config section (`Settings.treasurer:
+  TreasurerConfig`, `Settings::get_treasurer_config`) lets an operator write a per-model price
+  table as decimal strings per 1M tokens (`treasurer.pricing.<model>.{prompt,completion,
+  cache_read,cache_write,reasoning}`), validated at boot with a path-precise error naming the
+  offending model and axis — a hand-rolled exact-integer parser (no `rust_decimal`, no `f32`/
+  `f64`, no new dependency) rejects negative, malformed, too-fine (>9 decimal places) and
+  overflowing prices. Omitting the section changes nothing: the default is an empty table in
+  `"USD"`, and `paladin-server` boots identically to a config with no `treasurer:` key. Only
+  `treasurer.currency` has an env override (`APP_TREASURER_CURRENCY`); the `pricing` map is
+  config-file only. `build_agent_registry`, `FacadeProvisioner` (`POST /agents`, new
+  `with_treasurer` builder) and `paladin_port_from_settings` (the run engine) all build this
+  table and wrap their resolved `LlmPort` with `paladin_llm::pricing::with_pricing` before any
+  call is made; an invalid price aborts each build path — and stops `paladin-server` at boot,
+  before any agent or provider is constructed — with an error naming `treasurer.pricing`.
+  `paladin_core::platform::container::cost` is now re-exported from the facade's `core::platform`
+  container list. Purely additive — no `MIGRATION.md` §9.2 row (D-00g).
+
 - **Treasurer cost arithmetic and the streamed cost producer (PRICE-02, PRICE-03; Phase 38 plan
   38-02).** `paladin-core::platform::container::cost` adds `Cost` (`i64` nano-unit amount plus a
   validated `CurrencyCode`), `PriceRow`/`PriceTable` (nano-units per 1M tokens, keyed by bare

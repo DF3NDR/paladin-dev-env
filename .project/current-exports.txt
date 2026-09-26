@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-09-25 17:36:51 UTC
+# Public API Surface - Generated 2026-09-26 01:00:23 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -4926,6 +4926,8 @@ impl paladin::config::env_utils::EnvOverridable for paladin::config::schedules::
 pub fn paladin::config::schedules::SchedulesConfig::apply_env_overrides(&mut self)
 impl paladin::config::env_utils::EnvOverridable for paladin::config::trace::TraceConfig
 pub fn paladin::config::trace::TraceConfig::apply_env_overrides(&mut self)
+impl paladin::config::env_utils::EnvOverridable for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::apply_env_overrides(&mut self)
 impl paladin::config::env_utils::EnvOverridable for paladin::config::waypoint_retention::WaypointRetentionConfig
 pub fn paladin::config::waypoint_retention::WaypointRetentionConfig::apply_env_overrides(&mut self)
 impl paladin::config::env_utils::EnvOverridable for paladin::config::waypoint_store::WaypointStoreConfig
@@ -5378,6 +5380,7 @@ pub paladin::config::settings::Settings::server: paladin::config::web_server::Se
 pub paladin::config::settings::Settings::sources: alloc::vec::Vec<paladin::config::web_server::SourceConfig>
 pub paladin::config::settings::Settings::timeouts: core::option::Option<paladin::config::agents::AgentTimeoutsConfig>
 pub paladin::config::settings::Settings::trace: paladin::config::trace::TraceConfig
+pub paladin::config::settings::Settings::treasurer: paladin::config::treasurer::TreasurerConfig
 pub paladin::config::settings::Settings::vision: core::option::Option<paladin_llm::config::vision::VisionConfig>
 pub paladin::config::settings::Settings::web_server: paladin::config::web_server::WebServerConfig
 impl paladin::config::settings::Settings
@@ -5388,6 +5391,7 @@ pub fn paladin::config::settings::Settings::get_garrison_config(&self) -> paladi
 pub fn paladin::config::settings::Settings::get_herald_config(&self) -> paladin::config::herald::HeraldConfig
 pub fn paladin::config::settings::Settings::get_queue_config(&self) -> paladin::config::queue::QueueConfig
 pub fn paladin::config::settings::Settings::get_sanctum_config(&self) -> paladin_memory::config::sanctum::SanctumConfig
+pub fn paladin::config::settings::Settings::get_treasurer_config(&self) -> paladin::config::treasurer::TreasurerConfig
 pub fn paladin::config::settings::Settings::get_vision_config(&self) -> paladin_llm::config::vision::VisionConfig
 pub fn paladin::config::settings::Settings::load_from_file(&str) -> core::result::Result<Self, alloc::boxed::Box<dyn core::error::Error>>
 pub fn paladin::config::settings::Settings::new() -> core::result::Result<Self, config::error::ConfigError>
@@ -5554,6 +5558,59 @@ impl core::marker::Unpin for paladin::config::trace::TraceConfig
 impl core::marker::UnsafeUnpin for paladin::config::trace::TraceConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::trace::TraceConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::trace::TraceConfig
+pub mod paladin::config::treasurer
+pub struct paladin::config::treasurer::PriceRowConfig
+pub paladin::config::treasurer::PriceRowConfig::cache_read: core::option::Option<alloc::string::String>
+pub paladin::config::treasurer::PriceRowConfig::cache_write: core::option::Option<alloc::string::String>
+pub paladin::config::treasurer::PriceRowConfig::completion: alloc::string::String
+pub paladin::config::treasurer::PriceRowConfig::prompt: alloc::string::String
+pub paladin::config::treasurer::PriceRowConfig::reasoning: core::option::Option<alloc::string::String>
+impl core::clone::Clone for paladin::config::treasurer::PriceRowConfig
+pub fn paladin::config::treasurer::PriceRowConfig::clone(&self) -> paladin::config::treasurer::PriceRowConfig
+impl core::cmp::PartialEq for paladin::config::treasurer::PriceRowConfig
+pub fn paladin::config::treasurer::PriceRowConfig::eq(&self, &paladin::config::treasurer::PriceRowConfig) -> bool
+impl core::fmt::Debug for paladin::config::treasurer::PriceRowConfig
+pub fn paladin::config::treasurer::PriceRowConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::treasurer::PriceRowConfig
+impl serde_core::ser::Serialize for paladin::config::treasurer::PriceRowConfig
+pub fn paladin::config::treasurer::PriceRowConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::treasurer::PriceRowConfig
+pub fn paladin::config::treasurer::PriceRowConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::treasurer::PriceRowConfig
+impl core::marker::Send for paladin::config::treasurer::PriceRowConfig
+impl core::marker::Sync for paladin::config::treasurer::PriceRowConfig
+impl core::marker::Unpin for paladin::config::treasurer::PriceRowConfig
+impl core::marker::UnsafeUnpin for paladin::config::treasurer::PriceRowConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::PriceRowConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::PriceRowConfig
+pub struct paladin::config::treasurer::TreasurerConfig
+pub paladin::config::treasurer::TreasurerConfig::currency: alloc::string::String
+pub paladin::config::treasurer::TreasurerConfig::pricing: alloc::collections::btree::map::BTreeMap<alloc::string::String, paladin::config::treasurer::PriceRowConfig>
+impl paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::price_table(&self) -> core::result::Result<paladin_core::platform::container::cost::PriceTable, alloc::string::String>
+pub fn paladin::config::treasurer::TreasurerConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::clone(&self) -> paladin::config::treasurer::TreasurerConfig
+impl core::cmp::PartialEq for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::eq(&self, &paladin::config::treasurer::TreasurerConfig) -> bool
+impl core::default::Default for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::treasurer::TreasurerConfig
+impl paladin::config::env_utils::EnvOverridable for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::apply_env_overrides(&mut self)
+impl serde_core::ser::Serialize for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::treasurer::TreasurerConfig where paladin::config::treasurer::TreasurerConfig: core::default::Default
+pub fn paladin::config::treasurer::TreasurerConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::treasurer::TreasurerConfig
+impl core::marker::Send for paladin::config::treasurer::TreasurerConfig
+impl core::marker::Sync for paladin::config::treasurer::TreasurerConfig
+impl core::marker::Unpin for paladin::config::treasurer::TreasurerConfig
+impl core::marker::UnsafeUnpin for paladin::config::treasurer::TreasurerConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::TreasurerConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::TreasurerConfig
 pub mod paladin::config::user_config
 pub struct paladin::config::user_config::UserServiceFactory
 impl paladin::config::user_config::UserServiceFactory
@@ -6383,6 +6440,30 @@ impl core::marker::Unpin for paladin::config::trace::OtelConfig
 impl core::marker::UnsafeUnpin for paladin::config::trace::OtelConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::trace::OtelConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::trace::OtelConfig
+pub struct paladin::config::PriceRowConfig
+pub paladin::config::PriceRowConfig::cache_read: core::option::Option<alloc::string::String>
+pub paladin::config::PriceRowConfig::cache_write: core::option::Option<alloc::string::String>
+pub paladin::config::PriceRowConfig::completion: alloc::string::String
+pub paladin::config::PriceRowConfig::prompt: alloc::string::String
+pub paladin::config::PriceRowConfig::reasoning: core::option::Option<alloc::string::String>
+impl core::clone::Clone for paladin::config::treasurer::PriceRowConfig
+pub fn paladin::config::treasurer::PriceRowConfig::clone(&self) -> paladin::config::treasurer::PriceRowConfig
+impl core::cmp::PartialEq for paladin::config::treasurer::PriceRowConfig
+pub fn paladin::config::treasurer::PriceRowConfig::eq(&self, &paladin::config::treasurer::PriceRowConfig) -> bool
+impl core::fmt::Debug for paladin::config::treasurer::PriceRowConfig
+pub fn paladin::config::treasurer::PriceRowConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::treasurer::PriceRowConfig
+impl serde_core::ser::Serialize for paladin::config::treasurer::PriceRowConfig
+pub fn paladin::config::treasurer::PriceRowConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::treasurer::PriceRowConfig
+pub fn paladin::config::treasurer::PriceRowConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::treasurer::PriceRowConfig
+impl core::marker::Send for paladin::config::treasurer::PriceRowConfig
+impl core::marker::Sync for paladin::config::treasurer::PriceRowConfig
+impl core::marker::Unpin for paladin::config::treasurer::PriceRowConfig
+impl core::marker::UnsafeUnpin for paladin::config::treasurer::PriceRowConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::PriceRowConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::PriceRowConfig
 pub struct paladin::config::QueueConfig
 pub paladin::config::QueueConfig::connection_timeout: core::option::Option<u64>
 pub paladin::config::QueueConfig::enable_priority_queues: core::option::Option<bool>
@@ -6636,6 +6717,7 @@ pub paladin::config::Settings::server: paladin::config::web_server::ServerConfig
 pub paladin::config::Settings::sources: alloc::vec::Vec<paladin::config::web_server::SourceConfig>
 pub paladin::config::Settings::timeouts: core::option::Option<paladin::config::agents::AgentTimeoutsConfig>
 pub paladin::config::Settings::trace: paladin::config::trace::TraceConfig
+pub paladin::config::Settings::treasurer: paladin::config::treasurer::TreasurerConfig
 pub paladin::config::Settings::vision: core::option::Option<paladin_llm::config::vision::VisionConfig>
 pub paladin::config::Settings::web_server: paladin::config::web_server::WebServerConfig
 impl paladin::config::settings::Settings
@@ -6646,6 +6728,7 @@ pub fn paladin::config::settings::Settings::get_garrison_config(&self) -> paladi
 pub fn paladin::config::settings::Settings::get_herald_config(&self) -> paladin::config::herald::HeraldConfig
 pub fn paladin::config::settings::Settings::get_queue_config(&self) -> paladin::config::queue::QueueConfig
 pub fn paladin::config::settings::Settings::get_sanctum_config(&self) -> paladin_memory::config::sanctum::SanctumConfig
+pub fn paladin::config::settings::Settings::get_treasurer_config(&self) -> paladin::config::treasurer::TreasurerConfig
 pub fn paladin::config::settings::Settings::get_vision_config(&self) -> paladin_llm::config::vision::VisionConfig
 pub fn paladin::config::settings::Settings::load_from_file(&str) -> core::result::Result<Self, alloc::boxed::Box<dyn core::error::Error>>
 pub fn paladin::config::settings::Settings::new() -> core::result::Result<Self, config::error::ConfigError>
@@ -6742,6 +6825,34 @@ impl core::marker::Unpin for paladin::config::trace::TraceConfig
 impl core::marker::UnsafeUnpin for paladin::config::trace::TraceConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::trace::TraceConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::trace::TraceConfig
+pub struct paladin::config::TreasurerConfig
+pub paladin::config::TreasurerConfig::currency: alloc::string::String
+pub paladin::config::TreasurerConfig::pricing: alloc::collections::btree::map::BTreeMap<alloc::string::String, paladin::config::treasurer::PriceRowConfig>
+impl paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::price_table(&self) -> core::result::Result<paladin_core::platform::container::cost::PriceTable, alloc::string::String>
+pub fn paladin::config::treasurer::TreasurerConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::clone(&self) -> paladin::config::treasurer::TreasurerConfig
+impl core::cmp::PartialEq for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::eq(&self, &paladin::config::treasurer::TreasurerConfig) -> bool
+impl core::default::Default for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::treasurer::TreasurerConfig
+impl paladin::config::env_utils::EnvOverridable for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::apply_env_overrides(&mut self)
+impl serde_core::ser::Serialize for paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::treasurer::TreasurerConfig where paladin::config::treasurer::TreasurerConfig: core::default::Default
+pub fn paladin::config::treasurer::TreasurerConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::treasurer::TreasurerConfig
+impl core::marker::Send for paladin::config::treasurer::TreasurerConfig
+impl core::marker::Sync for paladin::config::treasurer::TreasurerConfig
+impl core::marker::Unpin for paladin::config::treasurer::TreasurerConfig
+impl core::marker::UnsafeUnpin for paladin::config::treasurer::TreasurerConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::TreasurerConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::TreasurerConfig
 pub struct paladin::config::WaypointRetentionConfig
 pub paladin::config::WaypointRetentionConfig::enabled: bool
 pub paladin::config::WaypointRetentionConfig::max_age_days: core::option::Option<u32>
@@ -6881,6 +6992,7 @@ pub use paladin::core::platform::container::citadel_error
 pub use paladin::core::platform::container::comment
 pub use paladin::core::platform::container::content
 pub use paladin::core::platform::container::content_list
+pub use paladin::core::platform::container::cost
 pub use paladin::core::platform::container::document
 pub use paladin::core::platform::container::execution_result
 pub use paladin::core::platform::container::garrison
@@ -7922,4 +8034,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 3960
+Total public items: 4013

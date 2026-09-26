@@ -164,11 +164,9 @@ fn spec_to_definition(spec: &AgentSpec) -> AgentDefinition {
 #[async_trait]
 impl AgentProvisioner for FacadeProvisioner {
     async fn provision(&self, spec: &AgentSpec) -> Result<ProvisionedAgent, ProvisionError> {
-        let price_table = Arc::new(
-            self.treasurer
-                .price_table()
-                .map_err(|reason| ProvisionError::Failed(format!("invalid treasurer configuration: {reason}")))?,
-        );
+        let price_table = Arc::new(self.treasurer.price_table().map_err(|reason| {
+            ProvisionError::Failed(format!("invalid treasurer configuration: {reason}"))
+        })?);
         let def = spec_to_definition(spec);
         let (paladin, executor, streamer) = build_agent(
             &def,
@@ -273,10 +271,7 @@ mod tests {
         let err = paladin_port_from_settings(&settings)
             .err()
             .expect("invalid treasurer price must error");
-        assert!(
-            matches!(err, HostBuildError::Build { .. }),
-            "got {err:?}"
-        );
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
         assert!(
             err.to_string().contains("treasurer.pricing.gpt-4.prompt"),
             "error must name the offending config path: {err}"

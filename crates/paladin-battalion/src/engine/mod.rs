@@ -2913,6 +2913,7 @@ mod tests {
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
     use paladin_core::platform::container::directive::{Directive, MusterTask, NextStep};
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_core::platform::container::parley::{
@@ -3504,6 +3505,156 @@ mod tests {
         assert_eq!(run_usage.cache_read_tokens, Some(100));
         assert_eq!(run_usage.cache_write_tokens, Some(50));
         assert_eq!(run_usage.reasoning_tokens, Some(207));
+    }
+
+    /// Plan 38-07 (D-10): each Paladin attempt's `NodeFinished.cost` is that
+    /// attempt's own `PaladinResult.cost`; a non-Paladin (`Function`) node's
+    /// is `None`; `RunFinished.cost` is the sum of the two priced Paladin
+    /// nodes -- end-to-end through the engine's Paladin-attempt bridge.
+    #[tokio::test]
+    async fn run_finished_cost_sums_priced_paladin_nodes() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let out = FieldName::new("out").unwrap();
+        let fn_out = FieldName::new("fn_out").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(out.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(fn_out.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        let fn_node = NodeId::new("func");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(make_paladin("first"), InputMapping::new("go"), out.clone()),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(make_paladin("second"), InputMapping::new("go"), out),
+        );
+        graph.add_node(
+            fn_node.clone(),
+            NodeSpec::Function(CountingFunctionNode::fixed(fn_out, serde_json::json!("v"))),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+        graph.add_entry(fn_node.clone());
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "first",
+            "done",
+            TokenUsage::new(10, 5),
+            Some(Cost::new(10_000, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "second",
+            "done",
+            TokenUsage::new(20, 10),
+            Some(Cost::new(32_500, usd.clone())),
+        );
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store.clone()).with_trace_sink(sink.clone());
+
+        let thread = ThreadId::new("cost-sums-priced-nodes").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        let finished_cost_for = |node: &NodeId| -> Option<Cost> {
+            events
+                .iter()
+                .find_map(|r| match &r.event {
+                    TraceEvent::NodeFinished { node_id, cost, .. } if node_id == node => {
+                        Some(cost.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("NodeFinished for {node:?} present"))
+        };
+        assert_eq!(finished_cost_for(&n1), Some(Cost::new(10_000, usd.clone())));
+        assert_eq!(finished_cost_for(&n2), Some(Cost::new(32_500, usd.clone())));
+        assert_eq!(finished_cost_for(&fn_node), None);
+
+        let run_cost = events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { cost, .. } => Some(cost.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(run_cost, Some(Cost::new(42_500, usd)));
+    }
+
+    /// Plan 38-07 (D-10, D-00c): when one of two Paladin nodes reports usage
+    /// but no cost, the run's `RunFinished.cost` is `None`, never a partial
+    /// sum of just the priced node.
+    #[tokio::test]
+    async fn run_finished_cost_is_none_when_a_paladin_node_is_unpriced() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(make_paladin("first"), InputMapping::new("go"), out.clone()),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(make_paladin("second"), InputMapping::new("go"), out),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "first",
+            "done",
+            TokenUsage::new(10, 5),
+            Some(Cost::new(10_000, usd)),
+        );
+        port.set_output_with_usage_and_cost("second", "done", TokenUsage::new(5, 5), None);
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store.clone()).with_trace_sink(sink.clone());
+
+        let thread = ThreadId::new("cost-none-when-unpriced").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        let run_cost = events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { cost, .. } => Some(cost.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(run_cost, None);
     }
 
     /// A run with zero Paladin nodes at all (a plain `Function` node)

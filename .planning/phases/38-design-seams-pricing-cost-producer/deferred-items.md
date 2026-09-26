@@ -6,6 +6,14 @@ by the task that found them.
 
 ## Found during 38-04 (Task 1/2 verification)
 
+**Resolved by 38-09 (Task 2, phase closeout — `make doc-check`/`make clean-code` gate).** The
+three `cost.rs` links below, plus two more discovered by 38-09's own full-gate-suite run
+(`herald.rs`'s `from_run_finished` doc linking to `TraceEvent::RunFinished` with no `use`, and
+`worker.rs`'s `with_herald` doc linking to the two private items `run_model_label` and
+`engine_factory`, both introduced by 38-08), were fixed in 38-09's Task 2 commit by switching to
+fully-qualified paths or plain code spans. `cargo doc --workspace --no-deps` now reports zero
+warnings.
+
 - **Pre-existing rustdoc `broken_intra_doc_links` warnings in `cost.rs`'s module doc comment**
   (introduced by plan 38-02, not touched by 38-04). `cargo doc --workspace --no-deps` reports:
   ```

@@ -740,6 +740,61 @@ mod tests {
         assert_eq!(meta["total_tokens"], meta["usage"]["total_tokens"]);
     }
 
+    // --- PRICE-03 / D-04: currency sibling field beside cost_estimate ------
+
+    #[test]
+    fn finalize_stream_emits_currency_beside_cost_estimate() {
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = JsonHerald::new();
+        let cost = Cost::new(45_000_000, CurrencyCode::new("USD").unwrap());
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("gpt-4".to_string())
+            .token_usage(TokenUsage::new(1_000, 2_000))
+            .cost(&cost)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+        let parsed: Value = serde_json::from_str(formatted.trim_end()).unwrap();
+
+        assert_eq!(parsed["cost_estimate"], 0.045);
+        assert_eq!(parsed["currency"], "USD");
+    }
+
+    #[test]
+    fn finalize_stream_unpriced_has_null_currency() {
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = JsonHerald::new();
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("gpt-4".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .duration_ms(1234)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+        let parsed: Value = serde_json::from_str(formatted.trim_end()).unwrap();
+
+        assert!(parsed["cost_estimate"].is_null());
+        assert!(parsed["currency"].is_null());
+
+        // Every pre-existing key is still present.
+        assert_eq!(parsed["type"], "metadata");
+        assert!(parsed["execution_id"].is_string());
+        assert_eq!(parsed["duration_ms"], 1234);
+        assert_eq!(parsed["model_used"], "gpt-4");
+        assert!(parsed["usage"].is_object());
+        assert_eq!(parsed["total_tokens"], 500);
+        assert!(parsed["timestamp"].is_string());
+    }
+
     // --- ACCT-04 / D-21: stable six-key usage object -----------------------
 
     #[test]

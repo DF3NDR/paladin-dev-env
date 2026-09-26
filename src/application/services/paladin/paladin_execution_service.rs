@@ -1293,6 +1293,12 @@ impl PaladinExecutionService {
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let mut usage = paladin_core::platform::container::token_usage::TokenUsage::default();
+        // D-10: cost rides beside usage everywhere usage travels -- one
+        // `CostTally` per run, folded from every model call's `LlmResponse.cost`
+        // at the exact point `usage` accumulates that call's `TokenUsage`
+        // (below). `None` propagates: if any call in this run was unpriced,
+        // the run's cost is `None`, never a partial sum (D-00c).
+        let mut cost_tally = paladin_core::platform::container::cost::CostTally::new();
         let mut accumulated_output = String::new();
         let mut _retrieval_latency_ms = 0u64;
         let mut _memories_retrieved_count = 0usize;
@@ -1544,6 +1550,7 @@ impl PaladinExecutionService {
             // cache/reasoning sub-counts merge under the same saturating
             // rule every other accumulator in the tree uses.
             usage += response.usage.clone();
+            cost_tally.record_call(response.cost.as_ref());
             middleware_cx.cumulative_tokens = usage.total_tokens;
             if let Some(provider) = response.metadata.get(SERVED_BY_METADATA_KEY) {
                 served_by = Some(provider.clone());
@@ -1576,7 +1583,7 @@ impl PaladinExecutionService {
                 return Ok(PaladinResult {
                     output: accumulated_output,
                     usage: usage.clone(),
-                    cost: None,
+                    cost: cost_tally.total(),
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     loop_count: loop_num,
                     stop_reason: final_result.stop_reason,
@@ -1863,7 +1870,7 @@ impl PaladinExecutionService {
                 return Ok(PaladinResult {
                     output: accumulated_output,
                     usage: usage.clone(),
-                    cost: None,
+                    cost: cost_tally.total(),
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     loop_count: loop_num,
                     stop_reason: StopReason::MaxLoops,
@@ -1891,7 +1898,7 @@ impl PaladinExecutionService {
         Ok(PaladinResult {
             output: accumulated_output,
             usage: usage.clone(),
-            cost: None,
+            cost: cost_tally.total(),
             execution_time_ms: start_time.elapsed().as_millis() as u64,
             loop_count: paladin.node.max_loops.as_u32(),
             stop_reason: StopReason::Completed,
@@ -3126,6 +3133,7 @@ impl PaladinExecutionService {
         Ok(PaladinResult {
             output: response.content,
             usage: response.usage.clone(),
+            cost: response.cost.clone(),
             loop_count: call_num,
             stop_reason: StopReason::Completed,
             ..Default::default()

@@ -145,6 +145,28 @@ Phase 37 plans; 2 open artifacts acknowledged — both already deferred by Phase
 entry points with `# Examples` doctests, `WINDOWS.md` `open_count: 0`, MSRV 1.88 measured. Full
 record: `MILESTONES.md`. **Next: `/gsd-new-milestone`** — new phases start at Phase 38.
 
+**Phase 38 complete (2026-09-26)** — design-seams-pricing-cost-producer, the first phase of
+milestone v0.11.0 "Treasurer Spend Governance" (PRICE-01..03; 9 plans in 6 waves, run
+sequentially on the main checkout). On record: ADR-0052 (mid-run Treasurer enforcement attaches as
+a `PricingLlmAdapter` decorator at the `LlmPort` boundary on both run paths, with the halt raised
+at the engine superstep boundary and the agent loop's `TokenBudget` cutoff; `build_chain` stays
+unwired for the engine) and ADR-0053 (append-only, derive-on-read ledger with reserve/settle/
+release row kinds, i64 nano-unit amounts and the `(run_id, superstep, attempt)` settlement key).
+In the tree: the `treasurer:` config section with exact decimal parsing and boot-time validation
+(`TreasurerConfig`, per-1M-token prices, one ISO 4217 currency, empty by default); the `Cost` /
+`PriceTable` / `CostTally` fixed-point value types (i128 intermediates, single half-up rounding,
+saturation, `None` never `0`); additive `cost: Option<Cost>` on `LlmResponse`, `PaladinResult`,
+`TraceEvent::NodeFinished` and `RunFinished`; `TraceDispatcher::total_cost()`; currency-aware
+cost in the markdown, JSON and table heralds; and a production `ExecutionMetadata` producer on
+both paths (`ExecutionMetadata::from_run_finished` + `HeraldTraceSink` for the engine, the agent
+loop's streamed completion) with the `cost_estimate` rustdoc now reading "produced by the
+Treasurer". Public-API changes registered in `MIGRATION.md` §9.2 and the semver-checks allowlist,
+CHANGELOG entries written, `.project/current-exports.txt` refreshed (4025 items). Verification
+`passed` 4/4; every post-wave `make build` + `make test` gate green (3780 tests at close); code
+review found one critical (an early-return path dropping accumulated cost) fixed in-phase, with
+two warnings and one info left advisory in `38-REVIEW.md`. Next: `/gsd-discuss-phase 39` (Spend
+Ledger).
+
 **Phase 36.1 complete (2026-09-18)** — deferred-items-closure, the inserted Release Readiness phase (CURR-16…21; 14 plans in 6 waves, run sequentially on the main checkout): every unowned entry in the Phase 31, 32, 34, 35 and 36 `deferred-items.md` registers, ledger rows 36-38 and the two `todos/pending/` files is now fixed, waived with a written reason, or re-homed with an owner and a 2026-10-16 re-check date, and `WINDOWS.md` reads `open_count: 0` (55 rows; rows 40-55 minted by this phase, row 39 an accidental executor row waived on the record). In the tree: both `ToolErrorMode::FailRun` arms now sanitize the `ArmamentFailed` reason (row 38); the `cli_isolation` guard asserts the manifest's default feature list and passes under `--all-features`; all 101 public-API entry points carry a `# Examples` doctest (19 added, `?`-style) and `make check-api-examples` gates `clean-code`, pre-push and the CI lint job; the six `docs/src` prose defects are closed and the docs gate is green; PROJECT.md's examples figures, ADR-0033's eight kept rustdoc suppressions, the RustFS v2 line (FUT-10) and the CHANGELOG are recorded. Verification `passed` 6/6 (re-verified after the four code-review fixes), CI run 35329107346 green on every required job (coverage 90.44 % lines), `make api-surface` unchanged at 3959 items. Next: `/gsd-plan-phase 37` (v0.10.0 Crate Release); `/gsd-secure-phase 36.1` and `/gsd-validate-phase 36.1` advisory.
 
 **Phase 34 complete (2026-09-17)** — documentation-currency-audit, the first Release Readiness phase
@@ -1831,6 +1853,12 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-09-26 after **Phase 38: Design Seams & Pricing/Cost Producer** completed —
+the first v0.11.0 phase: ADR-0052/ADR-0053 recorded, the `treasurer:` price table, the `Cost`
+fixed-point arithmetic, the `PricingLlmAdapter` decorator on both run paths, cost carriers on the
+response/result/trace types, herald currency rendering and the `ExecutionMetadata` producer
+shipped; verification `passed` 4/4, one code-review critical fixed in-phase.*
+
 *Last updated: 2026-09-01 after **milestone v0.10.0 "Durable Agent Execution Runtime" started** —
 scope taken from the approved design corpus in `.project/v0.10.0/` (program overview, seven epic
 PRDs `ENG`/`CF`/`HITL`/`FT`/`RT`/`PLAT`/`OBS` carrying ~135 FRs, traceability matrix). 44 active

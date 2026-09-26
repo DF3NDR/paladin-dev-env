@@ -572,6 +572,128 @@ impl ExecutionMetadata {
             None => format!("{cost:.4}"),
         })
     }
+
+    /// Build [`ExecutionMetadata`] from a completed run's [`TraceEvent::RunFinished`]
+    /// (D-12): the engine-path producer that hands the Treasurer's per-run cost — and every
+    /// other run-level figure a `TraceDispatcher` already accumulated — to
+    /// [`Herald::finalize_stream`]. This is the engine's counterpart to the agent loop's own
+    /// streamed-completion producer (`PaladinExecutionService::stream_execution_metadata`,
+    /// 38-02): a `TraceSink` (`HeraldTraceSink`, 38-08) calls this once per engine dispatch
+    /// (`start`, `resume`, `resume_with`, `fork`), covering that dispatch's own calls.
+    ///
+    /// Returns `None` for any [`TraceRecord`](crate::platform::container::trace::TraceRecord)
+    /// whose event is not [`TraceEvent::RunFinished`](crate::platform::container::trace::TraceEvent::RunFinished) —
+    /// a `HeraldTraceSink` calls this on every record it sees and only acts on `Some`.
+    ///
+    /// `execution_id` is parsed from the record's `run_id` (a UUID string); a fresh
+    /// `Uuid::new_v4()` stands in when there is no run id or it fails to parse (a bare engine
+    /// with no Platform API run wrapping it has no run identity). `end_time` is the record's own
+    /// `at` timestamp; `start_time` is derived by subtracting `duration_ms` (converted to a
+    /// [`chrono::Duration`] with a saturating `u64` -> `i64` conversion, so an implausibly large
+    /// duration never panics). `token_usage` and, when priced, `cost` come straight from the
+    /// event through [`ExecutionMetadataBuilder::cost`] — the single display-edge conversion
+    /// (D-03) — so an unpriced run's `cost_estimate` stays `None`, never a fabricated zero
+    /// (D-00c). `error_count` is `1` for [`RunFinishStatus::Failed`](crate::platform::container::trace::RunFinishStatus::Failed),
+    /// `0` otherwise. The record's `thread_id` and the status's own serialized name are recorded
+    /// under the `thread_id`/`run_status` metadata keys for callers that want them.
+    ///
+    /// Every field the builder requires is set from the event, so `build()` cannot fail here —
+    /// this always returns `Some` for an actual `RunFinished` record.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::run::RunId;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent, TraceRecord};
+    /// use paladin_core::platform::container::waypoint::ThreadId;
+    ///
+    /// let cost = Cost::new(22_500_000, CurrencyCode::new("USD")?);
+    /// let record = TraceRecord {
+    ///     thread_id: ThreadId::new("t1")?,
+    ///     run_id: Some(RunId::new_v7()),
+    ///     seq: 1,
+    ///     at: Utc::now(),
+    ///     event: TraceEvent::RunFinished {
+    ///         status: RunFinishStatus::Completed,
+    ///         total_supersteps: 3,
+    ///         usage: TokenUsage::new(1_000, 2_000),
+    ///         cost: Some(cost),
+    ///         duration_ms: 1_500,
+    ///         trace_dropped_total: 0,
+    ///     },
+    /// };
+    ///
+    /// let metadata = ExecutionMetadata::from_run_finished(&record, "gpt-4")
+    ///     .expect("a RunFinished record always produces metadata");
+    /// assert_eq!(metadata.cost_display().as_deref(), Some("0.0225 USD"));
+    /// assert_eq!(metadata.duration_ms, Some(1_500));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn from_run_finished(
+        record: &crate::platform::container::trace::TraceRecord,
+        model_used: impl Into<String>,
+    ) -> Option<ExecutionMetadata> {
+        use crate::platform::container::trace::{RunFinishStatus, TraceEvent};
+
+        let TraceEvent::RunFinished {
+            status,
+            usage,
+            cost,
+            duration_ms,
+            ..
+        } = &record.event
+        else {
+            return None;
+        };
+
+        let execution_id = record
+            .run_id
+            .as_ref()
+            .and_then(|run_id| Uuid::parse_str(run_id.as_str()).ok())
+            .unwrap_or_else(Uuid::new_v4);
+
+        let elapsed =
+            chrono::Duration::milliseconds(i64::try_from(*duration_ms).unwrap_or(i64::MAX));
+        let start_time = record.at - elapsed;
+
+        let error_count = if *status == RunFinishStatus::Failed {
+            1
+        } else {
+            0
+        };
+
+        let run_status = serde_json::to_value(status)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default();
+
+        let mut builder = ExecutionMetadata::builder()
+            .execution_id(execution_id)
+            .start_time(start_time)
+            .end_time(record.at)
+            .duration_ms(*duration_ms)
+            .model_used(model_used.into())
+            .token_usage(usage.clone())
+            .error_count(error_count)
+            .add_metadata(
+                "thread_id".to_string(),
+                serde_json::Value::String(record.thread_id.as_str().to_string()),
+            )
+            .add_metadata(
+                "run_status".to_string(),
+                serde_json::Value::String(run_status),
+            );
+
+        if let Some(cost) = cost {
+            builder = builder.cost(cost);
+        }
+
+        builder.build().ok()
+    }
 }
 
 /// Builder for ExecutionMetadata

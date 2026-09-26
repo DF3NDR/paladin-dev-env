@@ -199,10 +199,15 @@ impl LlmPort for PricingLlmAdapter {
 #[cfg(all(test, feature = "mock"))]
 mod tests {
     use super::*;
+    use crate::fallback::FallbackLlmAdapter;
     use crate::mock::MockLlmAdapter;
+    use chrono::Utc;
     use paladin_core::platform::container::cost::{CurrencyCode, PriceRow};
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_ports::output::llm_port::FinishReason;
+    use std::collections::HashMap;
+    use uuid::Uuid;
 
     fn request(model: &str) -> LlmRequest {
         let prompt = PromptItem::new(PromptType::User(UserPrompt {
@@ -352,6 +357,168 @@ mod tests {
         assert!(
             !warnings.should_warn("model-a"),
             "an already-seen model stays suppressed after the cap is hit"
+        );
+    }
+
+    /// A stub `LlmPort` that always serves a FIXED model name and usage, ignoring the
+    /// request's own model entirely -- `MockLlmAdapter` echoes `request.model`, so it cannot
+    /// express a fallback hop that ends up served by a DIFFERENTLY-named model (D-05).
+    struct NamedModelPort {
+        model: &'static str,
+        usage: TokenUsage,
+    }
+
+    #[async_trait]
+    impl LlmPort for NamedModelPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: self.model.to_string(),
+                content: "hi from the backup".to_string(),
+                finish_reason: FinishReason::Stop,
+                usage: self.usage.clone(),
+                cost: None,
+                created_at: Utc::now(),
+                metadata: HashMap::new(),
+                function_call: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
+        {
+            Err(LlmError::ProcessingError(
+                "NamedModelPort does not support streaming".to_string(),
+            ))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![self.model.to_string()])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "named-model-stub"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// D-09: `generate` prices the RESPONSE's own served model, not the request's.
+    #[tokio::test]
+    async fn generate_prices_the_response_model() {
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("hi")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let adapter = PricingLlmAdapter::new(mock, usd_table());
+
+        let response = adapter.generate(request("gpt-4")).await.unwrap();
+        let cost = response.cost.expect("priced model must carry a cost");
+        assert_eq!(cost.nanos(), 22_500_000);
+        assert_eq!(cost.currency().as_str(), "USD");
+    }
+
+    /// D-00c/D-08: an unpriced model's non-streaming call gets `cost: None`, never a
+    /// fabricated zero; a fresh `UnpricedModelWarnings` instance still warns exactly once per
+    /// distinct model name (the same dedup rule the stream path already proves).
+    #[tokio::test]
+    async fn generate_unpriced_model_reports_none() {
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("hi")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let adapter = PricingLlmAdapter::new(mock, usd_table());
+
+        let response = adapter
+            .generate(request("p38-unpriced-generate"))
+            .await
+            .unwrap();
+        assert!(
+            response.cost.is_none(),
+            "an unpriced model must never carry a cost"
+        );
+
+        let warnings = UnpricedModelWarnings::new(10);
+        assert!(warnings.should_warn("p38-unpriced-generate"));
+        assert!(
+            !warnings.should_warn("p38-unpriced-generate"),
+            "the same unpriced model warns only once"
+        );
+    }
+
+    /// D-09/RESEARCH Open Question 2: composed as `Pricing(Fallback(primary, backup))`, a
+    /// call that hops from a failing primary to a backup serving a DIFFERENTLY-named model is
+    /// priced against the backup's SERVED model -- or `None` when that model has no row --
+    /// never against the originally requested model.
+    #[tokio::test]
+    async fn prices_the_served_model_after_fallback_hop() {
+        let primary: Arc<dyn LlmPort> =
+            Arc::new(MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded));
+        let backup: Arc<dyn LlmPort> = Arc::new(NamedModelPort {
+            model: "backup-model",
+            usage: TokenUsage::new(100, 0),
+        });
+        let fallback =
+            Arc::new(FallbackLlmAdapter::new(vec![primary, backup]).expect("non-empty chain"));
+
+        let priced_table = Arc::new(
+            PriceTable::new(CurrencyCode::new("USD").unwrap())
+                .with_row("backup-model", PriceRow::new(1_000_000_000, 0).unwrap()),
+        );
+        let priced_adapter = PricingLlmAdapter::new(fallback.clone(), priced_table);
+        let response = priced_adapter
+            .generate(request("originally-requested-model"))
+            .await
+            .unwrap();
+        assert_eq!(response.model, "backup-model");
+        let cost = response
+            .cost
+            .expect("the served model's row must price the call");
+        assert_eq!(cost.nanos(), 100_000);
+        assert_eq!(cost.currency().as_str(), "USD");
+
+        let unpriced_table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()));
+        let unpriced_adapter = PricingLlmAdapter::new(fallback, unpriced_table);
+        let response = unpriced_adapter
+            .generate(request("originally-requested-model"))
+            .await
+            .unwrap();
+        assert_eq!(response.model, "backup-model");
+        assert!(
+            response.cost.is_none(),
+            "a served model with no price row must never carry a cost"
+        );
+    }
+
+    /// D-09: identity methods are unchanged pass-throughs to the inner port.
+    #[tokio::test]
+    async fn pricing_is_transparent() {
+        let mock = Arc::new(MockLlmAdapter::new());
+        let adapter = PricingLlmAdapter::new(Arc::clone(&mock) as Arc<dyn LlmPort>, usd_table());
+
+        assert_eq!(adapter.get_provider_name(), mock.get_provider_name());
+        assert_eq!(
+            adapter.get_capabilities().supports_streaming,
+            mock.get_capabilities().supports_streaming
+        );
+        assert_eq!(
+            adapter.validate_model("gpt-4").await.unwrap(),
+            mock.validate_model("gpt-4").await.unwrap()
+        );
+        assert_eq!(
+            adapter.get_available_models().await.unwrap(),
+            mock.get_available_models().await.unwrap()
         );
     }
 }

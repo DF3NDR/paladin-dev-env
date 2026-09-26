@@ -166,7 +166,7 @@ impl LlmPort for PricingLlmAdapter {
     /// Prices the terminal chunk of the delegated stream from ITS OWN usage against the
     /// request's model (D-09, Phase 31 contract -- `StreamingResponse` carries no served-model
     /// string of its own): a chunk whose `finish_reason.is_some()` and whose `usage` is `Some`
-    /// gets [`StreamingResponse::with_cost`] when [`Self::price_or_warn`] answers `Some`; when
+    /// gets [`StreamingResponse::with_cost`] when `price_or_warn` answers `Some`; when
     /// it answers `None`, the model is unpriced and gets exactly one `warn!` line per distinct
     /// model name per process (D-08) -- never a fabricated zero. A terminal chunk with no usage
     /// at all gets no cost and no pricing warning (the execution service already warns about

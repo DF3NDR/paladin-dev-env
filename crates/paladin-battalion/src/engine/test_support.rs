@@ -483,9 +483,14 @@ pub fn shuffle_seeded<T>(items: &mut [T], seed: u64) {
 /// The "Paladin name" key is `paladin.node.name` (`PaladinData::name`),
 /// matching the convention `tests/helpers/mock_paladin_port.rs`'s
 /// `FaultyPaladinPort` already established.
+/// One configured Paladin's output: the text, its reported [`TokenUsage`],
+/// and its reported [`Cost`] (D-10) -- `None` behaves exactly like a plain
+/// [`RecordingPaladinPort::set_output_with_usage`] call.
+type RecordedOutput = (String, TokenUsage, Option<Cost>);
+
 #[derive(Default)]
 pub struct RecordingPaladinPort {
-    outputs: Mutex<HashMap<String, (String, TokenUsage, Option<Cost>)>>,
+    outputs: Mutex<HashMap<String, RecordedOutput>>,
     calls: Mutex<Vec<(String, String)>>,
 }
 

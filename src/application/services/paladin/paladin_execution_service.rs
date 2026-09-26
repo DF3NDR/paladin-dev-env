@@ -6975,3 +6975,194 @@ mod streamed_cost_tests {
         assert!(!text.contains("Cost"), "{text}");
     }
 }
+
+/// Plan 38-07: the agent loop folds each model call's cost into
+/// `PaladinResult.cost` beside `usage` (D-10, D-00c).
+#[cfg(test)]
+mod agent_loop_cost_tests {
+    use super::*;
+    use crate::core::base::entity::node::Node;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use async_trait::async_trait;
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::llm_port::{
+        FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
+        StreamingResponse,
+    };
+    use std::sync::Mutex as StdMutex;
+    use uuid::Uuid;
+
+    fn make_paladin(max_loops: u32) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            max_loops: MaxLoops::Fixed(max_loops),
+            ..Default::default()
+        };
+        Node::new(data, None)
+    }
+
+    fn make_service(llm: Arc<dyn LlmPort>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+    }
+
+    /// A stub `LlmPort` returning a preset queue of `(content, usage, cost)`
+    /// tuples, one per call, holding on the last entry once exhausted --
+    /// lets a test drive per-call `cost` independently of
+    /// `MockLlmAdapter`'s single shared, cost-less response shape.
+    struct ScriptedCostLlmPort {
+        entries: StdMutex<std::collections::VecDeque<(String, TokenUsage, Option<Cost>)>>,
+    }
+
+    impl ScriptedCostLlmPort {
+        fn new(entries: Vec<(&str, TokenUsage, Option<Cost>)>) -> Self {
+            Self {
+                entries: StdMutex::new(
+                    entries
+                        .into_iter()
+                        .map(|(content, usage, cost)| (content.to_string(), usage, cost))
+                        .collect(),
+                ),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for ScriptedCostLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            let mut entries = self.entries.lock().unwrap();
+            let (content, usage, cost) = if entries.len() > 1 {
+                entries.pop_front().unwrap()
+            } else {
+                entries.front().cloned().expect("at least one entry")
+            };
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model,
+                content,
+                finish_reason: FinishReason::Stop,
+                usage,
+                cost,
+                created_at: chrono::Utc::now(),
+                metadata: HashMap::new(),
+                function_call: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            unimplemented!("ScriptedCostLlmPort only supports generate()")
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "scripted-cost-stub"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// D-10: two loop iterations whose responses carry costs 22_500_000 and
+    /// 1_000_000 nanos USD sum to `PaladinResult.cost == Some(23_500_000 USD)`
+    /// -- the exact `CostTally` sum of the run's priced calls.
+    #[tokio::test]
+    async fn agent_loop_sums_cost_across_calls() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            ),
+        ]));
+        let service = make_service(llm);
+        let paladin = make_paladin(2);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        let cost = result
+            .cost
+            .expect("two priced calls must sum to a priced run cost");
+        assert_eq!(cost.nanos(), 23_500_000);
+        assert_eq!(cost.currency(), &usd);
+    }
+
+    /// D-10, D-00c: an in-test `LlmPort` whose first response carries
+    /// `Some` cost and second carries `None` poisons the run total --
+    /// `PaladinResult.cost == None`, never a partial sum of just the first
+    /// call.
+    #[tokio::test]
+    async fn agent_loop_cost_is_none_when_any_call_unpriced() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd)),
+            ),
+            ("second", TokenUsage::new(200, 50), None),
+        ]));
+        let service = make_service(llm);
+        let paladin = make_paladin(2);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert!(
+            result.cost.is_none(),
+            "one unpriced call must poison the run total"
+        );
+    }
+
+    /// D-00c: an unwrapped `MockLlmAdapter` (no `PricingLlmAdapter`
+    /// decorator) reports `cost: None` on every response -- the run's
+    /// `PaladinResult.cost` is `None` while `usage` is still reported in
+    /// full, never a fabricated zero.
+    #[tokio::test]
+    async fn agent_loop_cost_is_none_without_pricing() {
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("plain")
+                .with_token_usage_struct(TokenUsage::new(10, 20)),
+        );
+        let llm: Arc<dyn LlmPort> = mock;
+        let service = make_service(llm);
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert!(
+            result.cost.is_none(),
+            "no pricing installed must yield None"
+        );
+        assert_eq!(
+            result.usage.total_tokens, 30,
+            "usage must still be reported in full even with no cost"
+        );
+    }
+}

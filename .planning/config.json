@@ -1,6 +1,7 @@
 {
   "workflow": {
     "_auto_chain_active": false,
-    "worktree_skip_hooks": true
+    "worktree_skip_hooks": true,
+    "test_gate_timeout": 2400
   }
 }

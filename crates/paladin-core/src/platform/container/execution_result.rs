@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::platform::container::cost::Cost;
 use crate::platform::container::handoff::HandoffRecord;
 use crate::platform::container::planning::TaskPlan;
 use crate::platform::container::token_usage::TokenUsage;
@@ -59,6 +60,18 @@ pub struct PaladinResult {
     /// (D-25) -- no custom deserializer maps the retired key forward.
     #[serde(default)]
     pub usage: TokenUsage,
+
+    /// This run's currency cost, as the `CostTally` sum of its priced model calls
+    /// (D-10, PRICE-03).
+    ///
+    /// `None` when no pricing is installed, any call in the run was unpriced, or no
+    /// model call was made at all -- **never** a zero stand-in (D-00c). `#[serde(default,
+    /// skip_serializing_if = "Option::is_none")]` so a `PaladinResult` JSON document
+    /// persisted before this field existed deserialises with `cost == None`, and a
+    /// `None` cost is absent from the serialised JSON entirely -- the same precedent
+    /// [`Self::served_by`] established.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<Cost>,
 
     /// Execution time in milliseconds
     pub execution_time_ms: u64,
@@ -192,6 +205,7 @@ impl Default for PaladinResult {
         Self {
             output: String::new(),
             usage: TokenUsage::default(),
+            cost: None,
             execution_time_ms: 0,
             loop_count: 0,
             stop_reason: StopReason::Completed,
@@ -229,6 +243,7 @@ impl PaladinResult {
         Self {
             output,
             usage,
+            cost: None,
             execution_time_ms,
             loop_count,
             stop_reason,
@@ -271,6 +286,7 @@ mod tests {
         let result = PaladinResult {
             output: "answer".to_string(),
             usage: TokenUsage::new(3, 0),
+            cost: None,
             execution_time_ms: 7,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -282,6 +298,7 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
 
         assert!(!json.contains("served_by"), "{json}");
+        assert!(!json.contains("\"cost\""), "{json}");
         assert_eq!(
             json,
             r#"{"output":"answer","usage":{"prompt_tokens":3,"completion_tokens":0,"total_tokens":3,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#
@@ -342,6 +359,20 @@ mod tests {
         assert!(json.contains(r#""served_by":"anthropic""#), "{json}");
         let back: PaladinResult = serde_json::from_str(&json).unwrap();
         assert_eq!(back.served_by.as_deref(), Some("anthropic"));
+    }
+
+    /// D-10, D-25 precedent: a `PaladinResult` JSON document persisted before
+    /// `cost` existed (no `cost` key at all) deserialises with `cost ==
+    /// None`, and a `None` cost never serialises a `cost` key.
+    #[test]
+    fn paladin_result_without_cost_key_deserializes_to_none() {
+        let legacy = r#"{"output":"answer","usage":{"prompt_tokens":3,"completion_tokens":0,"total_tokens":3,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#;
+
+        let result: PaladinResult = serde_json::from_str(legacy).unwrap();
+        assert!(result.cost.is_none());
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("\"cost\""), "{json}");
     }
 
     /// FT-FR-17: `Default` and `new()` both still work and leave `served_by`

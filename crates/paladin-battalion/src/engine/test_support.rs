@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
+use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::directive::{Directive, NextStep};
 use paladin_core::platform::container::node_cache::CachedDelta;
 use paladin_core::platform::container::node_error::NodeError;
@@ -484,7 +485,7 @@ pub fn shuffle_seeded<T>(items: &mut [T], seed: u64) {
 /// `FaultyPaladinPort` already established.
 #[derive(Default)]
 pub struct RecordingPaladinPort {
-    outputs: Mutex<HashMap<String, (String, TokenUsage)>>,
+    outputs: Mutex<HashMap<String, (String, TokenUsage, Option<Cost>)>>,
     calls: Mutex<Vec<(String, String)>>,
 }
 
@@ -524,7 +525,24 @@ impl RecordingPaladinPort {
         self.outputs
             .lock()
             .unwrap()
-            .insert(name.into(), (output.into(), usage));
+            .insert(name.into(), (output.into(), usage, None));
+    }
+
+    /// Configure the output string, reported [`TokenUsage`], AND reported
+    /// [`Cost`] a Paladin named `name` returns (D-10) -- the model for
+    /// exercising the engine's per-attempt `NodeFinished.cost` bridge.
+    /// `cost: None` behaves exactly like [`Self::set_output_with_usage`].
+    pub fn set_output_with_usage_and_cost(
+        &self,
+        name: impl Into<String>,
+        output: impl Into<String>,
+        usage: TokenUsage,
+        cost: Option<Cost>,
+    ) {
+        self.outputs
+            .lock()
+            .unwrap()
+            .insert(name.into(), (output.into(), usage, cost));
     }
 
     /// The ordered call log: one `(paladin_name, input)` entry per `execute`
@@ -549,7 +567,7 @@ impl PaladinPort for RecordingPaladinPort {
             .unwrap()
             .push((name.clone(), input.to_string()));
 
-        let (output, usage) = self
+        let (output, usage, cost) = self
             .outputs
             .lock()
             .unwrap()
@@ -560,6 +578,7 @@ impl PaladinPort for RecordingPaladinPort {
         Ok(PaladinResult {
             output,
             usage,
+            cost,
             execution_time_ms: 0,
             loop_count: 1,
             stop_reason: StopReason::Completed,

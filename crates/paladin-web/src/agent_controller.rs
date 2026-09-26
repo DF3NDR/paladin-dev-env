@@ -1912,4 +1912,29 @@ mod tests {
         assert_eq!(preview.chars().count(), DESCRIPTION_PREVIEW_LEN + 1); // +1 for the ellipsis
         assert!(preview.ends_with('…'));
     }
+
+    /// D-11, T-38-23: `PaladinResult.cost` is populated (D-10), but
+    /// `From<PaladinResult> for ExecuteResponse` selects exactly its current
+    /// fields -- a priced result's serialized `ExecuteResponse` carries no
+    /// `cost` key. Exposing spend over this unscoped, authenticated HTTP
+    /// surface is Phase 39 LEDGR-04, not this phase.
+    #[test]
+    fn execute_response_carries_no_cost_field() {
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let mut result = PaladinResult::new(
+            "priced output".to_string(),
+            TokenUsage::new(10, 5),
+            42,
+            1,
+            StopReason::Completed,
+        );
+        result.cost = Some(Cost::new(1_500_000, usd));
+
+        let response = ExecuteResponse::from(result);
+
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(!json.contains("\"cost\""), "{json}");
+    }
 }

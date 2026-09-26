@@ -1258,6 +1258,7 @@ mod tests {
         let result = PaladinResult {
             output: "Test output".to_string(),
             usage: TokenUsage::new(100, 0),
+            cost: None,
             execution_time_ms: 500,
             loop_count: 2,
             stop_reason: StopReason::Completed,
@@ -1335,6 +1336,7 @@ mod tests {
         let result = PaladinResult {
             output: "Test".to_string(),
             usage: TokenUsage::new(50, 0),
+            cost: None,
             execution_time_ms: 250,
             loop_count: 1,
             stop_reason: StopReason::Completed,
@@ -1382,6 +1384,7 @@ mod tests {
         let result = PaladinResult {
             output: "Task completed".to_string(),
             usage: TokenUsage::new(200, 0),
+            cost: None,
             execution_time_ms: 1000,
             loop_count: 3,
             stop_reason: StopReason::Completed,
@@ -1418,6 +1421,7 @@ mod tests {
         let result = PaladinResult {
             output: "All tasks completed".to_string(),
             usage: TokenUsage::new(500, 0),
+            cost: None,
             execution_time_ms: 3000,
             loop_count: 5,
             stop_reason: StopReason::Completed,
@@ -1461,6 +1465,7 @@ mod tests {
         let result = PaladinResult {
             output: "Final output".to_string(),
             usage: TokenUsage::new(300, 0),
+            cost: None,
             execution_time_ms: 2000,
             loop_count: 4,
             stop_reason: StopReason::Completed,

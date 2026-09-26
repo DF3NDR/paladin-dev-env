@@ -915,4 +915,80 @@ mod tests {
         // Metadata table should contain placeholder or actual values
         assert!(metadata_output.contains("Duration") || metadata_output.contains("Tokens"));
     }
+
+    // --- PRICE-03 / D-11 / D-04: finalize_stream renders real metadata -----
+    // (research Pitfall 4 — the stub ignored its argument and printed fixed
+    // placeholder rows regardless of what actually happened).
+
+    #[test]
+    fn finalize_stream_uses_real_metadata() {
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = TableHerald::default();
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("test-model".to_string())
+            .token_usage(TokenUsage::new(300, 200).with_cache_read(120))
+            .duration_ms(1000)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+
+        assert!(formatted.contains("test-model"));
+        assert!(formatted.contains("1000ms"));
+        assert!(formatted.contains("300"));
+        assert!(formatted.contains("200"));
+        assert!(formatted.contains("500"));
+        assert!(formatted.contains("120"));
+
+        // The old stub's fixed placeholder rows are gone.
+        assert!(!formatted.contains("3.45s"));
+        assert!(!formatted.contains("950"));
+        assert!(!formatted.contains("Paladins Executed"));
+        assert!(!formatted.contains("Success Rate"));
+    }
+
+    #[test]
+    fn finalize_stream_renders_currency_cost_row() {
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = TableHerald::default();
+        let cost = Cost::new(45_000_000, CurrencyCode::new("USD").unwrap());
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("test-model".to_string())
+            .token_usage(TokenUsage::new(1_000, 2_000))
+            .cost(&cost)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+
+        assert!(formatted.contains("Cost"));
+        assert!(formatted.contains("0.0450 USD"));
+        assert!(!formatted.contains('$'));
+    }
+
+    #[test]
+    fn finalize_stream_omits_cost_row_when_unpriced() {
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = TableHerald::default();
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("test-model".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .duration_ms(1000)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+
+        assert!(!formatted.contains("Cost"));
+    }
 }

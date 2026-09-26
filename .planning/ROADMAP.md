@@ -312,7 +312,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5)*
 
-- [ ] 38-09-PLAN.md — closeout: `cargo semver-checks` measurement and registration, CHANGELOG, API-surface refresh, full gate suite (PRICE-01..03)
+- [x] 38-09-PLAN.md — closeout: `cargo semver-checks` measurement and registration, CHANGELOG, API-surface refresh, full gate suite (PRICE-01..03)
 
 **Research flag**: yes — the engine-path-vs-agent-loop attachment point for mid-run `TokenBudget`
 enforcement is, per research, the single largest open architectural question this milestone

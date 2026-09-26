@@ -21,7 +21,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Pricing (PRICE)
 
-- [ ] **PRICE-01**: Operator can configure a per-model price table (prompt, completion, cache-read,
+- [x] **PRICE-01**: Operator can configure a per-model price table (prompt, completion, cache-read,
   cache-write and reasoning unit prices, written as decimal strings); the default table is empty,
   and negative or malformed prices are rejected at config validation
 
@@ -209,7 +209,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| PRICE-01 | Phase 38 | Pending |
+| PRICE-01 | Phase 38 | Complete |
 | PRICE-02 | Phase 38 | Complete |
 | PRICE-03 | Phase 38 | Complete |
 | LEDGR-01 | Phase 39 | Pending |

@@ -79,9 +79,14 @@ use crate::infrastructure::adapters::arsenal::tool_result_formatter::ToolResultF
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
 use paladin_battalion::llm_failure::to_paladin_error;
+use paladin_core::platform::container::cost::Cost;
+use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::structured::render_instruction_block;
 use paladin_core::platform::container::transience::Transience;
+use paladin_core::platform::container::treasury_ledger::{
+    LedgerScope, SettleOutcome, SettleRequest, SettlementKey,
+};
 use paladin_core::platform::container::vault::Namespace;
 use paladin_core::platform::container::waypoint::NodeId;
 use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
@@ -101,6 +106,7 @@ use paladin_ports::output::token_counter_port::TokenCounterPort;
 use paladin_ports::output::trace_sink_port::{
     MiddlewareAction, NodeProgressKind, TraceEmitter, TraceEvent, current_trace_emitter,
 };
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::vault_port::VaultPort;
 #[cfg(feature = "vision")]
 use paladin_ports::output::vision_port::VisionPort;
@@ -230,6 +236,40 @@ pub struct PaladinExecutionService {
     /// `None` by default -- a service with nothing wired emits nothing,
     /// exactly like every other observability seam in this phase (X-03).
     trace_emitter: Option<Arc<dyn TraceEmitter>>,
+
+    /// The agent-loop settle writer (D-07, D-08, 39-05), installed via
+    /// [`PaladinExecutionService::with_treasury_ledger`]. `None` by default
+    /// -- a service with no ledger attached performs no ledger call at all,
+    /// exactly like every other observability seam in this phase (X-03).
+    treasury_ledger: Option<(Arc<dyn TreasuryLedgerPort>, AgentLoopSettlement)>,
+}
+
+/// Which calls this service's agent-loop settle writer settles (D-07, D-08),
+/// installed via [`PaladinExecutionService::with_treasury_ledger`].
+///
+/// The ledger is observational in this phase (D-08, LEDGR-03): a settle
+/// failure or duplicate-key outcome is logged and never fails, retries or
+/// alters an execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentLoopSettlement {
+    /// Every priced model call settles, under the run's own
+    /// [`RunScope::run_id`] when the caller supplied one, else this
+    /// service's own execution id (D-07). The right mode for services
+    /// backing HTTP agent routes (`agent_host.rs`), where every call is
+    /// either a plain HTTP agent execution (no Platform run) or a Platform
+    /// API run the worker dispatched -- either way, this service is the
+    /// only writer that will ever settle that call.
+    EveryCall,
+    /// Only a call whose [`RunScope`] names a run id settles -- a call with
+    /// no run id (an engine node's own dispatch) never settles here. The
+    /// right mode for the run engine's SHARED execution service
+    /// (`facade_provisioner.rs`'s `EngineExecutionPort`): engine nodes are
+    /// already settled once per superstep by `WarEngine::with_treasury_ledger`
+    /// (39-04), and this mode is what keeps this service from ever settling
+    /// the SAME call a second time. Only a Platform API run of an
+    /// agent-kind assistant (which carries a real run id in its `RunScope`,
+    /// 39-07) settles through this service at all.
+    PlatformRunsOnly,
 }
 
 /// D-16: the latest-summary-wins effective-history rule.
@@ -334,6 +374,59 @@ pub(crate) fn effective_history(history: Vec<GarrisonEntry>) -> Vec<GarrisonEntr
     effective
 }
 
+/// Settle one priced agent-loop model call (D-07, D-08, 39-05): an
+/// unreserved settlement under `(run_id, ordinal, 1)` with an
+/// [`LedgerScope::unattributed`] scope (D-01) and a single-entry
+/// `model_breakdown` naming `model`.
+///
+/// A free function (not a `PaladinExecutionService` method) so it can be
+/// called from `execute_stream_inner`'s spawned task, which owns no `&self`
+/// -- [`PaladinExecutionService::settle_model_call`] delegates to this same
+/// function for the buffered reasoning loop, so there is exactly one settle
+/// implementation for both call sites.
+///
+/// Never propagates: a ledger `Err` is logged at `error!` and a
+/// duplicate-key [`SettleOutcome::AlreadySettled`] at `warn!` -- neither
+/// changes a run's output, retries a call, or fails an execution (D-08).
+/// Log lines carry the run id, ordinal, nanos and currency -- never the
+/// prompt, the response content, or any API key.
+async fn settle_agent_loop_call(
+    ledger: &Arc<dyn TreasuryLedgerPort>,
+    run_id: &RunId,
+    ordinal: u64,
+    model: &str,
+    cost: &Cost,
+) {
+    let key = SettlementKey::new(run_id.clone(), ordinal, 1);
+    let request = SettleRequest::unreserved(
+        LedgerScope::unattributed(),
+        key,
+        cost.clone(),
+        BTreeMap::from([(model.to_string(), cost.nanos())]),
+    );
+    match ledger.settle(request).await {
+        Ok(SettleOutcome::Settled) => {
+            debug!(
+                "settled agent-loop model call: run {run_id} ordinal {ordinal} amount_nanos {} currency {}",
+                cost.nanos(),
+                cost.currency()
+            );
+        }
+        Ok(SettleOutcome::AlreadySettled) => {
+            warn!(
+                "agent-loop model call already settled: run {run_id} ordinal {ordinal} -- duplicate not charged again"
+            );
+        }
+        Err(e) => {
+            error!(
+                "failed to settle agent-loop model call: run {run_id} ordinal {ordinal} amount_nanos {} currency {}: {e}",
+                cost.nanos(),
+                cost.currency()
+            );
+        }
+    }
+}
+
 impl PaladinExecutionService {
     /// Creates a new Paladin execution service
     ///
@@ -392,6 +485,7 @@ impl PaladinExecutionService {
             vault_tools_enabled: false,
             tool_error_config: ToolErrorConfig::default(),
             trace_emitter: None,
+            treasury_ledger: None,
         }
     }
 
@@ -815,6 +909,92 @@ impl PaladinExecutionService {
         self
     }
 
+    /// Installs the agent-loop settle writer (D-07, D-08, 39-05): after this
+    /// call, every priced model call of the reasoning loop (buffered or
+    /// streamed) settles exactly once, under a `SettlementKey` this
+    /// service's `settlement` mode resolves (see [`AgentLoopSettlement`]).
+    ///
+    /// The ledger is observational (LEDGR-03): a settle failure is logged
+    /// at `error!` and a duplicate-key `AlreadySettled` outcome at `warn!`
+    /// -- neither ever fails, retries or alters a `PaladinResult`. A call
+    /// with no cost (`response.cost: None`) writes no row. A service
+    /// without this call behaves exactly as before -- no ledger call at
+    /// all.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use paladin::application::services::paladin::paladin_execution_service::{
+    ///     AgentLoopSettlement, PaladinExecutionService,
+    /// };
+    /// use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
+    /// use paladin_llm::mock::MockLlmAdapter;
+    /// use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+    /// use std::time::Duration;
+    ///
+    /// let llm = Arc::new(MockLlmAdapter::new());
+    /// let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
+    /// let ledger = Arc::new(InMemoryTreasuryLedger::new());
+    /// let service = PaladinExecutionService::new(llm, circuit_breaker, None, None)
+    ///     .with_treasury_ledger(ledger, AgentLoopSettlement::EveryCall);
+    /// ```
+    #[must_use]
+    pub fn with_treasury_ledger(
+        mut self,
+        ledger: Arc<dyn TreasuryLedgerPort>,
+        settlement: AgentLoopSettlement,
+    ) -> Self {
+        info!(
+            "Attaching treasury ledger to PaladinExecutionService: settlement={:?}",
+            settlement
+        );
+        self.treasury_ledger = Some((ledger, settlement));
+        self
+    }
+
+    /// Resolves the run id this service's agent-loop settle writer should
+    /// settle `scope`'s calls under (D-07), or `None` when no call this run
+    /// makes should settle at all.
+    ///
+    /// - No ledger installed: `None`.
+    /// - [`AgentLoopSettlement::PlatformRunsOnly`][] mode: `scope.run_id.clone()`
+    ///   -- an engine node's own dispatch (no run id in its scope) never
+    ///   settles here (LEDGR-04: engine spend is settled once, by the
+    ///   superstep writer, 39-04).
+    /// - [`AgentLoopSettlement::EveryCall`][] mode: `scope.run_id.clone()`
+    ///   when present, else this execution's own id (`execution_id`) parsed
+    ///   as a [`RunId`] -- a UUIDv4 execution id is always a well-formed
+    ///   UUID, so this parse never fails in practice.
+    fn ledger_run_id(&self, scope: &RunScope, execution_id: uuid::Uuid) -> Option<RunId> {
+        let (_, settlement) = self.treasury_ledger.as_ref()?;
+        match settlement {
+            AgentLoopSettlement::PlatformRunsOnly => scope.run_id.clone(),
+            AgentLoopSettlement::EveryCall => scope.run_id.clone().or_else(|| {
+                RunId::parse(execution_id.to_string())
+                    .inspect_err(|e| {
+                        error!("execution id {execution_id} did not parse as a RunId: {e}");
+                    })
+                    .ok()
+            }),
+        }
+    }
+
+    /// Settle one priced model call (D-07, D-08): an unreserved settlement
+    /// under `(run_id, ordinal, 1)` with an [`LedgerScope::unattributed`]
+    /// scope (D-01) and a single-entry `model_breakdown` naming `model`.
+    ///
+    /// Delegates to [`settle_agent_loop_call`], the free function the
+    /// streamed path (`execute_stream_inner`'s spawned task, which owns no
+    /// `&self`) also calls -- one settle implementation, two call sites.
+    async fn settle_model_call(&self, run_id: &RunId, ordinal: u64, model: &str, cost: &Cost) {
+        let Some((ledger, _)) = &self.treasury_ledger else {
+            return;
+        };
+        settle_agent_loop_call(ledger, run_id, ordinal, model, cost).await;
+    }
+
     /// Replaces the whole `ExecutionMiddleware` chain with `chain` (Doc 05
     /// RT-01, D-06).
     ///
@@ -1076,6 +1256,9 @@ impl PaladinExecutionService {
         // SAME `ConfinedVault` handle `VaultRecallMiddleware` reads --
         // exactly one resolution point, per `confined_vault`'s own contract.
         let confined_vault = self.confined_vault(scope);
+        // D-07: resolved here, once, from this call's own `scope` -- never
+        // recomputed inside `execute_internal`'s per-loop-iteration body.
+        let ledger_run_id = self.ledger_run_id(scope, execution_id);
         info!(
             "Starting scoped Paladin execution: id={}, name={}, input_len={}, vault_namespace={}",
             execution_id,
@@ -1086,8 +1269,15 @@ impl PaladinExecutionService {
                 .map(|v| v.granted().to_string())
                 .unwrap_or_else(|| "none".to_string())
         );
-        self.execute_bounded(paladin, input, execution_id, heartbeat, confined_vault)
-            .await
+        self.execute_bounded(
+            paladin,
+            input,
+            execution_id,
+            heartbeat,
+            confined_vault,
+            ledger_run_id,
+        )
+        .await
     }
 
     /// The shared body of `execute`, `execute_observed` and `execute_scoped`:
@@ -1101,13 +1291,20 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
         confined_vault: Option<ConfinedVault>,
+        ledger_run_id: Option<RunId>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let timeout_duration = Duration::from_secs(paladin.node.max_loops.as_u32() as u64 * 60);
 
         // Wrap execution with timeout
-        let execution_future =
-            self.execute_internal(paladin, input, execution_id, heartbeat, confined_vault);
+        let execution_future = self.execute_internal(
+            paladin,
+            input,
+            execution_id,
+            heartbeat,
+            confined_vault,
+            ledger_run_id,
+        );
 
         match timeout(timeout_duration, execution_future).await {
             Ok(result) => {
@@ -1290,6 +1487,7 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
         confined_vault: Option<ConfinedVault>,
+        ledger_run_id: Option<RunId>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let mut usage = paladin_core::platform::container::token_usage::TokenUsage::default();
@@ -1554,6 +1752,19 @@ impl PaladinExecutionService {
             // rule every other accumulator in the tree uses.
             usage += response.usage.clone();
             cost_tally.record_call(response.cost.as_ref());
+            // D-07/D-08 (39-05): settle this priced call at the exact point
+            // its cost is folded into the run's own tally -- the same
+            // response, the same model, so the ledger's breakdown key
+            // matches the price that was actually computed from it (38-04).
+            if let (Some(run_id), Some(cost)) = (ledger_run_id.as_ref(), response.cost.as_ref()) {
+                let model = if response.model.is_empty() {
+                    paladin.node.model.as_str()
+                } else {
+                    response.model.as_str()
+                };
+                self.settle_model_call(run_id, u64::from(loop_num), model, cost)
+                    .await;
+            }
             middleware_cx.cumulative_tokens = usage.total_tokens;
             if let Some(provider) = response.metadata.get(SERVED_BY_METADATA_KEY) {
                 served_by = Some(provider.clone());
@@ -3302,6 +3513,24 @@ impl PaladinExecutionService {
         // is stamped with the SAME execution id as this call's `run_id`.
         let execution_id = run_id;
 
+        // D-07/D-08 (39-05): the streamed path carries no `RunScope` (there
+        // is no `execute_stream_scoped`), so only `EveryCall` mode ever
+        // settles a stream, always under this execution's own id (never a
+        // Platform run id) -- resolved ONCE, before the spawn, since the
+        // spawned task owns no `&self`.
+        let stream_settlement = self
+            .treasury_ledger
+            .as_ref()
+            .filter(|(_, mode)| *mode == AgentLoopSettlement::EveryCall)
+            .and_then(|(ledger, _)| {
+                RunId::parse(execution_id.to_string())
+                    .inspect_err(|e| {
+                        error!("execution id {execution_id} did not parse as a RunId: {e}");
+                    })
+                    .ok()
+                    .map(|run_id| (ledger.clone(), run_id))
+            });
+
         tokio::spawn(async move {
             use futures::StreamExt;
             let mut stream = Box::into_pin(provider_stream);
@@ -3337,6 +3566,16 @@ impl PaladinExecutionService {
                             // stamped `cost` on this SAME terminal
                             // `StreamingResponse` -- never fabricated here.
                             let cost = resp.cost.clone();
+                            // D-07/D-08 (39-05): settle this streamed call's
+                            // priced terminal chunk under (execution id, 1,
+                            // 1), naming `model_used` -- the only model
+                            // identity a stream carries -- before the chunk
+                            // is sent.
+                            if let (Some((ledger, run_id)), Some(cost)) =
+                                (stream_settlement.as_ref(), cost.as_ref())
+                            {
+                                settle_agent_loop_call(ledger, run_id, 1, &model_used, cost).await;
+                            }
                             let mut chunk_metadata = ChunkMetadata::new();
                             if let Some(usage) = usage.clone() {
                                 chunk_metadata = chunk_metadata.with_usage(usage);
@@ -6849,10 +7088,12 @@ mod streamed_cost_tests {
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
     use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_core::platform::container::treasury_ledger::{SpendGroupBy, SpendQuery};
     use paladin_herald::MarkdownHerald;
     use paladin_herald::markdown_herald::MarkdownHeraldConfig;
     use paladin_llm::mock::MockLlmAdapter;
     use paladin_llm::pricing::PricingLlmAdapter;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
 
     fn make_paladin(model: &str) -> Paladin {
         let data = PaladinData {
@@ -6985,6 +7226,41 @@ mod streamed_cost_tests {
             .expect("a herald is configured");
         assert!(!text.contains("Cost"), "{text}");
     }
+
+    /// Plan 39-05: a streamed priced call settles exactly once, under
+    /// `(execution_id, 1, 1)`, naming the request's model (`gpt-4`, the
+    /// only model identity a stream carries).
+    #[tokio::test]
+    async fn streamed_priced_call_settles_once() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin("gpt-4");
+
+        let _ = drain_final_chunk(&service, &paladin).await;
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(rows.len(), 1, "exactly one (model, currency) row");
+        assert_eq!(rows[0].group, "gpt-4");
+        assert_eq!(rows[0].amount.nanos(), 22_500_000);
+        assert_eq!(rows[0].settlements, 1);
+    }
 }
 
 /// Plan 38-07: the agent loop folds each model call's cost into
@@ -6995,13 +7271,19 @@ mod agent_loop_cost_tests {
     use crate::core::base::entity::node::Node;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use async_trait::async_trait;
+    use chrono::{DateTime, Utc};
     use paladin_core::platform::container::cost::{Cost, CurrencyCode};
     use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_core::platform::container::treasury_ledger::{
+        ReservationId, ReserveRequest, SpendGroupBy, SpendQuery, SpendRow,
+    };
     use paladin_llm::mock::MockLlmAdapter;
     use paladin_ports::output::llm_port::{
         FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
         StreamingResponse,
     };
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
     use std::sync::Mutex as StdMutex;
     use uuid::Uuid;
 
@@ -7175,5 +7457,263 @@ mod agent_loop_cost_tests {
             result.usage.total_tokens, 30,
             "usage must still be reported in full even with no cost"
         );
+    }
+
+    /// A ledger whose `settle` always fails with `TreasuryLedgerError::Backend`
+    /// -- proves D-08's "never fails the agent loop" guarantee.
+    /// `reserve`/`release` are unreachable: the agent loop's settle-only
+    /// production writer never calls them.
+    struct FailingTreasuryLedger;
+
+    #[async_trait]
+    impl TreasuryLedgerPort for FailingTreasuryLedger {
+        async fn reserve(
+            &self,
+            _request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            unreachable!("not exercised by the agent loop's settle-only production writer")
+        }
+
+        async fn release(&self, _reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            unreachable!("not exercised by the agent loop's settle-only production writer")
+        }
+
+        async fn settle(
+            &self,
+            _request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::Backend {
+                source: Box::new(std::io::Error::other("ledger backend unavailable")),
+            })
+        }
+
+        async fn spend(&self, _query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            Ok(Vec::new())
+        }
+
+        async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+            Ok(Utc::now())
+        }
+    }
+
+    /// D-07: every priced model call of a plain `execute()` (no `RunScope`
+    /// run id) settles under the service's own execution id -- the in-memory
+    /// ledger's spend by run has one row with 2 settlements whose amount
+    /// equals `PaladinResult.cost`; spend by model is keyed on the
+    /// responses' model.
+    #[tokio::test]
+    async fn every_priced_model_call_settles_under_the_execution_id() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd)),
+            ),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+        let cost = result.cost.expect("two priced calls must sum to a cost");
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1, "exactly one run settled");
+        assert_eq!(by_run[0].amount, cost);
+        assert_eq!(by_run[0].settlements, 2);
+
+        let by_model = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds");
+        assert_eq!(by_model.len(), 1, "both calls named the same model");
+        assert_eq!(by_model[0].group, "gpt-4");
+        assert_eq!(by_model[0].amount, cost);
+    }
+
+    /// D-08: an unpriced call writes no settlement row -- one priced and one
+    /// unpriced call settle exactly once.
+    #[tokio::test]
+    async fn unpriced_model_call_writes_no_settlement() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd)),
+            ),
+            ("second", TokenUsage::new(200, 50), None),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+
+        let _ = service.execute(&paladin, "hi").await.unwrap();
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(
+            by_run[0].settlements, 1,
+            "the unpriced call must write no row"
+        );
+    }
+
+    /// D-07: `EveryCall` prefers the scope's own run id over this service's
+    /// execution id -- `execute_scoped` with a `RunScope::with_run_id(R)`
+    /// settles both loop iterations under R, at supersteps 1 and 2, attempt
+    /// 1 (proven by re-settling the exact same keys directly against the
+    /// ledger and observing `AlreadySettled`, never a fresh `Settled`).
+    #[tokio::test]
+    async fn every_call_mode_prefers_the_scope_run_id() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            ),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(rows.len(), 1, "both calls settled under the scope's run id");
+        assert_eq!(rows[0].settlements, 2);
+
+        for superstep in [1_u64, 2_u64] {
+            let outcome = ledger
+                .settle(SettleRequest::unreserved(
+                    LedgerScope::unattributed(),
+                    SettlementKey::new(run_id.clone(), superstep, 1),
+                    Cost::new(1, usd.clone()),
+                    BTreeMap::from([("probe".to_string(), 1_i64)]),
+                ))
+                .await
+                .expect("settle probe succeeds");
+            assert_eq!(
+                outcome,
+                SettleOutcome::AlreadySettled,
+                "superstep {superstep} attempt 1 must already be settled under run {run_id}"
+            );
+        }
+    }
+
+    /// D-07/D-08: `PlatformRunsOnly` never settles a plain `execute()` call
+    /// (no run id in scope) -- only an `execute_scoped` call whose
+    /// `RunScope` names a run id settles.
+    #[tokio::test]
+    async fn platform_runs_only_settles_only_scoped_runs() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            TokenUsage::new(1_000, 2_000),
+            Some(Cost::new(22_500_000, usd)),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service = make_service(llm)
+            .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::PlatformRunsOnly);
+        let paladin = make_paladin(1);
+
+        let _ = service.execute(&paladin, "hi").await.unwrap();
+        let empty = ledger
+            .spend(SpendQuery::default())
+            .await
+            .expect("spend succeeds");
+        assert!(
+            empty.is_empty(),
+            "a call with no scope run id must never settle under PlatformRunsOnly"
+        );
+
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(rows.len(), 1, "the scoped run's call settled");
+    }
+
+    /// D-08, LEDGR-03: a ledger `Err` on every `settle` call never fails,
+    /// retries, or alters the run's output -- `execute` returns the exact
+    /// same output and cost as the identical run with no ledger installed.
+    #[tokio::test]
+    async fn ledger_failure_never_fails_the_agent_loop() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let make_llm = || -> Arc<dyn LlmPort> {
+            Arc::new(ScriptedCostLlmPort::new(vec![(
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            )]))
+        };
+        let paladin = make_paladin(1);
+
+        let baseline = make_service(make_llm())
+            .execute(&paladin, "hi")
+            .await
+            .unwrap();
+
+        let failing_service = make_service(make_llm()).with_treasury_ledger(
+            Arc::new(FailingTreasuryLedger),
+            AgentLoopSettlement::EveryCall,
+        );
+        let with_failing_ledger = failing_service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(with_failing_ledger.output, baseline.output);
+        assert_eq!(with_failing_ledger.cost, baseline.cost);
+        assert_eq!(with_failing_ledger.loop_count, baseline.loop_count);
     }
 }

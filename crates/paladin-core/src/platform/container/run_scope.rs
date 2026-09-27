@@ -28,6 +28,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::platform::container::run::RunId;
 use crate::platform::container::vault::Namespace;
 
 /// The host-issued grant a single run carries (Doc 05 RT-04, D-21).
@@ -62,6 +63,17 @@ pub struct RunScope {
     /// scope itself carries no grant — the run may still receive one from
     /// `PaladinExecutionService::with_vault`'s own default, or none at all.
     pub vault_namespace: Option<Namespace>,
+
+    /// The Platform API run this execution belongs to, set only by the run
+    /// worker (39-07) when it dispatches an agent-kind run. `None` for
+    /// engine nodes (which settle by superstep, never by this scope) and
+    /// for plain HTTP agent calls that carry no Platform run at all. When
+    /// present, the agent loop's `AgentLoopSettlement::EveryCall`/
+    /// `PlatformRunsOnly` settle writer (D-07, 39-05) settles under this
+    /// run id rather than the service's own execution id. Omitted from the
+    /// serialized form when `None` (D-00f: additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<RunId>,
 }
 
 impl RunScope {
@@ -85,6 +97,26 @@ impl RunScope {
         self.vault_namespace = Some(namespace);
         self
     }
+
+    /// Builds a [`RunScope`] carrying `run_id` as the Platform API run this
+    /// execution belongs to (D-07). The only way to set `run_id` on a
+    /// `#[non_exhaustive]` struct from outside this crate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::run::RunId;
+    /// use paladin_core::platform::container::run_scope::RunScope;
+    ///
+    /// let run_id = RunId::new_v7();
+    /// let scope = RunScope::default().with_run_id(run_id.clone());
+    /// assert_eq!(scope.run_id, Some(run_id));
+    /// ```
+    #[must_use]
+    pub fn with_run_id(mut self, run_id: RunId) -> Self {
+        self.run_id = Some(run_id);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -100,6 +132,7 @@ mod tests {
     fn run_scope_default_is_empty() {
         let scope = RunScope::default();
         assert!(scope.vault_namespace.is_none());
+        assert!(scope.run_id.is_none());
     }
 
     #[test]
@@ -116,5 +149,33 @@ mod tests {
         let json = serde_json::to_string(&scope).unwrap();
         let back: RunScope = serde_json::from_str(&json).unwrap();
         assert_eq!(scope, back);
+    }
+
+    #[test]
+    fn run_scope_with_run_id_sets_the_run_id() {
+        let run_id = crate::platform::container::run::RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+        assert_eq!(scope.run_id, Some(run_id));
+    }
+
+    /// A default scope serializes with no `run_id` key at all (D-00f:
+    /// additive, `skip_serializing_if`), and a scope carrying one round-trips.
+    #[test]
+    fn run_scope_run_id_omitted_when_none_and_round_trips_when_some() {
+        let empty = RunScope::default();
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(
+            !json.contains("run_id"),
+            "a None run_id must be omitted from the serialized form: {json}"
+        );
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(empty, back);
+
+        let run_id = crate::platform::container::run::RunId::new_v7();
+        let scoped = RunScope::default().with_run_id(run_id.clone());
+        let json = serde_json::to_string(&scoped).unwrap();
+        assert!(json.contains("run_id"));
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(scoped, back);
     }
 }

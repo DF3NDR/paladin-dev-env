@@ -80,6 +80,11 @@ pub mod node;
 /// carry every named-registration registry through (D-13, D-30).
 pub mod registries;
 pub mod retry;
+/// Superstep spend accumulation and the boundary settle writer (Doc 08
+/// LEDGR-03/04, D-07, D-08, ADR-0052, ADR-0053 §4): `SuperstepSpend`,
+/// `SpendHook` -- crate-private, threaded through `superstep::run` and
+/// `WarEngine::with_treasury_ledger`.
+mod settlement;
 pub mod shutdown;
 mod superstep;
 #[cfg(test)]
@@ -107,6 +112,7 @@ use paladin_core::platform::container::parley::{
     OnExpire, ParleyId, ParleyKind, ParleyRequest, ParleyResponse,
 };
 use paladin_core::platform::container::run::RunId;
+use paladin_core::platform::container::treasury_ledger::SettlementContext;
 use paladin_core::platform::container::vault::Namespace;
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, ThreadId, WaypointId, WaypointStatus,
@@ -118,9 +124,12 @@ use paladin_ports::output::structured_executor_port::StructuredExecutorPort;
 use paladin_ports::output::trace_sink_port::{
     RunFinishStatus, TraceEmitter, TraceEvent, TraceSink,
 };
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::vault_confined::ConfinedVault;
 use paladin_ports::output::vault_port::VaultPort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
+
+use crate::engine::settlement::SpendHook;
 
 pub use bridges::{CAMPAIGN_FAN_IN_SEPARATOR, campaign_node_ids, dedicated_output_field};
 pub use directive_parser::{DirectiveParseError, DirectiveParser, OnParseError};
@@ -1540,6 +1549,15 @@ pub struct WarEngine<W: WaypointPort> {
     /// existed. `Mutex`, not `RwLock`: a quick take-or-leave, never held
     /// across an `.await`.
     bound_trace: std::sync::Mutex<Option<(ThreadId, Arc<TraceDispatcher>)>>,
+    /// This engine's treasury ledger, wired via
+    /// [`WarEngine::with_treasury_ledger`] (D-08, ADR-0052). `None` by
+    /// default -- an engine with no ledger attached settles nothing, and
+    /// every pre-existing engine test passes unchanged. When `Some`, the
+    /// SAME `(ledger, context)` pair backs a fresh top-level
+    /// [`crate::engine::settlement::SpendHook`] on every `start`/`resume*`
+    /// call -- rendered as a presence flag only, never printed, if this
+    /// type ever gains a manual `Debug` impl.
+    treasury: Option<(Arc<dyn TreasuryLedgerPort>, SettlementContext)>,
 }
 
 // --- CF-FR-16, D-21: `+ 'static` is required here (not on the struct
@@ -1573,6 +1591,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             structured_executor: None,
             trace_dispatcher_cell: std::sync::Mutex::new(None),
             bound_trace: std::sync::Mutex::new(None),
+            treasury: None,
         }
     }
 
@@ -2013,6 +2032,91 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         self
     }
 
+    /// Attach a treasury ledger this engine settles spend into, once per
+    /// superstep attempt, synchronously at the superstep boundary (D-08,
+    /// ADR-0052) -- the same boundary Phase 41/42 will later attach
+    /// reservation and the mid-run halt to, through this same hook's ledger
+    /// and context.
+    ///
+    /// The settlement key is `(context.run_id, superstep, context.attempt)`:
+    /// `context.attempt` MUST be the persisted `Run.attempt` counter (D-07)
+    /// -- this engine never invents its own counter, so a caller building
+    /// `context` for a real run must read it from that run's own record. The
+    /// per-model breakdown is keyed on each dispatched `NodeSpec::Paladin`
+    /// node's *configured* model (`paladin.node.model`) -- when a
+    /// `FallbackLlmAdapter` hop serves a different model than configured,
+    /// that hop's cost is still priced at the SERVED model's rate but
+    /// attributed to the CONFIGURED model here (a deliberate simplification;
+    /// no `PaladinResult` field carries the served model back to this
+    /// bridge yet).
+    ///
+    /// A superstep with no priced attempt writes no row; two currencies in
+    /// one superstep write no row and log an error, never a combined
+    /// figure. A ledger `Err` is logged at `error` and a duplicate-key
+    /// `AlreadySettled` outcome at `warn` -- neither ever changes this run's
+    /// outcome, retries a node, or halts the run (D-08): the ledger is
+    /// observational in this phase. A nested `NodeSpec::Battalion` child
+    /// run never settles on its own -- its nodes' costs roll into the
+    /// PARENT superstep that dispatched it (CF-FR-16).
+    ///
+    /// Without a call to this method, this engine performs no ledger call
+    /// at all, and every pre-existing engine test passes unchanged.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    /// use paladin_battalion::engine::WarEngine;
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_core::platform::container::run::RunId;
+    /// use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    /// use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    ///
+    /// struct NoopPort;
+    /// #[async_trait]
+    /// impl PaladinPort for NoopPort {
+    ///     async fn execute(&self, _p: &Paladin, _i: &str) -> Result<PaladinResult, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> { Ok(()) }
+    /// }
+    ///
+    /// let ledger = Arc::new(InMemoryTreasuryLedger::new());
+    /// let context = SettlementContext {
+    ///     scope: LedgerScope::unattributed(),
+    ///     run_id: RunId::new_v7(),
+    ///     attempt: 1,
+    /// };
+    /// let engine = WarEngine::new(Arc::new(NoopPort), Arc::new(InMemoryWaypointStore::new()))
+    ///     .with_treasury_ledger(ledger, context);
+    /// ```
+    pub fn with_treasury_ledger(
+        mut self,
+        ledger: Arc<dyn TreasuryLedgerPort>,
+        context: SettlementContext,
+    ) -> Self {
+        self.treasury = Some((ledger, context));
+        self
+    }
+
+    /// A fresh top-level [`SpendHook`] over this engine's own treasury
+    /// ledger, if one was attached via [`WarEngine::with_treasury_ledger`] --
+    /// `None` otherwise, so every `start`/`resume*` entry point forwards the
+    /// SAME `None` down to `superstep::run`/`run_with_namespace` that it
+    /// always did before this plan.
+    fn spend_hook(&self) -> Option<SpendHook> {
+        self.treasury
+            .clone()
+            .map(|(ledger, context)| SpendHook::top_level(ledger, context))
+    }
+
     /// Start a new run of `graph` under `thread`, seeded with `initial`.
     ///
     /// Runs the full superstep loop (ENG-FR-01): validates the graph,
@@ -2077,6 +2181,11 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.node_cache.clone(),
             self.vault.clone(),
             self.structured_executor.clone(),
+            // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
+            // spend hook, if a treasury ledger was attached via
+            // `with_treasury_ledger` -- `None` otherwise, an engine with no
+            // ledger performs no settle call at all.
+            self.spend_hook(),
         )
         .await;
         // D-02, D-04, D-11: `status` from the `RunOutcome`/`Err` this call
@@ -2319,6 +2428,11 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.node_cache.clone(),
             self.vault.clone(),
             self.structured_executor.clone(),
+            // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
+            // spend hook, if a treasury ledger was attached via
+            // `with_treasury_ledger` -- `None` otherwise, an engine with no
+            // ledger performs no settle call at all.
+            self.spend_hook(),
         )
         .await;
         trace.emit(TraceEvent::RunFinished {
@@ -2674,6 +2788,11 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.node_cache.clone(),
             self.vault.clone(),
             self.structured_executor.clone(),
+            // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
+            // spend hook, if a treasury ledger was attached via
+            // `with_treasury_ledger` -- `None` otherwise, an engine with no
+            // ledger performs no settle call at all.
+            self.spend_hook(),
         )
         .await;
         trace.emit(TraceEvent::RunFinished {
@@ -2845,6 +2964,11 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.node_cache.clone(),
             self.vault.clone(),
             self.structured_executor.clone(),
+            // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
+            // spend hook, if a treasury ledger was attached via
+            // `with_treasury_ledger` -- `None` otherwise, an engine with no
+            // ledger performs no settle call at all.
+            self.spend_hook(),
         )
         .await;
         trace.emit(TraceEvent::RunFinished {
@@ -2921,9 +3045,13 @@ mod tests {
     };
     use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::transience::Transience;
+    use paladin_core::platform::container::treasury_ledger::{
+        LedgerScope, SettlementContext, SpendGroupBy, SpendQuery,
+    };
     use paladin_core::platform::container::waypoint::{NodeOutcomeKind, Waypoint};
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
     use paladin_ports::output::trace_sink_port::MiddlewareAction;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
     use crate::engine::graph::{EdgeSpec, GateRequestTemplate};
@@ -3248,6 +3376,18 @@ mod tests {
     fn make_paladin(name: &str) -> Paladin {
         let data = paladin_core::platform::container::paladin::PaladinData {
             name: name.to_string(),
+            ..Default::default()
+        };
+        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
+    }
+
+    /// Plan 39-04: like [`make_paladin`], but with an explicit `model` --
+    /// the settlement `model_breakdown` key every treasury-ledger test below
+    /// asserts against.
+    fn make_paladin_with_model(name: &str, model: &str) -> Paladin {
+        let data = paladin_core::platform::container::paladin::PaladinData {
+            name: name.to_string(),
+            model: model.to_string(),
             ..Default::default()
         };
         paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
@@ -3655,6 +3795,230 @@ mod tests {
             })
             .expect("a RunFinished record must exist");
         assert_eq!(run_cost, None);
+    }
+
+    // --- Plan 39-04 Task 1: WarEngine::with_treasury_ledger, the boundary
+    // settle, and the superstep spend accumulator ----------------------
+
+    /// Builds the shared three-node graph every Task 1 treasury-ledger test
+    /// below runs: superstep 1 dispatches two parallel priced `Paladin`
+    /// entries (`first`/gpt-4, `second`/gpt-4o-mini); superstep 2 dispatches
+    /// one more (`third`/gpt-4), reached only via `first`'s own edge, so
+    /// `second` never gates it. Each writes to its own field so two
+    /// concurrent superstep-1 writers never contend over one
+    /// `DispatchRule::LastWrite` field.
+    fn treasury_ledger_test_graph() -> (WarGraph, NodeId, NodeId, NodeId) {
+        let out1 = FieldName::new("out1").unwrap();
+        let out2 = FieldName::new("out2").unwrap();
+        let out3 = FieldName::new("out3").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(out1.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out2.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out3.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        let n3 = NodeId::new("third");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("first", "gpt-4"),
+                InputMapping::new("go"),
+                out1,
+            ),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("second", "gpt-4o-mini"),
+                InputMapping::new("go"),
+                out2,
+            ),
+        );
+        graph.add_node(
+            n3.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("third", "gpt-4"),
+                InputMapping::new("go"),
+                out3,
+            ),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n3.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+        graph.add_entry(n2.clone());
+        (graph, n1, n2, n3)
+    }
+
+    /// LEDGR-03/04, D-07, D-08: superstep 1's two parallel priced attempts
+    /// settle as ONE row aggregating both, superstep 2's one attempt as a
+    /// SECOND row -- spend by run sums to the total across both, spend by
+    /// model folds each superstep's own `model_breakdown`, and
+    /// `RunFinished.cost` equals the settled total.
+    #[tokio::test]
+    async fn treasury_ledger_settles_once_per_superstep_with_model_breakdown() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let (graph, _n1, _n2, _n3) = treasury_ledger_test_graph();
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "first",
+            "done",
+            TokenUsage::new(10, 5),
+            Some(Cost::new(10_000, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "second",
+            "done",
+            TokenUsage::new(5, 5),
+            Some(Cost::new(2_500, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "third",
+            "done",
+            TokenUsage::new(20, 10),
+            Some(Cost::new(30_000, usd.clone())),
+        );
+
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store.clone())
+            .with_trace_sink(sink.clone())
+            .with_treasury_ledger(ledger.clone(), context);
+
+        let thread = ThreadId::new("treasury-settles-once-per-superstep").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1, "one currency, one row");
+        assert_eq!(by_run[0].amount, Cost::new(42_500, usd.clone()));
+        assert_eq!(by_run[0].settlements, 2, "one settlement per superstep");
+
+        let by_model = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds");
+        let gpt4 = by_model
+            .iter()
+            .find(|row| row.group == "gpt-4")
+            .expect("a gpt-4 row exists");
+        assert_eq!(gpt4.amount, Cost::new(40_000, usd.clone()));
+        assert_eq!(gpt4.settlements, 2, "gpt-4 appears in both superstep rows");
+        let mini = by_model
+            .iter()
+            .find(|row| row.group == "gpt-4o-mini")
+            .expect("a gpt-4o-mini row exists");
+        assert_eq!(mini.amount, Cost::new(2_500, usd.clone()));
+        assert_eq!(mini.settlements, 1);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        let run_cost = events
+            .iter()
+            .find_map(|r| match &r.event {
+                TraceEvent::RunFinished { cost, .. } => Some(cost.clone()),
+                _ => None,
+            })
+            .expect("a RunFinished record must exist");
+        assert_eq!(
+            run_cost,
+            Some(Cost::new(42_500, usd)),
+            "RunFinished.cost equals the settled total"
+        );
+    }
+
+    /// D-08: a superstep in which every attempt's cost is `None` writes no
+    /// settlement row at all -- the run still completes normally.
+    #[tokio::test]
+    async fn unpriced_superstep_writes_no_settlement() {
+        let (graph, _n1, _n2, _n3) = treasury_ledger_test_graph();
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output("first", "done");
+        port.set_output("second", "done");
+        port.set_output("third", "done");
+
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine =
+            WarEngine::new(port, store.clone()).with_treasury_ledger(ledger.clone(), context);
+
+        let thread = ThreadId::new("unpriced-superstep-writes-no-settlement").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert!(by_run.is_empty(), "no attempt was priced, so no row exists");
+    }
+
+    /// D-08: an engine with no `with_treasury_ledger` call performs no
+    /// ledger call at all -- the pre-existing (pre-Phase-39) engine
+    /// behavior is completely unchanged.
+    #[tokio::test]
+    async fn engine_without_treasury_ledger_is_unchanged() {
+        let (graph, _n1, _n2, _n3) = treasury_ledger_test_graph();
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "first",
+            "done",
+            TokenUsage::new(10, 5),
+            Some(Cost::new(10_000, CurrencyCode::new("USD").unwrap())),
+        );
+        port.set_output("second", "done");
+        port.set_output("third", "done");
+        let store = Arc::new(RecordingWaypointStore::new());
+        // Deliberately no `.with_treasury_ledger(..)` call.
+        let engine = WarEngine::new(port, store.clone());
+
+        let thread = ThreadId::new("engine-without-treasury-ledger-is-unchanged").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
     }
 
     /// A run with zero Paladin nodes at all (a plain `Function` node)
@@ -10898,6 +11262,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap();
@@ -10951,6 +11316,7 @@ mod tests {
             &None,
             None,
             std::time::Duration::from_secs(30),
+            None,
             None,
             None,
             None,

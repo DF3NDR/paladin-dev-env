@@ -1,0 +1,347 @@
+//! Superstep spend accumulation and the boundary settle writer (LEDGR-03,
+//! LEDGR-04, D-07, D-08, ADR-0052, ADR-0053 §4).
+//!
+//! ADR-0052 names the superstep boundary as the one place the engine both
+//! settles spend today (this plan, observational) and, in Phase 42, will
+//! reserve and halt (authoritative) -- so [`SpendHook`] is deliberately
+//! shaped as the one hook both concerns attach to, at the same call site,
+//! sharing the same ledger and [`SettlementContext`].
+//!
+//! Settlement is synchronous and awaited at the superstep boundary, never
+//! routed through a [`crate::engine::hooks::TraceDispatcher`]/`TraceSink`:
+//! that channel is drop-oldest by contract (`engine::hooks`'s own module
+//! docs), so a dropped `NodeFinished` record would silently lose spend --
+//! money is the one thing this engine must never treat as best-effort.
+//!
+//! Crate-private: `paladin-battalion` never re-exports these types outside
+//! `engine::mod`/`engine::superstep`. A ledger failure or duplicate-key
+//! outcome (D-08, LEDGR-03) is logged and never changes a run's outcome,
+//! retries a node, or halts a run -- the ledger stays purely observational
+//! until Phase 41/42 make it authoritative through this same boundary hook.
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex, PoisonError};
+
+use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+use paladin_core::platform::container::treasury_ledger::{
+    SettleOutcome, SettleRequest, SettlementContext, SettlementKey,
+};
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+
+/// Resolve a per-attempt model label to the key a settlement's
+/// `model_breakdown` records it under: `None` or an empty string both fold
+/// into the literal `"unknown"` key (an attempt with no resolvable model --
+/// today, a `NodeSpec::Paladin` node's own `paladin.node.model` is never
+/// empty, but a future dispatch kind might not carry one).
+fn resolve_model_key(model: Option<&str>) -> &str {
+    match model {
+        Some(name) if !name.is_empty() => name,
+        _ => "unknown",
+    }
+}
+
+/// One superstep attempt's accumulated priced spend: the sum of every
+/// priced attempt's [`Cost`] dispatched in it, and each attempt's model
+/// share (D-02). Combined through [`Cost::checked_add`] rather than a bare
+/// `+=` so a currency mismatch is caught, never silently folded into a
+/// wrong total (T-39-11).
+#[derive(Default)]
+pub(crate) struct SuperstepSpend {
+    total: Option<Cost>,
+    by_model: BTreeMap<String, i64>,
+    mismatch: Option<(CurrencyCode, CurrencyCode)>,
+}
+
+impl SuperstepSpend {
+    /// Fold one attempt's cost into this superstep's running total and its
+    /// model's own running share. Once a mismatch has been observed, every
+    /// further call still updates `by_model` (so `take`'s `CurrencyMismatch`
+    /// path never claims a partial breakdown was charged) but the mismatch
+    /// itself is never overwritten -- the FIRST disagreement is the one
+    /// reported.
+    pub(crate) fn record(&mut self, model: &str, cost: &Cost) {
+        match self.total.take() {
+            None => self.total = Some(cost.clone()),
+            Some(current) => match current.checked_add(cost) {
+                Some(sum) => self.total = Some(sum),
+                None => {
+                    if self.mismatch.is_none() {
+                        self.mismatch = Some((current.currency().clone(), cost.currency().clone()));
+                    }
+                    self.total = Some(current);
+                }
+            },
+        }
+        let share = self.by_model.entry(model.to_string()).or_insert(0);
+        *share = share.saturating_add(cost.nanos());
+    }
+
+    /// Take and reset this superstep's accumulated charge (`std::mem::take`)
+    /// -- a second call immediately after always returns
+    /// [`SuperstepCharge::Nothing`].
+    pub(crate) fn take(&mut self) -> SuperstepCharge {
+        let taken = std::mem::take(self);
+        if let Some((first, other)) = taken.mismatch {
+            return SuperstepCharge::CurrencyMismatch { first, other };
+        }
+        match taken.total {
+            None => SuperstepCharge::Nothing,
+            Some(amount) => SuperstepCharge::Charge {
+                amount,
+                model_breakdown: taken.by_model,
+            },
+        }
+    }
+}
+
+/// The result of draining a [`SuperstepSpend`] (`take`): what
+/// [`SpendHook::settle_boundary`] does with it.
+#[derive(Debug)]
+pub(crate) enum SuperstepCharge {
+    /// No attempt in this superstep was priced -- no settlement row is
+    /// written (D-08).
+    Nothing,
+    /// At least one priced attempt was recorded, with no currency
+    /// disagreement -- settle `amount` with this `model_breakdown`.
+    Charge {
+        /// The superstep's aggregated priced total.
+        amount: Cost,
+        /// Bare model name -> nano-units; values sum to `amount` (D-02).
+        model_breakdown: BTreeMap<String, i64>,
+    },
+    /// Two different currencies were recorded in the same superstep attempt
+    /// -- never combined into one figure (T-39-11); no settlement row is
+    /// written, and the disagreement is logged by the caller.
+    CurrencyMismatch {
+        /// The first currency this superstep saw.
+        first: CurrencyCode,
+        /// A later, disagreeing currency this superstep also saw.
+        other: CurrencyCode,
+    },
+}
+
+/// The per-run hook threaded through the superstep loop (D-08): every
+/// dispatched attempt records its own cost via [`SpendHook::record`], and
+/// exactly one [`SpendHook::settle_boundary`] call per superstep drains and
+/// settles the accumulated charge.
+///
+/// A [`SpendHook::child`] shares the SAME accumulator as its parent (`sink`
+/// is `Arc`-cloned, never re-constructed) but carries no ledger of its own
+/// (`ledger: None`) -- so a nested `NodeSpec::Battalion` child run's attempts
+/// fold into the PARENT's superstep total, and the child's own
+/// `settle_boundary` calls are no-ops (CF-FR-16): only the top-level hook
+/// ever settles.
+#[derive(Clone)]
+pub(crate) struct SpendHook {
+    sink: Arc<Mutex<SuperstepSpend>>,
+    ledger: Option<(Arc<dyn TreasuryLedgerPort>, SettlementContext)>,
+}
+
+impl SpendHook {
+    /// Construct a fresh, top-level hook backed by `ledger`/`context`: a
+    /// new, empty accumulator, with a ledger attached so its
+    /// `settle_boundary` calls actually settle.
+    pub(crate) fn top_level(
+        ledger: Arc<dyn TreasuryLedgerPort>,
+        context: SettlementContext,
+    ) -> Self {
+        Self {
+            sink: Arc::new(Mutex::new(SuperstepSpend::default())),
+            ledger: Some((ledger, context)),
+        }
+    }
+
+    /// Derive a child hook for a nested `NodeSpec::Battalion` run (CF-FR-16):
+    /// the SAME shared accumulator, no ledger of its own -- its
+    /// `settle_boundary` is a no-op, and the parent's next boundary drains
+    /// whatever the child recorded alongside its own attempts.
+    ///
+    /// `#[allow(dead_code)]`: plan 39-04 Task 1 defines this method and
+    /// exercises it from this module's own unit tests, but wires the real
+    /// production call site (`ChildEngineResources::spend`,
+    /// `superstep.rs`'s `NodeSpec::Battalion` dispatch arm) only in Task 2 --
+    /// removed there once that call site exists.
+    #[allow(dead_code)]
+    pub(crate) fn child(&self) -> Self {
+        Self {
+            sink: Arc::clone(&self.sink),
+            ledger: None,
+        }
+    }
+
+    /// Record one attempt's own cost against this superstep's running total.
+    /// `model` resolves through [`resolve_model_key`] -- `None` or an empty
+    /// string folds into `"unknown"`. Recovers a poisoned lock with
+    /// [`PoisonError::into_inner`] (T-39-16): a prior panicked holder never
+    /// permanently loses this run's spend tracking.
+    pub(crate) fn record(&self, model: Option<&str>, cost: &Cost) {
+        let key = resolve_model_key(model);
+        let mut sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);
+        sink.record(key, cost);
+    }
+
+    /// Drain this superstep's accumulated charge and settle it, synchronously
+    /// (D-08). A child hook (`ledger: None`) returns at once -- the shared
+    /// accumulator is left for the top-level hook's own boundary call to
+    /// drain. The mutex guard is dropped BEFORE any `.await` (T-39-16): the
+    /// lock is held only long enough to call `take`.
+    ///
+    /// Never returns an error and never panics: an `Err` from the ledger is
+    /// logged at `error`, and [`SettleOutcome::AlreadySettled`] is logged at
+    /// `warn` -- neither changes this run's outcome, retries a node, or
+    /// halts the run (D-08). Log lines never carry `api_key_id`.
+    pub(crate) async fn settle_boundary(&self, superstep: u64) {
+        let Some((ledger, context)) = &self.ledger else {
+            return;
+        };
+        let charge = {
+            let mut sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);
+            sink.take()
+        };
+        match charge {
+            SuperstepCharge::Nothing => {}
+            SuperstepCharge::CurrencyMismatch { first, other } => {
+                log::error!(
+                    target: "paladin::treasury",
+                    "superstep spend currency mismatch: run {} superstep {} attempt {}: {} vs {} -- no settlement written",
+                    context.run_id, superstep, context.attempt, first, other
+                );
+            }
+            SuperstepCharge::Charge {
+                amount,
+                model_breakdown,
+            } => {
+                let key = SettlementKey::new(context.run_id.clone(), superstep, context.attempt);
+                let request = SettleRequest::unreserved(
+                    context.scope.clone(),
+                    key,
+                    amount.clone(),
+                    model_breakdown,
+                );
+                match ledger.settle(request).await {
+                    Ok(SettleOutcome::Settled) => {
+                        log::debug!(
+                            target: "paladin::treasury",
+                            "settled superstep spend: run {} superstep {} attempt {} amount_nanos {} currency {}",
+                            context.run_id, superstep, context.attempt, amount.nanos(), amount.currency()
+                        );
+                    }
+                    Ok(SettleOutcome::AlreadySettled) => {
+                        log::warn!(
+                            target: "paladin::treasury",
+                            "superstep spend already settled: run {} superstep {} attempt {} -- duplicate not charged again",
+                            context.run_id, superstep, context.attempt
+                        );
+                    }
+                    Err(e) => {
+                        log::error!(
+                            target: "paladin::treasury",
+                            "failed to settle superstep spend: run {} superstep {} attempt {} amount_nanos {} currency {}: {e}",
+                            context.run_id, superstep, context.attempt, amount.nanos(), amount.currency()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paladin_core::platform::container::run::RunId;
+    use paladin_core::platform::container::treasury_ledger::{
+        LedgerScope, SpendGroupBy, SpendQuery,
+    };
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+
+    fn usd() -> CurrencyCode {
+        CurrencyCode::new("USD").expect("USD is a valid currency code")
+    }
+
+    fn eur() -> CurrencyCode {
+        CurrencyCode::new("EUR").expect("EUR is a valid currency code")
+    }
+
+    #[test]
+    fn record_accumulates_amount_and_per_model_breakdown_then_take_resets() {
+        let mut spend = SuperstepSpend::default();
+        spend.record("gpt-4", &Cost::new(10, usd()));
+        spend.record("gpt-4o-mini", &Cost::new(5, usd()));
+        spend.record("gpt-4", &Cost::new(3, usd()));
+
+        match spend.take() {
+            SuperstepCharge::Charge {
+                amount,
+                model_breakdown,
+            } => {
+                assert_eq!(amount, Cost::new(18, usd()));
+                assert_eq!(model_breakdown.get("gpt-4"), Some(&13));
+                assert_eq!(model_breakdown.get("gpt-4o-mini"), Some(&5));
+            }
+            other => panic!("expected a Charge, got {other:?}"),
+        }
+
+        assert!(matches!(spend.take(), SuperstepCharge::Nothing));
+    }
+
+    #[test]
+    fn resolve_model_key_maps_none_and_empty_to_unknown() {
+        assert_eq!(resolve_model_key(None), "unknown");
+        assert_eq!(resolve_model_key(Some("")), "unknown");
+        assert_eq!(resolve_model_key(Some("gpt-4")), "gpt-4");
+    }
+
+    #[test]
+    fn mismatched_currencies_report_a_mismatch_without_combining() {
+        let mut spend = SuperstepSpend::default();
+        spend.record("gpt-4", &Cost::new(10, usd()));
+        spend.record("gpt-4", &Cost::new(1, eur()));
+
+        match spend.take() {
+            SuperstepCharge::CurrencyMismatch { first, other } => {
+                assert_eq!(first, usd());
+                assert_eq!(other, eur());
+            }
+            other => panic!("expected a CurrencyMismatch, got {other:?}"),
+        }
+    }
+
+    /// The one settling test in this file (per plan): proves a child hook's
+    /// `settle_boundary` performs no ledger call and leaves the shared
+    /// accumulator intact for the parent's own boundary to drain -- observed
+    /// through a real `InMemoryTreasuryLedger` settlement at the top level.
+    #[tokio::test]
+    async fn child_settle_boundary_makes_no_ledger_call_and_leaves_the_accumulator_intact() {
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: RunId::new_v7(),
+            attempt: 1,
+        };
+        let hook = SpendHook::top_level(ledger.clone(), context.clone());
+        let child = hook.child();
+
+        child.record(Some("gpt-4"), &Cost::new(10, usd()));
+        // A no-op: no ledger, and the shared accumulator is left untouched.
+        child.settle_boundary(1).await;
+
+        hook.record(Some("gpt-4o-mini"), &Cost::new(5, usd()));
+        hook.settle_boundary(1).await;
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![context.run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(rows.len(), 1, "exactly one settlement for this superstep");
+        assert_eq!(
+            rows[0].amount,
+            Cost::new(15, usd()),
+            "the child's recorded amount survived its own no-op settle_boundary"
+        );
+    }
+}

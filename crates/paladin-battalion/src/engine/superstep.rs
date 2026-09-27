@@ -80,6 +80,7 @@ use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
 use crate::engine::registries::EngineRegistries;
 use crate::engine::retry;
+use crate::engine::settlement::SpendHook;
 use crate::engine::{EngineError, RunOutcome, WaypointDurability};
 use crate::llm_failure;
 
@@ -642,6 +643,19 @@ impl<W: WaypointPort + 'static> Clone for NodeDispatch<W> {
                 restart_on_resume: *restart_on_resume,
             },
         }
+    }
+}
+
+/// The model a `NodeDispatch::Paladin` entry's cost attaches to in a
+/// settlement's `model_breakdown` (LEDGR-04, D-02): the node's *configured*
+/// `paladin.node.model`, never the model an adapter actually served (D-08's
+/// `WarEngine::with_treasury_ledger` rustdoc states the fallback-hop
+/// simplification this implies). `None` for every other dispatch kind --
+/// `SpendHook::record` folds that into the `"unknown"` breakdown key.
+fn dispatch_paladin_model<W: WaypointPort + 'static>(dispatch: &NodeDispatch<W>) -> Option<String> {
+    match dispatch {
+        NodeDispatch::Paladin { paladin, .. } => Some(paladin.node.model.clone()),
+        NodeDispatch::Function(_) | NodeDispatch::Battalion { .. } => None,
     }
 }
 
@@ -1462,6 +1476,12 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     // `output_schema` nodes dispatch through the SAME
                     // structured executor the parent's do.
                     resources.structured_executor.clone(),
+                    // --- LEDGR-03, D-08, CF-FR-16 (plan 39-04 Task 1): the
+                    // Battalion arm's spend hook is threaded in Task 2 --
+                    // this task's own dispatch always passes `None` here, so
+                    // a child run's own attempts settle nothing on their
+                    // own until `ChildEngineResources::spend` exists.
+                    None,
                 ));
                 let outcome = child_fut.await;
 
@@ -1803,6 +1823,13 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     // `WarGraph::validate_structured_executor_backend` has then already
     // rejected any `output_schema` in the graph).
     structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
+    // --- LEDGR-03, D-08 (plan 39-04): this run's top-level spend hook, if a
+    // treasury ledger was attached via `WarEngine::with_treasury_ledger` --
+    // `None` when no ledger is configured, in which case this run performs
+    // no ledger call at all (every pre-existing engine test passes
+    // unchanged). Forwarded, unconditionally, to [`run_with_namespace`],
+    // exactly like every other real, always-present engine setting above.
+    spend: Option<SpendHook>,
 ) -> Result<RunOutcome, EngineError> {
     // --- CF-FR-15, D-20: a top-level call through this public entry point
     // (`WarEngine::start`/`resume_with_options`, and every existing test
@@ -1857,6 +1884,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         node_cache,
         vault,
         structured_executor,
+        spend,
     )
     .await
 }
@@ -1966,6 +1994,14 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // `ChildEngineResources::structured_executor`, like every other engine
     // resource.
     structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
+    // --- LEDGR-03, D-08 (plan 39-04): this run's top-level spend hook, if
+    // any -- `None` when no treasury ledger is configured, in which case
+    // this run performs no ledger call at all. A nested `NodeSpec::Battalion`
+    // child run inherits a CHILD hook (never this same top-level one)
+    // through `ChildEngineResources::spend` (Task 2) -- its own attempts
+    // fold into the PARENT superstep's accumulator, and its own
+    // `settle_boundary` calls are no-ops (CF-FR-16).
+    spend: Option<SpendHook>,
 ) -> Result<RunOutcome, EngineError> {
     // --- FT-FR-20, D-28: the graph fingerprint every cache key composed in
     // this run starts with -- computed ONCE per run (never per dispatch),
@@ -2514,6 +2550,14 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             // owns everything it touches, mirroring `port` immediately
             // above.
             let node_structured_executor = structured_executor.clone();
+            // --- LEDGR-03, LEDGR-04, D-08 (plan 39-04): this dispatch's own
+            // spend hook (cloned out of the outer scope, mirroring `port`/
+            // `node_structured_executor` above) and its resolved
+            // `paladin.node.model` (or `None` for a `Function`/`Battalion`
+            // dispatch) -- computed here, once, from `dispatch` BEFORE it is
+            // moved into the spawned task below.
+            let node_spend = spend.clone();
+            let node_model = dispatch_paladin_model(&dispatch);
             let node_trace = Arc::clone(trace);
             // --- D-04, T-28-03-02: this run's shared heartbeat rate-limiter
             // state, cloned into the spawned task alongside `node_trace`
@@ -2801,6 +2845,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             // `true` (a served-from-cache outcome).
                             cache_hit: false,
                         });
+                        // --- LEDGR-03, LEDGR-04, D-08 (plan 39-04): record
+                        // THIS attempt's own cost against the superstep's
+                        // accumulator -- every attempt passes this point
+                        // (including a retried attempt), so a retry's cost
+                        // is folded in exactly once per attempt, never
+                        // dropped and never double-counted. A `None` cost
+                        // (an unpriced call, a `Function` node, a failed
+                        // attempt) records nothing.
+                        if let (Some(hook), Some(attempt_cost)) = (&node_spend, &cost) {
+                            hook.record(node_model.as_deref(), attempt_cost);
+                        }
 
                         // --- D-14, D-15, D-07: only a `NodeFailure::Node`
                         // (a `Function` node's own error, an `InputMapping`
@@ -3383,6 +3438,19 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             }
         }
         completed_records.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+
+        // --- LEDGR-03, D-08, ADR-0052 (plan 39-04): settle THIS superstep
+        // attempt's accumulated spend, synchronously, immediately after
+        // every dispatched node's result has been joined and
+        // `completed_records` sorted -- BEFORE any outcome branch below
+        // persists this superstep's Waypoint. A `None` hook (no treasury
+        // ledger configured) performs no call at all; a child hook
+        // (`ChildEngineResources::spend`) is a no-op here too (its own
+        // `settle_boundary` always returns at once) -- only the top-level
+        // hook this run was given ever actually settles.
+        if let Some(hook) = &spend {
+            hook.settle_boundary(superstep_number).await;
+        }
 
         // --- FT-FR-10, D-20, ENG-FR-03: the engine budget expired
         // MID-superstep and cut an in-flight attempt. The run ends with the
@@ -4785,6 +4853,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap()
@@ -4825,6 +4894,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -4874,6 +4944,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -5670,6 +5741,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -7137,6 +7209,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
 
@@ -7189,6 +7262,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -7778,6 +7852,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await;
 
@@ -7813,6 +7888,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -7877,6 +7953,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -9385,6 +9462,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
     }
@@ -10788,6 +10866,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .await
         .unwrap()
@@ -10831,6 +10910,7 @@ mod tests {
             &None,
             None,
             shutdown_grace,
+            None,
             None,
             None,
             None,
@@ -12261,6 +12341,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,
@@ -14434,6 +14515,7 @@ mod tests {
             &None,
             None,
             default_shutdown_grace(),
+            None,
             None,
             None,
             None,

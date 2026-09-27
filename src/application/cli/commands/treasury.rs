@@ -268,9 +268,29 @@ async fn build_treasury_ledger() -> Result<Arc<dyn TreasuryLedgerPort>, CliError
     }
 }
 
-/// The Postgres arm is not implemented until plan 39-03 (`PostgresTreasuryLedger`) -- returns
-/// the same `CliError::configuration` shape `run.rs`'s `not(feature = "storage-postgres")` arm
-/// uses, so an operator sees one consistent message regardless of which gap is the reason.
+/// Reads the Postgres URL from the named env var and opens a [`PostgresTreasuryLedger`] against
+/// it (D-09) -- mirrors `run.rs`'s `build_postgres_run_repository` exactly.
+#[cfg(feature = "storage-postgres")]
+async fn build_postgres_treasury_ledger(
+    url_env: &str,
+) -> Result<Arc<dyn TreasuryLedgerPort>, CliError> {
+    let url = std::env::var(url_env).map_err(|_| {
+        CliError::configuration(format!(
+            "run store postgres backend names env var '{url_env}', which is not set"
+        ))
+    })?;
+    let store = paladin_storage::treasury::postgres::PostgresTreasuryLedger::new(&url)
+        .await
+        .map_err(|e| {
+            CliError::execution(format!("failed to open postgres treasury ledger: {e}"))
+        })?;
+    Ok(Arc::new(store))
+}
+
+/// This binary was built without the `storage-postgres` feature -- returns the same
+/// `CliError::configuration` shape `run.rs`'s `not(feature = "storage-postgres")` arm uses, so an
+/// operator sees one consistent message regardless of which store this gap affects.
+#[cfg(not(feature = "storage-postgres"))]
 async fn build_postgres_treasury_ledger(
     url_env: &str,
 ) -> Result<Arc<dyn TreasuryLedgerPort>, CliError> {

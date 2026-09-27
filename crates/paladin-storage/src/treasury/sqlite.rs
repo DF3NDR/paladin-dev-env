@@ -1,0 +1,434 @@
+/*
+SQLite Treasury Ledger
+
+Concrete `TreasuryLedgerPort` implementation over SQLite (LEDGR-01..04, ADR-0053, D-04, D-06,
+D-11). This plan (39-01) implements `settle`/`spend`/`store_now` only -- every settle write is
+an unreserved settle (`request.reservation: None`); a `Some` reservation is rejected with
+`TreasuryLedgerError::UnknownReservation`, since no adapter can yet hold a `reserve` row (39-02
+adds `reserve`/`release`). Settlement idempotency is store-enforced (D-06): the partial unique
+index `idx_treasury_ledger_settlement` on `(run_id, superstep, attempt) WHERE kind = 'settle'`
+plus `INSERT ... ON CONFLICT (run_id, superstep, attempt) WHERE kind = 'settle' DO NOTHING` --
+zero rows affected maps to `SettleOutcome::AlreadySettled`, never an error.
+
+Every top-level query string below is a plain `&'static str` literal (or, for `spend`'s dynamic
+filters, an `sqlx::QueryBuilder` seeded with one) -- never a runtime string-formatting call
+building SQL text -- so no caller-supplied value can ever be interpolated into SQL. Every
+persisted timestamp is bound from a Rust `DateTime<Utc>` truncated through
+`crate::run::storage_timestamp` -- no row is ever stamped by an SQL-side clock expression, so
+the TEXT column holds one encoding and lexical order is chronological (D-00e). Migrations follow
+the versioned-file convention at `crates/paladin-storage/migrations/sqlite/`, embedded at
+compile time via `sqlx::migrate!` and applied automatically on construction.
+*/
+
+use std::collections::BTreeMap;
+use std::str::FromStr;
+
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use sqlx::sqlite::{Sqlite, SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use sqlx::{QueryBuilder, Row};
+use uuid::Uuid;
+
+use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+use paladin_core::platform::container::treasury_ledger::{
+    SettleOutcome, SettleRequest, SpendGroupBy, SpendQuery, SpendRow,
+};
+use paladin_ports::output::treasury_ledger_port::{TreasuryLedgerError, TreasuryLedgerPort};
+
+use crate::waypoint::redact::redact_database_url_password;
+
+/// The schema version this adapter stamps on every row it writes (mirrors
+/// `paladin_core::platform::container::run::RUN_SCHEMA_VERSION`'s convention).
+const TREASURY_LEDGER_SCHEMA_VERSION: &str = "v1";
+
+// The `WHERE kind = 'settle'` arbiter predicate below MUST textually match
+// `007_create_treasury_ledger_table.sql`'s `idx_treasury_ledger_settlement` index predicate, or
+// neither SQLite nor Postgres can infer that partial index as the conflict target (Pitfall 3;
+// `settle_arbiter_predicate_matches_the_migration` proves this stays true).
+const SETTLE_INSERT: &str = "\
+    INSERT INTO treasury_ledger \
+      (entry_id, kind, tenant_id, api_key_id, reservation_id, run_id, superstep, attempt, \
+       amount_nanos, charged_nanos, currency, model_breakdown, attributed_at, recorded_at, \
+       schema_version) \
+    VALUES (?, 'settle', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+    ON CONFLICT (run_id, superstep, attempt) WHERE kind = 'settle' DO NOTHING";
+
+/// The store's own clock (ALLOW-01, ADR-0053 §2) -- an RFC 3339 string SQLite's `chrono` decode
+/// already parses identically to every other `DateTime<Utc>` column in this codebase.
+const STORE_NOW: &str = "SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+
+/// Every settle row's columns `spend` needs, pre-filtered to `kind = 'settle'` so reserve/release
+/// rows never reach the fold.
+const SPEND_SELECT_PREFIX: &str = "\
+    SELECT tenant_id, api_key_id, run_id, currency, charged_nanos, model_breakdown \
+    FROM treasury_ledger WHERE kind = 'settle'";
+
+static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
+
+/// SQLite `TreasuryLedgerPort` implementation (LEDGR-01, Tier 1: always exercised in CI, no
+/// external service required).
+#[derive(Debug)]
+pub struct SqliteTreasuryLedger {
+    pool: SqlitePool,
+    /// Kept so every error this store returns can be redacted of the connection URL's password,
+    /// not just construction-time connection errors -- mirrors `SqliteRunRepository`'s rationale
+    /// (T-22-18).
+    database_url: String,
+}
+
+impl SqliteTreasuryLedger {
+    /// Connect to `database_url`, creating the database file if missing, and apply the
+    /// versioned migration. Safe to call more than once against the same database file: the
+    /// migration is idempotent (`CREATE TABLE IF NOT EXISTS`/`CREATE INDEX IF NOT EXISTS`) and
+    /// `sqlx::migrate::Migrator` itself tracks applied versions.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreasuryLedgerError::Backend`] (connection URL password redacted first) if the
+    /// connection cannot be opened or the migration cannot be applied.
+    pub async fn new(database_url: &str) -> Result<Self, TreasuryLedgerError> {
+        let options = SqliteConnectOptions::from_str(database_url)
+            .map_err(|e| Self::wrap(database_url, e))?
+            .create_if_missing(true);
+
+        let pool = SqlitePoolOptions::new()
+            .connect_with(options)
+            .await
+            .map_err(|e| Self::wrap(database_url, e))?;
+
+        MIGRATOR
+            .run(&pool)
+            .await
+            .map_err(|e| Self::wrap(database_url, e))?;
+
+        Ok(Self {
+            pool,
+            database_url: database_url.to_string(),
+        })
+    }
+
+    /// Wrap a driver/migration error into `TreasuryLedgerError::Backend`, with the connection
+    /// URL's password redacted from the error text first (redact before any truncation, per this
+    /// project's security instructions).
+    fn wrap(database_url: &str, err: impl std::error::Error) -> TreasuryLedgerError {
+        let redacted = redact_database_url_password(&err.to_string(), database_url);
+        TreasuryLedgerError::Backend {
+            source: redacted.into(),
+        }
+    }
+
+    fn wrap_error(&self, err: sqlx::Error) -> TreasuryLedgerError {
+        Self::wrap(&self.database_url, err)
+    }
+
+    /// The store's own clock (shared by `store_now` and `settle`'s `attributed_at`/
+    /// `recorded_at` stamping, so both read the same query).
+    async fn store_clock(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+        sqlx::query_scalar(STORE_NOW)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))
+    }
+}
+
+#[async_trait]
+impl TreasuryLedgerPort for SqliteTreasuryLedger {
+    async fn settle(&self, request: SettleRequest) -> Result<SettleOutcome, TreasuryLedgerError> {
+        crate::treasury::validate_settle(&request)?;
+
+        if let Some(reservation) = request.reservation {
+            // No adapter can yet hold a `reserve` row in this plan (39-02 adds
+            // `reserve`/`release`), so every `Some` reservation is unconditionally unknown.
+            return Err(TreasuryLedgerError::UnknownReservation { reservation });
+        }
+
+        let now = self.store_clock().await?;
+        let attributed_at = crate::run::storage_timestamp(now);
+
+        let superstep = i64::try_from(request.key.superstep).map_err(|_| {
+            TreasuryLedgerError::InvalidRequest {
+                message: format!(
+                    "superstep {} does not fit in a 64-bit signed integer",
+                    request.key.superstep
+                ),
+            }
+        })?;
+        let attempt = i64::from(request.key.attempt);
+
+        let model_breakdown_json =
+            serde_json::to_string(&request.model_breakdown).map_err(|e| {
+                TreasuryLedgerError::Serialization {
+                    message: format!("model_breakdown could not be serialized: {e}"),
+                }
+            })?;
+
+        let entry_id = Uuid::now_v7().to_string();
+        let amount_nanos = request.amount.nanos();
+
+        let result = sqlx::query(SETTLE_INSERT)
+            .bind(entry_id)
+            .bind(&request.scope.tenant_id)
+            .bind(&request.scope.api_key_id)
+            .bind(None::<String>)
+            .bind(request.key.run_id.as_str())
+            .bind(superstep)
+            .bind(attempt)
+            .bind(amount_nanos)
+            .bind(amount_nanos)
+            .bind(request.amount.currency().as_str())
+            .bind(model_breakdown_json)
+            .bind(attributed_at)
+            .bind(attributed_at)
+            .bind(TREASURY_LEDGER_SCHEMA_VERSION)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        Ok(if result.rows_affected() == 0 {
+            SettleOutcome::AlreadySettled
+        } else {
+            SettleOutcome::Settled
+        })
+    }
+
+    async fn spend(&self, query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+        let mut builder: QueryBuilder<Sqlite> = QueryBuilder::new(SPEND_SELECT_PREFIX);
+
+        if let Some(since) = query.since {
+            builder.push(" AND attributed_at >= ");
+            builder.push_bind(crate::run::storage_timestamp(since));
+        }
+        if let Some(until) = query.until {
+            builder.push(" AND attributed_at < ");
+            builder.push_bind(crate::run::storage_timestamp(until));
+        }
+        if let Some(tenant_id) = &query.tenant_id {
+            builder.push(" AND tenant_id = ");
+            builder.push_bind(tenant_id.clone());
+        }
+        if let Some(api_key_id) = &query.api_key_id {
+            builder.push(" AND api_key_id = ");
+            builder.push_bind(api_key_id.clone());
+        }
+        if !query.run_ids.is_empty() {
+            builder.push(" AND run_id IN (");
+            let mut separated = builder.separated(", ");
+            for run_id in &query.run_ids {
+                separated.push_bind(run_id.as_str().to_string());
+            }
+            separated.push_unseparated(")");
+        }
+
+        let rows = builder
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        // Keyed by (group value, currency code) -- never combining two currencies into one
+        // figure (D-09). The u64 is the settlement count folded into this (group, currency).
+        let mut folded: BTreeMap<(String, String), (i64, u64)> = BTreeMap::new();
+
+        for row in &rows {
+            let tenant_id: String = row.try_get("tenant_id").map_err(|e| self.wrap_error(e))?;
+            let api_key_id: String = row.try_get("api_key_id").map_err(|e| self.wrap_error(e))?;
+            let run_id: String = row.try_get("run_id").map_err(|e| self.wrap_error(e))?;
+            let currency: String = row.try_get("currency").map_err(|e| self.wrap_error(e))?;
+            let charged_nanos: i64 = row
+                .try_get("charged_nanos")
+                .map_err(|e| self.wrap_error(e))?;
+            let model_breakdown_json: String = row
+                .try_get("model_breakdown")
+                .map_err(|e| self.wrap_error(e))?;
+
+            CurrencyCode::new(&currency).map_err(|e| TreasuryLedgerError::Serialization {
+                message: format!("stored currency '{currency}' is invalid: {e}"),
+            })?;
+
+            match query.group_by {
+                SpendGroupBy::Tenant => fold_one(&mut folded, tenant_id, currency, charged_nanos),
+                SpendGroupBy::ApiKey => fold_one(&mut folded, api_key_id, currency, charged_nanos),
+                SpendGroupBy::Run => fold_one(&mut folded, run_id, currency, charged_nanos),
+                SpendGroupBy::Model => {
+                    let breakdown: BTreeMap<String, i64> =
+                        serde_json::from_str(&model_breakdown_json).map_err(|e| {
+                            TreasuryLedgerError::Serialization {
+                                message: format!("stored model_breakdown is invalid JSON: {e}"),
+                            }
+                        })?;
+                    for (model, nanos) in breakdown {
+                        fold_one(&mut folded, model, currency.clone(), nanos);
+                    }
+                }
+            }
+        }
+
+        folded
+            .into_iter()
+            .map(|((group, currency), (nanos, settlements))| {
+                let currency = CurrencyCode::new(&currency).map_err(|e| {
+                    TreasuryLedgerError::Serialization {
+                        message: format!("stored currency '{currency}' is invalid: {e}"),
+                    }
+                })?;
+                Ok(SpendRow {
+                    group,
+                    amount: Cost::new(nanos, currency),
+                    settlements,
+                })
+            })
+            .collect()
+    }
+
+    async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+        self.store_clock().await
+    }
+}
+
+/// Fold one (group, currency, nanos) contribution into `folded`, incrementing that entry's
+/// settlement count by one.
+fn fold_one(
+    folded: &mut BTreeMap<(String, String), (i64, u64)>,
+    group: String,
+    currency: String,
+    nanos: i64,
+) {
+    let entry = folded.entry((group, currency)).or_insert((0, 0));
+    entry.0 = entry.0.saturating_add(nanos);
+    entry.1 += 1;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paladin_core::platform::container::run::RunId;
+    use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
+
+    async fn fresh_store() -> SqliteTreasuryLedger {
+        SqliteTreasuryLedger::new("sqlite::memory:").await.unwrap()
+    }
+
+    fn usd() -> CurrencyCode {
+        CurrencyCode::new("USD").unwrap()
+    }
+
+    #[tokio::test]
+    async fn settle_then_spend_groups_by_run_and_model() {
+        let store = fresh_store().await;
+        let run_id = RunId::new_v7();
+
+        let first = store
+            .settle(SettleRequest::unreserved(
+                LedgerScope::unattributed(),
+                SettlementKey::new(run_id.clone(), 1, 1),
+                Cost::new(45_000_000, usd()),
+                BTreeMap::from([("gpt-4".to_string(), 45_000_000_i64)]),
+            ))
+            .await
+            .unwrap();
+        let second = store
+            .settle(SettleRequest::unreserved(
+                LedgerScope::unattributed(),
+                SettlementKey::new(run_id.clone(), 2, 1),
+                Cost::new(1_500_000, usd()),
+                BTreeMap::from([("gpt-4o-mini".to_string(), 1_500_000_i64)]),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(first, SettleOutcome::Settled);
+        assert_eq!(second, SettleOutcome::Settled);
+
+        let by_model = store
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(by_model.len(), 2);
+        let gpt4 = by_model.iter().find(|row| row.group == "gpt-4").unwrap();
+        assert_eq!(gpt4.amount.nanos(), 45_000_000);
+        assert_eq!(gpt4.settlements, 1);
+        let mini = by_model
+            .iter()
+            .find(|row| row.group == "gpt-4o-mini")
+            .unwrap();
+        assert_eq!(mini.amount.nanos(), 1_500_000);
+        assert_eq!(mini.settlements, 1);
+
+        let by_run = store
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(by_run[0].group, run_id.as_str());
+        assert_eq!(by_run[0].amount.nanos(), 46_500_000);
+        assert_eq!(by_run[0].settlements, 2);
+    }
+
+    #[tokio::test]
+    async fn duplicate_settle_is_already_settled_and_counted_once() {
+        let store = fresh_store().await;
+        let request = SettleRequest::unreserved(
+            LedgerScope::unattributed(),
+            SettlementKey::new(RunId::new_v7(), 1, 1),
+            Cost::new(45_000_000, usd()),
+            BTreeMap::from([("gpt-4".to_string(), 45_000_000_i64)]),
+        );
+
+        let first = store.settle(request.clone()).await.unwrap();
+        let second = store.settle(request).await.unwrap();
+        assert_eq!(first, SettleOutcome::Settled);
+        assert_eq!(second, SettleOutcome::AlreadySettled);
+
+        let rows = store
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].amount.nanos(), 45_000_000);
+        assert_eq!(rows[0].settlements, 1);
+    }
+
+    #[tokio::test]
+    async fn store_now_is_non_decreasing() {
+        let store = fresh_store().await;
+        let first = store.store_now().await.unwrap();
+        let second = store.store_now().await.unwrap();
+        assert!(second >= first);
+    }
+
+    #[tokio::test]
+    async fn connection_error_redacts_password_from_database_url() {
+        let url = "sqlite://user:hunter2-secret@/nonexistent/path/that/does/not/exist.db";
+        let err = SqliteTreasuryLedger::new(url).await.unwrap_err();
+        let message = err.to_string();
+        assert!(
+            !message.contains("hunter2-secret"),
+            "connection error leaked the password: {message}"
+        );
+    }
+
+    #[test]
+    fn settle_arbiter_predicate_matches_the_migration() {
+        let migration =
+            include_str!("../../migrations/sqlite/007_create_treasury_ledger_table.sql");
+        assert!(
+            migration.contains("WHERE kind = 'settle';"),
+            "the migration's settlement index predicate must read \
+             \"WHERE kind = 'settle';\" so the write query's arbiter clause below matches it \
+             textually"
+        );
+        assert!(
+            SETTLE_INSERT.contains("WHERE kind = 'settle' DO NOTHING"),
+            "SETTLE_INSERT's ON CONFLICT arbiter predicate must textually match the migration's \
+             partial unique index predicate (Pitfall 3)"
+        );
+    }
+}

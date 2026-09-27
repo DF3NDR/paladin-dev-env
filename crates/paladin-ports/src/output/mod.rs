@@ -59,6 +59,9 @@ pub mod token_counter_port;
 /// Trace event stream port (ENG-FR-21): standardized execution
 /// observability the superstep engine emits, with no consumer yet.
 pub mod trace_sink_port;
+/// Treasury ledger port (LEDGR-01..04, ADR-0053): the append-only, derive-on-read spend ledger
+/// contract every backend adapter (InMemory/SQLite/Postgres, `paladin-storage`) implements.
+pub mod treasury_ledger_port;
 /// User persistence repository port.
 pub mod user_repository_port;
 /// `ConfinedVault` -- the Vault's namespace-confinement enforcement point

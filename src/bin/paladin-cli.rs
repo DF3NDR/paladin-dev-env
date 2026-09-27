@@ -12,6 +12,7 @@ use paladin::application::cli::commands::{
     muster, onboarding,
     run::{RunCommands, run_run_export},
     setup_check,
+    treasury::{TreasuryCommands, run_treasury_spend},
 };
 use paladin::application::cli::error::CliError;
 use std::process;
@@ -108,6 +109,11 @@ enum Commands {
         #[command(subcommand)]
         action: RunCommands,
     },
+    /// Treasurer spend ledger operations (view settled spend)
+    Treasury {
+        #[command(subcommand)]
+        action: TreasuryCommands,
+    },
     /// Run a council discussion
     Council {
         /// Discussion topic
@@ -191,6 +197,9 @@ async fn main() {
             RunCommands::Export(args) => {
                 run_run_export(args.thread, args.waypoint, args.run, args.graph, args.out).await
             }
+        },
+        Commands::Treasury { action } => match action {
+            TreasuryCommands::Spend(args) => run_treasury_spend(args).await,
         },
         Commands::Muster {
             task,

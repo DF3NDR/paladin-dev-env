@@ -50,6 +50,10 @@ pub mod token_usage;
 /// their supporting types (D-01, D-02).
 pub mod trace;
 pub mod transience;
+/// Treasurer spend-ledger domain types (LEDGR-01..04, ADR-0053): `LedgerScope`,
+/// `SettlementKey`, `ReservationId`, `LedgerEntryKind`, `SpendRow` and the port's
+/// request/query types. Pure value types, no I/O.
+pub mod treasury_ledger;
 pub mod trigger;
 pub mod user;
 pub mod user_group;

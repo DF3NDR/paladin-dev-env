@@ -3,16 +3,18 @@ status: testing
 phase: 38-design-seams-pricing-cost-producer
 source: [38-01-SUMMARY.md, 38-02-SUMMARY.md, 38-03-SUMMARY.md, 38-04-SUMMARY.md, 38-05-SUMMARY.md, 38-06-SUMMARY.md, 38-07-SUMMARY.md, 38-08-SUMMARY.md, 38-09-SUMMARY.md]
 started: 2026-09-27T15:47:12Z
-updated: 2026-09-27T16:32:37Z
+updated: 2026-09-27T16:34:19Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 3
-name: 38-02/D2: An unpriced model's streamed call yields cost None end-to-end (never a
+number: 4
+name: 38-03/D7: paladin-server refuses to start with 'invalid treasurer configuration:
 expected: |
-  Run the same streamed call against a model with no price row. The herald prints no Cost line at all (never `0.0000`), cost_estimate is None, and the log carries exactly one `warn` line naming the unpriced model, no matter how many calls you make. (Automated: covered by the same test target and `pricing.rs` warn-once tests; confirm the log looks right to you.)
+  Start paladin-server with a config.yml whose `treasurer.pricing` has a bad price (e.g. `prompt: "-1.00"` or `prompt: "abc"`). The process refuses to start and prints `invalid treasurer configuration: ...` naming `treasurer.pricing` and the offending model/axis, before any agent, engine or provider is built.
+  
+  Why a human: No integration test spawns the actual paladin-server binary against a malformed config.yml and asserts process exit; the ordering and message-format claim is verified by source inspection and the unit-level HostBuildError/ProvisionError tests (D6) that share the exact same TreasurerConfig::validate() call. A human running `PALADIN_CONFIG=<bad-price-config> paladin-server` and observing the refusal would close this gap fully.
 awaiting: user response
 
 ## Tests
@@ -26,7 +28,7 @@ result: pass
 
 ### 3. 38-02/D2: An unpriced model's streamed call yields cost None end-to-end (never a
 expected: Run the same streamed call against a model with no price row. The herald prints no Cost line at all (never `0.0000`), cost_estimate is None, and the log carries exactly one `warn` line naming the unpriced model, no matter how many calls you make. (Automated: covered by the same test target and `pricing.rs` warn-once tests; confirm the log looks right to you.)
-result: [pending]
+result: pass
 
 ### 4. 38-03/D7: paladin-server refuses to start with 'invalid treasurer configuration:
 expected: Start paladin-server with a config.yml whose `treasurer.pricing` has a bad price (e.g. `prompt: "-1.00"` or `prompt: "abc"`). The process refuses to start and prints `invalid treasurer configuration: ...` naming `treasurer.pricing` and the offending model/axis, before any agent, engine or provider is built.
@@ -364,9 +366,9 @@ verification: cargo test --workspace; cargo fmt --check; make clean-code; make s
 ## Summary
 
 total: 51
-passed: 47
+passed: 48
 issues: 0
-pending: 4
+pending: 3
 skipped: 0
 blocked: 0
 

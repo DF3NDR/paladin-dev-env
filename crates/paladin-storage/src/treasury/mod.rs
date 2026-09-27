@@ -23,6 +23,11 @@ pub mod contract_tests;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
+/// PostgreSQL `TreasuryLedgerPort` implementation, behind the `postgres` feature (LEDGR-01,
+/// D-11, D-12, ADR-0053 §5).
+#[cfg(feature = "postgres")]
+pub mod postgres;
+
 use paladin_core::platform::container::treasury_ledger::{ReserveRequest, SettleRequest};
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
 

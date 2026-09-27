@@ -10,15 +10,20 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use paladin_core::platform::container::execution_result::PaladinResult;
+use paladin_core::platform::container::heartbeat::HeartbeatHandle;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::run_scope::RunScope;
 use paladin_llm::pricing::with_pricing;
 use paladin_llm::provider_factory::LlmProviderFactory;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_web::{AgentProvisioner, AgentSpec, ProvisionError, ProvisionedAgent};
 
-use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+use crate::application::services::paladin::paladin_execution_service::{
+    AgentLoopSettlement, PaladinExecutionService,
+};
 use crate::config::agents::AgentDefinition;
 use crate::config::settings::Settings;
 use crate::config::treasurer::TreasurerConfig;
@@ -34,6 +39,7 @@ pub struct FacadeProvisioner {
     default_provider: String,
     breaker: Arc<CircuitBreaker>,
     treasurer: TreasurerConfig,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
 }
 
 impl FacadeProvisioner {
@@ -41,12 +47,15 @@ impl FacadeProvisioner {
     ///
     /// The treasurer configuration defaults to [`TreasurerConfig::default()`] (empty pricing
     /// table) -- use [`FacadeProvisioner::with_treasurer`] to price runtime-provisioned agents.
+    /// No treasury ledger writer is installed by default -- use
+    /// [`FacadeProvisioner::with_treasury_ledger`] to settle runtime-provisioned agents' calls.
     pub fn new(default_provider: impl Into<String>, breaker: Arc<CircuitBreaker>) -> Self {
         Self {
             factory: LlmProviderFactory::new(),
             default_provider: default_provider.into(),
             breaker,
             treasurer: TreasurerConfig::default(),
+            treasury_ledger: None,
         }
     }
 
@@ -62,6 +71,17 @@ impl FacadeProvisioner {
     /// decorator on any agent this provisioner builds.
     pub fn with_treasurer(mut self, config: TreasurerConfig) -> Self {
         self.treasurer = config;
+        self
+    }
+
+    /// Installs `ledger` as the treasury ledger writer runtime-provisioned agents settle
+    /// under (D-08, 39-05): every priced call this provisioner's agents make settles under
+    /// [`AgentLoopSettlement::EveryCall`] (`build_agent_with_llm`'s own contract), exactly
+    /// like a config-defined agent installed via
+    /// [`build_agent_registry_with_ledger`](super::agent_host::build_agent_registry_with_ledger).
+    /// `None` (the default) installs no ledger call at all.
+    pub fn with_treasury_ledger(mut self, ledger: Arc<dyn TreasuryLedgerPort>) -> Self {
+        self.treasury_ledger = Some(ledger);
         self
     }
 }
@@ -90,6 +110,22 @@ impl PaladinPort for EngineExecutionPort {
     fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
         Ok(())
     }
+
+    /// Forwards `scope` to [`PaladinExecutionService::execute_scoped`] (D-07, 39-05) so a
+    /// worker-supplied `RunScope` run id (a Platform API run of an agent-kind assistant,
+    /// 39-07) reaches this shared service's agent-loop settle writer. `heartbeat` is
+    /// forwarded as `None`, exactly the trait's own default behavior -- this override
+    /// changes nothing about heartbeat handling, only that `scope` now actually reaches the
+    /// service instead of being silently discarded by the trait's default body.
+    async fn execute_scoped(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        _heartbeat: &HeartbeatHandle,
+        scope: &RunScope,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.0.execute_scoped(paladin, input, None, scope).await
+    }
 }
 
 /// Build the run engine's real [`PaladinPort`] from `settings` (Phase 27, PLAT-01/02),
@@ -109,8 +145,35 @@ impl PaladinPort for EngineExecutionPort {
 /// `treasurer.pricing` table is invalid (checked FIRST, before any provider is resolved, so an
 /// invalid price fails hermetically). Returns a [`HostBuildError::Provider`] if the resolved
 /// default provider cannot be constructed (an unknown provider name, or a missing API key).
+///
+/// Installs no treasury ledger writer -- see [`paladin_port_from_settings_with_ledger`] for
+/// the variant that does.
 pub fn paladin_port_from_settings(
     settings: &Settings,
+) -> Result<Arc<dyn PaladinPort>, HostBuildError> {
+    paladin_port_from_settings_with_ledger(settings, None)
+}
+
+/// Build the run engine's real [`PaladinPort`] from `settings`, installing `treasury_ledger`
+/// (D-08, 39-05) under [`AgentLoopSettlement::PlatformRunsOnly`] when `Some`.
+///
+/// Identical to [`paladin_port_from_settings`] otherwise. `PlatformRunsOnly` is the mode this
+/// SHARED service must use: engine nodes are already settled once per superstep by
+/// `WarEngine::with_treasury_ledger` (39-04), so this service settles only calls whose
+/// [`RunScope`] names a Platform run id -- an agent-kind assistant's run, dispatched by the
+/// worker (39-07) through [`EngineExecutionPort::execute_scoped`]'s forwarded scope. An
+/// engine node's own dispatch (no run id in its scope) never settles here, so engine spend is
+/// never double-charged.
+///
+/// # Errors
+///
+/// Returns a [`HostBuildError::Build`] naming `treasurer.pricing` if the operator's
+/// `treasurer.pricing` table is invalid (checked FIRST, before any provider is resolved, so an
+/// invalid price fails hermetically). Returns a [`HostBuildError::Provider`] if the resolved
+/// default provider cannot be constructed (an unknown provider name, or a missing API key).
+pub fn paladin_port_from_settings_with_ledger(
+    settings: &Settings,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
 ) -> Result<Arc<dyn PaladinPort>, HostBuildError> {
     let price_table = Arc::new(settings.get_treasurer_config().price_table().map_err(
         |reason| HostBuildError::Build {
@@ -129,13 +192,11 @@ pub fn paladin_port_from_settings(
             source,
         })?;
     let llm = with_pricing(llm, &price_table);
-    let service = Arc::new(PaladinExecutionService::new(
-        llm,
-        default_circuit_breaker(),
-        None,
-        None,
-    ));
-    Ok(Arc::new(EngineExecutionPort(service)))
+    let mut service = PaladinExecutionService::new(llm, default_circuit_breaker(), None, None);
+    if let Some(ledger) = treasury_ledger {
+        service = service.with_treasury_ledger(ledger, AgentLoopSettlement::PlatformRunsOnly);
+    }
+    Ok(Arc::new(EngineExecutionPort(Arc::new(service))))
 }
 
 /// Map a runtime [`AgentSpec`] onto the config-shaped [`AgentDefinition`] so both paths
@@ -174,6 +235,7 @@ impl AgentProvisioner for FacadeProvisioner {
             &self.default_provider,
             Arc::clone(&self.breaker),
             &price_table,
+            self.treasury_ledger.clone(),
         )
         .await
         .map_err(|err| match &err {
@@ -308,6 +370,85 @@ mod tests {
         assert!(
             matches!(result, Err(ProvisionError::Failed(_))),
             "unknown provider must map to ProvisionError::Failed"
+        );
+    }
+
+    fn make_engine_paladin() -> Paladin {
+        use paladin_core::base::entity::node::Node;
+        use paladin_core::platform::container::paladin::{MaxLoops, PaladinData};
+
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            model: "gpt-4".to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            ..Default::default()
+        };
+        Node::new(data, None)
+    }
+
+    /// D-07 (39-05): `EngineExecutionPort::execute_scoped` forwards `scope` to the wrapped
+    /// `PaladinExecutionService::execute_scoped` -- a `PlatformRunsOnly` service settles a
+    /// call whose `RunScope` names a run id, and settles nothing for a plain,
+    /// unscoped `execute` call.
+    #[tokio::test]
+    async fn engine_execution_port_forwards_the_run_scope_to_the_ledger() {
+        use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
+        use paladin_core::platform::container::run::RunId;
+        use paladin_core::platform::container::token_usage::TokenUsage;
+        use paladin_core::platform::container::treasury_ledger::SpendQuery;
+        use paladin_llm::mock::MockLlmAdapter;
+        use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock: Arc<dyn paladin_ports::output::llm_port::LlmPort> = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("hi there")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm = with_pricing(mock, &table);
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service = PaladinExecutionService::new(llm, default_circuit_breaker(), None, None)
+            .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::PlatformRunsOnly);
+        let engine_port = EngineExecutionPort(Arc::new(service));
+        let paladin = make_engine_paladin();
+
+        // A plain, unscoped call never settles under PlatformRunsOnly.
+        engine_port
+            .execute(&paladin, "hi")
+            .await
+            .expect("plain execute succeeds");
+        let empty = ledger
+            .spend(SpendQuery::default())
+            .await
+            .expect("spend query succeeds");
+        assert!(
+            empty.is_empty(),
+            "an engine node's own dispatch (no scope run id) must never settle here"
+        );
+
+        // A scoped call whose RunScope names a run id settles under it.
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+        let heartbeat = HeartbeatHandle::new();
+        engine_port
+            .execute_scoped(&paladin, "hi", &heartbeat, &scope)
+            .await
+            .expect("scoped execute succeeds");
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: paladin_core::platform::container::treasury_ledger::SpendGroupBy::Run,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(
+            rows.len(),
+            1,
+            "the scoped call must settle under its run id"
         );
     }
 }

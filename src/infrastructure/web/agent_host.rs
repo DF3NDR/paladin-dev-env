@@ -23,10 +23,13 @@ use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError};
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_web::{AgentEntry, AgentRegistry};
 
 use crate::application::services::paladin::paladin_builder::PaladinBuilder;
-use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+use crate::application::services::paladin::paladin_execution_service::{
+    AgentLoopSettlement, PaladinExecutionService,
+};
 use crate::config::agents::AgentDefinition;
 use crate::config::settings::Settings;
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
@@ -115,20 +118,25 @@ pub(crate) fn default_provider_name(settings: &Settings) -> String {
 ///
 /// This is the hermetic core of agent construction — it performs no provider lookup, so
 /// it can be exercised in tests with a mock [`LlmPort`].
+///
+/// `treasury_ledger`, when `Some`, installs [`AgentLoopSettlement::EveryCall`] (D-08, 39-05)
+/// on the ONE shared [`PaladinExecutionService`] BEFORE it is split into the buffered and
+/// streaming handles below -- so every priced call this agent makes, buffered or streamed,
+/// settles under this same ledger, regardless of which handle a caller reaches it through.
 pub(crate) async fn build_agent_with_llm(
     def: &AgentDefinition,
     llm: Arc<dyn LlmPort>,
     breaker: Arc<CircuitBreaker>,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
 ) -> Result<BuiltAgent, HostBuildError> {
     // One execution service backs both the buffered and streaming handles
     // (`PaladinExecutionService` implements both `PaladinExecutorPort` and
     // `StreamingExecutorPort`).
-    let service = Arc::new(PaladinExecutionService::new(
-        Arc::clone(&llm),
-        breaker,
-        None,
-        None,
-    ));
+    let mut service = PaladinExecutionService::new(Arc::clone(&llm), breaker, None, None);
+    if let Some(ledger) = treasury_ledger {
+        service = service.with_treasury_ledger(ledger, AgentLoopSettlement::EveryCall);
+    }
+    let service = Arc::new(service);
     let executor: Arc<dyn PaladinExecutorPort> = service.clone();
     let streamer: Arc<dyn StreamingExecutorPort> = service;
 
@@ -162,13 +170,15 @@ pub(crate) async fn build_agent_with_llm(
 ///
 /// `price_table` wraps the resolved provider with [`with_pricing`] (D-09, ADR-0052) BEFORE
 /// `build_agent_with_llm` composes the execution service, outside any fallback composition --
-/// an empty table installs no extra layer at all.
+/// an empty table installs no extra layer at all. `treasury_ledger` is threaded straight
+/// through to `build_agent_with_llm` (D-08, 39-05).
 pub(crate) async fn build_agent(
     def: &AgentDefinition,
     factory: &LlmProviderFactory,
     default_provider: &str,
     breaker: Arc<CircuitBreaker>,
     price_table: &Arc<PriceTable>,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
 ) -> Result<BuiltAgent, HostBuildError> {
     let provider = resolve_provider(def, default_provider);
     let llm = factory
@@ -179,7 +189,7 @@ pub(crate) async fn build_agent(
             source,
         })?;
     let llm = with_pricing(llm, price_table);
-    build_agent_with_llm(def, llm, breaker).await
+    build_agent_with_llm(def, llm, breaker, treasury_ledger).await
 }
 
 /// Insert a built agent into the registry, rejecting a duplicate id.
@@ -278,10 +288,35 @@ pub fn validate_config(settings: &Settings) -> Result<(), HostBuildError> {
 /// invalid treasurer configuration, an unresolvable provider, or a build failure aborts with a
 /// descriptive [`HostBuildError`] naming the agent (or `"treasurer"` for a pricing failure).
 ///
+/// Installs no treasury ledger writer -- see
+/// [`build_agent_registry_with_ledger`] for the variant that does.
+///
 /// # Errors
 ///
 /// Returns [`HostBuildError`] on the first problem encountered.
 pub async fn build_agent_registry(settings: &Settings) -> Result<AgentRegistry, HostBuildError> {
+    build_agent_registry_with_ledger(settings, None).await
+}
+
+/// Build a populated [`AgentRegistry`] from the `agents` section of `settings`, installing
+/// `treasury_ledger` (D-08, 39-05) on every configured agent's execution service.
+///
+/// Identical to [`build_agent_registry`] otherwise -- same validation, same
+/// `treasurer.pricing` table build, same per-agent construction via `build_agent` -- except
+/// every agent's [`PaladinExecutionService`] settles under
+/// [`AgentLoopSettlement::EveryCall`](crate::application::services::paladin::paladin_execution_service::AgentLoopSettlement::EveryCall)
+/// when `treasury_ledger` is `Some`. The ledger is observational in this phase (D-08,
+/// LEDGR-03): a settle failure never fails an agent's execution. Every priced call of every
+/// configured agent settles under its own execution id, with the [`LedgerScope::unattributed`](
+/// paladin_core::platform::container::treasury_ledger::LedgerScope::unattributed) scope (D-01).
+///
+/// # Errors
+///
+/// Returns [`HostBuildError`] on the first problem encountered.
+pub async fn build_agent_registry_with_ledger(
+    settings: &Settings,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+) -> Result<AgentRegistry, HostBuildError> {
     validate_config(settings)?;
 
     let factory = LlmProviderFactory::new();
@@ -302,6 +337,7 @@ pub async fn build_agent_registry(settings: &Settings) -> Result<AgentRegistry, 
             &default_provider,
             Arc::clone(&breaker),
             &price_table,
+            treasury_ledger.clone(),
         )
         .await?;
         register_built(
@@ -323,6 +359,7 @@ mod tests {
     use paladin_core::platform::container::cost::{CurrencyCode, PriceRow};
     use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_llm::mock::MockLlmAdapter;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
 
     fn empty_price_table() -> Arc<PriceTable> {
         Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()))
@@ -364,7 +401,7 @@ mod tests {
         def.max_loops = Some(2);
 
         let (paladin, _executor, streamer) =
-            build_agent_with_llm(&def, mock_llm(), default_circuit_breaker())
+            build_agent_with_llm(&def, mock_llm(), default_circuit_breaker(), None)
                 .await
                 .expect("builds");
 
@@ -387,6 +424,7 @@ mod tests {
             "openai",
             default_circuit_breaker(),
             &empty_price_table(),
+            None,
         )
         .await;
         assert!(
@@ -434,7 +472,7 @@ mod tests {
         let priced = with_pricing(mock, &table);
 
         let (paladin, _executor, streamer) =
-            build_agent_with_llm(&base("gpt-4"), priced, default_circuit_breaker())
+            build_agent_with_llm(&base("gpt-4"), priced, default_circuit_breaker(), None)
                 .await
                 .expect("builds");
         let streamer = streamer.expect("execution service is streaming-capable");
@@ -466,13 +504,13 @@ mod tests {
         let registry = AgentRegistry::new();
 
         let (p1, e1, s1) =
-            build_agent_with_llm(&base("dup"), mock_llm(), default_circuit_breaker())
+            build_agent_with_llm(&base("dup"), mock_llm(), default_circuit_breaker(), None)
                 .await
                 .unwrap();
         register_built(&registry, "dup", p1, e1, s1, None, Vec::new()).expect("first insert ok");
 
         let (p2, e2, s2) =
-            build_agent_with_llm(&base("dup"), mock_llm(), default_circuit_breaker())
+            build_agent_with_llm(&base("dup"), mock_llm(), default_circuit_breaker(), None)
                 .await
                 .unwrap();
         let err = register_built(&registry, "dup", p2, e2, s2, None, Vec::new())
@@ -534,5 +572,74 @@ mod tests {
             matches!(err, HostBuildError::UnknownProvider { .. }),
             "got {err:?}"
         );
+    }
+
+    /// D-08 (39-05): a ledger installed via `build_agent_with_llm`'s `treasury_ledger`
+    /// parameter settles a priced call made through the returned executor.
+    #[tokio::test]
+    async fn build_agent_with_llm_settles_priced_calls_when_a_ledger_is_installed() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock: Arc<dyn LlmPort> = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("hi there")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let priced = with_pricing(mock, &table);
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+
+        let (paladin, executor, _streamer) = build_agent_with_llm(
+            &base("gpt-4"),
+            priced,
+            default_circuit_breaker(),
+            Some(ledger.clone()),
+        )
+        .await
+        .expect("builds");
+
+        executor
+            .execute(&paladin, "hi")
+            .await
+            .expect("execution succeeds");
+
+        let rows = ledger
+            .spend(paladin_core::platform::container::treasury_ledger::SpendQuery::default())
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(rows.len(), 1, "the priced call must have settled");
+    }
+
+    /// The converse: with no `treasury_ledger` argument, an otherwise-identical priced call
+    /// performs no ledger call at all.
+    #[tokio::test]
+    async fn build_agent_with_llm_without_a_ledger_settles_nothing() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock: Arc<dyn LlmPort> = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("hi there")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let priced = with_pricing(mock, &table);
+
+        let (paladin, executor, _streamer) =
+            build_agent_with_llm(&base("gpt-4"), priced, default_circuit_breaker(), None)
+                .await
+                .expect("builds");
+
+        let result = executor
+            .execute(&paladin, "hi")
+            .await
+            .expect("execution succeeds");
+        assert!(
+            result.cost.is_some(),
+            "pricing is still installed even with no ledger"
+        );
+        // No ledger was installed at all -- nothing to assert against a store; this test's
+        // purpose is documented by its name and the absence of any ledger construction here.
     }
 }

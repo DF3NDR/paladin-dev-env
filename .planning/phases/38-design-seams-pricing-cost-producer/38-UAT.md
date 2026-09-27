@@ -3,18 +3,18 @@ status: testing
 phase: 38-design-seams-pricing-cost-producer
 source: [38-01-SUMMARY.md, 38-02-SUMMARY.md, 38-03-SUMMARY.md, 38-04-SUMMARY.md, 38-05-SUMMARY.md, 38-06-SUMMARY.md, 38-07-SUMMARY.md, 38-08-SUMMARY.md, 38-09-SUMMARY.md]
 started: 2026-09-27T15:47:12Z
-updated: 2026-09-27T16:34:19Z
+updated: 2026-09-27T16:34:46Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 4
-name: 38-03/D7: paladin-server refuses to start with 'invalid treasurer configuration:
+number: 5
+name: 38-08/D5: RunWorkerPool::with_herald composes a HeraldTraceSink alongside build_
 expected: |
-  Start paladin-server with a config.yml whose `treasurer.pricing` has a bad price (e.g. `prompt: "-1.00"` or `prompt: "abc"`). The process refuses to start and prints `invalid treasurer configuration: ...` naming `treasurer.pricing` and the offending model/axis, before any agent, engine or provider is built.
+  Start paladin-server with `herald:` configured (e.g. markdown) alongside the treasurer table and run one engine (graph) run to completion. The run's finished metadata, including the currency cost, is handed to the herald and appears in the server log once per run. Then start with an unknown herald formatter name: startup fails naming the `herald` config.
   
-  Why a human: No integration test spawns the actual paladin-server binary against a malformed config.yml and asserts process exit; the ordering and message-format claim is verified by source inspection and the unit-level HostBuildError/ProvisionError tests (D6) that share the exact same TreasurerConfig::validate() call. A human running `PALADIN_CONFIG=<bad-price-config> paladin-server` and observing the refusal would close this gap fully.
+  Why a human: No dedicated RunWorkerPool-level integration test exercises the composed-CompositeSink path with a herald wired in -- the plan's own designed test list (herald_sink_hands_run_finished_to_the_herald, priced/unpriced_engine_run_*, run_model_label_names_single_mixed_or_none) proves the producer and its WarEngine wiring directly, not RunWorkerPool's own sink-combination logic. Verified by code review, successful compilation and cargo clippy -D warnings across the composition branch (both-None/one-Some/both-Some), and consistency with the pre-existing build_run_sink combination pattern it mirrors.
 awaiting: user response
 
 ## Tests
@@ -34,7 +34,7 @@ result: pass
 expected: Start paladin-server with a config.yml whose `treasurer.pricing` has a bad price (e.g. `prompt: "-1.00"` or `prompt: "abc"`). The process refuses to start and prints `invalid treasurer configuration: ...` naming `treasurer.pricing` and the offending model/axis, before any agent, engine or provider is built.
 
 Why a human: No integration test spawns the actual paladin-server binary against a malformed config.yml and asserts process exit; the ordering and message-format claim is verified by source inspection and the unit-level HostBuildError/ProvisionError tests (D6) that share the exact same TreasurerConfig::validate() call. A human running `PALADIN_CONFIG=<bad-price-config> paladin-server` and observing the refusal would close this gap fully.
-result: [pending]
+result: pass
 
 ### 5. 38-08/D5: RunWorkerPool::with_herald composes a HeraldTraceSink alongside build_
 expected: Start paladin-server with `herald:` configured (e.g. markdown) alongside the treasurer table and run one engine (graph) run to completion. The run's finished metadata, including the currency cost, is handed to the herald and appears in the server log once per run. Then start with an unknown herald formatter name: startup fails naming the `herald` config.
@@ -366,9 +366,9 @@ verification: cargo test --workspace; cargo fmt --check; make clean-code; make s
 ## Summary
 
 total: 51
-passed: 48
+passed: 49
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

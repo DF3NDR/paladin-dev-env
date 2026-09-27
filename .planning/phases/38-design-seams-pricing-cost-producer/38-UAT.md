@@ -1,21 +1,14 @@
 ---
-status: testing
+status: complete
 phase: 38-design-seams-pricing-cost-producer
 source: [38-01-SUMMARY.md, 38-02-SUMMARY.md, 38-03-SUMMARY.md, 38-04-SUMMARY.md, 38-05-SUMMARY.md, 38-06-SUMMARY.md, 38-07-SUMMARY.md, 38-08-SUMMARY.md, 38-09-SUMMARY.md]
 started: 2026-09-27T15:47:12Z
-updated: 2026-09-27T16:37:26Z
+updated: 2026-09-27T16:38:51Z
 ---
 
 ## Current Test
-<!-- OVERWRITE each test - shows where we are -->
 
-number: 6
-name: 38-09/D7: Manual credential-handling review over the full Phase 38 diff: no API
-expected: |
-  Skim the Phase 38 diff (`git diff 74969e15^..HEAD -- crates src`) for credential handling: no API key is logged or Debug-formatted, the pricing warn-once lines interpolate only a bare model name, and no new HTTP client was added. You should reach the same conclusion the summary records: clean.
-  
-  Why a human: This is a manual source-inspection review per security.instructions.md, not something a unit test asserts -- grep-scanned the whole phase diff (git diff 8d76aa2a~1..HEAD -- crates src) for credential-shaped identifiers and reqwest client construction, then read pricing.rs's two log::warn! call sites directly to confirm only `model` (a bare model-name string) is interpolated. Findings are stated in prose below; a human reviewer re-reading the same diff would reach the same two conclusions (clean; two log call sites, both benign).
-awaiting: user response
+[testing complete]
 
 ## Tests
 ### 1. Cold Start Smoke Test
@@ -46,7 +39,7 @@ result: pass
 expected: Skim the Phase 38 diff (`git diff 74969e15^..HEAD -- crates src`) for credential handling: no API key is logged or Debug-formatted, the pricing warn-once lines interpolate only a bare model name, and no new HTTP client was added. You should reach the same conclusion the summary records: clean.
 
 Why a human: This is a manual source-inspection review per security.instructions.md, not something a unit test asserts -- grep-scanned the whole phase diff (git diff 8d76aa2a~1..HEAD -- crates src) for credential-shaped identifiers and reqwest client construction, then read pricing.rs's two log::warn! call sites directly to confirm only `model` (a bare model-name string) is interpolated. Findings are stated in prose below; a human reviewer re-reading the same diff would reach the same two conclusions (clean; two log call sites, both benign).
-result: [pending]
+result: pass
 
 ### 7. 38-01/D1: ADR-0052 recorded: mid-run Treasurer enforcement attachment point across WarEngine and Pal
 expected: ADR-0052 recorded: mid-run Treasurer enforcement attachment point across WarEngine and PaladinExecutionService, with the build_chain zero-production-callers fact and two rejected alternatives
@@ -366,9 +359,9 @@ verification: cargo test --workspace; cargo fmt --check; make clean-code; make s
 ## Summary
 
 total: 51
-passed: 50
+passed: 51
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 

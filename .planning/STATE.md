@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 39
 current_phase_name: spend-ledger
 status: executing
-stopped_at: Completed 39-03-PLAN.md
-last_updated: "2026-09-27T22:44:33.883Z"
+stopped_at: Completed 39-04-PLAN.md
+last_updated: "2026-09-27T23:24:30.909Z"
 last_activity: 2026-09-27
 last_activity_desc: Phase 39 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 17
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [███████░░░] 71%
+**Progress:** [████████░░] 76%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,7 +50,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 39 (spend-ledger) — EXECUTING
-Plan: 4 of 8
+Plan: 5 of 8
 Status: Ready to execute
 Last activity: 2026-09-27 — Phase 39 execution started
 
@@ -197,6 +197,7 @@ Last activity: 2026-09-27 — Phase 39 execution started
 | Phase 39 P01 | ~30min | 2 tasks | 11 files |
 | Phase 39 P02 | ~30min | 2 tasks | 6 files |
 | Phase 39 P03 | ~42min | 2 tasks | 4 files |
+| Phase 39 P04 | ~55min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -258,6 +259,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 39] 39-02: real balance+hold overflow (checked_add returning None) proven by priming a fresh scope with a small balance then reserving i64::MAX against ceiling i64::MAX -- the plan's literal 'hold i64::MAX ceiling 0' example never overflows from a balance of 0
 - [Phase ?]: 39-03: PostgresTreasuryLedger serializes reserve/reserved-settle/release per scope with a transaction-scoped pg_advisory_xact_lock(hashtext($1)::bigint) taken before any SUM or state read; an unreserved settle needs no lock, since idempotency is enforced entirely by the partial unique settlement index.
 - [Phase ?]: 39-03: No Docker daemon available in this sandbox; brought up a local Postgres 16 cluster (pg_ctlcluster) with a scratch paladin/paladin_treasury_test role+database to prove all 23 treasury::postgres tests live (0 SKIP:), per the plan's own fallback instruction. CI's postgres-integration job remains the authority for the Docker-gated path.
+- [Phase 39]: 39-04: SpendHook::child carried #[allow(dead_code)] in Task 1's commit (removed in Task 2) since its only production call site (ChildEngineResources.spend) is wired in Task 2 -- a documented Rule 3 auto-fix to keep Task 1's own clippy -D warnings gate green standalone.
+- [Phase 39]: 39-04: Every superstep::run/run_with_namespace call site (18 total, including 14 test-only helpers across superstep.rs/mod.rs/graph.rs) needed the new spend trailing parameter, not just the 4 named production sites -- found by grepping every call site rather than trusting the plan's named line numbers.
 
 ### Pending Todos
 
@@ -460,8 +463,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-27T22:44:22.554Z
-**Stopped at:** Completed 39-03-PLAN.md
+**Last session:** 2026-09-27T23:24:10.361Z
+**Stopped at:** Completed 39-04-PLAN.md
 next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
 RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
 not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.

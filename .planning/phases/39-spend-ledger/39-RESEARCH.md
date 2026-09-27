@@ -472,7 +472,9 @@ Ok(if result.rows_affected() == 0 {
 
 **If this table is empty:** N/A — three low-risk assumptions above, all self-correcting via compile errors or contract-test failures rather than silent behavior differences.
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+*Both questions below were resolved during planning (2026-09-27): question 1 by 39-04-PLAN.md, which reads the node's configured model from the engine dispatch instead of adding a `model` field to `PaladinResult`; question 2 by 39-05-PLAN.md, which adds `RunScope.run_id` and threads it end-to-end. The original text is kept for traceability.*
 
 1. **Where does the engine-path `model_breakdown` come from, given `PaladinResult` has no `model` field?**
    - What we know: The per-node `cost` IS available at every `completed_records.push(...)` site in `superstep.rs`; the model string is NOT, anywhere in that call chain, today.

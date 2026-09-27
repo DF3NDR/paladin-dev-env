@@ -339,7 +339,32 @@ against and query.
 
   4. Operator can view spend per tenant, API key, run and model over a time window from the CLI,
      and that spend appears in herald output and trace events.
-**Plans**: TBD
+**Plans**: 8 plans (5 waves)
+
+Plans:
+
+**Wave 1**
+
+- [ ] 39-01-PLAN.md — blocking checkpoint on the one-way `007` schema (D-01/D-06), then the tracer: `TreasuryLedgerPort` and core ledger types, the SQLite `007` migration and `SqliteTreasuryLedger` settle/spend, `paladin-cli treasury spend` printing `0.0450 USD` (LEDGR-01, LEDGR-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 39-02-PLAN.md — race-proof `reserve`/`release` and idempotent `settle` on SQLite (`BEGIN IMMEDIATE`, partial unique settlement index), the shared contract suite opened by the N−1-of-N race clause, `InMemoryTreasuryLedger` (LEDGR-01, LEDGR-02, LEDGR-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 39-03-PLAN.md — Postgres `007` migration and `PostgresTreasuryLedger` serialized per scope with a transaction-scoped advisory lock, passing the contract suite unmodified; CLI Postgres backend (LEDGR-01, LEDGR-02, LEDGR-03)
+- [ ] 39-04-PLAN.md — engine-path settle writer: one settlement per superstep attempt at the ADR-0052 boundary, aggregating priced Paladin attempts with a per-model breakdown; `WarEngine::with_treasury_ledger` (LEDGR-03, LEDGR-04)
+- [ ] 39-05-PLAN.md — agent-loop settle writer: one settlement per priced model call in `PaladinExecutionService`, `RunScope::with_run_id`, an `AgentLoopSettlement` mode that never double-counts engine nodes (LEDGR-03, LEDGR-04)
+- [ ] 39-06-PLAN.md — ledger-derived `cost` on `GET /runs` and `GET /runs/{id}` and `PaladinResult.cost` on the agent execute response through a shared `CostDto`; inverts `execute_response_carries_no_cost_field` (LEDGR-04)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 39-07-PLAN.md — production wiring: the worker hands each engine the ledger and the persisted `runs.attempt`, agent-kind runs carry their Platform run id, the server builds the ledger from `RunStoreConfig`; HTTP end-to-end proof (LEDGR-03, LEDGR-04)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 39-08-PLAN.md — closeout: `cargo semver-checks` measurement and registration, CHANGELOG entries, facade re-export, API-surface refresh, full gate suite and credential-handling review (LEDGR-01..04)
 
 ### Phase 40: Tenant Identity & Run-Read Scoping
 

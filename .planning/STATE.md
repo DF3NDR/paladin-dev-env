@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 39
-current_phase_name: Spend Ledger
+current_phase_name: spend-ledger
 status: executing
-stopped_at: "Phase 39 planned: 8 plans in 5 waves, plan checker passed; ready for /gsd-execute-phase 39"
-last_updated: "2026-09-27T20:58:32.225Z"
+stopped_at: Completed 39-01-PLAN.md
+last_updated: "2026-09-27T21:30:47.718Z"
 last_activity: 2026-09-27
-last_activity_desc: Phase 39 planned (8 plans, 5 waves), plan checker passed
+last_activity_desc: Phase 39 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 17
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-09-24 at the start of milestone v0.11.0)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 38 — design-seams-pricing-cost-producer
+**Current focus:** Phase 39 — spend-ledger
 (`/gsd-new-project` roadmapper), 10 phases (38-47), 35/35 requirements mapped. Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [██████████] 100%
+**Progress:** [██████░░░░] 59%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -49,10 +49,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 39 — Spend Ledger
-Plan: Not started
+Phase: 39 (spend-ledger) — EXECUTING
+Plan: 2 of 8
 Status: Ready to execute
-Last activity: 2026-09-27 — Phase 39 planned (8 plans, 5 waves), plan checker passed
+Last activity: 2026-09-27 — Phase 39 execution started
 
 ## Performance Metrics
 
@@ -194,6 +194,7 @@ Last activity: 2026-09-27 — Phase 39 planned (8 plans, 5 waves), plan checker 
 | Phase 38 P07 | ~25min | 3 tasks | 8 files |
 | Phase 38 P08 | ~26min | 2 tasks | 5 files |
 | Phase 38 P09 | ~110min | 2 tasks | 10 files |
+| Phase 39 P01 | ~30min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -249,6 +250,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 38]: 38-08: HeraldTraceSink wired the engine path's ExecutionMetadata producer into RunWorkerPool; end-to-end engine tests attach HeraldTraceSink directly to a bare WarEngine (mirroring tracer_e2e.rs), not through the full RunWorkerPool/queue/repository harness -- proving the price-table-to-rendered-herald-text chain without unrelated harness weight.
 - [Phase 38]: 38-09: The CI-pinned cargo-semver-checks --baseline-version 0.9.0 job is currently a no-op for every package (0 checks, 254 skip) because the in-tree version (0.10.1) already reads as a pre-1.0 major-equivalent bump over that two-milestones-old baseline -- not a Phase 38 defect, but a standing gap until the version is bumped for v0.11.0. — Empirically confirmed across all 11 CI packages; ci.yml is not in this plan's files_modified so it is documented, not fixed. Flag for whichever phase next touches the semver job or performs the v0.11.0 version bump.
 - [Phase 38]: 38-09: TraceEvent::NodeFinished/RunFinished.cost fires enum_struct_variant_field_added against the published v0.10.1 baseline (a genuinely unsuppressed lint) but is invisible to the CI-pinned v0.9.0 comparison since TraceEvent postdates that baseline -- registered N/A in MIGRATION.md for the v0.10 -> v0.11 migration guide (Phase 46, CURR-23), no allowlist entry. — Confirmed via cargo semver-checks check-release --baseline-version 0.10.1 --release-type minor; the X-10-governed CI gate only tracks breaks against the published v0.9.0 baseline, so no Cargo.toml suppression or allowlist entry applies to a type that did not exist at that baseline.
+- [Phase ?]: 39-01: Task 1 checkpoint (007 treasury_ledger schema/index design) approved as proposed (option-a) by the operator before execution -- one-way scope columns and partial unique settlement index, D-12 index keyed on attributed_at per planner deviation
+- [Phase ?]: 39-01: TreasuryLedgerPort's Postgres CLI arm returns the same not(storage-postgres)-feature configuration error regardless of feature flags, since PostgresTreasuryLedger does not exist until 39-03
 
 ### Pending Todos
 
@@ -451,12 +454,12 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-27T20:58:32.196Z
-**Stopped at:** Phase 39 planned: 8 plans in 5 waves, plan checker passed; ready for /gsd-execute-phase 39
+**Last session:** 2026-09-27T21:30:47.694Z
+**Stopped at:** Completed 39-01-PLAN.md
 next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
 RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
 not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.
-**Resume file:** .planning/phases/39-spend-ledger/39-CONTEXT.md
+**Resume file:** None
 **Branch state:** the close commits sit on `chore/37.1-post-close`; open a PR to `main` (the
 repository enforces PR-only merges to `main`, ADR-0043/0044) — `.planning/`-only, no crate change,
 no tag.

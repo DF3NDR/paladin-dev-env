@@ -37,7 +37,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Spend ledger (LEDGR)
 
-- [ ] **LEDGR-01**: A `TreasuryLedgerPort` with in-memory, SQLite and Postgres adapters passes one
+- [x] **LEDGR-01**: A `TreasuryLedgerPort` with in-memory, SQLite and Postgres adapters passes one
   shared contract-test suite, backed by a `007` migration in both
   `crates/paladin-storage/migrations/{sqlite,postgres}/`
 
@@ -47,7 +47,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [ ] **LEDGR-03**: Settlement is idempotent, keyed on run, superstep and attempt, so lease
   redelivery, resume, retries and model fallback never charge twice
 
-- [ ] **LEDGR-04**: Operator can view spend per tenant, API key, run and model over a time window
+- [x] **LEDGR-04**: Operator can view spend per tenant, API key, run and model over a time window
   from the CLI, and spend appears in herald output and trace events
 
 ### Tenant identity (TENANT)
@@ -212,10 +212,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PRICE-01 | Phase 38 | Complete |
 | PRICE-02 | Phase 38 | Complete |
 | PRICE-03 | Phase 38 | Complete |
-| LEDGR-01 | Phase 39 | Pending |
+| LEDGR-01 | Phase 39 | Complete |
 | LEDGR-02 | Phase 39 | Pending |
 | LEDGR-03 | Phase 39 | Pending |
-| LEDGR-04 | Phase 39 | Pending |
+| LEDGR-04 | Phase 39 | Complete |
 | TENANT-01 | Phase 40 | Pending |
 | TENANT-02 | Phase 40 | Pending |
 | ALLOW-01 | Phase 41 | Pending |

@@ -345,7 +345,7 @@ Plans:
 
 **Wave 1**
 
-- [ ] 39-01-PLAN.md — blocking checkpoint on the one-way `007` schema (D-01/D-06), then the tracer: `TreasuryLedgerPort` and core ledger types, the SQLite `007` migration and `SqliteTreasuryLedger` settle/spend, `paladin-cli treasury spend` printing `0.0450 USD` (LEDGR-01, LEDGR-04)
+- [x] 39-01-PLAN.md — blocking checkpoint on the one-way `007` schema (D-01/D-06), then the tracer: `TreasuryLedgerPort` and core ledger types, the SQLite `007` migration and `SqliteTreasuryLedger` settle/spend, `paladin-cli treasury spend` printing `0.0450 USD` (LEDGR-01, LEDGR-04)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -103,7 +103,8 @@ pub mod run_schedule;
 pub mod webhook;
 
 /// `TreasuryLedgerPort` storage adapters (LEDGR-01..04, ADR-0053). The
-/// SQLite adapter is added behind the existing `sqlite` feature (this
-/// plan, 39-01); the in-memory backend and Postgres adapter follow in
-/// 39-02/39-03 behind the existing `postgres` feature.
+/// in-memory backend is always available (no feature gate, mirroring
+/// `waypoint`'s D-01 precedent); the SQLite adapter is behind the existing
+/// `sqlite` feature; the Postgres adapter follows in 39-03 behind the
+/// existing `postgres` feature.
 pub mod treasury;

@@ -730,10 +730,7 @@ mod tests {
 
     #[tokio::test]
     async fn store_now_is_non_decreasing() {
-        let store = fresh_store().await;
-        let first = store.store_now().await.unwrap();
-        let second = store.store_now().await.unwrap();
-        assert!(second >= first);
+        contract_tests::store_now_is_non_decreasing(&fresh_store().await).await;
     }
 
     // ── Shared contract suite (D-11): Task 1 clauses ─────────────────────
@@ -801,6 +798,79 @@ mod tests {
             Arc::new(SqliteTreasuryLedger::new_shared_file(&url).await.unwrap());
 
         contract_tests::reserve_race_admits_exactly_n_minus_one(store).await;
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    // ── Shared contract suite (D-11): Task 2 clauses ─────────────────────
+
+    #[tokio::test]
+    async fn duplicate_settle_is_already_settled_and_charges_once() {
+        contract_tests::duplicate_settle_is_already_settled_and_charges_once(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn bumped_attempt_is_a_distinct_settlement() {
+        contract_tests::bumped_attempt_is_a_distinct_settlement(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn spend_groups_by_every_dimension_over_a_window() {
+        contract_tests::spend_groups_by_every_dimension_over_a_window(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn spend_orders_groups_then_currencies_ascending() {
+        contract_tests::spend_orders_groups_then_currencies_ascending(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn spend_over_an_empty_window_is_empty() {
+        contract_tests::spend_over_an_empty_window_is_empty(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn spend_window_is_half_open() {
+        contract_tests::spend_window_is_half_open(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn spend_splits_currencies_into_separate_rows() {
+        contract_tests::spend_splits_currencies_into_separate_rows(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn settle_rejects_a_breakdown_that_does_not_sum_to_the_amount() {
+        contract_tests::settle_rejects_a_breakdown_that_does_not_sum_to_the_amount(
+            &fresh_store().await,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn unattributed_scope_is_grouped_under_the_sentinel() {
+        contract_tests::unattributed_scope_is_grouped_under_the_sentinel(&fresh_store().await)
+            .await;
+    }
+
+    // The concurrency clause that needs a REAL shared on-disk database -- ten concurrent
+    // settles of one key against a single SQLite file, proving the partial unique index (not
+    // an in-process lock) enforces settlement idempotency under true multi-connection
+    // concurrency.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_duplicate_settles_charge_once_on_disk() {
+        let path = std::env::temp_dir().join(format!(
+            "paladin_treasury_ledger_duplicate_settle_test_{}.sqlite",
+            Uuid::new_v4()
+        ));
+        let url = format!("sqlite://{}", path.display());
+        let store: Arc<dyn TreasuryLedgerPort> =
+            Arc::new(SqliteTreasuryLedger::new_shared_file(&url).await.unwrap());
+
+        contract_tests::concurrent_duplicate_settles_charge_once(store).await;
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(format!("{}-wal", path.display()));

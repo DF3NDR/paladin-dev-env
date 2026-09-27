@@ -5,9 +5,14 @@
 //! `crate::run::storage_timestamp` (reused, not duplicated) before crossing into a Postgres
 //! `TIMESTAMPTZ` column.
 //!
-//! The in-memory backend and the shared `contract_tests` suite arrive in 39-02; this plan
-//! (39-02) also adds `reserve`/`release` on the SQLite adapter under per-scope serialization
-//! (LEDGR-02).
+//! This plan (39-02) completes the shared contract suite (`reserve`/`release`, idempotency,
+//! spend windows/grouping/ordering, validation, store clock) and adds `InMemoryTreasuryLedger`,
+//! proving every clause identically on the in-memory and SQLite adapters. The Postgres adapter
+//! follows in 39-03.
+
+/// In-memory `TreasuryLedgerPort` implementation, always available (no feature gate, mirroring
+/// `crate::run::in_memory`'s D-01 precedent).
+pub mod in_memory;
 
 /// Shared `TreasuryLedgerPort` contract suite (D-11): one generic async function per clause,
 /// invoked unchanged by every backend's own `#[tokio::test]`s. Plain module (not

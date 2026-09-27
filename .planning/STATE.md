@@ -5,12 +5,12 @@ milestone_name: Crate Release
 current_phase: 39
 current_phase_name: Spend Ledger
 status: planning
-stopped_at: Completed 38-09-PLAN.md
-last_updated: "2026-09-26T19:47:30.247Z"
+stopped_at: Phase 39 context gathered
+last_updated: "2026-09-27T16:48:12.896Z"
 last_activity: 2026-09-26
 last_activity_desc: Phase 38 complete, transitioned to Phase 39
 progress:
-  total_phases: 1
+  total_phases: 2
   completed_phases: 1
   total_plans: 9
   completed_plans: 9
@@ -451,12 +451,12 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-26T17:00:15.146Z
-**Stopped at:** Completed 38-09-PLAN.md
+**Last session:** 2026-09-27T16:48:12.871Z
+**Stopped at:** Phase 39 context gathered
 next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
 RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
 not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.
-**Resume file:** None
+**Resume file:** .planning/phases/39-spend-ledger/39-CONTEXT.md
 **Branch state:** the close commits sit on `chore/37.1-post-close`; open a PR to `main` (the
 repository enforces PR-only merges to `main`, ADR-0043/0044) — `.planning/`-only, no crate change,
 no tag.

@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 39
 current_phase_name: spend-ledger
 status: executing
-stopped_at: Completed 39-02-PLAN.md
-last_updated: "2026-09-27T22:00:37.490Z"
+stopped_at: Completed 39-03-PLAN.md
+last_updated: "2026-09-27T22:44:33.883Z"
 last_activity: 2026-09-27
 last_activity_desc: Phase 39 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 17
-  completed_plans: 11
+  completed_plans: 12
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [███████░░░] 65%
+**Progress:** [███████░░░] 71%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,7 +50,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 39 (spend-ledger) — EXECUTING
-Plan: 3 of 8
+Plan: 4 of 8
 Status: Ready to execute
 Last activity: 2026-09-27 — Phase 39 execution started
 
@@ -196,6 +196,7 @@ Last activity: 2026-09-27 — Phase 39 execution started
 | Phase 38 P09 | ~110min | 2 tasks | 10 files |
 | Phase 39 P01 | ~30min | 2 tasks | 11 files |
 | Phase 39 P02 | ~30min | 2 tasks | 6 files |
+| Phase 39 P03 | ~42min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -255,6 +256,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 39-01: TreasuryLedgerPort's Postgres CLI arm returns the same not(storage-postgres)-feature configuration error regardless of feature flags, since PostgresTreasuryLedger does not exist until 39-03
 - [Phase ?]: [Phase 39] 39-02: contract_tests.rs authored as one file spanning both tasks' clauses (shared helpers, non-test-gated module); Task 1's commit includes the full suite text, Task 2 wires it into InMemoryTreasuryLedger and the SQLite test module
 - [Phase ?]: [Phase 39] 39-02: real balance+hold overflow (checked_add returning None) proven by priming a fresh scope with a small balance then reserving i64::MAX against ceiling i64::MAX -- the plan's literal 'hold i64::MAX ceiling 0' example never overflows from a balance of 0
+- [Phase ?]: 39-03: PostgresTreasuryLedger serializes reserve/reserved-settle/release per scope with a transaction-scoped pg_advisory_xact_lock(hashtext($1)::bigint) taken before any SUM or state read; an unreserved settle needs no lock, since idempotency is enforced entirely by the partial unique settlement index.
+- [Phase ?]: 39-03: No Docker daemon available in this sandbox; brought up a local Postgres 16 cluster (pg_ctlcluster) with a scratch paladin/paladin_treasury_test role+database to prove all 23 treasury::postgres tests live (0 SKIP:), per the plan's own fallback instruction. CI's postgres-integration job remains the authority for the Docker-gated path.
 
 ### Pending Todos
 
@@ -457,8 +460,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-27T22:00:28.322Z
-**Stopped at:** Completed 39-02-PLAN.md
+**Last session:** 2026-09-27T22:44:22.554Z
+**Stopped at:** Completed 39-03-PLAN.md
 next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
 RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
 not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.

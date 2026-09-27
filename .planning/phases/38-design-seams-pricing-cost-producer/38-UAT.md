@@ -3,16 +3,16 @@ status: testing
 phase: 38-design-seams-pricing-cost-producer
 source: [38-01-SUMMARY.md, 38-02-SUMMARY.md, 38-03-SUMMARY.md, 38-04-SUMMARY.md, 38-05-SUMMARY.md, 38-06-SUMMARY.md, 38-07-SUMMARY.md, 38-08-SUMMARY.md, 38-09-SUMMARY.md]
 started: 2026-09-27T15:47:12Z
-updated: 2026-09-27T16:29:10Z
+updated: 2026-09-27T16:32:37Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 2
-name: 38-02/D1: A priced streamed agent call reaches ExecutionMetadata.cost_estimate (
+number: 3
+name: 38-02/D2: An unpriced model's streamed call yields cost None end-to-end (never a
 expected: |
-  Run a streamed agent call against a model that has a price row (e.g. gpt-4 at 2.50/10.00 per 1M with 1,000 prompt / 2,000 completion tokens). The markdown herald's Execution Metadata block ends with `Cost: 0.0225 USD` (currency code, four decimals, no dollar sign), and ExecutionMetadata.cost_estimate is Some(0.0225). (Automated: `cargo test -p paladin-ai --lib streamed_cost_tests` covers this; confirm the rendered output looks right to you.)
+  Run the same streamed call against a model with no price row. The herald prints no Cost line at all (never `0.0000`), cost_estimate is None, and the log carries exactly one `warn` line naming the unpriced model, no matter how many calls you make. (Automated: covered by the same test target and `pricing.rs` warn-once tests; confirm the log looks right to you.)
 awaiting: user response
 
 ## Tests
@@ -22,7 +22,7 @@ result: pass
 
 ### 2. 38-02/D1: A priced streamed agent call reaches ExecutionMetadata.cost_estimate (
 expected: Run a streamed agent call against a model that has a price row (e.g. gpt-4 at 2.50/10.00 per 1M with 1,000 prompt / 2,000 completion tokens). The markdown herald's Execution Metadata block ends with `Cost: 0.0225 USD` (currency code, four decimals, no dollar sign), and ExecutionMetadata.cost_estimate is Some(0.0225). (Automated: `cargo test -p paladin-ai --lib streamed_cost_tests` covers this; confirm the rendered output looks right to you.)
-result: [pending]
+result: pass
 
 ### 3. 38-02/D2: An unpriced model's streamed call yields cost None end-to-end (never a
 expected: Run the same streamed call against a model with no price row. The herald prints no Cost line at all (never `0.0000`), cost_estimate is None, and the log carries exactly one `warn` line naming the unpriced model, no matter how many calls you make. (Automated: covered by the same test target and `pricing.rs` warn-once tests; confirm the log looks right to you.)
@@ -364,9 +364,9 @@ verification: cargo test --workspace; cargo fmt --check; make clean-code; make s
 ## Summary
 
 total: 51
-passed: 46
+passed: 47
 issues: 0
-pending: 5
+pending: 4
 skipped: 0
 blocked: 0
 

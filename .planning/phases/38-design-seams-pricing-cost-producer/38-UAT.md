@@ -3,23 +3,22 @@ status: testing
 phase: 38-design-seams-pricing-cost-producer
 source: [38-01-SUMMARY.md, 38-02-SUMMARY.md, 38-03-SUMMARY.md, 38-04-SUMMARY.md, 38-05-SUMMARY.md, 38-06-SUMMARY.md, 38-07-SUMMARY.md, 38-08-SUMMARY.md, 38-09-SUMMARY.md]
 started: 2026-09-27T15:47:12Z
-updated: 2026-09-27T15:47:12Z
+updated: 2026-09-27T16:29:10Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 1
-name: Cold Start Smoke Test
+number: 2
+name: 38-02/D1: A priced streamed agent call reaches ExecutionMetadata.cost_estimate (
 expected: |
-  Kill any running paladin-server. Start it from scratch with a config.yml that carries a valid `treasurer:` section (currency + at least one priced model). The server boots without errors, logs no `invalid treasurer configuration` line, and a health check or basic API call returns live data.
+  Run a streamed agent call against a model that has a price row (e.g. gpt-4 at 2.50/10.00 per 1M with 1,000 prompt / 2,000 completion tokens). The markdown herald's Execution Metadata block ends with `Cost: 0.0225 USD` (currency code, four decimals, no dollar sign), and ExecutionMetadata.cost_estimate is Some(0.0225). (Automated: `cargo test -p paladin-ai --lib streamed_cost_tests` covers this; confirm the rendered output looks right to you.)
 awaiting: user response
 
 ## Tests
-
 ### 1. Cold Start Smoke Test
 expected: Kill any running paladin-server. Start it from scratch with a config.yml that carries a valid `treasurer:` section (currency + at least one priced model). The server boots without errors, logs no `invalid treasurer configuration` line, and a health check or basic API call returns live data.
-result: [pending]
+result: pass
 
 ### 2. 38-02/D1: A priced streamed agent call reaches ExecutionMetadata.cost_estimate (
 expected: Run a streamed agent call against a model that has a price row (e.g. gpt-4 at 2.50/10.00 per 1M with 1,000 prompt / 2,000 completion tokens). The markdown herald's Execution Metadata block ends with `Cost: 0.0225 USD` (currency code, four decimals, no dollar sign), and ExecutionMetadata.cost_estimate is Some(0.0225). (Automated: `cargo test -p paladin-ai --lib streamed_cost_tests` covers this; confirm the rendered output looks right to you.)
@@ -365,9 +364,9 @@ verification: cargo test --workspace; cargo fmt --check; make clean-code; make s
 ## Summary
 
 total: 51
-passed: 45
+passed: 46
 issues: 0
-pending: 6
+pending: 5
 skipped: 0
 blocked: 0
 

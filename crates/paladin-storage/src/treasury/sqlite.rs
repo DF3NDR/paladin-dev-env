@@ -1,14 +1,15 @@
 /*
 SQLite Treasury Ledger
 
-Concrete `TreasuryLedgerPort` implementation over SQLite (LEDGR-01..04, ADR-0053, D-04, D-06,
-D-11). This plan (39-01) implements `settle`/`spend`/`store_now` only -- every settle write is
-an unreserved settle (`request.reservation: None`); a `Some` reservation is rejected with
-`TreasuryLedgerError::UnknownReservation`, since no adapter can yet hold a `reserve` row (39-02
-adds `reserve`/`release`). Settlement idempotency is store-enforced (D-06): the partial unique
-index `idx_treasury_ledger_settlement` on `(run_id, superstep, attempt) WHERE kind = 'settle'`
-plus `INSERT ... ON CONFLICT (run_id, superstep, attempt) WHERE kind = 'settle' DO NOTHING` --
-zero rows affected maps to `SettleOutcome::AlreadySettled`, never an error.
+Concrete `TreasuryLedgerPort` implementation over SQLite (LEDGR-01..04, ADR-0053, D-03, D-04,
+D-06, D-11, D-12). `reserve`/`release` and the reserved `settle` path (this plan, 39-02) admit
+or draw down a hold under per-scope serialization: the SUM-then-insert runs inside one
+`Pool::begin_with("BEGIN IMMEDIATE")` transaction, so no other connection can begin a competing
+write transaction until this one commits or rolls back (ADR-0053 §5). Settlement idempotency is
+store-enforced (D-06): the partial unique index `idx_treasury_ledger_settlement` on
+`(run_id, superstep, attempt) WHERE kind = 'settle'` plus
+`INSERT ... ON CONFLICT (run_id, superstep, attempt) WHERE kind = 'settle' DO NOTHING` -- zero
+rows affected maps to `SettleOutcome::AlreadySettled`, never an error.
 
 Every top-level query string below is a plain `&'static str` literal (or, for `spend`'s dynamic
 filters, an `sqlx::QueryBuilder` seeded with one) -- never a runtime string-formatting call
@@ -18,6 +19,11 @@ persisted timestamp is bound from a Rust `DateTime<Utc>` truncated through
 the TEXT column holds one encoding and lexical order is chronological (D-00e). Migrations follow
 the versioned-file convention at `crates/paladin-storage/migrations/sqlite/`, embedded at
 compile time via `sqlx::migrate!` and applied automatically on construction.
+
+Every `reserve`/`settle`/`release` transaction body is kept to exactly the statements the method
+needs plus commit/rollback -- no other `.await` runs while the transaction is open, since
+`BEGIN IMMEDIATE` takes the write lock immediately and holding it across unrelated I/O would
+stall every other writer against this file (RESEARCH.md Pitfall 2).
 */
 
 use std::collections::BTreeMap;
@@ -31,7 +37,7 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::treasury_ledger::{
-    SettleOutcome, SettleRequest, SpendGroupBy, SpendQuery, SpendRow,
+    ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SpendGroupBy, SpendQuery, SpendRow,
 };
 use paladin_ports::output::treasury_ledger_port::{TreasuryLedgerError, TreasuryLedgerPort};
 
@@ -56,6 +62,54 @@ const SETTLE_INSERT: &str = "\
 /// The store's own clock (ALLOW-01, ADR-0053 §2) -- an RFC 3339 string SQLite's `chrono` decode
 /// already parses identically to every other `DateTime<Utc>` column in this codebase.
 const STORE_NOW: &str = "SELECT strftime('%Y-%m-%dT%H:%M:%fZ','now')";
+
+/// The balance SUM inside a `reserve`'s transaction: every row in `scope`+`currency` attributed
+/// inside the half-open window (D-03, D-12). Bound in order: tenant_id, api_key_id, currency,
+/// window_start, window_end.
+const BALANCE_QUERY: &str = "\
+    SELECT COALESCE(SUM(amount_nanos), 0) FROM treasury_ledger \
+    WHERE tenant_id = ? AND api_key_id = ? AND currency = ? AND attributed_at >= ? AND attributed_at < ?";
+
+/// The foreign-currency probe inside a `reserve`'s transaction: any row in `scope` attributed
+/// inside the window carrying a currency other than the hold's (ADR-0053 §2 -- a `SUM` over
+/// mixed currencies is always a refusal, never a conversion). Bound in order: tenant_id,
+/// api_key_id, window_start, window_end, currency.
+const FOREIGN_CURRENCY_QUERY: &str = "\
+    SELECT currency FROM treasury_ledger \
+    WHERE tenant_id = ? AND api_key_id = ? AND attributed_at >= ? AND attributed_at < ? \
+      AND currency <> ? LIMIT 1";
+
+/// A `reserve` row: `amount_nanos = +hold`, `charged_nanos = 0`, an empty `model_breakdown`
+/// (D-06 -- reserve rows are not idempotency-keyed, so `run_id`/`superstep`/`attempt` may be
+/// `NULL`). Bound in order: entry_id, tenant_id, api_key_id, reservation_id, run_id, superstep,
+/// attempt, amount_nanos, currency, attributed_at, recorded_at, schema_version.
+const RESERVE_INSERT: &str = "\
+    INSERT INTO treasury_ledger \
+      (entry_id, kind, tenant_id, api_key_id, reservation_id, run_id, superstep, attempt, \
+       amount_nanos, charged_nanos, currency, model_breakdown, attributed_at, recorded_at, \
+       schema_version) \
+    VALUES (?, 'reserve', ?, ?, ?, ?, ?, ?, ?, 0, ?, '{}', ?, ?, ?)";
+
+/// The `kind = 'reserve'` row a `settle` or `release` resolves its `reservation_id` against.
+const SELECT_RESERVATION: &str = "\
+    SELECT tenant_id, api_key_id, currency, amount_nanos, attributed_at \
+    FROM treasury_ledger WHERE kind = 'reserve' AND reservation_id = ?";
+
+/// Whether a reservation is already closed (an earlier `settle` or `release` referencing it
+/// already exists): `0` means still open (the full hold is outstanding), `> 0` means closed
+/// (the outstanding hold is `0`).
+const RESERVATION_CLOSED_QUERY: &str = "\
+    SELECT COUNT(*) FROM treasury_ledger WHERE reservation_id = ? AND kind IN ('settle', 'release')";
+
+/// A `release` row: `amount_nanos = -hold`, `charged_nanos = 0`, an empty `model_breakdown`.
+/// Bound in order: entry_id, tenant_id, api_key_id, reservation_id, amount_nanos, currency,
+/// attributed_at, recorded_at, schema_version.
+const RELEASE_INSERT: &str = "\
+    INSERT INTO treasury_ledger \
+      (entry_id, kind, tenant_id, api_key_id, reservation_id, run_id, superstep, attempt, \
+       amount_nanos, charged_nanos, currency, model_breakdown, attributed_at, recorded_at, \
+       schema_version) \
+    VALUES (?, 'release', ?, ?, ?, NULL, NULL, NULL, ?, 0, ?, '{}', ?, ?, ?)";
 
 /// Every settle row's columns `spend` needs, pre-filtered to `kind = 'settle'` so reserve/release
 /// rows never reach the fold.
@@ -107,6 +161,34 @@ impl SqliteTreasuryLedger {
         })
     }
 
+    /// Connect over a shared on-disk file with WAL journaling, so multiple pooled connections
+    /// (needed for the LEDGR-02 race clause's true-concurrency proof) observe each other's
+    /// writes -- unlike `new`, which callers use with `sqlite::memory:` and effectively one
+    /// connection. Test-only: production callers always go through `new` (mirrors
+    /// `SqliteRunRepository::new_shared_file`, D-52 precedent).
+    #[cfg(test)]
+    async fn new_shared_file(database_url: &str) -> Result<Self, TreasuryLedgerError> {
+        let options = SqliteConnectOptions::from_str(database_url)
+            .map_err(|e| Self::wrap(database_url, e))?
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal);
+
+        let pool = SqlitePoolOptions::new()
+            .connect_with(options)
+            .await
+            .map_err(|e| Self::wrap(database_url, e))?;
+
+        MIGRATOR
+            .run(&pool)
+            .await
+            .map_err(|e| Self::wrap(database_url, e))?;
+
+        Ok(Self {
+            pool,
+            database_url: database_url.to_string(),
+        })
+    }
+
     /// Wrap a driver/migration error into `TreasuryLedgerError::Backend`, with the connection
     /// URL's password redacted from the error text first (redact before any truncation, per this
     /// project's security instructions).
@@ -133,17 +215,182 @@ impl SqliteTreasuryLedger {
 
 #[async_trait]
 impl TreasuryLedgerPort for SqliteTreasuryLedger {
-    async fn settle(&self, request: SettleRequest) -> Result<SettleOutcome, TreasuryLedgerError> {
-        crate::treasury::validate_settle(&request)?;
+    async fn reserve(&self, request: ReserveRequest) -> Result<ReservationId, TreasuryLedgerError> {
+        crate::treasury::validate_reserve(&request)?;
 
-        if let Some(reservation) = request.reservation {
-            // No adapter can yet hold a `reserve` row in this plan (39-02 adds
-            // `reserve`/`release`), so every `Some` reservation is unconditionally unknown.
-            return Err(TreasuryLedgerError::UnknownReservation { reservation });
+        let window_start = crate::run::storage_timestamp(request.window_start);
+        let window_end = crate::run::storage_timestamp(request.window_end);
+
+        // Resolve the (optional) settlement key components before opening the transaction --
+        // pure computation, nothing that needs the write lock (Pitfall 2).
+        let (run_id, superstep, attempt) = match &request.key {
+            Some(key) => {
+                let superstep = i64::try_from(key.superstep).map_err(|_| {
+                    TreasuryLedgerError::InvalidRequest {
+                        message: format!(
+                            "superstep {} does not fit in a 64-bit signed integer",
+                            key.superstep
+                        ),
+                    }
+                })?;
+                (
+                    Some(key.run_id.as_str().to_string()),
+                    Some(superstep),
+                    Some(i64::from(key.attempt)),
+                )
+            }
+            None => (None, None, None),
+        };
+
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        let foreign: Option<String> = sqlx::query_scalar(FOREIGN_CURRENCY_QUERY)
+            .bind(&request.scope.tenant_id)
+            .bind(&request.scope.api_key_id)
+            .bind(window_start)
+            .bind(window_end)
+            .bind(request.hold.currency().as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        if let Some(found) = foreign {
+            tx.rollback().await.map_err(|e| self.wrap_error(e))?;
+            let found_currency =
+                CurrencyCode::new(&found).map_err(|e| TreasuryLedgerError::Serialization {
+                    message: format!("stored currency '{found}' is invalid: {e}"),
+                })?;
+            return Err(TreasuryLedgerError::CurrencyMismatch {
+                expected: request.hold.currency().clone(),
+                found: found_currency,
+            });
         }
 
-        let now = self.store_clock().await?;
+        let balance: i64 = sqlx::query_scalar(BALANCE_QUERY)
+            .bind(&request.scope.tenant_id)
+            .bind(&request.scope.api_key_id)
+            .bind(request.hold.currency().as_str())
+            .bind(window_start)
+            .bind(window_end)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        let hold_nanos = request.hold.nanos();
+        let ceiling_nanos = request.ceiling.nanos();
+        let admitted = balance
+            .checked_add(hold_nanos)
+            .is_some_and(|sum| sum <= ceiling_nanos);
+
+        if !admitted {
+            tx.rollback().await.map_err(|e| self.wrap_error(e))?;
+            return Err(TreasuryLedgerError::Refused {
+                balance: Cost::new(balance, request.hold.currency().clone()),
+                hold: request.hold.clone(),
+                ceiling: request.ceiling.clone(),
+            });
+        }
+
+        let now: DateTime<Utc> = sqlx::query_scalar(STORE_NOW)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
         let attributed_at = crate::run::storage_timestamp(now);
+
+        let reservation_id = ReservationId::new_v7();
+        let entry_id = Uuid::now_v7().to_string();
+
+        sqlx::query(RESERVE_INSERT)
+            .bind(entry_id)
+            .bind(&request.scope.tenant_id)
+            .bind(&request.scope.api_key_id)
+            .bind(reservation_id.as_str())
+            .bind(run_id)
+            .bind(superstep)
+            .bind(attempt)
+            .bind(hold_nanos)
+            .bind(request.hold.currency().as_str())
+            .bind(attributed_at)
+            .bind(attributed_at)
+            .bind(TREASURY_LEDGER_SCHEMA_VERSION)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        tx.commit().await.map_err(|e| self.wrap_error(e))?;
+
+        Ok(reservation_id)
+    }
+
+    async fn release(&self, reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        let Some(row) = sqlx::query(SELECT_RESERVATION)
+            .bind(reservation.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?
+        else {
+            tx.rollback().await.map_err(|e| self.wrap_error(e))?;
+            return Err(TreasuryLedgerError::UnknownReservation { reservation });
+        };
+
+        let tenant_id: String = row.try_get("tenant_id").map_err(|e| self.wrap_error(e))?;
+        let api_key_id: String = row.try_get("api_key_id").map_err(|e| self.wrap_error(e))?;
+        let currency: String = row.try_get("currency").map_err(|e| self.wrap_error(e))?;
+        let amount_nanos: i64 = row
+            .try_get("amount_nanos")
+            .map_err(|e| self.wrap_error(e))?;
+        let attributed_at: DateTime<Utc> = row
+            .try_get("attributed_at")
+            .map_err(|e| self.wrap_error(e))?;
+
+        let closed_count: i64 = sqlx::query_scalar(RESERVATION_CLOSED_QUERY)
+            .bind(reservation.as_str())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        if closed_count > 0 {
+            // Already settled or already released: a no-op, not an error (D-04).
+            tx.commit().await.map_err(|e| self.wrap_error(e))?;
+            return Ok(());
+        }
+
+        let now: DateTime<Utc> = sqlx::query_scalar(STORE_NOW)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+        let recorded_at = crate::run::storage_timestamp(now);
+
+        sqlx::query(RELEASE_INSERT)
+            .bind(Uuid::now_v7().to_string())
+            .bind(&tenant_id)
+            .bind(&api_key_id)
+            .bind(reservation.as_str())
+            .bind(-amount_nanos)
+            .bind(&currency)
+            .bind(attributed_at)
+            .bind(recorded_at)
+            .bind(TREASURY_LEDGER_SCHEMA_VERSION)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        tx.commit().await.map_err(|e| self.wrap_error(e))?;
+        Ok(())
+    }
+
+    async fn settle(&self, request: SettleRequest) -> Result<SettleOutcome, TreasuryLedgerError> {
+        crate::treasury::validate_settle(&request)?;
 
         let superstep = i64::try_from(request.key.superstep).map_err(|_| {
             TreasuryLedgerError::InvalidRequest {
@@ -155,6 +402,83 @@ impl TreasuryLedgerPort for SqliteTreasuryLedger {
         })?;
         let attempt = i64::from(request.key.attempt);
 
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        let (attributed_at, recorded_at, outstanding_hold) = if let Some(reservation) =
+            &request.reservation
+        {
+            let Some(row) = sqlx::query(SELECT_RESERVATION)
+                .bind(reservation.as_str())
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| self.wrap_error(e))?
+            else {
+                tx.rollback().await.map_err(|e| self.wrap_error(e))?;
+                return Err(TreasuryLedgerError::UnknownReservation {
+                    reservation: reservation.clone(),
+                });
+            };
+
+            let tenant_id: String = row.try_get("tenant_id").map_err(|e| self.wrap_error(e))?;
+            let api_key_id: String = row.try_get("api_key_id").map_err(|e| self.wrap_error(e))?;
+            let currency: String = row.try_get("currency").map_err(|e| self.wrap_error(e))?;
+            let hold_nanos: i64 = row
+                .try_get("amount_nanos")
+                .map_err(|e| self.wrap_error(e))?;
+            let reservation_attributed_at: DateTime<Utc> = row
+                .try_get("attributed_at")
+                .map_err(|e| self.wrap_error(e))?;
+
+            if tenant_id != request.scope.tenant_id || api_key_id != request.scope.api_key_id {
+                tx.rollback().await.map_err(|e| self.wrap_error(e))?;
+                return Err(TreasuryLedgerError::InvalidRequest {
+                    message: format!(
+                        "settle scope {:?}/{:?} does not match reservation {reservation}'s \
+                             scope {tenant_id:?}/{api_key_id:?}",
+                        request.scope.tenant_id, request.scope.api_key_id
+                    ),
+                });
+            }
+            if currency != request.amount.currency().as_str() {
+                tx.rollback().await.map_err(|e| self.wrap_error(e))?;
+                let expected = CurrencyCode::new(&currency).map_err(|e| {
+                    TreasuryLedgerError::Serialization {
+                        message: format!("stored currency '{currency}' is invalid: {e}"),
+                    }
+                })?;
+                return Err(TreasuryLedgerError::CurrencyMismatch {
+                    expected,
+                    found: request.amount.currency().clone(),
+                });
+            }
+
+            let closed_count: i64 = sqlx::query_scalar(RESERVATION_CLOSED_QUERY)
+                .bind(reservation.as_str())
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| self.wrap_error(e))?;
+            let outstanding = if closed_count > 0 { 0 } else { hold_nanos };
+
+            let now: DateTime<Utc> = sqlx::query_scalar(STORE_NOW)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| self.wrap_error(e))?;
+            let recorded_at = crate::run::storage_timestamp(now);
+
+            (reservation_attributed_at, recorded_at, outstanding)
+        } else {
+            let now: DateTime<Utc> = sqlx::query_scalar(STORE_NOW)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| self.wrap_error(e))?;
+            let attributed_at = crate::run::storage_timestamp(now);
+            (attributed_at, attributed_at, 0)
+        };
+
         let model_breakdown_json =
             serde_json::to_string(&request.model_breakdown).map_err(|e| {
                 TreasuryLedgerError::Serialization {
@@ -163,26 +487,30 @@ impl TreasuryLedgerPort for SqliteTreasuryLedger {
             })?;
 
         let entry_id = Uuid::now_v7().to_string();
-        let amount_nanos = request.amount.nanos();
+        let actual_nanos = request.amount.nanos();
+        let amount_nanos = actual_nanos - outstanding_hold;
+        let reservation_id = request.reservation.as_ref().map(|r| r.as_str().to_string());
 
         let result = sqlx::query(SETTLE_INSERT)
             .bind(entry_id)
             .bind(&request.scope.tenant_id)
             .bind(&request.scope.api_key_id)
-            .bind(None::<String>)
+            .bind(reservation_id)
             .bind(request.key.run_id.as_str())
             .bind(superstep)
             .bind(attempt)
             .bind(amount_nanos)
-            .bind(amount_nanos)
+            .bind(actual_nanos)
             .bind(request.amount.currency().as_str())
             .bind(model_breakdown_json)
             .bind(attributed_at)
-            .bind(attributed_at)
+            .bind(recorded_at)
             .bind(TREASURY_LEDGER_SCHEMA_VERSION)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| self.wrap_error(e))?;
+
+        tx.commit().await.map_err(|e| self.wrap_error(e))?;
 
         Ok(if result.rows_affected() == 0 {
             SettleOutcome::AlreadySettled
@@ -301,8 +629,12 @@ fn fold_one(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
     use paladin_core::platform::container::run::RunId;
     use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
+
+    use crate::treasury::contract_tests;
 
     async fn fresh_store() -> SqliteTreasuryLedger {
         SqliteTreasuryLedger::new("sqlite::memory:").await.unwrap()
@@ -402,6 +734,77 @@ mod tests {
         let first = store.store_now().await.unwrap();
         let second = store.store_now().await.unwrap();
         assert!(second >= first);
+    }
+
+    // ── Shared contract suite (D-11): Task 1 clauses ─────────────────────
+
+    #[tokio::test]
+    async fn reserve_admits_at_the_ceiling_and_refuses_one_past_it() {
+        contract_tests::reserve_admits_at_the_ceiling_and_refuses_one_past_it(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn reserve_then_settle_contributes_actual_minus_hold() {
+        contract_tests::reserve_then_settle_contributes_actual_minus_hold(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn unreserved_settle_contributes_actual() {
+        contract_tests::unreserved_settle_contributes_actual(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn release_returns_the_hold_and_is_idempotent() {
+        contract_tests::release_returns_the_hold_and_is_idempotent(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn settle_after_release_charges_actual_only() {
+        contract_tests::settle_after_release_charges_actual_only(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn settle_is_attributed_to_its_reservation_window() {
+        contract_tests::settle_is_attributed_to_its_reservation_window(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn reserve_refuses_a_second_currency_in_scope_and_window() {
+        contract_tests::reserve_refuses_a_second_currency_in_scope_and_window(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn reserve_rejects_invalid_requests() {
+        contract_tests::reserve_rejects_invalid_requests(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn two_reservations_for_one_superstep_attempt_are_legal() {
+        contract_tests::two_reservations_for_one_superstep_attempt_are_legal(&fresh_store().await)
+            .await;
+    }
+
+    // The one clause that needs a REAL shared on-disk database -- proving the LEDGR-02
+    // N-1-of-N race under true multi-connection concurrency, not a single in-process
+    // `sqlite::memory:` connection (D-52 precedent, `run/sqlite.rs`).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reserve_race_admits_exactly_n_minus_one_on_disk() {
+        let path = std::env::temp_dir().join(format!(
+            "paladin_treasury_ledger_race_test_{}.sqlite",
+            Uuid::new_v4()
+        ));
+        let url = format!("sqlite://{}", path.display());
+        let store: Arc<dyn TreasuryLedgerPort> =
+            Arc::new(SqliteTreasuryLedger::new_shared_file(&url).await.unwrap());
+
+        contract_tests::reserve_race_admits_exactly_n_minus_one(store).await;
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
     }
 
     #[tokio::test]

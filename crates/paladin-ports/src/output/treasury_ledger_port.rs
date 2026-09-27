@@ -3,9 +3,9 @@
 //! [`TreasuryLedgerPort`] is the WHOLE contract every backend adapter (`InMemoryTreasuryLedger`,
 //! `SqliteTreasuryLedger`, `PostgresTreasuryLedger`, all `paladin-storage`) implements: an
 //! append-only, derive-on-read ledger whose scope+window balance is a plain `SUM` of every
-//! row's signed contribution (ADR-0053 §1-2, cited not re-argued, D-00a). `reserve`/`release`
-//! and their per-scope serialized admission arrive with 39-02; this plan's contract is
-//! `settle`/`spend`/`store_now` only, proven end-to-end on the SQLite adapter.
+//! row's signed contribution (ADR-0053 §1-2, cited not re-argued, D-00a). `reserve` and
+//! `release` (this plan, 39-02) admit or release a hold under per-scope serialization;
+//! `settle`/`spend`/`store_now` (39-01) are unchanged.
 //!
 //! ## Store-enforced settlement idempotency (D-06)
 //!
@@ -18,16 +18,18 @@
 //!
 //! ## Policy-free ledger (D-03)
 //!
-//! This port knows no allowance policy: `reserve` (39-02) takes the caller's ceiling and
-//! window bounds and admits a hold only if the scope+window balance would not exceed the
-//! ceiling; Phase 41 computes ceilings and windows from allowance config, this port never
-//! reads such config itself.
+//! This port knows no allowance policy: [`TreasuryLedgerPort::reserve`] takes the caller's
+//! ceiling and window bounds and admits a hold only if the scope+window balance would not
+//! exceed the ceiling; Phase 41 computes ceilings and windows from allowance config, this port
+//! never reads such config itself.
 //!
-//! ## Per-scope serialization (39-02)
+//! ## Per-scope serialization (LEDGR-02, ADR-0053 §5)
 //!
-//! `reserve`'s SUM-then-insert is serialized per scope (Postgres: a transaction-scoped
-//! advisory lock; SQLite: `BEGIN IMMEDIATE`; in-memory: one mutex) so concurrent draws against
-//! a shared ceiling never overspend (LEDGR-02, ADR-0053 §5) — arriving with 39-02's `reserve`.
+//! `reserve`'s SUM-then-insert is serialized per scope inside one transaction (Postgres: a
+//! transaction-scoped advisory lock; SQLite: `BEGIN IMMEDIATE`; in-memory: one mutex across the
+//! SUM and the insert) so concurrent draws against a shared ceiling never overspend: `N`
+//! concurrent reserves against a ceiling fitting `N-1` yield exactly `N-1` `Ok` and one
+//! `Refused`.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -35,7 +37,7 @@ use thiserror::Error;
 
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::treasury_ledger::{
-    ReservationId, SettleOutcome, SettleRequest, SpendQuery, SpendRow,
+    ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SpendQuery, SpendRow,
 };
 
 /// Errors returned by [`TreasuryLedgerPort`] methods (X-06 — structured, never a bare
@@ -65,10 +67,8 @@ pub enum TreasuryLedgerError {
         /// The currency the rejected call carried.
         found: CurrencyCode,
     },
-    /// A `settle` or `release` named a `reservation` that does not exist on this backend. In
-    /// this plan (39-01), every `settle` names `reservation: None` (unreserved) — no adapter can
-    /// yet hold a `reserve` row, so any `Some` reservation is unconditionally unknown until
-    /// 39-02 adds `reserve`.
+    /// A `reserve`, `settle` or `release` named a `reservation` that does not exist on this
+    /// backend — the id was never issued by [`TreasuryLedgerPort::reserve`] on this store.
     #[error("unknown reservation: {reservation}")]
     UnknownReservation {
         /// The reservation id that could not be resolved.
@@ -115,7 +115,8 @@ pub enum TreasuryLedgerError {
 /// use chrono::{DateTime, Utc};
 /// use paladin_core::platform::container::cost::Cost;
 /// use paladin_core::platform::container::treasury_ledger::{
-///     SettleOutcome, SettleRequest, SettlementKey, SpendQuery, SpendRow,
+///     ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SettlementKey, SpendQuery,
+///     SpendRow,
 /// };
 /// use paladin_ports::output::treasury_ledger_port::{TreasuryLedgerError, TreasuryLedgerPort};
 ///
@@ -125,6 +126,16 @@ pub enum TreasuryLedgerError {
 ///
 /// #[async_trait]
 /// impl TreasuryLedgerPort for MockLedger {
+///     async fn reserve(&self, _request: ReserveRequest) -> Result<ReservationId, TreasuryLedgerError> {
+///         // A real adapter serializes the SUM-then-insert per scope (LEDGR-02); this mock has
+///         // no policy to enforce, so it always admits.
+///         Ok(ReservationId::new_v7())
+///     }
+///
+///     async fn release(&self, _reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+///         Ok(())
+///     }
+///
 ///     async fn settle(&self, request: SettleRequest) -> Result<SettleOutcome, TreasuryLedgerError> {
 ///         let mut settled = self.settled.lock().unwrap();
 ///         if !settled.insert(request.key) {
@@ -167,22 +178,68 @@ pub enum TreasuryLedgerError {
 /// ```
 #[async_trait]
 pub trait TreasuryLedgerPort: Send + Sync {
+    /// Place a hold against a scope+window's ceiling (D-03, D-04, LEDGR-02).
+    ///
+    /// Admits the hold only if `balance + request.hold <= request.ceiling`, where `balance` is
+    /// the plain `SUM` of `amount_nanos` over the scope's rows in `request.hold`'s currency
+    /// attributed inside `[request.window_start, request.window_end)`. An overflowing add does
+    /// not fit (refused, never a panic). A row of another currency already in that scope and
+    /// window is [`TreasuryLedgerError::CurrencyMismatch`] (never converted, never silently
+    /// combined). A refusal is [`TreasuryLedgerError::Refused`], never `Ok(false)` (X-06).
+    ///
+    /// The SUM and the insert are serialized per scope inside one transaction (SQLite `BEGIN
+    /// IMMEDIATE`, Postgres a transaction-scoped advisory lock on the scope, in-memory one
+    /// mutex) so `N` concurrent reserves against a ceiling fitting `N-1` yield exactly `N-1`
+    /// `Ok` and one `Refused` (LEDGR-02). The reservation is attributed to the store's own
+    /// clock at the instant it is admitted (ADR-0053 §2) — never the caller's `Utc::now()`. The
+    /// port knows no allowance policy (D-03): it never reads config to decide a ceiling or a
+    /// window, only compares the values the caller supplies.
+    ///
+    /// Two reservations may legally carry the same `request.key` (D-06): only `settle` rows are
+    /// keyed for idempotency, so a retry after a released hold can reserve again under the same
+    /// superstep attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreasuryLedgerError::InvalidRequest`] for a malformed request (empty scope
+    /// fields, a negative `hold` or `ceiling`, or `window_start >= window_end` — validated
+    /// before any I/O), [`TreasuryLedgerError::CurrencyMismatch`] when `request.hold`'s currency
+    /// differs from `request.ceiling`'s, or from another currency already found in the same
+    /// scope+window, and [`TreasuryLedgerError::Refused`] when admitting the hold would exceed
+    /// the ceiling.
+    async fn reserve(&self, request: ReserveRequest) -> Result<ReservationId, TreasuryLedgerError>;
+
+    /// Release a hold (D-04): idempotent, and a no-op for a reservation that is already settled
+    /// or already released — calling `release` twice, or after a `settle` referencing the same
+    /// reservation, changes nothing and returns `Ok(())` both times.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreasuryLedgerError::UnknownReservation`] when `reservation` does not resolve
+    /// on this backend (an id this store never issued).
+    async fn release(&self, reservation: ReservationId) -> Result<(), TreasuryLedgerError>;
+
     /// Record a settlement (D-04): the actual charge for one `SettlementKey`
     /// (`run_id`/`superstep`/`attempt`, ADR-0053 §4).
     ///
     /// Store-enforced idempotency (D-06): a duplicate `request.key` returns
     /// `Ok(SettleOutcome::AlreadySettled)` and changes nothing — never an error. An unreserved
     /// settle (`request.reservation: None`) contributes `request.amount` to its scope+window's
-    /// balance at the store's current instant; a reserved settle (39-02) contributes
-    /// `actual - hold` and is attributed to its reservation's window (ADR-0053 §2).
+    /// balance at the store's current instant. A reserved settle contributes `actual - hold`
+    /// while the reservation is still open, or `actual` once it has been closed by an earlier
+    /// settle or release, and is attributed to its reservation's own instant — never the
+    /// settle's own call time — so a hold placed in one window and settled after that window
+    /// closes still counts against the window it was placed in (ADR-0053 §2). `request.scope`
+    /// must equal the reservation's own scope, and `request.amount`'s currency must equal the
+    /// reservation's currency.
     ///
     /// # Errors
     ///
     /// Returns [`TreasuryLedgerError::InvalidRequest`] for a malformed request (validated before
-    /// any I/O — see `paladin_storage::treasury::validate_settle`),
+    /// any I/O — see `paladin_storage::treasury::validate_settle`, and, for a reserved settle, a
+    /// `request.scope` that does not match the reservation's own scope),
     /// [`TreasuryLedgerError::UnknownReservation`] when `request.reservation` is `Some` and does
-    /// not resolve on this backend (every adapter in this plan, 39-01, since no adapter can yet
-    /// hold a `reserve` row), and [`TreasuryLedgerError::CurrencyMismatch`] when
+    /// not resolve on this backend, and [`TreasuryLedgerError::CurrencyMismatch`] when
     /// `request.amount`'s currency differs from its reservation's or from another currency
     /// already found in the same scope+window.
     async fn settle(&self, request: SettleRequest) -> Result<SettleOutcome, TreasuryLedgerError>;
@@ -217,6 +274,17 @@ mod tests {
 
     #[async_trait]
     impl TreasuryLedgerPort for MockLedger {
+        async fn reserve(
+            &self,
+            _request: paladin_core::platform::container::treasury_ledger::ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            Ok(ReservationId::new_v7())
+        }
+
+        async fn release(&self, _reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            Ok(())
+        }
+
         async fn settle(
             &self,
             request: SettleRequest,

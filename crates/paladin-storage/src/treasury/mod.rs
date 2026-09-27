@@ -6,13 +6,19 @@
 //! `TIMESTAMPTZ` column.
 //!
 //! The in-memory backend and the shared `contract_tests` suite arrive in 39-02; this plan
-//! (39-01) proves the architecture end-to-end on the SQLite adapter alone.
+//! (39-02) also adds `reserve`/`release` on the SQLite adapter under per-scope serialization
+//! (LEDGR-02).
+
+/// Shared `TreasuryLedgerPort` contract suite (D-11): one generic async function per clause,
+/// invoked unchanged by every backend's own `#[tokio::test]`s. Plain module (not
+/// `#[cfg(test)]`), mirroring `crate::run::contract_tests`.
+pub mod contract_tests;
 
 /// SQLite `TreasuryLedgerPort` implementation, behind the `sqlite` feature (LEDGR-01, D-11).
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 
-use paladin_core::platform::container::treasury_ledger::SettleRequest;
+use paladin_core::platform::container::treasury_ledger::{ReserveRequest, SettleRequest};
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
 
 /// Shared, backend-agnostic validation every adapter's `settle` runs before any I/O (D-00e's
@@ -76,6 +82,59 @@ pub(crate) fn validate_settle(request: &SettleRequest) -> Result<(), TreasuryLed
                  {amount} nanos",
                 amount = request.amount.nanos()
             ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Shared, backend-agnostic validation every adapter's `reserve` runs before any I/O (D-00e).
+///
+/// # Errors
+///
+/// Returns [`TreasuryLedgerError::InvalidRequest`] when:
+/// - `request.scope.tenant_id` or `request.scope.api_key_id` is empty.
+/// - `request.hold.nanos()` or `request.ceiling.nanos()` is negative.
+/// - `request.window_start >= request.window_end`.
+///
+/// Returns [`TreasuryLedgerError::CurrencyMismatch`] when `request.hold`'s currency differs
+/// from `request.ceiling`'s.
+pub(crate) fn validate_reserve(request: &ReserveRequest) -> Result<(), TreasuryLedgerError> {
+    if request.scope.tenant_id.trim().is_empty() {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: "reserve request scope.tenant_id must not be empty".to_string(),
+        });
+    }
+    if request.scope.api_key_id.trim().is_empty() {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: "reserve request scope.api_key_id must not be empty".to_string(),
+        });
+    }
+    if request.hold.nanos() < 0 {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: format!(
+                "reserve request hold must not be negative (got {} nanos)",
+                request.hold.nanos()
+            ),
+        });
+    }
+    if request.ceiling.nanos() < 0 {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: format!(
+                "reserve request ceiling must not be negative (got {} nanos)",
+                request.ceiling.nanos()
+            ),
+        });
+    }
+    if request.window_start >= request.window_end {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: "reserve request window_start must be before window_end".to_string(),
+        });
+    }
+    if request.hold.currency() != request.ceiling.currency() {
+        return Err(TreasuryLedgerError::CurrencyMismatch {
+            expected: request.hold.currency().clone(),
+            found: request.ceiling.currency().clone(),
         });
     }
 
@@ -217,6 +276,90 @@ mod tests {
         assert!(matches!(
             validate_settle(&request),
             Err(TreasuryLedgerError::InvalidRequest { .. })
+        ));
+    }
+
+    fn base_reserve_request() -> ReserveRequest {
+        let now = chrono::Utc::now();
+        ReserveRequest {
+            scope: LedgerScope::unattributed(),
+            hold: Cost::new(1, usd()),
+            ceiling: Cost::new(10, usd()),
+            window_start: now - chrono::Duration::hours(1),
+            window_end: now + chrono::Duration::hours(1),
+            key: None,
+        }
+    }
+
+    #[test]
+    fn accepts_a_well_formed_reserve_request() {
+        assert!(validate_reserve(&base_reserve_request()).is_ok());
+    }
+
+    #[test]
+    fn reserve_rejects_empty_tenant_id() {
+        let mut request = base_reserve_request();
+        request.scope = LedgerScope::new("", "key-1");
+        assert!(matches!(
+            validate_reserve(&request),
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ));
+    }
+
+    #[test]
+    fn reserve_rejects_empty_api_key_id() {
+        let mut request = base_reserve_request();
+        request.scope = LedgerScope::new("tenant-1", "");
+        assert!(matches!(
+            validate_reserve(&request),
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ));
+    }
+
+    #[test]
+    fn reserve_rejects_negative_hold() {
+        let mut request = base_reserve_request();
+        request.hold = Cost::new(-1, usd());
+        assert!(matches!(
+            validate_reserve(&request),
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ));
+    }
+
+    #[test]
+    fn reserve_rejects_negative_ceiling() {
+        let mut request = base_reserve_request();
+        request.ceiling = Cost::new(-1, usd());
+        assert!(matches!(
+            validate_reserve(&request),
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ));
+    }
+
+    #[test]
+    fn reserve_rejects_a_window_that_does_not_start_before_it_ends() {
+        let mut request = base_reserve_request();
+        request.window_end = request.window_start;
+        assert!(matches!(
+            validate_reserve(&request),
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ));
+
+        let mut inverted = base_reserve_request();
+        std::mem::swap(&mut inverted.window_start, &mut inverted.window_end);
+        assert!(matches!(
+            validate_reserve(&inverted),
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ));
+    }
+
+    #[test]
+    fn reserve_rejects_hold_ceiling_currency_mismatch() {
+        let mut request = base_reserve_request();
+        request.ceiling = Cost::new(10, CurrencyCode::new("EUR").unwrap());
+        assert!(matches!(
+            validate_reserve(&request),
+            Err(TreasuryLedgerError::CurrencyMismatch { .. })
         ));
     }
 }

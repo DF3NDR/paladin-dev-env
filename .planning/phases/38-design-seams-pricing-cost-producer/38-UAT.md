@@ -3,18 +3,18 @@ status: testing
 phase: 38-design-seams-pricing-cost-producer
 source: [38-01-SUMMARY.md, 38-02-SUMMARY.md, 38-03-SUMMARY.md, 38-04-SUMMARY.md, 38-05-SUMMARY.md, 38-06-SUMMARY.md, 38-07-SUMMARY.md, 38-08-SUMMARY.md, 38-09-SUMMARY.md]
 started: 2026-09-27T15:47:12Z
-updated: 2026-09-27T16:34:46Z
+updated: 2026-09-27T16:37:26Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 5
-name: 38-08/D5: RunWorkerPool::with_herald composes a HeraldTraceSink alongside build_
+number: 6
+name: 38-09/D7: Manual credential-handling review over the full Phase 38 diff: no API
 expected: |
-  Start paladin-server with `herald:` configured (e.g. markdown) alongside the treasurer table and run one engine (graph) run to completion. The run's finished metadata, including the currency cost, is handed to the herald and appears in the server log once per run. Then start with an unknown herald formatter name: startup fails naming the `herald` config.
+  Skim the Phase 38 diff (`git diff 74969e15^..HEAD -- crates src`) for credential handling: no API key is logged or Debug-formatted, the pricing warn-once lines interpolate only a bare model name, and no new HTTP client was added. You should reach the same conclusion the summary records: clean.
   
-  Why a human: No dedicated RunWorkerPool-level integration test exercises the composed-CompositeSink path with a herald wired in -- the plan's own designed test list (herald_sink_hands_run_finished_to_the_herald, priced/unpriced_engine_run_*, run_model_label_names_single_mixed_or_none) proves the producer and its WarEngine wiring directly, not RunWorkerPool's own sink-combination logic. Verified by code review, successful compilation and cargo clippy -D warnings across the composition branch (both-None/one-Some/both-Some), and consistency with the pre-existing build_run_sink combination pattern it mirrors.
+  Why a human: This is a manual source-inspection review per security.instructions.md, not something a unit test asserts -- grep-scanned the whole phase diff (git diff 8d76aa2a~1..HEAD -- crates src) for credential-shaped identifiers and reqwest client construction, then read pricing.rs's two log::warn! call sites directly to confirm only `model` (a bare model-name string) is interpolated. Findings are stated in prose below; a human reviewer re-reading the same diff would reach the same two conclusions (clean; two log call sites, both benign).
 awaiting: user response
 
 ## Tests
@@ -40,7 +40,7 @@ result: pass
 expected: Start paladin-server with `herald:` configured (e.g. markdown) alongside the treasurer table and run one engine (graph) run to completion. The run's finished metadata, including the currency cost, is handed to the herald and appears in the server log once per run. Then start with an unknown herald formatter name: startup fails naming the `herald` config.
 
 Why a human: No dedicated RunWorkerPool-level integration test exercises the composed-CompositeSink path with a herald wired in -- the plan's own designed test list (herald_sink_hands_run_finished_to_the_herald, priced/unpriced_engine_run_*, run_model_label_names_single_mixed_or_none) proves the producer and its WarEngine wiring directly, not RunWorkerPool's own sink-combination logic. Verified by code review, successful compilation and cargo clippy -D warnings across the composition branch (both-None/one-Some/both-Some), and consistency with the pre-existing build_run_sink combination pattern it mirrors.
-result: [pending]
+result: pass
 
 ### 6. 38-09/D7: Manual credential-handling review over the full Phase 38 diff: no API
 expected: Skim the Phase 38 diff (`git diff 74969e15^..HEAD -- crates src`) for credential handling: no API key is logged or Debug-formatted, the pricing warn-once lines interpolate only a bare model name, and no new HTTP client was added. You should reach the same conclusion the summary records: clean.
@@ -366,9 +366,9 @@ verification: cargo test --workspace; cargo fmt --check; make clean-code; make s
 ## Summary
 
 total: 51
-passed: 49
+passed: 50
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 

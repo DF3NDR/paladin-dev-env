@@ -41,10 +41,10 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
   shared contract-test suite, backed by a `007` migration in both
   `crates/paladin-storage/migrations/{sqlite,postgres}/`
 
-- [ ] **LEDGR-02**: Draws reserve then settle atomically, so concurrent draws never overspend —
+- [x] **LEDGR-02**: Draws reserve then settle atomically, so concurrent draws never overspend —
   when N draws race and only N−1 fit, exactly N−1 succeed, on every adapter
 
-- [ ] **LEDGR-03**: Settlement is idempotent, keyed on run, superstep and attempt, so lease
+- [x] **LEDGR-03**: Settlement is idempotent, keyed on run, superstep and attempt, so lease
   redelivery, resume, retries and model fallback never charge twice
 
 - [x] **LEDGR-04**: Operator can view spend per tenant, API key, run and model over a time window
@@ -213,8 +213,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PRICE-02 | Phase 38 | Complete |
 | PRICE-03 | Phase 38 | Complete |
 | LEDGR-01 | Phase 39 | Complete |
-| LEDGR-02 | Phase 39 | Pending |
-| LEDGR-03 | Phase 39 | Pending |
+| LEDGR-02 | Phase 39 | Complete |
+| LEDGR-03 | Phase 39 | Complete |
 | LEDGR-04 | Phase 39 | Complete |
 | TENANT-01 | Phase 40 | Pending |
 | TENANT-02 | Phase 40 | Pending |

@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 39
 current_phase_name: spend-ledger
 status: executing
-stopped_at: Completed 39-01-PLAN.md
-last_updated: "2026-09-27T21:30:47.718Z"
+stopped_at: Completed 39-02-PLAN.md
+last_updated: "2026-09-27T22:00:37.490Z"
 last_activity: 2026-09-27
 last_activity_desc: Phase 39 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 17
-  completed_plans: 10
+  completed_plans: 11
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [██████░░░░] 59%
+**Progress:** [███████░░░] 65%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,7 +50,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 39 (spend-ledger) — EXECUTING
-Plan: 2 of 8
+Plan: 3 of 8
 Status: Ready to execute
 Last activity: 2026-09-27 — Phase 39 execution started
 
@@ -195,6 +195,7 @@ Last activity: 2026-09-27 — Phase 39 execution started
 | Phase 38 P08 | ~26min | 2 tasks | 5 files |
 | Phase 38 P09 | ~110min | 2 tasks | 10 files |
 | Phase 39 P01 | ~30min | 2 tasks | 11 files |
+| Phase 39 P02 | ~30min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -252,6 +253,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 38]: 38-09: TraceEvent::NodeFinished/RunFinished.cost fires enum_struct_variant_field_added against the published v0.10.1 baseline (a genuinely unsuppressed lint) but is invisible to the CI-pinned v0.9.0 comparison since TraceEvent postdates that baseline -- registered N/A in MIGRATION.md for the v0.10 -> v0.11 migration guide (Phase 46, CURR-23), no allowlist entry. — Confirmed via cargo semver-checks check-release --baseline-version 0.10.1 --release-type minor; the X-10-governed CI gate only tracks breaks against the published v0.9.0 baseline, so no Cargo.toml suppression or allowlist entry applies to a type that did not exist at that baseline.
 - [Phase ?]: 39-01: Task 1 checkpoint (007 treasury_ledger schema/index design) approved as proposed (option-a) by the operator before execution -- one-way scope columns and partial unique settlement index, D-12 index keyed on attributed_at per planner deviation
 - [Phase ?]: 39-01: TreasuryLedgerPort's Postgres CLI arm returns the same not(storage-postgres)-feature configuration error regardless of feature flags, since PostgresTreasuryLedger does not exist until 39-03
+- [Phase ?]: [Phase 39] 39-02: contract_tests.rs authored as one file spanning both tasks' clauses (shared helpers, non-test-gated module); Task 1's commit includes the full suite text, Task 2 wires it into InMemoryTreasuryLedger and the SQLite test module
+- [Phase ?]: [Phase 39] 39-02: real balance+hold overflow (checked_add returning None) proven by priming a fresh scope with a small balance then reserving i64::MAX against ceiling i64::MAX -- the plan's literal 'hold i64::MAX ceiling 0' example never overflows from a balance of 0
 
 ### Pending Todos
 
@@ -454,8 +457,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-27T21:30:47.694Z
-**Stopped at:** Completed 39-01-PLAN.md
+**Last session:** 2026-09-27T22:00:28.322Z
+**Stopped at:** Completed 39-02-PLAN.md
 next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
 RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
 not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.

@@ -349,7 +349,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 39-02-PLAN.md — race-proof `reserve`/`release` and idempotent `settle` on SQLite (`BEGIN IMMEDIATE`, partial unique settlement index), the shared contract suite opened by the N−1-of-N race clause, `InMemoryTreasuryLedger` (LEDGR-01, LEDGR-02, LEDGR-03)
+- [x] 39-02-PLAN.md — race-proof `reserve`/`release` and idempotent `settle` on SQLite (`BEGIN IMMEDIATE`, partial unique settlement index), the shared contract suite opened by the N−1-of-N race clause, `InMemoryTreasuryLedger` (LEDGR-01, LEDGR-02, LEDGR-03)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

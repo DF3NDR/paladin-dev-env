@@ -324,6 +324,7 @@ surfaces; needs an ADR-level design pass before Phase 42 planning.
 against and query.
 **Depends on**: Phase 38 (cost function to persist; reserve/settle schema decision)
 **Requirements**: LEDGR-01, LEDGR-02, LEDGR-03, LEDGR-04
+**UI hint**: no
 **Success Criteria** (what must be TRUE):
 
   1. One shared `TreasuryLedgerPort` contract-test suite passes unmodified against in-memory,

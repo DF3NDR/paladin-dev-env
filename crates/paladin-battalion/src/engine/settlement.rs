@@ -154,14 +154,9 @@ impl SpendHook {
     /// Derive a child hook for a nested `NodeSpec::Battalion` run (CF-FR-16):
     /// the SAME shared accumulator, no ledger of its own -- its
     /// `settle_boundary` is a no-op, and the parent's next boundary drains
-    /// whatever the child recorded alongside its own attempts.
-    ///
-    /// `#[allow(dead_code)]`: plan 39-04 Task 1 defines this method and
-    /// exercises it from this module's own unit tests, but wires the real
-    /// production call site (`ChildEngineResources::spend`,
-    /// `superstep.rs`'s `NodeSpec::Battalion` dispatch arm) only in Task 2 --
-    /// removed there once that call site exists.
-    #[allow(dead_code)]
+    /// whatever the child recorded alongside its own attempts. Wired into
+    /// production at `superstep.rs`'s `ChildEngineResources::spend`
+    /// construction site (plan 39-04 Task 2).
     pub(crate) fn child(&self) -> Self {
         Self {
             sink: Arc::clone(&self.sink),

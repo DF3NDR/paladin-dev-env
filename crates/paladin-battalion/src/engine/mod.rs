@@ -3031,7 +3031,7 @@ fn validate_response_shape(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
     use paladin_core::platform::container::aegis::{Aegis, RetryPolicy, RetryPredicate};
     use paladin_core::platform::container::battalion::campaign::EdgeCondition;
     use paladin_core::platform::container::battlefield::{
@@ -3046,15 +3046,17 @@ mod tests {
     use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_core::platform::container::transience::Transience;
     use paladin_core::platform::container::treasury_ledger::{
-        LedgerScope, SettlementContext, SpendGroupBy, SpendQuery,
+        LedgerScope, ReservationId, ReserveRequest, SettleOutcome, SettleRequest,
+        SettlementContext, SettlementKey, SpendGroupBy, SpendQuery, SpendRow,
     };
     use paladin_core::platform::container::waypoint::{NodeOutcomeKind, Waypoint};
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream};
     use paladin_ports::output::trace_sink_port::MiddlewareAction;
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
     use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
-    use crate::engine::graph::{EdgeSpec, GateRequestTemplate};
+    use crate::engine::graph::{EdgeSpec, GateRequestTemplate, StateMap};
     use crate::engine::test_support::{
         AttemptObservingNode, CountingFunctionNode, FailThenSucceedNode, FailingFunctionNode,
         FailingPaladinPort, FixedDecisionInterceptor, MusterFailThenSucceedWorker,
@@ -4019,6 +4021,565 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, RunOutcome::Completed { .. }));
+    }
+
+    // --- Plan 39-04 Task 2: nested Battalion roll-up, the retry invariant,
+    // and ledger failure isolation ---------------------------------------
+
+    /// Records every `SettleRequest` this ledger receives -- its key and its
+    /// amount, in call order -- delegating everything to a real
+    /// `InMemoryTreasuryLedger`. `SettleOutcome` alone cannot distinguish
+    /// "one settle call" from "one settlement row" (a duplicate key is
+    /// still exactly one call, `AlreadySettled`), so this double counts
+    /// CALLS directly.
+    #[derive(Default)]
+    struct RecordingTreasuryLedger {
+        inner: InMemoryTreasuryLedger,
+        calls: std::sync::Mutex<Vec<(SettlementKey, Cost)>>,
+    }
+
+    impl RecordingTreasuryLedger {
+        fn new() -> Self {
+            Self::default()
+        }
+
+        fn calls(&self) -> Vec<(SettlementKey, Cost)> {
+            self.calls.lock().expect("calls mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl TreasuryLedgerPort for RecordingTreasuryLedger {
+        async fn reserve(
+            &self,
+            request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            self.inner.reserve(request).await
+        }
+
+        async fn release(&self, reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            self.inner.release(reservation).await
+        }
+
+        async fn settle(
+            &self,
+            request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            self.calls
+                .lock()
+                .expect("calls mutex poisoned")
+                .push((request.key.clone(), request.amount.clone()));
+            self.inner.settle(request).await
+        }
+
+        async fn spend(&self, query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            self.inner.spend(query).await
+        }
+
+        async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+            self.inner.store_now().await
+        }
+    }
+
+    /// A ledger whose `settle` always fails with `TreasuryLedgerError::Backend`
+    /// -- proves D-08's "never fails the run" guarantee. `reserve`/`release`
+    /// are unreachable: this plan's production writer never calls them.
+    struct FailingTreasuryLedger;
+
+    #[async_trait]
+    impl TreasuryLedgerPort for FailingTreasuryLedger {
+        async fn reserve(
+            &self,
+            _request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            unreachable!("not exercised by this plan's settle-only production writer")
+        }
+
+        async fn release(&self, _reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            unreachable!("not exercised by this plan's settle-only production writer")
+        }
+
+        async fn settle(
+            &self,
+            _request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::Backend {
+                source: Box::new(std::io::Error::other("ledger backend unavailable")),
+            })
+        }
+
+        async fn spend(&self, _query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            Ok(Vec::new())
+        }
+
+        async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+            Ok(Utc::now())
+        }
+    }
+
+    /// Wraps a `RecordingPaladinPort`, failing the FIRST call to
+    /// `flaky_name` with a retry-eligible (`Transience::Unknown`) error, and
+    /// delegating every other call -- including `flaky_name`'s own retried
+    /// second attempt -- to `inner` unchanged.
+    struct FlakyOnceThenRecordingPort {
+        inner: Arc<RecordingPaladinPort>,
+        flaky_name: String,
+        flaky_calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FlakyOnceThenRecordingPort {
+        fn new(inner: Arc<RecordingPaladinPort>, flaky_name: impl Into<String>) -> Arc<Self> {
+            Arc::new(Self {
+                inner,
+                flaky_name: flaky_name.into(),
+                flaky_calls: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl PaladinPort for FlakyOnceThenRecordingPort {
+        async fn execute(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            if paladin.node.name == self.flaky_name
+                && self
+                    .flaky_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    == 0
+            {
+                return Err(PaladinError::ExecutionError(
+                    "transient failure".to_string(),
+                ));
+            }
+            self.inner.execute(paladin, input).await
+        }
+
+        async fn execute_stream(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            self.inner.execute_stream(paladin, input).await
+        }
+
+        fn validate(&self, paladin: &Paladin) -> Result<(), PaladinError> {
+            self.inner.validate(paladin)
+        }
+    }
+
+    /// CF-FR-16: a `NodeSpec::Battalion` node's entire child run (however
+    /// many supersteps the child itself takes) is awaited inline within the
+    /// ONE parent superstep that dispatched it -- so the child's two priced
+    /// attempts (7_000 then 8_000, across two child supersteps) roll into
+    /// the PARENT's superstep 1 settlement, and the parent's own second
+    /// superstep (1_000) settles separately, both under the top-level run
+    /// id.
+    #[tokio::test]
+    async fn nested_battalion_child_spend_rolls_into_the_parent_superstep() {
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let child_out = FieldName::new("child_out").unwrap();
+        let child_schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            child_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut child_graph = WarGraph::new(child_schema, EngineLimits::default());
+        let c1 = NodeId::new("child-first");
+        let c2 = NodeId::new("child-second");
+        child_graph.add_node(
+            c1.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("child-first", "gpt-4"),
+                InputMapping::new("go"),
+                child_out.clone(),
+            ),
+        );
+        child_graph.add_node(
+            c2.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("child-second", "gpt-4"),
+                InputMapping::new("go"),
+                child_out,
+            ),
+        );
+        child_graph.add_edge(EdgeSpec {
+            from: c1.clone(),
+            to: c2.clone(),
+            condition: None,
+        });
+        child_graph.add_entry(c1);
+
+        let parent_out = FieldName::new("parent_out").unwrap();
+        let parent_schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            parent_out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut parent = WarGraph::new(parent_schema, EngineLimits::default());
+        let battalion_id = NodeId::new("battalion");
+        parent.add_node(
+            battalion_id.clone(),
+            NodeSpec::battalion(Arc::new(child_graph), StateMap::new()),
+        );
+        let parent_second = NodeId::new("parent-second");
+        parent.add_node(
+            parent_second.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("parent-second", "gpt-4"),
+                InputMapping::new("go"),
+                parent_out,
+            ),
+        );
+        parent.add_edge(EdgeSpec {
+            from: battalion_id.clone(),
+            to: parent_second.clone(),
+            condition: None,
+        });
+        parent.add_entry(battalion_id);
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "child-first",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(7_000, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "child-second",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(8_000, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "parent-second",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(1_000, usd.clone())),
+        );
+
+        let ledger = Arc::new(RecordingTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine =
+            WarEngine::new(port, store.clone()).with_treasury_ledger(ledger.clone(), context);
+
+        let thread = ThreadId::new("nested-battalion-child-spend-rolls-up").unwrap();
+        let outcome = engine
+            .start(&parent, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let calls = ledger.calls();
+        assert_eq!(
+            calls.len(),
+            2,
+            "exactly two settle calls: one per parent superstep"
+        );
+        assert_eq!(calls[0].0.run_id, run_id);
+        assert_eq!(calls[0].0.superstep, 1);
+        assert_eq!(
+            calls[0].1,
+            Cost::new(15_000, usd.clone()),
+            "the child's two attempts roll into the parent's superstep 1"
+        );
+        assert_eq!(calls[1].0.run_id, run_id);
+        assert_eq!(calls[1].0.superstep, 2);
+        assert_eq!(calls[1].1, Cost::new(1_000, usd));
+    }
+
+    /// ADR-0053 §4's accepted assumption-delta invariant: three parallel
+    /// priced Paladin nodes plus one whose Aegis retry policy retries a
+    /// failed first attempt all dispatch in the SAME superstep -- exactly
+    /// one settle call results, summing every priced attempt (the failed
+    /// first attempt of the flaky node contributes nothing; only its
+    /// successful retry is priced).
+    #[tokio::test]
+    async fn one_settlement_per_superstep_attempt_across_parallel_nodes_and_retries() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let out1 = FieldName::new("out1").unwrap();
+        let out2 = FieldName::new("out2").unwrap();
+        let out3 = FieldName::new("out3").unwrap();
+        let out4 = FieldName::new("out4").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(out1.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out2.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out3.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out4.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("one");
+        let n2 = NodeId::new("two");
+        let n3 = NodeId::new("three");
+        let n4 = NodeId::new("flaky");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("one", "gpt-4"),
+                InputMapping::new("go"),
+                out1,
+            ),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("two", "gpt-4o-mini"),
+                InputMapping::new("go"),
+                out2,
+            ),
+        );
+        graph.add_node(
+            n3.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("three", "gpt-4"),
+                InputMapping::new("go"),
+                out3,
+            ),
+        );
+        graph.add_node(
+            n4.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("flaky", "gpt-4"),
+                InputMapping::new("go"),
+                out4,
+            ),
+        );
+        graph.add_entry(n1.clone());
+        graph.add_entry(n2.clone());
+        graph.add_entry(n3.clone());
+        graph.add_entry(n4.clone());
+        graph.set_aegis(n4.clone(), retrying_aegis(3));
+
+        let recording_port = Arc::new(RecordingPaladinPort::new());
+        recording_port.set_output_with_usage_and_cost(
+            "one",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(5_000, usd.clone())),
+        );
+        recording_port.set_output_with_usage_and_cost(
+            "two",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(6_000, usd.clone())),
+        );
+        recording_port.set_output_with_usage_and_cost(
+            "three",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(7_000, usd.clone())),
+        );
+        recording_port.set_output_with_usage_and_cost(
+            "flaky",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(9_000, usd.clone())),
+        );
+        let port = FlakyOnceThenRecordingPort::new(recording_port, "flaky");
+
+        let ledger = Arc::new(RecordingTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine =
+            WarEngine::new(port, store.clone()).with_treasury_ledger(ledger.clone(), context);
+
+        let thread = ThreadId::new("one-settlement-per-superstep-parallel-and-retries").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let calls = ledger.calls();
+        assert_eq!(
+            calls.len(),
+            1,
+            "exactly one settle call for the one superstep, across parallel nodes and a retry"
+        );
+        assert_eq!(calls[0].0.run_id, run_id);
+        assert_eq!(calls[0].0.superstep, 1);
+        assert_eq!(calls[0].1, Cost::new(27_000, usd));
+    }
+
+    /// D-08: a `settle` call that fails never fails, retries a node in, or
+    /// halts the run -- `RunOutcome::Completed` and a `TraceEvent::RunFinished`
+    /// are both still produced.
+    #[tokio::test]
+    async fn failing_treasury_ledger_never_fails_the_run() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("priced");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("priced", "gpt-4"),
+                InputMapping::new("go"),
+                out,
+            ),
+        );
+        graph.add_entry(n1);
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "priced",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(1_000, usd)),
+        );
+
+        let ledger = Arc::new(FailingTreasuryLedger);
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: RunId::new_v7(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store.clone())
+            .with_trace_sink(sink.clone())
+            .with_treasury_ledger(ledger, context);
+
+        let thread = ThreadId::new("failing-treasury-ledger-never-fails-the-run").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let events = sink.events().await;
+        assert!(
+            events
+                .iter()
+                .any(|r| matches!(r.event, TraceEvent::RunFinished { .. })),
+            "RunFinished must still be emitted"
+        );
+    }
+
+    /// LEDGR-03: pre-settling `(run_id, 1, 1)` before the run starts (a
+    /// stand-in for a lease redelivery that re-settles an already-settled
+    /// superstep attempt) is not an error -- the pre-settled amount is kept
+    /// for superstep 1, and superstep 2 adds its own settlement on top.
+    #[tokio::test]
+    async fn already_settled_superstep_is_not_an_error() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let out1 = FieldName::new("out1").unwrap();
+        let out2 = FieldName::new("out2").unwrap();
+        let schema = BattlefieldSchema::new(vec![
+            FieldSpec::new(out1.clone(), DispatchRule::LastWrite, None, false),
+            FieldSpec::new(out2.clone(), DispatchRule::LastWrite, None, false),
+        ]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let n1 = NodeId::new("first");
+        let n2 = NodeId::new("second");
+        graph.add_node(
+            n1.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("first", "gpt-4"),
+                InputMapping::new("go"),
+                out1,
+            ),
+        );
+        graph.add_node(
+            n2.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("second", "gpt-4"),
+                InputMapping::new("go"),
+                out2,
+            ),
+        );
+        graph.add_edge(EdgeSpec {
+            from: n1.clone(),
+            to: n2.clone(),
+            condition: None,
+        });
+        graph.add_entry(n1.clone());
+
+        let port = Arc::new(RecordingPaladinPort::new());
+        port.set_output_with_usage_and_cost(
+            "first",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(10_000, usd.clone())),
+        );
+        port.set_output_with_usage_and_cost(
+            "second",
+            "done",
+            TokenUsage::new(1, 1),
+            Some(Cost::new(2_000, usd.clone())),
+        );
+
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let scope = LedgerScope::unattributed();
+        let pre_settle_key = SettlementKey::new(run_id.clone(), 1, 1);
+        ledger
+            .settle(SettleRequest::unreserved(
+                scope.clone(),
+                pre_settle_key,
+                Cost::new(1, usd.clone()),
+                BTreeMap::from([("gpt-4".to_string(), 1_i64)]),
+            ))
+            .await
+            .expect("pre-settle succeeds");
+
+        let context = SettlementContext {
+            scope,
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let engine =
+            WarEngine::new(port, store.clone()).with_treasury_ledger(ledger.clone(), context);
+
+        let thread = ThreadId::new("already-settled-superstep-is-not-an-error").unwrap();
+        let outcome = engine
+            .start(&graph, thread, StateDelta::new())
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(
+            by_run[0].amount,
+            Cost::new(1 + 2_000, usd),
+            "the pre-settled superstep-1 amount is kept, superstep 2 adds its own"
+        );
+        assert_eq!(
+            by_run[0].settlements, 2,
+            "the pre-settled row plus superstep 2's own"
+        );
     }
 
     /// A run with zero Paladin nodes at all (a plain `Function` node)

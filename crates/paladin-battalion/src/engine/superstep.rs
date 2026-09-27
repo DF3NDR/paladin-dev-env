@@ -147,6 +147,14 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// `output_schema` nodes dispatch through the SAME executor the
     /// parent's do.
     structured_executor: Option<Arc<dyn StructuredExecutorPort>>,
+    /// THIS run's spend hook, if any (LEDGR-03, D-08, CF-FR-16; plan
+    /// 39-04) -- inherited by a nested `NodeSpec::Battalion` child run as a
+    /// CHILD hook (`SpendHook::child`, never this same top-level/child
+    /// instance re-shared verbatim like every other resource above): the
+    /// child's own attempts fold into the PARENT superstep's accumulator,
+    /// and the child's own `settle_boundary` calls are no-ops -- only the
+    /// top-level hook this run was given ever actually settles.
+    spend: Option<SpendHook>,
 }
 
 /// One dispatched node's resolved cache binding (Doc 04 FT-FR-18, D-29;
@@ -1476,12 +1484,13 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     // `output_schema` nodes dispatch through the SAME
                     // structured executor the parent's do.
                     resources.structured_executor.clone(),
-                    // --- LEDGR-03, D-08, CF-FR-16 (plan 39-04 Task 1): the
-                    // Battalion arm's spend hook is threaded in Task 2 --
-                    // this task's own dispatch always passes `None` here, so
-                    // a child run's own attempts settle nothing on their
-                    // own until `ChildEngineResources::spend` exists.
-                    None,
+                    // --- LEDGR-03, D-08, CF-FR-16 (plan 39-04 Task 2): the
+                    // child's own CHILD hook (constructed once, at
+                    // `child_resources`'s single construction site) -- its
+                    // own attempts fold into the PARENT superstep's
+                    // accumulator, and its own `settle_boundary` calls are
+                    // no-ops.
+                    resources.spend.clone(),
                 ));
                 let outcome = child_fut.await;
 
@@ -2047,6 +2056,12 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 node_cache: node_cache.clone(),
                 vault: vault.clone(),
                 structured_executor: structured_executor.clone(),
+                // --- LEDGR-03, D-08, CF-FR-16 (plan 39-04 Task 2): a CHILD
+                // hook over the SAME shared accumulator, never this run's
+                // own top-level/child hook re-shared verbatim -- the
+                // child's own `settle_boundary` calls are then no-ops by
+                // construction (`SpendHook::child`'s own contract).
+                spend: spend.as_ref().map(SpendHook::child),
             })
         });
 

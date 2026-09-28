@@ -187,3 +187,67 @@ lint = "constructible_struct_adds_field"
 migration_row = "paladin-ports | LlmResponse"
 requirement_id = "PRICE-03"
 justification = "LlmResponse gained the additive cost: Option<Cost> field (D-10), priced per call by the PricingLlmAdapter decorator at the LlmPort boundary (D-09). #[serde(default, skip_serializing_if)] keeps legacy JSON byte-identical and deserialising as None (the served_by precedent, D-25); the struct stays constructible and is deliberately NOT #[non_exhaustive] for the same PaladinResult/Settings reason -- only full struct literals break, and every in-tree one (provider adapters, mocks, services, tests, benches, examples, doctests) was migrated to cost: None in the same commit."
+
+# --- Phase 40 (Tenant Identity & Run-Read Scoping, TENANT-01/02, PLAT-07) ---
+# D-18/D-00c convention: an entry whose `lint` value begins "register-only"
+# records a deliberate break that `cargo semver-checks` cannot itself detect
+# (no lint in its 0.50.0 catalog models a changed field or parameter TYPE,
+# only additions/removals/count changes) -- MIGRATION.md's §9.2 row, not the
+# tool, is the control for that pair. It still names exactly one crate and
+# one type, mirroring every other entry in this file.
+
+[[entry]]
+crate = "paladin-web"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-web | Principal"
+requirement_id = "TENANT-01"
+justification = "Principal gained the required tenant_id: TenantId field (D-01), server-derived from AgentAuthConfig, never from the request (D-02). No backward-compatible mitigation exists for a required field on a struct with no Default; every in-tree literal was migrated to Principal::new in the same commit; suppressed by the existing crate-wide allow line in crates/paladin-web/Cargo.toml."
+
+[[entry]]
+crate = "paladin-web"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-web | Principal"
+requirement_id = "TENANT-01"
+justification = "Principal is marked #[non_exhaustive] per X-10.3 option (a) (the LlmRequest/GarrisonEntry precedent, Task 1 option-a) so the next field this type gains is non-breaking; Principal::new is the one constructor every external caller now uses."
+
+[[entry]]
+crate = "paladin-web"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-web | AgentAuthConfig"
+requirement_id = "TENANT-01"
+justification = "AgentAuthConfig gained the additive bearer_tenant: Option<TenantId> field (D-03) -- the tenant every verified bearer principal carries; while None a verified bearer token does not authenticate (fail closed). Default is unchanged (None), so functional-update sites keep compiling; not #[non_exhaustive] (X-10.3 option (b), the Settings precedent -- a Default exists); suppressed by the existing crate-wide allow line in crates/paladin-web/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | ApiKeyConfig"
+requirement_id = "TENANT-01"
+justification = "ApiKeyConfig gained the required tenant: String field (#[serde(default)] so the config file still parses; enforced at boot, D-05) -- an empty or invalid value stops paladin-server with an error naming the key's name, never its secret key value. D-05 forbids an implicit default tenant, which would pool every key's spend into one scope. Suppressed by the root Cargo.toml's crate-wide allow line."
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | BearerTokenAuthConfig"
+requirement_id = "TENANT-01"
+justification = "BearerTokenAuthConfig gained the tenant: Option<String> field (#[serde(default)], required when enabled, D-03) -- same rationale as ApiKeyConfig above. Default is unchanged; suppressed by the same root Cargo.toml allow line."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "register-only (cargo-semver-checks 0.50.0 has no field- or parameter-type-change lint)"
+migration_row = "paladin-ports | SubmitRun"
+requirement_id = "TENANT-01, TENANT-02"
+justification = "SubmitRun.requested_by retyped from Option<(String, UserRole)> to Option<PrincipalRef> (D-04) -- the tenant now travels with the principal reference itself, never assembled ad hoc at the call site. SubmitRun shipped in v0.10 and is absent at the v0.9.0 baseline the CI semver job diffs against, so this register entry (not the tool) is the control per 40-CONTEXT D-18 (operator-locked)."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "register-only (cargo-semver-checks 0.50.0 has no field- or parameter-type-change lint)"
+migration_row = "paladin-ports | ForkRun"
+requirement_id = "TENANT-01, TENANT-02"
+justification = "ForkRun.requested_by retyped from Option<(String, UserRole)> to Option<PrincipalRef> (D-04), identically to the SubmitRun row above and for the same reason."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "register-only (cargo-semver-checks 0.50.0 has no field- or parameter-type-change lint)"
+migration_row = "paladin-ports | RunSubmissionPort"
+requirement_id = "TENANT-01, PLAT-07"
+justification = "RunSubmissionPort::cancel's requested_by parameter retyped from Option<(String, UserRole)> to Option<PrincipalRef> (D-04); every in-tree implementor and caller was migrated in the same commit. Same register-only basis as the SubmitRun/ForkRun rows above."

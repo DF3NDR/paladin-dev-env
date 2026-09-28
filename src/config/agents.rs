@@ -372,4 +372,183 @@ mod tests {
         let auth: AuthConfig = serde_json::from_value(json).expect("parses");
         assert_eq!(auth.api_keys[0].tenant, "");
     }
+
+    // --- Phase 40 Plan 03 (D-03/D-05/D-06): AuthConfig::validate() fails closed ---
+
+    fn api_key(name: &str, key: &str, tenant: &str) -> ApiKeyConfig {
+        ApiKeyConfig {
+            key: key.to_string(),
+            name: name.to_string(),
+            role: UserRole::User,
+            tenant: tenant.to_string(),
+        }
+    }
+
+    fn auth_with_keys(api_keys: Vec<ApiKeyConfig>) -> AuthConfig {
+        AuthConfig {
+            enabled: true,
+            api_keys,
+            bearer_token: BearerTokenAuthConfig::default(),
+        }
+    }
+
+    fn validation_error(cfg: &AuthConfig) -> String {
+        cfg.validate()
+            .expect_err("this config must fail validation")
+    }
+
+    #[test]
+    fn default_auth_config_validates() {
+        assert_eq!(AuthConfig::default().validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_accepts_two_keys_mapped_to_the_same_tenant() {
+        // D-06 adjacency: different names, same tenant -- two principals, one read scope.
+        let cfg = auth_with_keys(vec![
+            api_key("ci", "sk-ci", "acme"),
+            api_key("web", "sk-web", "acme"),
+        ]);
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn validate_rejects_an_api_key_without_a_tenant() {
+        let cfg = auth_with_keys(vec![api_key("ci", "sk-ci", "")]);
+        let err = validation_error(&cfg);
+        assert_eq!(
+            err,
+            "http.auth.api_keys[ci]: 'tenant' is required — every API key must map to a tenant \
+             (Phase 40, TENANT-01)"
+        );
+        assert!(!err.contains("sk-ci"), "never print the key value: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_a_whitespace_or_non_printable_tenant() {
+        // Nothing is trimmed or defaulted: a leading/trailing space is as fatal as an inner one.
+        for tenant in [" ", " acme", "acme ", "ac me", "acme\t", "acmé"] {
+            let cfg = auth_with_keys(vec![api_key("ci", "sk-ci", tenant)]);
+            let err = validation_error(&cfg);
+            assert!(
+                err.starts_with("http.auth.api_keys[ci]: 'tenant' is not a valid tenant id: "),
+                "tenant {tenant:?} must be rejected as invalid, got: {err}"
+            );
+            assert!(!err.contains("sk-ci"), "never print the key value: {err}");
+        }
+    }
+
+    #[test]
+    fn validate_rejects_a_duplicate_key_name() {
+        let cfg = auth_with_keys(vec![
+            api_key("ci", "sk-1", "acme"),
+            api_key("ci", "sk-2", "globex"),
+        ]);
+        let err = validation_error(&cfg);
+        assert!(
+            err.starts_with("http.auth.api_keys[ci]: duplicate 'name'"),
+            "expected the duplicate-name message, got: {err}"
+        );
+        assert!(!err.contains("sk-1") && !err.contains("sk-2"), "never print key values: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_a_duplicate_key_value_without_printing_it() {
+        // T-40-12 / T-40-13: a shared secret would make `lookup_api_key` resolve an arbitrary
+        // principal (and tenant); it is rejected at boot and the secret itself never appears.
+        let cfg = auth_with_keys(vec![
+            api_key("ci", "sk-dup", "acme"),
+            api_key("web", "sk-dup", "acme"),
+        ]);
+        let err = validation_error(&cfg);
+        assert!(
+            err.starts_with("http.auth.api_keys[web]: duplicate 'key'"),
+            "expected the duplicate-key message naming the second entry, got: {err}"
+        );
+        assert!(err.contains("'ci'"), "must name the first key holding the same secret: {err}");
+        assert!(!err.contains("sk-dup"), "the key value must never be printed: {err}");
+    }
+
+    #[test]
+    fn validate_rejects_an_empty_key_value() {
+        // T-40-14: an empty string must never become an accepted credential.
+        let cfg = auth_with_keys(vec![
+            api_key("ok", "sk-ok", "acme"),
+            api_key("ci", "", "acme"),
+        ]);
+        assert_eq!(
+            validation_error(&cfg),
+            "http.auth.api_keys[#1]: 'key' must not be empty"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_an_invalid_key_name() {
+        // `name` is the API key id on every run and ledger row: same identifier rules as a tenant.
+        let cfg = auth_with_keys(vec![api_key("ci runner", "sk-ci", "acme")]);
+        let err = validation_error(&cfg);
+        assert!(
+            err.starts_with("http.auth.api_keys[#0]: 'name' is not a valid API key id: "),
+            "expected the invalid-name message, got: {err}"
+        );
+        assert!(!err.contains("sk-ci"), "never print the key value: {err}");
+    }
+
+    #[test]
+    fn validate_requires_a_bearer_tenant_when_bearer_is_enabled() {
+        for tenant in [None, Some(String::new())] {
+            let cfg = AuthConfig {
+                enabled: true,
+                api_keys: Vec::new(),
+                bearer_token: BearerTokenAuthConfig {
+                    enabled: true,
+                    tenant,
+                },
+            };
+            let err = validation_error(&cfg);
+            assert!(
+                err.starts_with(
+                    "http.auth.bearer_token: 'tenant' is required when bearer_token.enabled is true"
+                ),
+                "expected the bearer tenant-required message, got: {err}"
+            );
+        }
+
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: Vec::new(),
+            bearer_token: BearerTokenAuthConfig {
+                enabled: true,
+                tenant: Some("bearer callers".to_string()),
+            },
+        };
+        assert!(
+            validation_error(&cfg)
+                .starts_with("http.auth.bearer_token: 'tenant' is not a valid tenant id: ")
+        );
+    }
+
+    #[test]
+    fn validate_ignores_the_bearer_tenant_when_bearer_is_disabled() {
+        for tenant in [None, Some(String::new()), Some("bad tenant".to_string())] {
+            let cfg = AuthConfig {
+                enabled: true,
+                api_keys: vec![api_key("ci", "sk-ci", "acme")],
+                bearer_token: BearerTokenAuthConfig {
+                    enabled: false,
+                    tenant,
+                },
+            };
+            assert_eq!(cfg.validate(), Ok(()), "a disabled bearer section is not validated");
+        }
+    }
+
+    #[test]
+    fn validate_checks_api_keys_even_when_auth_is_disabled() {
+        // A disabled section's keys take effect the moment auth is re-enabled, so a malformed
+        // mapping is rejected regardless of `enabled`.
+        let mut cfg = auth_with_keys(vec![api_key("ci", "sk-ci", "")]);
+        cfg.enabled = false;
+        assert!(cfg.validate().is_err());
+    }
 }

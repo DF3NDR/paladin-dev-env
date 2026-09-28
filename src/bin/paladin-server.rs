@@ -659,6 +659,7 @@ async fn shutdown_signal(coordinator: ShutdownCoordinator, grace: Duration, grac
 mod tests {
     use super::*;
     use paladin::config::agents::{ApiKeyConfig, BearerTokenAuthConfig};
+    use paladin_core::platform::container::principal::RunReadScope;
     use paladin_core::platform::container::user::UserRole;
     use std::sync::{Mutex, Once};
     use tower::ServiceExt; // for `Router::oneshot`
@@ -840,6 +841,68 @@ mod tests {
             err.contains("http.auth.bearer_token: 'tenant' is required"),
             "expected the fail-closed bearer tenant-required message, got: {err}"
         );
+    }
+
+    // --- Phase 40 Plan 03 (D-06): AuthConfig::validate() runs first at boot ---
+
+    #[test]
+    fn build_auth_config_rejects_duplicate_api_key_names_at_boot() {
+        let mut second = api_key("ci");
+        second.key = "test-key-ci-second".to_string();
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![api_key("ci"), second],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
+        };
+
+        let err = match build_auth_config(&cfg) {
+            Ok(_) => panic!("two API keys sharing one name must fail closed at boot"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("http.auth.api_keys[ci]: duplicate 'name'"),
+            "expected the duplicate-name message naming the key, got: {err}"
+        );
+        assert!(
+            !err.contains("test-key-ci"),
+            "the error must name only the key's `name`, never a secret `key` value: {err}"
+        );
+    }
+
+    #[test]
+    fn build_auth_config_maps_two_keys_of_one_tenant_to_one_read_scope() {
+        let mut ci = api_key("ci");
+        ci.tenant = "acme".to_string();
+        let mut web = api_key("web");
+        web.tenant = "acme".to_string();
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![ci, web],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
+        };
+
+        let auth = build_auth_config(&cfg).expect("two keys of one tenant must build");
+        let ci = auth
+            .api_keys
+            .get("test-key-ci")
+            .expect("the `ci` key must map to a principal");
+        let web = auth
+            .api_keys
+            .get("test-key-web")
+            .expect("the `web` key must map to a principal");
+        assert_eq!(ci.tenant_id, web.tenant_id);
+        assert_eq!(ci.read_scope(), web.read_scope());
+        assert_eq!(
+            ci.read_scope(),
+            RunReadScope::Tenant(TenantId::new("acme").unwrap())
+        );
+        assert_ne!(ci.id, web.id, "two keys of one tenant stay two distinct principals");
     }
 
     // --- Phase 24 Plan 09: ShutdownCoordinator process wiring (HITL-04,

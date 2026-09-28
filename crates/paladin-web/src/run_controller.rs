@@ -61,6 +61,7 @@
 //! in the project's broken-windows ledger (`.planning/WINDOWS.md`, row 32)
 //! rather than left as an implicit assumption.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -75,14 +76,19 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::run::{
     Run, RunCursor, RunEventKind, RunId, RunStatus, WebhookSpec,
+};
+use paladin_core::platform::container::treasury_ledger::{
+    SpendGroupBy, SpendQuery, SpendRow, format_cost,
 };
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_core::platform::container::webhook::{WebhookDeliveryId, WebhookDeliveryStatus};
 use paladin_ports::input::run_event_stream_port::{RunEventStreamPort, RunStreamError};
 use paladin_ports::input::run_submission_port::{RunSubmissionError, RunSubmissionPort, SubmitRun};
 use paladin_ports::output::run_repository_port::{RunPage, RunQuery, RunRepositoryPort};
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
 use utoipa_axum::router::OpenApiRouter;
@@ -150,6 +156,12 @@ pub struct RunApiState {
     /// /runs/{run_id}/webhook-deliveries`, D-40, PLAT-FR-14). `None` when
     /// unwired.
     pub webhook_deliveries: Option<Arc<dyn WebhookDeliveryRepositoryPort>>,
+    /// Reads settled spend for this deployment's runs (D-10, LEDGR-04) --
+    /// `RunResponse::cost`/`RunListResponse` items are derived from this
+    /// port's `spend` at read time, never persisted on the run row. `None`
+    /// when no ledger backend is configured, in which case `cost` is always
+    /// `null` and no ledger call is ever made.
+    pub treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
 }
 
 impl RunApiState {
@@ -166,6 +178,7 @@ impl RunApiState {
             expose_code_registry: true,
             schedules: None,
             webhook_deliveries: None,
+            treasury_ledger: None,
         }
     }
 
@@ -238,6 +251,14 @@ impl RunApiState {
         self.auth = auth;
         self
     }
+
+    /// Wire a [`TreasuryLedgerPort`], enabling ledger-derived `cost` on `GET
+    /// /runs/{run_id}` and `GET /runs` (D-10). Without this, `cost` is
+    /// always `null` and no ledger call is ever made.
+    pub fn with_treasury_ledger(mut self, treasury_ledger: Arc<dyn TreasuryLedgerPort>) -> Self {
+        self.treasury_ledger = Some(treasury_ledger);
+        self
+    }
 }
 
 impl Default for RunApiState {
@@ -291,6 +312,31 @@ pub struct SubmitRunResponse {
     pub state_url: String,
 }
 
+/// Wire projection of a [`Cost`] (D-10): the raw, authoritative nano-unit amount plus
+/// the same four-decimal-plus-currency rendering the herald and `paladin-cli treasury
+/// spend` print ([`format_cost`], D-00c/D-04) -- `display` is derived, never a second
+/// source of truth.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub struct CostDto {
+    /// The exact nano-unit amount. Authoritative; `display` is derived from it.
+    pub nanos: i64,
+    /// ISO 4217 currency code.
+    pub currency: String,
+    /// Four-decimal-plus-currency rendering (e.g. `"0.0450 USD"`), byte-identical to
+    /// the herald and CLI output for the same amount.
+    pub display: String,
+}
+
+impl From<&Cost> for CostDto {
+    fn from(cost: &Cost) -> Self {
+        Self {
+            nanos: cost.nanos(),
+            currency: cost.currency().as_str().to_string(),
+            display: format_cost(cost),
+        }
+    }
+}
+
 /// Response body for `GET /runs/{run_id}`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RunResponse {
@@ -320,6 +366,12 @@ pub struct RunResponse {
     /// How many responses are currently parked on this run awaiting worker
     /// consumption -- the COUNT only, never the response values themselves.
     pub pending_responses: usize,
+    /// This run's cost, derived from the ledger's settlements for `run_id` at read
+    /// time (D-10) -- `null` when no ledger backend is configured, the run has no
+    /// settled spend, or its settlements span more than one currency. Never
+    /// persisted on the run row; a ledger read failure degrades this to `null`
+    /// rather than failing the read (D-08).
+    pub cost: Option<CostDto>,
 }
 
 impl From<&Run> for RunResponse {
@@ -336,6 +388,7 @@ impl From<&Run> for RunResponse {
             error: run.error.clone(),
             webhook: run.webhook.as_ref().map(RunWebhookDto::from),
             pending_responses: run.pending_responses.len(),
+            cost: None,
         }
     }
 }
@@ -667,6 +720,61 @@ pub async fn submit_run(
     ))
 }
 
+/// Derive ledger-backed [`CostDto`]s for a batch of run ids in exactly ONE
+/// [`TreasuryLedgerPort::spend`] call (D-10, T-39-17) -- `get_run` calls this
+/// with one id, `list_runs` with the whole page's ids.
+///
+/// Returns an empty map (never an error) when `ledger` is `None`, `run_ids`
+/// is empty, or the `spend` call itself fails -- a ledger problem degrades
+/// the caller's `cost` field to `null`, it never fails the run read (D-08).
+/// A run whose settlements span more than one currency is also omitted
+/// (T-39-11): `spend` never combines two currencies into one row, and this
+/// helper refuses to guess which one to surface, so such a run's entry is
+/// simply absent from the returned map.
+async fn run_costs(
+    ledger: Option<&Arc<dyn TreasuryLedgerPort>>,
+    run_ids: Vec<RunId>,
+) -> HashMap<String, CostDto> {
+    let Some(ledger) = ledger else {
+        return HashMap::new();
+    };
+    if run_ids.is_empty() {
+        return HashMap::new();
+    }
+    let run_count = run_ids.len();
+
+    let rows = match ledger
+        .spend(SpendQuery {
+            group_by: SpendGroupBy::Run,
+            run_ids,
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            log::warn!(
+                "treasury ledger spend query failed for {run_count} run(s), \
+                 degrading cost to null: {error}"
+            );
+            return HashMap::new();
+        }
+    };
+
+    let mut by_run: HashMap<String, Vec<SpendRow>> = HashMap::new();
+    for row in rows {
+        by_run.entry(row.group.clone()).or_default().push(row);
+    }
+
+    by_run
+        .into_iter()
+        .filter_map(|(run_id, rows)| match rows.as_slice() {
+            [only] => Some((run_id, CostDto::from(&only.amount))),
+            _ => None,
+        })
+        .collect()
+}
+
 /// `GET /runs/{run_id}` -- the run's current status.
 ///
 /// Reads [`RunRepositoryPort`] directly (no submission port, no engine and
@@ -708,7 +816,11 @@ pub async fn get_run(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found(format!("unknown run '{run_id}'")))?;
 
-    Ok((StatusCode::OK, ok_body(&RunResponse::from(&run))))
+    let mut response = RunResponse::from(&run);
+    let mut costs = run_costs(state.treasury_ledger.as_ref(), vec![id]).await;
+    response.cost = costs.remove(&response.run_id);
+
+    Ok((StatusCode::OK, ok_body(&response)))
 }
 
 /// `GET /runs` -- paginated list, filterable by `thread_id`/`assistant_id`/
@@ -778,7 +890,12 @@ pub async fn list_runs(
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let items: Vec<RunResponse> = page.items.iter().map(RunResponse::from).collect();
+    let mut items: Vec<RunResponse> = page.items.iter().map(RunResponse::from).collect();
+    let page_run_ids: Vec<RunId> = page.items.iter().map(|run| run.run_id.clone()).collect();
+    let costs = run_costs(state.treasury_ledger.as_ref(), page_run_ids).await;
+    for item in &mut items {
+        item.cost = costs.get(&item.run_id).cloned();
+    }
     let next_cursor = page.next_cursor.as_ref().map(encode_cursor);
     Ok((
         StatusCode::OK,
@@ -1034,11 +1151,16 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::Request;
+    use paladin_core::platform::container::cost::CurrencyCode;
     use paladin_core::platform::container::parley::ParleyResponse;
     use paladin_core::platform::container::run::{AssistantRef, RunStatus};
+    use paladin_core::platform::container::treasury_ledger::{
+        ReservationId, ReserveRequest, SettleOutcome, SettleRequest,
+    };
     use paladin_ports::output::run_repository_port::{
         RunOutcomeRecord, RunPage, RunQuery, RunRepositoryError,
     };
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
     use std::collections::HashMap;
     use std::sync::Mutex;
     use tower::ServiceExt; // for `Router::oneshot`
@@ -1148,6 +1270,9 @@ mod tests {
     #[derive(Default)]
     struct MockRepository {
         runs: Mutex<HashMap<String, Run>>,
+        /// The page `list` returns; test-only -- the real adapters compute a page from
+        /// `RunQuery`, which this double ignores entirely.
+        list_items: Mutex<Vec<Run>>,
     }
 
     impl MockRepository {
@@ -1156,6 +1281,10 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(run.run_id.as_str().to_string(), run);
+        }
+
+        fn set_list_page(&self, items: Vec<Run>) {
+            *self.list_items.lock().unwrap() = items;
         }
     }
 
@@ -1190,7 +1319,7 @@ mod tests {
 
         async fn list(&self, _query: RunQuery) -> Result<RunPage, RunRepositoryError> {
             Ok(RunPage {
-                items: vec![],
+                items: self.list_items.lock().unwrap().clone(),
                 next_cursor: None,
             })
         }
@@ -1230,6 +1359,252 @@ mod tests {
         async fn clear_pending_responses(&self, _run_id: &RunId) -> Result<(), RunRepositoryError> {
             Ok(())
         }
+    }
+
+    // --- Mock `TreasuryLedgerPort` (D-10) --------------------------------
+    //
+    // `paladin-web` has no dependency on `paladin-storage`'s real adapters (verified by
+    // `grep -c 'paladin-storage' crates/paladin-web/Cargo.toml` printing `0`), so `cost`
+    // is proven entirely against this local double. `spend` returns a canned outcome
+    // and counts/records every call; every other method is never exercised by
+    // `get_run`/`list_runs` and returns an inert `Err` so a stray call would fail loudly.
+
+    /// What `StubTreasuryLedger::spend` answers.
+    enum StubSpendOutcome {
+        Rows(Vec<SpendRow>),
+        Err,
+    }
+
+    struct StubTreasuryLedger {
+        outcome: StubSpendOutcome,
+        calls: Mutex<Vec<SpendQuery>>,
+    }
+
+    impl StubTreasuryLedger {
+        fn rows(rows: Vec<SpendRow>) -> Self {
+            Self {
+                outcome: StubSpendOutcome::Rows(rows),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn erroring() -> Self {
+            Self {
+                outcome: StubSpendOutcome::Err,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    #[async_trait]
+    impl TreasuryLedgerPort for StubTreasuryLedger {
+        async fn reserve(
+            &self,
+            _request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::InvalidRequest {
+                message: "StubTreasuryLedger does not implement reserve".to_string(),
+            })
+        }
+
+        async fn release(&self, _reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            Err(TreasuryLedgerError::InvalidRequest {
+                message: "StubTreasuryLedger does not implement release".to_string(),
+            })
+        }
+
+        async fn settle(
+            &self,
+            _request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::InvalidRequest {
+                message: "StubTreasuryLedger does not implement settle".to_string(),
+            })
+        }
+
+        async fn spend(&self, query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            self.calls.lock().unwrap().push(query);
+            match &self.outcome {
+                StubSpendOutcome::Rows(rows) => Ok(rows.clone()),
+                StubSpendOutcome::Err => Err(TreasuryLedgerError::Backend {
+                    source: "stub ledger backend failure".into(),
+                }),
+            }
+        }
+
+        async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+            Ok(Utc::now())
+        }
+    }
+
+    #[tokio::test]
+    async fn get_run_includes_ledger_cost() {
+        let repository = Arc::new(MockRepository::default());
+        let run = sample_run("t-cost");
+        repository.seed(run.clone());
+        let usd = CurrencyCode::new("USD").unwrap();
+        let ledger = Arc::new(StubTreasuryLedger::rows(vec![SpendRow {
+            group: run.run_id.to_string(),
+            amount: Cost::new(45_000_000, usd),
+            settlements: 2,
+        }]));
+        let state = RunApiState::new()
+            .with_repository(repository)
+            .with_treasury_ledger(ledger);
+
+        let (status, Json(body)) = get_run(
+            State(state),
+            tester_principal(),
+            Path(run.run_id.to_string()),
+        )
+        .await
+        .expect("ok");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["cost"]["nanos"], 45_000_000);
+        assert_eq!(body["cost"]["currency"], "USD");
+        assert_eq!(body["cost"]["display"], "0.0450 USD");
+    }
+
+    #[tokio::test]
+    async fn get_run_cost_is_null_without_a_ledger() {
+        let repository = Arc::new(MockRepository::default());
+        let run = sample_run("t-no-ledger");
+        repository.seed(run.clone());
+        let state = RunApiState::new().with_repository(repository);
+
+        let (status, Json(body)) = get_run(
+            State(state),
+            tester_principal(),
+            Path(run.run_id.to_string()),
+        )
+        .await
+        .expect("ok");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["cost"].is_null());
+        // Every other field is unchanged.
+        assert_eq!(body["run_id"], run.run_id.to_string());
+        assert_eq!(body["status"], run.status.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_run_cost_is_null_when_the_ledger_errors() {
+        let repository = Arc::new(MockRepository::default());
+        let run = sample_run("t-ledger-err");
+        repository.seed(run.clone());
+        let ledger = Arc::new(StubTreasuryLedger::erroring());
+        let state = RunApiState::new()
+            .with_repository(repository)
+            .with_treasury_ledger(ledger);
+
+        let (status, Json(body)) = get_run(
+            State(state),
+            tester_principal(),
+            Path(run.run_id.to_string()),
+        )
+        .await
+        .expect("ok");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["cost"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_run_cost_is_null_for_mixed_currencies() {
+        let repository = Arc::new(MockRepository::default());
+        let run = sample_run("t-mixed");
+        repository.seed(run.clone());
+        let usd = CurrencyCode::new("USD").unwrap();
+        let eur = CurrencyCode::new("EUR").unwrap();
+        let ledger = Arc::new(StubTreasuryLedger::rows(vec![
+            SpendRow {
+                group: run.run_id.to_string(),
+                amount: Cost::new(1_000_000, usd),
+                settlements: 1,
+            },
+            SpendRow {
+                group: run.run_id.to_string(),
+                amount: Cost::new(2_000_000, eur),
+                settlements: 1,
+            },
+        ]));
+        let state = RunApiState::new()
+            .with_repository(repository)
+            .with_treasury_ledger(ledger);
+
+        let (status, Json(body)) = get_run(
+            State(state),
+            tester_principal(),
+            Path(run.run_id.to_string()),
+        )
+        .await
+        .expect("ok");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["cost"].is_null());
+    }
+
+    #[tokio::test]
+    async fn list_runs_derives_costs_with_one_spend_call_per_page() {
+        let repository = Arc::new(MockRepository::default());
+        let run_a = sample_run("t-list-a");
+        let run_b = sample_run("t-list-b");
+        let run_c = sample_run("t-list-c");
+        repository.set_list_page(vec![run_a.clone(), run_b.clone(), run_c.clone()]);
+        let usd = CurrencyCode::new("USD").unwrap();
+        let ledger = Arc::new(StubTreasuryLedger::rows(vec![SpendRow {
+            group: run_a.run_id.to_string(),
+            amount: Cost::new(10_000_000, usd),
+            settlements: 1,
+        }]));
+        let state = RunApiState::new()
+            .with_repository(repository)
+            .with_treasury_ledger(Arc::clone(&ledger) as Arc<dyn TreasuryLedgerPort>);
+
+        let (status, Json(body)) = list_runs(
+            State(state),
+            tester_principal(),
+            axum::extract::Query(RunListQuery {
+                thread_id: None,
+                assistant_id: None,
+                status: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .expect("ok");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ledger.call_count(), 1, "exactly one spend call per page");
+
+        {
+            let recorded = ledger.calls.lock().unwrap();
+            let query = recorded.first().expect("one spend call was recorded");
+            assert_eq!(query.group_by, SpendGroupBy::Run);
+            let mut expected_ids: Vec<String> = vec![
+                run_a.run_id.to_string(),
+                run_b.run_id.to_string(),
+                run_c.run_id.to_string(),
+            ];
+            expected_ids.sort();
+            let mut actual_ids: Vec<String> =
+                query.run_ids.iter().map(|id| id.to_string()).collect();
+            actual_ids.sort();
+            assert_eq!(actual_ids, expected_ids);
+        }
+
+        let items = body["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        let find = |id: &str| items.iter().find(|item| item["run_id"] == id).unwrap();
+        assert_eq!(find(&run_a.run_id.to_string())["cost"]["nanos"], 10_000_000);
+        assert!(find(&run_b.run_id.to_string())["cost"].is_null());
+        assert!(find(&run_c.run_id.to_string())["cost"].is_null());
     }
 
     #[tokio::test]

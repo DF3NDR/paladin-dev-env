@@ -481,29 +481,19 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 **Last session:** 2026-09-28T16:33:04Z
 **Stopped at:** Phase 39 complete — verification passed, UAT 49/49 (3 human checkpoints passed), Nyquist-compliant (39-VALIDATION.md validated), security verified (39-SECURITY.md: 21 threats closed, 0 open); ready to plan Phase 40
 **Resume file:** None
-**Branch state:** the close commits sit on `chore/37.1-post-close`; open a PR to `main` (the
-repository enforces PR-only merges to `main`, ADR-0043/0044) — `.planning/`-only, no crate change,
-no tag.
-
-**Next action:** `/gsd-new-milestone` — new phases start at Phase 38. Candidate scope is listed
-under *Next Milestone Goals* in PROJECT.md (Milestone 14 Treasurer, the FUT-01…10 v2 list, the
-accepted deviations D-16 / rows 31-32, the Nyquist backfill, RustFS). Housekeeping that needs no
-milestone: tick or annotate the corpus audit §11 boxes (the `release/*` ruleset bypass was removed
-2026-09-23); `/gsd-validate-phase` for the seven `draft` phases.
-
 ## Operator Next Steps
 
-- **Milestone v0.10.0 closed 2026-09-23** (`override_closeout`; two todos acknowledged; Phase 37's
-  three superseded plans and SHIP-05 recorded as known gaps). Archives under `milestones/v0.10.0-*`;
-  record in MILESTONES.md; lessons in RETROSPECTIVE.md.
+- **Phase 39 (Spend Ledger) is sealed 2026-09-28:** `39-VERIFICATION.md` passed, `39-UAT.md` complete (49/49,
+  3 human checkpoints), `39-VALIDATION.md` validated (Nyquist-compliant), `39-SECURITY.md` verified
+  (21 threats closed, 0 open). All artifacts pushed on `claude/laughing-dirac-e0h2ax`; open a PR to `main`
+  (`.planning/`-only) when convenient.
 
-- **Next:** open a PR for `chore/37.1-post-close` → `main` (planning-only), then `/clear` and
-  `/gsd-new-milestone`. New phases start at Phase 38; `.planning/REQUIREMENTS.md` is recreated by
-  that command.
+- **Next:** `/clear` then `/gsd-discuss-phase 40` (no `40-CONTEXT.md` yet), or `/gsd-plan-phase 40` to plan directly.
 
-- **Housekeeping, no milestone needed:** ~~remove the temporary `release/*` ruleset bypass~~ (done
-  2026-09-23, ruleset `20868128` matches `.github/rulesets/protect-release-branches.json`); tick or annotate the seven §11 sign-off boxes and the `v0.10.0`
-  tag box in `.project/v0.10.0/09-program-acceptance-audit.md` (§13 for v0.10.1 is ticked);
-  `/gsd-validate-phase` 22, 24, 28, 29, 30, 34, 36, 36.1 (advisory).
+- **Still manual:** operator UAT of a real multi-model engine run (`paladin-cli treasury spend --group-by model`
+  against a priced `treasurer:` table) — optional, not required for compliance.
+
+- **Housekeeping, no milestone needed:** tick or annotate the seven §11 sign-off boxes and the `v0.10.0` tag box in
+  `.project/v0.10.0/09-program-acceptance-audit.md`; `/gsd-validate-phase` 22, 24, 28, 29, 30, 34, 36, 36.1 (advisory).
 
 - **Recheck by 2026-10-16:** the two pending todos (`todos/pending/`).

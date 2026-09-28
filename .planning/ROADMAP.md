@@ -228,7 +228,7 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 `.planning/research/SUMMARY.md`; requirements minted in `.planning/REQUIREMENTS.md`.
 
 - [x] **Phase 38: Design Seams & Pricing/Cost Producer** - Record the mid-run enforcement attachment point and the ledger balance model, then ship an operator-configured price table and a fixed-point cost function that reaches `ExecutionMetadata.cost_estimate` (completed 2026-09-26)
-- [ ] **Phase 39: Spend Ledger** - A `TreasuryLedgerPort` with in-memory, SQLite and Postgres adapters behind one contract suite, reserve-then-settle draws, idempotent settlement, and queryable spend
+- [x] **Phase 39: Spend Ledger** - A `TreasuryLedgerPort` with in-memory, SQLite and Postgres adapters behind one contract suite, reserve-then-settle draws, idempotent settlement, and queryable spend (completed 2026-09-28)
 - [ ] **Phase 40: Tenant Identity & Run-Read Scoping** - Map API keys to tenants on the `Principal`, attribute every run to its submitting principal, and scope every run-read route to the calling principal
 - [ ] **Phase 41: Admission-Time Allowance Enforcement** - Rolling-period allowances with an optional lifetime cap, refused at admission when exhausted, with a non-blocking warn-threshold notice
 - [ ] **Phase 42: Mid-Run Halt & SSE Terminal Status** - A resumable, checkpoint-preserving halt when an in-flight run's next draw would overspend, on both the engine and agent-loop paths, plus the SSE `done`/`Cancelled` fix
@@ -574,7 +574,7 @@ feature work)
 | 18-21 | v0.9.0 | 25/25 | ✅ Shipped | 2026-09-01 |
 | 22-37.1 | v0.10.0 | 231/231 (228 executed, 3 superseded) | ✅ Shipped | 2026-09-23 |
 | 38. Design Seams & Pricing/Cost Producer | v0.11.0 | 9/9 | Complete    | 2026-09-26 |
-| 39. Spend Ledger | v0.11.0 | 0/TBD | Not started | - |
+| 39. Spend Ledger | v0.11.0 | 8/8 | Complete    | 2026-09-28 |
 | 40. Tenant Identity & Run-Read Scoping | v0.11.0 | 0/TBD | Not started | - |
 | 41. Admission-Time Allowance Enforcement | v0.11.0 | 0/TBD | Not started | - |
 | 42. Mid-Run Halt & SSE Terminal Status | v0.11.0 | 0/TBD | Not started | - |

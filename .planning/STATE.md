@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 39
-current_phase_name: spend-ledger
-status: verifying
+current_phase: 40
+current_phase_name: Tenant Identity & Run-Read Scoping
+status: planning
 stopped_at: Completed 39-08-PLAN.md (phase 39-spend-ledger closed)
-last_updated: "2026-09-28T02:11:11.482Z"
-last_activity: 2026-09-27
-last_activity_desc: Phase 39 execution started
+last_updated: "2026-09-28T02:31:09.062Z"
+last_activity: 2026-09-28
+last_activity_desc: Phase 39 complete, transitioned to Phase 40
 progress:
   total_phases: 2
   completed_phases: 2
@@ -49,16 +49,16 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 39 (spend-ledger) — EXECUTING
-Plan: 8 of 8
-Status: Phase complete — ready for verification
-Last activity: 2026-09-27 — Phase 39 execution started
+Phase: 40 — Tenant Identity & Run-Read Scoping
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-09-28 — Phase 39 complete, transitioned to Phase 40
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 424
+- Total plans completed: 432
 - Average duration: —
 - Total execution time: —
 
@@ -105,6 +105,7 @@ Last activity: 2026-09-27 — Phase 39 execution started
 | 37 | 8 | - | - |
 | 37.1 | 16 | - | - |
 | 38 | 9 | - | - |
+| 39 | 8 | - | - |
 
 *Updated after each plan completion*
 

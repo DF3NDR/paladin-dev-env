@@ -819,18 +819,20 @@ mod tests {
 
     /// An admin `Principal` extension for direct handler calls (passes all authz checks).
     fn admin() -> Extension<Principal> {
-        Extension(Principal {
-            id: "test-admin".to_string(),
-            role: UserRole::Admin,
-        })
+        Extension(Principal::new(
+            "test-admin",
+            UserRole::Admin,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ))
     }
 
     /// A non-admin (`User`) `Principal` extension for authz tests.
     fn user() -> Extension<Principal> {
-        Extension(Principal {
-            id: "test-user".to_string(),
-            role: UserRole::User,
-        })
+        Extension(Principal::new(
+            "test-user",
+            UserRole::User,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ))
     }
 
     /// Configurable in-test executor: succeeds with a fixed output, fails, or stalls

@@ -10,6 +10,7 @@
 //! InMemory adapters, mirroring `worker_tests.rs`'s own Tier 1 convention
 //! for behavior that does not need to cross a real process boundary.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,7 +27,9 @@ use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::execution_result::PaladinResult;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
-use paladin_core::platform::container::run::RunStatus;
+use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+use paladin_core::platform::container::run::{RunId, RunStatus};
+use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::NodeId;
 use paladin_ports::input::run_submission_port::{ForkRun, RunSubmissionPort, SubmitRun};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
@@ -37,6 +40,7 @@ use paladin_storage::run::in_memory::InMemoryRunRepository;
 use paladin_storage::run::sqlite::SqliteRunRepository;
 use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+use paladin_web::agent_auth::{AgentAuthConfig, Principal};
 use paladin_web::run_controller::{RunApiState, run_router};
 
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
@@ -297,4 +301,215 @@ async fn fork_run_completes_from_waypoint() {
     })
     .await
     .expect("fork_run_completes_from_waypoint did not hang");
+}
+
+/// Phase 40's own tracer (TENANT-01, TENANT-02, PLAT-07, D-01, D-02, D-08, D-09, D-11,
+/// D-12): an API key's configured tenant travels config -> `Principal.tenant_id`
+/// (paladin-web) -> `PrincipalRef` on `SubmitRun` (paladin-ports) -> `Run.submitted_by`
+/// (paladin-core) -> the `008` columns written by `SqliteRunRepository` (paladin-storage)
+/// -> `GET /v1/runs/{id}` gated by `load_visible_run` (`RunReadScope::permits`) -- driven
+/// through the real `run_router` over an on-disk SQLite store.
+#[tokio::test(flavor = "multi_thread")]
+async fn tenant_scoped_run_read_tracer() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (repo_path, repo_url) = temp_sqlite_url("tenant");
+        let repository: Arc<dyn RunRepositoryPort> =
+            Arc::new(SqliteRunRepository::new(&repo_url).await.unwrap());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("tenant-wf", build_chain_graph(1)));
+        let submission: Arc<dyn RunSubmissionPort> = Arc::new(RunSubmissionService::new(
+            repository.clone(),
+            queue.clone(),
+            resolver.clone(),
+        ));
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "tracer-key-a".to_string(),
+            Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        api_keys.insert(
+            "tracer-key-b".to_string(),
+            Principal::new("svc-b", UserRole::User, TenantId::new("globex").unwrap()),
+        );
+        api_keys.insert(
+            "tracer-key-ops".to_string(),
+            Principal::new("ops", UserRole::Admin, TenantId::new("ops-tenant").unwrap()),
+        );
+        let auth = AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        };
+
+        let state = RunApiState::new()
+            .with_submission(submission)
+            .with_repository(repository.clone())
+            .with_auth(auth);
+        let app = run_router(state);
+
+        // (a) POST /v1/runs with key tracer-key-a, plus a spoofed tenant on every
+        // client-controlled surface (body field, query param, header) -- the tenant must
+        // still come only from AgentAuthConfig (D-02).
+        let submit_body = serde_json::to_vec(&serde_json::json!({
+            "assistant_id": "tenant-wf",
+            "thread_id": "tenant-thread-1",
+            "input": {},
+            "tenant_id": "globex",
+            "tenant": "globex"
+        }))
+        .unwrap();
+        let submit_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/runs?tenant_id=globex")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "tracer-key-a")
+                    .header("x-tenant-id", "globex")
+                    .body(Body::from(submit_body))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(submit_response.status(), StatusCode::ACCEPTED);
+        let submit_bytes = axum::body::to_bytes(submit_response.into_body(), usize::MAX)
+            .await
+            .expect("read submit body");
+        let submit_json: serde_json::Value =
+            serde_json::from_slice(&submit_bytes).expect("submit body is JSON");
+        let run_id = RunId::parse(submit_json["run_id"].as_str().expect("run_id string"))
+            .expect("run_id parses");
+
+        // (b) The repository round trip: the run is attributed to the KEY's configured
+        // tenant (acme), never the spoofed globex from the request (D-02, D-09).
+        let stored = repository
+            .get(&run_id)
+            .await
+            .expect("repository read succeeds")
+            .expect("run exists");
+        let expected_attribution = RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a");
+        assert_eq!(stored.submitted_by, Some(expected_attribution.clone()));
+
+        // (c) A second submission by the same principal on a different thread carries
+        // IDENTICAL attribution (edge TENANT-02/adjacency).
+        let second_submit_body = serde_json::to_vec(&serde_json::json!({
+            "assistant_id": "tenant-wf",
+            "thread_id": "tenant-thread-2",
+            "input": {}
+        }))
+        .unwrap();
+        let second_submit_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/runs")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "tracer-key-a")
+                    .body(Body::from(second_submit_body))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(second_submit_response.status(), StatusCode::ACCEPTED);
+        let second_submit_bytes =
+            axum::body::to_bytes(second_submit_response.into_body(), usize::MAX)
+                .await
+                .expect("read second submit body");
+        let second_submit_json: serde_json::Value =
+            serde_json::from_slice(&second_submit_bytes).expect("second submit body is JSON");
+        let second_run_id = RunId::parse(
+            second_submit_json["run_id"]
+                .as_str()
+                .expect("run_id string"),
+        )
+        .expect("run_id parses");
+        let second_stored = repository
+            .get(&second_run_id)
+            .await
+            .expect("repository read succeeds")
+            .expect("run exists");
+        assert_eq!(second_stored.submitted_by, Some(expected_attribution));
+
+        // (d) GET /v1/runs/{run_id}: the owner (svc-a) and an Admin of another tenant
+        // (ops) both see it (D-11's Admin arm).
+        let owner_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/runs/{run_id}"))
+                    .header("x-api-key", "tracer-key-a")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(owner_get.status(), StatusCode::OK);
+
+        let admin_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/runs/{run_id}"))
+                    .header("x-api-key", "tracer-key-ops")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(admin_get.status(), StatusCode::OK);
+
+        // (e) GET /v1/runs/{run_id} with a DIFFERENT tenant's key (svc-b, globex) is
+        // the SAME missing-run 404 a genuinely unknown run id gets (PLAT-07, D-12): no
+        // 403, no shape/timing difference between "hidden" and "missing".
+        let hidden_get = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/runs/{run_id}"))
+                    .header("x-api-key", "tracer-key-b")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(hidden_get.status(), StatusCode::NOT_FOUND);
+        let hidden_bytes = axum::body::to_bytes(hidden_get.into_body(), usize::MAX)
+            .await
+            .expect("read hidden body");
+
+        let missing_run_id = RunId::new_v7();
+        let missing_get = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/runs/{missing_run_id}"))
+                    .header("x-api-key", "tracer-key-b")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(missing_get.status(), StatusCode::NOT_FOUND);
+        let missing_bytes = axum::body::to_bytes(missing_get.into_body(), usize::MAX)
+            .await
+            .expect("read missing body");
+
+        let hidden_text = String::from_utf8(hidden_bytes.to_vec()).expect("utf8 body");
+        let missing_text = String::from_utf8(missing_bytes.to_vec()).expect("utf8 body");
+        let normalized_hidden =
+            hidden_text.replace(&run_id.to_string(), &missing_run_id.to_string());
+        assert_eq!(
+            normalized_hidden, missing_text,
+            "a hidden run's 404 body must be byte-identical to a genuinely missing run's, \
+             once the two ids are swapped (PLAT-07, D-12)"
+        );
+
+        cleanup(&repo_path);
+    })
+    .await
+    .expect("tenant_scoped_run_read_tracer did not hang");
 }

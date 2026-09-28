@@ -154,18 +154,26 @@ http:
     enabled: true
     # Static API keys (header `X-API-Key`). Put real keys in env/secrets, not in VCS.
     # `role` is `admin` or `user`; admins may register/deregister agents at runtime.
+    # `tenant` is REQUIRED on every key (Phase 40, TENANT-01): runs and spend are
+    # attributed to it, and a key reads only its own tenant's runs unless its role is
+    # admin. There is no implicit default tenant -- an empty/missing value fails boot.
     api_keys:
       - key: "${PALADIN_API_KEY_CI}" # service-to-service caller
         name: "ci-runner"
         role: "admin"
+        tenant: "platform-ops"
       - key: "${PALADIN_API_KEY_APP}"
         name: "frontend"
         role: "user"
+        tenant: "web-app"
     # Accept opaque server-issued bearer tokens via the wired AuthPort (in-process token
     # store). A random string checked against the store's own hashed records — not a
     # signed or self-describing token.
     bearer_token:
       enabled: false
+      # Required when `enabled` is true (Phase 40, TENANT-01, D-03): every verified
+      # bearer principal carries this tenant. Example:
+      # tenant: "bearer-callers"
   # Interactive API docs: serve GET /openapi.json + Swagger UI at /docs (unversioned,
   # unauthenticated — the contract is public). Set false to omit them in production.
   docs:

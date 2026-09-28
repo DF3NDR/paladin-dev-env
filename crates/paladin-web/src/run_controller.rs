@@ -77,6 +77,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::cost::Cost;
+use paladin_core::platform::container::principal::PrincipalRef;
 use paladin_core::platform::container::run::{
     Run, RunCursor, RunEventKind, RunId, RunStatus, WebhookSpec,
 };
@@ -699,7 +700,7 @@ pub async fn submit_run(
         thread_id,
         input: body.input,
         webhook,
-        requested_by: Some((principal.id.clone(), principal.role)),
+        requested_by: Some(PrincipalRef::from(&principal)),
     };
 
     let accepted = submission
@@ -775,6 +776,34 @@ async fn run_costs(
         .collect()
 }
 
+/// Fetch a run and check the caller's
+/// [`RunReadScope`](paladin_core::platform::container::principal::RunReadScope) before
+/// returning it -- the single-run
+/// half of the one shared run-read authorization function (D-12, D-13).
+///
+/// A hidden (out-of-scope) run and a genuinely missing run answer with the EXACT SAME
+/// [`ApiError::not_found`] (no `403`, no timing/shape difference, PLAT-07): a foreign
+/// tenant's run must be indistinguishable from a run that does not exist.
+///
+/// Every `/runs/{run_id}*` route enters through this helper.
+async fn load_visible_run(
+    repository: &Arc<dyn RunRepositoryPort>,
+    principal: &Principal,
+    run_id: &RunId,
+) -> Result<Run, ApiError> {
+    let run = repository
+        .get(run_id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found(format!("unknown run '{run_id}'")))?;
+
+    if !principal.read_scope().permits(&run) {
+        return Err(ApiError::not_found(format!("unknown run '{run_id}'")));
+    }
+
+    Ok(run)
+}
+
 /// `GET /runs/{run_id}` -- the run's current status.
 ///
 /// Reads [`RunRepositoryPort`] directly (no submission port, no engine and
@@ -801,7 +830,7 @@ async fn run_costs(
 )]
 pub async fn get_run(
     State(state): State<RunApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     Path(run_id): Path<String>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
     let repository = state
@@ -810,11 +839,7 @@ pub async fn get_run(
         .ok_or_else(|| ApiError::not_implemented(REPOSITORY_PORT_HINT))?;
     let id = parse_run_id(&run_id)?;
 
-    let run = repository
-        .get(&id)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found(format!("unknown run '{run_id}'")))?;
+    let run = load_visible_run(repository, &principal, &id).await?;
 
     let mut response = RunResponse::from(&run);
     let mut costs = run_costs(state.treasury_ledger.as_ref(), vec![id]).await;
@@ -946,8 +971,11 @@ pub async fn cancel_run(
         .ok_or_else(|| ApiError::not_implemented(SUBMISSION_PORT_HINT))?;
     let id = parse_run_id(&run_id)?;
 
+    // NOTE (D-13, T-40-07, accepted for this plan): the visibility gate for cancel is wired
+    // in 40-05 alongside stream/webhook-deliveries and the full route matrix. This plan only
+    // retypes `requested_by` (D-04).
     let outcome = submission
-        .cancel(&id, Some((principal.id.clone(), principal.role)))
+        .cancel(&id, Some(PrincipalRef::from(&principal)))
         .await
         .map_err(map_submission_error)?;
 
@@ -1230,7 +1258,7 @@ mod tests {
         async fn cancel(
             &self,
             run_id: &RunId,
-            _requested_by: Option<(String, paladin_core::platform::container::user::UserRole)>,
+            _requested_by: Option<PrincipalRef>,
         ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
         {
             match self.outcome {
@@ -1781,6 +1809,7 @@ mod tests {
             enabled: true,
             api_keys: HashMap::new(),
             token_verifier: None,
+            bearer_tenant: None,
         };
         let state = RunApiState::new().with_auth(auth);
         let app = run_router(state);
@@ -1849,10 +1878,11 @@ mod tests {
     }
 
     fn tester_principal() -> Extension<Principal> {
-        Extension(Principal {
-            id: "tester".to_string(),
-            role: paladin_core::platform::container::user::UserRole::Admin,
-        })
+        Extension(Principal::new(
+            "tester",
+            paladin_core::platform::container::user::UserRole::Admin,
+            paladin_core::platform::container::principal::TenantId::new("tester-tenant").unwrap(),
+        ))
     }
 
     fn sample_stream_event(
@@ -2280,18 +2310,29 @@ mod tests {
             key: &str,
             role: paladin_core::platform::container::user::UserRole,
         ) -> crate::agent_auth::AgentAuthConfig {
+            api_key_auth_with_tenant(key, "svc", role, "svc-tenant")
+        }
+
+        fn api_key_auth_with_tenant(
+            key: &str,
+            principal_id: &str,
+            role: paladin_core::platform::container::user::UserRole,
+            tenant: &str,
+        ) -> crate::agent_auth::AgentAuthConfig {
             let mut api_keys = HashMap::new();
             api_keys.insert(
                 key.to_string(),
-                Principal {
-                    id: "svc".to_string(),
+                Principal::new(
+                    principal_id,
                     role,
-                },
+                    paladin_core::platform::container::principal::TenantId::new(tenant).unwrap(),
+                ),
             );
             crate::agent_auth::AgentAuthConfig {
                 enabled: true,
                 api_keys,
                 token_verifier: None,
+                bearer_tenant: None,
             }
         }
 
@@ -2427,6 +2468,241 @@ mod tests {
                 second.status() == StatusCode::TOO_MANY_REQUESTS
                     || third.status() == StatusCode::TOO_MANY_REQUESTS,
                 "expected a 429 within the burst window"
+            );
+        }
+
+        // --- Tenant-scoped GET /runs/{id} (Phase 40, D-12/D-13, PLAT-07) ---
+
+        fn authed_state_with_repository(
+            auth: crate::agent_auth::AgentAuthConfig,
+            repository: Arc<MockRepository>,
+        ) -> RunApiState {
+            RunApiState::new()
+                .with_repository(repository)
+                .with_auth(auth)
+        }
+
+        #[tokio::test]
+        async fn get_run_hides_a_foreign_tenant_run_behind_the_missing_run_404() {
+            let repository = Arc::new(MockRepository::default());
+            let run = sample_run("t1").with_submitted_by(
+                paladin_core::platform::container::principal::RunAttribution::new(
+                    paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+                    "svc-a".to_string(),
+                ),
+            );
+            let run_id = run.run_id.clone();
+            repository.seed(run);
+
+            let mut api_keys = HashMap::new();
+            api_keys.insert(
+                "svc-a-key".to_string(),
+                Principal::new(
+                    "svc-a",
+                    paladin_core::platform::container::user::UserRole::User,
+                    paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+                ),
+            );
+            api_keys.insert(
+                "svc-b-key".to_string(),
+                Principal::new(
+                    "svc-b",
+                    paladin_core::platform::container::user::UserRole::User,
+                    paladin_core::platform::container::principal::TenantId::new("globex").unwrap(),
+                ),
+            );
+            let auth = crate::agent_auth::AgentAuthConfig {
+                enabled: true,
+                api_keys,
+                token_verifier: None,
+                bearer_tenant: None,
+            };
+            let app = run_router(authed_state_with_repository(auth, repository));
+
+            let owner_response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/runs/{run_id}"))
+                        .header("x-api-key", "svc-a-key")
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(owner_response.status(), StatusCode::OK);
+
+            let hidden_response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/runs/{run_id}"))
+                        .header("x-api-key", "svc-b-key")
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(hidden_response.status(), StatusCode::NOT_FOUND);
+            let hidden_body = axum::body::to_bytes(hidden_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+
+            let missing_id = RunId::new_v7();
+            let missing_response = app
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/runs/{missing_id}"))
+                        .header("x-api-key", "svc-b-key")
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+            let missing_body = axum::body::to_bytes(missing_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+
+            // Byte-equal once the two ids are swapped (D-12: no shape/timing difference
+            // between "hidden" and "genuinely missing").
+            let hidden_text = String::from_utf8(hidden_body.to_vec()).unwrap();
+            let missing_text = String::from_utf8(missing_body.to_vec()).unwrap();
+            let normalized_hidden =
+                hidden_text.replace(&run_id.to_string(), &missing_id.to_string());
+            assert_eq!(normalized_hidden, missing_text);
+        }
+
+        #[tokio::test]
+        async fn get_run_lets_an_admin_of_another_tenant_see_the_run() {
+            let repository = Arc::new(MockRepository::default());
+            let run = sample_run("t1").with_submitted_by(
+                paladin_core::platform::container::principal::RunAttribution::new(
+                    paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+                    "svc-a".to_string(),
+                ),
+            );
+            let run_id = run.run_id.clone();
+            repository.seed(run);
+
+            let mut api_keys = HashMap::new();
+            api_keys.insert(
+                "ops-key".to_string(),
+                Principal::new(
+                    "ops",
+                    paladin_core::platform::container::user::UserRole::Admin,
+                    paladin_core::platform::container::principal::TenantId::new("ops-tenant")
+                        .unwrap(),
+                ),
+            );
+            let auth = crate::agent_auth::AgentAuthConfig {
+                enabled: true,
+                api_keys,
+                token_verifier: None,
+                bearer_tenant: None,
+            };
+            let app = run_router(authed_state_with_repository(auth, repository));
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/runs/{run_id}"))
+                        .header("x-api-key", "ops-key")
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        /// A small recording `RunSubmissionPort` double capturing the `SubmitRun` it received,
+        /// so this test can assert the exact `PrincipalRef` the controller forwarded (D-04).
+        struct RecordingSubmissionPort {
+            captured: std::sync::Mutex<Option<SubmitRun>>,
+        }
+
+        #[async_trait]
+        impl RunSubmissionPort for RecordingSubmissionPort {
+            async fn submit(
+                &self,
+                request: SubmitRun,
+            ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+            {
+                let thread_id = request
+                    .thread_id
+                    .clone()
+                    .unwrap_or_else(|| ThreadId::new("t1").unwrap());
+                *self.captured.lock().unwrap() = Some(request);
+                Ok(paladin_ports::input::run_submission_port::RunAccepted {
+                    run_id: RunId::new_v7(),
+                    thread_id,
+                })
+            }
+
+            async fn cancel(
+                &self,
+                run_id: &RunId,
+                _requested_by: Option<PrincipalRef>,
+            ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
+            {
+                Err(RunSubmissionError::NotFound {
+                    run_id: run_id.clone(),
+                })
+            }
+
+            async fn fork(
+                &self,
+                _request: paladin_ports::input::run_submission_port::ForkRun,
+            ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+            {
+                Err(RunSubmissionError::NotWired)
+            }
+        }
+
+        #[tokio::test]
+        async fn submit_run_forwards_the_callers_principal_ref() {
+            let submission = Arc::new(RecordingSubmissionPort {
+                captured: std::sync::Mutex::new(None),
+            });
+            let auth = api_key_auth_with_tenant(
+                "svc-a-key",
+                "svc-a",
+                paladin_core::platform::container::user::UserRole::User,
+                "acme",
+            );
+            let state = RunApiState::new()
+                .with_submission(Arc::clone(&submission) as Arc<dyn RunSubmissionPort>)
+                .with_auth(auth);
+            let app = run_router(state);
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("x-api-key", "svc-a-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&serde_json::json!({ "assistant_id": "a1" }))
+                                .unwrap(),
+                        ))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+            let captured = submission.captured.lock().unwrap().take().unwrap();
+            let requested_by = captured.requested_by.expect("principal ref forwarded");
+            assert_eq!(requested_by.api_key_id, "svc-a");
+            assert_eq!(
+                requested_by.tenant_id,
+                paladin_core::platform::container::principal::TenantId::new("acme").unwrap()
+            );
+            assert_eq!(
+                requested_by.role,
+                paladin_core::platform::container::user::UserRole::User
             );
         }
     }

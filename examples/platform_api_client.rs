@@ -68,6 +68,7 @@ use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_core::platform::container::execution_result::PaladinResult;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::user::UserRole;
 use paladin_ports::input::assistant_admin_port::AssistantAdminPort;
 use paladin_ports::input::parley_port::ParleyPort;
@@ -141,15 +142,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut api_keys = HashMap::new();
     api_keys.insert(
         API_KEY.to_string(),
-        Principal {
-            id: "example".to_string(),
-            role: UserRole::Admin,
-        },
+        Principal::new("example", UserRole::Admin, TenantId::new("example-tenant")?),
     );
     let auth = AgentAuthConfig {
         enabled: true,
         api_keys,
         token_verifier: None,
+        bearer_tenant: None,
     };
     let auth_port: Arc<dyn AuthPort> = Arc::new(InMemoryTokenAuthAdapter::new());
     let admin_token = auth_port

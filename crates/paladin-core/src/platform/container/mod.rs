@@ -33,6 +33,9 @@ pub mod paladin_config;
 pub mod paladin_error;
 pub mod parley;
 pub mod planning;
+/// Identity scope types (Phase 40, TENANT-01/TENANT-02): `TenantId`, `PrincipalRef`,
+/// `RunAttribution`, `RunReadScope` -- pure value types, no I/O.
+pub mod principal;
 pub mod prompt;
 pub mod queue_config;
 pub mod queue_item;

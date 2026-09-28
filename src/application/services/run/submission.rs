@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 
 use paladin_core::platform::container::assistant::AssistantSource;
+use paladin_core::platform::container::principal::PrincipalRef;
 use paladin_core::platform::container::run::{ForkSpec, Run, RunId};
 use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::ThreadId;
@@ -219,13 +220,13 @@ impl RunSubmissionService {
     /// against). Shared by all three call sites so the rule is expressed
     /// exactly once.
     fn authorize_invocation(
-        requested_by: &Option<(String, UserRole)>,
+        requested_by: &Option<PrincipalRef>,
         allowed_roles: &[UserRole],
     ) -> Result<(), RunSubmissionError> {
-        let Some((_, role)) = requested_by else {
+        let Some(principal_ref) = requested_by else {
             return Ok(());
         };
-        if allowed_roles.is_empty() || allowed_roles.contains(role) {
+        if allowed_roles.is_empty() || allowed_roles.contains(&principal_ref.role) {
             Ok(())
         } else {
             Err(RunSubmissionError::Forbidden {
@@ -280,6 +281,12 @@ impl RunSubmissionPort for RunSubmissionService {
         if let Some(webhook) = request.webhook {
             run = run.with_webhook(webhook);
         }
+        // D-08: stamp the submitting principal's attribution onto the run BEFORE it is
+        // ever inserted -- `None` (an internal/same-process caller) leaves `submitted_by`
+        // `None` (D-10).
+        if let Some(principal_ref) = &request.requested_by {
+            run = run.with_submitted_by(principal_ref.attribution());
+        }
 
         if use_latest {
             let resolved_version = self
@@ -326,7 +333,7 @@ impl RunSubmissionPort for RunSubmissionService {
     async fn cancel(
         &self,
         run_id: &RunId,
-        requested_by: Option<(String, UserRole)>,
+        requested_by: Option<PrincipalRef>,
     ) -> Result<CancelOutcome, RunSubmissionError> {
         if requested_by.is_some() {
             let run = self
@@ -446,6 +453,9 @@ impl RunSubmissionPort for RunSubmissionService {
             serde_json::json!({}),
         )
         .with_fork_from(fork_spec);
+        if let Some(principal_ref) = &request.requested_by {
+            run = run.with_submitted_by(principal_ref.attribution());
+        }
         if let Some(webhook) = request.webhook {
             run = run.with_webhook(webhook);
         }
@@ -807,5 +817,141 @@ mod tests {
             "a pinned version: Some(1) must be inserted verbatim, ignoring the \
              assistant's later-published latest (2)"
         );
+    }
+
+    // --- Phase 40 (TENANT-01/02, D-08): principal attribution stamped on submit ---
+
+    fn principal_ref(tenant: &str, api_key_id: &str, role: UserRole) -> PrincipalRef {
+        PrincipalRef::new(
+            api_key_id,
+            paladin_core::platform::container::principal::TenantId::new(tenant).unwrap(),
+            role,
+        )
+    }
+
+    #[tokio::test]
+    async fn submit_records_the_requesting_principal_attribution() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+
+        let accepted = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: Some(principal_ref("acme", "svc-a", UserRole::User)),
+            })
+            .await
+            .unwrap();
+
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.submitted_by,
+            Some(
+                paladin_core::platform::container::principal::RunAttribution::new(
+                    paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+                    "svc-a",
+                )
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_without_a_principal_records_no_attribution() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+
+        let accepted = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: None,
+            })
+            .await
+            .unwrap();
+
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert!(stored.submitted_by.is_none());
+    }
+
+    #[tokio::test]
+    async fn two_submissions_by_one_principal_carry_identical_attribution() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let principal = principal_ref("acme", "svc-a", UserRole::User);
+
+        let first = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: Some(principal.clone()),
+            })
+            .await
+            .unwrap();
+        let second = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: Some(principal),
+            })
+            .await
+            .unwrap();
+
+        let first_stored = repository.get(&first.run_id).await.unwrap().unwrap();
+        let second_stored = repository.get(&second.run_id).await.unwrap().unwrap();
+        assert_eq!(first_stored.submitted_by, second_stored.submitted_by);
+    }
+
+    #[tokio::test]
+    async fn submit_forbidden_role_is_read_from_the_principal_ref() {
+        struct StubRoleRestrictedResolver;
+
+        #[async_trait]
+        impl AssistantResolver for StubRoleRestrictedResolver {
+            async fn resolve(
+                &self,
+                assistant_id: &str,
+                version: Option<u32>,
+            ) -> Result<ResolvedAssistant, ResolveError> {
+                Ok(ResolvedAssistant {
+                    reference: paladin_core::platform::container::run::AssistantRef {
+                        assistant_id: assistant_id.to_string(),
+                        version: version.unwrap_or(1),
+                    },
+                    runnable: Runnable::Workflow(empty_graph()),
+                    allowed_roles: vec![UserRole::Admin],
+                    source: AssistantSource::Code,
+                })
+            }
+        }
+
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let service =
+            RunSubmissionService::new(repository, queue, Arc::new(StubRoleRestrictedResolver));
+
+        let err = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: Some(principal_ref("acme", "svc-a", UserRole::User)),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RunSubmissionError::Forbidden { .. }));
     }
 }

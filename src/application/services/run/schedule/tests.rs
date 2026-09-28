@@ -13,11 +13,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 
 use paladin_core::platform::container::assistant::AssistantSource;
+use paladin_core::platform::container::principal::PrincipalRef;
 use paladin_core::platform::container::run::{AssistantRef, RunId, WebhookSpec};
 use paladin_core::platform::container::run_schedule::{
     OnMissed, RunSchedule, RunScheduleId, RunScheduleUpdate, ThreadStrategy,
 };
-use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::input::run_submission_port::{
     CancelOutcome, ForkRun, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
@@ -72,7 +72,7 @@ impl RunSubmissionPort for RecordingSubmission {
     async fn cancel(
         &self,
         _run_id: &RunId,
-        _requested_by: Option<(String, UserRole)>,
+        _requested_by: Option<PrincipalRef>,
     ) -> Result<CancelOutcome, RunSubmissionError> {
         Err(RunSubmissionError::NotWired)
     }

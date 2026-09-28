@@ -757,17 +757,19 @@ mod tests {
     }
 
     fn admin_principal() -> Extension<Principal> {
-        Extension(Principal {
-            id: "admin".to_string(),
-            role: paladin_core::platform::container::user::UserRole::Admin,
-        })
+        Extension(Principal::new(
+            "admin",
+            paladin_core::platform::container::user::UserRole::Admin,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ))
     }
 
     fn user_principal() -> Extension<Principal> {
-        Extension(Principal {
-            id: "user".to_string(),
-            role: paladin_core::platform::container::user::UserRole::User,
-        })
+        Extension(Principal::new(
+            "user",
+            paladin_core::platform::container::user::UserRole::User,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ))
     }
 
     fn create_request() -> CreateScheduleRequest {
@@ -1051,6 +1053,7 @@ mod tests {
             enabled: true,
             api_keys: HashMap::new(),
             token_verifier: None,
+            bearer_tenant: None,
         };
         let state = RunApiState::new().with_auth(auth);
         let app = run_router(state);

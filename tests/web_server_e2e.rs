@@ -19,6 +19,7 @@ use paladin::infrastructure::web::{
     AgentApiState, AgentEntry, AgentRegistry, HttpLayersConfig, Principal, agent_router,
     with_http_layers,
 };
+use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::user::UserRole;
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
@@ -96,23 +97,22 @@ async fn build_state() -> AgentApiState {
     let mut api_keys = HashMap::new();
     api_keys.insert(
         ADMIN_KEY.to_string(),
-        Principal {
-            id: "admin".to_string(),
-            role: UserRole::Admin,
-        },
+        Principal::new(
+            "admin",
+            UserRole::Admin,
+            TenantId::new("e2e-tenant").unwrap(),
+        ),
     );
     api_keys.insert(
         USER_KEY.to_string(),
-        Principal {
-            id: "user".to_string(),
-            role: UserRole::User,
-        },
+        Principal::new("user", UserRole::User, TenantId::new("e2e-tenant").unwrap()),
     );
     AgentApiState::new(Arc::new(registry)).with_auth(
         paladin::infrastructure::web::AgentAuthConfig {
             enabled: true,
             api_keys,
             token_verifier: None,
+            bearer_tenant: None,
         },
     )
 }

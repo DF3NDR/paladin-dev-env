@@ -26,28 +26,64 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use paladin_core::platform::container::principal::{PrincipalRef, RunReadScope, TenantId};
 use paladin_core::platform::container::user::UserRole;
 use paladin_ports::output::auth_port::AuthPort;
 
 use crate::agent_controller::AgentApiState;
 use crate::error::ApiError;
 
-/// An authenticated caller: an identifier plus the role used for authorization.
+/// An authenticated caller: an identifier, tenant and role used for authorization and
+/// run-read scoping (Phase 40, TENANT-01, D-01).
+///
+/// `tenant_id` is required (no `Option`) -- every authenticated principal belongs to
+/// exactly one tenant, derived server-side from [`AgentAuthConfig`] inside [`authenticate`]
+/// and never from the request (D-02). `#[non_exhaustive]`: constructed only through
+/// [`Principal::new`], so the next field this type gains stays non-breaking (X-10.3, the
+/// `LlmRequest`/`GarrisonEntry` precedent).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Principal {
     /// Stable identifier (API-key name or opaque bearer-token subject).
     pub id: String,
     /// Role used for per-agent and admin authorization.
     pub role: UserRole,
+    /// The tenant this principal belongs to -- derived server-side from `AgentAuthConfig`,
+    /// never from the request (D-01, D-02).
+    pub tenant_id: TenantId,
 }
 
 impl Principal {
-    /// The principal attached when auth is disabled: full access (`Admin`).
-    fn open_access() -> Self {
+    /// Construct a `Principal`.
+    pub fn new(id: impl Into<String>, role: UserRole, tenant_id: TenantId) -> Self {
         Self {
-            id: "anonymous".to_string(),
-            role: UserRole::Admin,
+            id: id.into(),
+            role,
+            tenant_id,
         }
+    }
+
+    /// The principal attached when auth is disabled: full access (`Admin`), carrying the
+    /// documented open-access sentinel tenant (D-03) -- deployment-wide reads happen
+    /// through the Admin arm of [`RunReadScope::for_principal`] (D-11), not a bypass.
+    fn open_access() -> Self {
+        Self::new("anonymous", UserRole::Admin, TenantId::open_access())
+    }
+
+    /// Derive this principal's run-read scope (D-12): `All` for `Admin`, otherwise scoped
+    /// to its own tenant.
+    pub fn read_scope(&self) -> RunReadScope {
+        RunReadScope::for_principal(self.role, &self.tenant_id)
+    }
+}
+
+impl From<&Principal> for PrincipalRef {
+    fn from(principal: &Principal) -> Self {
+        PrincipalRef::new(
+            principal.id.clone(),
+            principal.tenant_id.clone(),
+            principal.role,
+        )
     }
 }
 
@@ -61,6 +97,10 @@ pub struct AgentAuthConfig {
     /// Optional opaque bearer-token verifier (the `AuthPort` implementation is injected by
     /// the binary).
     pub token_verifier: Option<Arc<dyn AuthPort>>,
+    /// The tenant every verified bearer principal carries (D-03), set from
+    /// `http.auth.bearer_token.tenant`. While `None`, a verified bearer token does NOT
+    /// authenticate (fail closed) -- every principal must carry a tenant (D-01).
+    pub bearer_tenant: Option<TenantId>,
 }
 
 impl Default for AgentAuthConfig {
@@ -70,6 +110,7 @@ impl Default for AgentAuthConfig {
             enabled: false,
             api_keys: HashMap::new(),
             token_verifier: None,
+            bearer_tenant: None,
         }
     }
 }
@@ -140,14 +181,20 @@ pub async fn authenticate(
     headers: &HeaderMap,
     config: &AgentAuthConfig,
 ) -> Result<Principal, ApiError> {
-    // 1. Opaque bearer token (only when a verifier is configured).
-    if let (Some(token), Some(verifier)) = (bearer_token(headers), config.token_verifier.as_ref())
-        && let Ok(claims) = verifier.verify_token(token).await
+    // 1. Opaque bearer token (only when a verifier is configured AND a bearer tenant is
+    //    configured -- a verified bearer token with no configured tenant does not
+    //    authenticate; every principal must carry a tenant (D-01, D-03, fail closed)).
+    if let (Some(token), Some(verifier), Some(tenant)) = (
+        bearer_token(headers),
+        config.token_verifier.as_ref(),
+        config.bearer_tenant.as_ref(),
+    ) && let Ok(claims) = verifier.verify_token(token).await
     {
-        return Ok(Principal {
-            id: claims.user_id.to_string(),
-            role: claims.role,
-        });
+        return Ok(Principal::new(
+            claims.user_id.to_string(),
+            claims.role,
+            tenant.clone(),
+        ));
     }
 
     // 2. API key.
@@ -255,18 +302,20 @@ mod tests {
     }
 
     fn config_with_key(key: &str, role: UserRole) -> AgentAuthConfig {
+        config_with_key_and_tenant(key, role, "acme")
+    }
+
+    fn config_with_key_and_tenant(key: &str, role: UserRole, tenant: &str) -> AgentAuthConfig {
         let mut api_keys = HashMap::new();
         api_keys.insert(
             key.to_string(),
-            Principal {
-                id: "svc".to_string(),
-                role,
-            },
+            Principal::new("svc", role, TenantId::new(tenant).unwrap()),
         );
         AgentAuthConfig {
             enabled: true,
             api_keys,
             token_verifier: None,
+            bearer_tenant: None,
         }
     }
 
@@ -331,11 +380,13 @@ mod tests {
             token_verifier: Some(Arc::new(MockTokenVerifier {
                 valid: "good-token".to_string(),
             })),
+            bearer_tenant: Some(TenantId::new("bearer-tenant").unwrap()),
         };
         let p = authenticate(&headers(&[("authorization", "Bearer good-token")]), &cfg)
             .await
             .expect("authenticates");
         assert_eq!(p.role, UserRole::User);
+        assert_eq!(p.tenant_id, TenantId::new("bearer-tenant").unwrap());
 
         assert!(
             authenticate(&headers(&[("authorization", "Bearer bad")]), &cfg)
@@ -344,12 +395,130 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn verified_bearer_token_without_configured_tenant_fails_closed() {
+        let cfg = AgentAuthConfig {
+            enabled: true,
+            api_keys: HashMap::new(),
+            token_verifier: Some(Arc::new(MockTokenVerifier {
+                valid: "good-token".to_string(),
+            })),
+            bearer_tenant: None,
+        };
+        let err = authenticate(&headers(&[("authorization", "Bearer good-token")]), &cfg)
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), axum::http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn bearer_token_is_resolved_before_api_key_and_carries_bearer_tenant() {
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "good-token".to_string(),
+            Principal::new(
+                "api-key-svc",
+                UserRole::User,
+                TenantId::new("api-tenant").unwrap(),
+            ),
+        );
+        let cfg = AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: Some(Arc::new(MockTokenVerifier {
+                valid: "good-token".to_string(),
+            })),
+            bearer_tenant: Some(TenantId::new("bearer-tenant").unwrap()),
+        };
+        // A request carrying both a verified bearer token and a value that ALSO happens to
+        // match a configured API key name resolves to the bearer principal (lookup order
+        // unchanged, D-03/D-00b).
+        let p = authenticate(
+            &headers(&[
+                ("authorization", "Bearer good-token"),
+                ("x-api-key", "good-token"),
+            ]),
+            &cfg,
+        )
+        .await
+        .expect("authenticates");
+        assert_eq!(p.tenant_id, TenantId::new("bearer-tenant").unwrap());
+    }
+
+    #[test]
+    fn api_key_principal_carries_its_configured_tenant() {
+        let cfg = config_with_key_and_tenant("sk-abc", UserRole::User, "acme");
+        let principal = cfg.api_keys.get("sk-abc").unwrap();
+        assert_eq!(principal.tenant_id, TenantId::new("acme").unwrap());
+    }
+
+    #[tokio::test]
+    async fn tenant_is_derived_from_config_never_from_request_headers() {
+        let cfg = config_with_key_and_tenant("sk-abc", UserRole::User, "acme");
+        let p = authenticate(
+            &headers(&[("x-api-key", "sk-abc"), ("x-tenant-id", "globex")]),
+            &cfg,
+        )
+        .await
+        .expect("authenticates");
+        assert_eq!(p.tenant_id, TenantId::new("acme").unwrap());
+    }
+
+    #[tokio::test]
+    async fn every_principal_source_yields_a_tenant() {
+        // API key.
+        let cfg = config_with_key_and_tenant("sk-abc", UserRole::User, "acme");
+        let p = authenticate(&headers(&[("x-api-key", "sk-abc")]), &cfg)
+            .await
+            .unwrap();
+        assert_eq!(p.tenant_id, TenantId::new("acme").unwrap());
+
+        // Bearer.
+        let bearer_cfg = AgentAuthConfig {
+            enabled: true,
+            api_keys: HashMap::new(),
+            token_verifier: Some(Arc::new(MockTokenVerifier {
+                valid: "good-token".to_string(),
+            })),
+            bearer_tenant: Some(TenantId::new("bearer-tenant").unwrap()),
+        };
+        let p = authenticate(
+            &headers(&[("authorization", "Bearer good-token")]),
+            &bearer_cfg,
+        )
+        .await
+        .unwrap();
+        assert_eq!(p.tenant_id, TenantId::new("bearer-tenant").unwrap());
+
+        // Open access (auth disabled).
+        let open = Principal::open_access();
+        assert_eq!(open.tenant_id, TenantId::open_access());
+        assert_eq!(open.role, UserRole::Admin);
+    }
+
+    #[test]
+    fn read_scope_is_all_for_admin_and_tenant_for_user() {
+        let admin = Principal::new("a", UserRole::Admin, TenantId::new("acme").unwrap());
+        assert_eq!(admin.read_scope(), RunReadScope::All);
+        let user = Principal::new("u", UserRole::User, TenantId::new("acme").unwrap());
+        assert_eq!(
+            user.read_scope(),
+            RunReadScope::Tenant(TenantId::new("acme").unwrap())
+        );
+    }
+
+    #[test]
+    fn principal_ref_from_principal_copies_id_tenant_and_role() {
+        let principal = Principal::new("svc-a", UserRole::Admin, TenantId::new("acme").unwrap());
+        let principal_ref = PrincipalRef::from(&principal);
+        assert_eq!(principal_ref.api_key_id, "svc-a");
+        assert_eq!(principal_ref.tenant_id, TenantId::new("acme").unwrap());
+        assert_eq!(principal_ref.role, UserRole::Admin);
+    }
+
     #[test]
     fn authorize_invoke_respects_allowed_roles() {
-        let user = Principal {
-            id: "u".into(),
-            role: UserRole::User,
-        };
+        let user = Principal::new("u", UserRole::User, TenantId::new("t-1").unwrap());
         assert!(authorize_invoke(&user, &[]).is_ok()); // empty ⇒ any
         assert!(authorize_invoke(&user, &[UserRole::User]).is_ok());
         assert_eq!(
@@ -362,14 +531,8 @@ mod tests {
 
     #[test]
     fn require_admin_gates_non_admins() {
-        let admin = Principal {
-            id: "a".into(),
-            role: UserRole::Admin,
-        };
-        let user = Principal {
-            id: "u".into(),
-            role: UserRole::User,
-        };
+        let admin = Principal::new("a", UserRole::Admin, TenantId::new("t-1").unwrap());
+        let user = Principal::new("u", UserRole::User, TenantId::new("t-1").unwrap());
         assert!(require_admin(&admin).is_ok());
         assert_eq!(
             require_admin(&user).unwrap_err().status(),

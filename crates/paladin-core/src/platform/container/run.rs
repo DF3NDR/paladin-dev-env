@@ -21,7 +21,11 @@
 //!
 //! Every persisted `Run` carries [`RUN_SCHEMA_VERSION`] in its own
 //! `schema_version` field, mirroring the `Waypoint`/`Battlefield` precedent
-//! in [`crate::platform::container::waypoint`].
+//! in [`crate::platform::container::waypoint`]. The Phase 40 `submitted_by`
+//! attribution field is additive and `#[serde(default)]`, so it does not
+//! bump [`RUN_SCHEMA_VERSION`] -- every v1 row and document reads back
+//! unchanged (X-04, mirroring `waypoint.rs`'s own
+//! `battlefield_schema_version_is_unchanged` precedent).
 //!
 //! # No status-history type (D-05)
 //!
@@ -39,6 +43,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::platform::container::parley::ParleyResponse;
+use crate::platform::container::principal::RunAttribution;
 use crate::platform::container::waypoint::ThreadId;
 
 /// Schema version stamped on every persisted [`Run`] (X-04).
@@ -404,6 +409,12 @@ pub struct Run {
     /// The final Waypoint id this run reached, if any.
     #[serde(default)]
     pub final_waypoint_id: Option<String>,
+    /// The submitting principal, if one was recorded (D-08). `None` means no principal was
+    /// recorded: schedule-fired runs, same-process embedders, pre-v0.11 rows (D-10). This
+    /// field is additive and serde-defaulted, so [`RUN_SCHEMA_VERSION`] stays `v1` (X-04) --
+    /// every v1 row and document reads back unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submitted_by: Option<RunAttribution>,
     /// Schema version this row was persisted under (X-04).
     #[serde(default = "default_run_schema_version")]
     pub schema_version: String,
@@ -435,6 +446,7 @@ impl Run {
             fork_from: None,
             output: None,
             final_waypoint_id: None,
+            submitted_by: None,
             schema_version: RUN_SCHEMA_VERSION.to_string(),
         }
     }
@@ -442,6 +454,13 @@ impl Run {
     /// Attach a webhook delivery target.
     pub fn with_webhook(mut self, webhook: WebhookSpec) -> Self {
         self.webhook = Some(webhook);
+        self
+    }
+
+    /// Record the submitting principal's attribution (D-08). Additive; a run left unset
+    /// stays `submitted_by: None` (D-10).
+    pub fn with_submitted_by(mut self, attribution: RunAttribution) -> Self {
+        self.submitted_by = Some(attribution);
         self
     }
 
@@ -819,6 +838,48 @@ mod tests {
         assert_eq!(run.attempt, 0);
         assert!(run.pending_responses.is_empty());
         assert!(run.webhook.is_none());
+    }
+
+    #[test]
+    fn run_submitted_by_defaults_to_none_and_round_trips_through_serde() {
+        use crate::platform::container::principal::{RunAttribution, TenantId};
+
+        let run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("thread-1").unwrap(),
+            AssistantRef {
+                assistant_id: "assistant-1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        assert!(run.submitted_by.is_none());
+
+        let attributed =
+            run.with_submitted_by(RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a"));
+        let json = serde_json::to_string(&attributed).unwrap();
+        let restored: Run = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.submitted_by, attributed.submitted_by);
+    }
+
+    #[test]
+    fn run_without_attribution_serializes_without_the_submitted_by_key() {
+        let run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("thread-1").unwrap(),
+            AssistantRef {
+                assistant_id: "assistant-1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        let json = serde_json::to_value(&run).unwrap();
+        assert!(json.get("submitted_by").is_none());
+    }
+
+    #[test]
+    fn run_schema_version_stays_v1() {
+        assert_eq!(RUN_SCHEMA_VERSION, "v1");
     }
 
     #[test]

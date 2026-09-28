@@ -47,6 +47,7 @@ use paladin_battalion::engine::WarEngine;
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::principal::TenantId;
 use paladin_ports::input::parley_port::ParleyPort;
 use paladin_ports::output::auth_port::AuthPort;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
@@ -360,38 +361,58 @@ fn build_auth_config(cfg: &AuthConfig) -> Result<AgentAuthConfig, Box<dyn std::e
             enabled: false,
             api_keys: HashMap::new(),
             token_verifier: None,
+            bearer_tenant: None,
         });
     }
 
-    let api_keys: HashMap<String, Principal> = cfg
-        .api_keys
-        .iter()
-        .map(|k| {
-            (
-                k.key.clone(),
-                Principal {
-                    id: k.name.clone(),
-                    role: k.role,
-                },
-            )
-        })
-        .collect();
+    let mut api_keys: HashMap<String, Principal> = HashMap::new();
+    for k in &cfg.api_keys {
+        let tenant = TenantId::new(k.tenant.clone()).map_err(|e| {
+            if k.tenant.is_empty() {
+                format!(
+                    "http.auth.api_keys[{}]: 'tenant' is required — every API key must map to \
+                     a tenant (Phase 40, TENANT-01)",
+                    k.name
+                )
+            } else {
+                format!(
+                    "http.auth.api_keys[{}]: 'tenant' is not a valid tenant id: {e}",
+                    k.name
+                )
+            }
+        })?;
+        api_keys.insert(
+            k.key.clone(),
+            Principal::new(k.name.clone(), k.role, tenant),
+        );
+    }
 
     // The bearer-token path reuses the existing AuthPort against the in-process opaque
     // token store. The in-memory adapter verifies tokens it issued in-process, so it is
     // primarily useful when token issuance is co-located; API keys are the standalone
     // service-to-service mechanism.
-    let token_verifier: Option<Arc<dyn AuthPort>> = if cfg.bearer_token.enabled {
-        warn!("{IN_PROCESS_TOKEN_STORE_WARNING}");
-        Some(Arc::new(InMemoryTokenAuthAdapter::new()))
-    } else {
-        None
-    };
+    let (token_verifier, bearer_tenant): (Option<Arc<dyn AuthPort>>, Option<TenantId>) =
+        if cfg.bearer_token.enabled {
+            warn!("{IN_PROCESS_TOKEN_STORE_WARNING}");
+            let tenant_str = cfg.bearer_token.tenant.clone().unwrap_or_default();
+            let tenant = TenantId::new(tenant_str).map_err(|_| {
+                "http.auth.bearer_token: 'tenant' is required when bearer_token.enabled is \
+                 true — bearer-token principals must map to a tenant (Phase 40, TENANT-01)"
+                    .to_string()
+            })?;
+            (
+                Some(Arc::new(InMemoryTokenAuthAdapter::new()) as Arc<dyn AuthPort>),
+                Some(tenant),
+            )
+        } else {
+            (None, None)
+        };
 
     let auth = AgentAuthConfig {
         enabled: true,
         api_keys,
         token_verifier,
+        bearer_tenant,
     };
 
     if !auth.has_credentials() {
@@ -697,6 +718,7 @@ mod tests {
             key: format!("test-key-{name}"),
             name: name.to_string(),
             role: UserRole::User,
+            tenant: "test-tenant".to_string(),
         }
     }
 
@@ -707,7 +729,10 @@ mod tests {
         let cfg = AuthConfig {
             enabled: true,
             api_keys: vec![api_key("wired-store-test")],
-            bearer_token: BearerTokenAuthConfig { enabled: true },
+            bearer_token: BearerTokenAuthConfig {
+                enabled: true,
+                tenant: Some("test-tenant".to_string()),
+            },
         };
 
         let result = build_auth_config(&cfg);
@@ -731,7 +756,10 @@ mod tests {
         let cfg = AuthConfig {
             enabled: true,
             api_keys: vec![],
-            bearer_token: BearerTokenAuthConfig { enabled: false },
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
         };
 
         let result = build_auth_config(&cfg);
@@ -740,6 +768,77 @@ mod tests {
             result.is_err(),
             "authentication enabled with no API keys and the token store disabled must refuse \
              to start, not silently build an unauthenticated-but-enabled config"
+        );
+    }
+
+    // --- Phase 40 (TENANT-01, D-05): api_keys[].tenant / bearer_token.tenant fail-closed ---
+
+    #[test]
+    fn build_auth_config_maps_each_api_key_to_its_tenant() {
+        let mut key = api_key("acme-key");
+        key.tenant = "acme".to_string();
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![key],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
+        };
+
+        let auth = build_auth_config(&cfg).expect("a key with a valid tenant must build");
+        let principal = auth
+            .api_keys
+            .get("test-key-acme-key")
+            .expect("the configured key must map to a principal");
+        assert_eq!(principal.tenant_id, TenantId::new("acme").unwrap());
+    }
+
+    #[test]
+    fn build_auth_config_fails_closed_when_an_api_key_has_no_tenant() {
+        let mut key = api_key("ci");
+        key.tenant = String::new();
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![key],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: false,
+                tenant: None,
+            },
+        };
+
+        let err = match build_auth_config(&cfg) {
+            Ok(_) => panic!("an API key with no tenant must fail closed"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("http.auth.api_keys[ci]: 'tenant' is required"),
+            "expected the fail-closed tenant-required message, got: {err}"
+        );
+        assert!(
+            !err.contains("test-key-ci"),
+            "the error must name only the key's `name`, never its secret `key` value: {err}"
+        );
+    }
+
+    #[test]
+    fn build_auth_config_requires_a_bearer_tenant_when_bearer_is_enabled() {
+        let cfg = AuthConfig {
+            enabled: true,
+            api_keys: vec![api_key("fallback")],
+            bearer_token: BearerTokenAuthConfig {
+                enabled: true,
+                tenant: None,
+            },
+        };
+
+        let err = match build_auth_config(&cfg) {
+            Ok(_) => panic!("bearer_token.enabled with no tenant must fail closed"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("http.auth.bearer_token: 'tenant' is required"),
+            "expected the fail-closed bearer tenant-required message, got: {err}"
         );
     }
 
@@ -1034,6 +1133,7 @@ mod tests {
             enabled: true,
             api_keys: HashMap::new(),
             token_verifier: None,
+            bearer_tenant: None,
         };
         let thread_state = ThreadApiState::new().with_auth(auth);
         let app = thread_router(thread_state);

@@ -155,8 +155,8 @@ impl Default for ScheduleServiceOptions {
 /// use paladin::application::services::run::schedule::{
 ///     ScheduleService, ScheduleServiceOptions,
 /// };
+/// use paladin_core::platform::container::principal::PrincipalRef;
 /// use paladin_core::platform::container::run::RunId;
-/// use paladin_core::platform::container::user::UserRole;
 /// use paladin_core::platform::container::waypoint::ThreadId;
 /// use paladin_ports::input::run_submission_port::{
 ///     CancelOutcome, ForkRun, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
@@ -177,7 +177,7 @@ impl Default for ScheduleServiceOptions {
 ///     async fn cancel(
 ///         &self,
 ///         run_id: &RunId,
-///         _requested_by: Option<(String, UserRole)>,
+///         _requested_by: Option<PrincipalRef>,
 ///     ) -> Result<CancelOutcome, RunSubmissionError> {
 ///         Err(RunSubmissionError::NotFound {
 ///             run_id: run_id.clone(),

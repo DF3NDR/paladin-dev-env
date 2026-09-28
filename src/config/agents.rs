@@ -85,6 +85,11 @@ pub struct ApiKeyConfig {
     pub name: String,
     /// The role granted to requests authenticated with this key.
     pub role: UserRole,
+    /// The tenant this key's principal belongs to (required; an empty value fails boot,
+    /// D-05). A plain identifier: non-empty, no whitespace, printable ASCII, at most 128
+    /// bytes.
+    #[serde(default)]
+    pub tenant: String,
 }
 
 /// Opaque server-issued bearer-token settings for the agent API.
@@ -93,6 +98,10 @@ pub struct BearerTokenAuthConfig {
     /// Whether to accept `Authorization: Bearer` tokens via the wired `AuthPort`.
     #[serde(default)]
     pub enabled: bool,
+    /// The tenant every verified bearer principal carries (D-03). Required when `enabled`
+    /// is `true`; a missing or empty value fails boot.
+    #[serde(default)]
+    pub tenant: Option<String>,
 }
 
 /// Authentication configuration for the agent API (maps onto `paladin_web::AgentAuthConfig`).
@@ -316,10 +325,10 @@ mod tests {
         let json = serde_json::json!({
             "enabled": true,
             "api_keys": [
-                { "key": "sk-1", "name": "ci", "role": "admin" },
-                { "key": "sk-2", "name": "fe", "role": "user" }
+                { "key": "sk-1", "name": "ci", "role": "admin", "tenant": "platform-ops" },
+                { "key": "sk-2", "name": "fe", "role": "user", "tenant": "web-app" }
             ],
-            "bearer_token": { "enabled": true }
+            "bearer_token": { "enabled": true, "tenant": "bearer-tenant" }
         });
         let auth: AuthConfig = serde_json::from_value(json).expect("parses");
         assert_eq!(auth.api_keys.len(), 2);
@@ -331,9 +340,36 @@ mod tests {
     #[test]
     fn auth_config_rejects_unknown_role() {
         let json = serde_json::json!({
-            "api_keys": [ { "key": "sk", "name": "x", "role": "superuser" } ]
+            "api_keys": [ { "key": "sk", "name": "x", "role": "superuser", "tenant": "t" } ]
         });
         let result: Result<AuthConfig, _> = serde_json::from_value(json);
         assert!(result.is_err(), "unknown role must fail to parse");
+    }
+
+    // --- Phase 40 (TENANT-01, D-05): api_keys[].tenant / bearer_token.tenant ---
+
+    #[test]
+    fn auth_config_parses_api_key_tenant_and_bearer_tenant() {
+        let json = serde_json::json!({
+            "enabled": true,
+            "api_keys": [
+                { "key": "sk-1", "name": "ci", "role": "admin", "tenant": "acme" }
+            ],
+            "bearer_token": { "enabled": true, "tenant": "acme-bearer" }
+        });
+        let auth: AuthConfig = serde_json::from_value(json).expect("parses");
+        assert_eq!(auth.api_keys[0].tenant, "acme");
+        assert_eq!(auth.bearer_token.tenant.as_deref(), Some("acme-bearer"));
+    }
+
+    #[test]
+    fn api_key_without_tenant_parses_to_an_empty_tenant() {
+        // serde default keeps the file parseable so `build_auth_config` can name the key
+        // in its fail-closed error (D-05) -- validation happens at boot, not at parse time.
+        let json = serde_json::json!({
+            "api_keys": [ { "key": "sk", "name": "x", "role": "user" } ]
+        });
+        let auth: AuthConfig = serde_json::from_value(json).expect("parses");
+        assert_eq!(auth.api_keys[0].tenant, "");
     }
 }

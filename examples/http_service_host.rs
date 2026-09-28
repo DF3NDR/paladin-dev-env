@@ -25,6 +25,7 @@ use paladin::infrastructure::web::{
     AgentApiState, AgentAuthConfig, AgentRegistry, HttpLayersConfig, Principal, RunApiState,
     ThreadApiState, agent_router, run_router, thread_router, with_http_layers,
 };
+use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::user::UserRole;
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
@@ -59,15 +60,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut api_keys = HashMap::new();
     api_keys.insert(
         API_KEY.to_string(),
-        Principal {
-            id: "example".to_string(),
-            role: UserRole::Admin,
-        },
+        Principal::new("example", UserRole::Admin, TenantId::new("example-tenant")?),
     );
     let auth = AgentAuthConfig {
         enabled: true,
         api_keys,
         token_verifier: None,
+        bearer_tenant: None,
     };
     let state = AgentApiState::new(Arc::new(registry)).with_auth(auth.clone());
 

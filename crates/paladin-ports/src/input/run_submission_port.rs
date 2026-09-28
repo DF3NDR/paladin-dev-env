@@ -10,8 +10,8 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+use paladin_core::platform::container::principal::PrincipalRef;
 use paladin_core::platform::container::run::{RunId, RunStatus, WebhookSpec};
-use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::{ThreadId, WaypointId};
 
 /// A run submission request (D-12).
@@ -28,8 +28,10 @@ pub struct SubmitRun {
     pub input: serde_json::Value,
     /// An optional webhook delivery target for this run's lifecycle events.
     pub webhook: Option<WebhookSpec>,
-    /// The identity and role of the submitting principal, if known.
-    pub requested_by: Option<(String, UserRole)>,
+    /// The submitting principal's API key id, tenant and role (D-04), if known.
+    /// `None` means an internal caller with no principal (skips the role check).
+    /// The tenant is server-derived -- never taken from the request.
+    pub requested_by: Option<PrincipalRef>,
 }
 
 /// A request to fork a NEW run from a specific Waypoint on an existing
@@ -47,8 +49,10 @@ pub struct ForkRun {
     /// An optional webhook delivery target for the forked run's lifecycle
     /// events.
     pub webhook: Option<WebhookSpec>,
-    /// The identity and role of the submitting principal, if known.
-    pub requested_by: Option<(String, UserRole)>,
+    /// The submitting principal's API key id, tenant and role (D-04), if known.
+    /// `None` means an internal caller with no principal (skips the role check).
+    /// The tenant is server-derived -- never taken from the request.
+    pub requested_by: Option<PrincipalRef>,
 }
 
 /// The accepted handle [`RunSubmissionPort::submit`] returns on success.
@@ -181,8 +185,8 @@ pub enum RunSubmissionError {
 ///
 /// ```
 /// use async_trait::async_trait;
+/// use paladin_core::platform::container::principal::PrincipalRef;
 /// use paladin_core::platform::container::run::RunId;
-/// use paladin_core::platform::container::user::UserRole;
 /// use paladin_core::platform::container::waypoint::ThreadId;
 /// use paladin_ports::input::run_submission_port::{
 ///     CancelOutcome, ForkRun, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
@@ -202,7 +206,7 @@ pub enum RunSubmissionError {
 ///     async fn cancel(
 ///         &self,
 ///         run_id: &RunId,
-///         _requested_by: Option<(String, UserRole)>,
+///         _requested_by: Option<PrincipalRef>,
 ///     ) -> Result<CancelOutcome, RunSubmissionError> {
 ///         Err(RunSubmissionError::NotFound {
 ///             run_id: run_id.clone(),
@@ -252,17 +256,18 @@ pub trait RunSubmissionPort: Send + Sync {
     /// does not exist, and [`RunSubmissionError::AlreadyTerminal`] when the
     /// run has already reached a terminal status.
     ///
-    /// `requested_by` is the invoking principal's identity/role (D-46):
-    /// when `Some`, an implementor authorizes the request against the
-    /// run's own assistant `allowed_roles` (empty means any authenticated
-    /// caller), returning [`RunSubmissionError::Forbidden`] on a mismatch,
-    /// BEFORE the durable cancel flag is written. `None` skips this check
-    /// (a same-process/internal caller with no principal to authorize
-    /// against).
+    /// `requested_by` is the invoking principal's API key id, tenant and
+    /// role (D-46, D-04): when `Some`, an implementor authorizes the
+    /// request against the run's own assistant `allowed_roles` (empty
+    /// means any authenticated caller), returning
+    /// [`RunSubmissionError::Forbidden`] on a mismatch, BEFORE the durable
+    /// cancel flag is written. `None` skips this check (a same-process/
+    /// internal caller with no principal to authorize against). The
+    /// tenant is server-derived -- never taken from the request.
     async fn cancel(
         &self,
         run_id: &RunId,
-        requested_by: Option<(String, UserRole)>,
+        requested_by: Option<PrincipalRef>,
     ) -> Result<CancelOutcome, RunSubmissionError>;
 
     /// Fork a NEW run from `request.from_waypoint_id` onto
@@ -291,7 +296,7 @@ mod tests {
         async fn cancel(
             &self,
             _run_id: &RunId,
-            _requested_by: Option<(String, UserRole)>,
+            _requested_by: Option<PrincipalRef>,
         ) -> Result<CancelOutcome, RunSubmissionError> {
             Err(RunSubmissionError::NotWired)
         }

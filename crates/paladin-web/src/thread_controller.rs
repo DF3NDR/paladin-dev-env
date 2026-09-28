@@ -1025,7 +1025,9 @@ pub async fn fork_thread(
             from_waypoint_id,
             edit: body.edit,
             webhook,
-            requested_by: Some((principal.id.clone(), principal.role)),
+            requested_by: Some(
+                paladin_core::platform::container::principal::PrincipalRef::from(&principal),
+            ),
         })
         .await
         .map_err(map_submission_error)?;
@@ -1178,10 +1180,11 @@ mod tests {
     /// An admin `Principal` extension for direct handler calls (bypasses
     /// HTTP auth plumbing), mirroring `agent_controller`'s own `admin()`.
     fn admin() -> Extension<Principal> {
-        Extension(Principal {
-            id: "test-admin".to_string(),
-            role: UserRole::Admin,
-        })
+        Extension(Principal::new(
+            "test-admin",
+            UserRole::Admin,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ))
     }
 
     fn thread(name: &str) -> ThreadId {
@@ -1721,6 +1724,7 @@ mod tests {
             enabled: true,
             api_keys: std::collections::HashMap::new(),
             token_verifier: None,
+            bearer_tenant: None,
         };
         let state = ThreadApiState::new().with_auth(auth);
         let app = thread_router(state);
@@ -1746,22 +1750,25 @@ mod tests {
         let mut api_keys = HashMap::new();
         api_keys.insert(
             "user-key".to_string(),
-            Principal {
-                id: "u".to_string(),
-                role: UserRole::User,
-            },
+            Principal::new(
+                "u",
+                UserRole::User,
+                paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+            ),
         );
         api_keys.insert(
             "admin-key".to_string(),
-            Principal {
-                id: "a".to_string(),
-                role: UserRole::Admin,
-            },
+            Principal::new(
+                "a",
+                UserRole::Admin,
+                paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+            ),
         );
         let auth = crate::agent_auth::AgentAuthConfig {
             enabled: true,
             api_keys,
             token_verifier: None,
+            bearer_tenant: None,
         };
         let state = ThreadApiState::new()
             .with_waypoints(Arc::new(MockWaypointStore::default()))
@@ -2118,7 +2125,7 @@ mod tests {
         async fn cancel(
             &self,
             _run_id: &RunId,
-            _requested_by: Option<(String, paladin_core::platform::container::user::UserRole)>,
+            _requested_by: Option<paladin_core::platform::container::principal::PrincipalRef>,
         ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
         {
             Err(RunSubmissionError::NotWired)
@@ -2296,10 +2303,11 @@ mod tests {
         let t = thread("admin-gated");
         store.seed_latest(sample_waypoint(&t, 1, WaypointStatus::Completed));
         let state = state_with_waypoints(store);
-        let user_principal = Extension(Principal {
-            id: "u".to_string(),
-            role: UserRole::User,
-        });
+        let user_principal = Extension(Principal::new(
+            "u",
+            UserRole::User,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ));
         let err = delete_thread(State(state), user_principal, Path(t.as_str().to_string()))
             .await
             .unwrap_err();

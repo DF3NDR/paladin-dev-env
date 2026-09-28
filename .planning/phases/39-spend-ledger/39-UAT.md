@@ -3,23 +3,23 @@ status: testing
 phase: 39-spend-ledger
 source: [39-01-SUMMARY.md, 39-02-SUMMARY.md, 39-03-SUMMARY.md, 39-04-SUMMARY.md, 39-05-SUMMARY.md, 39-06-SUMMARY.md, 39-07-SUMMARY.md, 39-08-SUMMARY.md]
 started: 2026-09-28T14:00:10Z
-updated: 2026-09-28T14:00:10Z
+updated: 2026-09-28T14:15:23Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 1
-name: Cold Start Smoke Test
+number: 2
+name: One-way 007 schema decision was yours
 expected: |
-  Kill any running paladin-server. Delete the ephemeral SQLite run-store file (or point APP_RUN_STORE_PATH at a fresh path) so no `treasury_ledger` table exists yet. Start `paladin-server` with `APP_RUN_STORE_BACKEND=sqlite`. The server boots without errors, the embedded migrator applies `007_create_treasury_ledger_table` on first open (no "no such table" or migration error in the log), `GET /v1/runs` returns 200 with an empty list, and `paladin-cli treasury spend --format json` against the same file prints `[]` rather than failing.
+  The `treasury_ledger` schema shipped in `crates/paladin-storage/migrations/{sqlite,postgres}/007_create_treasury_ledger_table.sql` (scope columns with the `unattributed` sentinel, `breakdown` column, attribution-instant column, partial unique settlement index `(run_id, superstep, attempt) WHERE kind = 'settle'`) is exactly the option-a design you approved at the 39-01 Task 1 checkpoint. Nothing was changed after your sign-off without your knowledge.
 awaiting: user response
 
 ## Tests
 
 ### 1. Cold Start Smoke Test
 expected: Kill any running paladin-server. Delete the ephemeral SQLite run-store file (or point APP_RUN_STORE_PATH at a fresh path) so no `treasury_ledger` table exists yet. Start `paladin-server` with `APP_RUN_STORE_BACKEND=sqlite`. The server boots without errors, the embedded migrator applies `007_create_treasury_ledger_table` on first open, `GET /v1/runs` returns 200 with an empty list, and `paladin-cli treasury spend --format json` against the same file prints `[]` rather than failing.
-result: [pending]
+result: pass
 
 ### 2. One-way 007 schema decision was yours
 expected: The `treasury_ledger` schema shipped in `crates/paladin-storage/migrations/{sqlite,postgres}/007_create_treasury_ledger_table.sql` (scope columns with the `unattributed` sentinel, `breakdown` column, attribution-instant column, partial unique settlement index `(run_id, superstep, attempt) WHERE kind = 'settle'`) is exactly the option-a design you approved at the 39-01 Task 1 checkpoint. Nothing was changed after your sign-off without your knowledge.
@@ -312,9 +312,9 @@ coverage_id: 39-08/D7
 ## Summary
 
 total: 49
-passed: 46
+passed: 47
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

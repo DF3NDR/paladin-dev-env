@@ -41,12 +41,15 @@ use paladin_battalion::engine::{
     EngineError, NodeSpec, RunOutcome, TraceDispatcher, WarEngine, WarGraph,
 };
 use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
+use paladin_core::platform::container::heartbeat::HeartbeatHandle;
 use paladin_core::platform::container::herald::Herald;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::parley::{ParleyRequest, ParleyResponse};
 use paladin_core::platform::container::run::{
     ForkSpec, Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
+use paladin_core::platform::container::run_scope::RunScope;
+use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
 use paladin_core::platform::container::waypoint::{Waypoint, WaypointId};
 use paladin_core::platform::container::webhook::{WebhookDelivery, WebhookDeliveryId};
 use paladin_ports::output::cancellation_probe::CancellationProbe;
@@ -59,6 +62,7 @@ use paladin_ports::output::run_trace_port::RunTracePort;
 use paladin_ports::output::trace_sink_port::{
     CompositeSink, RUN_TRACE_EMITTER, TraceEmitter, TraceSink,
 };
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
@@ -577,6 +581,29 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// on the shared-engine ("no factory") path, exactly like
     /// `trace_config`/`run_trace_port` above.
     herald: Option<Arc<dyn Herald>>,
+    /// The Treasurer's durable spend ledger (D-08, D-07, 39-07), wired via
+    /// [`RunWorkerPool::with_treasury_ledger`]: attaches to every per-run
+    /// engine [`Self::engine_factory`] builds, via
+    /// [`WarEngine::with_treasury_ledger`] with a [`SettlementContext`]
+    /// whose `scope` is [`LedgerScope::unattributed`] (until Phase 40
+    /// records the submitting principal), `run_id` is this dispatch's own
+    /// `Run.run_id`, and `attempt` is the persisted counter this same
+    /// `run_once` call just computed -- `run.attempt` on a first dispatch,
+    /// or [`RunRepositoryPort::bump_attempt`]'s returned value on a
+    /// `Running` redelivery (D-07): the engine never invents its own
+    /// counter. The shared no-factory engine gets none, exactly like the
+    /// trace sinks above. Settlements written through this attachment are
+    /// observational only -- a ledger failure is logged and never affects
+    /// this run's status, ack or retry (D-08). An agent-kind run does not
+    /// settle here at all: [`Self::run_agent`] instead carries this run's
+    /// id into the run engine's shared [`PaladinPort`] via
+    /// [`RunScope::with_run_id`], so the agent loop's own
+    /// `AgentLoopSettlement::PlatformRunsOnly` writer (39-05) settles it
+    /// under attempt `1`, never double-charging a redelivered agent-kind
+    /// run. `None` (the default) means no ledger call happens anywhere in
+    /// this pool, matching every other optional field's own "a pool that
+    /// never calls the builder is unaffected" contract.
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
 }
 
 impl<W: WaypointPort + 'static> RunWorkerPool<W> {
@@ -617,6 +644,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             trace_config: TraceConfig::default(),
             run_trace_port: None,
             herald: None,
+            treasury_ledger: None,
         }
     }
 
@@ -733,6 +761,32 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         self
     }
 
+    /// Attach the Treasurer's durable spend ledger (D-08, D-07, 39-07):
+    /// `run_once` attaches `ledger` to every per-run engine
+    /// [`Self::with_engine_factory`] produces, via
+    /// [`WarEngine::with_treasury_ledger`] with a [`SettlementContext`]
+    /// scoped [`LedgerScope::unattributed`] and keyed by this dispatch's
+    /// own `run_id` and persisted `attempt` (D-07) -- the same persisted
+    /// counter [`RunRepositoryPort::bump_attempt`]/`record_resume` already
+    /// bump on redelivery/resume, so a genuine re-execution settles under a
+    /// fresh key while a repeated settle of an already-settled key is
+    /// charged once (LEDGR-03, ADR-0053 §4). Also carries this run's id
+    /// into the run engine's shared [`PaladinPort`] for an agent-kind
+    /// (`Runnable::Agent`) run via [`RunScope::with_run_id`] in
+    /// [`Self::run_agent`], so that port's own `AgentLoopSettlement::
+    /// PlatformRunsOnly` writer (39-05) settles it under the Platform run
+    /// id rather than a fresh execution id every dispatch. Only takes
+    /// effect on the [`Self::with_engine_factory`] path -- the shared
+    /// no-factory engine is never attached to, exactly like
+    /// [`Self::with_trace_config`]/[`Self::with_herald`]. A pool that never
+    /// calls this builder performs no ledger call at all (D-08: the ledger
+    /// is not installed when no backend is configured), and every
+    /// pre-existing worker test's behavior is unchanged.
+    pub fn with_treasury_ledger(mut self, ledger: Arc<dyn TreasuryLedgerPort>) -> Self {
+        self.treasury_ledger = Some(ledger);
+        self
+    }
+
     /// Wire the D-40 durable webhook delivery queue: `run_once` enqueues a
     /// `Pending` [`WebhookDelivery`] on every terminal/suspension
     /// transition whose run subscribes to that event, straight from the
@@ -826,7 +880,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             return Ok(true);
         };
 
-        match run.status {
+        // D-07: `attempt` is the persisted `Run.attempt` counter this
+        // dispatch settles under (39-07) -- `run.attempt` on a first
+        // dispatch or an `AwaitingInput` release, or `bump_attempt`'s own
+        // returned value on a `Running` redelivery. The engine never
+        // invents its own counter.
+        let attempt = match run.status {
             RunStatus::Queued => {
                 self.repository
                     .update_status(
@@ -836,6 +895,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                         chrono::Utc::now(),
                     )
                     .await?;
+                run.attempt
             }
             RunStatus::AwaitingInput => {
                 self.repository
@@ -846,11 +906,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                         chrono::Utc::now(),
                     )
                     .await?;
+                run.attempt
             }
             RunStatus::Running => {
                 // A redelivery: no status change, just the shared attempt
                 // counter (D-23).
-                self.repository.bump_attempt(&run.run_id).await?;
+                self.repository.bump_attempt(&run.run_id).await?
             }
             _ => {
                 // A stale message for an already-terminal run: ack and
@@ -858,7 +919,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 self.queue.ack(&leased.token).await?;
                 return Ok(true);
             }
-        }
+        };
 
         let resolved = self
             .resolver
@@ -900,6 +961,16 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 let mut engine = factory(child_token);
                 if let Some(probe) = &self.cancellation_probe {
                     engine = engine.with_cancellation_probe(Arc::clone(probe));
+                }
+                if let Some(ledger) = &self.treasury_ledger {
+                    engine = engine.with_treasury_ledger(
+                        Arc::clone(ledger),
+                        SettlementContext {
+                            scope: LedgerScope::unattributed(),
+                            run_id: run.run_id.clone(),
+                            attempt,
+                        },
+                    );
                 }
                 // --- 28-06 (OBS-02, D-03, D-11): one CompositeSink, one
                 // TraceDispatcher, per run. `build_run_sink` is the single
@@ -1173,7 +1244,23 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             None => run.input.to_string(),
         };
 
-        match paladin_port.execute(paladin.as_ref(), &input_text).await {
+        // 39-07: carry this run's Platform API id into the run engine's
+        // shared PaladinPort via RunScope::with_run_id, so the agent
+        // loop's own AgentLoopSettlement::PlatformRunsOnly writer (39-05)
+        // settles this call under the Platform run id -- for any port
+        // that does not override `execute_scoped`, the trait's default
+        // body delegates straight to `execute`, so this is
+        // behavior-identical for a port with no ledger settlement
+        // installed.
+        match paladin_port
+            .execute_scoped(
+                paladin.as_ref(),
+                &input_text,
+                &HeartbeatHandle::new(),
+                &RunScope::default().with_run_id(run.run_id.clone()),
+            )
+            .await
+        {
             Ok(result) => {
                 self.repository
                     .update_status(
@@ -1294,23 +1381,32 @@ mod tests {
 
     use async_trait::async_trait;
 
-    use paladin_battalion::engine::{EngineLimits, WarEngine, WarGraph};
-    use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema};
+    use paladin_battalion::engine::{EngineLimits, InputMapping, NodeSpec, WarEngine, WarGraph};
+    use paladin_core::platform::container::battlefield::{
+        Battlefield, BattlefieldSchema, DispatchRule, FieldSpec,
+    };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
     use paladin_core::platform::container::execution_result::PaladinResult;
     use paladin_core::platform::container::paladin::Paladin;
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_core::platform::container::run::AssistantRef;
+    use paladin_core::platform::container::treasury_ledger::{
+        ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SettlementKey, SpendQuery,
+        SpendRow,
+    };
     use paladin_core::platform::container::waypoint::{
-        FrontierSnapshot, GraphFingerprint, ThreadId, WaypointStatus,
+        FrontierSnapshot, GraphFingerprint, NodeId, ThreadId, WaypointStatus,
     };
     use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
     use paladin_ports::output::run_queue_port::{QueueError, QueuedRun};
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
     use paladin_storage::run::in_memory::InMemoryRunRepository;
     use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
     use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 
     use super::super::events::RunEventBus;
-    use super::super::resolver::{AssistantResolver, CodeWorkflowResolver};
+    use super::super::resolver::{AssistantResolver, CodeWorkflowResolver, ResolvedAssistant};
 
     /// A [`PaladinPort`] that must never be called -- this module's own
     /// graphs never have `NodeSpec::Paladin` nodes (mirrors
@@ -1933,5 +2029,393 @@ mod tests {
         );
         mixed_graph.add_entry(m1);
         assert_eq!(run_model_label(&mixed_graph), "mixed");
+    }
+
+    // --- 39-07: the worker attaches the treasury ledger per run with the
+    // persisted attempt; agent-kind runs carry their run id -------------
+
+    /// A [`TreasuryLedgerPort`] that records every `settle` call's key and
+    /// amount, delegating everything else to a real `InMemoryTreasuryLedger`
+    /// -- mirrors `paladin-battalion`'s own `RecordingTreasuryLedger`
+    /// (39-04), re-implemented locally since that one is crate-private to
+    /// `paladin-battalion`'s own test module.
+    #[derive(Default)]
+    struct RecordingTreasuryLedger {
+        inner: InMemoryTreasuryLedger,
+        calls: Mutex<Vec<(SettlementKey, Cost)>>,
+    }
+
+    impl RecordingTreasuryLedger {
+        fn calls(&self) -> Vec<(SettlementKey, Cost)> {
+            self.calls.lock().expect("calls mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl TreasuryLedgerPort for RecordingTreasuryLedger {
+        async fn reserve(
+            &self,
+            request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            self.inner.reserve(request).await
+        }
+
+        async fn release(&self, reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            self.inner.release(reservation).await
+        }
+
+        async fn settle(
+            &self,
+            request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            self.calls
+                .lock()
+                .expect("calls mutex poisoned")
+                .push((request.key.clone(), request.amount.clone()));
+            self.inner.settle(request).await
+        }
+
+        async fn spend(&self, query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            self.inner.spend(query).await
+        }
+
+        async fn store_now(&self) -> Result<chrono::DateTime<chrono::Utc>, TreasuryLedgerError> {
+            self.inner.store_now().await
+        }
+    }
+
+    /// A [`PaladinPort`] that always returns a priced result (45,000,000
+    /// nanos USD) -- the instrument for every engine-path settlement test
+    /// below. The model breakdown key comes from the dispatched Paladin
+    /// node's own `model` field (`dispatch_paladin_model`), not from this
+    /// port's response.
+    struct PricedPaladinPort;
+
+    #[async_trait]
+    impl PaladinPort for PricedPaladinPort {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Ok(PaladinResult {
+                output: input.to_string(),
+                cost: Some(Cost::new(45_000_000, CurrencyCode::new("USD").unwrap())),
+                ..Default::default()
+            })
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            unreachable!("this test never streams")
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// A single-node, single-superstep workflow with one Paladin node,
+    /// modeled `"gpt-4"`, priced by [`PricedPaladinPort`].
+    fn priced_paladin_graph() -> Arc<WarGraph> {
+        let field = FieldName::new("summary").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            field.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("summarizer");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                labeled_paladin("summarizer", "gpt-4"),
+                InputMapping::new("summarize this"),
+                field,
+            ),
+        );
+        graph.add_entry(node_id);
+        Arc::new(graph)
+    }
+
+    /// Build a `RunWorkerPool` over a fresh in-memory waypoint
+    /// store/repository/queue, wired with an `engine_factory` over
+    /// [`PricedPaladinPort`] (required for the worker to attach a per-run
+    /// treasury ledger -- the shared no-factory engine never gets one) and
+    /// `treasury_ledger` when `Some`.
+    fn build_ledger_pool(
+        treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    ) -> (
+        RunWorkerPool<InMemoryWaypointStore>,
+        Arc<dyn RunRepositoryPort>,
+        Arc<dyn RunQueuePort>,
+    ) {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("priced", priced_paladin_graph()));
+        let base_engine = Arc::new(WarEngine::new(Arc::new(PricedPaladinPort), store.clone()));
+
+        let factory_store = store.clone();
+        let engine_factory: Arc<
+            dyn Fn(CancellationToken) -> WarEngine<InMemoryWaypointStore> + Send + Sync,
+        > = Arc::new(move |_token| {
+            WarEngine::new(Arc::new(PricedPaladinPort), factory_store.clone())
+        });
+
+        let mut pool = RunWorkerPool::new(
+            base_engine,
+            store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_engine_factory(engine_factory);
+        if let Some(ledger) = treasury_ledger {
+            pool = pool.with_treasury_ledger(ledger);
+        }
+
+        (pool, repository, queue)
+    }
+
+    /// Insert a fresh `Queued` run against `"priced"` and enqueue it,
+    /// returning the run id.
+    async fn submit_priced_run(
+        repository: &Arc<dyn RunRepositoryPort>,
+        queue: &Arc<dyn RunQueuePort>,
+    ) -> RunId {
+        let run_id = RunId::new_v7();
+        let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+        let run = Run::new(
+            run_id.clone(),
+            thread_id.clone(),
+            AssistantRef {
+                assistant_id: "priced".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        repository.insert(&run).await.unwrap();
+        queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id: thread_id.clone(),
+                attempt: 1,
+                enqueued_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+        run_id
+    }
+
+    #[tokio::test]
+    async fn engine_run_settles_under_its_run_id_and_first_attempt() {
+        let ledger = Arc::new(RecordingTreasuryLedger::default());
+        let treasury_ledger: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let (pool, repository, queue) = build_ledger_pool(Some(treasury_ledger));
+
+        let run_id = submit_priced_run(&repository, &queue).await;
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        let calls = ledger.calls();
+        assert_eq!(calls.len(), 1, "exactly one settlement for one superstep");
+        let (key, amount) = &calls[0];
+        assert_eq!(key.run_id, run_id);
+        assert_eq!(key.superstep, 1);
+        assert_eq!(key.attempt, 1);
+        assert_eq!(
+            amount,
+            &Cost::new(45_000_000, CurrencyCode::new("USD").unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn redelivered_running_run_settles_under_the_bumped_attempt() {
+        let ledger = Arc::new(RecordingTreasuryLedger::default());
+        let treasury_ledger: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let (pool, repository, queue) = build_ledger_pool(Some(treasury_ledger));
+
+        let run_id = submit_priced_run(&repository, &queue).await;
+
+        // Seed the redelivery: a prior worker already claimed this run
+        // (`Running`, `attempt == 1`) and this same message is redelivered.
+        repository
+            .update_status(
+                &run_id,
+                RunStatus::Queued,
+                RunStatus::Running,
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+        assert_eq!(run.attempt, 2, "bump_attempt must have run");
+
+        let calls = ledger.calls();
+        assert_eq!(calls.len(), 1);
+        let (key, _amount) = &calls[0];
+        assert_eq!(key.run_id, run_id);
+        assert_eq!(
+            key.attempt, 2,
+            "the settlement must key on the BUMPED attempt, never a re-invented 1"
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_without_a_treasury_ledger_settles_nothing() {
+        let (pool, repository, queue) = build_ledger_pool(None);
+        let run_id = submit_priced_run(&repository, &queue).await;
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(
+            run.status,
+            RunStatus::Completed,
+            "a pool with no treasury ledger attached behaves exactly as before"
+        );
+    }
+
+    /// A [`PaladinPort`] that records the [`RunScope`] handed to
+    /// `execute_scoped`, then delegates to a plain, unpriced `execute` --
+    /// the instrument for `agent_kind_run_passes_its_run_id_in_the_run_scope`.
+    #[derive(Default)]
+    struct ScopeRecordingPaladinPort {
+        recorded: Mutex<Option<RunScope>>,
+    }
+
+    impl ScopeRecordingPaladinPort {
+        fn recorded_scope(&self) -> Option<RunScope> {
+            self.recorded.lock().expect("mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl PaladinPort for ScopeRecordingPaladinPort {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Ok(PaladinResult {
+                output: input.to_string(),
+                ..Default::default()
+            })
+        }
+
+        async fn execute_scoped(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+            _heartbeat: &HeartbeatHandle,
+            scope: &RunScope,
+        ) -> Result<PaladinResult, PaladinError> {
+            *self.recorded.lock().expect("mutex poisoned") = Some(scope.clone());
+            self.execute(paladin, input).await
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            unreachable!("this test never streams")
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// An [`AssistantResolver`] resolving every id to a code-registered
+    /// `Runnable::Agent` -- mirrors `worker_tests.rs`'s own
+    /// `AgentOnlyResolver` precedent, local to this module since that one
+    /// lives in a sibling test file.
+    struct AgentOnlyResolver;
+
+    #[async_trait]
+    impl AssistantResolver for AgentOnlyResolver {
+        async fn resolve(
+            &self,
+            assistant_id: &str,
+            version: Option<u32>,
+        ) -> Result<ResolvedAssistant, ResolveError> {
+            Ok(ResolvedAssistant {
+                reference: AssistantRef {
+                    assistant_id: assistant_id.to_string(),
+                    version: version.unwrap_or(1),
+                },
+                runnable: Runnable::Agent(Arc::new(labeled_paladin(assistant_id, "gpt-4"))),
+                allowed_roles: vec![],
+                source: paladin_core::platform::container::assistant::AssistantSource::Code,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_kind_run_passes_its_run_id_in_the_run_scope() {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let resolver: Arc<dyn AssistantResolver> = Arc::new(AgentOnlyResolver);
+        let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+
+        let scope_port = Arc::new(ScopeRecordingPaladinPort::default());
+        let paladin_port: Arc<dyn PaladinPort> = scope_port.clone();
+        let pool = RunWorkerPool::new(
+            engine,
+            store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_paladin_port(paladin_port);
+
+        let run_id = RunId::new_v7();
+        let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+        let run = Run::new(
+            run_id.clone(),
+            thread_id.clone(),
+            AssistantRef {
+                assistant_id: "assistant".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        repository.insert(&run).await.unwrap();
+        queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id: thread_id.clone(),
+                attempt: 1,
+                enqueued_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        let scope = scope_port
+            .recorded_scope()
+            .expect("execute_scoped must have been called");
+        assert_eq!(scope.run_id, Some(run_id));
     }
 }

@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
 use paladin_battalion::engine::{
@@ -24,6 +25,7 @@ use paladin_core::base::entity::node::Node;
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
 };
+use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::execution_result::PaladinResult;
 use paladin_core::platform::container::paladin::{Paladin, PaladinData};
@@ -36,8 +38,10 @@ use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::run_queue_port::RunQueuePort;
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_storage::run::in_memory::InMemoryRunRepository;
 use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_web::run_controller::{RunApiState, run_router};
 
@@ -113,6 +117,69 @@ fn build_success_graph() -> Arc<WarGraph> {
         node_id.clone(),
         NodeSpec::paladin(
             make_paladin("summarizer"),
+            InputMapping::new("summarize this"),
+            FieldName::new("summary").unwrap(),
+        ),
+    );
+    graph.add_entry(node_id);
+    Arc::new(graph)
+}
+
+/// A [`PaladinPort`] that always returns a priced result (45,000,000 nanos
+/// USD) -- the instrument for `priced_run_cost_reaches_get_run_through_the_ledger`.
+/// The model breakdown key comes from the dispatched Paladin node's own
+/// `model` field, not from this port's response.
+struct PricedPaladinPort;
+
+#[async_trait::async_trait]
+impl PaladinPort for PricedPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        Ok(PaladinResult {
+            output: input.to_string(),
+            cost: Some(Cost::new(45_000_000, CurrencyCode::new("USD").unwrap())),
+            ..Default::default()
+        })
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unreachable!("this tracer's WarGraph never streams")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// A single-node, single-superstep workflow with one Paladin node, modeled
+/// `"gpt-4"`, priced by [`PricedPaladinPort`] -- the instrument for
+/// `priced_run_cost_reaches_get_run_through_the_ledger`.
+fn build_priced_graph() -> Arc<WarGraph> {
+    let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+        FieldName::new("summary").unwrap(),
+        DispatchRule::LastWrite,
+        None,
+        false,
+    )]);
+    let mut graph = WarGraph::new(schema, EngineLimits::default());
+    let node_id = NodeId::new("summarizer");
+    let data = PaladinData {
+        name: "summarizer".to_string(),
+        model: "gpt-4".to_string(),
+        ..Default::default()
+    };
+    let paladin = Node::new(data, Some("summarizer".to_string()));
+    graph.add_node(
+        node_id.clone(),
+        NodeSpec::paladin(
+            paladin,
             InputMapping::new("summarize this"),
             FieldName::new("summary").unwrap(),
         ),
@@ -358,4 +425,98 @@ async fn run_whose_graph_fails_ends_failed_not_a_panic() {
     let run_body = body_json(response).await;
     assert_eq!(run_body["status"], "failed");
     assert!(run_body["error"].is_string());
+}
+
+/// End-to-end: a run submitted through `POST /v1/runs` whose graph has one
+/// Paladin node priced at 45,000,000 nanos USD, executed by the worker, is
+/// reported by `GET /v1/runs/{id}` with `cost.display` `"0.0450 USD"` read
+/// back from the SAME `InMemoryTreasuryLedger` the worker settled into
+/// (D-10, LEDGR-04, 39-07).
+#[tokio::test]
+async fn priced_run_cost_reaches_get_run_through_the_ledger() {
+    let waypoints = Arc::new(InMemoryWaypointStore::new());
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("priced-summarizer", build_priced_graph()));
+
+    let ledger: Arc<dyn TreasuryLedgerPort> = Arc::new(InMemoryTreasuryLedger::new());
+
+    let priced_port: Arc<dyn PaladinPort> = Arc::new(PricedPaladinPort);
+    let base_engine = Arc::new(WarEngine::new(Arc::clone(&priced_port), waypoints.clone()));
+    let factory_waypoints = waypoints.clone();
+    let factory_port = Arc::clone(&priced_port);
+    let engine_factory: Arc<
+        dyn Fn(CancellationToken) -> WarEngine<InMemoryWaypointStore> + Send + Sync,
+    > = Arc::new(move |_token| {
+        WarEngine::new(Arc::clone(&factory_port), factory_waypoints.clone())
+    });
+
+    let worker = RunWorkerPool::new(
+        base_engine,
+        waypoints,
+        repository.clone(),
+        queue.clone(),
+        resolver.clone(),
+        Duration::from_secs(30),
+    )
+    .with_engine_factory(engine_factory)
+    .with_treasury_ledger(Arc::clone(&ledger));
+
+    let submission: Arc<dyn RunSubmissionPort> = Arc::new(RunSubmissionService::new(
+        repository.clone(),
+        queue.clone(),
+        resolver,
+    ));
+
+    let state = RunApiState::new()
+        .with_submission(submission)
+        .with_repository(repository)
+        .with_treasury_ledger(ledger);
+    let app = run_router(state);
+
+    let submit_body = serde_json::to_vec(&serde_json::json!({
+        "assistant_id": "priced-summarizer",
+        "input": {}
+    }))
+    .expect("request body serializes");
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/runs")
+                .header("content-type", "application/json")
+                .body(Body::from(submit_body))
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let submitted = body_json(response).await;
+    let run_id = submitted["run_id"]
+        .as_str()
+        .expect("run_id is a string")
+        .to_string();
+
+    let processed = worker.run_once().await.expect("worker iteration succeeds");
+    assert!(processed);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/runs/{run_id}"))
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::OK);
+    let run_body = body_json(response).await;
+    assert_eq!(run_body["status"], "completed");
+    let cost = &run_body["cost"];
+    assert_eq!(cost["nanos"], 45_000_000);
+    assert_eq!(cost["currency"], "USD");
+    assert_eq!(cost["display"], "0.0450 USD");
 }

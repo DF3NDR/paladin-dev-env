@@ -47,6 +47,7 @@ use paladin_ports::output::assistant_repository_port::AssistantRepositoryPort;
 use paladin_ports::output::run_queue_port::RunQueuePort;
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::run_schedule_repository_port::RunScheduleRepositoryPort;
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
@@ -76,7 +77,7 @@ use crate::config::run_worker::RunWorkerConfig;
 use crate::config::schedules::SchedulesConfig;
 use crate::config::settings::Settings;
 use crate::config::webhooks::WebhooksConfig;
-use crate::infrastructure::web::facade_provisioner::paladin_port_from_settings;
+use crate::infrastructure::web::facade_provisioner::paladin_port_from_settings_with_ledger;
 
 /// The seven X-09 config structs `paladin-server.rs` reads (`Default` +
 /// `apply_env_overrides()` + `validate()`) and hands to [`build_run_api`] in one bundle.
@@ -364,6 +365,64 @@ async fn build_postgres_quartet(url_env: &str) -> Result<RepoQuartet, Box<dyn st
     .into())
 }
 
+/// Build the Treasurer's durable spend ledger from the SAME [`RunStoreBackend`] selection
+/// `build_run_api` already reads for the run repository (D-00g: no new store config) --
+/// `Disabled` -> `Ok(None)` (D-08: no ledger installed when no backend is configured);
+/// `Sqlite { path }` -> a [`SqliteTreasuryLedger`](paladin_storage::treasury::sqlite::SqliteTreasuryLedger)
+/// sharing that exact database file; `Postgres { url_env }` -> a
+/// [`PostgresTreasuryLedger`](paladin_storage::treasury::postgres::PostgresTreasuryLedger)
+/// sharing that exact database, on a build with `storage-postgres` (a named-feature error
+/// otherwise, mirroring [`build_postgres_quartet`]'s own precedent).
+///
+/// # Errors
+///
+/// Returns an error naming the sqlite path, the postgres env var, or (without
+/// `storage-postgres`) the missing cargo feature -- never the database URL's own value
+/// (T-39-04).
+pub async fn build_treasury_ledger(
+    config: &RunStoreConfig,
+) -> Result<Option<Arc<dyn TreasuryLedgerPort>>, Box<dyn std::error::Error>> {
+    match &config.backend {
+        RunStoreBackend::Disabled => Ok(None),
+        RunStoreBackend::Sqlite { path } => {
+            let ledger = paladin_storage::treasury::sqlite::SqliteTreasuryLedger::new(path)
+                .await
+                .map_err(|e| format!("failed to open sqlite treasury ledger at '{path}': {e}"))?;
+            Ok(Some(Arc::new(ledger) as Arc<dyn TreasuryLedgerPort>))
+        }
+        RunStoreBackend::Postgres { url_env } => build_postgres_treasury_ledger(url_env).await,
+    }
+}
+
+#[cfg(feature = "storage-postgres")]
+async fn build_postgres_treasury_ledger(
+    url_env: &str,
+) -> Result<Option<Arc<dyn TreasuryLedgerPort>>, Box<dyn std::error::Error>> {
+    let url = std::env::var(url_env).map_err(|_| {
+        format!("run store postgres backend names env var '{url_env}', which is not set")
+    })?;
+    let ledger = paladin_storage::treasury::postgres::PostgresTreasuryLedger::new(&url)
+        .await
+        .map_err(|e| format!("failed to open postgres treasury ledger: {e}"))?;
+    Ok(Some(Arc::new(ledger) as Arc<dyn TreasuryLedgerPort>))
+}
+
+/// When this binary is built without `storage-postgres`, a configured `Postgres` run store
+/// backend is a startup error naming the missing feature, never a silent fallback --
+/// mirrors [`build_postgres_quartet`]'s own twin.
+#[cfg(not(feature = "storage-postgres"))]
+async fn build_postgres_treasury_ledger(
+    url_env: &str,
+) -> Result<Option<Arc<dyn TreasuryLedgerPort>>, Box<dyn std::error::Error>> {
+    Err(format!(
+        "run_store.backend is configured as 'postgres' (env var '{url_env}') but this binary \
+         was built without the 'storage-postgres' feature; rebuild with \
+         --features storage-postgres,web-server, or set APP_RUN_STORE_BACKEND=disabled or \
+         =sqlite"
+    )
+    .into())
+}
+
 #[cfg(feature = "redis-queue")]
 async fn build_redis_run_queue(
     url_env: &str,
@@ -447,6 +506,12 @@ pub async fn build_run_api(
             RunStoreBackend::Postgres { url_env } => build_postgres_quartet(url_env).await?,
         };
 
+    // D-08, D-10, 39-07: the Treasurer's spend ledger, sharing this exact run store's
+    // backend selection -- `None` only when `build_treasury_ledger` itself hits the
+    // `Disabled` arm, which is unreachable here (handled by the early return above), so a
+    // configured run store always yields `Some` or a hard startup error.
+    let treasury_ledger = build_treasury_ledger(&configs.run_store).await?;
+
     let run_queue: Arc<dyn RunQueuePort> = match &configs.run_queue.backend {
         RunQueueBackend::InMemory => {
             Arc::new(paladin_storage::run_queue::in_memory::InMemoryRunQueue::new())
@@ -470,8 +535,11 @@ pub async fn build_run_api(
         Arc::new(ChainedResolver::new(stored_resolver, code_resolver));
 
     // The run engine's real PaladinPort (D-44's "the run pipeline uses a real port"): the
-    // SAME default-provider resolution `FacadeProvisioner` uses.
-    let paladin_port = paladin_port_from_settings(settings)
+    // SAME default-provider resolution `FacadeProvisioner` uses. 39-07: installs
+    // `treasury_ledger` under `AgentLoopSettlement::PlatformRunsOnly` when `Some`, so an
+    // agent-kind run's own dispatch (never the shared engine's own superstep settlements)
+    // settles through this port.
+    let paladin_port = paladin_port_from_settings_with_ledger(settings, treasury_ledger.clone())
         .map_err(|e| format!("failed to build the run engine's LLM port: {e}"))?;
 
     let mut engine_config = EngineConfig::default();
@@ -543,6 +611,9 @@ pub async fn build_run_api(
     if let Some(herald) = herald {
         pool = pool.with_herald(herald);
     }
+    if let Some(ledger) = &treasury_ledger {
+        pool = pool.with_treasury_ledger(Arc::clone(ledger));
+    }
     let pool = Arc::new(pool);
 
     let mut tasks = Arc::clone(&pool).spawn(RunWorkerOptions::from(&configs.run_worker));
@@ -611,6 +682,9 @@ pub async fn build_run_api(
     if let Some(schedules) = schedules {
         run_state = run_state.with_schedules(schedules);
     }
+    if let Some(ledger) = &treasury_ledger {
+        run_state = run_state.with_treasury_ledger(Arc::clone(ledger));
+    }
 
     Ok(RunApiHandles {
         run_state,
@@ -672,6 +746,10 @@ mod tests {
         assert!(handles.run_repository.is_none());
         assert!(handles.thread_run_submission.is_none());
         assert!(handles.parley_extras.is_none());
+        assert!(
+            handles.run_state.treasury_ledger.is_none(),
+            "a disabled run store must wire no treasury ledger either"
+        );
 
         let app = paladin_web::run_router(handles.run_state);
         let response = app
@@ -770,9 +848,148 @@ mod tests {
         assert!(handles.run_repository.is_some());
         assert!(handles.thread_run_submission.is_some());
         assert!(handles.parley_extras.is_some());
+        assert!(
+            handles.run_state.treasury_ledger.is_some(),
+            "a configured sqlite run store must wire a treasury ledger too (D-08, 39-07)"
+        );
 
         cleanup(&run_path);
         cleanup(&wp_path);
+    }
+
+    /// `build_run_api` wires a treasury ledger onto `RunApiState` when a run store backend
+    /// is configured, and wires none when it is disabled (D-08, D-10, 39-07) -- a focused
+    /// pairing of the two config shapes `defaults_wire_nothing_and_answer_501` and
+    /// `sqlite_and_in_memory_wires_three_tasks_and_every_state_field` already exercise for
+    /// every OTHER `RunApiState` field, now asserted specifically for `treasury_ledger`.
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_wires_the_treasury_ledger() {
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+
+        let (run_path, run_url) = temp_sqlite_url("wires_treasury_ledger");
+        let (wp_path, wp_url) = temp_sqlite_url("wires_treasury_ledger_waypoints");
+
+        let waypoint_store: Arc<dyn WaypointPort> = Arc::new(
+            paladin_storage::waypoint::sqlite::SqliteWaypointStore::new(&wp_url)
+                .await
+                .expect("waypoint store opens"),
+        );
+
+        let mut configs = default_configs();
+        configs.run_store.backend = RunStoreBackend::Sqlite {
+            path: run_url.clone(),
+        };
+
+        let handles = build_run_api(
+            configs,
+            &Settings::default(),
+            ShutdownCoordinator::new(),
+            Some(waypoint_store),
+            AgentAuthConfig::default(),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .expect("sqlite run store wires successfully");
+
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+
+        assert!(
+            handles.run_state.treasury_ledger.is_some(),
+            "a configured sqlite run store must wire a treasury ledger"
+        );
+
+        cleanup(&run_path);
+        cleanup(&wp_path);
+
+        // The Disabled arm (mirrors `defaults_wire_nothing_and_answer_501`, restated here so
+        // this test alone proves both halves of the D-08 contract by name).
+        let disabled_handles = build_run_api(
+            default_configs(),
+            &Settings::default(),
+            ShutdownCoordinator::new(),
+            None,
+            AgentAuthConfig::default(),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .expect("disabled run store never fails to build");
+        assert!(
+            disabled_handles.run_state.treasury_ledger.is_none(),
+            "a disabled run store must wire no treasury ledger"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_treasury_ledger_disabled_is_none() {
+        let ledger = build_treasury_ledger(&RunStoreConfig::default())
+            .await
+            .expect("a disabled run store never fails to build");
+        assert!(
+            ledger.is_none(),
+            "RunStoreBackend::Disabled must wire no treasury ledger"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_treasury_ledger_sqlite_round_trips() {
+        let (path, url) = temp_sqlite_url("treasury_ledger");
+        let config = RunStoreConfig {
+            backend: RunStoreBackend::Sqlite { path: url },
+        };
+
+        let ledger = build_treasury_ledger(&config)
+            .await
+            .expect("a configured sqlite backend must open")
+            .expect("a configured sqlite backend must wire Some");
+
+        let key = paladin_core::platform::container::treasury_ledger::SettlementKey {
+            run_id: paladin_core::platform::container::run::RunId::new_v7(),
+            superstep: 1,
+            attempt: 1,
+        };
+        let amount = paladin_core::platform::container::cost::Cost::new(
+            45_000_000,
+            paladin_core::platform::container::cost::CurrencyCode::new("USD").unwrap(),
+        );
+        let mut breakdown = std::collections::BTreeMap::new();
+        breakdown.insert("gpt-4".to_string(), 45_000_000i64);
+        let scope = paladin_core::platform::container::treasury_ledger::LedgerScope::unattributed();
+        let outcome = ledger
+            .settle(
+                paladin_core::platform::container::treasury_ledger::SettleRequest::unreserved(
+                    scope.clone(),
+                    key,
+                    amount.clone(),
+                    breakdown,
+                ),
+            )
+            .await
+            .expect("an unreserved settle must succeed against a fresh ledger");
+        assert_eq!(
+            outcome,
+            paladin_core::platform::container::treasury_ledger::SettleOutcome::Settled
+        );
+
+        let rows = ledger
+            .spend(
+                paladin_core::platform::container::treasury_ledger::SpendQuery {
+                    group_by:
+                        paladin_core::platform::container::treasury_ledger::SpendGroupBy::Tenant,
+                    tenant_id: Some(scope.tenant_id.clone()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("spend must read back the settlement just written");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].amount, amount);
+
+        cleanup(&path);
     }
 }
 

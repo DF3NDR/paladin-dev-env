@@ -34,10 +34,10 @@ use paladin::config::settings::Settings;
 use paladin::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};
 use paladin::config::webhooks::WebhooksConfig;
 use paladin::infrastructure::adapters::auth::InMemoryTokenAuthAdapter;
-use paladin::infrastructure::web::agent_host::{bind_address, build_agent_registry};
+use paladin::infrastructure::web::agent_host::{bind_address, build_agent_registry_with_ledger};
 use paladin::infrastructure::web::facade_provisioner::FacadeProvisioner;
 use paladin::infrastructure::web::run_api_wiring::{
-    ErasedWaypointStore, RunApiConfigs, build_run_api,
+    ErasedWaypointStore, RunApiConfigs, build_run_api, build_treasury_ledger,
 };
 use paladin::infrastructure::web::{
     AgentApiState, AgentAuthConfig, HttpLayersConfig, Principal, RateLimitConfig, ThreadApiState,
@@ -83,16 +83,31 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .validate()
         .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
 
+    // 39-07/D-08: `RunStoreConfig` moved ahead of the agent registry so the Treasurer's
+    // spend ledger can be built ONCE, from the SAME backend selection `RunApiConfigs` uses
+    // below, and handed to both the resident-agent registry and the runtime provisioner
+    // before either is built. `None` when the run store is disabled (D-08: no ledger
+    // installed with no backend configured) -- every downstream call takes `Option`.
+    let mut run_store_config = RunStoreConfig::default();
+    run_store_config.apply_env_overrides();
+    run_store_config
+        .validate()
+        .map_err(|e| format!("invalid run store configuration: {e}"))?;
+    let treasury_ledger = build_treasury_ledger(&run_store_config).await?;
+
     // Build the resident agents and the runtime provisioner from the same config.
-    // `build_agent_registry` validates the config first, so misconfiguration fails here
-    // with a specific message rather than mid-serve.
-    let registry = build_agent_registry(&settings).await?;
+    // `build_agent_registry_with_ledger` validates the config first, so misconfiguration
+    // fails here with a specific message rather than mid-serve.
+    let registry = build_agent_registry_with_ledger(&settings, treasury_ledger.clone()).await?;
     let mut agent_ids: Vec<String> = registry.list().into_iter().map(|(id, _)| id).collect();
     agent_ids.sort();
     // Shared with `build_run_api`'s `CodeAgentResolver` (D-32) below, so a code-registered
     // agent id is runnable through `POST /runs` without a second registry.
     let registry = Arc::new(registry);
-    let provisioner = FacadeProvisioner::from_settings(&settings);
+    let mut provisioner = FacadeProvisioner::from_settings(&settings);
+    if let Some(ledger) = &treasury_ledger {
+        provisioner = provisioner.with_treasury_ledger(Arc::clone(ledger));
+    }
     let timeouts = settings.timeouts.clone().unwrap_or_default();
     // Cross-cutting HTTP layers (health routes are merged inside `agent_router`).
     let http = settings.http.clone().unwrap_or_default();
@@ -130,12 +145,9 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Platform API (Phase 27, PLAT-01..06): the seven X-09 config structs, each
     // `Default` + `apply_env_overrides()` + `validate()`'d before ever reaching
     // `build_run_api` -- every one defaults to off / today's-behaviour (D-50), so a
-    // v0.9 config boots this v0.10 binary with no run server at all.
-    let mut run_store_config = RunStoreConfig::default();
-    run_store_config.apply_env_overrides();
-    run_store_config
-        .validate()
-        .map_err(|e| format!("invalid run store configuration: {e}"))?;
+    // v0.9 config boots this v0.10 binary with no run server at all. `run_store_config`
+    // itself was already built above (39-07), ahead of the agent registry, so the
+    // Treasurer's ledger and the run API share the exact same backend selection.
     let mut run_queue_config = RunQueueConfig::default();
     run_queue_config.apply_env_overrides();
     run_queue_config

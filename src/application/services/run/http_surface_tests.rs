@@ -27,7 +27,7 @@ use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::execution_result::PaladinResult;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
-use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+use paladin_core::platform::container::principal::{PrincipalRef, RunAttribution, TenantId};
 use paladin_core::platform::container::run::{RunId, RunStatus};
 use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::NodeId;
@@ -267,18 +267,30 @@ async fn fork_run_completes_from_waypoint() {
             .expect("a superstep-2 waypoint exists")
             .waypoint_id;
 
+        // D-08: the fork is attributed to the FORKING principal (svc-a of acme), not
+        // to whoever submitted the original (unattributed) run; the fork's own
+        // latest-run lookup on the thread is unscoped (D-12/Pitfall 8) and still
+        // finds the unattributed original.
+        let forking_principal =
+            PrincipalRef::new("svc-a", TenantId::new("acme").unwrap(), UserRole::User);
         let forked = submission
             .fork(ForkRun {
                 thread_id: thread_id.clone(),
                 from_waypoint_id: wp2,
                 edit: None,
                 webhook: None,
-                requested_by: None,
+                requested_by: Some(forking_principal),
             })
             .await
             .unwrap();
         assert_eq!(forked.thread_id, thread_id);
         assert_ne!(forked.run_id, accepted.run_id);
+        let forked_at_submit = repository.get(&forked.run_id).await.unwrap().unwrap();
+        assert_eq!(
+            forked_at_submit.submitted_by,
+            Some(RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a")),
+            "a forked run is attributed to the forking principal (D-08)"
+        );
 
         // Drive the fork dispatch -- `WorkerDispatch::decide` sees
         // `run.fork_from` on the freshly-enqueued forked run and the
@@ -512,4 +524,206 @@ async fn tenant_scoped_run_read_tracer() {
     })
     .await
     .expect("tenant_scoped_run_read_tracer did not hang");
+}
+
+/// Phase 40's list half of PLAT-07 (D-02, D-11, D-12, D-14): `GET /v1/runs` through the
+/// real `run_router` over an on-disk `SqliteRunRepository` returns only the calling
+/// principal's tenant's runs (across two API keys of the same tenant), every run for
+/// an Admin, an exact empty page for a tenant with no runs, an empty page when another
+/// tenant's `thread_id` is requested, and a gap-free `?limit=1` keyset walk -- with a
+/// `tenant_id` query parameter changing nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn tenant_scoped_run_list_e2e() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (repo_path, repo_url) = temp_sqlite_url("tenant-list");
+        let repository: Arc<dyn RunRepositoryPort> =
+            Arc::new(SqliteRunRepository::new(&repo_url).await.unwrap());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("tenant-wf", build_chain_graph(1)));
+        let submission: Arc<dyn RunSubmissionPort> = Arc::new(RunSubmissionService::new(
+            repository.clone(),
+            queue.clone(),
+            resolver.clone(),
+        ));
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "tracer-key-a".to_string(),
+            Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        api_keys.insert(
+            "tracer-key-a2".to_string(),
+            Principal::new("svc-a2", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        api_keys.insert(
+            "tracer-key-b".to_string(),
+            Principal::new("svc-b", UserRole::User, TenantId::new("globex").unwrap()),
+        );
+        api_keys.insert(
+            "tracer-key-ops".to_string(),
+            Principal::new("ops", UserRole::Admin, TenantId::new("ops-tenant").unwrap()),
+        );
+        api_keys.insert(
+            "tracer-key-empty".to_string(),
+            Principal::new(
+                "svc-empty",
+                UserRole::User,
+                TenantId::new("empty-tenant").unwrap(),
+            ),
+        );
+        let auth = AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        };
+
+        let state = RunApiState::new()
+            .with_submission(submission)
+            .with_repository(repository.clone())
+            .with_auth(auth);
+        let app = run_router(state);
+
+        async fn submit(app: &axum::Router, key: &str, thread: &str) -> String {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "assistant_id": "tenant-wf",
+                "thread_id": thread,
+                "input": {}
+            }))
+            .unwrap();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", key)
+                        .body(Body::from(body))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(
+                response.status(),
+                StatusCode::ACCEPTED,
+                "submit on {thread}"
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read submit body");
+            let json: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
+            json["run_id"].as_str().expect("run_id string").to_string()
+        }
+
+        async fn list(app: &axum::Router, key: &str, uri: &str) -> (Vec<u8>, serde_json::Value) {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(uri)
+                        .header("x-api-key", key)
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(response.status(), StatusCode::OK, "GET {uri} with {key}");
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read list body");
+            let json: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
+            (bytes.to_vec(), json)
+        }
+
+        fn thread_ids(page: &serde_json::Value) -> Vec<String> {
+            let mut ids: Vec<String> = page["items"]
+                .as_array()
+                .expect("items array")
+                .iter()
+                .map(|item| item["thread_id"].as_str().expect("thread_id").to_string())
+                .collect();
+            ids.sort();
+            ids
+        }
+
+        // Two acme runs from two DIFFERENT acme keys (edge PLAT-07/adjacency), one
+        // globex run. No worker runs, so every run stays Queued.
+        let run_a1 = submit(&app, "tracer-key-a", "list-a-1").await;
+        let run_a2 = submit(&app, "tracer-key-a2", "list-a-2").await;
+        let run_b1 = submit(&app, "tracer-key-b", "list-b-1").await;
+
+        // (a) A user key lists exactly its own tenant's runs, including the run
+        // submitted by the OTHER acme key.
+        let (_, page_a) = list(&app, "tracer-key-a", "/v1/runs").await;
+        assert_eq!(thread_ids(&page_a), vec!["list-a-1", "list-a-2"]);
+        assert!(page_a["next_cursor"].is_null());
+
+        let (_, page_b) = list(&app, "tracer-key-b", "/v1/runs").await;
+        assert_eq!(thread_ids(&page_b), vec!["list-b-1"]);
+        assert_eq!(page_b["items"][0]["run_id"].as_str(), Some(run_b1.as_str()));
+
+        // (b) An Admin key of an unrelated tenant lists every run (D-11).
+        let (_, page_ops) = list(&app, "tracer-key-ops", "/v1/runs").await;
+        assert_eq!(
+            thread_ids(&page_ops),
+            vec!["list-a-1", "list-a-2", "list-b-1"]
+        );
+
+        // (c) Edge PLAT-07/empty: a tenant with no runs is 200 with EXACTLY
+        // `{"items":[],"next_cursor":null}`, never 404.
+        let (empty_bytes, _) = list(&app, "tracer-key-empty", "/v1/runs").await;
+        assert_eq!(
+            String::from_utf8(empty_bytes).expect("utf8 body"),
+            r#"{"items":[],"next_cursor":null}"#
+        );
+
+        // (d) D-14: another tenant's thread id under a user scope is an empty page.
+        let (_, cross) = list(&app, "tracer-key-b", "/v1/runs?thread_id=list-a-1").await;
+        assert!(cross["items"].as_array().expect("items").is_empty());
+        assert!(cross["next_cursor"].is_null());
+
+        // (e) D-02: `?tenant_id=` is neither a filter nor an override.
+        let (_, spoofed) = list(&app, "tracer-key-a", "/v1/runs?tenant_id=globex").await;
+        assert_eq!(thread_ids(&spoofed), vec!["list-a-1", "list-a-2"]);
+
+        // (f) A `?limit=1` keyset walk under a user scope yields both acme runs, one
+        // per page, then `next_cursor: null` -- the tenant predicate is inside the
+        // SQL, so pages stay full and the cursor stays correct (D-12, T-40-09).
+        let (_, first) = list(&app, "tracer-key-a", "/v1/runs?limit=1").await;
+        assert_eq!(first["items"].as_array().expect("items").len(), 1);
+        let cursor = first["next_cursor"]
+            .as_str()
+            .expect("first page has a cursor");
+        let (_, second) = list(
+            &app,
+            "tracer-key-a",
+            &format!("/v1/runs?limit=1&cursor={cursor}"),
+        )
+        .await;
+        assert_eq!(second["items"].as_array().expect("items").len(), 1);
+        assert!(second["next_cursor"].is_null(), "second page is the last");
+        let mut walked = vec![
+            first["items"][0]["run_id"]
+                .as_str()
+                .expect("run_id")
+                .to_string(),
+            second["items"][0]["run_id"]
+                .as_str()
+                .expect("run_id")
+                .to_string(),
+        ];
+        walked.sort();
+        let mut expected = vec![run_a1, run_a2];
+        expected.sort();
+        assert_eq!(
+            walked, expected,
+            "the walk covers exactly the two acme runs"
+        );
+
+        cleanup(&repo_path);
+    })
+    .await
+    .expect("tenant_scoped_run_list_e2e did not hang");
 }

@@ -17,13 +17,14 @@ use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::assistant::AssistantId;
 use paladin_core::platform::container::parley::{ParleyId, ParleyKind, ParleyResponse};
+use paladin_core::platform::container::principal::{RunAttribution, RunReadScope, TenantId};
 use paladin_core::platform::container::run::{
     AssistantRef, ForkSpec, Run, RunEventKind, RunId, RunStatus, WebhookSpec,
 };
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::output::assistant_repository_port::AssistantRepositoryPort;
 use paladin_ports::output::run_repository_port::{
-    RunOutcomeRecord, RunQuery, RunRepositoryError, RunRepositoryPort,
+    RunOutcomeRecord, RunPage, RunQuery, RunRepositoryError, RunRepositoryPort,
 };
 
 use crate::assistant::contract_tests::sample_new_version as sample_assistant_new_version;
@@ -786,4 +787,426 @@ pub async fn assistant_version_freeze_at_submit(
             "run {run_id}'s resolved version {version} must exist"
         );
     }
+}
+
+// ── Run attribution and tenant-scoped listing (Phase 40, TENANT-02, PLAT-07) ─
+//
+// Every clause below scopes itself to uuid-suffixed tenant ids, thread ids and
+// `assistant_id`s, so a shared PostgreSQL database (the Docker-gated Tier 2
+// suite) cannot leak rows between clauses or between repeated runs.
+
+/// Build an attributed `Run` fixture: `sample_run` plus `submitted_by =
+/// RunAttribution { tenant, api_key_id }` (D-08/D-09). Every attribution and
+/// scoped-list clause builds its rows through this helper so all backends
+/// exercise identical inputs.
+pub fn sample_attributed_run(
+    thread: &ThreadId,
+    assistant_id: &str,
+    submitted_at: DateTime<Utc>,
+    tenant: &TenantId,
+    api_key_id: &str,
+) -> Run {
+    sample_run(thread, assistant_id, submitted_at)
+        .with_submitted_by(RunAttribution::new(tenant.clone(), api_key_id))
+}
+
+/// A fresh, per-clause unique identifier: `{prefix}-{uuid}`.
+fn unique(prefix: &str) -> String {
+    format!("{prefix}-{}", uuid::Uuid::new_v4())
+}
+
+fn unique_tenant(prefix: &str) -> TenantId {
+    TenantId::new(unique(prefix)).unwrap()
+}
+
+fn unique_thread(prefix: &str) -> ThreadId {
+    ThreadId::new(unique(prefix)).unwrap()
+}
+
+/// `insert` then `get` round-trips `submitted_by` exactly (D-09).
+pub async fn insert_then_get_round_trips_attribution(port: &dyn RunRepositoryPort) {
+    let tenant = unique_tenant("contract-attr-tenant");
+    let thread = unique_thread("contract-attr-round-trip");
+    let run = sample_attributed_run(
+        &thread,
+        "contract-attr-round-trip",
+        contract_timestamp(),
+        &tenant,
+        "svc-a",
+    );
+
+    port.insert(&run).await.unwrap();
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+
+    assert_eq!(
+        loaded.submitted_by,
+        Some(RunAttribution::new(tenant, "svc-a")),
+        "submitted_by must round-trip byte-for-byte"
+    );
+}
+
+/// A run submitted with no principal reads back with `submitted_by: None`
+/// (edge TENANT-02/empty, D-10) and is never listed under a `Tenant` scope.
+pub async fn unattributed_run_round_trips_null_attribution(port: &dyn RunRepositoryPort) {
+    let assistant_id = unique("contract-attr-null");
+    let thread = unique_thread("contract-attr-null");
+    let run = sample_run(&thread, &assistant_id, contract_timestamp());
+    assert!(run.submitted_by.is_none(), "fixture must be unattributed");
+
+    port.insert(&run).await.unwrap();
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.submitted_by, None);
+
+    let unscoped = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(unscoped.items.len(), 1, "All sees the unattributed run");
+
+    let scoped = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id),
+            scope: RunReadScope::Tenant(unique_tenant("contract-attr-null-tenant")),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        scoped.items.is_empty(),
+        "no Tenant scope ever lists an unattributed run"
+    );
+    assert!(scoped.next_cursor.is_none());
+}
+
+/// Attribution set at insert is never mutated: every mutating repository
+/// method leaves `submitted_by` byte-for-byte unchanged (edge
+/// TENANT-02/ordering, T-40-11).
+pub async fn attribution_survives_every_status_and_attempt_update(port: &dyn RunRepositoryPort) {
+    let tenant = unique_tenant("contract-attr-immutable-tenant");
+    let thread = unique_thread("contract-attr-immutable");
+    let run = sample_attributed_run(
+        &thread,
+        "contract-attr-immutable",
+        contract_timestamp(),
+        &tenant,
+        "svc-a",
+    );
+    let expected = run.submitted_by.clone();
+    assert!(expected.is_some());
+    port.insert(&run).await.unwrap();
+
+    async fn assert_unchanged(
+        port: &dyn RunRepositoryPort,
+        run_id: &RunId,
+        expected: &Option<RunAttribution>,
+        step: &str,
+    ) {
+        let loaded = port.get(run_id).await.unwrap().unwrap();
+        assert_eq!(
+            &loaded.submitted_by, expected,
+            "submitted_by changed after {step}"
+        );
+    }
+    let check = |step: &'static str| assert_unchanged(port, &run.run_id, &expected, step);
+
+    port.update_status(
+        &run.run_id,
+        RunStatus::Queued,
+        RunStatus::Running,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    check("update_status Queued -> Running").await;
+
+    port.bump_attempt(&run.run_id).await.unwrap();
+    check("bump_attempt").await;
+
+    port.request_cancel(&run.run_id).await.unwrap();
+    check("request_cancel").await;
+
+    port.update_status(
+        &run.run_id,
+        RunStatus::Running,
+        RunStatus::AwaitingInput,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    check("update_status Running -> AwaitingInput").await;
+
+    port.record_resume(&run.run_id, vec![sample_parley_response("resumer")])
+        .await
+        .unwrap();
+    check("record_resume").await;
+
+    port.clear_pending_responses(&run.run_id).await.unwrap();
+    check("clear_pending_responses").await;
+
+    port.update_status(
+        &run.run_id,
+        RunStatus::AwaitingInput,
+        RunStatus::Running,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    check("update_status AwaitingInput -> Running").await;
+
+    port.record_outcome(
+        &run.run_id,
+        RunOutcomeRecord {
+            error: None,
+            output: Some(serde_json::json!({ "ok": true })),
+            final_waypoint_id: Some("wp-final".to_string()),
+        },
+    )
+    .await
+    .unwrap();
+    check("record_outcome").await;
+
+    port.update_status(
+        &run.run_id,
+        RunStatus::Running,
+        RunStatus::Completed,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    check("update_status Running -> Completed").await;
+}
+
+/// `list` under `Tenant(A)` returns tenant A's runs from two different API
+/// keys (edge PLAT-07/adjacency), never tenant B's, never an unattributed
+/// run; `All` returns every one of them; `Tenant(A)` combined with B's
+/// `thread_id` is an empty page (D-14: filters compose by AND).
+pub async fn list_scoped_to_tenant_returns_only_that_tenants_runs(port: &dyn RunRepositoryPort) {
+    let assistant_id = unique("contract-scope-list");
+    let tenant_a = unique_tenant("contract-scope-a");
+    let tenant_b = unique_tenant("contract-scope-b");
+    let base = contract_timestamp();
+
+    let a1 = sample_attributed_run(
+        &unique_thread("contract-scope-a1"),
+        &assistant_id,
+        base,
+        &tenant_a,
+        "a1",
+    );
+    let a2 = sample_attributed_run(
+        &unique_thread("contract-scope-a2"),
+        &assistant_id,
+        base + chrono::Duration::seconds(1),
+        &tenant_a,
+        "a2",
+    );
+    let thread_b = unique_thread("contract-scope-b1");
+    let b1 = sample_attributed_run(
+        &thread_b,
+        &assistant_id,
+        base + chrono::Duration::seconds(2),
+        &tenant_b,
+        "b1",
+    );
+    let unattributed = sample_run(
+        &unique_thread("contract-scope-none"),
+        &assistant_id,
+        base + chrono::Duration::seconds(3),
+    );
+    for run in [&a1, &a2, &b1, &unattributed] {
+        port.insert(run).await.unwrap();
+    }
+
+    let ids =
+        |page: &RunPage| -> Vec<RunId> { page.items.iter().map(|r| r.run_id.clone()).collect() };
+
+    let scoped_a = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id.clone()),
+            scope: RunReadScope::Tenant(tenant_a.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(&scoped_a),
+        vec![a2.run_id.clone(), a1.run_id.clone()],
+        "Tenant(A) sees exactly A's two runs (both keys), newest first"
+    );
+    assert!(scoped_a.next_cursor.is_none());
+    for run in &scoped_a.items {
+        assert_eq!(
+            run.submitted_by.as_ref().map(|a| &a.tenant_id),
+            Some(&tenant_a)
+        );
+    }
+
+    let scoped_b = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id.clone()),
+            scope: RunReadScope::Tenant(tenant_b.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(ids(&scoped_b), vec![b1.run_id.clone()]);
+
+    let all = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id.clone()),
+            scope: RunReadScope::All,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        ids(&all),
+        vec![
+            unattributed.run_id.clone(),
+            b1.run_id.clone(),
+            a2.run_id.clone(),
+            a1.run_id.clone(),
+        ],
+        "All sees every run including the unattributed one"
+    );
+
+    let cross = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id),
+            thread_id: Some(thread_b),
+            scope: RunReadScope::Tenant(tenant_a),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(
+        cross.items.is_empty(),
+        "another tenant's thread id under Tenant(A) is simply an empty page (D-14)"
+    );
+    assert!(cross.next_cursor.is_none());
+}
+
+/// `list` scoped to a tenant that owns no runs answers an empty page --
+/// `items == []`, `next_cursor == None` -- never an error (edge
+/// PLAT-07/empty).
+pub async fn list_scoped_to_a_tenant_with_no_runs_is_an_empty_page(port: &dyn RunRepositoryPort) {
+    let assistant_id = unique("contract-scope-empty");
+    let occupied = unique_tenant("contract-scope-empty-occupied");
+    let run = sample_attributed_run(
+        &unique_thread("contract-scope-empty"),
+        &assistant_id,
+        contract_timestamp(),
+        &occupied,
+        "svc",
+    );
+    port.insert(&run).await.unwrap();
+
+    let page = port
+        .list(RunQuery {
+            assistant_id: Some(assistant_id),
+            limit: 20,
+            scope: RunReadScope::Tenant(unique_tenant("contract-scope-empty-fresh")),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(page.items.is_empty());
+    assert!(page.next_cursor.is_none());
+}
+
+/// Paginating `Tenant(A)` at `limit: 2` over five A runs interleaved with
+/// five B runs (two A runs sharing a `submitted_at`) yields pages of sizes
+/// 2, 2, 1 in `(submitted_at DESC, run_id DESC)` order, with every non-final
+/// page exactly full, no overlap, no gap, and `next_cursor` `None` only on
+/// the last page (edge PLAT-07/ordering, T-40-09) -- which is only possible
+/// if the tenant predicate lives inside the adapter's own query rather than
+/// post-filtering a fetched page (D-12).
+pub async fn list_scoped_pagination_has_no_gap_or_overlap(port: &dyn RunRepositoryPort) {
+    let assistant_id = unique("contract-scope-paging");
+    let tenant_a = unique_tenant("contract-scope-paging-a");
+    let tenant_b = unique_tenant("contract-scope-paging-b");
+    let base = contract_timestamp();
+
+    let mut a_runs = Vec::new();
+    for i in 0..5u32 {
+        // A runs 0 and 1 share `submitted_at` to exercise the run_id tiebreak.
+        let ts = if i <= 1 {
+            base
+        } else {
+            base + chrono::Duration::seconds(i as i64 * 2)
+        };
+        let a = sample_attributed_run(
+            &unique_thread("contract-scope-paging-a"),
+            &assistant_id,
+            ts,
+            &tenant_a,
+            "a-key",
+        );
+        port.insert(&a).await.unwrap();
+        a_runs.push(a);
+
+        // A B run interleaved between every pair of A timestamps.
+        let b = sample_attributed_run(
+            &unique_thread("contract-scope-paging-b"),
+            &assistant_id,
+            ts + chrono::Duration::seconds(1),
+            &tenant_b,
+            "b-key",
+        );
+        port.insert(&b).await.unwrap();
+    }
+
+    let mut expected = a_runs.clone();
+    expected.sort_by(|x, y| {
+        y.submitted_at
+            .cmp(&x.submitted_at)
+            .then_with(|| y.run_id.as_str().cmp(x.run_id.as_str()))
+    });
+    let expected_ids: Vec<RunId> = expected.iter().map(|r| r.run_id.clone()).collect();
+
+    let limit = 2u32;
+    let mut seen = Vec::new();
+    let mut page_sizes = Vec::new();
+    let mut cursor = None;
+    for _ in 0..4 {
+        let page = port
+            .list(RunQuery {
+                assistant_id: Some(assistant_id.clone()),
+                limit,
+                cursor: cursor.clone(),
+                scope: RunReadScope::Tenant(tenant_a.clone()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for item in &page.items {
+            assert_eq!(
+                item.submitted_by.as_ref().map(|a| &a.tenant_id),
+                Some(&tenant_a),
+                "a B row leaked into an A-scoped page"
+            );
+            assert!(
+                !seen.contains(&item.run_id),
+                "run {} appeared on more than one page (overlap)",
+                item.run_id
+            );
+            seen.push(item.run_id.clone());
+        }
+        page_sizes.push(page.items.len());
+        cursor = page.next_cursor.clone();
+        if cursor.is_none() {
+            break;
+        }
+        assert_eq!(
+            page.items.len(),
+            limit as usize,
+            "every non-final scoped page must be exactly full"
+        );
+    }
+
+    assert_eq!(page_sizes, vec![2, 2, 1], "pages of sizes 2, 2, 1");
+    assert_eq!(seen, expected_ids, "no gap: every A run seen, in order");
 }

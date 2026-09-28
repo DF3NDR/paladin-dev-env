@@ -622,4 +622,50 @@ mod contract_suite {
         > = assistant_repo;
         contract_tests::assistant_version_freeze_at_submit(run_repo, assistant_repo).await;
     }
+
+    // ── Run attribution + tenant-scoped list contract clauses (Phase 40) ──
+
+    #[tokio::test]
+    async fn insert_then_get_round_trips_attribution() {
+        contract_tests::insert_then_get_round_trips_attribution(&InMemoryRunRepository::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn unattributed_run_round_trips_null_attribution() {
+        contract_tests::unattributed_run_round_trips_null_attribution(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn attribution_survives_every_status_and_attempt_update() {
+        contract_tests::attribution_survives_every_status_and_attempt_update(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_to_tenant_returns_only_that_tenants_runs() {
+        contract_tests::list_scoped_to_tenant_returns_only_that_tenants_runs(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_to_a_tenant_with_no_runs_is_an_empty_page() {
+        contract_tests::list_scoped_to_a_tenant_with_no_runs_is_an_empty_page(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_pagination_has_no_gap_or_overlap() {
+        contract_tests::list_scoped_pagination_has_no_gap_or_overlap(&InMemoryRunRepository::new())
+            .await;
+    }
 }

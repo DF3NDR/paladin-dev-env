@@ -77,7 +77,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::cost::Cost;
-use paladin_core::platform::container::principal::PrincipalRef;
+use paladin_core::platform::container::principal::{PrincipalRef, RunReadScope};
 use paladin_core::platform::container::run::{
     Run, RunCursor, RunEventKind, RunId, RunStatus, WebhookSpec,
 };
@@ -883,9 +883,10 @@ pub async fn get_run(
 )]
 pub async fn list_runs(
     State(state): State<RunApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     axum::extract::Query(params): axum::extract::Query<RunListQuery>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
+    let _ = &principal;
     let repository = state
         .run_repository
         .as_ref()
@@ -911,6 +912,7 @@ pub async fn list_runs(
             status,
             limit,
             cursor,
+            scope: RunReadScope::All,
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -1301,6 +1303,9 @@ mod tests {
         /// The page `list` returns; test-only -- the real adapters compute a page from
         /// `RunQuery`, which this double ignores entirely.
         list_items: Mutex<Vec<Run>>,
+        /// Every `RunQuery` handed to `list`, in call order, so a test can assert on
+        /// what the handler asked the repository for (e.g. the D-12 `scope`).
+        recorded_queries: Mutex<Vec<RunQuery>>,
     }
 
     impl MockRepository {
@@ -1313,6 +1318,10 @@ mod tests {
 
         fn set_list_page(&self, items: Vec<Run>) {
             *self.list_items.lock().unwrap() = items;
+        }
+
+        fn last_list_query(&self) -> Option<RunQuery> {
+            self.recorded_queries.lock().unwrap().last().cloned()
         }
     }
 
@@ -1345,7 +1354,8 @@ mod tests {
             Ok(())
         }
 
-        async fn list(&self, _query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+        async fn list(&self, query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+            self.recorded_queries.lock().unwrap().push(query);
             Ok(RunPage {
                 items: self.list_items.lock().unwrap().clone(),
                 next_cursor: None,
@@ -2018,6 +2028,96 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["items"].as_array().unwrap().len(), 0);
         assert!(body["next_cursor"].is_null());
+    }
+
+    /// D-12 (list half): `list_runs` derives `RunQuery.scope` from the caller's
+    /// principal -- a `User` in tenant `acme` asks for `Tenant(acme)`, an `Admin`
+    /// asks for `All` -- and never from anything on the request.
+    #[tokio::test]
+    async fn list_runs_passes_the_callers_read_scope() {
+        let repository = Arc::new(MockRepository::default());
+        let state = RunApiState::new().with_repository(repository.clone());
+        let acme = paladin_core::platform::container::principal::TenantId::new("acme").unwrap();
+        let empty_query = || {
+            axum::extract::Query(RunListQuery {
+                thread_id: None,
+                assistant_id: None,
+                status: None,
+                limit: None,
+                cursor: None,
+            })
+        };
+
+        let user = Extension(Principal::new(
+            "svc-a",
+            paladin_core::platform::container::user::UserRole::User,
+            acme.clone(),
+        ));
+        let (status, _) = list_runs(State(state.clone()), user, empty_query())
+            .await
+            .expect("ok");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            repository.last_list_query().map(|q| q.scope),
+            Some(RunReadScope::Tenant(acme)),
+            "a user-role principal lists only its own tenant"
+        );
+
+        let (status, _) = list_runs(State(state), tester_principal(), empty_query())
+            .await
+            .expect("ok");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            repository.last_list_query().map(|q| q.scope),
+            Some(RunReadScope::All),
+            "an Admin principal lists every run"
+        );
+    }
+
+    /// D-02/D-12: a `tenant_id` query parameter is not a filter and not an
+    /// override -- an `acme` user still asks the repository for `Tenant(acme)`
+    /// when the URL says `?tenant_id=globex`.
+    #[tokio::test]
+    async fn list_runs_ignores_a_tenant_query_parameter() {
+        let repository = Arc::new(MockRepository::default());
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "svc-a-key".to_string(),
+            Principal::new(
+                "svc-a",
+                paladin_core::platform::container::user::UserRole::User,
+                paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+            ),
+        );
+        let auth = crate::agent_auth::AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        };
+        let state = RunApiState::new()
+            .with_repository(repository.clone())
+            .with_auth(auth);
+        let app = run_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/runs?tenant_id=globex")
+                    .header("x-api-key", "svc-a-key")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            repository.last_list_query().map(|q| q.scope),
+            Some(RunReadScope::Tenant(
+                paladin_core::platform::container::principal::TenantId::new("acme").unwrap()
+            )),
+            "?tenant_id is ignored: the scope still comes from the principal"
+        );
     }
 
     #[tokio::test]

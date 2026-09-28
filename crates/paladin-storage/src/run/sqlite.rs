@@ -972,6 +972,41 @@ mod tests {
         cleanup_shared_file(&path);
     }
 
+    // ── Run attribution + tenant-scoped list contract clauses (Phase 40) ──
+
+    #[tokio::test]
+    async fn insert_then_get_round_trips_attribution() {
+        contract_tests::insert_then_get_round_trips_attribution(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn unattributed_run_round_trips_null_attribution() {
+        contract_tests::unattributed_run_round_trips_null_attribution(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn attribution_survives_every_status_and_attempt_update() {
+        contract_tests::attribution_survives_every_status_and_attempt_update(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_to_tenant_returns_only_that_tenants_runs() {
+        contract_tests::list_scoped_to_tenant_returns_only_that_tenants_runs(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_to_a_tenant_with_no_runs_is_an_empty_page() {
+        contract_tests::list_scoped_to_a_tenant_with_no_runs_is_an_empty_page(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_pagination_has_no_gap_or_overlap() {
+        contract_tests::list_scoped_pagination_has_no_gap_or_overlap(&fresh_store().await).await;
+    }
+
     // ── Run attribution (Phase 40, TENANT-02, D-08/D-09) ─────────────────
 
     fn bare_run() -> Run {
@@ -1039,17 +1074,6 @@ mod tests {
                 .ends_with("a.assistant_id = ? AND a.deleted_at IS NULL"),
             "INSERT_RUN_WITH_LATEST must still end with the a.assistant_id = ? bind: {INSERT_RUN_WITH_LATEST}"
         );
-    }
-
-    #[tokio::test]
-    async fn insert_then_get_round_trips_attribution_on_sqlite() {
-        let store = fresh_store().await;
-        let attribution = RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a".to_string());
-        let run = bare_run().with_submitted_by(attribution.clone());
-
-        store.insert(&run).await.unwrap();
-        let fetched = store.get(&run.run_id).await.unwrap().unwrap();
-        assert_eq!(fetched.submitted_by, Some(attribution));
     }
 
     #[tokio::test]

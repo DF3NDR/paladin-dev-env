@@ -53,19 +53,20 @@ use crate::waypoint::redact::redact_database_url_password;
 const INSERT_RUN: &str = "INSERT INTO runs \
      (run_id, thread_id, assistant_id, assistant_version, status, input, submitted_at, \
       started_at, finished_at, attempt, cancel_requested, error, webhook, pending_responses, \
-      fork_from, output, final_waypoint_id, schema_version) \
+      fork_from, output, final_waypoint_id, schema_version, tenant_id, api_key_id) \
      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, \
-             $15::jsonb, $16::jsonb, $17, $18)";
+             $15::jsonb, $16::jsonb, $17, $18, $19, $20)";
 
 const SELECT_RUN_BY_ID: &str = "SELECT run_id, thread_id, assistant_id, assistant_version, \
      status, input, submitted_at, started_at, finished_at, attempt, cancel_requested, error, \
-     webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version \
+     webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version, \
+     tenant_id, api_key_id \
      FROM runs WHERE run_id = $1";
 
 const SELECT_ACTIVE_RUN_FOR_THREAD: &str = "SELECT run_id, thread_id, assistant_id, \
      assistant_version, status, input, submitted_at, started_at, finished_at, attempt, \
      cancel_requested, error, webhook, pending_responses, fork_from, output, \
-     final_waypoint_id, schema_version FROM runs WHERE thread_id = $1 \
+     final_waypoint_id, schema_version, tenant_id, api_key_id FROM runs WHERE thread_id = $1 \
      AND status IN ('queued','running','awaiting_input') LIMIT 1";
 
 const UPDATE_REQUEST_CANCEL: &str = "UPDATE runs SET cancel_requested = TRUE WHERE run_id = $1 \
@@ -76,7 +77,8 @@ const SELECT_CANCEL_REQUESTED_FOR_ACTIVE_THREAD: &str = "SELECT cancel_requested
 
 const LIST_SELECT_PREFIX: &str = "SELECT run_id, thread_id, assistant_id, assistant_version, \
      status, input, submitted_at, started_at, finished_at, attempt, cancel_requested, error, \
-     webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version \
+     webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version, \
+     tenant_id, api_key_id \
      FROM runs WHERE 1 = 1";
 
 /// D-30: resolves and freezes `assistant_version` onto the new row from the
@@ -87,10 +89,10 @@ const LIST_SELECT_PREFIX: &str = "SELECT run_id, thread_id, assistant_id, assist
 const INSERT_RUN_WITH_LATEST: &str = "INSERT INTO runs \
      (run_id, thread_id, assistant_id, assistant_version, status, input, submitted_at, \
       started_at, finished_at, attempt, cancel_requested, error, webhook, pending_responses, \
-      fork_from, output, final_waypoint_id, schema_version) \
+      fork_from, output, final_waypoint_id, schema_version, tenant_id, api_key_id) \
      SELECT $1, $2, $3, a.latest, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12::jsonb, \
-            $13::jsonb, $14::jsonb, $15::jsonb, $16, $17 \
-     FROM assistants a WHERE a.assistant_id = $18 AND a.deleted_at IS NULL";
+            $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $19 \
+     FROM assistants a WHERE a.assistant_id = $20 AND a.deleted_at IS NULL";
 
 const SELECT_RESOLVED_ASSISTANT_VERSION: &str =
     "SELECT assistant_version FROM runs WHERE run_id = $1";
@@ -269,6 +271,29 @@ impl PostgresRunRepository {
             });
         }
 
+        // D-09/D-10 (mirrors `sqlite.rs` 1:1): both present -> attributed;
+        // both NULL -> unattributed; one present -> a corrupt row.
+        let tenant_id_str: Option<String> = row.try_get("tenant_id").map_err(backend_err)?;
+        let api_key_id: Option<String> = row.try_get("api_key_id").map_err(backend_err)?;
+        let submitted_by = match (tenant_id_str, api_key_id) {
+            (Some(tenant_id_str), Some(api_key_id)) => {
+                let tenant_id = TenantId::new(tenant_id_str).map_err(|e| {
+                    RunRepositoryError::Serialization {
+                        message: format!("invalid tenant_id: {e}"),
+                    }
+                })?;
+                Some(RunAttribution::new(tenant_id, api_key_id))
+            }
+            (None, None) => None,
+            _ => {
+                return Err(RunRepositoryError::Serialization {
+                    message: "run row attribution is incomplete: tenant_id and api_key_id must \
+                              both be set or both be NULL"
+                        .to_string(),
+                });
+            }
+        };
+
         let mut run = Run::new(
             run_id,
             thread_id,
@@ -291,8 +316,53 @@ impl PostgresRunRepository {
         run.output = output;
         run.final_waypoint_id = final_waypoint_id;
         run.schema_version = schema_version;
+        run.submitted_by = submitted_by;
         Ok(run)
     }
+}
+
+/// Assemble `list`'s keyset query (pure, no I/O): `LIST_SELECT_PREFIX` plus
+/// the `thread_id`/`assistant_id`/`status` filters, then the D-12 tenant
+/// scope, then the cursor clause, then `ORDER BY submitted_at DESC, run_id
+/// DESC LIMIT`. Every caller-supplied value is `push_bind`-bound (a `$N`
+/// placeholder) -- never interpolated into the SQL text (T-40-10). The scope
+/// is a predicate INSIDE this one statement, never a Rust post-filter over a
+/// fetched page, so a scoped page is exactly as full as an unscoped one and
+/// `next_cursor` keeps a correct keyset walk (T-40-09).
+fn list_query(query: &RunQuery, fetch_limit: i64) -> sqlx::QueryBuilder<'_, sqlx::Postgres> {
+    let mut builder: sqlx::QueryBuilder<sqlx::Postgres> =
+        sqlx::QueryBuilder::new(LIST_SELECT_PREFIX);
+    if let Some(thread_id) = &query.thread_id {
+        builder.push(" AND thread_id = ");
+        builder.push_bind(thread_id.as_str().to_string());
+    }
+    if let Some(assistant_id) = &query.assistant_id {
+        builder.push(" AND assistant_id = ");
+        builder.push_bind(assistant_id.clone());
+    }
+    if let Some(status) = &query.status {
+        builder.push(" AND status = ");
+        builder.push_bind(status.as_str().to_string());
+    }
+    match &query.scope {
+        RunReadScope::All => {}
+        RunReadScope::Tenant(tenant) => {
+            builder.push(" AND tenant_id = ");
+            builder.push_bind(tenant.as_str().to_string());
+        }
+    }
+    if let Some(cursor) = &query.cursor {
+        builder.push(" AND (submitted_at < ");
+        builder.push_bind(cursor.submitted_at);
+        builder.push(" OR (submitted_at = ");
+        builder.push_bind(cursor.submitted_at);
+        builder.push(" AND run_id < ");
+        builder.push_bind(cursor.run_id.as_str().to_string());
+        builder.push("))");
+    }
+    builder.push(" ORDER BY submitted_at DESC, run_id DESC LIMIT ");
+    builder.push_bind(fetch_limit);
+    builder
 }
 
 #[async_trait]
@@ -351,6 +421,8 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(output)
             .bind(&run.final_waypoint_id)
             .bind(&run.schema_version)
+            .bind(run.submitted_by.as_ref().map(|a| a.tenant_id.as_str()))
+            .bind(run.submitted_by.as_ref().map(|a| a.api_key_id.as_str()))
             .execute(&self.pool)
             .await
             .map_err(|e| self.map_insert_error(e, &run.thread_id))?;
@@ -462,31 +534,7 @@ impl RunRepositoryPort for PostgresRunRepository {
             effective_limit as i64 + 1
         };
 
-        let mut builder: sqlx::QueryBuilder<sqlx::Postgres> =
-            sqlx::QueryBuilder::new(LIST_SELECT_PREFIX);
-        if let Some(thread_id) = &query.thread_id {
-            builder.push(" AND thread_id = ");
-            builder.push_bind(thread_id.as_str().to_string());
-        }
-        if let Some(assistant_id) = &query.assistant_id {
-            builder.push(" AND assistant_id = ");
-            builder.push_bind(assistant_id.clone());
-        }
-        if let Some(status) = &query.status {
-            builder.push(" AND status = ");
-            builder.push_bind(status.as_str().to_string());
-        }
-        if let Some(cursor) = &query.cursor {
-            builder.push(" AND (submitted_at < ");
-            builder.push_bind(cursor.submitted_at);
-            builder.push(" OR (submitted_at = ");
-            builder.push_bind(cursor.submitted_at);
-            builder.push(" AND run_id < ");
-            builder.push_bind(cursor.run_id.as_str().to_string());
-            builder.push("))");
-        }
-        builder.push(" ORDER BY submitted_at DESC, run_id DESC LIMIT ");
-        builder.push_bind(fetch_limit);
+        let mut builder = list_query(&query, fetch_limit);
 
         let rows = builder
             .build()
@@ -706,8 +754,10 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(output)
             .bind(&run.final_waypoint_id)
             .bind(&run.schema_version)
+            .bind(run.submitted_by.as_ref().map(|a| a.tenant_id.as_str()))
+            .bind(run.submitted_by.as_ref().map(|a| a.api_key_id.as_str()))
             .bind(&run.assistant.assistant_id)
-            // (INSERT_RUN_WITH_LATEST's trailing $18 predicate bind, unchanged)
+            // (INSERT_RUN_WITH_LATEST's trailing $20 predicate bind)
             .execute(&self.pool)
             .await
             .map_err(|e| self.map_insert_error(e, &run.thread_id))?;

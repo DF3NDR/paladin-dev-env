@@ -3195,6 +3195,30 @@
           }
         }
       },
+      "CostDto": {
+        "type": "object",
+        "description": "Wire projection of a [`Cost`] (D-10): the raw, authoritative nano-unit amount plus\nthe same four-decimal-plus-currency rendering the herald and `paladin-cli treasury\nspend` print ([`format_cost`], D-00c/D-04) -- `display` is derived, never a second\nsource of truth.",
+        "required": [
+          "nanos",
+          "currency",
+          "display"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217 currency code."
+          },
+          "display": {
+            "type": "string",
+            "description": "Four-decimal-plus-currency rendering (e.g. `\"0.0450 USD\"`), byte-identical to\nthe herald and CLI output for the same amount."
+          },
+          "nanos": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The exact nano-unit amount. Authoritative; `display` is derived from it."
+          }
+        }
+      },
       "CreateAssistantRequest": {
         "type": "object",
         "description": "Request body for `POST /assistants`.",
@@ -3356,6 +3380,17 @@
           "stop_reason"
         ],
         "properties": {
+          "cost": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CostDto",
+                "description": "This call's currency cost, from [`PaladinResult::cost`] (D-10, LEDGR-04). `null`\nwhen any model call in the run was unpriced or no pricing is configured --\nnever a zero stand-in (D-00c)."
+              }
+            ]
+          },
           "execution_time_ms": {
             "type": "integer",
             "format": "int64",
@@ -3752,6 +3787,17 @@
           "assistant_id": {
             "type": "string",
             "description": "The resolved assistant id."
+          },
+          "cost": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CostDto",
+                "description": "This run's cost, derived from the ledger's settlements for `run_id` at read\ntime (D-10) -- `null` when no ledger backend is configured, the run has no\nsettled spend, or its settlements span more than one currency. Never\npersisted on the run row; a ledger read failure degrades this to `null`\nrather than failing the read (D-08)."
+              }
+            ]
           },
           "error": {
             "type": [

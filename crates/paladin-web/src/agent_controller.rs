@@ -47,6 +47,7 @@ use crate::agent_auth::{Principal, authorize_invoke, require_admin};
 use crate::agent_registry::{AgentEntry, AgentProvisioner, AgentRegistry, AgentSpec};
 use crate::error::{ApiError, ApiErrorBody};
 use crate::job_store::{JobRecord, JobStore};
+use crate::run_controller::CostDto;
 use crate::timeout::{TimeoutPolicy, resolve_timeout};
 
 /// Shared state for the agent routes.
@@ -173,6 +174,10 @@ pub struct ExecuteResponse {
     pub loop_count: u32,
     /// Why execution stopped, as a stable label.
     pub stop_reason: String,
+    /// This call's currency cost, from [`PaladinResult::cost`] (D-10, LEDGR-04). `null`
+    /// when any model call in the run was unpriced or no pricing is configured --
+    /// never a zero stand-in (D-00c).
+    pub cost: Option<CostDto>,
 }
 
 impl From<PaladinResult> for ExecuteResponse {
@@ -180,6 +185,7 @@ impl From<PaladinResult> for ExecuteResponse {
         Self {
             output: result.output,
             usage: TokenUsageResponse::from(result.usage),
+            cost: result.cost.as_ref().map(CostDto::from),
             execution_time_ms: result.execution_time_ms,
             loop_count: result.loop_count,
             stop_reason: stop_reason_label(&result.stop_reason).to_string(),
@@ -1913,13 +1919,12 @@ mod tests {
         assert!(preview.ends_with('…'));
     }
 
-    /// D-11, T-38-23: `PaladinResult.cost` is populated (D-10), but
-    /// `From<PaladinResult> for ExecuteResponse` selects exactly its current
-    /// fields -- a priced result's serialized `ExecuteResponse` carries no
-    /// `cost` key. Exposing spend over this unscoped, authenticated HTTP
-    /// surface is Phase 39 LEDGR-04, not this phase.
+    /// D-10, T-38-23: Phase 38 deferred exposing `PaladinResult.cost` on this response
+    /// to "Phase 39 LEDGR-04" by name (its own regression test asserted the opposite --
+    /// `execute_response_carries_no_cost_field`). Phase 39 D-10 is that phase: a priced
+    /// result's serialized `ExecuteResponse` now carries `cost` as a `CostDto`.
     #[test]
-    fn execute_response_carries_no_cost_field() {
+    fn execute_response_carries_cost_when_priced() {
         use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 
         let usd = CurrencyCode::new("USD").unwrap();
@@ -1934,7 +1939,28 @@ mod tests {
 
         let response = ExecuteResponse::from(result);
 
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(!json.contains("\"cost\""), "{json}");
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["cost"]["nanos"], 1_500_000);
+        assert_eq!(json["cost"]["currency"], "USD");
+        assert_eq!(json["cost"]["display"], "0.0015 USD");
+    }
+
+    /// D-10: an unpriced `PaladinResult` (`cost: None`) serializes `cost` as `null` --
+    /// never a zero stand-in (D-00c).
+    #[test]
+    fn execute_response_cost_is_null_when_unpriced() {
+        let result = PaladinResult::new(
+            "unpriced output".to_string(),
+            TokenUsage::new(10, 5),
+            42,
+            1,
+            StopReason::Completed,
+        );
+        assert!(result.cost.is_none());
+
+        let response = ExecuteResponse::from(result);
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(json["cost"].is_null());
     }
 }

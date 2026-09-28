@@ -35,6 +35,19 @@
 //! catching any OTHER, unintentional break to a pre-existing v0.9 path or schema -- this is a
 //! second sanctioned, narrowly-scoped, explicitly-documented exception alongside `info.version`,
 //! never a loosening of the gate's general power.
+//!
+//! ## Phase 39 exception: `ExecuteResponse.cost` (D-10, LEDGR-04)
+//!
+//! `.planning/phases/39-spend-ledger/39-CONTEXT.md` D-10 exposes `PaladinResult.cost` on
+//! `ExecuteResponse` -- Phase 38's own regression test (`execute_response_carries_no_cost_field`,
+//! now inverted to `execute_response_carries_cost_when_priced`) named this phase by number as the
+//! one that would add it. This is purely additive (a new, nullable `cost: Option<CostDto>` field;
+//! `output`/`usage`/`execution_time_ms`/`loop_count`/`stop_reason` are all untouched), but it still
+//! introduces a schema the frozen `v0.9.0` baseline has no way to have: `cost` is absent from the
+//! baseline's `ExecuteResponse` entirely (never `token_count`-like renamed, just new).
+//! [`strip_known_v0_10_execute_response_divergence`] removes this field (and the `CostDto` schema
+//! it introduces) alongside the Phase 31 exception, for the same reason: so this gate keeps
+//! catching any OTHER, unintentional break to a pre-existing v0.9 path or schema.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -233,27 +246,35 @@ fn ref_closure(
     closure
 }
 
-/// Remove the ONE sanctioned Phase 31 schema divergence (D-24, ADR-0051, see this file's module
-/// docs) from a `components.schemas` closure map in place: `ExecuteResponse`'s `token_count`
-/// (present only in the frozen `v0.9.0` baseline) and `usage` (present only in the generated
-/// v0.10 document) are both dropped from `properties` and `required`, and the `TokenUsageResponse`
-/// schema the generated document's `usage` field introduces is dropped entirely. Every other
-/// schema, and every other field of `ExecuteResponse` itself, is left untouched -- a regression in
-/// `output`, `execution_time_ms`, `loop_count` or `stop_reason` still fails this gate.
+/// Remove the two sanctioned `ExecuteResponse` schema divergences (see this file's module docs)
+/// from a `components.schemas` closure map in place:
+///
+/// - Phase 31 (D-24, ADR-0051): `token_count` (present only in the frozen `v0.9.0` baseline) and
+///   `usage` (present only in the generated v0.10 document) are both dropped from `properties`
+///   and `required`, and the `TokenUsageResponse` schema `usage` introduces is dropped entirely.
+/// - Phase 39 (D-10, LEDGR-04): `cost` (present only in the generated document -- absent from
+///   the baseline entirely, never renamed) is dropped from `properties` and `required`, and the
+///   `CostDto` schema it introduces is dropped entirely.
+///
+/// Every other schema, and every other field of `ExecuteResponse` itself, is left untouched -- a
+/// regression in `output`, `execution_time_ms`, `loop_count` or `stop_reason` still fails this
+/// gate.
 fn strip_known_v0_10_execute_response_divergence(schemas: &mut BTreeMap<String, Value>) {
     if let Some(object) = schemas
         .get_mut("ExecuteResponse")
         .and_then(Value::as_object_mut)
     {
         if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
-            required.retain(|v| v != "token_count" && v != "usage");
+            required.retain(|v| v != "token_count" && v != "usage" && v != "cost");
         }
         if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
             properties.remove("token_count");
             properties.remove("usage");
+            properties.remove("cost");
         }
     }
     schemas.remove("TokenUsageResponse");
+    schemas.remove("CostDto");
 }
 
 /// The restriction itself must never be vacuous: an empty or partial restriction must fail
@@ -326,10 +347,10 @@ fn ref_closure_schemas_match_the_frozen_baseline() {
     );
 }
 
-/// The Phase 31 `ExecuteResponse` exception strips exactly the two known-divergent keys and the
-/// `TokenUsageResponse` schema -- proven directly against the real generated/baseline closures,
-/// so a future edit that widens the exception (e.g. also dropping an unrelated field) breaks this
-/// test instead of silently passing.
+/// The Phase 31 + Phase 39 `ExecuteResponse` exceptions strip exactly the three known-divergent
+/// keys and the `TokenUsageResponse`/`CostDto` schemas -- proven directly against the real
+/// generated/baseline closures, so a future edit that widens the exception (e.g. also dropping an
+/// unrelated field) breaks this test instead of silently passing.
 #[test]
 fn execute_response_exception_is_narrowly_scoped() {
     let generated_doc = generated_spec();
@@ -341,8 +362,8 @@ fn execute_response_exception_is_narrowly_scoped() {
         ref_closure(&restrict_paths(&baseline_doc), schemas_of(&baseline_doc));
 
     // Before stripping: the two closures must actually differ under `ExecuteResponse`, and the
-    // generated closure must actually contain `TokenUsageResponse` -- otherwise this test would
-    // exercise nothing.
+    // generated closure must actually contain `TokenUsageResponse`/`CostDto` -- otherwise this
+    // test would exercise nothing.
     assert_ne!(
         generated_closure.get("ExecuteResponse"),
         baseline_closure.get("ExecuteResponse"),
@@ -352,12 +373,22 @@ fn execute_response_exception_is_narrowly_scoped() {
         generated_closure.contains_key("TokenUsageResponse"),
         "generated closure must contain the new TokenUsageResponse schema before stripping"
     );
+    assert!(
+        generated_closure.contains_key("CostDto"),
+        "generated closure must contain the new CostDto schema before stripping"
+    );
+    assert!(
+        !baseline_closure.contains_key("CostDto"),
+        "the frozen v0.9.0 baseline must never contain CostDto"
+    );
 
     strip_known_v0_10_execute_response_divergence(&mut generated_closure);
     strip_known_v0_10_execute_response_divergence(&mut baseline_closure);
 
     assert!(!generated_closure.contains_key("TokenUsageResponse"));
     assert!(!baseline_closure.contains_key("TokenUsageResponse"));
+    assert!(!generated_closure.contains_key("CostDto"));
+    assert!(!baseline_closure.contains_key("CostDto"));
 
     for (label, closure) in [
         ("generated", &generated_closure),
@@ -377,6 +408,10 @@ fn execute_response_exception_is_narrowly_scoped() {
         assert!(
             !properties.contains_key("usage"),
             "{label}: usage must be stripped"
+        );
+        assert!(
+            !properties.contains_key("cost"),
+            "{label}: cost must be stripped"
         );
         // Every other field must survive the exception untouched.
         for field in ["output", "execution_time_ms", "loop_count", "stop_reason"] {

@@ -15,6 +15,10 @@ and this project follows lockstep workspace versioning.
 - `StreamingResponse.cost: Option<Cost>` and `ChunkMetadata.cost: Option<Cost>` /
   `ChunkMetadata.execution: Option<ExecutionMetadata>` additive fields on the two
   `#[non_exhaustive]` port types the streaming path carries (PRICE-03).
+- `output::treasury_ledger_port` module: `TreasuryLedgerPort`
+  (`reserve`/`settle`/`release`/`spend`/`store_now`) and `TreasuryLedgerError`, mirroring
+  `RunRepositoryPort`'s error-enum shape (X-06) with a compiling rustdoc mock (LEDGR-01,
+  LEDGR-02, LEDGR-03, LEDGR-04).
 
 ## [0.10.1] - 2026-09-20
 

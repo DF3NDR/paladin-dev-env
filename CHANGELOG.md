@@ -93,8 +93,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on `ExecutionMetadata` now reads "produced by the Treasurer" instead of "no in-tree producer
   yet," on both run paths.
 
+- **`TreasuryLedgerPort` — the durable spend ledger, on three adapters behind one contract suite
+  (LEDGR-01; Phase 39 plans 39-01, 39-02, 39-03).** `paladin-ports::output::treasury_ledger_port`
+  adds `TreasuryLedgerPort` (`reserve`/`settle`/`release`/`spend`/`store_now`) and
+  `TreasuryLedgerError`, mirroring `RunRepositoryPort`'s house shape (X-06). `InMemoryTreasuryLedger`,
+  `SqliteTreasuryLedger` and `PostgresTreasuryLedger` (`paladin-storage::treasury`) all pass one
+  shared, generic-async-function contract suite unmodified — including the phase's first red test,
+  16 concurrent reserves against a ceiling of 15 admitting exactly 15 and refusing 1 (LEDGR-02) on
+  every adapter. A new `007_create_treasury_ledger_table` migration (`crates/paladin-storage/
+  migrations/{sqlite,postgres}`) is append-only: signed contributions (`reserve` `+hold`, `settle`
+  `actual − hold` or `actual` when unreserved, `release` `-hold`), `i64` nano-unit amounts with an
+  ISO 4217 currency code, a partial unique settlement index on `(run_id, superstep, attempt) WHERE
+  kind = 'settle'` (LEDGR-03), and a `model_breakdown` column (D-02) folded in Rust so `spend`'s
+  per-model view is identical across all three adapters. Every row carries `tenant_id`/`api_key_id`;
+  production writers stamp the documented `LedgerScope::unattributed()` sentinel scope until Phase
+  40 replaces its source (D-01).
+- **Race-proof `reserve` and idempotent `settle`/`release`, serialized per scope (LEDGR-02,
+  LEDGR-03; Phase 39 plans 39-02, 39-03).** SQLite opens each reserving transaction with `BEGIN
+  IMMEDIATE`; Postgres takes a transaction-scoped `pg_advisory_xact_lock` keyed on the scope before
+  any balance `SUM`; the in-memory adapter holds one `tokio::sync::Mutex` across the whole method
+  body — all three admit a hold only when `balance + hold <= ceiling`, refusing with a typed
+  `TreasuryLedgerError::Refused { balance, hold, ceiling }` otherwise. A duplicate settlement key is
+  a success (`SettleOutcome::AlreadySettled`), never an error, store-enforced by the same partial
+  unique index plus `INSERT ... ON CONFLICT DO NOTHING` on every adapter.
+- **`paladin-cli treasury spend` — queryable spend with no server (LEDGR-04; Phase 39 plan
+  39-01).** A new `treasury` subcommand group reads the configured `RunStoreConfig` store directly
+  (mirroring `run export`): `--since`/`--until` (RFC 3339, default the last 24 hours),
+  `--group-by tenant|api-key|run|model` (default `tenant`), optional `--tenant`/`--api-key`/`--run`
+  filters, and `--format table|json`. Amounts print as four decimals plus the currency code
+  (`0.0450 USD`); a window spanning two currencies prints one row per currency, never combined.
+- **Production settle-only writers fill the ledger on both run paths (LEDGR-03, LEDGR-04; Phase 39
+  plans 39-04, 39-05, 39-07).** `WarEngine::with_treasury_ledger(ledger, SettlementContext)`
+  settles exactly one aggregated row per superstep attempt, synchronously and awaited at the
+  superstep boundary — never through the drop-oldest trace channel — including nested Battalion
+  child runs (rolled into the parent superstep) and Aegis-retried nodes (only the eventual
+  successful attempt contributes); `RunWorkerPool::with_treasury_ledger` attaches it per run keyed
+  by the run's real, persisted `(run_id, superstep, attempt)` (D-07: `attempt` is `Run.attempt`,
+  bumped on redelivery/resume, never re-invented). `PaladinExecutionService::with_treasury_ledger`
+  and the new `AgentLoopSettlement` enum (`EveryCall`/`PlatformRunsOnly`) settle every priced
+  agent-loop model call, buffered or streamed, exactly once — `PlatformRunsOnly` is the mechanism
+  that keeps the run engine's shared agent service from ever double-charging a node already settled
+  by the engine's own superstep writer. A ledger failure is logged and never fails, retries or
+  halts a run (the ledger is observational until Phase 41).
+- **`RunScope::with_run_id` and the production ledger composition points (LEDGR-04; Phase 39 plans
+  39-05, 39-07).** `RunScope` (already `#[non_exhaustive]`) gains an additive `run_id:
+  Option<RunId>` field and `with_run_id` builder, carrying the Platform API run id into the agent
+  loop's settle writer for an agent-kind run. `build_agent_registry_with_ledger` and
+  `FacadeProvisioner::with_treasury_ledger`/`paladin_port_from_settings_with_ledger` are the two
+  production installation points for HTTP agents and the run engine's shared execution service,
+  respectively; both existing ledger-less functions keep their signatures, delegating with `None`.
+  `build_treasury_ledger(&RunStoreConfig)` builds the ledger from the same backend selection the
+  run repository already uses (`Disabled` → `None`, `Sqlite`/`Postgres` → the matching adapter),
+  shared by `build_run_api` and `paladin-server.rs`'s boot path.
+
 ### Changed
 
+- `GET /runs/{run_id}` and `GET /runs` carry a ledger-derived `cost: Option<CostDto>` (`{ nanos,
+  currency, display }`), computed from `TreasuryLedgerPort::spend` at read time — one query per
+  request/page, never persisted on the run row, `null` when no ledger backend is configured, the
+  run has no settled spend, or its settlements span more than one currency (D-10; LEDGR-04, Phase
+  39 plan 39-06; see `MIGRATION.md` §9.2).
+- The agent execute response (`ExecuteResponse.cost`) carries `PaladinResult.cost` the same way,
+  inverting the Phase 38 deferral that named this phase (LEDGR-04, Phase 39 plan 39-06; see
+  `MIGRATION.md` §9.2).
+- Every ledger row this phase's production writers create carries the documented
+  `LedgerScope::unattributed()` sentinel scope (`tenant_id`/`api_key_id` both the literal
+  `"unattributed"`) until Phase 40 records a run's real submitting principal (D-01).
 - Heralds print a run's cost as four decimals followed by its ISO currency code (e.g.
   `0.0450 USD`), never a hard-coded `$` (D-04; Phase 38 plans 38-02, 38-05).
 - The table herald's `finalize_stream` renders the run's real `ExecutionMetadata` (model,

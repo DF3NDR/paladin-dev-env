@@ -161,7 +161,7 @@ pub fn paladin_port_from_settings(
 /// SHARED service must use: engine nodes are already settled once per superstep by
 /// `WarEngine::with_treasury_ledger` (39-04), so this service settles only calls whose
 /// [`RunScope`] names a Platform run id -- an agent-kind assistant's run, dispatched by the
-/// worker (39-07) through [`EngineExecutionPort::execute_scoped`]'s forwarded scope. An
+/// worker (39-07) through the internal `EngineExecutionPort::execute_scoped`'s forwarded scope. An
 /// engine node's own dispatch (no run id in its scope) never settles here, so engine spend is
 /// never double-charged.
 ///

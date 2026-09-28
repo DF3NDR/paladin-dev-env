@@ -1,7 +1,8 @@
 //! Treasurer spend-ledger domain types (LEDGR-01..04, ADR-0053).
 //!
 //! Pure value types with no I/O: the append-only ledger's row kinds, its identity types
-//! ([`ReservationId`], [`SettlementKey`]), and the request/query/response shapes
+//! ([`crate::platform::container::treasury_ledger::ReservationId`],
+//! [`crate::platform::container::treasury_ledger::SettlementKey`]), and the request/query/response shapes
 //! `TreasuryLedgerPort` (`paladin-ports`) and its adapters (`paladin-storage`) exchange.
 //!
 //! ADR-0053 governs the model implemented here (cited, not re-argued, D-00a): the ledger is

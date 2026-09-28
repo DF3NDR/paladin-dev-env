@@ -11,6 +11,11 @@ and this project follows lockstep workspace versioning.
 
 - `TraceDispatcher::total_cost()`, the synchronous twin of `total_usage()`, folding every priced
   `TraceEvent::NodeFinished` via `CostTally::record_node` inside `emit()` itself (PRICE-03).
+- `WarEngine::with_treasury_ledger(ledger, SettlementContext)` — settles exactly one aggregated
+  ledger row per superstep attempt, synchronously and awaited at the superstep boundary, including
+  nested Battalion child runs (rolled into the parent superstep, never settling on their own) and
+  Aegis-retried nodes (only the eventual successful attempt contributes); a ledger failure is
+  logged and never fails, retries or halts the run (LEDGR-03, LEDGR-04).
 
 ### Changed
 

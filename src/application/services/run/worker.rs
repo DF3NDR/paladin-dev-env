@@ -773,7 +773,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// charged once (LEDGR-03, ADR-0053 §4). Also carries this run's id
     /// into the run engine's shared [`PaladinPort`] for an agent-kind
     /// (`Runnable::Agent`) run via [`RunScope::with_run_id`] in
-    /// [`Self::run_agent`], so that port's own `AgentLoopSettlement::
+    /// `Self::run_agent`, so that port's own `AgentLoopSettlement::
     /// PlatformRunsOnly` writer (39-05) settles it under the Platform run
     /// id rather than a fresh execution id every dispatch. Only takes
     /// effect on the [`Self::with_engine_factory`] path -- the shared

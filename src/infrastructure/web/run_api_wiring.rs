@@ -372,7 +372,7 @@ async fn build_postgres_quartet(url_env: &str) -> Result<RepoQuartet, Box<dyn st
 /// sharing that exact database file; `Postgres { url_env }` -> a
 /// [`PostgresTreasuryLedger`](paladin_storage::treasury::postgres::PostgresTreasuryLedger)
 /// sharing that exact database, on a build with `storage-postgres` (a named-feature error
-/// otherwise, mirroring [`build_postgres_quartet`]'s own precedent).
+/// otherwise, mirroring `build_postgres_quartet`'s own precedent).
 ///
 /// # Errors
 ///

@@ -19,6 +19,13 @@ and this project follows lockstep workspace versioning.
 - `ExecutionMetadataBuilder::cost`, `ExecutionMetadata::cost_currency`/`cost_display`, and
   `ExecutionMetadata::from_run_finished(record, model_used)` — the engine-path producer built
   from a completed run's `TraceEvent::RunFinished`.
+- `platform::container::treasury_ledger` module: `LedgerScope` (with the `unattributed()`
+  sentinel), `ReservationId`, `SettlementKey`, `LedgerEntryKind`, `ReserveRequest`/`SettleRequest`/
+  `SettleOutcome`, `SpendGroupBy`/`SpendQuery`/`SpendRow`, `SettlementContext`, and `format_cost`
+  — the ledger's domain value types (LEDGR-01), re-exported from the facade as
+  `core::platform::container::treasury_ledger`.
+- `RunScope.run_id: Option<RunId>` and `RunScope::with_run_id` — additive; `RunScope` stays
+  `#[non_exhaustive]` (LEDGR-04).
 
 ### Changed
 

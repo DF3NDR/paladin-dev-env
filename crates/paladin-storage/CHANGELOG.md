@@ -7,6 +7,18 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `treasury` module: `InMemoryTreasuryLedger`, `SqliteTreasuryLedger` (`sqlite` feature) and
+  `PostgresTreasuryLedger` (`postgres` feature) — three `TreasuryLedgerPort` adapters passing one
+  shared, 21-clause `contract_tests.rs` suite unmodified, including the LEDGR-02 race clause (16
+  concurrent reserves against a ceiling of 15) and the LEDGR-03 duplicate-settle idempotency clause
+  on every adapter (LEDGR-01, LEDGR-02, LEDGR-03).
+- `007_create_treasury_ledger_table` migrations (`migrations/{sqlite,postgres}`): a partial unique
+  settlement index on `(run_id, superstep, attempt) WHERE kind = 'settle'`, a scope+window covering
+  index, and a `model_breakdown` column folded in Rust so `spend`'s per-model view is identical
+  across adapters (LEDGR-01, LEDGR-04).
+
 ## [0.10.1] - 2026-09-20
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source

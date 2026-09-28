@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-09-26 16:39:16 UTC
+# Public API Surface - Generated 2026-09-28 01:50:48 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -2735,6 +2735,25 @@ impl core::marker::UnsafeUnpin for paladin::application::services::paladin::pala
 impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::paladin::paladin_builder::PaladinBuilder
 impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::paladin::paladin_builder::PaladinBuilder
 pub mod paladin::application::services::paladin::paladin_execution_service
+pub enum paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+pub paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement::EveryCall
+pub paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement::PlatformRunsOnly
+impl core::clone::Clone for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+pub fn paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement::clone(&self) -> paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+impl core::cmp::Eq for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+impl core::cmp::PartialEq for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+pub fn paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement::eq(&self, &paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement) -> bool
+impl core::fmt::Debug for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+pub fn paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+impl core::marker::StructuralPartialEq for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+impl core::marker::Freeze for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+impl core::marker::Send for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+impl core::marker::Sync for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+impl core::marker::Unpin for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+impl core::marker::UnsafeUnpin for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
+impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement
 pub struct paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService
 impl paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::confined_vault(&self, &paladin_core::platform::container::run_scope::RunScope) -> core::option::Option<paladin_ports::output::vault_confined::ConfinedVault>
@@ -2760,6 +2779,7 @@ pub fn paladin::application::services::paladin::paladin_execution_service::Palad
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_token_counter(self, alloc::sync::Arc<dyn paladin_ports::output::token_counter_port::TokenCounterPort>) -> Self
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_tool_error_config(self, paladin::config::agent_runtime::ToolErrorConfig) -> Self
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_trace_emitter(self, alloc::sync::Arc<dyn paladin_ports::output::trace_sink_port::TraceEmitter>) -> Self
+pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_treasury_ledger(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>, paladin::application::services::paladin::paladin_execution_service::AgentLoopSettlement) -> Self
 pub fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_vault(self, alloc::sync::Arc<dyn paladin_ports::output::vault_port::VaultPort>, core::option::Option<paladin_core::platform::container::vault::Namespace>) -> Self
 impl paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService
 pub async fn paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService::execute_stream_observed(&self, &paladin_core::platform::container::paladin::Paladin, &str, &paladin_core::platform::container::heartbeat::HeartbeatHandle) -> core::result::Result<paladin_ports::output::paladin_port::PaladinStream, paladin_core::platform::container::paladin_error::PaladinError>
@@ -3666,6 +3686,7 @@ pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_palad
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_run_trace_port(self, alloc::sync::Arc<dyn paladin_ports::output::run_trace_port::RunTracePort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_shutdown_coordinator(self, paladin_battalion::engine::shutdown::ShutdownCoordinator) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_trace_config(self, paladin::config::trace::TraceConfig) -> Self
+pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasury_ledger(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_webhook_deliveries(self, alloc::sync::Arc<dyn paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort>) -> Self
 impl<W> core::marker::Freeze for paladin::application::services::run::worker::RunWorkerPool<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Freeze, alloc::sync::Arc<W>: core::marker::Freeze, core::option::Option<alloc::sync::Arc<(dyn core::ops::function::Fn(tokio_util::sync::cancellation_token::CancellationToken) -> paladin_battalion::engine::WarEngine<W> + core::marker::Send + core::marker::Sync)>>: core::marker::Freeze
 impl<W> core::marker::Send for paladin::application::services::run::worker::RunWorkerPool<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Send, alloc::sync::Arc<W>: core::marker::Send, core::option::Option<alloc::sync::Arc<(dyn core::ops::function::Fn(tokio_util::sync::cancellation_token::CancellationToken) -> paladin_battalion::engine::WarEngine<W> + core::marker::Send + core::marker::Sync)>>: core::marker::Send
@@ -3940,6 +3961,7 @@ pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_palad
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_run_trace_port(self, alloc::sync::Arc<dyn paladin_ports::output::run_trace_port::RunTracePort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_shutdown_coordinator(self, paladin_battalion::engine::shutdown::ShutdownCoordinator) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_trace_config(self, paladin::config::trace::TraceConfig) -> Self
+pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasury_ledger(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_webhook_deliveries(self, alloc::sync::Arc<dyn paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort>) -> Self
 impl<W> core::marker::Freeze for paladin::application::services::run::worker::RunWorkerPool<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Freeze, alloc::sync::Arc<W>: core::marker::Freeze, core::option::Option<alloc::sync::Arc<(dyn core::ops::function::Fn(tokio_util::sync::cancellation_token::CancellationToken) -> paladin_battalion::engine::WarEngine<W> + core::marker::Send + core::marker::Sync)>>: core::marker::Freeze
 impl<W> core::marker::Send for paladin::application::services::run::worker::RunWorkerPool<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Send, alloc::sync::Arc<W>: core::marker::Send, core::option::Option<alloc::sync::Arc<(dyn core::ops::function::Fn(tokio_util::sync::cancellation_token::CancellationToken) -> paladin_battalion::engine::WarEngine<W> + core::marker::Send + core::marker::Sync)>>: core::marker::Send
@@ -7019,6 +7041,7 @@ pub use paladin::core::platform::container::sanctum
 pub use paladin::core::platform::container::schedule
 pub use paladin::core::platform::container::task
 pub use paladin::core::platform::container::token_usage
+pub use paladin::core::platform::container::treasury_ledger
 pub use paladin::core::platform::container::trigger
 pub use paladin::core::platform::container::user
 pub use paladin::core::platform::container::user_group
@@ -8066,4 +8089,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4025
+Total public items: 4035

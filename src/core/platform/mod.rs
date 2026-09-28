@@ -36,6 +36,7 @@ pub mod container {
     pub use paladin_core::platform::container::schedule;
     pub use paladin_core::platform::container::task;
     pub use paladin_core::platform::container::token_usage;
+    pub use paladin_core::platform::container::treasury_ledger;
     pub use paladin_core::platform::container::trigger;
     pub use paladin_core::platform::container::user;
     pub use paladin_core::platform::container::user_group;

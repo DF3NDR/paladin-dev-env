@@ -7,6 +7,20 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Added
+
+- `CostDto { nanos, currency, display }` (`run_controller.rs`) — the crate's one wire projection
+  of `paladin_core::cost::Cost`, `display` produced by `treasury_ledger::format_cost` (LEDGR-04).
+- `RunApiState.treasury_ledger`/`with_treasury_ledger`.
+
+### Changed
+
+- `RunResponse.cost: Option<CostDto>` (`GET /runs/{run_id}` and `GET /runs`) and
+  `ExecuteResponse.cost: Option<CostDto>` (`POST /agents/{id}/execute`) are both derived from
+  `TreasuryLedgerPort::spend` at read time — one query per request/page, `null` when no ledger
+  backend is configured, the run has no settled spend, or its settlements span more than one
+  currency (LEDGR-04; see root `MIGRATION.md` §9.2).
+
 ## [0.10.1] - 2026-09-20
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source change in

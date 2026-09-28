@@ -340,3 +340,9 @@ temp-file SQLite adapter (both already normal, non-dev dependencies of the root 
 ---
 *Phase: 39-spend-ledger*
 *Completed: 2026-09-28*
+
+## Self-Check: PASSED
+
+All four modified source files verified present on disk; commits `09c1841a`, `294d4a38` and
+`7f1ed3ad` verified present in git history (`git log --oneline --all | grep -E
+"09c1841a|294d4a38|7f1ed3ad"` all found).

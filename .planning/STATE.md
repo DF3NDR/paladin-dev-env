@@ -6,9 +6,9 @@ current_phase: 40
 current_phase_name: Tenant Identity & Run-Read Scoping
 status: planning
 stopped_at: Completed 39-08-PLAN.md (phase 39-spend-ledger closed)
-last_updated: "2026-09-28T02:31:09.062Z"
+last_updated: "2026-09-28T16:33:04Z"
 last_activity: 2026-09-28
-last_activity_desc: Phase 39 complete, transitioned to Phase 40
+last_activity_desc: Phase 39 verified, UAT/validation/security sealed; Phase 40 ready to plan
 progress:
   total_phases: 2
   completed_phases: 2
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-24 at the start of milestone v0.11.0)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 39 — spend-ledger
+**Current focus:** Phase 40 — Tenant Identity & Run-Read Scoping (ready to plan)
 (`/gsd-new-project` roadmapper), 10 phases (38-47), 35/35 requirements mapped. Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
@@ -478,11 +478,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-28T02:11:11.460Z
-**Stopped at:** Completed 39-08-PLAN.md (phase 39-spend-ledger closed)
-next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
-RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
-not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.
+**Last session:** 2026-09-28T16:33:04Z
+**Stopped at:** Phase 39 complete — verification passed, UAT 49/49 (3 human checkpoints passed), Nyquist-compliant (39-VALIDATION.md validated), security verified (39-SECURITY.md: 21 threats closed, 0 open); ready to plan Phase 40
 **Resume file:** None
 **Branch state:** the close commits sit on `chore/37.1-post-close`; open a PR to `main` (the
 repository enforces PR-only merges to `main`, ADR-0043/0044) — `.planning/`-only, no crate change,

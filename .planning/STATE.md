@@ -5,12 +5,12 @@ milestone_name: Crate Release
 current_phase: 40
 current_phase_name: Tenant Identity & Run-Read Scoping
 status: planning
-stopped_at: Completed 39-08-PLAN.md (phase 39-spend-ledger closed)
-last_updated: "2026-09-28T16:33:04Z"
+stopped_at: Phase 40 context gathered
+last_updated: "2026-09-28T16:44:12.913Z"
 last_activity: 2026-09-28
-last_activity_desc: Phase 39 verified, UAT/validation/security sealed; Phase 40 ready to plan
+last_activity_desc: Phase 39 complete, transitioned to Phase 40
 progress:
-  total_phases: 2
+  total_phases: 3
   completed_phases: 2
   total_plans: 17
   completed_plans: 17
@@ -478,9 +478,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-28T16:33:04Z
-**Stopped at:** Phase 39 complete — verification passed, UAT 49/49 (3 human checkpoints passed), Nyquist-compliant (39-VALIDATION.md validated), security verified (39-SECURITY.md: 21 threats closed, 0 open); ready to plan Phase 40
-**Resume file:** None
+**Last session:** 2026-09-28T16:44:12.490Z
+**Stopped at:** Phase 40 context gathered
+**Resume file:** .planning/phases/40-tenant-identity-run-read-scoping/40-CONTEXT.md
 
 ## Operator Next Steps
 

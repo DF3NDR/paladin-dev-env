@@ -394,7 +394,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 40-02-PLAN.md — Scoped GET /v1/runs: RunQuery.scope inside SQL on all three adapters, Postgres attribution parity, shared contract clauses (wave 2)
+- [x] 40-02-PLAN.md — Scoped GET /v1/runs: RunQuery.scope inside SQL on all three adapters, Postgres attribution parity, shared contract clauses (wave 2)
 - [ ] 40-03-PLAN.md — AuthConfig::validate fail-closed key/tenant/bearer rules at boot and deployment docs (wave 2)
 - [ ] 40-04-PLAN.md — Ledger scope source: LedgerScope::from_attribution on the worker path and scoped executor ports on the HTTP agent path (wave 2)
 

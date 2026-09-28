@@ -77,7 +77,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::cost::Cost;
-use paladin_core::platform::container::principal::{PrincipalRef, RunReadScope};
+use paladin_core::platform::container::principal::PrincipalRef;
 use paladin_core::platform::container::run::{
     Run, RunCursor, RunEventKind, RunId, RunStatus, WebhookSpec,
 };
@@ -886,7 +886,6 @@ pub async fn list_runs(
     Extension(principal): Extension<Principal>,
     axum::extract::Query(params): axum::extract::Query<RunListQuery>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
-    let _ = &principal;
     let repository = state
         .run_repository
         .as_ref()
@@ -912,7 +911,10 @@ pub async fn list_runs(
             status,
             limit,
             cursor,
-            scope: RunReadScope::All,
+            // D-12 (list half): the scope comes from the authenticated principal
+            // only -- never from a query parameter -- and is applied inside the
+            // adapter's own query, not as a post-filter.
+            scope: principal.read_scope(),
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
@@ -1183,6 +1185,7 @@ mod tests {
     use axum::http::Request;
     use paladin_core::platform::container::cost::CurrencyCode;
     use paladin_core::platform::container::parley::ParleyResponse;
+    use paladin_core::platform::container::principal::RunReadScope;
     use paladin_core::platform::container::run::{AssistantRef, RunStatus};
     use paladin_core::platform::container::treasury_ledger::{
         ReservationId, ReserveRequest, SettleOutcome, SettleRequest,

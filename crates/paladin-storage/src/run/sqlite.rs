@@ -22,7 +22,7 @@ use sqlx::{QueryBuilder, Row, sqlite::SqliteRow};
 use std::str::FromStr;
 
 use paladin_core::platform::container::parley::ParleyResponse;
-use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+use paladin_core::platform::container::principal::{RunAttribution, RunReadScope, TenantId};
 use paladin_core::platform::container::run::{
     AssistantRef, ForkSpec, RUN_SCHEMA_VERSION, Run, RunCursor, RunId, RunStatus, WebhookSpec,
 };
@@ -515,6 +515,18 @@ impl RunRepositoryPort for SqliteRunRepository {
         if let Some(status) = &query.status {
             builder.push(" AND status = ");
             builder.push_bind(status.as_str().to_string());
+        }
+        // D-12: the tenant scope is a predicate INSIDE this statement, ahead of
+        // the cursor clause and `ORDER BY ... LIMIT`, never a Rust post-filter
+        // over a fetched page -- so a scoped page is exactly as full as an
+        // unscoped one and `next_cursor` keeps a correct keyset walk. The
+        // tenant id is bound, never interpolated (T-40-10).
+        match &query.scope {
+            RunReadScope::All => {}
+            RunReadScope::Tenant(tenant) => {
+                builder.push(" AND tenant_id = ");
+                builder.push_bind(tenant.as_str().to_string());
+            }
         }
         if let Some(cursor) = &query.cursor {
             builder.push(" AND (submitted_at < ");

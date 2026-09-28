@@ -160,6 +160,10 @@ impl RunRepositoryPort for InMemoryRunRepository {
                     .is_none_or(|a| a == r.assistant.assistant_id)
             })
             .filter(|r| query.status.is_none_or(|s| s == r.status))
+            // D-12: the one shared read rule (`RunReadScope::permits`), applied
+            // before sorting and paging -- the in-memory analogue of the SQL
+            // adapters' `WHERE tenant_id = ?` predicate.
+            .filter(|r| query.scope.permits(r))
             .cloned()
             .collect();
         items.sort_by(|a, b| {

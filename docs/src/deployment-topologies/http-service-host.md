@@ -79,7 +79,7 @@ http:
   auth:
     enabled: true                  # fail-closed: the server refuses to start with no credentials
     api_keys:
-      - { key: "${PALADIN_API_KEY_CI}", name: "ci", role: "admin" }
+      - { key: "${PALADIN_API_KEY_CI}", name: "ci", role: "admin", tenant: "platform-ops" }
   docs:
     enabled: true                  # GET /openapi.json + Swagger UI at /docs
 
@@ -99,6 +99,24 @@ verified against the server's own token store — not a signed or self-describin
 key/token maps to a role. Per-agent `allowed_roles` gate invocation, and runtime
 register/deregister require an `admin` role. `/health`, `/ready`, `/openapi.json`, and `/docs`
 are always reachable without a credential.
+
+**Tenants and what a key can read.** Every API key maps to exactly one tenant through
+`http.auth.api_keys[].tenant`. The field is **required**: a key without one, or with a value
+that is not a plain identifier (non-empty, no whitespace, printable ASCII, at most 128 bytes),
+stops the server at boot with an error naming the key by `name` — there is no implicit default
+tenant, and the error never prints a key value. Key `name`s and key values must each be unique
+across the list (a duplicated secret would resolve to an arbitrary principal, so it is rejected
+at boot too). Bearer-token principals take the tenant configured at `http.auth.bearer_token.tenant`,
+which is required whenever `http.auth.bearer_token.enabled` is true. The tenant is derived by
+the server from the presented credential and nothing else: no header, query parameter or body
+field can assert one. Every submitted run is attributed to the submitting key (`name`) and its
+tenant, and read access follows that attribution — `GET /runs` and every `/runs/{run_id}*`
+route (`GET`, `/stream`, `/cancel`, `/webhook-deliveries`) show a `user`-role key only its own
+tenant's runs, while an `admin`-role key sees every run, including runs recorded without a
+principal. Another tenant's run answers the same `404` as a run that does not exist — never a
+`403`, so a caller cannot learn that a foreign run is there. With `http.auth.enabled: false`,
+every request is an `admin` principal in the `open-access` tenant, which is why open mode keeps
+its deployment-wide read behaviour.
 
 **Choosing a credential path for a multi-replica deployment:** the API-key path scales
 horizontally without qualification — keys are static and byte-identical across every replica.

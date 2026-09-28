@@ -390,7 +390,7 @@ Phase 39
 Plans:
 **Wave 1**
 
-- [ ] 40-01-PLAN.md — Checkpoint on the one-way doors (D-01/D-04/D-09), then the tracer: API-key tenant → Principal → PrincipalRef → Run.submitted_by → SQLite 008 → GET /v1/runs/{id} gate (owner/Admin 200, other tenant 404); register the breaks (wave 1)
+- [x] 40-01-PLAN.md — Checkpoint on the one-way doors (D-01/D-04/D-09), then the tracer: API-key tenant → Principal → PrincipalRef → Run.submitted_by → SQLite 008 → GET /v1/runs/{id} gate (owner/Admin 200, other tenant 404); register the breaks (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

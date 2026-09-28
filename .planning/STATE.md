@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 40
 current_phase_name: Tenant Identity & Run-Read Scoping
 status: executing
-stopped_at: Phase 40 context gathered
-last_updated: "2026-09-28T17:53:30.148Z"
+stopped_at: Completed 40-01-PLAN.md
+last_updated: "2026-09-28T18:50:56.787Z"
 last_activity: 2026-09-28
-last_activity_desc: Phase 39 complete, transitioned to Phase 40
+last_activity_desc: Phase 40 execution started
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 23
-  completed_plans: 17
+  completed_plans: 18
 ---
 
 # Project State
@@ -25,12 +25,12 @@ See: .planning/PROJECT.md (updated 2026-09-24 at the start of milestone v0.11.0)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 40 — Tenant Identity & Run-Read Scoping (ready to plan)
+**Current focus:** Phase 40 — Tenant Identity & Run-Read Scoping
 (`/gsd-new-project` roadmapper), 10 phases (38-47), 35/35 requirements mapped. Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [██████████] 100%
+**Progress:** [████████░░] 78%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -49,10 +49,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 40 — Tenant Identity & Run-Read Scoping
-Plan: Not started
+Phase: 40 (Tenant Identity & Run-Read Scoping) — EXECUTING
+Plan: 2 of 6
 Status: Ready to execute
-Last activity: 2026-09-28 — Phase 39 complete, transitioned to Phase 40
+Last activity: 2026-09-28 — Phase 40 execution started
 
 ## Performance Metrics
 
@@ -203,6 +203,7 @@ Last activity: 2026-09-28 — Phase 39 complete, transitioned to Phase 40
 | Phase 39 P06 | ~20min | 2 tasks | 4 files |
 | Phase 39 P07 | ~50min | 2 tasks | 4 files |
 | Phase 39 P08 | ~55min | 2 tasks | 13 files |
+| Phase 40 P40-01 | ~2h (continuation) | 3 tasks | 29 files |
 
 ## Accumulated Context
 
@@ -276,6 +277,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 39-07: build_run_api_wires_the_treasury_ledger added as its own dedicated test (rather than only extending the two existing RunApiState-field tests) so the plan's own acceptance criterion -- a test literally named build_run_api_wires_the_treasury_ledger passing -- is satisfied by name.
 - [Phase ?]: [Phase 39] 39-08: no new .cargo/semver-checks-allowlist.toml entry or Cargo.toml lint-table line was needed anywhere -- every lint the 0.10.1 diagnostic run reported (paladin-web's RunResponse.cost, ExecuteResponse.cost) was already covered by an existing crate-wide suppression, confirmed by a temporarily-disabled-and-reverted diagnostic (D-27 method).
 - [Phase ?]: [Phase 39] 39-08: RunResponse gained its first MIGRATION.md §9.2 row, marked N/A for CI set-equality -- it is a new-in-0.10 type absent at the v0.9.0 baseline, so its cost field addition is recorded for the v0.10 -> v0.11 migration guide (Phase 46, CURR-23) rather than as a CI-gated row, mirroring the ThreadApiState/ResumeAcceptedResponse precedent.
+- [Phase ?]: Task 1 checkpoint: option-a (Principal #[non_exhaustive] + Principal::new) auto-selected under --auto mode
+- [Phase ?]: Postgres run-attribution columns deliberately deferred to 40-02; SQLite adapter fully wired this plan
 
 ### Pending Todos
 
@@ -478,9 +481,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-28T16:44:12.490Z
-**Stopped at:** Phase 40 context gathered
-**Resume file:** .planning/phases/40-tenant-identity-run-read-scoping/40-CONTEXT.md
+**Last session:** 2026-09-28T18:50:56.761Z
+**Stopped at:** Completed 40-01-PLAN.md
+**Resume file:** None
 
 ## Operator Next Steps
 

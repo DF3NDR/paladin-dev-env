@@ -52,11 +52,11 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Tenant identity (TENANT)
 
-- [ ] **TENANT-01**: Operator config maps each API key to a tenant and the authenticated
+- [x] **TENANT-01**: Operator config maps each API key to a tenant and the authenticated
   `Principal` carries `tenant_id`; a caller cannot assert its own tenant. The breaking change is
   recorded in `MIGRATION.md` §9.2 and the `cargo semver-checks` allowlist
 
-- [ ] **TENANT-02**: Every run records its submitting principal (API key id and tenant), so spend
+- [x] **TENANT-02**: Every run records its submitting principal (API key id and tenant), so spend
   and run reads are attributed to the caller
 
 ### Allowances (ALLOW)
@@ -128,7 +128,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Platform (PLAT, continued)
 
-- [ ] **PLAT-07**: `GET /runs` and every `/runs/{id}*` read route return only runs the calling
+- [x] **PLAT-07**: `GET /runs` and every `/runs/{id}*` read route return only runs the calling
   principal may see, enforced by one shared authorization function; another caller's run returns
   404 (`WINDOWS.md` row 32). The admin-role override is decided in the phase
 
@@ -216,8 +216,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LEDGR-02 | Phase 39 | Complete |
 | LEDGR-03 | Phase 39 | Complete |
 | LEDGR-04 | Phase 39 | Complete |
-| TENANT-01 | Phase 40 | Pending |
-| TENANT-02 | Phase 40 | Pending |
+| TENANT-01 | Phase 40 | Complete |
+| TENANT-02 | Phase 40 | Complete |
 | ALLOW-01 | Phase 41 | Pending |
 | ALLOW-02 | Phase 41 | Pending |
 | ALLOW-03 | Phase 42 | Pending |
@@ -235,7 +235,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STORE-01 | Phase 45 | Pending |
 | STORE-02 | Phase 45 | Pending |
 | STORE-03 | Phase 45 | Pending |
-| PLAT-07 | Phase 40 | Pending |
+| PLAT-07 | Phase 40 | Complete |
 | PLAT-08 | Phase 45 | Pending |
 | PLAT-09 | Phase 42 | Pending |
 | OBS-05 | Phase 45 | Pending |

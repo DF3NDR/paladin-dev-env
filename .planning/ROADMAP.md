@@ -364,7 +364,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 39-08-PLAN.md — closeout: `cargo semver-checks` measurement and registration, CHANGELOG entries, facade re-export, API-surface refresh, full gate suite and credential-handling review (LEDGR-01..04)
+- [x] 39-08-PLAN.md — closeout: `cargo semver-checks` measurement and registration, CHANGELOG entries, facade re-export, API-surface refresh, full gate suite and credential-handling review (LEDGR-01..04)
 
 ### Phase 40: Tenant Identity & Run-Read Scoping
 

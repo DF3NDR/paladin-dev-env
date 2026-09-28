@@ -4,16 +4,16 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 39
 current_phase_name: spend-ledger
-status: executing
-stopped_at: Completed 39-07-PLAN.md
-last_updated: "2026-09-28T01:14:24.443Z"
+status: verifying
+stopped_at: Completed 39-08-PLAN.md (phase 39-spend-ledger closed)
+last_updated: "2026-09-28T02:11:11.482Z"
 last_activity: 2026-09-27
 last_activity_desc: Phase 39 execution started
 progress:
   total_phases: 2
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 17
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [█████████░] 94%
+**Progress:** [██████████] 100%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 
 Phase: 39 (spend-ledger) — EXECUTING
 Plan: 8 of 8
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-27 — Phase 39 execution started
 
 ## Performance Metrics
@@ -201,6 +201,7 @@ Last activity: 2026-09-27 — Phase 39 execution started
 | Phase 39 P05 | ~50min | 2 tasks | 4 files |
 | Phase 39 P06 | ~20min | 2 tasks | 4 files |
 | Phase 39 P07 | ~50min | 2 tasks | 4 files |
+| Phase 39 P08 | ~55min | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -272,6 +273,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 39-07: RunWorkerPool::with_treasury_ledger attaches WarEngine::with_treasury_ledger to every per-run engine_factory-built engine keyed by SettlementContext { scope: LedgerScope::unattributed(), run_id, attempt } where attempt is run.attempt on first dispatch or bump_attempt's return on a Running redelivery (D-07); run_agent now dispatches through execute_scoped with RunScope::default().with_run_id(run.run_id) so an agent-kind run settles under the Platform run id via 39-05's PlatformRunsOnly writer.
 - [Phase ?]: 39-07: build_treasury_ledger(&RunStoreConfig) shares the run store's own backend selection (Disabled -> None, Sqlite -> SqliteTreasuryLedger, Postgres -> PostgresTreasuryLedger on storage-postgres); build_run_api wires it into the worker pool, the run engine's PaladinPort (PlatformRunsOnly) and RunApiState, and paladin-server.rs builds it ahead of the agent registry for build_agent_registry_with_ledger and FacadeProvisioner::with_treasury_ledger.
 - [Phase ?]: 39-07: build_run_api_wires_the_treasury_ledger added as its own dedicated test (rather than only extending the two existing RunApiState-field tests) so the plan's own acceptance criterion -- a test literally named build_run_api_wires_the_treasury_ledger passing -- is satisfied by name.
+- [Phase ?]: [Phase 39] 39-08: no new .cargo/semver-checks-allowlist.toml entry or Cargo.toml lint-table line was needed anywhere -- every lint the 0.10.1 diagnostic run reported (paladin-web's RunResponse.cost, ExecuteResponse.cost) was already covered by an existing crate-wide suppression, confirmed by a temporarily-disabled-and-reverted diagnostic (D-27 method).
+- [Phase ?]: [Phase 39] 39-08: RunResponse gained its first MIGRATION.md §9.2 row, marked N/A for CI set-equality -- it is a new-in-0.10 type absent at the v0.9.0 baseline, so its cost field addition is recorded for the v0.10 -> v0.11 migration guide (Phase 46, CURR-23) rather than as a CI-gated row, mirroring the ThreadApiState/ResumeAcceptedResponse precedent.
 
 ### Pending Todos
 
@@ -474,8 +477,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-28T01:14:24.421Z
-**Stopped at:** Completed 39-07-PLAN.md
+**Last session:** 2026-09-28T02:11:11.460Z
+**Stopped at:** Completed 39-08-PLAN.md (phase 39-spend-ledger closed)
 next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
 RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
 not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.

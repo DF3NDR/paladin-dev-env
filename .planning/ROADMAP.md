@@ -360,7 +360,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 39-07-PLAN.md — production wiring: the worker hands each engine the ledger and the persisted `runs.attempt`, agent-kind runs carry their Platform run id, the server builds the ledger from `RunStoreConfig`; HTTP end-to-end proof (LEDGR-03, LEDGR-04)
+- [x] 39-07-PLAN.md — production wiring: the worker hands each engine the ledger and the persisted `runs.attempt`, agent-kind runs carry their Platform run id, the server builds the ledger from `RunStoreConfig`; HTTP end-to-end proof (LEDGR-03, LEDGR-04)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

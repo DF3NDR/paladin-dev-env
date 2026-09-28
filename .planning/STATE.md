@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 39
 current_phase_name: spend-ledger
 status: executing
-stopped_at: Completed 39-05-PLAN.md
-last_updated: "2026-09-27T23:52:06.574Z"
+stopped_at: Completed 39-06-PLAN.md
+last_updated: "2026-09-28T00:09:27.863Z"
 last_activity: 2026-09-27
 last_activity_desc: Phase 39 execution started
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 17
-  completed_plans: 14
+  completed_plans: 15
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [████████░░] 82%
+**Progress:** [█████████░] 88%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,7 +50,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 39 (spend-ledger) — EXECUTING
-Plan: 6 of 8
+Plan: 7 of 8
 Status: Ready to execute
 Last activity: 2026-09-27 — Phase 39 execution started
 
@@ -199,6 +199,7 @@ Last activity: 2026-09-27 — Phase 39 execution started
 | Phase 39 P03 | ~42min | 2 tasks | 4 files |
 | Phase 39 P04 | ~55min | 2 tasks | 4 files |
 | Phase 39 P05 | ~50min | 2 tasks | 4 files |
+| Phase 39 P06 | ~20min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -265,6 +266,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 39-05: settle_agent_loop_call extracted as a free function so execute_stream_inner's spawned task (owns no &self) shares the exact settle logic PaladinExecutionService::settle_model_call delegates to for the buffered loop.
 - [Phase ?]: 39-05: the streamed agent-loop path settles only under AgentLoopSettlement::EveryCall (never PlatformRunsOnly) since no execute_stream_scoped exists -- a stream never carries a RunScope to read a Platform run id from, so it always settles under (execution_id, 1, 1).
 - [Phase ?]: 39-05: build_agent_with_llm/build_agent gained a trailing Option<Arc<dyn TreasuryLedgerPort>> parameter mirroring the existing trailing price_table parameter, keeping the Treasurer's pricing and ledger concerns parallel at one call site rather than a second composition mechanism.
+- [Phase ?]: [Phase 39] 39-06: CostDto shared by RunResponse and ExecuteResponse; run_costs makes exactly one TreasuryLedgerPort::spend(SpendGroupBy::Run) call per GET /runs request/page, degrading to null on any ledger error or mixed-currency run
+- [Phase ?]: [Phase 39] 39-06: openapi_golden_v0_9.rs (SHIP-02 frozen v0.9.0 diff, not in the plan's files_modified) needed a second sanctioned ExecuteResponse exception (cost/CostDto) mirroring the Phase 31 usage/token_count one -- discovered by the plan's own cargo test -p paladin-web verify command
 
 ### Pending Todos
 
@@ -467,8 +470,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-27T23:52:06.551Z
-**Stopped at:** Completed 39-05-PLAN.md
+**Last session:** 2026-09-28T00:09:20.251Z
+**Stopped at:** Completed 39-06-PLAN.md
 next milestone; ROADMAP collapsed to milestone groupings with no planned phase; PROJECT.md evolved;
 RETROSPECTIVE.md extended. Tag `v0.10.0` pre-existed (2026-09-18, merge commit `1d4a9724`) and was
 not re-cut; `v0.10.1` (2026-09-21) is the release consumers install.

@@ -356,7 +356,7 @@ Plans:
 - [x] 39-03-PLAN.md — Postgres `007` migration and `PostgresTreasuryLedger` serialized per scope with a transaction-scoped advisory lock, passing the contract suite unmodified; CLI Postgres backend (LEDGR-01, LEDGR-02, LEDGR-03)
 - [x] 39-04-PLAN.md — engine-path settle writer: one settlement per superstep attempt at the ADR-0052 boundary, aggregating priced Paladin attempts with a per-model breakdown; `WarEngine::with_treasury_ledger` (LEDGR-03, LEDGR-04)
 - [x] 39-05-PLAN.md — agent-loop settle writer: one settlement per priced model call in `PaladinExecutionService`, `RunScope::with_run_id`, an `AgentLoopSettlement` mode that never double-counts engine nodes (LEDGR-03, LEDGR-04)
-- [ ] 39-06-PLAN.md — ledger-derived `cost` on `GET /runs` and `GET /runs/{id}` and `PaladinResult.cost` on the agent execute response through a shared `CostDto`; inverts `execute_response_carries_no_cost_field` (LEDGR-04)
+- [x] 39-06-PLAN.md — ledger-derived `cost` on `GET /runs` and `GET /runs/{id}` and `PaladinResult.cost` on the agent execute response through a shared `CostDto`; inverts `execute_response_carries_no_cost_field` (LEDGR-04)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

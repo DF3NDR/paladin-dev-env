@@ -385,7 +385,15 @@ Phase 39
 
   4. The breaking `Principal` change is recorded in `MIGRATION.md` §9.2 and the
      `cargo semver-checks` allowlist.
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+- [ ] 40-01-PLAN.md — Checkpoint on the one-way doors (D-01/D-04/D-09), then the tracer: API-key tenant → Principal → PrincipalRef → Run.submitted_by → SQLite 008 → GET /v1/runs/{id} gate (owner/Admin 200, other tenant 404); register the breaks (wave 1)
+- [ ] 40-02-PLAN.md — Scoped GET /v1/runs: RunQuery.scope inside SQL on all three adapters, Postgres attribution parity, shared contract clauses (wave 2)
+- [ ] 40-03-PLAN.md — AuthConfig::validate fail-closed key/tenant/bearer rules at boot and deployment docs (wave 2)
+- [ ] 40-04-PLAN.md — Ledger scope source: LedgerScope::from_attribution on the worker path and scoped executor ports on the HTTP agent path (wave 2)
+- [ ] 40-05-PLAN.md — load_visible_run on stream/cancel/webhook-deliveries, route matrix, RunResponse.submitted_by, read-scope docs and MIGRATION.md 9.6 (wave 3)
+- [ ] 40-06-PLAN.md — Release records: semver measurement and register reconciliation, CHANGELOGs, surface baseline, ADR-0054, WINDOWS.md, full gates (wave 4)
 
 ### Phase 41: Admission-Time Allowance Enforcement
 

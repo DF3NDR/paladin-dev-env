@@ -1,19 +1,14 @@
 ---
-status: testing
+status: complete
 phase: 39-spend-ledger
 source: [39-01-SUMMARY.md, 39-02-SUMMARY.md, 39-03-SUMMARY.md, 39-04-SUMMARY.md, 39-05-SUMMARY.md, 39-06-SUMMARY.md, 39-07-SUMMARY.md, 39-08-SUMMARY.md]
 started: 2026-09-28T14:00:10Z
-updated: 2026-09-28T15:40:56Z
+updated: 2026-09-28T15:41:35Z
 ---
 
 ## Current Test
-<!-- OVERWRITE each test - shows where we are -->
 
-number: 3
-name: Credential-handling review holds up
-expected: |
-  Reading `crates/paladin-storage/src/treasury/{sqlite,postgres}.rs` you see every connection error routed through `redact_database_url_password` before any other handling; the settle log lines in `crates/paladin-battalion/src/engine/settlement.rs` and `paladin_execution_service.rs` interpolate only run_id/superstep/attempt/ordinal/nanos/currency, never `api_key_id` or `tenant_id`; and no new `reqwest::Client` appears anywhere in the phase diff. The findings recorded in 39-08-SUMMARY.md §Credential-handling review match what you see.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
@@ -29,7 +24,7 @@ rationale: Operator sign-off on a one-way schema decision is inherently a human 
 
 ### 3. Credential-handling review holds up
 expected: Reading `crates/paladin-storage/src/treasury/{sqlite,postgres}.rs` you see every connection error routed through `redact_database_url_password` before any other handling; the settle log lines in `crates/paladin-battalion/src/engine/settlement.rs` and `paladin_execution_service.rs` interpolate only run_id/superstep/attempt/ordinal/nanos/currency, never `api_key_id` or `tenant_id`; and no new `reqwest::Client` appears anywhere in the phase diff. The findings recorded in 39-08-SUMMARY.md §Credential-handling review match what you see.
-result: [pending]
+result: pass
 coverage_id: 39-08/D8
 rationale: Manual source-inspection review per security.instructions.md; no merge-gating Rust SAST exists.
 
@@ -312,9 +307,9 @@ coverage_id: 39-08/D7
 ## Summary
 
 total: 49
-passed: 48
+passed: 49
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 

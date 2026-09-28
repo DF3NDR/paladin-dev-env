@@ -29,6 +29,7 @@ use sqlx::Row;
 use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
 
 use paladin_core::platform::container::parley::ParleyResponse;
+use paladin_core::platform::container::principal::{RunAttribution, RunReadScope, TenantId};
 use paladin_core::platform::container::run::{
     AssistantRef, ForkSpec, RUN_SCHEMA_VERSION, Run, RunCursor, RunId, RunStatus, WebhookSpec,
 };
@@ -1032,6 +1033,209 @@ mod tests {
     }
 
     // ── Gap-closure plan 27-20: timestamp precision contract ────────────
+    // ── Run attribution + tenant-scoped list (Phase 40, TENANT-02, PLAT-07) ──
+    //
+    // Two DB-free `#[test]`s first: they pin the SQL text itself (the
+    // attribution columns on every INSERT/SELECT constant, and the D-12
+    // scope predicate's position and bound-placeholder form in `list_query`)
+    // and therefore run in every environment, Docker or not. The six shared
+    // contract clauses and two postgres-local clauses below them are
+    // Docker-gated like everything else in this module.
+
+    #[test]
+    fn insert_constants_carry_the_attribution_columns() {
+        assert!(
+            INSERT_RUN.contains("tenant_id, api_key_id"),
+            "INSERT_RUN must name both attribution columns: {INSERT_RUN}"
+        );
+        assert!(
+            INSERT_RUN.contains("$19, $20"),
+            "INSERT_RUN must bind the attribution as $19, $20: {INSERT_RUN}"
+        );
+        assert!(
+            INSERT_RUN_WITH_LATEST.contains("tenant_id, api_key_id"),
+            "INSERT_RUN_WITH_LATEST must name both attribution columns: {INSERT_RUN_WITH_LATEST}"
+        );
+        assert!(
+            INSERT_RUN_WITH_LATEST.contains("$17, $18, $19"),
+            "INSERT_RUN_WITH_LATEST must select the attribution as $18, $19 after $17: \
+             {INSERT_RUN_WITH_LATEST}"
+        );
+        assert!(
+            INSERT_RUN_WITH_LATEST.contains("a.assistant_id = $20"),
+            "INSERT_RUN_WITH_LATEST must end with the a.assistant_id = $20 bind: \
+             {INSERT_RUN_WITH_LATEST}"
+        );
+        for constant in [
+            SELECT_RUN_BY_ID,
+            SELECT_ACTIVE_RUN_FOR_THREAD,
+            LIST_SELECT_PREFIX,
+        ] {
+            assert!(
+                constant.contains("tenant_id") && constant.contains("api_key_id"),
+                "SELECT constant must read both attribution columns: {constant}"
+            );
+        }
+    }
+
+    #[test]
+    fn list_query_applies_the_tenant_scope_before_order_by() {
+        let tenant = TenantId::new("acme").unwrap();
+        let scoped = RunQuery {
+            status: Some(RunStatus::Queued),
+            limit: 2,
+            scope: RunReadScope::Tenant(tenant),
+            ..Default::default()
+        };
+        let sql = list_query(&scoped, 3).sql().to_string();
+        let tenant_at = sql
+            .find(" AND tenant_id = $")
+            .expect("Tenant scope pushes a bound tenant_id predicate");
+        let status_at = sql.find(" AND status = $").expect("status predicate");
+        let order_at = sql
+            .find(" ORDER BY submitted_at DESC, run_id DESC LIMIT $")
+            .expect("keyset ORDER BY ... LIMIT");
+        assert!(
+            status_at < tenant_at && tenant_at < order_at,
+            "tenant predicate must sit after the status filter and before ORDER BY: {sql}"
+        );
+        assert!(
+            !sql.contains("acme"),
+            "the tenant id must be bound, never interpolated (T-40-10): {sql}"
+        );
+
+        let unscoped = RunQuery {
+            limit: 2,
+            scope: RunReadScope::All,
+            ..Default::default()
+        };
+        let sql = list_query(&unscoped, 3).sql().to_string();
+        assert!(
+            !sql.contains("tenant_id ="),
+            "All must add no tenant predicate: {sql}"
+        );
+        assert!(sql.contains(" ORDER BY submitted_at DESC, run_id DESC LIMIT $"));
+    }
+
+    #[tokio::test]
+    async fn insert_then_get_round_trips_attribution() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::insert_then_get_round_trips_attribution(&store).await;
+    }
+
+    #[tokio::test]
+    async fn unattributed_run_round_trips_null_attribution() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::unattributed_run_round_trips_null_attribution(&store).await;
+    }
+
+    #[tokio::test]
+    async fn attribution_survives_every_status_and_attempt_update() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::attribution_survives_every_status_and_attempt_update(&store).await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_to_tenant_returns_only_that_tenants_runs() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::list_scoped_to_tenant_returns_only_that_tenants_runs(&store).await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_to_a_tenant_with_no_runs_is_an_empty_page() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::list_scoped_to_a_tenant_with_no_runs_is_an_empty_page(&store).await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_pagination_has_no_gap_or_overlap() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::list_scoped_pagination_has_no_gap_or_overlap(&store).await;
+    }
+
+    /// Postgres-local (mirrors `sqlite.rs`): the D-30 single-statement insert path
+    /// carries the attribution in the SAME `INSERT ... SELECT` as every other column
+    /// (edge TENANT-02/concurrency).
+    #[tokio::test]
+    async fn insert_with_latest_persists_attribution() {
+        use crate::assistant::contract_tests::sample_new_version;
+        use paladin_core::platform::container::assistant::AssistantId;
+        use paladin_ports::output::assistant_repository_port::AssistantRepositoryPort;
+
+        let (Some(run_store), Some(assistant_store)) =
+            (store_or_skip().await, assistant_store_or_skip().await)
+        else {
+            return;
+        };
+
+        let assistant_id =
+            AssistantId::new(format!("attr-insert-with-latest-{}", uuid::Uuid::new_v4())).unwrap();
+        assistant_store
+            .create(&assistant_id, sample_new_version("v1"))
+            .await
+            .unwrap();
+
+        let tenant = TenantId::new(format!("acme-{}", uuid::Uuid::new_v4())).unwrap();
+        let thread = ThreadId::new(format!("thread-latest-attr-{}", uuid::Uuid::new_v4())).unwrap();
+        let run = contract_tests::sample_attributed_run(
+            &thread,
+            assistant_id.as_str(),
+            contract_tests::contract_timestamp(),
+            &tenant,
+            "svc-a",
+        );
+
+        run_store.insert_with_latest(&run).await.unwrap();
+        let fetched = run_store.get(&run.run_id).await.unwrap().unwrap();
+        assert_eq!(
+            fetched.submitted_by,
+            Some(RunAttribution::new(tenant, "svc-a"))
+        );
+    }
+
+    /// Postgres-local (mirrors `sqlite.rs`): no principal means SQL NULL in both
+    /// columns -- never the ledger's unattributed sentinel string (D-09, D-10).
+    #[tokio::test]
+    async fn unattributed_run_is_stored_as_sql_null() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        let thread = ThreadId::new(format!("thread-attr-null-{}", uuid::Uuid::new_v4())).unwrap();
+        let run = contract_tests::sample_run(
+            &thread,
+            "attr-null-assistant",
+            contract_tests::contract_timestamp(),
+        );
+        assert!(run.submitted_by.is_none());
+        store.insert(&run).await.unwrap();
+
+        let row = sqlx::query(
+            "SELECT tenant_id IS NULL AND api_key_id IS NULL AS both_null FROM runs \
+             WHERE run_id = $1",
+        )
+        .bind(run.run_id.as_str())
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        let both_null: bool = row.get("both_null");
+        assert!(
+            both_null,
+            "an unattributed run must store SQL NULL in both columns"
+        );
+    }
+
     //
     // Deliberate, single exception to the "no extra, non-contract
     // `#[tokio::test]`s in this module" rule below: this clause pins the
@@ -1109,12 +1313,17 @@ mod tests {
     }
 
     // No extra, non-contract `#[tokio::test]`s in this module BEYOND the
-    // one immediately above (by design, and its own doc comment explains
-    // why it is the sanctioned exception): CI asserts this module's
-    // `#[tokio::test]` count equals `contract_tests`'s `pub async fn` count
-    // plus exactly one (Task 3's own acceptance criterion, amended by plan
-    // 27-20), so a password-redaction smoke test analogous to `sqlite.rs`'s
-    // and `waypoint::postgres`'s would break that assertion.
+    // one immediately above and Phase 40's two postgres-local attribution
+    // clauses (`insert_with_latest_persists_attribution`,
+    // `unattributed_run_is_stored_as_sql_null` -- each mirrors a
+    // `sqlite.rs`-local test that needs raw SQL or the sibling assistant
+    // store, which no shared contract clause can express). CI's
+    // `postgres-integration` job asserts the number of tests that actually
+    // PASSED against the live server is at least this module's declared
+    // `#[tokio::test]` count (and fails on any `SKIP:` line), so every
+    // `#[tokio::test]` added here must really run there -- a
+    // password-redaction smoke test analogous to `sqlite.rs`'s and
+    // `waypoint::postgres`'s would still be pure noise against that gate.
     // `map_insert_error`/`wrap`/`wrap_error` reuse the same
     // `redact_database_url_password` helper the Waypoint adapters already
     // prove redacts correctly (`waypoint::postgres::tests::connection_error_redacts_password_from_database_url`).

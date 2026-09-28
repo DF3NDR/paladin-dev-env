@@ -145,6 +145,28 @@ Phase 37 plans; 2 open artifacts acknowledged — both already deferred by Phase
 entry points with `# Examples` doctests, `WINDOWS.md` `open_count: 0`, MSRV 1.88 measured. Full
 record: `MILESTONES.md`. **Next: `/gsd-new-milestone`** — new phases start at Phase 38.
 
+**Phase 39 complete (2026-09-28)** — spend-ledger, the second phase of milestone v0.11.0
+"Treasurer Spend Governance" (LEDGR-01..04; 8 plans in 5 waves, run sequentially on the main
+checkout). In the tree: the `TreasuryLedgerPort` (`reserve`/`settle`/`release`/`spend`/
+`store_now`) with its domain types in `paladin-core`'s `treasury_ledger` module, three adapters —
+`InMemoryTreasuryLedger`, `SqliteTreasuryLedger` (`BEGIN IMMEDIATE`) and `PostgresTreasuryLedger`
+(transaction-scoped advisory lock) — backed by a `007` migration in both dialects and proven by one
+21-clause contract suite run unmodified on every adapter (the N−1-of-N race and the
+concurrent-duplicate-settle clauses included, live against Postgres 16). Settlement is idempotent
+on `(run_id, superstep, attempt)` through a partial unique index; the engine path settles once per
+superstep attempt at the ADR-0052 boundary (`WarEngine::with_treasury_ledger`, per-model
+breakdown, nested Battalion roll-up) and the agent loop once per priced call
+(`AgentLoopSettlement::PlatformRunsOnly` never double-counts engine nodes); `RunScope::with_run_id`
+carries the Platform run id; the worker hands each engine the persisted `runs.attempt`; the server
+builds the ledger from `RunStoreConfig`. Operators read spend with `paladin-cli treasury spend`
+(per tenant, API key, run and model over a window) and as ledger-derived `cost` on `GET /runs`,
+`GET /runs/{id}` and the agent execute response (`CostDto`); tenant scope is the
+`LedgerScope::unattributed()` sentinel until Phase 40. Release records: MIGRATION §9.2 rows,
+CHANGELOGs, facade re-export, `.project/current-exports.txt` at 4035 items; every gate green
+(`cargo test --workspace` 0 failed, `make clean-code`, `make security`, `make check-gates`,
+`make openapi` no drift). Verification `passed` 4/4 with no human items. Next:
+`/gsd-discuss-phase 40` (Tenant Identity & Run-Read Scoping).
+
 **Phase 38 complete (2026-09-26)** — design-seams-pricing-cost-producer, the first phase of
 milestone v0.11.0 "Treasurer Spend Governance" (PRICE-01..03; 9 plans in 6 waves, run
 sequentially on the main checkout). On record: ADR-0052 (mid-run Treasurer enforcement attaches as
@@ -1686,7 +1708,7 @@ corpus:
 | [`Treasurer` reserved for cross-run spend governance](.planning/decisions/0050-treasurer-reservation.md) (ADR-0050) | Reserves the output-side spend-governance officer name (allowances, per-model pricing, `ExecutionMetadata.cost_estimate` production, pacing) that *installs* rather than replaces the per-run `TokenBudget` at `src/application/services/paladin/middleware/limits.rs`, owned by Milestone 14; `grep -rn Treasurer crates src` returns 0/0 at authoring time (2026-09-14). | ✓ Good — reservation honoured through v0.10.0: `cost_estimate` rustdoc reservation and the downstream guardrail landed (Phase 30); no `Treasurer` code in-tree; Milestone 14 candidate; Milestone 14 build began Phase 38 (ADR-0052/0053) |
 | [Token-economy Phases 31-33 land as clean breaks inside the untagged v0.10.0](.planning/decisions/0051-token-economy-versioning-x03-supersession.md) (ADR-0051) | Supersedes v0.10.0 corpus rule X-03 (`.project/v0.10.0/00-program-overview.md` line 44) for Phases 31, 32 and 33 only, on the operator's 2026-09-14 decision, with every break still recorded as a `MIGRATION.md` §9.2 row and a `cargo semver-checks` allowlist row as documentation for the downstream refactor, never as a compatibility shim. | ✓ Good — applied Phases 31-33: every clean break carries a `MIGRATION.md` §9.2 row and a `cargo semver-checks` allowlist row, no shims; scope held to Phases 31-33 only |
 | [Mid-run Treasurer enforcement attachment point](.planning/decisions/0052-mid-run-treasurer-enforcement.md) (ADR-0052) | Metering lives in a pricing decorator (`PricingLlmAdapter`) at the `LlmPort` boundary on both `WarEngine` and `PaladinExecutionService` run paths; the mid-run halt is raised at the engine's superstep boundary (a `WaypointStatus::Halted` Waypoint) and the agent loop's existing `TokenBudget` `after_model` cutoff, with `AgentRuntimeConfig::build_chain` confirmed to have zero production callers today and staying unwired for the engine path. | ⏳ Pending — metering built Phase 38; halts built Phase 42 |
-| [Treasury ledger balance model](.planning/decisions/0053-ledger-balance-model.md) (ADR-0053) | Append-only ledger, balance derived on read (D-14); `reserve`/`settle`/`release` row kinds with signed contributions, `i64` nano-unit amounts with an ISO 4217 currency code (D-02/D-15); settlement idempotency key `(run_id, superstep, attempt)` kept exactly as D-15 locked it, with one settlement per superstep attempt aggregating every Paladin node's cost — the operator's checkpoint decision, 2026-09-25 (superstep-aggregate over the per-node-extended-key alternative); PostgreSQL/SQLite/in-memory SUM-then-reserve serialization named; DDL left to Phase 39. | ⏳ Pending — implemented by Phase 39's 007 migration |
+| [Treasury ledger balance model](.planning/decisions/0053-ledger-balance-model.md) (ADR-0053) | Append-only ledger, balance derived on read (D-14); `reserve`/`settle`/`release` row kinds with signed contributions, `i64` nano-unit amounts with an ISO 4217 currency code (D-02/D-15); settlement idempotency key `(run_id, superstep, attempt)` kept exactly as D-15 locked it, with one settlement per superstep attempt aggregating every Paladin node's cost — the operator's checkpoint decision, 2026-09-25 (superstep-aggregate over the per-node-extended-key alternative); PostgreSQL/SQLite/in-memory SUM-then-reserve serialization named; DDL left to Phase 39. | ✅ Implemented — Phase 39 (2026-09-28): `007_create_treasury_ledger_table.sql` in both dialects, three adapters, one contract suite |
 
 **v0.9.0 (Phases 18-21) minted no new ADRs.** Its decisions were recorded as per-phase locked
 decisions (`D-xx`) in each phase's `CONTEXT.md`/`DISCUSSION-LOG.md`, now archived under
@@ -1853,6 +1875,12 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-09-28 after **Phase 39: Spend Ledger** completed — the second v0.11.0 phase:
+`TreasuryLedgerPort` with in-memory, SQLite and Postgres adapters under one contract suite, the `007`
+migrations, race-proof reserve and idempotent settle, production settle writers on both run paths,
+`paladin-cli treasury spend` and ledger-derived HTTP cost; verification `passed` 4/4, LEDGR-01..04
+complete.*
+
 *Last updated: 2026-09-26 after **Phase 38: Design Seams & Pricing/Cost Producer** completed —
 the first v0.11.0 phase: ADR-0052/ADR-0053 recorded, the `treasurer:` price table, the `Cost`
 fixed-point arithmetic, the `PricingLlmAdapter` decorator on both run paths, cost carriers on the

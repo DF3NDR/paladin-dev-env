@@ -348,11 +348,18 @@ const IN_PROCESS_TOKEN_STORE_WARNING: &str = "in-process bearer-token store ENAB
 
 /// Translate the config `auth` section into the web layer's [`AgentAuthConfig`].
 ///
-/// **Fail-closed:** when auth is enabled but no credential source (API keys or an opaque
-/// bearer token) is configured, this returns an error so the server refuses to start rather
-/// than silently serving an open API. When auth is disabled, a warning is logged and the API
-/// is open.
+/// **Fail-closed:** `AuthConfig::validate` runs first (Phase 40, D-05/D-06) -- a malformed,
+/// ambiguous or tenantless key mapping stops the boot with a message naming the entry and
+/// never its secret, even when auth is disabled. Then, when auth is enabled but no credential
+/// source (API keys or an opaque bearer token) is configured, this returns an error so the
+/// server refuses to start rather than silently serving an open API. When auth is disabled, a
+/// warning is logged and the API is open.
+///
+/// The per-key/bearer parsing below cannot fail on a validated config; it stays fallible (no
+/// panicking calls) so the two checks never drift apart silently.
 fn build_auth_config(cfg: &AuthConfig) -> Result<AgentAuthConfig, Box<dyn std::error::Error>> {
+    cfg.validate()?;
+
     if !cfg.enabled {
         warn!(
             "agent API authentication is DISABLED (http.auth.enabled = false) — all agent routes are open"
@@ -902,7 +909,10 @@ mod tests {
             ci.read_scope(),
             RunReadScope::Tenant(TenantId::new("acme").unwrap())
         );
-        assert_ne!(ci.id, web.id, "two keys of one tenant stay two distinct principals");
+        assert_ne!(
+            ci.id, web.id,
+            "two keys of one tenant stay two distinct principals"
+        );
     }
 
     // --- Phase 24 Plan 09: ShutdownCoordinator process wiring (HITL-04,

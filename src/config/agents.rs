@@ -7,6 +7,9 @@
 //! Secrets (API keys) are **never** read from these definitions — they come from the
 //! `llm:` provider configuration and the corresponding environment variables.
 
+use std::collections::{HashMap, HashSet};
+
+use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::user::UserRole;
 use serde::{Deserialize, Serialize};
 
@@ -73,15 +76,21 @@ impl Default for RateLimitConfig {
     }
 }
 
-/// One static API key mapped to a principal (`name` + `role`).
+/// One static API key mapped to a principal (`name` + `role` + `tenant`).
 ///
 /// The `key` should come from an environment variable / secret in practice, not be
-/// committed in plaintext.
+/// committed in plaintext. Every field is checked fail-closed at boot by
+/// [`AuthConfig::validate`]; nothing is trimmed, defaulted or clamped.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiKeyConfig {
-    /// The secret key value presented in the `X-API-Key` header.
+    /// The secret key value presented in the `X-API-Key` header. Must be non-empty and
+    /// unique across `api_keys` -- a shared secret would make the key lookup resolve an
+    /// arbitrary principal, and so an arbitrary tenant.
     pub key: String,
-    /// A stable identifier for the caller (used as the principal id; appears in logs).
+    /// The API key id: the principal id, and the `api_key_id` recorded on every run and
+    /// ledger row this key submits (Phase 40, D-06). Appears in logs. Must be unique across
+    /// `api_keys` and follow the same identifier rules as a tenant id: non-empty, no
+    /// whitespace, printable ASCII, at most 128 bytes.
     pub name: String,
     /// The role granted to requests authenticated with this key.
     pub role: UserRole,
@@ -132,6 +141,100 @@ impl Default for AuthConfig {
             api_keys: Vec::new(),
             bearer_token: BearerTokenAuthConfig::default(),
         }
+    }
+}
+
+impl AuthConfig {
+    /// Validate the key-to-tenant mapping fail-closed (Phase 40, TENANT-01; D-03/D-05/D-06).
+    ///
+    /// Never clamps, trims or rewrites a value: the first offending entry, in declaration
+    /// order, is reported and the config is rejected as written. Every message names the
+    /// entry -- `http.auth.api_keys[<name>]` once the name is known to be usable,
+    /// `http.auth.api_keys[#<index>]` (0-based list position) before that, or
+    /// `http.auth.bearer_token` -- and never a key value.
+    ///
+    /// Per `api_keys` entry, in order: `key` must be non-empty; `name` must be a valid
+    /// identifier (the rules of [`TenantId`]); `tenant` must be present and a valid
+    /// [`TenantId`] (there is no implicit default tenant); `name` must not repeat an earlier
+    /// entry's; `key` must not repeat an earlier entry's value. Then, only when
+    /// `bearer_token.enabled` is `true`, `bearer_token.tenant` must be present and valid.
+    ///
+    /// The API keys are validated even when `enabled` is `false`: a disabled section's keys
+    /// take effect the moment auth is re-enabled, so a malformed mapping is never accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operator-facing message for the first failing entry.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use paladin::config::agents::AuthConfig;
+    ///
+    /// let mut config = AuthConfig::default();
+    /// assert!(config.validate().is_ok());
+    ///
+    /// config.bearer_token.enabled = true; // ... with no `bearer_token.tenant`
+    /// assert!(config.validate().is_err());
+    /// ```
+    pub fn validate(&self) -> Result<(), String> {
+        let mut seen_names: HashSet<&str> = HashSet::with_capacity(self.api_keys.len());
+        // key value -> name of the first entry that configured it (boot-time config, not a
+        // request path: a plain `==` comparison is the right tool here, not `ct_eq`).
+        let mut seen_keys: HashMap<&str, &str> = HashMap::with_capacity(self.api_keys.len());
+
+        for (index, entry) in self.api_keys.iter().enumerate() {
+            if entry.key.is_empty() {
+                return Err(format!(
+                    "http.auth.api_keys[#{index}]: 'key' must not be empty"
+                ));
+            }
+            TenantId::new(entry.name.as_str()).map_err(|e| {
+                format!("http.auth.api_keys[#{index}]: 'name' is not a valid API key id: {e}")
+            })?;
+            let name = entry.name.as_str();
+
+            if entry.tenant.is_empty() {
+                return Err(format!(
+                    "http.auth.api_keys[{name}]: 'tenant' is required — every API key must map \
+                     to a tenant (Phase 40, TENANT-01)"
+                ));
+            }
+            TenantId::new(entry.tenant.as_str()).map_err(|e| {
+                format!("http.auth.api_keys[{name}]: 'tenant' is not a valid tenant id: {e}")
+            })?;
+
+            if !seen_names.insert(name) {
+                return Err(format!(
+                    "http.auth.api_keys[{name}]: duplicate 'name' — every API key name must be \
+                     unique because it is the attribution and scope key (Phase 40, D-06)"
+                ));
+            }
+            if let Some(first) = seen_keys.insert(entry.key.as_str(), name) {
+                return Err(format!(
+                    "http.auth.api_keys[{name}]: duplicate 'key' — the same secret is already \
+                     configured for api key '{first}' (the value is never printed)"
+                ));
+            }
+        }
+
+        if self.bearer_token.enabled {
+            match self.bearer_token.tenant.as_deref() {
+                None | Some("") => {
+                    return Err("http.auth.bearer_token: 'tenant' is required when \
+                                bearer_token.enabled is true — bearer-token principals must map \
+                                to a tenant (Phase 40, TENANT-01)"
+                        .to_string());
+                }
+                Some(tenant) => {
+                    TenantId::new(tenant).map_err(|e| {
+                        format!("http.auth.bearer_token: 'tenant' is not a valid tenant id: {e}")
+                    })?;
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -449,7 +552,10 @@ mod tests {
             err.starts_with("http.auth.api_keys[ci]: duplicate 'name'"),
             "expected the duplicate-name message, got: {err}"
         );
-        assert!(!err.contains("sk-1") && !err.contains("sk-2"), "never print key values: {err}");
+        assert!(
+            !err.contains("sk-1") && !err.contains("sk-2"),
+            "never print key values: {err}"
+        );
     }
 
     #[test]
@@ -465,8 +571,14 @@ mod tests {
             err.starts_with("http.auth.api_keys[web]: duplicate 'key'"),
             "expected the duplicate-key message naming the second entry, got: {err}"
         );
-        assert!(err.contains("'ci'"), "must name the first key holding the same secret: {err}");
-        assert!(!err.contains("sk-dup"), "the key value must never be printed: {err}");
+        assert!(
+            err.contains("'ci'"),
+            "must name the first key holding the same secret: {err}"
+        );
+        assert!(
+            !err.contains("sk-dup"),
+            "the key value must never be printed: {err}"
+        );
     }
 
     #[test]
@@ -539,7 +651,11 @@ mod tests {
                     tenant,
                 },
             };
-            assert_eq!(cfg.validate(), Ok(()), "a disabled bearer section is not validated");
+            assert_eq!(
+                cfg.validate(),
+                Ok(()),
+                "a disabled bearer section is not validated"
+            );
         }
     }
 

@@ -4,15 +4,15 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 40
 current_phase_name: Tenant Identity & Run-Read Scoping
-status: planning
+status: executing
 stopped_at: Phase 40 context gathered
-last_updated: "2026-09-28T16:44:12.913Z"
+last_updated: "2026-09-28T17:53:30.148Z"
 last_activity: 2026-09-28
 last_activity_desc: Phase 39 complete, transitioned to Phase 40
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 17
+  total_plans: 23
   completed_plans: 17
 ---
 
@@ -51,7 +51,7 @@ under `milestones/`.
 
 Phase: 40 — Tenant Identity & Run-Read Scoping
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-09-28 — Phase 39 complete, transitioned to Phase 40
 
 ## Performance Metrics

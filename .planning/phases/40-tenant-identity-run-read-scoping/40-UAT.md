@@ -3,17 +3,17 @@ status: testing
 phase: 40-tenant-identity-run-read-scoping
 source: [40-VERIFICATION.md]
 started: 2026-09-29T12:36:44Z
-updated: 2026-09-29T19:32:38Z
+updated: 2026-09-29T19:40:34Z
 ---
 
 ## Current Test
 
-number: 4
-name: CI-only evidence
+number: 5
+name: Disposition of code-review WR-02, WR-03 and WR-04
 expected: |
-  CI postgres-integration, coverage (82% line floor) and the web-server integration job
-  (tests/integration/e2e_platform_api_test.rs) are green on the phase's final tree. The sandbox
-  has no Docker daemon and could not produce this evidence.
+  Decide whether to apply the shared permits check inside RunSubmissionService::cancel and a
+  generic-body repository-error helper in run_controller now, or file them (WINDOWS.md or Phase 46
+  hygiene). Neither blocks the roadmap criteria, which are met at the HTTP route level.
 awaiting: user response
 
 ## Tests
@@ -32,7 +32,9 @@ result: pass
 
 ### 4. CI-only evidence
 expected: CI postgres-integration, coverage (82% line floor) and the web-server integration job (tests/integration/e2e_platform_api_test.rs) are green on the phase's final tree. The sandbox has no Docker daemon and could not produce this evidence.
-result: [pending]
+result: blocked
+blocked_by: third-party
+reason: "Blocked. CI runs 444 and 442 on the phase's final code tree fail at container init: quay.io/minio/minio pin returns unauthorized (MinIO locked anonymous pulls ~2026-09-24; pin identical on main, main green 2026-09-23). Coverage, Integration, Docker Integration and K8s Smoke cannot run; postgres-integration, Redis, Ollama, audit, deny, API-surface are green. Not a Phase 40 defect; resolved by Phase 45 (RustFS swap) or an interim image re-pin."
 
 ### 5. Disposition of code-review WR-02, WR-03 and WR-04
 expected: Decide whether to apply the shared permits check inside RunSubmissionService::cancel and a generic-body repository-error helper in run_controller now, or file them (WINDOWS.md or Phase 46 hygiene). Neither blocks the roadmap criteria, which are met at the HTTP route level.
@@ -43,8 +45,8 @@ result: [pending]
 total: 5
 passed: 3
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
-blocked: 0
+blocked: 1
 
 ## Gaps

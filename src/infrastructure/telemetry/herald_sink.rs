@@ -197,6 +197,66 @@ mod tests {
         assert_eq!(captured[0].cost_currency(), Some("USD"));
     }
 
+    /// 45-02 (D-14): a legacy agent run has no graph, so `RunWorkerPool::run_agent`
+    /// feeds this sink `RunStarted { graph_fingerprint: "agent" }`, one superstep-0
+    /// node pair and `RunFinished { total_supersteps: 0 }`. The sink must produce
+    /// exactly one summary for that shape -- and never panic on it.
+    #[tokio::test]
+    async fn herald_sink_summarises_an_agent_shaped_run() {
+        use paladin_core::platform::container::waypoint::NodeOutcomeKind;
+
+        let herald = Arc::new(RecordingHerald::default());
+        let sink = HeraldTraceSink::new(Arc::clone(&herald) as Arc<dyn Herald>, "gpt-4");
+        let thread_id = ThreadId::new("herald-agent-shaped").unwrap();
+        let run_id = RunId::new_v7();
+        let record = |seq: u64, event: TraceEvent| TraceRecord {
+            thread_id: thread_id.clone(),
+            run_id: Some(run_id.clone()),
+            seq,
+            at: Utc::now(),
+            event,
+        };
+
+        let events = vec![
+            TraceEvent::RunStarted {
+                run_id: Some(run_id.clone()),
+                graph_fingerprint: "agent".to_string(),
+            },
+            TraceEvent::NodeStarted {
+                superstep: 0,
+                node_id: NodeId::new("code-agent"),
+                attempt: 1,
+                muster_task_key: None,
+            },
+            TraceEvent::NodeFinished {
+                superstep: 0,
+                node_id: NodeId::new("code-agent"),
+                attempt: 1,
+                outcome: NodeOutcomeKind::Succeeded,
+                duration_ms: 5,
+                usage: TokenUsage::new(11, 7),
+                cost: None,
+                cache_hit: false,
+            },
+            TraceEvent::RunFinished {
+                status: RunFinishStatus::Completed,
+                total_supersteps: 0,
+                usage: TokenUsage::new(11, 7),
+                cost: None,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        ];
+        for (index, event) in events.into_iter().enumerate() {
+            sink.on_event(record(index as u64 + 1, event))
+                .await
+                .expect("herald sink tolerates every agent-shaped record");
+        }
+
+        let captured = herald.captured();
+        assert_eq!(captured.len(), 1, "exactly one summary per agent run");
+    }
+
     /// Adapts a [`PaladinExecutionService`] to the engine-facing [`PaladinPort`] seam,
     /// mirroring `tracer_e2e.rs`'s own local adapter (no production adapter of this shape
     /// exists elsewhere in the tree).

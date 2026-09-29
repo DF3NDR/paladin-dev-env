@@ -49,6 +49,7 @@ use paladin_core::platform::container::run::{
     ForkSpec, Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
 use paladin_core::platform::container::run_scope::RunScope;
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent};
 use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
 use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, Waypoint, WaypointId};
@@ -1207,23 +1208,11 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 // ack have already succeeded -- a delivery-repository
                 // failure here is logged and never rolls back or changes
                 // the run's own status (prohibition P2).
-                if let Some(deliveries) = &self.webhook_deliveries
-                    && let Some(kind) = run_status_to_event_kind(to)
-                {
-                    let parleys = match &outcome {
-                        RunOutcome::AwaitingInput { parleys, .. } => Some(parleys.as_slice()),
-                        _ => None,
-                    };
-                    if let Some(delivery) =
-                        webhook_delivery_for_outcome(&run, kind, to, parleys, chrono::Utc::now())
-                        && let Err(error) = deliveries.enqueue(delivery).await
-                    {
-                        log::warn!(
-                            "run worker: failed to enqueue webhook delivery for run {}: {error}",
-                            run.run_id
-                        );
-                    }
-                }
+                let parleys = match &outcome {
+                    RunOutcome::AwaitingInput { parleys, .. } => Some(parleys.as_slice()),
+                    _ => None,
+                };
+                self.enqueue_webhook_delivery(&run, to, parleys).await;
             }
             OutcomeAction::LeaveRunningAndRequeue => {
                 self.queue.nack(&leased.token, Duration::ZERO).await?;
@@ -1410,8 +1399,32 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 .await
             }
             Err(error) => {
-                self.record_engine_failure(leased, run, error.to_string())
-                    .await
+                // D-15 (single terminal event): the ONE `error` wire event
+                // comes from `RunFinished { Failed }` through the dispatcher
+                // -> `map_trace_event` (`message: null`, exactly like a graph
+                // run's engine-emitted failure); this arm makes no direct bus
+                // publish of its own. The failure text is persisted on the
+                // run row below and stays readable through `GET /runs/{id}`.
+                let duration_ms = elapsed_ms(started);
+                dispatcher.emit(TraceEvent::NodeFinished {
+                    superstep: 0,
+                    node_id,
+                    attempt,
+                    outcome: NodeOutcomeKind::Failed,
+                    duration_ms,
+                    usage: TokenUsage::default(),
+                    cost: None,
+                    cache_hit: false,
+                });
+                dispatcher.emit(TraceEvent::RunFinished {
+                    status: RunFinishStatus::Failed,
+                    total_supersteps: 0,
+                    usage: dispatcher.total_usage(),
+                    cost: dispatcher.total_cost(),
+                    duration_ms,
+                    trace_dropped_total: 0,
+                });
+                self.persist_failure(leased, run, error.to_string()).await
             }
         };
 
@@ -1424,33 +1437,38 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         persisted
     }
 
-    /// Record an `EngineError` (or a `PaladinError`, for the `Agent`-kind
-    /// path) returned outside normal `RunOutcome` reporting as a `Failed`
-    /// run -- never a panic. If the repository write itself fails, log at
-    /// `warn` and nack with a 1s delay so the run is retried rather than
-    /// lost.
+    /// Record an `EngineError` returned outside normal `RunOutcome`
+    /// reporting as a `Failed` run -- never a panic. If the repository write
+    /// itself fails, log at `warn` and nack with a 1s delay so the run is
+    /// retried rather than lost.
     ///
     /// **(D-14) The ONE publish this pool retains outside `map_trace_event`,
-    /// deliberately.** Every caller of this method reaches it through a
-    /// path that never gets a `TraceEvent::RunFinished` record: the corrupt
-    /// `fork_from` case (`run_once`, before any engine dispatch begins),
-    /// the `Runnable::Agent` path (`run_agent`, which calls a bare
-    /// `PaladinPort` directly -- no `WarEngine`, no trace pipeline at all),
-    /// and a `WarEngine::start`/`resume`/`resume_with`/`fork` call that
-    /// itself returns `Err` before its OWN `trace.emit(TraceEvent::
-    /// RunStarted)` runs (graph/battlefield validation failures --
+    /// deliberately.** Its two callers both reach it through a path that
+    /// never gets a `TraceEvent::RunFinished` record: the corrupt `fork_from`
+    /// case (`run_once`, before any engine dispatch begins), and a
+    /// `WarEngine::start`/`resume`/`resume_with`/`fork` call that itself
+    /// returns `Err` before its OWN `trace.emit(TraceEvent::RunStarted)` runs
+    /// (graph/battlefield validation failures --
     /// `crates/paladin-battalion/src/engine/mod.rs`'s `start`, for one,
     /// validates the graph and initializes the Battlefield before opening
-    /// its trace dispatcher). A `WarEngine` call that fails AFTER its own
-    /// `RunStarted` already reached the trace pipeline DOES still get a
-    /// `RunFinished{status: failed}` record (the engine unconditionally
-    /// emits it right after `superstep::run` returns, `Ok` or `Err` alike)
-    /// -- for that narrower subset this method's own publish is a harmless,
-    /// accepted duplicate `error` event alongside the one `map_trace_event`
-    /// already produced, not a correctness bug: an SSE consumer treats
-    /// `error` as terminal either way. Fixing the duplicate would require
-    /// distinguishing "already had a `RunStarted`" inside `paladin-battalion`
-    /// itself, a crate outside this plan's file scope.
+    /// its trace dispatcher). The `Runnable::Agent` path no longer reaches
+    /// this method: [`RunWorkerPool::run_agent`] emits its own
+    /// `RunFinished { Failed }` and calls [`Self::persist_failure`]
+    /// directly, so an agent run produces exactly one `error` wire event.
+    /// A `WarEngine` call that fails AFTER its own `RunStarted` already
+    /// reached the trace pipeline DOES still get a `RunFinished{status:
+    /// failed}` record (the engine unconditionally emits it right after
+    /// `superstep::run` returns, `Ok` or `Err` alike) -- for that narrower
+    /// subset this method's own publish is a harmless, accepted duplicate
+    /// `error` event alongside the one `map_trace_event` already produced,
+    /// not a correctness bug: an SSE consumer treats `error` as terminal
+    /// either way. Fixing the duplicate would require distinguishing
+    /// "already had a `RunStarted`" inside `paladin-battalion` itself, a
+    /// crate outside this plan's file scope.
+    ///
+    /// The status write, ack and the subscribed `failed` webhook delivery
+    /// come from [`Self::persist_failure`] (D-15), so a graph run failing
+    /// here gets the delivery the `Ok`-only `Transition` arm never enqueued.
     async fn record_engine_failure(
         &self,
         leased: &LeasedRun,
@@ -1468,7 +1486,23 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             .await;
             bus.unbind(&run.thread_id).await;
         }
+        self.persist_failure(leased, run, error_text).await
+    }
 
+    /// Persist a run's failure: status `Running -> Failed`, the outcome record
+    /// carrying `error_text`, then `ack` -- or, on a repository error, log at
+    /// `warn` and `nack` with a 1s delay so the run is retried rather than
+    /// lost. On the ack path ONLY, enqueues the run's subscribed `failed`
+    /// webhook delivery (D-40 ordering: strictly after the status write and
+    /// ack; a delivery error is logged and never changes the run's status,
+    /// prohibition P2). Publishes nothing on the bus -- callers own their
+    /// wire event.
+    async fn persist_failure(
+        &self,
+        leased: &LeasedRun,
+        run: &Run,
+        error_text: String,
+    ) -> Result<bool, WorkerError> {
         let now = chrono::Utc::now();
         let record_result: Result<(), RunRepositoryError> = async {
             self.repository
@@ -1491,6 +1525,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         match record_result {
             Ok(()) => {
                 self.queue.ack(&leased.token).await?;
+                self.enqueue_webhook_delivery(run, RunStatus::Failed, None)
+                    .await;
             }
             Err(repo_err) => {
                 log::warn!(
@@ -1504,6 +1540,40 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             }
         }
         Ok(true)
+    }
+
+    /// Enqueue the `Pending` webhook delivery `status` implies for `run`, when
+    /// a delivery repository is wired and the run's webhook subscribes to the
+    /// matching event (D-40, PLAT-FR-14). The one enqueue path every terminal
+    /// or suspension transition shares -- graph outcomes, agent outcomes and
+    /// [`Self::persist_failure`] alike -- so both runnable kinds deliver
+    /// through the identical [`webhook_delivery_for_outcome`] helper and the
+    /// SSRF-guarded `WebhookDeliveryService` that drains it (D-00h).
+    ///
+    /// Callers invoke this strictly AFTER the run's own status write and ack
+    /// succeeded. An enqueue error is logged (naming only the run id, never
+    /// the URL or secret) and NEVER propagated (prohibition P2).
+    async fn enqueue_webhook_delivery(
+        &self,
+        run: &Run,
+        status: RunStatus,
+        parleys: Option<&[ParleyRequest]>,
+    ) {
+        let Some(deliveries) = &self.webhook_deliveries else {
+            return;
+        };
+        let Some(kind) = run_status_to_event_kind(status) else {
+            return;
+        };
+        if let Some(delivery) =
+            webhook_delivery_for_outcome(run, kind, status, parleys, chrono::Utc::now())
+            && let Err(error) = deliveries.enqueue(delivery).await
+        {
+            log::warn!(
+                "run worker: failed to enqueue webhook delivery for run {}: {error}",
+                run.run_id
+            );
+        }
     }
 }
 
@@ -2071,6 +2141,88 @@ mod tests {
 
         let run_after = repository.get(&run_id).await.unwrap().unwrap();
         assert_eq!(run_after.status, RunStatus::Failed);
+    }
+
+    /// D-15: a graph run failing through `record_engine_failure` (the corrupt
+    /// `fork_from` vehicle) now enqueues exactly one `Failed` delivery -- the
+    /// graph `Err` path used to enqueue only on the `Ok` path. Its `error`
+    /// wire event is pinned separately by
+    /// `engine_failure_still_reaches_the_error_wire_name`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn graph_engine_failure_enqueues_failed_delivery() {
+        use paladin_core::platform::container::run::WebhookSpec;
+        use paladin_core::platform::container::webhook::WebhookDeliveryStatus;
+        use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
+
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let waypoint_store = Arc::new(InMemoryWaypointStore::new());
+        let graph = Arc::new(WarGraph::new(
+            BattlefieldSchema::new(vec![]),
+            EngineLimits::default(),
+        ));
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("noop", graph));
+        let engine = Arc::new(WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            waypoint_store.clone(),
+        ));
+        let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+            Arc::new(InMemoryWebhookDeliveryRepository::new());
+        let pool = RunWorkerPool::new(
+            engine,
+            waypoint_store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_webhook_deliveries(Arc::clone(&deliveries));
+
+        let run_id = RunId::new_v7();
+        let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+        let run = Run::new(
+            run_id.clone(),
+            thread_id.clone(),
+            AssistantRef {
+                assistant_id: "noop".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_fork_from(ForkSpec {
+            from_waypoint_id: "not-a-uuid".to_string(),
+            edit: None,
+        })
+        .with_webhook(WebhookSpec {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            events: vec![RunEventKind::Failed],
+        });
+        repository.insert(&run).await.unwrap();
+        queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id,
+                attempt: 1,
+                enqueued_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        assert!(pool.run_once().await.unwrap());
+        let run_after = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run_after.status, RunStatus::Failed);
+
+        let page = deliveries.list_for_run(&run_id, 10, None).await.unwrap();
+        assert_eq!(page.items.len(), 1, "exactly one Failed delivery");
+        assert!(matches!(page.items[0].event, RunEventKind::Failed));
+        assert!(matches!(
+            page.items[0].status,
+            WebhookDeliveryStatus::Pending
+        ));
+        let payload: serde_json::Value = serde_json::from_str(&page.items[0].payload).unwrap();
+        assert_eq!(payload["status"], "failed");
     }
 
     // --- run_model_label (D-12, model_used discretion item) ---------

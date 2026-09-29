@@ -1111,6 +1111,221 @@ async fn agent_kind_run_streams_done_live() {
     ));
 }
 
+/// A [`PaladinPort`] whose every call fails, standing in for an LLM outage.
+/// The error text is deliberately recognisable so a test can prove it never
+/// reaches a wire event (T-45-08).
+struct AlwaysFailsPaladinPort;
+
+/// The failure text [`AlwaysFailsPaladinPort`] returns.
+const AGENT_FAILURE_TEXT: &str = "llm exploded: sk-agent-secret-marker";
+
+#[async_trait]
+impl PaladinPort for AlwaysFailsPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        Err(PaladinError::ExecutionError(AGENT_FAILURE_TEXT.to_string()))
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unreachable!("this test never calls execute_stream")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// Build a pool over an [`AgentOnlyResolver`] with `port`, an event bus and
+/// (optionally) a webhook delivery repository -- the shared harness of the
+/// 45-02 agent-path failure tests.
+#[allow(clippy::type_complexity)]
+fn agent_pool(
+    port: Arc<dyn PaladinPort>,
+    deliveries: Option<Arc<dyn WebhookDeliveryRepositoryPort>>,
+) -> (
+    RunWorkerPool<InMemoryWaypointStore>,
+    Arc<dyn RunRepositoryPort>,
+    Arc<dyn RunQueuePort>,
+    Arc<super::events::RunEventBus>,
+) {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let resolver: Arc<dyn AssistantResolver> = Arc::new(AgentOnlyResolver);
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let bus = Arc::new(super::events::RunEventBus::new());
+    let mut pool = RunWorkerPool::new(
+        engine,
+        store,
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_paladin_port(port)
+    .with_event_bus(bus.clone())
+    .with_trace_config(crate::config::trace::TraceConfig {
+        log_sink: false,
+        ..crate::config::trace::TraceConfig::default()
+    });
+    if let Some(deliveries) = deliveries {
+        pool = pool.with_webhook_deliveries(deliveries);
+    }
+    (pool, repository, queue, bus)
+}
+
+/// Drain every event currently buffered on `rx`.
+fn drain_events(
+    rx: &mut tokio::sync::broadcast::Receiver<
+        paladin_core::platform::container::run::RunStreamEvent,
+    >,
+) -> Vec<paladin_core::platform::container::run::RunStreamEvent> {
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+    events
+}
+
+fn terminal_count(events: &[paladin_core::platform::container::run::RunStreamEvent]) -> usize {
+    events
+        .iter()
+        .filter(|e| matches!(e.kind, RunStreamEventKind::Done | RunStreamEventKind::Error))
+        .count()
+}
+
+/// D-15, T-45-08, T-45-10: every agent run ends with EXACTLY ONE terminal
+/// wire event. A failure is one `error` (status `failed`, `message: null`,
+/// exactly like a graph run's engine-emitted failure) -- never an `error`
+/// plus a second publish, and never a `done`; a success is one `done`. The
+/// failure text stays behind the tenant-scoped `GET /runs/{id}`.
+#[tokio::test]
+async fn agent_kind_run_emits_exactly_one_terminal_event() {
+    // --- failure ---
+    let (pool, repository, queue, bus) = agent_pool(Arc::new(AlwaysFailsPaladinPort), None);
+    let (run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+    bus.bind(thread_id.clone(), run_id.clone()).await;
+    let mut rx = bus.subscribe(&run_id).await.expect("bound");
+
+    assert!(pool.run_once().await.unwrap());
+    let events = drain_events(&mut rx);
+    assert_eq!(terminal_count(&events), 1, "got {events:?}");
+    let terminal = events.last().expect("at least the terminal event");
+    assert_eq!(terminal.kind, RunStreamEventKind::Error);
+    assert_eq!(terminal.mode, RunStreamMode::Live);
+    assert_eq!(terminal.payload["status"], "failed");
+    assert!(
+        terminal.payload["message"].is_null(),
+        "the wire error carries no failure text (message: null)"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| e.payload.to_string().contains("sk-agent-secret-marker")),
+        "the failure text must never reach any wire event"
+    );
+    assert!(
+        !events.iter().any(|e| e.kind == RunStreamEventKind::Done),
+        "a failed agent run never emits done"
+    );
+    let failed = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(failed.status, RunStatus::Failed);
+    assert_eq!(
+        failed.error.as_deref(),
+        Some(format!("Execution error: {AGENT_FAILURE_TEXT}").as_str()),
+        "the failure text stays readable through GET /runs/{{id}}"
+    );
+
+    // --- success ---
+    let (pool, repository, queue, bus) = agent_pool(Arc::new(AlwaysSucceedsPaladinPort), None);
+    let (run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+    bus.bind(thread_id.clone(), run_id.clone()).await;
+    let mut rx = bus.subscribe(&run_id).await.expect("bound");
+
+    assert!(pool.run_once().await.unwrap());
+    let events = drain_events(&mut rx);
+    assert_eq!(terminal_count(&events), 1, "got {events:?}");
+    assert_eq!(
+        events.last().map(|e| e.kind),
+        Some(RunStreamEventKind::Done),
+        "a successful agent run ends with one done"
+    );
+}
+
+/// PLAT-08, D-15: a failing agent run subscribed to `failed` enqueues
+/// exactly one `Pending` `failed` delivery, after its status write and ack.
+#[tokio::test]
+async fn agent_kind_run_failure_enqueues_a_failed_delivery() {
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let (pool, repository, queue, _bus) = agent_pool(
+        Arc::new(AlwaysFailsPaladinPort),
+        Some(Arc::clone(&deliveries)),
+    );
+    let webhook = WebhookSpec {
+        url: "https://example.com/hook".to_string(),
+        secret: None,
+        events: vec![RunEventKind::Failed],
+    };
+    let (run_id, _thread_id) =
+        submit_with_webhook(&repository, &queue, "code-agent", webhook).await;
+
+    assert!(pool.run_once().await.unwrap());
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Failed);
+
+    let page = deliveries.list_for_run(&run_id, 10, None).await.unwrap();
+    assert_eq!(page.items.len(), 1, "exactly one delivery must be enqueued");
+    let delivery = &page.items[0];
+    assert!(matches!(delivery.event, RunEventKind::Failed));
+    assert!(matches!(
+        delivery.status,
+        paladin_core::platform::container::webhook::WebhookDeliveryStatus::Pending
+    ));
+    let payload: serde_json::Value = serde_json::from_str(&delivery.payload).unwrap();
+    assert_eq!(payload["status"], "failed");
+    assert_eq!(payload["event"], "failed");
+    assert!(
+        !delivery.payload.contains("sk-agent-secret-marker"),
+        "the failure text never rides in the webhook payload"
+    );
+}
+
+/// P2 (T-45-11): a delivery-repository error on the FAILURE path is logged
+/// and never changes the run's `Failed` status, nor leaves the bus bound.
+#[tokio::test]
+async fn failed_delivery_enqueue_error_never_changes_the_failed_status() {
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> = Arc::new(AlwaysErrorWebhookDeliveries);
+    let (pool, repository, queue, bus) =
+        agent_pool(Arc::new(AlwaysFailsPaladinPort), Some(deliveries));
+    let webhook = WebhookSpec {
+        url: "https://example.com/hook".to_string(),
+        secret: None,
+        events: vec![RunEventKind::Failed],
+    };
+    let (run_id, _thread_id) =
+        submit_with_webhook(&repository, &queue, "code-agent", webhook).await;
+
+    assert!(pool.run_once().await.unwrap());
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(
+        run.status,
+        RunStatus::Failed,
+        "a webhook delivery repository error must never change the run's own status"
+    );
+    assert!(
+        bus.subscribe(&run_id).await.is_none(),
+        "the channel must be unbound once the run returns"
+    );
+}
+
 // --- 28-06: per-run trace composition (Task 1) --------------------------
 
 /// Build a `RunWorkerPool` over a fresh `InMemoryWaypointStore`/repository/

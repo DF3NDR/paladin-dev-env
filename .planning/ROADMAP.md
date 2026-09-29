@@ -531,13 +531,25 @@ independent of the Treasurer phases
 **Plans**: 7 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 45-01-PLAN.md — Wave 1 (tracer, STORE-02): make the FileStoragePort contract suite real and green against RustFS with the reused adapter (path-style bucket bootstrap, multipart via a stateless token, ETag + exercised presign cases, harness fixes, RustFS `GenericImage` local mode, D-01 roadmap line)
 - [ ] 45-02-PLAN.md — Wave 1 (PLAT-08): legacy `Runnable::Agent` runs stream live SSE and enqueue webhooks through the shared machinery; single terminal event; `persist_failure`; row 31 closed via the ledger tool
 - [ ] 45-03-PLAN.md — Wave 1 (OBS-05): bench harness (point A), `LogTraceSink` enablement guard (point B), per-thread buffer + `CompositeSink` last-child move (point C), evidence protocol
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 45-04-PLAN.md — Wave 2 (STORE-01/02): CI Integration/Coverage/Docker Integration/E2E/k8s smoke on `rustfs/rustfs:1.0.0`, `mc` deleted, suite runs with a tests-ran check, `k8s/minio.yaml` → `k8s/rustfs.yaml`
 - [ ] 45-05-PLAN.md — Wave 2 (STORE-01): dev compose, devcontainer, Makefile, `.env.example`, coverage probe and dev docs on RustFS
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 45-06-PLAN.md — Wave 3 (STORE-03): ADR-0055, storage docs reframed with the production-manifest decision, phase-wide no-MinIO gate, CHANGELOG, MinIO todos closed
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 45-07-PLAN.md — Wave 4 (OBS-05, non-autonomous): maintainer-run three-point bench re-measure; D-19 meet/amend recording (evidence, row 35 ledger row, docs, CHANGELOG)
+
 **Research flag**: yes — RustFS's S3 API-surface parity (presigned URLs, multipart uploads, ETag
 format) is MEDIUM-confidence only; the phase's first work item should close this via the existing
 `FileStoragePort` contract-test suite before any adapter code is written.

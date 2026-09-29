@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 40
 current_phase_name: Tenant Identity & Run-Read Scoping
 status: executing
-stopped_at: Completed 40-02-PLAN.md
-last_updated: "2026-09-28T20:00:38.448Z"
+stopped_at: Completed 40-03-PLAN.md
+last_updated: "2026-09-29T00:00:15.907Z"
 last_activity: 2026-09-28
 last_activity_desc: Phase 40 execution started
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 23
-  completed_plans: 19
+  completed_plans: 20
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [████████░░] 83%
+**Progress:** [█████████░] 87%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,7 +50,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 40 (Tenant Identity & Run-Read Scoping) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
 Last activity: 2026-09-28 — Phase 40 execution started
 
@@ -205,6 +205,7 @@ Last activity: 2026-09-28 — Phase 40 execution started
 | Phase 39 P08 | ~55min | 2 tasks | 13 files |
 | Phase 40 P40-01 | ~2h (continuation) | 3 tasks | 29 files |
 | Phase 40 P02 | ~1h | 2 tasks | 7 files |
+| Phase 40 P03 | ~35m | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -282,6 +283,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: Postgres run-attribution columns deliberately deferred to 40-02; SQLite adapter fully wired this plan
 - [Phase ?]: 40-02: RunQuery.scope defaults to RunReadScope::All so internal callers stay unscoped; only list_runs narrows it from Principal::read_scope() (D-12 / Pitfall 8)
 - [Phase ?]: 40-02: tenant scope is a bound predicate inside each adapter's own keyset query (SQLite/Postgres WHERE tenant_id = ?, in-memory permits before sort/page), never a Rust post-filter
+- [Phase ?]: 40-03: AuthConfig::validate() checks api_keys even when http.auth.enabled is false -- a disabled section's keys take effect the moment auth is re-enabled
+- [Phase ?]: 40-03: boot-time duplicate key-value detection compares with plain == (value -> first name map) and names both keys by name only; ct_eq stays on the request path
 
 ### Pending Todos
 
@@ -484,8 +487,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-28T20:00:38.424Z
-**Stopped at:** Completed 40-02-PLAN.md
+**Last session:** 2026-09-29T00:00:15.883Z
+**Stopped at:** Completed 40-03-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

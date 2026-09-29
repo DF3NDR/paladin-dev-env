@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 1
+open_count: 2
 waived_count: 34
 fixed_count: 21
-total_count: 56
-last_updated: 2026-09-26T02:43:14.297Z
+total_count: 57
+last_updated: 2026-09-29T00:00:16.256Z
 ---
 
 # Broken Windows Ledger
@@ -71,6 +71,7 @@ last_updated: 2026-09-26T02:43:14.297Z
 | 54 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 232 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 232 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:54.731Z | 2026-09-18T05:30:54.994Z |
 | 55 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 354 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 354 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:55.190Z | 2026-09-18T05:30:55.444Z |
 | 56 | 38 | lint-warning | crates/paladin-core/src/platform/container/cost.rs |  | Pre-existing rustdoc broken_intra_doc_links (Cost/CurrencyCode/PriceRow unresolved in module doc comment); introduced by plan 38-02, out of scope for 38-04, logged to phase deferred-items.md | open |  | 2026-09-26T02:43:14.297Z |  |
+| 57 | 40 | deviation | docs/src/deployment-topologies/http-service-host.md |  | 40-03: plan Task 2 negated grep '^\\s*api_keys\\s*:' over src/application/cli is a false positive on a Rust parameter (env.rs:22); intent verified by refined grep, not fixed | open |  | 2026-09-29T00:00:16.256Z |  |
 
 ````json
 [
@@ -744,6 +745,18 @@ last_updated: 2026-09-26T02:43:14.297Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-09-26T02:43:14.297Z",
+    "resolved_at": null
+  },
+  {
+    "id": 57,
+    "kind": "deviation",
+    "phase": "40",
+    "file": "docs/src/deployment-topologies/http-service-host.md",
+    "line": null,
+    "description": "40-03: plan Task 2 negated grep '^\\s*api_keys\\s*:' over src/application/cli is a false positive on a Rust parameter (env.rs:22); intent verified by refined grep, not fixed",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-29T00:00:16.256Z",
     "resolved_at": null
   }
 ]

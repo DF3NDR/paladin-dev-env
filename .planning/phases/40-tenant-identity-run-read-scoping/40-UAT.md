@@ -3,17 +3,17 @@ status: testing
 phase: 40-tenant-identity-run-read-scoping
 source: [40-VERIFICATION.md]
 started: 2026-09-29T12:36:44Z
-updated: 2026-09-29T19:32:12Z
+updated: 2026-09-29T19:32:38Z
 ---
 
 ## Current Test
 
-number: 3
-name: Judgment-tier prohibitions (20 items, non-authoritative "held" verdicts)
+number: 4
+name: CI-only evidence
 expected: |
-  A human reviews the flagged prohibitions and confirms or rejects the verdicts; in particular
-  re-runs the credential-handling review required by .github/instructions/security.instructions.md
-  over the Phase 40 diff (git diff 629ef660..HEAD).
+  CI postgres-integration, coverage (82% line floor) and the web-server integration job
+  (tests/integration/e2e_platform_api_test.rs) are green on the phase's final tree. The sandbox
+  has no Docker daemon and could not produce this evidence.
 awaiting: user response
 
 ## Tests
@@ -28,7 +28,7 @@ result: pass
 
 ### 3. Judgment-tier prohibitions (20 items, non-authoritative "held" verdicts)
 expected: A human reviews the flagged prohibitions and confirms or rejects the verdicts; in particular re-runs the credential-handling review required by .github/instructions/security.instructions.md over the Phase 40 diff (git diff 629ef660..HEAD).
-result: [pending]
+result: pass
 
 ### 4. CI-only evidence
 expected: CI postgres-integration, coverage (82% line floor) and the web-server integration job (tests/integration/e2e_platform_api_test.rs) are green on the phase's final tree. The sandbox has no Docker daemon and could not produce this evidence.
@@ -41,9 +41,9 @@ result: [pending]
 ## Summary
 
 total: 5
-passed: 2
+passed: 3
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

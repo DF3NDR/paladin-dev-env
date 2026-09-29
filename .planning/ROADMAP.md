@@ -532,7 +532,7 @@ overhead) are closed or re-measured.
 Plans:
 **Wave 1**
 
-- [ ] 45-01-PLAN.md — Wave 1 (tracer, STORE-02): make the FileStoragePort contract suite real and green against RustFS with the reused adapter (path-style bucket bootstrap, multipart via a stateless token, ETag + exercised presign cases, harness fixes, RustFS `GenericImage` local mode, D-01 roadmap line)
+- [x] 45-01-PLAN.md — Wave 1 (tracer, STORE-02): make the FileStoragePort contract suite real and green against RustFS with the reused adapter (path-style bucket bootstrap, multipart via a stateless token, ETag + exercised presign cases, harness fixes, RustFS `GenericImage` local mode, D-01 roadmap line)
 - [ ] 45-02-PLAN.md — Wave 1 (PLAT-08): legacy `Runnable::Agent` runs stream live SSE and enqueue webhooks through the shared machinery; single terminal event; `persist_failure`; row 31 closed via the ledger tool
 - [ ] 45-03-PLAN.md — Wave 1 (OBS-05): bench harness (point A), `LogTraceSink` enablement guard (point B), per-thread buffer + `CompositeSink` last-child move (point C), evidence protocol
 

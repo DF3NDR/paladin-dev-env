@@ -99,7 +99,7 @@ and is declared from `tests/integration/mod.rs`.
 |--------|---------|
 | none | In-memory / mock only; no external process needed |
 | Redis | Requires a Redis 7 instance |
-| MinIO | Requires MinIO (S3-compatible object storage) |
+| MinIO | Requires an S3-compatible object store (RustFS in dev/test/CI; the `TEST_MINIO_*` variable names are unchanged) |
 | SQLite | Uses a `tempfile::NamedTempFile`; no external service needed |
 | Qdrant | Requires a Qdrant vector-database instance |
 | live-api | Requires real provider API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `DEEPSEEK_API_KEY`); skipped in normal CI |
@@ -193,18 +193,34 @@ make test-integration-minio    # MinIO tests only
 
 ## 3. CI Service Provisioning
 
-### Integration Tests job (`.github/workflows/integration-tests.yml`)
+### Integration Tests job (`.github/workflows/ci.yml`)
 
 The `integration-tests` job uses GitHub-native **service containers**:
 
 | Service | Image | Port |
 |---------|-------|------|
-| Redis | `redis:7-alpine` | `localhost:6379` |
-| MinIO | `quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772` | `localhost:9000` |
+| Redis | `redis:7-alpine` | `localhost:6380` |
+| RustFS | `rustfs/rustfs:1.0.0` | `localhost:9010` |
 
-The job runs:
+RustFS is the S3-compatible object store for dev, test and CI. The tag is exact (never `latest`, never a
+preview) and the manifest-list digest is recorded in a comment beside it in `ci.yml`, the test compose
+file and `k8s/rustfs.yaml`; a re-pin is a deliberate commit. The service is health-checked on
+`/health/ready`, runs with `RUSTFS_CONSOLE_ENABLE: "false"`, and has no `command:` key. No client
+binary creates buckets: `MinioAdapter::new` creates the bucket it needs.
+
+The job runs three cargo steps. The `FileStoragePort` contract suite has its own pair of steps so it
+cannot pass vacuously (without `s3-storage` a `file_storage_integration_tests` filter matches zero
+tests and still exits green):
 
 ```bash
+# 1. "Assert the file storage contract suite is compiled in": at least 11 listed cases
+cargo test --test lib --features integration-tests,s3-storage -- --list --ignored
+
+# 2. "Run file storage contract suite (RustFS)": `test result: ok` with at least 11 passed
+cargo test --test lib --features integration-tests,s3-storage file_storage_integration_tests \
+    -- --ignored --test-threads=1 --nocapture
+
+# 3. "Run broad workspace integration suite"
 cargo test --workspace --features integration-tests --verbose -- --test-threads=1
 ```
 
@@ -212,11 +228,13 @@ Environment variables passed to the test binary:
 
 | Variable | Value |
 |----------|-------|
-| `REDIS_URL` | `redis://localhost:6379` |
-| `MINIO_ENDPOINT` | `localhost:9000` |
-| `MINIO_ACCESS_KEY` | `minioadmin` |
-| `MINIO_SECRET_KEY` | `minioadmin` |
-| `MINIO_USE_SSL` | `false` |
+| `USE_EXTERNAL_TEST_SERVICES` | `true` |
+| `TEST_REDIS_HOST` / `TEST_REDIS_PORT` | `localhost` / `6380` |
+| `TEST_MINIO_ENDPOINT` | `localhost:9010` |
+| `TEST_MINIO_ACCESS_KEY` | `testuser` |
+| `TEST_MINIO_SECRET_KEY` | `testpass123` |
+
+(The `TEST_MINIO_*` names are the harness's own and are unchanged by the RustFS swap.)
 
 ### Docker Integration Tests job
 

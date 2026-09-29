@@ -694,33 +694,26 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-      minio:
-        # Pinned rather than floating: Docker Hub deleted the community MinIO
-        # repositories on 2026-09-12 and MinIO no longer publishes
-        # community-edition images. quay.io still serves this last
-        # known-good community release and no newer community tag will ever
-        # appear. Server manifest digest:
-        # sha256:cf3dadcfa1fb0324f43958bad1abba986d53c4ecc04d4d50b46c7dcda28bd3cd
-        # Long-term replacement tracked in
-        # .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+      rustfs:
+        # Pinned rather than floating: the community MinIO images are gone (Docker Hub
+        # deleted them on 2026-09-12, quay.io locked anonymous pulls on 2026-09-24).
+        # RustFS is Apache-2.0 and multi-arch. Manifest-list digest:
+        # sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+        # A re-pin is a deliberate commit, never automatic (Phase 45 D-03).
+        # No `command:` key: the image entrypoint appends /data itself.
+        image: rustfs/rustfs:1.0.0
         ports:
           - 9010:9000
-          - 9011:9001
         env:
-          MINIO_ROOT_USER: testuser
-          MINIO_ROOT_PASSWORD: testpass123
+          RUSTFS_ACCESS_KEY: testuser
+          RUSTFS_SECRET_KEY: testpass123
+          RUSTFS_CONSOLE_ENABLE: "false"
         options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
-          --health-interval 30s
-          --health-timeout 20s
-          --health-retries 3
-        # MinIO requires an explicit command argument to start as a server
-        # (matches integration-tests.yml's identical MinIO block); actionlint
-        # flags `command` as an unrecognized `services` key against its
-        # strict schema, but GitHub Actions applies it at runtime. See
-        # .github/actionlint.yaml for the narrowly-scoped suppression.
-        command: server /data --console-address ":9001"
+          --health-cmd "curl -f http://localhost:9000/health/ready"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 5s
 
     steps:
       - name: Checkout code
@@ -734,31 +727,6 @@ jobs:
         with:
           cache-on-failure: true
 
-      # MinIO retired its community binary downloads; its former community download host
-      # answered HTTP 410 Gone for the mc binary on 2026-09-13. The binary is now fetched
-      # from the archived github.com/minio/mc repository's release assets (assets on
-      # archived repositories remain downloadable), pinned to the same release the quay.io
-      # client image from quick task 260913-15w already carries. The checksum is the one
-      # published as that release's own .sha256sum asset. Long-term replacement tracked in .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
-      - name: Install MinIO Client
-        run: |
-          set -euo pipefail
-          MC_RELEASE="RELEASE.2025-08-13T08-35-41Z"
-          MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
-          # Retry transient CDN/5xx errors (a 504 here killed a whole run on 2026-09-14).
-          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o mc \
-            "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
-          echo "${MC_SHA256}  mc" | sha256sum -c -
-          chmod +x mc
-          sudo mv mc /usr/local/bin/mc
-
-      - name: Setup MinIO buckets
-        run: |
-          mc alias set testminio http://localhost:9010 testuser testpass123
-          mc mb testminio/test-bucket --ignore-existing
-          mc mb testminio/integration-tests --ignore-existing
-          echo "MinIO buckets created successfully"
-
       - name: Wait for services
         run: |
           echo "Waiting for Redis..."
@@ -770,10 +738,10 @@ jobs:
             sleep 1
           done
 
-          echo "Waiting for MinIO..."
+          echo "Waiting for RustFS..."
           for _ in {1..30}; do
-            if curl -f http://localhost:9010/minio/health/live; then
-              echo "MinIO is ready"
+            if curl -f http://localhost:9010/health/ready; then
+              echo "RustFS is ready"
               break
             fi
             sleep 1
@@ -792,8 +760,51 @@ jobs:
           echo "Running Redis integration tests..."
           cargo test redis_queue_integration_tests --release -- --ignored --nocapture
 
-          echo "Running file storage integration tests..."
-          cargo test file_storage_integration_tests --release -- --ignored --nocapture
+      # The FileStoragePort contract suite is gated behind `s3-storage`; without that
+      # feature `cargo test file_storage_integration_tests` matches zero tests and
+      # reports success (Phase 45 RESEARCH Pitfall 2). Two steps, so the suite cannot
+      # pass vacuously: the first proves the cases are compiled in, the second runs them
+      # against the RustFS service container above and checks the passed count. The
+      # buckets are created by `MinioAdapter::new` itself (no client bootstrap).
+      - name: Assert the file storage contract suite is compiled in
+        env:
+          USE_EXTERNAL_TEST_SERVICES: "true"
+          TEST_REDIS_HOST: localhost
+          TEST_REDIS_PORT: 6380
+          TEST_MINIO_ENDPOINT: localhost:9010
+          TEST_MINIO_ACCESS_KEY: testuser
+          TEST_MINIO_SECRET_KEY: testpass123
+          RUST_LOG: info
+        run: |
+          LIST=$(cargo test --test lib --features integration-tests,s3-storage -- --list --ignored)
+          COUNT=$(printf '%s\n' "${LIST}" | grep -c 'file_storage_integration_tests::.*: test$' || true)
+          echo "file storage contract suite cases compiled in: ${COUNT}"
+          if [ "${COUNT}" -lt 11 ]; then
+            echo "::error::expected at least 11 file_storage_integration_tests cases under --features integration-tests,s3-storage, found ${COUNT}"
+            exit 1
+          fi
+
+      - name: Run file storage contract suite (RustFS)
+        env:
+          USE_EXTERNAL_TEST_SERVICES: "true"
+          TEST_REDIS_HOST: localhost
+          TEST_REDIS_PORT: 6380
+          TEST_MINIO_ENDPOINT: localhost:9010
+          TEST_MINIO_ACCESS_KEY: testuser
+          TEST_MINIO_SECRET_KEY: testpass123
+          RUST_LOG: info
+        # Default test profile, no --release: the suite is I/O-bound, so a debug build
+        # compiles faster and matches the local simulation. It prints no presigned URL
+        # query string, so the tee'd log carries no credential.
+        run: |
+          set -o pipefail
+          cargo test --test lib --features integration-tests,s3-storage file_storage_integration_tests -- --ignored --test-threads=1 --nocapture 2>&1 | tee file-storage-suite.log
+          PASSED=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' file-storage-suite.log | tail -n 1)
+          echo "file storage contract suite passed: ${PASSED:-0}"
+          if [ -z "${PASSED}" ] || [ "${PASSED}" -lt 11 ]; then
+            echo "::error::expected 'test result: ok' with at least 11 passed, got '${PASSED:-none}'"
+            exit 1
+          fi
 
       # Absorbed from the now-deleted integration-tests.yml (D-09). This is the
       # broad `--workspace --features integration-tests` suite, distinct from
@@ -1406,33 +1417,26 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-      minio:
-        # Pinned rather than floating: Docker Hub deleted the community MinIO
-        # repositories on 2026-09-12 and MinIO no longer publishes
-        # community-edition images. quay.io still serves this last
-        # known-good community release and no newer community tag will ever
-        # appear. Server manifest digest:
-        # sha256:cf3dadcfa1fb0324f43958bad1abba986d53c4ecc04d4d50b46c7dcda28bd3cd
-        # Long-term replacement tracked in
-        # .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+      rustfs:
+        # Pinned rather than floating: the community MinIO images are gone (Docker Hub
+        # deleted them on 2026-09-12, quay.io locked anonymous pulls on 2026-09-24).
+        # RustFS is Apache-2.0 and multi-arch. Manifest-list digest:
+        # sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+        # A re-pin is a deliberate commit, never automatic (Phase 45 D-03).
+        # No `command:` key: the image entrypoint appends /data itself.
+        image: rustfs/rustfs:1.0.0
         ports:
           - 9010:9000
-          - 9011:9001
         env:
-          MINIO_ROOT_USER: testuser
-          MINIO_ROOT_PASSWORD: testpass123
+          RUSTFS_ACCESS_KEY: testuser
+          RUSTFS_SECRET_KEY: testpass123
+          RUSTFS_CONSOLE_ENABLE: "false"
         options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
-          --health-interval 30s
-          --health-timeout 20s
-          --health-retries 3
-        # MinIO requires an explicit command argument to start as a server
-        # (matches integration-tests.yml's identical MinIO block); actionlint
-        # flags `command` as an unrecognized `services` key against its
-        # strict schema, but GitHub Actions applies it at runtime. See
-        # .github/actionlint.yaml for the narrowly-scoped suppression.
-        command: server /data --console-address ":9001"
+          --health-cmd "curl -f http://localhost:9000/health/ready"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 5s
 
     steps:
       - name: Checkout code
@@ -1453,31 +1457,6 @@ jobs:
         with:
           cache-on-failure: true
 
-      # MinIO retired its community binary downloads; its former community download host
-      # answered HTTP 410 Gone for the mc binary on 2026-09-13. The binary is now fetched
-      # from the archived github.com/minio/mc repository's release assets (assets on
-      # archived repositories remain downloadable), pinned to the same release the quay.io
-      # client image from quick task 260913-15w already carries. The checksum is the one
-      # published as that release's own .sha256sum asset. Long-term replacement tracked in .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
-      - name: Install MinIO Client
-        run: |
-          set -euo pipefail
-          MC_RELEASE="RELEASE.2025-08-13T08-35-41Z"
-          MC_SHA256="01f866e9c5f9b87c2b09116fa5d7c06695b106242d829a8bb32990c00312e891"
-          # Retry transient CDN/5xx errors (a 504 here killed a whole run on 2026-09-14).
-          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o mc \
-            "https://github.com/minio/mc/releases/download/${MC_RELEASE}/mc.linux-amd64.${MC_RELEASE}"
-          echo "${MC_SHA256}  mc" | sha256sum -c -
-          chmod +x mc
-          sudo mv mc /usr/local/bin/mc
-
-      - name: Setup MinIO buckets
-        run: |
-          mc alias set testminio http://localhost:9010 testuser testpass123
-          mc mb testminio/test-bucket --ignore-existing
-          mc mb testminio/integration-tests --ignore-existing
-          echo "MinIO buckets created successfully"
-
       - name: Wait for services
         run: |
           echo "Waiting for Redis..."
@@ -1489,10 +1468,10 @@ jobs:
             sleep 1
           done
 
-          echo "Waiting for MinIO..."
+          echo "Waiting for RustFS..."
           for _ in {1..30}; do
-            if curl -f http://localhost:9010/minio/health/live; then
-              echo "MinIO is ready"
+            if curl -f http://localhost:9010/health/ready; then
+              echo "RustFS is ready"
               break
             fi
             sleep 1

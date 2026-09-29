@@ -144,6 +144,9 @@ pub trait TraceEmitter: Send + Sync {
 /// erroring child neither starves nor fails its siblings. Returns `Ok(())`
 /// unless EVERY child errored (or panicked) — the same "errors are
 /// diagnostics only" contract [`TraceSink`] itself carries.
+///
+/// The record is cloned once per child EXCEPT the last, which receives it by
+/// move, so a single-child composite performs no clone at all.
 pub struct CompositeSink {
     sinks: Vec<Arc<dyn TraceSink>>,
 }
@@ -159,35 +162,47 @@ impl CompositeSink {
     pub fn push(&mut self, sink: Arc<dyn TraceSink>) {
         self.sinks.push(sink);
     }
+
+    /// Fold one child's outcome into the "did any child succeed" flag,
+    /// logging (never propagating) a panic so a misbehaving child cannot
+    /// starve or fail its siblings (D-08).
+    fn fold_outcome(
+        outcome: Result<Result<(), TraceSinkError>, Box<dyn std::any::Any + Send>>,
+        all_failed: &mut bool,
+    ) {
+        match outcome {
+            Ok(Ok(())) => *all_failed = false,
+            Ok(Err(_)) => {
+                // Diagnostic only — this child failed, its siblings
+                // still run.
+            }
+            Err(_panic) => {
+                log::error!(
+                    target: "paladin::trace",
+                    "a CompositeSink child panicked while handling a trace record"
+                );
+            }
+        }
+    }
 }
 
 #[async_trait]
 impl TraceSink for CompositeSink {
     async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
-        if self.sinks.is_empty() {
+        // Every child but the last gets a clone; the last child takes the
+        // record by move, saving one deep clone per event (OBS-05, D-17).
+        let Some((last, rest)) = self.sinks.split_last() else {
             return Ok(());
-        }
+        };
         let mut all_failed = true;
-        for sink in &self.sinks {
+        for sink in rest {
             let outcome = AssertUnwindSafe(sink.on_event(record.clone()))
                 .catch_unwind()
                 .await;
-            match outcome {
-                Ok(Ok(())) => all_failed = false,
-                Ok(Err(_)) => {
-                    // Diagnostic only — this child failed, its siblings
-                    // still run.
-                }
-                Err(_panic) => {
-                    // A panicking child must never starve or fail its
-                    // siblings (D-08).
-                    log::error!(
-                        target: "paladin::trace",
-                        "a CompositeSink child panicked while handling a trace record"
-                    );
-                }
-            }
+            Self::fold_outcome(outcome, &mut all_failed);
         }
+        let outcome = AssertUnwindSafe(last.on_event(record)).catch_unwind().await;
+        Self::fold_outcome(outcome, &mut all_failed);
         if all_failed {
             return Err(TraceSinkError::Failed(
                 "every CompositeSink child failed or panicked".to_string(),
@@ -457,6 +472,38 @@ mod tests {
         });
         assert!(composite.on_event(record).await.is_ok());
         assert_eq!(b.events.lock().await.len(), 1);
+    }
+
+    /// D-17: the last child receives the record by move rather than a clone;
+    /// every child (including the last) still sees a record equal to the
+    /// input, with several children and with exactly one.
+    #[tokio::test]
+    async fn composite_sink_hands_an_equal_record_to_its_last_child() {
+        let record = sample_record(TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        });
+
+        let first = RecordingSink::new();
+        let last = RecordingSink::new();
+        let composite = CompositeSink::new(vec![first.clone(), last.clone()]);
+        assert!(composite.on_event(record.clone()).await.is_ok());
+        assert_eq!(
+            first.events.lock().await.as_slice(),
+            std::slice::from_ref(&record)
+        );
+        assert_eq!(
+            last.events.lock().await.as_slice(),
+            std::slice::from_ref(&record)
+        );
+
+        let only = RecordingSink::new();
+        let single = CompositeSink::new(vec![only.clone()]);
+        assert!(single.on_event(record.clone()).await.is_ok());
+        assert_eq!(
+            only.events.lock().await.as_slice(),
+            std::slice::from_ref(&record)
+        );
     }
 
     #[test]

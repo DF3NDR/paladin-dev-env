@@ -33,6 +33,8 @@ and this project follows lockstep workspace versioning.
   `requested_by` parameter are `Option<PrincipalRef>` (tenant, API key id and role travel together)
   instead of `Option<(String, UserRole)>`; `None` keeps its internal-caller meaning (TENANT-01,
   TENANT-02; see root `MIGRATION.md` §9.2).
+- `CompositeSink::on_event` moves the record into its last child instead of cloning it for every
+  child; no behaviour change (OBS-05).
 
 ## [0.10.1] - 2026-09-20
 

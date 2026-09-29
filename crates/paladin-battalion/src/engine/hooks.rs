@@ -302,6 +302,19 @@ impl TraceDispatcher {
     /// dispatcher's own final `dropped_count()` (D-07) -- `RunFinished` is
     /// the run's last event, drop-oldest never evicts the newest push, so
     /// this is always accurate.
+    ///
+    /// # Serialisation cost (OBS-05, Phase 45)
+    ///
+    /// `emit` performs no serialisation: serialisation lives in the sinks,
+    /// and `LogTraceSink` now skips it entirely for a filtered
+    /// `paladin::trace` target. The per-event `thread_id`/`run_id` clones
+    /// are forced by `TraceRecord`'s owned fields, which D-17 forbids
+    /// reshaping, and the `usage` clone is a plain-integer copy. No
+    /// enablement guard belongs here: the dispatcher cannot know which sinks
+    /// need a record (the bus, persisting, OTel and herald sinks all do),
+    /// and skipping an event would bypass the `seq` stamp and the
+    /// usage/cost tallies that gapless `seq` and `RunStreamMode::Replay`
+    /// depend on (D-00f).
     pub fn emit(&self, event: TraceEvent) {
         let Some((queue, doorbell)) = &self.inner else {
             return;

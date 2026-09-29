@@ -43,9 +43,9 @@ Three commits, each a complete, buildable tree, so the effect of each fix is iso
 
 | Point | Commit subject | What it adds | SHA |
 |-------|----------------|--------------|-----|
-| A | `test(45-03): install a discarding logger and add target-off rows to the sink-variant bench` | Bench harness only: `DiscardLogger`, `set_trace_target`, the `_target_off` rows. `LogTraceSink` is unchanged, so the `_target_off` rows still pay serialisation (Phase 28's condition) | (fill at measurement time) |
-| B | `perf(45-03): skip LogTraceSink serialisation when the paladin::trace target is disabled` | A + the enablement guard: a filtered target costs neither serialisation nor formatting | (fill at measurement time) |
-| C | `perf(45-03): reuse a per-thread trace buffer and move the record into the last CompositeSink child` | B + thread-local `Vec<u8>` buffer reuse (`serde_json::to_writer`) and the `CompositeSink` last-child move | (fill at measurement time) |
+| A | `test(45-03): install a discarding logger and add target-off rows to the sink-variant bench` | Bench harness only: `DiscardLogger`, `set_trace_target`, the `_target_off` rows. `LogTraceSink` is unchanged, so the `_target_off` rows still pay serialisation (Phase 28's condition) | 54400e2d2ed9789c81665f52f1ebf381a860dbe8 |
+| B | `perf(45-03): skip LogTraceSink serialisation when the paladin::trace target is disabled` | A + the enablement guard: a filtered target costs neither serialisation nor formatting | 1f95afeffae13c92db840578a0120d0aef641e54 |
+| C | `perf(45-03): reuse a per-thread trace buffer and move the record into the last CompositeSink child` | B + thread-local `Vec<u8>` buffer reuse (`serde_json::to_writer`) and the `CompositeSink` last-child move | resolve by subject at measurement time (the commit after B) |
 
 Resolve a SHA with `git log --format=%H -1 --grep='<subject>'`.
 

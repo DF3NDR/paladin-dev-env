@@ -34,19 +34,41 @@ impl LogTraceSink {
     }
 }
 
-/// Serialize `value` and write it as one `log::info!` line under target
-/// `paladin::trace`; a serialization failure logs a single `error!`
-/// diagnostic instead. Factored out of [`LogTraceSink::on_event`] so its
-/// error path can be exercised directly with a value engineered to fail
-/// serialization (`log_sink_never_returns_err_and_logs_diagnostic`) —
-/// `TraceRecord` itself is always serializable in practice (every field is
-/// a plain `Serialize` type), so this is the only way to prove the
-/// diagnostics-only contract deterministically rather than by assertion.
-fn write_trace_line<T: serde::Serialize>(value: &T) {
-    match serde_json::to_string(value) {
-        Ok(json) => {
-            log::info!(target: "paladin::trace", "{json}");
-        }
+thread_local! {
+    /// Per-thread scratch buffer `write_trace_line` serialises into, reused
+    /// across records so the hot path allocates no fresh `String` per record
+    /// (OBS-05, D-17 fix 2). A thread-local rather than a field on
+    /// [`LogTraceSink`]: any field would break the unit-struct literal and
+    /// drop `Copy`, changing the public surface.
+    static TRACE_BUF: std::cell::RefCell<Vec<u8>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The largest buffer capacity retained between records (64 KiB). A record
+/// that grew the buffer past this is followed by a release of that memory,
+/// so a single oversize record never pins its allocation for the life of the
+/// thread (T-45-12: no unbounded buffering).
+const TRACE_BUF_RETAIN_MAX: usize = 64 * 1024;
+
+/// Serialize `value` into `buf` (cleared first) and write it as one
+/// `log::info!` line under target `paladin::trace`; a serialization failure
+/// (or a non-UTF-8 result, which `serde_json` never produces) logs a single
+/// `error!` diagnostic naming only the error -- never record content --
+/// instead.
+fn write_into<T: serde::Serialize>(buf: &mut Vec<u8>, value: &T) {
+    buf.clear();
+    match serde_json::to_writer(&mut *buf, value) {
+        Ok(()) => match std::str::from_utf8(buf) {
+            Ok(json) => {
+                log::info!(target: "paladin::trace", "{json}");
+            }
+            Err(error) => {
+                log::error!(
+                    target: "paladin::trace",
+                    "LogTraceSink produced non-UTF-8 JSON: {error}"
+                );
+            }
+        },
         Err(error) => {
             // Diagnostics-only (module docs): a serialization failure is
             // this sink's own malfunction, never a reason to fail the run
@@ -57,6 +79,38 @@ fn write_trace_line<T: serde::Serialize>(value: &T) {
             );
         }
     }
+}
+
+/// Serialize `value` and write it as one `log::info!` line under target
+/// `paladin::trace`; a serialization failure logs a single `error!`
+/// diagnostic instead. Factored out of [`LogTraceSink::on_event`] so its
+/// error path can be exercised directly with a value engineered to fail
+/// serialization (`log_sink_never_returns_err_and_logs_diagnostic`) —
+/// `TraceRecord` itself is always serializable in practice (every field is
+/// a plain `Serialize` type), so this is the only way to prove the
+/// diagnostics-only contract deterministically rather than by assertion.
+///
+/// Serialises into the per-thread [`TRACE_BUF`], which is borrowed with
+/// `try_borrow_mut`: a re-entrant call (a logger that itself emits a trace
+/// line) falls back to a fresh local buffer instead of panicking. The borrow
+/// is synchronous and never held across an `.await`.
+fn write_trace_line<T: serde::Serialize>(value: &T) {
+    TRACE_BUF.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut buf) => {
+            write_into(&mut buf, value);
+            if buf.capacity() > TRACE_BUF_RETAIN_MAX {
+                *buf = Vec::new();
+            }
+        }
+        Err(_) => write_into(&mut Vec::new(), value),
+    });
+}
+
+/// The current capacity of this thread's reusable trace buffer, for the
+/// bounded-retention test.
+#[cfg(test)]
+fn trace_buf_capacity() -> usize {
+    TRACE_BUF.with(|cell| cell.try_borrow().map(|buf| buf.capacity()).unwrap_or(0))
 }
 
 /// Whether the operator's logger currently accepts `Info` records under
@@ -380,6 +434,101 @@ mod tests {
                 .iter()
                 .all(|(target, _, _)| target != "paladin::trace"),
             "a disabled target must write no line: {records:?}"
+        );
+    }
+
+    /// The `paladin::trace` lines captured since the last drain, in order.
+    fn trace_lines(logger: &CapturingLogger) -> Vec<String> {
+        drain_records(logger)
+            .into_iter()
+            .filter(|(target, level, _)| target == "paladin::trace" && *level == log::Level::Info)
+            .map(|(_, _, message)| message)
+            .collect()
+    }
+
+    fn record_with_seq(seq: u64, event: TraceEvent) -> TraceRecord {
+        TraceRecord {
+            seq,
+            event,
+            ..sample_record()
+        }
+    }
+
+    /// Behavior: two different records written back to back through the
+    /// reused per-thread buffer yield two lines, each byte-equal to that
+    /// record's own JSON -- no bleed from the first into the second, no
+    /// truncation (OBS-05, D-17 fix 2).
+    #[test]
+    #[serial_test::serial]
+    fn log_sink_reuses_its_buffer_without_bleeding_between_records() {
+        let logger = install_capturing_logger();
+        let _on = MaxLevelGuard::set(log::LevelFilter::Trace);
+        drain_records(&logger);
+
+        let long = record_with_seq(
+            1,
+            TraceEvent::RunStarted {
+                run_id: None,
+                graph_fingerprint: "a-considerably-longer-fingerprint-value".to_string(),
+            },
+        );
+        let short = record_with_seq(
+            2,
+            TraceEvent::RunStarted {
+                run_id: None,
+                graph_fingerprint: "x".to_string(),
+            },
+        );
+        write_trace_line(&long);
+        write_trace_line(&short);
+
+        let lines = trace_lines(&logger);
+        assert_eq!(lines.len(), 2, "one line per record: {lines:?}");
+        assert_eq!(lines[0], serde_json::to_string(&long).unwrap());
+        assert_eq!(lines[1], serde_json::to_string(&short).unwrap());
+    }
+
+    /// Behavior: a record far larger than `TRACE_BUF_RETAIN_MAX` followed by
+    /// a small one produces two exact lines, and the retained buffer never
+    /// exceeds the retention bound afterwards (T-45-12: no unbounded
+    /// buffering).
+    #[test]
+    #[serial_test::serial]
+    fn log_sink_writes_an_oversize_record_then_a_small_record_exactly() {
+        use paladin_core::platform::container::trace::MiddlewareAction;
+
+        let logger = install_capturing_logger();
+        let _on = MaxLevelGuard::set(log::LevelFilter::Trace);
+        drain_records(&logger);
+
+        let oversize = record_with_seq(
+            1,
+            TraceEvent::MiddlewareEvent {
+                name: "m".repeat(70_000),
+                action: MiddlewareAction::Finish,
+            },
+        );
+        let small = record_with_seq(
+            2,
+            TraceEvent::RunStarted {
+                run_id: None,
+                graph_fingerprint: "fp".to_string(),
+            },
+        );
+        write_trace_line(&oversize);
+        assert!(
+            trace_buf_capacity() <= TRACE_BUF_RETAIN_MAX,
+            "an oversize record must not leave its capacity retained"
+        );
+        write_trace_line(&small);
+
+        let lines = trace_lines(&logger);
+        assert_eq!(lines.len(), 2, "one line per record");
+        assert_eq!(lines[0], serde_json::to_string(&oversize).unwrap());
+        assert_eq!(lines[1], serde_json::to_string(&small).unwrap());
+        assert!(
+            trace_buf_capacity() <= TRACE_BUF_RETAIN_MAX,
+            "the retained buffer stays within the bound"
         );
     }
 }

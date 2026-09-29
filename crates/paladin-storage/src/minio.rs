@@ -157,10 +157,11 @@ impl MinioAdapter {
     async fn create_bucket(&self) -> FileStorageResult<()> {
         let config = BucketConfiguration::default();
 
-        // Fix: Use the static method Bucket::create instead of instance method
+        // Path-style is required: RustFS (and MinIO without domain config) rejects
+        // virtual-hosted bucket creation.
         match timeout(
             self.config.connection_timeout,
-            Bucket::create(
+            Bucket::create_with_path_style(
                 &self.config.bucket,
                 self.bucket.region(),
                 self.bucket.credentials().await.map_err(|e| {

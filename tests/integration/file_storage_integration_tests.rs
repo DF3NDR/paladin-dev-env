@@ -1,17 +1,14 @@
 use super::{TestContext, TestEnvironment};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 use testcontainers::{ContainerAsync, runners::AsyncRunner};
 use testcontainers_modules::minio::MinIO;
 
 use paladin::infrastructure::adapters::file_storage::minio::{MinioAdapter, MinioConfig};
-use paladin::infrastructure::adapters::logs::system_log_adapter::SystemLogAdapter;
 use paladin_ports::output::file_storage_port::{
     AdvancedFileStoragePort, BatchFileStoragePort, FileStoragePort, ListOptions, UploadOptions,
 };
-use paladin_ports::output::log_port::LogPort;
 
 pub struct FileStorageTestContext {
     pub adapter: MinioAdapter,
@@ -46,9 +43,6 @@ impl TestContext for FileStorageTestContext {
 impl FileStorageTestContext {
     /// Create context using external services (CI/CD)
     async fn new_external(env: TestEnvironment) -> Result<Self, Box<dyn std::error::Error>> {
-        let log_adapter = SystemLogAdapter::new(Default::default())?;
-        let log_adapter = Arc::new(log_adapter) as Arc<dyn LogPort>;
-
         let minio_config = MinioConfig {
             endpoint: env.minio_endpoint.clone(),
             access_key: env.minio_access_key.clone(),
@@ -63,7 +57,7 @@ impl FileStorageTestContext {
             max_idle_conns: 10,
         };
 
-        let adapter = MinioAdapter::new(minio_config, Some(log_adapter)).await?;
+        let adapter = MinioAdapter::new(minio_config, None).await?;
 
         Ok(Self {
             adapter,
@@ -82,9 +76,6 @@ impl FileStorageTestContext {
         // Wait for MinIO to start
         tokio::time::sleep(Duration::from_secs(3)).await;
 
-        let log_adapter = SystemLogAdapter::new(Default::default())?;
-        let log_adapter = Arc::new(log_adapter) as Arc<dyn LogPort>;
-
         let minio_config = MinioConfig {
             endpoint: env.minio_endpoint.clone(),
             access_key: env.minio_access_key.clone(),
@@ -99,7 +90,7 @@ impl FileStorageTestContext {
             max_idle_conns: 10,
         };
 
-        let adapter = MinioAdapter::new(minio_config, Some(log_adapter)).await?;
+        let adapter = MinioAdapter::new(minio_config, None).await?;
 
         Ok(Self {
             adapter,

@@ -3,17 +3,17 @@ status: testing
 phase: 40-tenant-identity-run-read-scoping
 source: [40-VERIFICATION.md]
 started: 2026-09-29T12:36:44Z
-updated: 2026-09-29T19:30:57Z
+updated: 2026-09-29T19:32:12Z
 ---
 
 ## Current Test
 
-number: 2
-name: Backstop truth (40-03): key-to-tenant mapping immutable after boot
+number: 3
+name: Judgment-tier prohibitions (20 items, non-authoritative "held" verdicts)
 expected: |
-  A human confirms the no-mutation-after-boot invariant on AgentAuthConfig (api_keys writes exist
-  only in #[cfg(test)]), or adds a held-out test that clones AgentAuthConfig into two router states
-  and asserts the same key resolves the same tenant under concurrent requests.
+  A human reviews the flagged prohibitions and confirms or rejects the verdicts; in particular
+  re-runs the credential-handling review required by .github/instructions/security.instructions.md
+  over the Phase 40 diff (git diff 629ef660..HEAD).
 awaiting: user response
 
 ## Tests
@@ -24,7 +24,7 @@ result: pass
 
 ### 2. Backstop truth (40-03): key-to-tenant mapping immutable after boot
 expected: A human confirms the no-mutation-after-boot invariant on AgentAuthConfig (api_keys writes exist only in #[cfg(test)]), or adds a held-out test that clones AgentAuthConfig into two router states and asserts the same key resolves the same tenant under concurrent requests.
-result: [pending]
+result: pass
 
 ### 3. Judgment-tier prohibitions (20 items, non-authoritative "held" verdicts)
 expected: A human reviews the flagged prohibitions and confirms or rejects the verdicts; in particular re-runs the credential-handling review required by .github/instructions/security.instructions.md over the Phase 40 diff (git diff 629ef660..HEAD).
@@ -41,9 +41,9 @@ result: [pending]
 ## Summary
 
 total: 5
-passed: 1
+passed: 2
 issues: 0
-pending: 4
+pending: 3
 skipped: 0
 blocked: 0
 

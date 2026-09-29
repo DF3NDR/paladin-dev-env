@@ -132,7 +132,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
   principal may see, enforced by one shared authorization function; another caller's run returns
   404 (`WINDOWS.md` row 32). The admin-role override is decided in the phase
 
-- [ ] **PLAT-08**: Legacy `Runnable::Agent` runs emit SSE live events and webhook deliveries like
+- [x] **PLAT-08**: Legacy `Runnable::Agent` runs emit SSE live events and webhook deliveries like
   graph runs (row 31)
 
 - [ ] **PLAT-09**: The SSE `done` event matches the persisted status — `Cancelled` for a
@@ -236,7 +236,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STORE-02 | Phase 45 | Pending |
 | STORE-03 | Phase 45 | Pending |
 | PLAT-07 | Phase 40 | Complete |
-| PLAT-08 | Phase 45 | Pending |
+| PLAT-08 | Phase 45 | Complete |
 | PLAT-09 | Phase 42 | Pending |
 | OBS-05 | Phase 45 | Pending |
 | CURR-22 | Phase 46 | Pending |

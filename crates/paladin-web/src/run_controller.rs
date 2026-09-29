@@ -664,6 +664,22 @@ fn parse_run_status(raw: &str) -> Result<RunStatus, ApiError> {
 
 // --- Error mapping -----------------------------------------------------
 
+/// The one fixed client-facing message every repository/backend failure on the run
+/// routes renders (WR-03/WR-04). The detail -- which can carry connection strings,
+/// schema names, or (for a half-attributed or corrupt row) another tenant's data
+/// shape -- goes to the server log only.
+const RUN_STORE_ERROR_MESSAGE: &str = "run store error";
+
+/// Log a repository/backend failure server-side and return the generic `500`.
+///
+/// Every repository error on the run routes goes through this helper so raw
+/// backend text (connection detail, `Serialization`/attribution/tenant-validation
+/// messages) is never echoed to an API client.
+fn internal_repo_error(context: &str, err: impl std::fmt::Display) -> ApiError {
+    log::error!("run API {context} failed: {err}");
+    ApiError::internal(RUN_STORE_ERROR_MESSAGE)
+}
+
 /// Map a [`RunSubmissionError`] onto the [`ApiError`] status/code this
 /// route uses. `#[non_exhaustive]`, so a future variant renders `500
 /// internal` rather than failing to compile. `pub(crate)` so
@@ -708,9 +724,9 @@ pub(crate) fn map_submission_error(err: RunSubmissionError) -> ApiError {
         } => ApiError::not_found(format!(
             "unknown waypoint '{waypoint_id}' on thread '{thread_id}'"
         )),
-        RunSubmissionError::Backend { message } => ApiError::internal(message),
+        RunSubmissionError::Backend { message } => internal_repo_error("run submission", message),
         RunSubmissionError::NotWired => ApiError::not_implemented(SUBMISSION_PORT_HINT),
-        other => ApiError::internal(other.to_string()),
+        other => internal_repo_error("run submission", other),
     }
 }
 
@@ -854,7 +870,7 @@ async fn load_visible_run(
     let run = repository
         .get(run_id)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| internal_repo_error("run lookup", e))?
         .ok_or_else(|| ApiError::not_found(format!("unknown run '{run_id}'")))?;
 
     if !principal.read_scope().permits(&run) {
@@ -987,7 +1003,7 @@ pub async fn list_runs(
             scope: principal.read_scope(),
         })
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| internal_repo_error("run list", e))?;
 
     let mut items: Vec<RunResponse> = page.items.iter().map(RunResponse::from).collect();
     let page_run_ids: Vec<RunId> = page.items.iter().map(|run| run.run_id.clone()).collect();
@@ -1133,7 +1149,7 @@ pub async fn list_webhook_deliveries(
     let page = deliveries
         .list_for_run(&id, limit, cursor)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| internal_repo_error("webhook delivery list", e))?;
 
     let items: Vec<WebhookDeliveryDto> = page.items.iter().map(WebhookDeliveryDto::from).collect();
     let next_cursor = page.next_cursor.as_ref().map(encode_cursor);
@@ -1239,8 +1255,10 @@ pub async fn stream_run(
         Err(RunStreamError::NotWired) => {
             ApiError::not_implemented(RUN_EVENTS_PORT_HINT).into_response()
         }
-        Err(RunStreamError::Backend { message }) => ApiError::internal(message).into_response(),
-        Err(other) => ApiError::internal(other.to_string()).into_response(),
+        Err(RunStreamError::Backend { message }) => {
+            internal_repo_error("run event stream", message).into_response()
+        }
+        Err(other) => internal_repo_error("run event stream", other).into_response(),
     }
 }
 
@@ -1427,9 +1445,28 @@ mod tests {
         /// Every `RunQuery` handed to `list`, in call order, so a test can assert on
         /// what the handler asked the repository for (e.g. the D-12 `scope`).
         recorded_queries: Mutex<Vec<RunQuery>>,
+        /// When `Some`, `get` and `list` fail with a `Serialization` error carrying
+        /// this text -- proves the handlers never echo raw repository text to the
+        /// client (WR-03/WR-04).
+        fail_reads_with: Mutex<Option<String>>,
     }
 
     impl MockRepository {
+        fn failing_reads(message: &str) -> Self {
+            Self {
+                fail_reads_with: Mutex::new(Some(message.to_string())),
+                ..Self::default()
+            }
+        }
+
+        fn read_failure(&self) -> Option<RunRepositoryError> {
+            self.fail_reads_with
+                .lock()
+                .unwrap()
+                .clone()
+                .map(|message| RunRepositoryError::Serialization { message })
+        }
+
         fn seed(&self, run: Run) {
             self.runs
                 .lock()
@@ -1454,6 +1491,9 @@ mod tests {
         }
 
         async fn get(&self, run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
+            if let Some(err) = self.read_failure() {
+                return Err(err);
+            }
             Ok(self.runs.lock().unwrap().get(run_id.as_str()).cloned())
         }
 
@@ -1476,6 +1516,9 @@ mod tests {
         }
 
         async fn list(&self, query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+            if let Some(err) = self.read_failure() {
+                return Err(err);
+            }
             self.recorded_queries.lock().unwrap().push(query);
             Ok(RunPage {
                 items: self.list_items.lock().unwrap().clone(),
@@ -3301,5 +3344,64 @@ mod tests {
             );
             assert!(body["submitted_by"].is_null(), "{body}");
         }
+    }
+
+    // --- WR-03/WR-04: repository errors never leak raw backend text ---------
+
+    const LEAKY_REPO_TEXT: &str =
+        "run row attribution is incomplete: tenant_id set, api_key_id NULL (host=db.internal:5432)";
+
+    fn assert_generic_internal(err: &ApiError) {
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = err.to_body().to_string();
+        assert!(
+            !body.contains("db.internal") && !body.contains("attribution is incomplete"),
+            "a repository error must never surface raw backend text, got {body}"
+        );
+        assert_eq!(err.to_body()["error"]["message"], "run store error");
+    }
+
+    #[tokio::test]
+    async fn get_run_repository_error_is_a_generic_500_without_backend_text() {
+        let repository = Arc::new(MockRepository::failing_reads(LEAKY_REPO_TEXT));
+        let state = RunApiState::new().with_repository(repository);
+
+        let err = get_run(
+            State(state),
+            tester_principal(),
+            Path(RunId::new_v7().to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_generic_internal(&err);
+    }
+
+    #[tokio::test]
+    async fn list_runs_repository_error_is_a_generic_500_without_backend_text() {
+        let repository = Arc::new(MockRepository::failing_reads(LEAKY_REPO_TEXT));
+        let state = RunApiState::new().with_repository(repository);
+
+        let err = list_runs(
+            State(state),
+            tester_principal(),
+            axum::extract::Query(RunListQuery {
+                thread_id: None,
+                assistant_id: None,
+                status: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_generic_internal(&err);
+    }
+
+    #[test]
+    fn submission_backend_errors_are_a_generic_500_without_backend_text() {
+        let err = map_submission_error(RunSubmissionError::Backend {
+            message: LEAKY_REPO_TEXT.to_string(),
+        });
+        assert_generic_internal(&err);
     }
 }

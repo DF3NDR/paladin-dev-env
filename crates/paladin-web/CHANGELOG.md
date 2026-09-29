@@ -34,6 +34,10 @@ and this project follows lockstep workspace versioning.
   backend is configured, the run has no settled spend, or its settlements span more than one
   currency (LEDGR-04; see root `MIGRATION.md` §9.2).
 
+- Every repository/backend failure on the `/runs` routes (`GET /runs`, `GET /runs/{run_id}`,
+  `/stream`, `/webhook-deliveries`, `POST /runs`, cancel) now renders a fixed `500 internal`
+  body (`"run store error"`); the detail is logged server-side with `log::error!` and no longer
+  echoed to the client (WR-03/WR-04).
 - `GET /runs` lists only the caller's tenant's runs (Admin: all); `GET /runs/{run_id}`, `/stream`,
   `/webhook-deliveries` and `POST /runs/{run_id}/cancel` answer the missing-run `404` for another
   tenant's run and `501` when no run store is configured (PLAT-07).

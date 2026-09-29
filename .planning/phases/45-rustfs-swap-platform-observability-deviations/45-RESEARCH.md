@@ -602,22 +602,30 @@ gsd-tools windows fixed <new-id>                                          # or: 
 | A7 | GH Actions service containers start `rustfs/rustfs:1.0.0` correctly with no `command:` (entrypoint default) | Code Examples | CI red on first push; fallback: `command: rustfs /data` |
 | A8 | Docker Hub tag `1.0.0` is immutable; the digest comment is the audit trail if it is ever repushed | Standard Stack | Low |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All six questions were resolved at planning time (2026-09-29); each question below carries a resolution line naming the plan and decision that settles it.
 
 1. **Ledger closure form for rows 31/35** (Pitfall 9)
    - Known: `windows fixed` refuses `waived` rows; Phase 40 left row 32 `waived` and recorded the met condition elsewhere; CONTEXT D-16/D-19 say "closed/amended through the ledger tool".
    - Unclear: whether the maintainer wants an appended-then-fixed closure row or the 40-06 precedent.
    - Recommendation: default to the 40-06 precedent; offer the append+fix row as the optional tool-sanctioned alternative; for the D-19 amend branch use append + waive.
+   - RESOLVED: the 40-06 precedent plus an appended-then-fixed closure row, never a hand edit (D-16, D-19). Plan 45-02 leaves row 31 `waived` and closes it with one `gsd-tools windows append` row that is then `windows fixed`; plan 45-07 leaves row 35 `waived` and appends one row: `fixed` on the D-19 meet branch, left open on the amend branch until the maintainer's UAT acceptance, then `windows waive` (append + waive).
 
 2. **Should `scripts/coverage.sh` gain `s3-storage` in this phase?** (Pitfall 7) - Recommendation: no; STORE-02's evidence comes from the Integration Tests job, and the coverage change needs its own CI-measured figure.
+   - RESOLVED: no. Plan 45-04 (Task 1 step 3) leaves `s3-storage` out of the Coverage job and records the choice in its SUMMARY; plan 45-05 (Task 3) keeps `scripts/coverage.sh`'s `exec cargo llvm-cov` line byte-identical, and both plans gate `grep -c "s3-storage" scripts/coverage.sh` at 0.
 
 3. **Rename compose service names (`minio` -> `rustfs`)?** - Recommendation: yes (honest naming; D-11 already renames k8s), applying the reader list above in one commit; the alternative (keep names, change image only) satisfies "no MinIO image" but leaves a misleading `minio` service running RustFS.
+   - RESOLVED: yes. Plan 45-04 (Task 2) renames the test-compose service to `rustfs-test` (container `paladin-rustfs-test`); plan 45-05 (Tasks 1-2) renames the dev-compose and devcontainer services to `rustfs` (container `paladin-rustfs`), with every reader updated in the same plan.
 
 4. **`RUSTFS_CONSOLE_ENABLE=false` in the k8s reference manifest?** - Recommendation: disable in CI/test blocks; leave the console on in the dev compose; for k8s pick per ADR-0055 (smaller surface vs. operator convenience).
+   - RESOLVED: console OFF (`RUSTFS_CONSOLE_ENABLE: "false"`) in CI, the test compose and `k8s/rustfs.yaml` (plan 45-04, Tasks 1-3; the k8s Service exposes the API port only); console ON in the dev compose and the devcontainer (plan 45-05, Tasks 1-2) for operator convenience; ADR-0055 (plan 45-06) records the choice.
 
 5. **Emit a `NodeStarted`/`NodeFinished` pair for the agent call?** - Recommendation: yes; without it `dispatcher.total_usage()/total_cost()` are zero (they only sum `NodeFinished`), so the wire `done.usage`, the Herald summary and `run_traces` would misreport an agent run's spend.
+   - RESOLVED: yes. Plan 45-02 (Task 1) has `run_agent` emit `RunStarted` -> `NodeStarted` -> `NodeFinished` -> `RunFinished` (seq 1..=4, no gap), with `NodeFinished` carrying the `PaladinResult` usage and cost so `total_usage()`/`total_cost()` are non-zero (D-15).
 
 6. **Executor sandbox for the benchmark:** the researcher sandbox had ~1-2 GB free disk (98 % used) and 4 cores, too small for a release bench build; `45-BENCH-EVIDENCE.md` must be produced where a release `cargo bench` can run (maintainer machine or a CI dispatch) and the machine block recorded as Phase 28 did.
+   - RESOLVED: plan 45-03 builds the three commit points and the `45-BENCH-EVIDENCE.md` skeleton in the sandbox (criterion test mode only, no release bench); plan 45-07 Task 1 is a `checkpoint:human-action` (`gate="blocking-human"`) where the maintainer runs the release bench at points A/B/C on one machine in one session and pastes the output and machine block (D-18).
 
 ## Environment Availability
 

@@ -178,4 +178,38 @@ mod tests {
         let back: RunScope = serde_json::from_str(&json).unwrap();
         assert_eq!(scoped, back);
     }
+
+    /// D-16: a default scope carries no ledger scope -- the settle writer
+    /// falls back to the sentinel.
+    #[test]
+    fn run_scope_default_has_no_ledger_scope() {
+        assert!(RunScope::default().ledger_scope.is_none());
+    }
+
+    #[test]
+    fn with_ledger_scope_sets_the_scope() {
+        let ledger_scope = LedgerScope::new("acme", "svc-a");
+        let scope = RunScope::default().with_ledger_scope(ledger_scope.clone());
+        assert_eq!(scope.ledger_scope, Some(ledger_scope));
+    }
+
+    /// D-00f: additive -- a `None` ledger scope is omitted from the
+    /// serialized form, and a scope carrying one round-trips.
+    #[test]
+    fn default_scope_serializes_without_a_ledger_scope_key() {
+        let empty = RunScope::default();
+        let json = serde_json::to_string(&empty).unwrap();
+        assert!(
+            !json.contains("ledger_scope"),
+            "a None ledger_scope must be omitted from the serialized form: {json}"
+        );
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(empty, back);
+
+        let scoped = RunScope::default().with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+        let json = serde_json::to_string(&scoped).unwrap();
+        assert!(json.contains("ledger_scope"));
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(scoped, back);
+    }
 }

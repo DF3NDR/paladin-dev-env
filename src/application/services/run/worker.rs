@@ -1389,6 +1389,7 @@ mod tests {
     use paladin_core::platform::container::execution_result::PaladinResult;
     use paladin_core::platform::container::paladin::Paladin;
     use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_core::platform::container::principal::{RunAttribution, TenantId};
     use paladin_core::platform::container::run::AssistantRef;
     use paladin_core::platform::container::treasury_ledger::{
         ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SettlementKey, SpendQuery,
@@ -2043,11 +2044,18 @@ mod tests {
     struct RecordingTreasuryLedger {
         inner: InMemoryTreasuryLedger,
         calls: Mutex<Vec<(SettlementKey, Cost)>>,
+        /// 40-04 (D-15): the `LedgerScope` of every `settle` request, in
+        /// call order -- the instrument for the attribution tests.
+        scopes: Mutex<Vec<LedgerScope>>,
     }
 
     impl RecordingTreasuryLedger {
         fn calls(&self) -> Vec<(SettlementKey, Cost)> {
             self.calls.lock().expect("calls mutex poisoned").clone()
+        }
+
+        fn scopes(&self) -> Vec<LedgerScope> {
+            self.scopes.lock().expect("scopes mutex poisoned").clone()
         }
     }
 
@@ -2072,6 +2080,10 @@ mod tests {
                 .lock()
                 .expect("calls mutex poisoned")
                 .push((request.key.clone(), request.amount.clone()));
+            self.scopes
+                .lock()
+                .expect("scopes mutex poisoned")
+                .push(request.scope.clone());
             self.inner.settle(request).await
         }
 
@@ -2185,14 +2197,30 @@ mod tests {
     }
 
     /// Insert a fresh `Queued` run against `"priced"` and enqueue it,
-    /// returning the run id.
+    /// returning the run id. The run records no submitting principal
+    /// (`submitted_by = None`, D-10).
     async fn submit_priced_run(
         repository: &Arc<dyn RunRepositoryPort>,
         queue: &Arc<dyn RunQueuePort>,
     ) -> RunId {
+        submit_priced_run_with(repository, queue, None).await
+    }
+
+    /// The `(acme, svc-a)` attribution every 40-04 attribution test stamps.
+    fn acme_svc_a() -> RunAttribution {
+        RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a")
+    }
+
+    /// `submit_priced_run` with an explicit recorded submitter (40-04,
+    /// D-15): `Some(a)` inserts the run `with_submitted_by(a)`.
+    async fn submit_priced_run_with(
+        repository: &Arc<dyn RunRepositoryPort>,
+        queue: &Arc<dyn RunQueuePort>,
+        submitted_by: Option<RunAttribution>,
+    ) -> RunId {
         let run_id = RunId::new_v7();
         let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
-        let run = Run::new(
+        let mut run = Run::new(
             run_id.clone(),
             thread_id.clone(),
             AssistantRef {
@@ -2201,6 +2229,9 @@ mod tests {
             },
             serde_json::json!({}),
         );
+        if let Some(attribution) = submitted_by {
+            run = run.with_submitted_by(attribution);
+        }
         repository.insert(&run).await.unwrap();
         queue
             .enqueue(QueuedRun {
@@ -2273,6 +2304,49 @@ mod tests {
             key.attempt, 2,
             "the settlement must key on the BUMPED attempt, never a re-invented 1"
         );
+    }
+
+    /// D-15: an engine run whose row records `submitted_by = (acme, svc-a)`
+    /// settles its superstep under exactly that scope -- the worker builds
+    /// the `SettlementContext.scope` from the run row, never the sentinel.
+    #[tokio::test]
+    async fn attributed_engine_run_settles_under_its_submitting_principal_scope() {
+        let ledger = Arc::new(RecordingTreasuryLedger::default());
+        let treasury_ledger: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let (pool, repository, queue) = build_ledger_pool(Some(treasury_ledger));
+
+        let run_id = submit_priced_run_with(&repository, &queue, Some(acme_svc_a())).await;
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        let scopes = ledger.scopes();
+        assert_eq!(scopes.len(), 1, "exactly one settlement for one superstep");
+        assert_eq!(scopes[0], LedgerScope::new("acme", "svc-a"));
+    }
+
+    /// D-10/D-15: a run with no recorded principal (schedule-fired or
+    /// internal) still settles under the unattributed sentinel.
+    #[tokio::test]
+    async fn unattributed_engine_run_settles_under_the_unattributed_sentinel() {
+        let ledger = Arc::new(RecordingTreasuryLedger::default());
+        let treasury_ledger: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let (pool, repository, queue) = build_ledger_pool(Some(treasury_ledger));
+
+        let run_id = submit_priced_run(&repository, &queue).await;
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+        assert!(run.submitted_by.is_none());
+
+        let scopes = ledger.scopes();
+        assert_eq!(scopes.len(), 1);
+        assert_eq!(scopes[0], LedgerScope::unattributed());
+        assert!(scopes[0].is_unattributed());
     }
 
     #[tokio::test]
@@ -2417,5 +2491,67 @@ mod tests {
             .recorded_scope()
             .expect("execute_scoped must have been called");
         assert_eq!(scope.run_id, Some(run_id));
+        assert!(
+            scope.ledger_scope.is_none(),
+            "a run with no recorded principal carries no ledger scope (D-10)"
+        );
+    }
+
+    /// D-16 (run path): an agent-kind run whose row records
+    /// `submitted_by = (acme, svc-a)` hands the shared `PaladinPort` a
+    /// `RunScope` carrying both its run id and `ledger_scope == (acme, svc-a)`.
+    #[tokio::test]
+    async fn agent_kind_run_carries_its_attribution_in_the_run_scope() {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let resolver: Arc<dyn AssistantResolver> = Arc::new(AgentOnlyResolver);
+        let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+
+        let scope_port = Arc::new(ScopeRecordingPaladinPort::default());
+        let paladin_port: Arc<dyn PaladinPort> = scope_port.clone();
+        let pool = RunWorkerPool::new(
+            engine,
+            store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_paladin_port(paladin_port);
+
+        let run_id = RunId::new_v7();
+        let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+        let run = Run::new(
+            run_id.clone(),
+            thread_id.clone(),
+            AssistantRef {
+                assistant_id: "assistant".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_submitted_by(acme_svc_a());
+        repository.insert(&run).await.unwrap();
+        queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id: thread_id.clone(),
+                attempt: 1,
+                enqueued_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        assert!(pool.run_once().await.unwrap());
+
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+
+        let scope = scope_port
+            .recorded_scope()
+            .expect("execute_scoped must have been called");
+        assert_eq!(scope.run_id, Some(run_id));
+        assert_eq!(scope.ledger_scope, Some(LedgerScope::new("acme", "svc-a")));
     }
 }

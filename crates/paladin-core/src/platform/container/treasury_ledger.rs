@@ -394,6 +394,7 @@ mod tests {
     use super::*;
     use crate::platform::container::cost::CurrencyCode;
     use crate::platform::container::herald::ExecutionMetadata;
+    use crate::platform::container::principal::{RunAttribution, TenantId};
     use crate::platform::container::token_usage::TokenUsage;
 
     fn usd() -> CurrencyCode {
@@ -407,6 +408,24 @@ mod tests {
         assert_eq!(scope.api_key_id, "unattributed");
         assert!(scope.is_unattributed());
         assert!(!LedgerScope::new("t", "k").is_unattributed());
+    }
+
+    /// D-15: a recorded submitter maps to exactly `(tenant, api_key_id)`.
+    #[test]
+    fn from_attribution_maps_tenant_and_api_key() {
+        let attribution = RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a");
+        let scope = LedgerScope::from_attribution(Some(&attribution));
+        assert_eq!(scope, LedgerScope::new("acme", "svc-a"));
+        assert!(!scope.is_unattributed());
+    }
+
+    /// D-10/D-15: no recorded principal yields the documented sentinel.
+    #[test]
+    fn from_attribution_none_is_the_unattributed_sentinel() {
+        assert_eq!(
+            LedgerScope::from_attribution(None),
+            LedgerScope::unattributed()
+        );
     }
 
     #[test]

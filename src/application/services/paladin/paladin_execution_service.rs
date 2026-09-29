@@ -7642,6 +7642,103 @@ mod agent_loop_cost_tests {
         }
     }
 
+    /// D-16 (run path): a `RunScope` carrying `ledger_scope == (acme, svc-a)`
+    /// settles every priced call under that scope -- a spend query filtered
+    /// to that tenant and key sees both settlements, and the sentinel sees
+    /// none.
+    #[tokio::test]
+    async fn agent_loop_settles_under_the_run_scope_ledger_scope() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            ),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default()
+            .with_run_id(run_id.clone())
+            .with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let attributed = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                tenant_id: Some("acme".to_string()),
+                api_key_id: Some("svc-a".to_string()),
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(attributed.len(), 1, "both calls settled under (acme, svc-a)");
+        assert_eq!(attributed[0].settlements, 2);
+
+        let sentinel = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                tenant_id: Some(LedgerScope::UNATTRIBUTED.to_string()),
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert!(
+            sentinel.is_empty(),
+            "an attributed run must never settle under the sentinel"
+        );
+    }
+
+    /// D-10/D-16: a `RunScope` carrying no `ledger_scope` settles under the
+    /// unattributed sentinel -- the only case the sentinel is stamped.
+    #[tokio::test]
+    async fn agent_loop_without_a_ledger_scope_settles_unattributed() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            TokenUsage::new(1_000, 2_000),
+            Some(Cost::new(22_500_000, usd)),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(1);
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+        assert!(scope.ledger_scope.is_none());
+
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Tenant,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by tenant succeeds");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].group, LedgerScope::UNATTRIBUTED);
+        assert_eq!(rows[0].settlements, 1);
+    }
+
     /// D-07/D-08: `PlatformRunsOnly` never settles a plain `execute()` call
     /// (no run id in scope) -- only an `execute_scoped` call whose
     /// `RunScope` names a run id settles.

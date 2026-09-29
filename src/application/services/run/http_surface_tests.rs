@@ -270,9 +270,12 @@ async fn fork_run_completes_from_waypoint() {
         // D-08: the fork is attributed to the FORKING principal (svc-a of acme), not
         // to whoever submitted the original (unattributed) run; the fork's own
         // latest-run lookup on the thread is unscoped (D-12/Pitfall 8) and still
-        // finds the unattributed original.
+        // finds the unattributed original. The forking principal is an Admin
+        // (`RunReadScope::All`) because a tenant-scoped `User` may not fork a thread
+        // whose latest run is unattributed -- the tenant guard treats it exactly
+        // like a hidden run (phase 40 review WR-01).
         let forking_principal =
-            PrincipalRef::new("svc-a", TenantId::new("acme").unwrap(), UserRole::User);
+            PrincipalRef::new("svc-a", TenantId::new("acme").unwrap(), UserRole::Admin);
         let forked = submission
             .fork(ForkRun {
                 thread_id: thread_id.clone(),

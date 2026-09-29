@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 
 use paladin_core::platform::container::assistant::AssistantSource;
-use paladin_core::platform::container::principal::PrincipalRef;
+use paladin_core::platform::container::principal::{PrincipalRef, RunReadScope};
 use paladin_core::platform::container::run::{ForkSpec, Run, RunId};
 use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::ThreadId;
@@ -213,6 +213,53 @@ impl RunSubmissionService {
         self
     }
 
+    /// Tenant guard for a caller-supplied Thread (phase 40 review WR-01).
+    ///
+    /// A thread carries no tenant of its own, but every run on it carries
+    /// `submitted_by`. When `requested_by` is `Some`, the thread's latest run
+    /// (looked up with the unrestricted `All` scope -- this is an internal
+    /// authorization read, not a caller-facing one) must be permitted by the
+    /// principal's [`RunReadScope`]; otherwise the caller is answered
+    /// [`RunSubmissionError::UnknownThread`], the same value a `fork` against a
+    /// thread with no runs yields, so a hidden thread is not distinguishable
+    /// from a missing one on this path. A thread with no runs stays open, and a
+    /// `None` principal (an internal caller) or an `All` scope (Admin) skips
+    /// the lookup entirely.
+    ///
+    /// Known limitation: `submit` accepts a caller-chosen id for a thread that
+    /// has no runs, so a Quest submit against an unused id still succeeds while
+    /// a hidden thread is refused -- thread ids are unguessable in practice
+    /// (UUIDv7 by default) and full tenant-namespacing of threads is the
+    /// deferred thread-tenancy work (40-CONTEXT D-14).
+    async fn ensure_thread_visible(
+        &self,
+        thread_id: &ThreadId,
+        requested_by: &Option<PrincipalRef>,
+    ) -> Result<(), RunSubmissionError> {
+        let Some(principal_ref) = requested_by else {
+            return Ok(());
+        };
+        let scope = RunReadScope::for_principal(principal_ref.role, &principal_ref.tenant_id);
+        if scope == RunReadScope::All {
+            return Ok(());
+        }
+        let page = self
+            .repository
+            .list(RunQuery {
+                thread_id: Some(thread_id.clone()),
+                limit: 1,
+                ..Default::default()
+            })
+            .await
+            .map_err(map_repository_error)?;
+        match page.items.into_iter().next() {
+            Some(latest) if !scope.permits(&latest) => Err(RunSubmissionError::UnknownThread {
+                thread_id: thread_id.clone(),
+            }),
+            _ => Ok(()),
+        }
+    }
+
     /// D-46: authorize an invocation-shaped request (`submit`/`cancel`/
     /// `fork`) against `allowed_roles` -- empty means any authenticated
     /// caller, `None` `requested_by` skips the check entirely (an
@@ -270,6 +317,12 @@ impl RunSubmissionPort for RunSubmissionService {
         // `insert_with_latest` would only ever fail `UnknownAssistant`
         // there (no `assistants` row for a code id).
         let use_latest = request.version.is_none() && resolved.source == AssistantSource::Stored;
+
+        // WR-01: a caller-supplied thread must not belong to another tenant.
+        if let Some(supplied) = &request.thread_id {
+            self.ensure_thread_visible(supplied, &request.requested_by)
+                .await?;
+        }
 
         let thread_id = request.thread_id.unwrap_or_else(generate_thread_id);
         let mut run = Run::new(
@@ -380,6 +433,11 @@ impl RunSubmissionPort for RunSubmissionService {
                 reason: rejection.to_string(),
             });
         }
+
+        // WR-01: run the tenant guard first, so neither the busy-thread nor the
+        // waypoint checks below can confirm another tenant's thread exists.
+        self.ensure_thread_visible(&request.thread_id, &request.requested_by)
+            .await?;
 
         // D-17/D-18: a thread with an active run cannot accept a fork
         // either -- the busy invariant is thread-wide, not run-specific.
@@ -953,5 +1011,150 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, RunSubmissionError::Forbidden { .. }));
+    }
+
+    // --- Phase 40 review-fix (WR-01/WR-02): tenant isolation on the write paths ---
+
+    fn submit_on_thread(thread: &str, requested_by: Option<PrincipalRef>) -> SubmitRun {
+        SubmitRun {
+            assistant_id: "wf1".to_string(),
+            version: None,
+            thread_id: Some(ThreadId::new(thread).unwrap()),
+            input: serde_json::json!({}),
+            webhook: None,
+            requested_by,
+        }
+    }
+
+    /// WR-01: a `User` principal of another tenant must not be able to run
+    /// against a Thread whose latest run belongs to a different tenant, and the
+    /// rejection is the SAME `UnknownThread` a fork against a thread with no
+    /// runs answers -- never `ThreadBusy`, which would confirm the thread
+    /// exists.
+    #[tokio::test]
+    async fn submit_on_another_tenants_thread_is_rejected_as_unknown_thread() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+
+        service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        let err = service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("globex", "svc-b", UserRole::User)),
+            ))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RunSubmissionError::UnknownThread { .. }),
+            "cross-tenant thread submit must look like an unknown thread, got {err:?}"
+        );
+        assert_eq!(queue.depth().await.unwrap(), 1, "nothing may be enqueued");
+        let all = repository
+            .list(RunQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(all.items.len(), 1, "nothing may be inserted");
+    }
+
+    /// WR-01 controls: the owning tenant, an Admin, an internal (`None`)
+    /// caller, and a thread with no runs are all NOT blocked by the tenant
+    /// guard (the owner and Admin reach the ordinary busy-thread check).
+    #[tokio::test]
+    async fn submit_thread_tenant_guard_admits_owner_admin_internal_and_fresh_threads() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, _repository, _queue) = service_with(resolver);
+
+        service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        for requester in [
+            Some(principal_ref("acme", "svc-a2", UserRole::User)),
+            Some(principal_ref("ops-tenant", "ops", UserRole::Admin)),
+            None,
+        ] {
+            let err = service
+                .submit(submit_on_thread("acme-thread", requester))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, RunSubmissionError::ThreadBusy { .. }),
+                "owner/admin/internal must pass the tenant guard and reach the busy check, got {err:?}"
+            );
+        }
+
+        // A thread with no runs stays open to any principal.
+        service
+            .submit(submit_on_thread(
+                "fresh-thread",
+                Some(principal_ref("globex", "svc-b", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+    }
+
+    /// WR-01 (fork): a `User` of another tenant forking a thread whose latest
+    /// run is not theirs gets the uniform `UnknownThread`, before the
+    /// busy-thread / waypoint checks can confirm the thread exists.
+    #[tokio::test]
+    async fn fork_on_another_tenants_thread_is_rejected_as_unknown_thread() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, _repository, queue) = service_with(resolver);
+
+        service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        let fork_as = |requested_by: Option<PrincipalRef>| ForkRun {
+            thread_id: ThreadId::new("acme-thread").unwrap(),
+            from_waypoint_id: paladin_core::platform::container::waypoint::WaypointId::new(),
+            edit: None,
+            webhook: None,
+            requested_by,
+        };
+
+        let err = service
+            .fork(fork_as(Some(principal_ref(
+                "globex",
+                "svc-b",
+                UserRole::User,
+            ))))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RunSubmissionError::UnknownThread { .. }),
+            "cross-tenant fork must look like an unknown thread, got {err:?}"
+        );
+        assert_eq!(queue.depth().await.unwrap(), 1, "nothing may be enqueued");
+
+        // Control: the owning tenant passes the guard and reaches the ordinary
+        // busy-thread check (the thread's only run is still active).
+        let err = service
+            .fork(fork_as(Some(principal_ref(
+                "acme",
+                "svc-a2",
+                UserRole::User,
+            ))))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RunSubmissionError::ThreadBusy { .. }));
     }
 }

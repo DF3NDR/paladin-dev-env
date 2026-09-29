@@ -9,6 +9,11 @@
 //! `trace.log_sink: false` (this sink is never attached) or
 //! `RUST_LOG=paladin::trace=off` (the house `env_logger` stack drops the
 //! line before it is written) — no code change either way (D-11).
+//!
+//! A disabled target costs neither serialisation nor formatting: `on_event`
+//! asks the installed logger whether `paladin::trace` is enabled at `Info`
+//! and returns `Ok(())` without touching `serde_json` when it is not
+//! (OBS-05, D-17).
 
 use async_trait::async_trait;
 use paladin_ports::output::trace_sink_port::{TraceRecord, TraceSink, TraceSinkError};
@@ -54,10 +59,39 @@ fn write_trace_line<T: serde::Serialize>(value: &T) {
     }
 }
 
+/// Whether the operator's logger currently accepts `Info` records under
+/// target `paladin::trace`.
+///
+/// Reads the real filter through the installed logger's `enabled` (so
+/// `RUST_LOG=paladin::trace=off` silences the stream, D-11) rather than
+/// mirroring it in config. With no logger installed the `log` crate's max
+/// level is `Off`, so this is `false`.
+fn trace_target_enabled() -> bool {
+    log::log_enabled!(target: "paladin::trace", log::Level::Info)
+}
+
+/// Write `value` as one trace line only when the `paladin::trace` target is
+/// enabled; returns whether a line was attempted.
+///
+/// A disabled target costs neither JSON serialisation nor message
+/// formatting (OBS-05, D-17 fix 1). The guard deliberately lives here and
+/// not inside [`write_trace_line`], so that function's serialization-failure
+/// diagnostic stays directly testable with an unserialisable value.
+fn write_trace_line_if_enabled<T: serde::Serialize>(value: &T) -> bool {
+    if !trace_target_enabled() {
+        return false;
+    }
+    write_trace_line(value);
+    true
+}
+
 #[async_trait]
 impl TraceSink for LogTraceSink {
     async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
-        write_trace_line(&record);
+        // Enablement guard first: a filtered target must not pay for
+        // serialisation (OBS-05). The return value only says whether a line
+        // was attempted; the sink never fails either way.
+        write_trace_line_if_enabled(&record);
         Ok(())
     }
 }
@@ -255,5 +289,97 @@ mod tests {
     async fn on_event_always_returns_ok() {
         let sink = LogTraceSink::new();
         assert!(sink.on_event(sample_record()).await.is_ok());
+    }
+
+    /// A value whose `Serialize` impl counts how many times it is called and
+    /// serialises a unit -- the witness that a disabled `paladin::trace`
+    /// target never reaches `serde_json`.
+    struct CountingValue<'a>(&'a std::sync::atomic::AtomicUsize);
+    impl serde::Serialize for CountingValue<'_> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            serializer.serialize_unit()
+        }
+    }
+
+    /// Sets the process-wide `log` max level for one test and restores
+    /// `Trace` on drop, so a failed assertion never leaves the level `Off`
+    /// for sibling tests sharing the one logger slot.
+    struct MaxLevelGuard;
+    impl MaxLevelGuard {
+        fn set(level: log::LevelFilter) -> Self {
+            log::set_max_level(level);
+            Self
+        }
+    }
+    impl Drop for MaxLevelGuard {
+        fn drop(&mut self) {
+            log::set_max_level(log::LevelFilter::Trace);
+        }
+    }
+
+    /// Behavior: with the `paladin::trace` target disabled the guard returns
+    /// `false`, never invokes `Serialize` and writes no line; with it
+    /// enabled it serialises exactly once and writes exactly one line
+    /// (OBS-05, D-17 fix 1).
+    #[test]
+    #[serial_test::serial]
+    fn log_sink_skips_serialisation_when_the_trace_target_is_disabled() {
+        let logger = install_capturing_logger();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+
+        {
+            let _off = MaxLevelGuard::set(log::LevelFilter::Off);
+            drain_records(&logger);
+            assert!(!write_trace_line_if_enabled(&CountingValue(&calls)));
+            assert_eq!(
+                calls.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "a disabled target must not serialise the record"
+            );
+            let records = drain_records(&logger);
+            assert!(
+                records
+                    .iter()
+                    .all(|(target, _, _)| target != "paladin::trace"),
+                "a disabled target must write no line: {records:?}"
+            );
+        }
+
+        let _on = MaxLevelGuard::set(log::LevelFilter::Trace);
+        drain_records(&logger);
+        assert!(write_trace_line_if_enabled(&CountingValue(&calls)));
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an enabled target serialises exactly once"
+        );
+        let records = drain_records(&logger);
+        let trace_lines = records
+            .iter()
+            .filter(|(target, _, _)| target == "paladin::trace")
+            .count();
+        assert_eq!(trace_lines, 1, "exactly one line when enabled: {records:?}");
+    }
+
+    /// Behavior: `on_event` with the target disabled still returns `Ok(())`
+    /// (the diagnostics-only contract) and writes no `paladin::trace` line.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn on_event_writes_no_line_when_the_trace_target_is_disabled() {
+        let logger = install_capturing_logger();
+        let _off = MaxLevelGuard::set(log::LevelFilter::Off);
+        drain_records(&logger);
+
+        let sink = LogTraceSink::new();
+        assert!(sink.on_event(sample_record()).await.is_ok());
+
+        let records = drain_records(&logger);
+        assert!(
+            records
+                .iter()
+                .all(|(target, _, _)| target != "paladin::trace"),
+            "a disabled target must write no line: {records:?}"
+        );
     }
 }

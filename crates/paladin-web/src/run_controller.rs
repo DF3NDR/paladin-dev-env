@@ -3147,5 +3147,72 @@ mod tests {
                  peer and the Admin -- never by the foreign key (D-13, T-40-19)"
             );
         }
+
+        // --- RunResponse.submitted_by (Phase 40, 40-05, D-19, TENANT-02) ---
+
+        /// D-19: `GET /v1/runs/{id}` carries the recorded submitter as exactly
+        /// `{ tenant_id, api_key_id }` -- the key's configured NAME, never the key value
+        /// the caller authenticated with, and never the role.
+        #[tokio::test]
+        async fn run_response_carries_submitted_by_and_never_the_key_or_role() {
+            use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+            use paladin_core::platform::container::user::UserRole;
+
+            const KEY_VALUE: &str = "owner-super-secret-key-value";
+
+            let repository = Arc::new(MockRepository::default());
+            let run = sample_run("t-dto")
+                .with_submitted_by(RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a"));
+            let run_id = run.run_id.clone();
+            repository.seed(run);
+            let auth = api_key_auth_with_tenant(KEY_VALUE, "svc-a", UserRole::User, "acme");
+            let app = run_router(authed_state_with_repository(auth, repository));
+
+            let response = send_as(&app, "GET", format!("/v1/runs/{run_id}"), KEY_VALUE).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let text = read_response_body(response).await;
+            let body: serde_json::Value = serde_json::from_str(&text).expect("JSON body");
+
+            let submitted_by = body["submitted_by"]
+                .as_object()
+                .expect("submitted_by is an object for an attributed run");
+            assert_eq!(
+                submitted_by.len(),
+                2,
+                "exactly tenant_id and api_key_id: {text}"
+            );
+            assert_eq!(submitted_by["tenant_id"], "acme");
+            assert_eq!(submitted_by["api_key_id"], "svc-a");
+            assert!(
+                !text.contains(KEY_VALUE),
+                "the configured API key value must never appear in a response body: {text}"
+            );
+            assert!(
+                !submitted_by.contains_key("role") && !text.contains("\"role\""),
+                "the role is config, not data, and is never served (D-19): {text}"
+            );
+        }
+
+        /// D-19: a run with no recorded principal (schedule-fired, same-process, or
+        /// submitted before v0.11) serialises `"submitted_by": null` -- the key is always
+        /// present, mirroring the `cost` precedent.
+        #[tokio::test]
+        async fn run_response_submitted_by_is_null_for_an_unattributed_run() {
+            let run = sample_run("t-dto");
+            let run_id = run.run_id.clone();
+            let state = RunApiState::new().with_repository(repository_with(run));
+
+            let (status, Json(body)) =
+                get_run(State(state), tester_principal(), Path(run_id.to_string()))
+                    .await
+                    .expect("ok");
+            assert_eq!(status, StatusCode::OK);
+            let object = body.as_object().expect("object body");
+            assert!(
+                object.contains_key("submitted_by"),
+                "submitted_by must always be serialised: {body}"
+            );
+            assert!(body["submitted_by"].is_null(), "{body}");
+        }
     }
 }

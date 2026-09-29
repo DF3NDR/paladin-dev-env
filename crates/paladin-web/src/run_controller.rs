@@ -2808,5 +2808,232 @@ mod tests {
                 paladin_core::platform::container::user::UserRole::User
             );
         }
+
+        // --- Route matrix (Phase 40, 40-05, D-13, research Pitfall 10, PLAT-07) ---
+
+        /// A `RunSubmissionPort` double that records the `api_key_id` behind every
+        /// `cancel` call, so the matrix can prove a foreign caller never reaches the
+        /// port at all (D-13, T-40-19) -- the gate answers before `cancel` is invoked.
+        struct RecordingCancelPort {
+            cancel_callers: Mutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl RunSubmissionPort for RecordingCancelPort {
+            async fn submit(
+                &self,
+                _request: SubmitRun,
+            ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+            {
+                Err(RunSubmissionError::NotWired)
+            }
+
+            async fn cancel(
+                &self,
+                run_id: &RunId,
+                requested_by: Option<PrincipalRef>,
+            ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
+            {
+                self.cancel_callers.lock().unwrap().push(
+                    requested_by
+                        .map(|principal| principal.api_key_id)
+                        .unwrap_or_else(|| "<internal>".to_string()),
+                );
+                Ok(paladin_ports::input::run_submission_port::CancelOutcome {
+                    run_id: run_id.clone(),
+                    status: RunStatus::Running,
+                    was_local: false,
+                })
+            }
+
+            async fn fork(
+                &self,
+                _request: paladin_ports::input::run_submission_port::ForkRun,
+            ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+            {
+                Err(RunSubmissionError::NotWired)
+            }
+        }
+
+        /// Every `(METHOD, path)` operation under `/v1/runs/{run_id}` the router publishes,
+        /// read from its OWN OpenAPI document (`versioned_run_parts(..).1`) rather than a
+        /// hand-maintained list -- so a route added to `run_openapi_router` without joining
+        /// the matrix table fails the test (research Pitfall 10, T-40-22).
+        fn published_run_id_operations(api: &utoipa::openapi::OpenApi) -> Vec<(String, String)> {
+            let mut operations = Vec::new();
+            for (path, item) in &api.paths.paths {
+                if !path.starts_with("/v1/runs/{run_id}") {
+                    continue;
+                }
+                let by_method = [
+                    ("GET", item.get.is_some()),
+                    ("PUT", item.put.is_some()),
+                    ("POST", item.post.is_some()),
+                    ("DELETE", item.delete.is_some()),
+                    ("OPTIONS", item.options.is_some()),
+                    ("HEAD", item.head.is_some()),
+                    ("PATCH", item.patch.is_some()),
+                    ("TRACE", item.trace.is_some()),
+                ];
+                for (method, present) in by_method {
+                    if present {
+                        operations.push((method.to_string(), path.clone()));
+                    }
+                }
+            }
+            operations.sort();
+            operations
+        }
+
+        async fn send_as(app: &axum::Router, method: &str, uri: String, key: &str) -> Response {
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("x-api-key", key)
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds")
+        }
+
+        /// D-13 / PLAT-07 success criterion 3, on the WHOLE `/runs/{run_id}*` route set:
+        /// the operations are enumerated from the router's own OpenAPI document and
+        /// compared against this table; for every row the owner key, a second key of
+        /// the same tenant and an Admin of another tenant get the success status, a key of
+        /// a different tenant gets a 404 whose body is byte-identical to that route's
+        /// missing-run 404 once the ids are swapped (D-11, D-12), and the recording cancel
+        /// double never sees a call from the foreign key.
+        #[tokio::test]
+        async fn every_run_id_route_hides_foreign_runs_behind_the_missing_run_404() {
+            use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+            use paladin_core::platform::container::run::RunStreamEventKind;
+            use paladin_core::platform::container::user::UserRole;
+
+            let submission = Arc::new(RecordingCancelPort {
+                cancel_callers: Mutex::new(Vec::new()),
+            });
+            let repository = Arc::new(MockRepository::default());
+            let run = sample_run("t-matrix").with_submitted_by(RunAttribution::new(
+                TenantId::new("acme").unwrap(),
+                "svc-a",
+            ));
+            let run_id = run.run_id.clone();
+            repository.seed(run);
+
+            let mut api_keys = HashMap::new();
+            api_keys.insert(
+                "owner-key".to_string(),
+                Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap()),
+            );
+            api_keys.insert(
+                "peer-key".to_string(),
+                Principal::new("svc-a2", UserRole::User, TenantId::new("acme").unwrap()),
+            );
+            api_keys.insert(
+                "foreign-key".to_string(),
+                Principal::new("svc-b", UserRole::User, TenantId::new("globex").unwrap()),
+            );
+            api_keys.insert(
+                "admin-key".to_string(),
+                Principal::new("ops", UserRole::Admin, TenantId::new("ops-tenant").unwrap()),
+            );
+            let auth = crate::agent_auth::AgentAuthConfig {
+                enabled: true,
+                api_keys,
+                token_verifier: None,
+                bearer_tenant: None,
+            };
+
+            let events = vec![sample_stream_event(
+                &run_id,
+                RunStreamEventKind::Done,
+                serde_json::json!({ "status": "completed", "waypoint_id": "wp-1" }),
+            )];
+            let state = RunApiState::new()
+                .with_submission(Arc::clone(&submission) as Arc<dyn RunSubmissionPort>)
+                .with_repository(repository)
+                .with_run_events(Arc::new(MockRunEventStreamPort { events }))
+                .with_webhook_deliveries(Arc::new(MockWebhookDeliveries::default()))
+                .with_auth(auth);
+            let (app, api) = versioned_run_parts(state);
+
+            // The table every `/v1/runs/{run_id}*` operation must appear in, with the
+            // status its owner gets. Adding a route to `run_openapi_router` without adding
+            // it here (and routing it through `load_visible_run`) fails the assertion
+            // below.
+            let table: [(&str, &str, StatusCode); 4] = [
+                ("GET", "/v1/runs/{run_id}", StatusCode::OK),
+                ("GET", "/v1/runs/{run_id}/stream", StatusCode::OK),
+                ("POST", "/v1/runs/{run_id}/cancel", StatusCode::ACCEPTED),
+                (
+                    "GET",
+                    "/v1/runs/{run_id}/webhook-deliveries",
+                    StatusCode::OK,
+                ),
+            ];
+            let mut tabled: Vec<(String, String)> = table
+                .iter()
+                .map(|(method, path, _)| (method.to_string(), path.to_string()))
+                .collect();
+            tabled.sort();
+            let published = published_run_id_operations(&api);
+            assert_eq!(
+                published, tabled,
+                "the /v1/runs/{{run_id}}* operations the router publishes do not match the \
+                 matrix table: published={published:?} table={tabled:?}. Every route under \
+                 /v1/runs/{{run_id}} must enter through `load_visible_run` (D-13, PLAT-07) \
+                 and be added to this table with its owner success status; a route that no \
+                 longer exists must be removed from the table."
+            );
+
+            for (method, template, success) in table {
+                let uri_for = |id: &RunId| template.replace("{run_id}", &id.to_string());
+
+                for key in ["owner-key", "peer-key", "admin-key"] {
+                    let response = send_as(&app, method, uri_for(&run_id), key).await;
+                    assert_eq!(
+                        response.status(),
+                        success,
+                        "{method} {template} as {key} must succeed (D-11: same tenant or Admin)"
+                    );
+                }
+
+                let hidden = send_as(&app, method, uri_for(&run_id), "foreign-key").await;
+                assert_eq!(
+                    hidden.status(),
+                    StatusCode::NOT_FOUND,
+                    "{method} {template} as a foreign tenant must be the missing-run 404 (D-12)"
+                );
+                let hidden_text = read_response_body(hidden).await;
+
+                let missing_id = RunId::new_v7();
+                let missing = send_as(&app, method, uri_for(&missing_id), "foreign-key").await;
+                assert_eq!(
+                    missing.status(),
+                    StatusCode::NOT_FOUND,
+                    "{method} {template} for a missing run must be 404"
+                );
+                let missing_text = read_response_body(missing).await;
+
+                assert_eq!(
+                    hidden_text.replace(&run_id.to_string(), &missing_id.to_string()),
+                    missing_text,
+                    "{method} {template}: a hidden run's 404 body must be byte-identical to \
+                     the missing-run 404 once the ids are swapped (D-12, T-40-21)"
+                );
+            }
+
+            let mut callers = submission.cancel_callers.lock().unwrap().clone();
+            callers.sort();
+            assert_eq!(
+                callers,
+                vec!["ops".to_string(), "svc-a".to_string(), "svc-a2".to_string()],
+                "RunSubmissionPort::cancel must be reached only by the owner, the same-tenant \
+                 peer and the Admin -- never by the foreign key (D-13, T-40-19)"
+            );
+        }
     }
 }

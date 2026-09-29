@@ -727,3 +727,135 @@ async fn tenant_scoped_run_list_e2e() {
     .await
     .expect("tenant_scoped_run_list_e2e did not hang");
 }
+
+/// Phase 40's cross-tenant cancel proof (D-13, T-40-19, PLAT-07) over a real on-disk
+/// `SqliteRunRepository` through the real `run_router` and `RunSubmissionService`: key b's
+/// `POST /v1/runs/{id}/cancel` on key a's run is the missing-run 404 and writes NOTHING --
+/// the row's `cancel_requested` stays false -- while key a's own cancel then answers 202
+/// and sets the flag. A foreign cancel is a cross-tenant mutation, not just a leak, so the
+/// visibility gate must answer before `RunSubmissionPort::cancel` is ever reached.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_tenant_cancel_is_a_404_and_writes_no_cancel_flag() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (repo_path, repo_url) = temp_sqlite_url("cross-tenant-cancel");
+        let repository: Arc<dyn RunRepositoryPort> =
+            Arc::new(SqliteRunRepository::new(&repo_url).await.unwrap());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("cancel-wf", build_chain_graph(1)));
+        let submission: Arc<dyn RunSubmissionPort> = Arc::new(RunSubmissionService::new(
+            repository.clone(),
+            queue.clone(),
+            resolver.clone(),
+        ));
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "cancel-key-a".to_string(),
+            Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        api_keys.insert(
+            "cancel-key-b".to_string(),
+            Principal::new("svc-b", UserRole::User, TenantId::new("globex").unwrap()),
+        );
+        let auth = AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        };
+
+        let state = RunApiState::new()
+            .with_submission(submission)
+            .with_repository(repository.clone())
+            .with_auth(auth);
+        let app = run_router(state);
+
+        // Key a submits; no worker runs, so the run stays Queued (non-terminal) and a
+        // cancel is admissible for whoever may see it.
+        let submit_body = serde_json::to_vec(&serde_json::json!({
+            "assistant_id": "cancel-wf",
+            "thread_id": "cancel-a-1",
+            "input": {}
+        }))
+        .unwrap();
+        let submit_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/runs")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "cancel-key-a")
+                    .body(Body::from(submit_body))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(submit_response.status(), StatusCode::ACCEPTED);
+        let submit_bytes = axum::body::to_bytes(submit_response.into_body(), usize::MAX)
+            .await
+            .expect("read submit body");
+        let submit_json: serde_json::Value =
+            serde_json::from_slice(&submit_bytes).expect("submit body is JSON");
+        let run_id = RunId::parse(submit_json["run_id"].as_str().expect("run_id string"))
+            .expect("run_id parses");
+
+        // Key b (globex) cancelling acme's run: the missing-run 404, and the row is
+        // untouched.
+        let foreign_cancel = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/runs/{run_id}/cancel"))
+                    .header("x-api-key", "cancel-key-b")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(
+            foreign_cancel.status(),
+            StatusCode::NOT_FOUND,
+            "a foreign tenant's cancel must be the missing-run 404 (D-13, PLAT-07)"
+        );
+        let after_foreign = repository
+            .get(&run_id)
+            .await
+            .expect("repository read succeeds")
+            .expect("run exists");
+        assert!(
+            !after_foreign.cancel_requested,
+            "a foreign cancel must never reach RunSubmissionPort::cancel or write the flag"
+        );
+        assert_eq!(after_foreign.status, RunStatus::Queued);
+
+        // Key a (the owner) cancels: 202, and the flag is now set.
+        let owner_cancel = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/runs/{run_id}/cancel"))
+                    .header("x-api-key", "cancel-key-a")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(owner_cancel.status(), StatusCode::ACCEPTED);
+        let after_owner = repository
+            .get(&run_id)
+            .await
+            .expect("repository read succeeds")
+            .expect("run exists");
+        assert!(
+            after_owner.cancel_requested,
+            "the owner's cancel must set cancel_requested on the row"
+        );
+
+        cleanup(&repo_path);
+    })
+    .await
+    .expect("cross_tenant_cancel_is_a_404_and_writes_no_cancel_flag did not hang");
+}

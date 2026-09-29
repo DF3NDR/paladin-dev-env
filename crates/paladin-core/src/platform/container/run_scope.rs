@@ -24,11 +24,14 @@
 //! functional-update syntax) from outside this crate, [`RunScope::default`]
 //! plus the [`RunScope::with_vault_namespace`] builder are the only way a
 //! downstream crate ever builds one — exactly the shape that keeps working
-//! once Phase 27 adds a field.
+//! once Phase 27 adds a field. Phase 39 (39-07) added `run_id` and Phase 40
+//! (D-16) added `ledger_scope` exactly this way: each is serde-defaulted,
+//! omitted when `None`, and set only through its own `with_*` builder.
 
 use serde::{Deserialize, Serialize};
 
 use crate::platform::container::run::RunId;
+use crate::platform::container::treasury_ledger::LedgerScope;
 use crate::platform::container::vault::Namespace;
 
 /// The host-issued grant a single run carries (Doc 05 RT-04, D-21).
@@ -74,6 +77,18 @@ pub struct RunScope {
     /// serialized form when `None` (D-00f: additive).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<RunId>,
+
+    /// The tenant and API key id this execution's priced calls settle
+    /// under (Phase 40 D-16). Set by the run worker from the run row's
+    /// recorded submitter (`LedgerScope::from_attribution(run.submitted_by)`)
+    /// and by the HTTP agent handlers from the calling `Principal`; read by
+    /// the agent loop's settle writer in `PaladinExecutionService`. `None`
+    /// means this scope carries no attribution -- the settle writer then
+    /// stamps the [`LedgerScope::unattributed`] sentinel, the documented
+    /// value for "no principal exists" (D-10). Never the API key's secret
+    /// value. Omitted from the serialized form when `None` (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ledger_scope: Option<LedgerScope>,
 }
 
 impl RunScope {
@@ -115,6 +130,26 @@ impl RunScope {
     #[must_use]
     pub fn with_run_id(mut self, run_id: RunId) -> Self {
         self.run_id = Some(run_id);
+        self
+    }
+
+    /// Builds a [`RunScope`] whose priced calls settle under `scope`
+    /// (Phase 40 D-16). The only way to set `ledger_scope` on a
+    /// `#[non_exhaustive]` struct from outside this crate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::run_scope::RunScope;
+    /// use paladin_core::platform::container::treasury_ledger::LedgerScope;
+    ///
+    /// let ledger_scope = LedgerScope::new("acme", "svc-a");
+    /// let scope = RunScope::default().with_ledger_scope(ledger_scope.clone());
+    /// assert_eq!(scope.ledger_scope, Some(ledger_scope));
+    /// ```
+    #[must_use]
+    pub fn with_ledger_scope(mut self, scope: LedgerScope) -> Self {
+        self.ledger_scope = Some(scope);
         self
     }
 }

@@ -585,9 +585,12 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// [`RunWorkerPool::with_treasury_ledger`]: attaches to every per-run
     /// engine [`Self::engine_factory`] builds, via
     /// [`WarEngine::with_treasury_ledger`] with a [`SettlementContext`]
-    /// whose `scope` is [`LedgerScope::unattributed`] (until Phase 40
-    /// records the submitting principal), `run_id` is this dispatch's own
-    /// `Run.run_id`, and `attempt` is the persisted counter this same
+    /// whose `scope` is the run row's recorded submitter -- its tenant and
+    /// API key id via [`LedgerScope::from_attribution`] (Phase 40 D-15), or
+    /// the [`LedgerScope::unattributed`] sentinel when `Run.submitted_by`
+    /// is `None` (a schedule-fired or internal run, D-10) -- `run_id` is
+    /// this dispatch's own `Run.run_id`, and `attempt` is the persisted
+    /// counter this same
     /// `run_once` call just computed -- `run.attempt` on a first dispatch,
     /// or [`RunRepositoryPort::bump_attempt`]'s returned value on a
     /// `Running` redelivery (D-07): the engine never invents its own
@@ -596,11 +599,13 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// observational only -- a ledger failure is logged and never affects
     /// this run's status, ack or retry (D-08). An agent-kind run does not
     /// settle here at all: [`Self::run_agent`] instead carries this run's
-    /// id into the run engine's shared [`PaladinPort`] via
-    /// [`RunScope::with_run_id`], so the agent loop's own
+    /// id and the same submitter-derived scope into the run engine's shared
+    /// [`PaladinPort`] via [`RunScope::with_run_id`] and
+    /// [`RunScope::with_ledger_scope`] (D-16), so the agent loop's own
     /// `AgentLoopSettlement::PlatformRunsOnly` writer (39-05) settles it
-    /// under attempt `1`, never double-charging a redelivered agent-kind
-    /// run. `None` (the default) means no ledger call happens anywhere in
+    /// under attempt `1` and the same tenant/API key id, never
+    /// double-charging a redelivered agent-kind run. `None` (the default)
+    /// means no ledger call happens anywhere in
     /// this pool, matching every other optional field's own "a pool that
     /// never calls the builder is unaffected" contract.
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
@@ -765,17 +770,22 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// `run_once` attaches `ledger` to every per-run engine
     /// [`Self::with_engine_factory`] produces, via
     /// [`WarEngine::with_treasury_ledger`] with a [`SettlementContext`]
-    /// scoped [`LedgerScope::unattributed`] and keyed by this dispatch's
+    /// scoped to the run row's recorded submitter via
+    /// [`LedgerScope::from_attribution`] (Phase 40 D-15; the
+    /// [`LedgerScope::unattributed`] sentinel only when the row records no
+    /// principal, D-10) and keyed by this dispatch's
     /// own `run_id` and persisted `attempt` (D-07) -- the same persisted
     /// counter [`RunRepositoryPort::bump_attempt`]/`record_resume` already
     /// bump on redelivery/resume, so a genuine re-execution settles under a
     /// fresh key while a repeated settle of an already-settled key is
     /// charged once (LEDGR-03, ADR-0053 §4). Also carries this run's id
-    /// into the run engine's shared [`PaladinPort`] for an agent-kind
-    /// (`Runnable::Agent`) run via [`RunScope::with_run_id`] in
-    /// `Self::run_agent`, so that port's own `AgentLoopSettlement::
+    /// and the same submitter-derived scope into the run engine's shared
+    /// [`PaladinPort`] for an agent-kind (`Runnable::Agent`) run via
+    /// [`RunScope::with_run_id`] and [`RunScope::with_ledger_scope`] in
+    /// `Self::run_agent` (D-16), so that port's own `AgentLoopSettlement::
     /// PlatformRunsOnly` writer (39-05) settles it under the Platform run
-    /// id rather than a fresh execution id every dispatch. Only takes
+    /// id and the submitting principal's tenant and API key id rather than
+    /// a fresh execution id and the sentinel every dispatch. Only takes
     /// effect on the [`Self::with_engine_factory`] path -- the shared
     /// no-factory engine is never attached to, exactly like
     /// [`Self::with_trace_config`]/[`Self::with_herald`]. A pool that never
@@ -965,8 +975,10 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 if let Some(ledger) = &self.treasury_ledger {
                     engine = engine.with_treasury_ledger(
                         Arc::clone(ledger),
+                        // 40-04 (D-15): the run row's recorded submitter is
+                        // the scope; the sentinel only when none was recorded.
                         SettlementContext {
-                            scope: LedgerScope::unattributed(),
+                            scope: LedgerScope::from_attribution(run.submitted_by.as_ref()),
                             run_id: run.run_id.clone(),
                             attempt,
                         },
@@ -1251,13 +1263,19 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // that does not override `execute_scoped`, the trait's default
         // body delegates straight to `execute`, so this is
         // behavior-identical for a port with no ledger settlement
-        // installed.
+        // installed. 40-04 (D-15/D-16): the same scope carries the run
+        // row's recorded submitter as the ledger scope, so that writer
+        // settles under the submitting principal's tenant and API key id
+        // (the sentinel only when the row records no principal, D-10).
+        let run_scope = RunScope::default()
+            .with_run_id(run.run_id.clone())
+            .with_ledger_scope(LedgerScope::from_attribution(run.submitted_by.as_ref()));
         match paladin_port
             .execute_scoped(
                 paladin.as_ref(),
                 &input_text,
                 &HeartbeatHandle::new(),
-                &RunScope::default().with_run_id(run.run_id.clone()),
+                &run_scope,
             )
             .await
         {
@@ -2491,9 +2509,10 @@ mod tests {
             .recorded_scope()
             .expect("execute_scoped must have been called");
         assert_eq!(scope.run_id, Some(run_id));
-        assert!(
-            scope.ledger_scope.is_none(),
-            "a run with no recorded principal carries no ledger scope (D-10)"
+        assert_eq!(
+            scope.ledger_scope,
+            Some(LedgerScope::unattributed()),
+            "a run with no recorded principal carries the sentinel scope (D-10)"
         );
     }
 

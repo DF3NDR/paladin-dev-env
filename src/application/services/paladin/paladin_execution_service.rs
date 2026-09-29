@@ -374,10 +374,28 @@ pub(crate) fn effective_history(history: Vec<GarrisonEntry>) -> Vec<GarrisonEntr
     effective
 }
 
+/// The ledger identity one agent-loop execution settles its priced calls
+/// under (D-07, Phase 40 D-16): the run id every `(run_id, ordinal, 1)`
+/// key names and the resolved [`LedgerScope`] every row is stamped with.
+/// Resolved once per `execute_scoped` call, from that call's own
+/// [`RunScope`] (`ledger_run_id` for the id; `scope.ledger_scope` or the
+/// [`LedgerScope::unattributed`] sentinel for the scope), and carried
+/// unchanged through `execute_bounded` into `execute_internal`'s loop.
+/// `None` at the call site means no call this execution makes settles.
+#[derive(Debug, Clone)]
+struct AgentLoopLedgerTarget {
+    /// The run every settlement key names.
+    run_id: RunId,
+    /// The tenant and API key id every settlement row is stamped with.
+    scope: LedgerScope,
+}
+
 /// Settle one priced agent-loop model call (D-07, D-08, 39-05): an
-/// unreserved settlement under `(run_id, ordinal, 1)` with an
-/// [`LedgerScope::unattributed`] scope (D-01) and a single-entry
-/// `model_breakdown` naming `model`.
+/// unreserved settlement under `(run_id, ordinal, 1)` with the caller's
+/// resolved `scope` (Phase 40 D-16: the submitting principal's tenant and
+/// API key id, or the [`LedgerScope::unattributed`] sentinel when the
+/// caller resolved none) and a single-entry `model_breakdown` naming
+/// `model`.
 ///
 /// A free function (not a `PaladinExecutionService` method) so it can be
 /// called from `execute_stream_inner`'s spawned task, which owns no `&self`
@@ -389,9 +407,10 @@ pub(crate) fn effective_history(history: Vec<GarrisonEntry>) -> Vec<GarrisonEntr
 /// duplicate-key [`SettleOutcome::AlreadySettled`] at `warn!` -- neither
 /// changes a run's output, retries a call, or fails an execution (D-08).
 /// Log lines carry the run id, ordinal, nanos and currency -- never the
-/// prompt, the response content, or any API key.
+/// prompt, the response content, the scope's key id, or any API key value.
 async fn settle_agent_loop_call(
     ledger: &Arc<dyn TreasuryLedgerPort>,
+    scope: &LedgerScope,
     run_id: &RunId,
     ordinal: u64,
     model: &str,
@@ -399,7 +418,7 @@ async fn settle_agent_loop_call(
 ) {
     let key = SettlementKey::new(run_id.clone(), ordinal, 1);
     let request = SettleRequest::unreserved(
-        LedgerScope::unattributed(),
+        scope.clone(),
         key,
         cost.clone(),
         BTreeMap::from([(model.to_string(), cost.nanos())]),
@@ -956,7 +975,10 @@ impl PaladinExecutionService {
 
     /// Resolves the run id this service's agent-loop settle writer should
     /// settle `scope`'s calls under (D-07), or `None` when no call this run
-    /// makes should settle at all.
+    /// makes should settle at all. The companion scope resolution (Phase 40
+    /// D-16: `scope.ledger_scope`, else the sentinel) happens beside this
+    /// call in `execute_scoped`; both ride together as one
+    /// [`AgentLoopLedgerTarget`].
     ///
     /// - No ledger installed: `None`.
     /// - [`AgentLoopSettlement::PlatformRunsOnly`][] mode: `scope.run_id.clone()`
@@ -982,17 +1004,23 @@ impl PaladinExecutionService {
     }
 
     /// Settle one priced model call (D-07, D-08): an unreserved settlement
-    /// under `(run_id, ordinal, 1)` with an [`LedgerScope::unattributed`]
-    /// scope (D-01) and a single-entry `model_breakdown` naming `model`.
+    /// under `(target.run_id, ordinal, 1)` with the resolved `target.scope`
+    /// (Phase 40 D-16) and a single-entry `model_breakdown` naming `model`.
     ///
     /// Delegates to [`settle_agent_loop_call`], the free function the
     /// streamed path (`execute_stream_inner`'s spawned task, which owns no
     /// `&self`) also calls -- one settle implementation, two call sites.
-    async fn settle_model_call(&self, run_id: &RunId, ordinal: u64, model: &str, cost: &Cost) {
+    async fn settle_model_call(
+        &self,
+        target: &AgentLoopLedgerTarget,
+        ordinal: u64,
+        model: &str,
+        cost: &Cost,
+    ) {
         let Some((ledger, _)) = &self.treasury_ledger else {
             return;
         };
-        settle_agent_loop_call(ledger, run_id, ordinal, model, cost).await;
+        settle_agent_loop_call(ledger, &target.scope, &target.run_id, ordinal, model, cost).await;
     }
 
     /// Replaces the whole `ExecutionMiddleware` chain with `chain` (Doc 05
@@ -1258,7 +1286,19 @@ impl PaladinExecutionService {
         let confined_vault = self.confined_vault(scope);
         // D-07: resolved here, once, from this call's own `scope` -- never
         // recomputed inside `execute_internal`'s per-loop-iteration body.
-        let ledger_run_id = self.ledger_run_id(scope, execution_id);
+        // Phase 40 D-16: the ledger scope rides beside the run id -- the
+        // scope's own `ledger_scope` (the submitting principal's tenant and
+        // API key id, set by the run worker or the HTTP agent handler), or
+        // the unattributed sentinel when this scope carries none (D-10).
+        let ledger_target =
+            self.ledger_run_id(scope, execution_id)
+                .map(|run_id| AgentLoopLedgerTarget {
+                    run_id,
+                    scope: scope
+                        .ledger_scope
+                        .clone()
+                        .unwrap_or_else(LedgerScope::unattributed),
+                });
         info!(
             "Starting scoped Paladin execution: id={}, name={}, input_len={}, vault_namespace={}",
             execution_id,
@@ -1275,7 +1315,7 @@ impl PaladinExecutionService {
             execution_id,
             heartbeat,
             confined_vault,
-            ledger_run_id,
+            ledger_target,
         )
         .await
     }
@@ -1291,7 +1331,7 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
         confined_vault: Option<ConfinedVault>,
-        ledger_run_id: Option<RunId>,
+        ledger_target: Option<AgentLoopLedgerTarget>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let timeout_duration = Duration::from_secs(paladin.node.max_loops.as_u32() as u64 * 60);
@@ -1303,7 +1343,7 @@ impl PaladinExecutionService {
             execution_id,
             heartbeat,
             confined_vault,
-            ledger_run_id,
+            ledger_target,
         );
 
         match timeout(timeout_duration, execution_future).await {
@@ -1487,7 +1527,7 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
         confined_vault: Option<ConfinedVault>,
-        ledger_run_id: Option<RunId>,
+        ledger_target: Option<AgentLoopLedgerTarget>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let mut usage = paladin_core::platform::container::token_usage::TokenUsage::default();
@@ -1756,13 +1796,13 @@ impl PaladinExecutionService {
             // its cost is folded into the run's own tally -- the same
             // response, the same model, so the ledger's breakdown key
             // matches the price that was actually computed from it (38-04).
-            if let (Some(run_id), Some(cost)) = (ledger_run_id.as_ref(), response.cost.as_ref()) {
+            if let (Some(target), Some(cost)) = (ledger_target.as_ref(), response.cost.as_ref()) {
                 let model = if response.model.is_empty() {
                     paladin.node.model.as_str()
                 } else {
                     response.model.as_str()
                 };
-                self.settle_model_call(run_id, u64::from(loop_num), model, cost)
+                self.settle_model_call(target, u64::from(loop_num), model, cost)
                     .await;
             }
             middleware_cx.cumulative_tokens = usage.total_tokens;
@@ -3574,7 +3614,15 @@ impl PaladinExecutionService {
                             if let (Some((ledger, run_id)), Some(cost)) =
                                 (stream_settlement.as_ref(), cost.as_ref())
                             {
-                                settle_agent_loop_call(ledger, run_id, 1, &model_used, cost).await;
+                                settle_agent_loop_call(
+                                    ledger,
+                                    &LedgerScope::unattributed(),
+                                    run_id,
+                                    1,
+                                    &model_used,
+                                    cost,
+                                )
+                                .await;
                             }
                             let mut chunk_metadata = ChunkMetadata::new();
                             if let Some(usage) = usage.clone() {
@@ -7685,7 +7733,11 @@ mod agent_loop_cost_tests {
             })
             .await
             .expect("spend by run succeeds");
-        assert_eq!(attributed.len(), 1, "both calls settled under (acme, svc-a)");
+        assert_eq!(
+            attributed.len(),
+            1,
+            "both calls settled under (acme, svc-a)"
+        );
         assert_eq!(attributed[0].settlements, 2);
 
         let sentinel = ledger

@@ -26,15 +26,20 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::platform::container::cost::Cost;
+use crate::platform::container::principal::RunAttribution;
 use crate::platform::container::run::RunId;
 
 /// A tenant + API-key pair every ledger row is scoped to (D-01).
 ///
-/// Every reserve/settle/query call takes a `LedgerScope`. Until Phase 40 records the
-/// submitting principal's tenant on the `Run` row, every Phase 39 production writer stamps the
-/// literal sentinel [`LedgerScope::unattributed`] -- Phase 40 replaces only the *source* of
-/// these two strings, never the schema, the port, or the queries built against it. `api_key_id`
-/// is an opaque key label, never the secret key value itself.
+/// Every reserve/settle/query call takes a `LedgerScope`. Production writers stamp the
+/// submitting principal's tenant and API key id, derived from the run's recorded
+/// [`RunAttribution`] (or the HTTP caller's `Principal`) through
+/// [`LedgerScope::from_attribution`] -- the one place that mapping is written (Phase 40 D-15).
+/// The literal sentinel [`LedgerScope::unattributed`] is stamped only when no principal exists
+/// at all (a schedule-fired or internal run, an embedded library caller; D-10). Phase 40
+/// replaced only the *source* of these two strings, never the schema, the port, or the queries
+/// built against it (Phase 39 D-01). `api_key_id` is the key's configured name, an opaque
+/// label -- never the secret key value itself.
 ///
 /// # Examples
 ///
@@ -58,8 +63,9 @@ pub struct LedgerScope {
 }
 
 impl LedgerScope {
-    /// The literal sentinel every Phase 39 production writer stamps until Phase 40 records a
-    /// real tenant/API-key on the submitting principal (D-01).
+    /// The literal sentinel stamped when no principal exists to attribute a row to (Phase 39
+    /// D-01, Phase 40 D-10): a run whose row records no submitter, or a caller that passes no
+    /// scope.
     pub const UNATTRIBUTED: &'static str = "unattributed";
 
     /// Construct a scope from a caller-known tenant and API key.
@@ -79,6 +85,36 @@ impl LedgerScope {
     /// Whether this scope is the [`LedgerScope::unattributed`] sentinel.
     pub fn is_unattributed(&self) -> bool {
         self.tenant_id == Self::UNATTRIBUTED && self.api_key_id == Self::UNATTRIBUTED
+    }
+
+    /// The scope a run's recorded submitting principal settles under (Phase 40 D-15) -- the
+    /// **only** place a [`RunAttribution`] becomes a `LedgerScope`.
+    ///
+    /// `Some(attribution)` maps to `(attribution.tenant_id, attribution.api_key_id)`; `None`
+    /// -- no principal was recorded (a schedule-fired or internal run, D-10) -- yields the
+    /// [`LedgerScope::unattributed`] sentinel. Every production writer (the run worker's
+    /// engine `SettlementContext`, the agent-kind `RunScope`, the HTTP agent handlers) builds
+    /// its scope through this function so the mapping cannot drift between writers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+    /// use paladin_core::platform::container::treasury_ledger::LedgerScope;
+    ///
+    /// let attribution = RunAttribution::new(TenantId::new("acme")?, "svc-a");
+    /// assert_eq!(
+    ///     LedgerScope::from_attribution(Some(&attribution)),
+    ///     LedgerScope::new("acme", "svc-a")
+    /// );
+    /// assert_eq!(LedgerScope::from_attribution(None), LedgerScope::unattributed());
+    /// # Ok::<(), paladin_core::platform::container::principal::TenantIdError>(())
+    /// ```
+    pub fn from_attribution(attribution: Option<&RunAttribution>) -> Self {
+        match attribution {
+            Some(a) => Self::new(a.tenant_id.as_str(), &a.api_key_id),
+            None => Self::unattributed(),
+        }
     }
 }
 

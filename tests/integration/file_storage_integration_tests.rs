@@ -2,19 +2,46 @@ use super::{TestContext, TestEnvironment};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
-use testcontainers::{ContainerAsync, runners::AsyncRunner};
-use testcontainers_modules::minio::MinIO;
+use testcontainers::{
+    ContainerAsync, GenericImage, ImageExt, core::IntoContainerPort, runners::AsyncRunner,
+};
 
 use paladin::infrastructure::adapters::file_storage::minio::{MinioAdapter, MinioConfig};
 use paladin_ports::output::file_storage_port::{
     AdvancedFileStoragePort, BatchFileStoragePort, FileStoragePort, ListOptions, UploadOptions,
 };
 
+// Pinned image: rustfs/rustfs:1.0.0 (manifest-list digest sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff) -- keep in lockstep with ci.yml, the compose files and k8s/rustfs.yaml (Phase 45 D-03).
+const RUSTFS_IMAGE: &str = "rustfs/rustfs";
+const RUSTFS_TAG: &str = "1.0.0";
+
+/// Poll RustFS's readiness endpoint until it answers 2xx or `deadline` passes.
+///
+/// RustFS logs to files, not stdout, so a log-line wait would never fire; the API port's
+/// `/health/ready` answers 503 until storage and IAM are ready.
+async fn wait_until_ready(url: &str, deadline: Duration) -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    let started = tokio::time::Instant::now();
+    loop {
+        if let Ok(response) = client.get(url).send().await
+            && response.status().is_success()
+        {
+            return Ok(());
+        }
+        if started.elapsed() >= deadline {
+            return Err(format!("object store not ready at {url} within {deadline:?}").into());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 pub struct FileStorageTestContext {
     pub adapter: MinioAdapter,
     pub env: TestEnvironment,
     #[allow(dead_code)]
-    container: Option<ContainerAsync<MinIO>>,
+    container: Option<ContainerAsync<GenericImage>>,
 }
 
 #[async_trait::async_trait]
@@ -68,13 +95,23 @@ impl FileStorageTestContext {
 
     /// Create context using local containers (development)
     async fn new_local(mut env: TestEnvironment) -> Result<Self, Box<dyn std::error::Error>> {
-        let container = MinIO::default().start().await?;
+        let container = GenericImage::new(RUSTFS_IMAGE, RUSTFS_TAG)
+            .with_exposed_port(9000.tcp())
+            .with_env_var("RUSTFS_ACCESS_KEY", env.minio_access_key.clone())
+            .with_env_var("RUSTFS_SECRET_KEY", env.minio_secret_key.clone())
+            .with_env_var("RUSTFS_CONSOLE_ENABLE", "false")
+            .start()
+            .await?;
         let port = container.get_host_port_ipv4(9000).await?;
 
         env.minio_endpoint = format!("localhost:{}", port);
 
-        // Wait for MinIO to start
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        // Wait for RustFS to become ready (no fixed sleep)
+        wait_until_ready(
+            &format!("http://{}/health/ready", env.minio_endpoint),
+            Duration::from_secs(60),
+        )
+        .await?;
 
         let minio_config = MinioConfig {
             endpoint: env.minio_endpoint.clone(),

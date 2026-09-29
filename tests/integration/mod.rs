@@ -181,9 +181,10 @@ impl TestEnvironment {
         Self {
             redis_host: "localhost".to_string(),
             redis_port: 6379, // Will be overridden by testcontainers
-            minio_endpoint: "localhost:9000".to_string(), // Will be overridden
-            minio_access_key: "minioadmin".to_string(),
-            minio_secret_key: "minioadmin".to_string(),
+            minio_endpoint: "localhost:9000".to_string(), // Overridden by the mapped RustFS port
+            // Throwaway literals, never a real credential or the RustFS default (D-00a)
+            minio_access_key: "testuser".to_string(),
+            minio_secret_key: "testpass123".to_string(),
             use_external_services: false,
         }
     }

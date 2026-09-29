@@ -77,14 +77,14 @@ revisit_condition = "sqlx-mysql upgrades its transitive rsa dependency past the 
 id = "RUSTSEC-2025-0111"
 class = "vulnerability"
 crate = "tokio-tar"
-path = "tokio-tar -> testcontainers -> testcontainers-modules"
-why_present = "Transitive dependency of testcontainers-modules, used only by integration tests that provision ephemeral Docker containers."
+path = "tokio-tar -> testcontainers"
+why_present = "Transitive dependency of testcontainers, used only by integration tests that provision ephemeral Docker containers."
 why_not_fixable = "No fixed release of tokio-tar exists upstream, and testcontainers has not migrated away from the tokio-tar dependency."
 owner = "DF3NDR"
 review_date = "2026-12-31"
 scope = "dev/test dependency graph only, via testcontainers integration tests; not present in a release build"
 compensating_control = "tokio-tar's PAX header extraction runs only inside CI/test-runner processes against fixture archives this project authors itself, never against untrusted third-party archives."
-revisit_condition = "testcontainers-modules upgrades its transitive tokio-tar dependency, or drops tokio-tar entirely"
+revisit_condition = "testcontainers upgrades its transitive tokio-tar dependency, or drops tokio-tar entirely"
 
 [[exception]]
 id = "RUSTSEC-2026-0187"

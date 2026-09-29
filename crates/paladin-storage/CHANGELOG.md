@@ -7,7 +7,20 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- `MinioAdapter` bucket bootstrap is path-style (`Bucket::create_with_path_style`), so a missing
+  bucket is created on RustFS and on MinIO without domain configuration; virtual-hosted creation
+  was rejected by both (STORE-01, STORE-02).
+- `MinioAdapter::copy_file` no longer double-prefixes the bucket in the copy source, which made
+  every copy answer `NoSuchKey` on a real S3 endpoint (STORE-02).
+
 ### Added
+
+- The `AdvancedFileStoragePort` multipart trio (`upload_part`, `complete_multipart_upload`,
+  `abort_multipart_upload`) is implemented on `MinioAdapter`; the upload id returned by
+  `create_multipart_upload` is now an opaque token that callers pass back unchanged
+  (STORE-02).
 
 - `treasury` module: `InMemoryTreasuryLedger`, `SqliteTreasuryLedger` (`sqlite` feature) and
   `PostgresTreasuryLedger` (`postgres` feature) — three `TreasuryLedgerPort` adapters passing one

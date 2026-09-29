@@ -506,8 +506,7 @@ concurrently touched files)
 **Goal**: The dev/test/CI object store runs on a maintained, pinned image instead of a terminal
 MinIO pin, and two standing accepted deviations (legacy-agent SSE/webhook silence, tracing
 overhead) are closed or re-measured.
-**Depends on**: Phase 44 (sequenced after legacy removal to avoid diff conflicts); functionally
-independent of the Treasurer phases
+**Depends on**: none functionally -- resequenced on 2026-09-29 to execute ahead of Phases 41-44 (Phase 45 D-01): the earlier "Phase 44" ordering was a diff-conflict-avoidance preference, and every later phase's Coverage / Integration / Docker Integration / Kubernetes Smoke evidence is red until the object store is replaced; functionally independent of the Treasurer phases
 **Requirements**: STORE-01, STORE-02, STORE-03, PLAT-08, OBS-05
 **Success Criteria** (what must be TRUE):
 

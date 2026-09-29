@@ -29,8 +29,11 @@ use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::ParleyResponse;
 use paladin_core::platform::container::run::{
-    AssistantRef, Run, RunEventKind, RunId, RunStatus, WebhookSpec,
+    AssistantRef, Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
+    WebhookSpec,
 };
+use paladin_core::platform::container::token_usage::TokenUsage;
+use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent};
 use paladin_core::platform::container::waypoint::{
     NodeId, ThreadId, Waypoint, WaypointId, WaypointStatus,
 };
@@ -40,6 +43,7 @@ use paladin_core::platform::container::webhook::{
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::run_queue_port::{QueuedRun, RunQueuePort};
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
+use paladin_ports::output::run_trace_port::RunTracePort;
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
@@ -48,6 +52,7 @@ use paladin_ports::output::webhook_delivery_port::{
 };
 use paladin_storage::run::in_memory::InMemoryRunRepository;
 use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+use paladin_storage::run_trace::in_memory::InMemoryRunTraceStore;
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
 
@@ -909,6 +914,7 @@ impl PaladinPort for AlwaysSucceedsPaladinPort {
     ) -> Result<PaladinResult, PaladinError> {
         Ok(PaladinResult {
             output: "agent completed".to_string(),
+            usage: TokenUsage::new(11, 7),
             ..Default::default()
         })
     }
@@ -978,6 +984,131 @@ async fn agent_kind_run_with_a_webhook_enqueues_no_delivery() {
         "an Agent-kind run must enqueue zero webhook deliveries, got {}",
         page.items.len()
     );
+}
+
+// --- 45-02 (PLAT-08): agent runs stream live through the one mapping ---
+
+/// D-14, D-00e: a code-registered agent run streams `node_started`,
+/// `node_finished` and exactly one `done` in `Live` mode, every one of them
+/// produced by `RunEventBusSink` -> `map_trace_event` (never a hand-published
+/// event), with the agent call's non-zero usage on both `node_finished` and
+/// `done`.
+///
+/// `RunStarted` maps to no wire event (D-24, the `map_trace_event` table), so
+/// D-16's "`RunStarted`-derived" evidence is asserted where it actually lands:
+/// the first persisted `run_traces` row (seq 1) of a gapless 1..=4 sequence
+/// ending in `RunFinished`; the first WIRE event is `node_started`.
+#[tokio::test]
+async fn agent_kind_run_streams_done_live() {
+    use crate::application::services::run::events::RunEventBus;
+    use crate::config::trace::TraceConfig;
+
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let resolver: Arc<dyn AssistantResolver> = Arc::new(AgentOnlyResolver);
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let bus = Arc::new(RunEventBus::new());
+    let traces = Arc::new(InMemoryRunTraceStore::new());
+    let worker = RunWorkerPool::new(
+        engine,
+        store,
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_paladin_port(Arc::new(AlwaysSucceedsPaladinPort))
+    .with_event_bus(bus.clone())
+    .with_trace_config(TraceConfig {
+        log_sink: false,
+        persist: true,
+        ..TraceConfig::default()
+    })
+    .with_run_trace_port(traces.clone());
+
+    let (run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+    // Pre-bind so a subscriber can attach before `run_agent`'s own `bind`
+    // re-affirms the SAME channel (`bind` is idempotent).
+    bus.bind(thread_id.clone(), run_id.clone()).await;
+    let mut rx = bus
+        .subscribe(&run_id)
+        .await
+        .expect("the channel exists once bound");
+
+    assert!(worker.run_once().await.unwrap());
+    let run = repository.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+    let kinds: Vec<RunStreamEventKind> = events.iter().map(|e| e.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            RunStreamEventKind::NodeStarted,
+            RunStreamEventKind::NodeFinished,
+            RunStreamEventKind::Done,
+        ],
+        "an agent run must stream node_started, node_finished, then exactly one done"
+    );
+    assert!(
+        events.iter().all(|e| e.mode == RunStreamMode::Live),
+        "every agent-run wire event must be Live"
+    );
+
+    let expected_usage = serde_json::to_value(TokenUsage::new(11, 7)).unwrap();
+    assert_eq!(events[0].payload["node_id"], "code-agent");
+    assert_eq!(events[1].payload["outcome"], "Succeeded");
+    assert_eq!(events[1].payload["usage"], expected_usage);
+    assert_eq!(events[2].payload["status"], "completed");
+    assert_eq!(events[2].payload["usage"], expected_usage);
+    assert!(
+        events[2].payload["usage"]["total_tokens"].as_u64().unwrap() > 0,
+        "the done event must carry the agent call's non-zero usage"
+    );
+
+    // The persisting sink drains on its own schedule: poll until the
+    // terminal row lands (up to 2 s).
+    let mut rows = Vec::new();
+    for _ in 0..100 {
+        rows = traces.read(&thread_id, 0, 100).await.unwrap();
+        if rows
+            .iter()
+            .any(|r| matches!(r.event, TraceEvent::RunFinished { .. }))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let seqs: Vec<u64> = rows.iter().map(|r| r.seq).collect();
+    assert_eq!(
+        seqs,
+        vec![1, 2, 3, 4],
+        "the persisted trace must be gapless"
+    );
+    match &rows[0].event {
+        TraceEvent::RunStarted {
+            run_id: traced_run,
+            graph_fingerprint,
+        } => {
+            assert_eq!(traced_run.as_ref(), Some(&run_id));
+            assert_eq!(graph_fingerprint, "agent");
+        }
+        other => panic!("seq 1 must be RunStarted, got {other:?}"),
+    }
+    assert!(matches!(rows[1].event, TraceEvent::NodeStarted { .. }));
+    assert!(matches!(rows[2].event, TraceEvent::NodeFinished { .. }));
+    assert!(matches!(
+        rows[3].event,
+        TraceEvent::RunFinished {
+            status: RunFinishStatus::Completed,
+            total_supersteps: 0,
+            ..
+        }
+    ));
 }
 
 // --- 28-06: per-run trace composition (Task 1) --------------------------

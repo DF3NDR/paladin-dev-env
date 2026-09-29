@@ -49,8 +49,9 @@ use paladin_core::platform::container::run::{
     ForkSpec, Run, RunEventKind, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
 use paladin_core::platform::container::run_scope::RunScope;
+use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent};
 use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
-use paladin_core::platform::container::waypoint::{Waypoint, WaypointId};
+use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, Waypoint, WaypointId};
 use paladin_core::platform::container::webhook::{WebhookDelivery, WebhookDeliveryId};
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::paladin_port::PaladinPort;
@@ -124,6 +125,49 @@ fn run_model_label(graph: &WarGraph) -> String {
         [only] => only.to_string(),
         _ => "mixed".to_string(),
     }
+}
+
+/// The `graph_fingerprint` an agent run's `TraceEvent::RunStarted` carries.
+/// A legacy `Runnable::Agent` run has no `WarGraph`, hence no fingerprint;
+/// this sentinel stands in. Every sink accepts any string here -- the
+/// bus sink maps `RunStarted` to no wire event at all (D-24), and the
+/// persisting sink stores it verbatim.
+const AGENT_RUN_FINGERPRINT: &str = "agent";
+
+/// This agent run's model label for [`HeraldTraceSink`] (D-12, the
+/// `model_used` discretion item): the paladin's own model string, or
+/// `"none"` when it is empty -- the agent-path twin of [`run_model_label`].
+fn agent_model_label(paladin: &Paladin) -> String {
+    let model = paladin.node.model.as_str();
+    if model.is_empty() {
+        "none".to_string()
+    } else {
+        model.to_string()
+    }
+}
+
+/// Compose a run's `TraceSink` from `build_run_sink`'s own output and the
+/// optional [`HeraldTraceSink`]: neither -> `None` (the untraced path), one
+/// -> that sink alone, both -> a panic-isolated [`CompositeSink`]. Shared by
+/// the graph path ([`RunWorkerPool::run_once`]) and the agent path
+/// ([`RunWorkerPool::run_agent`]) so both assemble sinks identically.
+fn compose_run_sink(
+    base: Option<Arc<dyn TraceSink>>,
+    herald: Option<Arc<dyn TraceSink>>,
+) -> Option<Arc<dyn TraceSink>> {
+    match (base, herald) {
+        (None, None) => None,
+        (Some(sink), None) | (None, Some(sink)) => Some(sink),
+        (Some(base), Some(herald)) => {
+            Some(Arc::new(CompositeSink::new(vec![base, herald])) as Arc<dyn TraceSink>)
+        }
+    }
+}
+
+/// Elapsed wall-clock milliseconds since `started`, saturating rather than
+/// panicking on an (unreachable in practice) overflow.
+fn elapsed_ms(started: std::time::Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 /// The per-run engine [`RunWorkerPool::run_once`] dispatches through, the
@@ -939,7 +983,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         let graph = match resolved.runnable {
             Runnable::Workflow(graph) => graph,
             Runnable::Agent(paladin) => {
-                return self.run_agent(&leased, &run, paladin).await;
+                return self.run_agent(&leased, &run, paladin, attempt).await;
             }
         };
 
@@ -960,95 +1004,88 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // caller's factory closure never needs to know about probes at
         // all. Otherwise (the default), fall back to the ONE shared engine
         // exactly as 27-04 left it, with no local-token registration.
-        let (run_engine, local_token_guard, run_trace_emitter): RunDispatchEngine<W> = match &self
-            .engine_factory
-        {
-            Some(factory) => {
-                let child_token = self.coordinator.token().child_token();
-                self.local_tokens
-                    .register(run.run_id.clone(), child_token.clone())
-                    .await;
-                let mut engine = factory(child_token);
-                if let Some(probe) = &self.cancellation_probe {
-                    engine = engine.with_cancellation_probe(Arc::clone(probe));
-                }
-                if let Some(ledger) = &self.treasury_ledger {
-                    engine = engine.with_treasury_ledger(
-                        Arc::clone(ledger),
-                        // 40-04 (D-15): the run row's recorded submitter is
-                        // the scope; the sentinel only when none was recorded.
-                        SettlementContext {
-                            scope: LedgerScope::from_attribution(run.submitted_by.as_ref()),
-                            run_id: run.run_id.clone(),
-                            attempt,
-                        },
-                    );
-                }
-                // --- 28-06 (OBS-02, D-03, D-11): one CompositeSink, one
-                // TraceDispatcher, per run. `build_run_sink` is the single
-                // place a run's sink fan-out (the default-on log sink
-                // alongside the D-24 bus sink, when wired) is assembled.
-                // The dispatcher is built HERE, before the engine exists,
-                // because the SAME `Arc<dyn TraceEmitter>` handle must also
-                // reach the fallback adapter/middleware chain/execution
-                // service below the engine -- `with_bound_trace_dispatcher`
-                // then hands this exact instance to the engine too, so
-                // every record in this run comes from the ONE counter
-                // (D-03), never two independent dispatchers racing.
-                let bus_sink = self.event_bus.as_ref().map(|bus| {
-                    Arc::new(RunEventBusSink::new(Arc::clone(bus))) as Arc<dyn TraceSink>
-                });
-                let base_sink =
-                    build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone());
-                // D-12: compose a HeraldTraceSink alongside build_run_sink's own
-                // output, only when this pool has an operator herald wired
-                // (RunWorkerPool::with_herald) -- a pool with no herald composes
-                // exactly as before, so the untraced-for-cost path stays zero-cost.
-                let herald_sink = self.herald.as_ref().map(|herald| {
-                    Arc::new(HeraldTraceSink::new(
-                        Arc::clone(herald),
-                        run_model_label(&graph),
-                    )) as Arc<dyn TraceSink>
-                });
-                let composed_sink = match (base_sink, herald_sink) {
-                    (None, None) => None,
-                    (Some(sink), None) | (None, Some(sink)) => Some(sink),
-                    (Some(base), Some(herald)) => {
-                        Some(Arc::new(CompositeSink::new(vec![base, herald])) as Arc<dyn TraceSink>)
+        let (run_engine, local_token_guard, run_trace_emitter): RunDispatchEngine<W> =
+            match &self.engine_factory {
+                Some(factory) => {
+                    let child_token = self.coordinator.token().child_token();
+                    self.local_tokens
+                        .register(run.run_id.clone(), child_token.clone())
+                        .await;
+                    let mut engine = factory(child_token);
+                    if let Some(probe) = &self.cancellation_probe {
+                        engine = engine.with_cancellation_probe(Arc::clone(probe));
                     }
-                };
-                let run_trace_emitter = match composed_sink {
-                    Some(sink) => {
-                        let dispatcher = Arc::new(TraceDispatcher::with_capacity(
-                            run.thread_id.clone(),
-                            Some(run.run_id.clone()),
-                            Some(sink.clone()),
-                            self.trace_config.channel_capacity,
-                        ));
-                        engine = engine
-                            .with_trace_sink(sink)
-                            .with_trace_capacity(self.trace_config.channel_capacity)
-                            .with_bound_trace_dispatcher(run.thread_id.clone(), dispatcher);
-                        // `trace_emitter()` returns the SAME dispatcher
-                        // `with_bound_trace_dispatcher` just bound
-                        // (28-06's own `with_bound_trace`/
-                        // `trace_emitter` doc comments): the canonical
-                        // accessor, not a second cast of the local
-                        // `dispatcher` variable, so this handle is
-                        // provably the one `start`/`resume*` itself
-                        // will use once dispatch begins below.
-                        Some(engine.trace_emitter())
+                    if let Some(ledger) = &self.treasury_ledger {
+                        engine = engine.with_treasury_ledger(
+                            Arc::clone(ledger),
+                            // 40-04 (D-15): the run row's recorded submitter is
+                            // the scope; the sentinel only when none was recorded.
+                            SettlementContext {
+                                scope: LedgerScope::from_attribution(run.submitted_by.as_ref()),
+                                run_id: run.run_id.clone(),
+                                attempt,
+                            },
+                        );
                     }
-                    None => None,
-                };
-                (
-                    Arc::new(engine),
-                    Some(run.run_id.clone()),
-                    run_trace_emitter,
-                )
-            }
-            None => (Arc::clone(&self.engine), None, None),
-        };
+                    // --- 28-06 (OBS-02, D-03, D-11): one CompositeSink, one
+                    // TraceDispatcher, per run. `build_run_sink` is the single
+                    // place a run's sink fan-out (the default-on log sink
+                    // alongside the D-24 bus sink, when wired) is assembled.
+                    // The dispatcher is built HERE, before the engine exists,
+                    // because the SAME `Arc<dyn TraceEmitter>` handle must also
+                    // reach the fallback adapter/middleware chain/execution
+                    // service below the engine -- `with_bound_trace_dispatcher`
+                    // then hands this exact instance to the engine too, so
+                    // every record in this run comes from the ONE counter
+                    // (D-03), never two independent dispatchers racing.
+                    let bus_sink = self.event_bus.as_ref().map(|bus| {
+                        Arc::new(RunEventBusSink::new(Arc::clone(bus))) as Arc<dyn TraceSink>
+                    });
+                    let base_sink =
+                        build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone());
+                    // D-12: compose a HeraldTraceSink alongside build_run_sink's own
+                    // output, only when this pool has an operator herald wired
+                    // (RunWorkerPool::with_herald) -- a pool with no herald composes
+                    // exactly as before, so the untraced-for-cost path stays zero-cost.
+                    let herald_sink = self.herald.as_ref().map(|herald| {
+                        Arc::new(HeraldTraceSink::new(
+                            Arc::clone(herald),
+                            run_model_label(&graph),
+                        )) as Arc<dyn TraceSink>
+                    });
+                    let composed_sink = compose_run_sink(base_sink, herald_sink);
+                    let run_trace_emitter = match composed_sink {
+                        Some(sink) => {
+                            let dispatcher = Arc::new(TraceDispatcher::with_capacity(
+                                run.thread_id.clone(),
+                                Some(run.run_id.clone()),
+                                Some(sink.clone()),
+                                self.trace_config.channel_capacity,
+                            ));
+                            engine = engine
+                                .with_trace_sink(sink)
+                                .with_trace_capacity(self.trace_config.channel_capacity)
+                                .with_bound_trace_dispatcher(run.thread_id.clone(), dispatcher);
+                            // `trace_emitter()` returns the SAME dispatcher
+                            // `with_bound_trace_dispatcher` just bound
+                            // (28-06's own `with_bound_trace`/
+                            // `trace_emitter` doc comments): the canonical
+                            // accessor, not a second cast of the local
+                            // `dispatcher` variable, so this handle is
+                            // provably the one `start`/`resume*` itself
+                            // will use once dispatch begins below.
+                            Some(engine.trace_emitter())
+                        }
+                        None => None,
+                    };
+                    (
+                        Arc::new(engine),
+                        Some(run.run_id.clone()),
+                        run_trace_emitter,
+                    )
+                }
+                None => (Arc::clone(&self.engine), None, None),
+            };
 
         // D-24: bind THIS thread/run on the bus before dispatch, so a
         // `TraceSink` callback firing mid-superstep has somewhere to
@@ -1243,7 +1280,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         leased: &LeasedRun,
         run: &Run,
         paladin: Arc<Paladin>,
+        attempt: u32,
     ) -> Result<bool, WorkerError> {
+        // A nacked run never binds: keep this early return FIRST.
         let Some(paladin_port) = &self.paladin_port else {
             self.queue
                 .nack(&leased.token, Duration::from_secs(1))
@@ -1255,6 +1294,50 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             Some(text) => text.to_string(),
             None => run.input.to_string(),
         };
+
+        // 45-02 (D-14): the graph path's per-run trace assembly. No engine
+        // hosts this run, so the dispatcher is a standalone one built from
+        // the SAME sink composition `run_once` uses.
+        let bus_sink = self
+            .event_bus
+            .as_ref()
+            .map(|bus| Arc::new(RunEventBusSink::new(Arc::clone(bus))) as Arc<dyn TraceSink>);
+        let base_sink = build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone());
+        let herald_sink = self.herald.as_ref().map(|herald| {
+            Arc::new(HeraldTraceSink::new(
+                Arc::clone(herald),
+                agent_model_label(&paladin),
+            )) as Arc<dyn TraceSink>
+        });
+        let composed_sink = compose_run_sink(base_sink, herald_sink);
+        let traced = composed_sink.is_some();
+        let dispatcher = Arc::new(TraceDispatcher::with_capacity(
+            run.thread_id.clone(),
+            Some(run.run_id.clone()),
+            composed_sink,
+            self.trace_config.channel_capacity,
+        ));
+        // `None` for an untraced run, so below-engine producers keep their
+        // zero-cost "no emitter" path (D-10) exactly as on the graph path.
+        let emitter: Option<Arc<dyn TraceEmitter>> =
+            traced.then(|| Arc::clone(&dispatcher) as Arc<dyn TraceEmitter>);
+
+        if let Some(bus) = &self.event_bus {
+            bus.bind(run.thread_id.clone(), run.run_id.clone()).await;
+        }
+
+        let node_id = NodeId::new(run.assistant.assistant_id.clone());
+        dispatcher.emit(TraceEvent::RunStarted {
+            run_id: Some(run.run_id.clone()),
+            graph_fingerprint: AGENT_RUN_FINGERPRINT.to_string(),
+        });
+        dispatcher.emit(TraceEvent::NodeStarted {
+            superstep: 0,
+            node_id: node_id.clone(),
+            attempt,
+            muster_task_key: None,
+        });
+        let started = std::time::Instant::now();
 
         // 39-07: carry this run's Platform API id into the run engine's
         // shared PaladinPort via RunScope::with_run_id, so the agent
@@ -1270,42 +1353,75 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         let run_scope = RunScope::default()
             .with_run_id(run.run_id.clone())
             .with_ledger_scope(LedgerScope::from_attribution(run.submitted_by.as_ref()));
-        match paladin_port
-            .execute_scoped(
+        let call = with_run_trace_scope(
+            &emitter,
+            paladin_port.execute_scoped(
                 paladin.as_ref(),
                 &input_text,
                 &HeartbeatHandle::new(),
                 &run_scope,
-            )
-            .await
-        {
+            ),
+        )
+        .await;
+
+        let persisted = match call {
             Ok(result) => {
-                self.repository
-                    .update_status(
-                        &run.run_id,
-                        RunStatus::Running,
-                        RunStatus::Completed,
-                        chrono::Utc::now(),
-                    )
-                    .await?;
-                self.repository
-                    .record_outcome(
-                        &run.run_id,
-                        RunOutcomeRecord {
-                            error: None,
-                            output: Some(serde_json::Value::String(result.output)),
-                            final_waypoint_id: None,
-                        },
-                    )
-                    .await?;
-                self.queue.ack(&leased.token).await?;
-                Ok(true)
+                let duration_ms = elapsed_ms(started);
+                dispatcher.emit(TraceEvent::NodeFinished {
+                    superstep: 0,
+                    node_id,
+                    attempt,
+                    outcome: NodeOutcomeKind::Succeeded,
+                    duration_ms,
+                    usage: result.usage.clone(),
+                    cost: result.cost.clone(),
+                    cache_hit: false,
+                });
+                dispatcher.emit(TraceEvent::RunFinished {
+                    status: RunFinishStatus::Completed,
+                    total_supersteps: 0,
+                    usage: dispatcher.total_usage(),
+                    cost: dispatcher.total_cost(),
+                    duration_ms,
+                    trace_dropped_total: 0,
+                });
+                async {
+                    self.repository
+                        .update_status(
+                            &run.run_id,
+                            RunStatus::Running,
+                            RunStatus::Completed,
+                            chrono::Utc::now(),
+                        )
+                        .await?;
+                    self.repository
+                        .record_outcome(
+                            &run.run_id,
+                            RunOutcomeRecord {
+                                error: None,
+                                output: Some(serde_json::Value::String(result.output)),
+                                final_waypoint_id: None,
+                            },
+                        )
+                        .await?;
+                    self.queue.ack(&leased.token).await?;
+                    Ok(true)
+                }
+                .await
             }
             Err(error) => {
                 self.record_engine_failure(leased, run, error.to_string())
                     .await
             }
+        };
+
+        // Best-effort drain window, then unbind -- captured-then-returned so
+        // a repository error never leaves the channel bound (T-45-11).
+        if let Some(bus) = &self.event_bus {
+            tokio::time::sleep(TRACE_DRAIN_GRACE_PERIOD).await;
+            bus.unbind(&run.thread_id).await;
         }
+        persisted
     }
 
     /// Record an `EngineError` (or a `PaladinError`, for the `Agent`-kind
@@ -2048,6 +2164,17 @@ mod tests {
         );
         mixed_graph.add_entry(m1);
         assert_eq!(run_model_label(&mixed_graph), "mixed");
+    }
+
+    /// 45-02 (D-14): the agent-path label is the paladin's own model, or
+    /// `"none"` when the model string is empty.
+    #[test]
+    fn agent_model_label_names_the_model_or_none() {
+        assert_eq!(
+            agent_model_label(&labeled_paladin("solo", "gpt-4")),
+            "gpt-4"
+        );
+        assert_eq!(agent_model_label(&labeled_paladin("blank", "")), "none");
     }
 
     // --- 39-07: the worker attaches the treasury ledger per run with the

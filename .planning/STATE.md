@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 40
-current_phase_name: Tenant Identity & Run-Read Scoping
+current_phase: 45
+current_phase_name: RustFS Swap & Platform/Observability Deviations
 status: executing
 stopped_at: Phase 45 context gathered
-last_updated: "2026-09-29T22:08:38.653Z"
-last_activity: 2026-09-28
-last_activity_desc: Phase 40 execution started
+last_updated: "2026-09-29T22:10:17.509Z"
+last_activity: 2026-09-29
+last_activity_desc: Phase 45 execution started
 progress:
   total_phases: 4
   completed_phases: 3
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-24 at the start of milestone v0.11.0)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 40 — Tenant Identity & Run-Read Scoping
+**Current focus:** Phase 45 — RustFS Swap & Platform/Observability Deviations
 (`/gsd-new-project` roadmapper), 10 phases (38-47), 35/35 requirements mapped. Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
@@ -49,10 +49,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 40 (Tenant Identity & Run-Read Scoping) — EXECUTING
-Plan: 6 of 6
-Status: Ready to execute
-Last activity: 2026-09-28 — Phase 40 execution started
+Phase: 45 (RustFS Swap & Platform/Observability Deviations) — EXECUTING
+Plan: 1 of 7
+Status: Executing Phase 45
+Last activity: 2026-09-29 — Phase 45 execution started
 
 ## Performance Metrics
 

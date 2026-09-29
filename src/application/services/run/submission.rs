@@ -397,6 +397,18 @@ impl RunSubmissionPort for RunSubmissionService {
                 .ok_or_else(|| RunSubmissionError::NotFound {
                     run_id: run_id.clone(),
                 })?;
+            // WR-02: enforce the tenant scope here, not only in the HTTP
+            // controller -- any other adapter or embedder passing a fully
+            // attributed principal gets the same isolation. A run the principal
+            // may not see is answered exactly like a missing one.
+            if let Some(principal_ref) = &requested_by
+                && !RunReadScope::for_principal(principal_ref.role, &principal_ref.tenant_id)
+                    .permits(&run)
+            {
+                return Err(RunSubmissionError::NotFound {
+                    run_id: run_id.clone(),
+                });
+            }
             let resolved = self
                 .resolver
                 .resolve(&run.assistant.assistant_id, Some(run.assistant.version))
@@ -1156,5 +1168,84 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, RunSubmissionError::ThreadBusy { .. }));
+    }
+
+    /// WR-02: `cancel` enforces the tenant scope itself -- another tenant's
+    /// `User` gets the same `NotFound` a missing run yields, and the durable
+    /// cancel flag is never written.
+    #[tokio::test]
+    async fn cancel_of_another_tenants_run_is_not_found_and_writes_nothing() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+
+        let accepted = service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        let err = service
+            .cancel(
+                &accepted.run_id,
+                Some(principal_ref("globex", "svc-b", UserRole::User)),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, RunSubmissionError::NotFound { run_id } if *run_id == accepted.run_id),
+            "cross-tenant cancel must look like a missing run, got {err:?}"
+        );
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert!(
+            !stored.cancel_requested,
+            "a rejected cancel must not persist the cancel flag"
+        );
+    }
+
+    /// WR-02 controls: the owning tenant and an Admin can cancel.
+    #[tokio::test]
+    async fn cancel_admits_the_owning_tenant_and_admin() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+
+        let first = service
+            .submit(submit_on_thread(
+                "t-own",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+        service
+            .cancel(
+                &first.run_id,
+                Some(principal_ref("acme", "svc-a2", UserRole::User)),
+            )
+            .await
+            .unwrap();
+        assert!(
+            repository
+                .get(&first.run_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .cancel_requested
+        );
+
+        let second = service
+            .submit(submit_on_thread(
+                "t-admin",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+        service
+            .cancel(
+                &second.run_id,
+                Some(principal_ref("ops-tenant", "ops", UserRole::Admin)),
+            )
+            .await
+            .unwrap();
     }
 }

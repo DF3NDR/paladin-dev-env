@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 40
 current_phase_name: Tenant Identity & Run-Read Scoping
 status: executing
-stopped_at: Completed 40-04-PLAN.md
-last_updated: "2026-09-29T00:57:26.955Z"
+stopped_at: Completed 40-05-PLAN.md
+last_updated: "2026-09-29T01:58:58.486Z"
 last_activity: 2026-09-28
 last_activity_desc: Phase 40 execution started
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 23
-  completed_plans: 21
+  completed_plans: 22
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [█████████░] 91%
+**Progress:** [██████████] 96%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,7 +50,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 40 (Tenant Identity & Run-Read Scoping) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-09-28 — Phase 40 execution started
 
@@ -207,6 +207,7 @@ Last activity: 2026-09-28 — Phase 40 execution started
 | Phase 40 P02 | ~1h | 2 tasks | 7 files |
 | Phase 40 P03 | ~35m | 2 tasks | 3 files |
 | Phase 40 P04 | 17 min | 2 tasks | 9 files |
+| Phase 40 P05 | 15min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -288,6 +289,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 40-03: boot-time duplicate key-value detection compares with plain == (value -> first name map) and names both keys by name only; ct_eq stays on the request path
 - [Phase 40]: 40-04: LedgerScope::from_attribution is the only attribution-to-scope mapping; worker (engine + agent-kind) and HTTP agent handlers settle under the submitting principal, the unattributed sentinel only where no principal exists
 - [Phase 40]: 40-04: PaladinExecutorPort::execute_scoped and StreamingExecutorPort::execute_stream_scoped are defaulted scope-ignoring delegates (X-10.4); an unattributed agent-kind run's RunScope carries Some(sentinel), the None fallback is reached only by scope-less embedded callers
+- [Phase 40]: 40-05: stream/cancel/webhook-deliveries gate on load_visible_run and now answer 501 naming run_store.backend when the run store is unwired; the route matrix enumerates /v1/runs/{run_id}* from the router's own OpenAPI document
+- [Phase 40]: 40-05: utoipa descriptions are single-line strings and public handler docs name the private load_visible_run in plain backticks (cargo doc -D warnings)
 
 ### Pending Todos
 
@@ -490,8 +493,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-29T00:57:26.931Z
-**Stopped at:** Completed 40-04-PLAN.md
+**Last session:** 2026-09-29T01:58:58.453Z
+**Stopped at:** Completed 40-05-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

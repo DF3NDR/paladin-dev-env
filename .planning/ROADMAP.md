@@ -400,7 +400,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 40-05-PLAN.md — load_visible_run on stream/cancel/webhook-deliveries, route matrix, RunResponse.submitted_by, read-scope docs and MIGRATION.md 9.6 (wave 3)
+- [x] 40-05-PLAN.md — load_visible_run on stream/cancel/webhook-deliveries, route matrix, RunResponse.submitted_by, read-scope docs and MIGRATION.md 9.6 (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

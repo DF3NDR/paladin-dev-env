@@ -28,6 +28,7 @@ pub mod container {
     pub use paladin_core::platform::container::paladin_config;
     pub use paladin_core::platform::container::paladin_error;
     pub use paladin_core::platform::container::planning;
+    pub use paladin_core::platform::container::principal;
     pub use paladin_core::platform::container::prompt;
     pub use paladin_core::platform::container::queue_config;
     pub use paladin_core::platform::container::queue_item;

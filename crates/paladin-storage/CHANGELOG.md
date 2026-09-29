@@ -19,6 +19,15 @@ and this project follows lockstep workspace versioning.
   index, and a `model_breakdown` column folded in Rust so `spend`'s per-model view is identical
   across adapters (LEDGR-01, LEDGR-04).
 
+- `008_add_run_attribution_columns` migrations (`migrations/{sqlite,postgres}`): nullable
+  `runs.tenant_id`/`runs.api_key_id` columns plus the non-unique `idx_runs_tenant_submitted` index;
+  `RUN_SCHEMA_VERSION` is unchanged and a pre-existing row reads back with no attribution
+  (TENANT-02).
+- The in-memory, SQLite and PostgreSQL run repositories persist and read `Run.submitted_by`, reject
+  a half-attributed row, and apply `RunQuery.scope` inside `list` (`WHERE tenant_id = ?`) so a
+  tenant-scoped page and its cursor stay a correct keyset walk; the shared run contract suite gains
+  the attribution and scoped-list clauses every adapter passes (TENANT-02, PLAT-07).
+
 ## [0.10.1] - 2026-09-20
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source

@@ -27,6 +27,19 @@ and this project follows lockstep workspace versioning.
 - `RunScope.run_id: Option<RunId>` and `RunScope::with_run_id` — additive; `RunScope` stays
   `#[non_exhaustive]` (LEDGR-04).
 
+- `platform::container::principal` module: `TenantId` (with `TENANT_ID_MAX_LEN` and
+  `TenantIdError`), `PrincipalRef`, `RunAttribution` and `RunReadScope` — the tenant identifier, the
+  principal reference every run submission carries, the persisted attribution and the one shared
+  tenant read-scope rule (TENANT-01, PLAT-07); re-exported from the facade as
+  `core::platform::container::principal`.
+- `Run.submitted_by: Option<RunAttribution>` and `Run::with_submitted_by` — additive under
+  `#[non_exhaustive]`, `#[serde(default, skip_serializing_if)]`, `RUN_SCHEMA_VERSION` unchanged
+  (TENANT-02).
+- `RunScope.ledger_scope: Option<LedgerScope>` and `RunScope::with_ledger_scope` — the ledger
+  scope an agent-kind run or an HTTP agent-execute call settles under (TENANT-02).
+- `LedgerScope::from_attribution(Option<&RunAttribution>)` — the one mapping from a recorded
+  principal to a ledger scope; `None` yields the `unattributed` sentinel (TENANT-02).
+
 ### Changed
 
 - The `cost_estimate`/`total_cost()` rustdoc reserved-note on `ExecutionMetadata` now reads

@@ -20,6 +20,20 @@ and this project follows lockstep workspace versioning.
   `RunRepositoryPort`'s error-enum shape (X-06) with a compiling rustdoc mock (LEDGR-01,
   LEDGR-02, LEDGR-03, LEDGR-04).
 
+- `RunQuery.scope: RunReadScope` (`Default` = `All`) — every `RunRepositoryPort::list` adapter
+  applies a `Tenant(t)` scope inside its own query; the run contract suite gains attribution
+  round-trip and scoped-list clauses (PLAT-07; see root `MIGRATION.md` §9.2).
+- `PaladinExecutorPort::execute_scoped` and `StreamingExecutorPort::execute_stream_scoped` —
+  defaulted methods that carry a `RunScope` (and its tenant ledger scope) into an executor; every
+  existing implementor compiles unchanged (TENANT-02).
+
+### Changed
+
+- **Breaking:** `SubmitRun.requested_by`, `ForkRun.requested_by` and `RunSubmissionPort::cancel`'s
+  `requested_by` parameter are `Option<PrincipalRef>` (tenant, API key id and role travel together)
+  instead of `Option<(String, UserRole)>`; `None` keeps its internal-caller meaning (TENANT-01,
+  TENANT-02; see root `MIGRATION.md` §9.2).
+
 ## [0.10.1] - 2026-09-20
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source

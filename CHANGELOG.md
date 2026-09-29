@@ -146,6 +146,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run repository already uses (`Disabled` → `None`, `Sqlite`/`Postgres` → the matching adapter),
   shared by `build_run_api` and `paladin-server.rs`'s boot path.
 
+- **Tenant identity: every authenticated principal carries a server-derived tenant (TENANT-01;
+  Phase 40 plans 40-01, 40-03; ADR-0054).** `Principal` (`paladin-web`) gains a required
+  `tenant_id: TenantId`, looked up from operator configuration inside `authenticate()` and nowhere
+  else — no request header, query parameter or body field can name a tenant, and a caller presenting
+  key A cannot obtain tenant B by any request-side means. `TenantId`/`TenantIdError`
+  (`paladin_core::platform::container::principal`, a new module re-exported from the facade as
+  `core::platform::container::principal`) is the validated identifier (non-empty, no whitespace,
+  printable ASCII, at most 128 bytes). The key-to-tenant mapping is the new
+  `http.auth.api_keys[].tenant` (required on every key) and `http.auth.bearer_token.tenant`
+  (required when bearer auth is enabled); the new `AuthConfig::validate` checks both at boot and
+  additionally rejects an empty key value, an invalid or duplicate key `name` and a duplicate key
+  value, naming keys by `name` and never printing a secret. There is no implicit default tenant.
+  See `MIGRATION.md` §9.2, §9.5 and §9.8 step 3.
+
+- **Run attribution: every run and every ledger settlement records the principal that caused it
+  (TENANT-02; Phase 40 plans 40-01, 40-02, 40-04, 40-05).** `Run.submitted_by:
+  Option<RunAttribution { tenant_id, api_key_id }>` is stamped by `RunSubmissionService::submit`/
+  `fork` from the caller's `PrincipalRef` and persisted in the new nullable `runs.tenant_id`/
+  `runs.api_key_id` columns (migration `008` on SQLite and PostgreSQL, `RUN_SCHEMA_VERSION`
+  unchanged) under the `idx_runs_tenant_submitted` index; `GET /runs/{run_id}` and `GET /runs`
+  surface it as `RunResponse.submitted_by` (`null` for an unattributed run; never the key value,
+  never the role). Ledger settlements now carry the submitting tenant and API key:
+  `LedgerScope::from_attribution` is the one core mapping, `RunScope.ledger_scope`/
+  `RunScope::with_ledger_scope` carry it into the agent loop, the worker derives both the engine
+  `SettlementContext.scope` and the agent-kind scope from `run.submitted_by`, and the HTTP
+  agent-execute routes settle under the calling principal through the new defaulted
+  `PaladinExecutorPort::execute_scoped`/`StreamingExecutorPort::execute_stream_scoped` (every
+  existing implementor compiles unchanged). The Phase 39 `unattributed` sentinel is written only
+  where no principal exists (schedule-fired runs, same-process embedders).
+
+- **Tenant-scoped run reads with an Admin bypass (PLAT-07; Phase 40 plans 40-01, 40-02, 40-05;
+  ADR-0054).** `RunReadScope { All, Tenant(TenantId) }` is the one shared visibility rule: a
+  principal sees a run iff the run's recorded tenant is its own, or its role is `Admin` (an
+  unattributed run is visible to Admin only). `RunQuery.scope` applies it inside every
+  `RunRepositoryPort::list` adapter (`WHERE tenant_id = ?`, so scoped pages and cursors stay a
+  correct keyset walk, composing with the `thread_id`/`assistant_id`/`status` filters), and the
+  controller helper `load_visible_run` gates every `/runs/{run_id}*` route — `GET /runs/{run_id}`,
+  `/stream`, `/webhook-deliveries` and `POST /runs/{run_id}/cancel`. Another tenant's run answers
+  the byte-identical `404 unknown run` a missing run does, never `403`. A route-matrix test and the
+  end-to-end `tenant_scoped_run_read_tracer` pin the behaviour. Closes `WINDOWS.md` row 32
+  (WR-03); ADR-0054 records the model.
+
 ### Changed
 
 - `GET /runs/{run_id}` and `GET /runs` carry a ledger-derived `cost: Option<CostDto>` (`{ nanos,
@@ -172,6 +214,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ChunkMetadata` each gain a `cost: Option<Cost>` field beside `usage`; a full struct literal of
   the first three (`LlmResponse`, `PaladinResult`, `TraceEvent::NodeFinished`/`RunFinished`) needs
   `cost: None` added — see `MIGRATION.md` §9.2 (Phase 38 plans 38-02, 38-04, 38-06, 38-07).
+
+- Ledger settlements on both production paths are attributed to the submitting principal's tenant
+  and API key (`LedgerScope::from_attribution`) instead of the Phase 39 `unattributed` sentinel,
+  which is now written only for a run with no recorded principal; the `007` ledger schema,
+  `TreasuryLedgerPort` and its adapters are unchanged (TENANT-02; Phase 40 plan 40-04).
+- The run read routes are tenant-scoped: `GET /runs` returns only the caller's tenant's runs
+  (Admin: all), and every `/runs/{run_id}*` route answers `404` for another tenant's run;
+  `GET /runs/{run_id}/stream`, `POST /runs/{run_id}/cancel` and
+  `GET /runs/{run_id}/webhook-deliveries` also answer `501` when no run store is configured, as
+  `GET /runs/{run_id}` already did (PLAT-07; Phase 40 plans 40-01, 40-05; see `MIGRATION.md`
+  §9.6). `WINDOWS.md` row 32 (WR-03, "any authenticated principal can read every run") is closed;
+  the `/v1/threads/*` routes remain unscoped and are tracked as a new open row.
+
+### Breaking Changes
+
+- **BREAKING (`paladin-web`): `Principal` gains the required `tenant_id: TenantId` field and is
+  marked `#[non_exhaustive]`** — build it with `Principal::new(id, role, tenant_id)`; a struct
+  literal outside the crate no longer compiles (TENANT-01; Phase 40 plan 40-01; `MIGRATION.md`
+  §9.2, allowlist entry `paladin-web | Principal`).
+- **BREAKING (`paladin-web`): `AgentAuthConfig` gains `bearer_tenant: Option<TenantId>`** — a
+  full struct literal must add it (`..Default::default()` sites are unchanged); a verified bearer
+  token does not authenticate while it is `None` (TENANT-01; 40-01; `MIGRATION.md` §9.2).
+- **BREAKING (config): `http.auth.api_keys[].tenant` is required on every API key, and
+  `http.auth.bearer_token.tenant` is required when bearer auth is enabled** — `paladin-server`
+  refuses to boot otherwise, naming the key's `name` and never its value; duplicate key names and
+  duplicate key values are also rejected at boot. This is the one deliberate exception to the
+  "every new config surface defaults to today's behaviour" rule (X-09): there is no implicit default
+  tenant (TENANT-01; 40-01, 40-03; `MIGRATION.md` §9.5, §9.8 step 3).
+- **BREAKING (`paladin-ports`): `SubmitRun.requested_by`, `ForkRun.requested_by` and
+  `RunSubmissionPort::cancel`'s `requested_by` are `Option<PrincipalRef>`** instead of
+  `Option<(String, UserRole)>`; `None` keeps its internal-caller meaning (TENANT-01, TENANT-02;
+  40-01; `MIGRATION.md` §9.2, register-only entries).
+- **BREAKING (`paladin-ports`, new-in-0.10 type): `RunQuery` gains `scope: RunReadScope`** —
+  `..Default::default()` sites are unchanged (`All`); a full struct literal must add it (PLAT-07;
+  40-02; `MIGRATION.md` §9.2).
+- **BREAKING (HTTP API): run reads are tenant-scoped** — another tenant's run answers `404` on
+  every `/runs/{run_id}*` route (`GET`, `/stream`, `/webhook-deliveries`, `POST .../cancel`) and is
+  absent from `GET /runs`; `/stream`, `/cancel` and `/webhook-deliveries` also answer `501` without
+  a run store. Cross-tenant operator reads need an `admin`-role key (PLAT-07; 40-01, 40-05;
+  `MIGRATION.md` §9.6).
 
 ## [0.10.1] - 2026-09-20
 

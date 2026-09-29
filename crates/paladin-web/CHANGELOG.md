@@ -13,6 +13,19 @@ and this project follows lockstep workspace versioning.
   of `paladin_core::cost::Cost`, `display` produced by `treasury_ledger::format_cost` (LEDGR-04).
 - `RunApiState.treasury_ledger`/`with_treasury_ledger`.
 
+- `Principal.tenant_id: TenantId` (required, derived from `AgentAuthConfig` inside `authenticate()`
+  and nowhere else), `Principal::new`, `Principal::read_scope`, `Principal::ledger_scope` and
+  `From<&Principal> for PrincipalRef`; `Principal` is now `#[non_exhaustive]` (TENANT-01;
+  **breaking** — see root `MIGRATION.md` §9.2).
+- `AgentAuthConfig.bearer_tenant: Option<TenantId>` — the tenant every verified bearer principal
+  carries; a verified bearer token fails closed (`401`) while it is `None` (TENANT-01).
+- `run_controller::load_visible_run` — the single-run half of the tenant read gate and the entry
+  point of every `/runs/{run_id}*` route; a hidden run is the missing-run `404`, never `403`
+  (PLAT-07).
+- `RunAttributionDto { tenant_id, api_key_id }` and `RunResponse.submitted_by:
+  Option<RunAttributionDto>` on `GET /runs/{run_id}` and `GET /runs`; `openapi.json` regenerated
+  (TENANT-02).
+
 ### Changed
 
 - `RunResponse.cost: Option<CostDto>` (`GET /runs/{run_id}` and `GET /runs`) and
@@ -20,6 +33,13 @@ and this project follows lockstep workspace versioning.
   `TreasuryLedgerPort::spend` at read time — one query per request/page, `null` when no ledger
   backend is configured, the run has no settled spend, or its settlements span more than one
   currency (LEDGR-04; see root `MIGRATION.md` §9.2).
+
+- `GET /runs` lists only the caller's tenant's runs (Admin: all); `GET /runs/{run_id}`, `/stream`,
+  `/webhook-deliveries` and `POST /runs/{run_id}/cancel` answer the missing-run `404` for another
+  tenant's run and `501` when no run store is configured (PLAT-07).
+- `POST /agents/{id}/execute`, `/execute/stream` and `/jobs` settle spend under the calling
+  principal's tenant and API key via `RunScope::with_ledger_scope(principal.ledger_scope())`; open
+  access settles under `(open-access, anonymous)`, never the `unattributed` sentinel (TENANT-02).
 
 ## [0.10.1] - 2026-09-20
 

@@ -140,7 +140,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Observability (OBS, continued)
 
-- [ ] **OBS-05**: `LogTraceSink` / `TraceDispatcher::emit` skips serialisation when logging is
+- [x] **OBS-05**: `LogTraceSink` / `TraceDispatcher::emit` skips serialisation when logging is
   disabled and reuses its buffers; the tracing-overhead benchmark is re-measured and either meets
   PRD 07's ≤ 3 % bar or records a new accepted figure on the record (D-16, row 35)
 
@@ -238,7 +238,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PLAT-07 | Phase 40 | Complete |
 | PLAT-08 | Phase 45 | Complete |
 | PLAT-09 | Phase 42 | Pending |
-| OBS-05 | Phase 45 | Pending |
+| OBS-05 | Phase 45 | Complete |
 | CURR-22 | Phase 46 | Pending |
 | CURR-23 | Phase 46 | Pending |
 | CURR-24 | Phase 46 | Pending |

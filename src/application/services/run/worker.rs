@@ -557,52 +557,40 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// own `repository` field.
     cancellation_probe: Option<Arc<dyn CancellationProbe>>,
     /// The D-24 per-run broadcast bus (PLAT-FR-07), when
-    /// [`RunWorkerPool::with_event_bus`] wires one: `run_once` `bind`s the
-    /// dispatch's thread/run before driving the engine, attaches
-    /// [`RunEventBusSink`] to a per-run `engine_factory` engine so all
-    /// seven wire events bridge live through `map_trace_event` alone
-    /// (D-14), then `unbind`s. `None` (the default) preserves every prior
-    /// plan's behavior verbatim -- no bind/publish/unbind call happens
-    /// anywhere in `run_once`.
-    ///
-    /// **(WR-02) Excluded: the legacy `Runnable::Agent` path.** `run_once`
-    /// dispatches `Runnable::Agent` to [`RunWorkerPool::run_agent`] before
-    /// any `bind`/`publish`/`unbind` call on this bus -- a run against a
-    /// code-registered agent never binds a thread here, so `GET
-    /// /runs/{id}/stream` only ever takes the degraded polling path for
-    /// it. This is a recorded, tested limitation (ledger row 31,
-    /// `agent_kind_run_with_a_webhook_enqueues_no_delivery`), not an
-    /// oversight: only a stored `WarGraphDoc` workflow run gets the live
-    /// bus.
+    /// [`RunWorkerPool::with_event_bus`] wires one: both runnable kinds
+    /// `bind` the dispatch's thread/run before the call, publish live through
+    /// [`RunEventBusSink`] -> `map_trace_event` alone (D-14), wait
+    /// [`TRACE_DRAIN_GRACE_PERIOD`], then `unbind`. `run_once` attaches the
+    /// sink to a per-run `engine_factory` engine so all seven wire events
+    /// bridge from the engine's own records; [`Self::run_agent`] has no
+    /// engine, so it emits its own `RunStarted`/`NodeStarted`/`NodeFinished`/
+    /// `RunFinished` records into a standalone per-run `TraceDispatcher`
+    /// feeding the same sink (PLAT-08, ledger row 31). `None` (the default)
+    /// preserves every prior plan's behavior verbatim -- no
+    /// bind/publish/unbind call happens anywhere.
     event_bus: Option<Arc<RunEventBus>>,
     /// The D-40 durable delivery queue, when
-    /// [`RunWorkerPool::with_webhook_deliveries`] wires one: `run_once`
-    /// enqueues a `Pending` [`WebhookDelivery`] on every terminal/suspension
-    /// transition whose run subscribes to that event (PLAT-FR-14). `None`
-    /// (the default) preserves every prior plan's behavior verbatim -- no
-    /// enqueue call happens anywhere in `run_once`. A repository error here
-    /// is logged and NEVER changes the run's own status (prohibition P2):
-    /// it is enqueued strictly after the run's own status write/ack has
-    /// already succeeded.
-    ///
-    /// **(WR-02) Excluded: the legacy `Runnable::Agent` path.** [`Self::run_agent`]
-    /// writes status/outcome and acks directly, never reaching the
-    /// `webhook_delivery_for_outcome` -> `deliveries.enqueue` block below --
-    /// so a run against a code-registered agent that carries a `webhook`
-    /// spec completes (or fails) with ZERO deliveries enqueued, no matter
-    /// which events it subscribed to. Recorded and pinned by
-    /// `agent_kind_run_with_a_webhook_enqueues_no_delivery` (ledger row
-    /// 31): if a future change wires this hook into `run_agent`'s two
-    /// return paths, that test goes red and this doc must move with it. A
-    /// caller needing webhook delivery today should poll the run instead.
+    /// [`RunWorkerPool::with_webhook_deliveries`] wires one: both runnable
+    /// kinds enqueue a `Pending` [`WebhookDelivery`] on every
+    /// terminal/suspension transition whose run subscribes to that event
+    /// (PLAT-FR-14), through the one `webhook_delivery_for_outcome` helper.
+    /// The graph path and the agent's success path enqueue after the status
+    /// write and ack; a failure -- an agent run's, or a graph run's
+    /// engine-error -- enqueues through `persist_failure` (D-15). `None` (the
+    /// default) preserves every prior plan's behavior verbatim -- no enqueue
+    /// call happens anywhere. A repository error here is logged and NEVER
+    /// changes the run's own status (prohibition P2): it is enqueued strictly
+    /// after the run's own status write/ack has already succeeded.
     webhook_deliveries: Option<Arc<dyn WebhookDeliveryRepositoryPort>>,
     /// The trace pipeline configuration (OBS-02, D-11), wired via
     /// [`RunWorkerPool::with_trace_config`]. Defaults to
     /// [`TraceConfig::default`] (`log_sink: true`) -- a pool that never
     /// calls the builder still gets the default-on log sink for every run
-    /// dispatched through [`Self::engine_factory`]. Has no effect on the
-    /// shared-engine ("no factory") path, exactly like `event_bus` above:
-    /// per-run trace composition needs a per-run engine to attach to.
+    /// dispatched through [`Self::engine_factory`], and for every legacy
+    /// `Runnable::Agent` run (which needs no engine to host its standalone
+    /// dispatcher). Has no effect on a graph run's shared-engine ("no
+    /// factory") path: per-run trace composition needs a per-run engine to
+    /// attach to.
     trace_config: TraceConfig,
     /// The durable trace-persistence backend (OBS-02, D-17), wired via
     /// [`RunWorkerPool::with_run_trace_port`]: `run_once` passes this to
@@ -767,7 +755,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// [`RunEventBusSink`] to that engine directly at construction (mirrors
     /// [`Self::with_cancellation_probing`]'s own documented limitation);
     /// this pool still binds/unbinds regardless, since those do not depend
-    /// on which engine instance is used.
+    /// on which engine instance is used. A legacy `Runnable::Agent` run has
+    /// no engine at all: `run_agent` attaches its own
+    /// [`RunEventBusSink`] to a standalone per-run dispatcher (PLAT-08).
     pub fn with_event_bus(mut self, bus: Arc<RunEventBus>) -> Self {
         self.event_bus = Some(bus);
         self
@@ -778,7 +768,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// per-run `CompositeSink`/`TraceDispatcher` via
     /// [`crate::infrastructure::telemetry::build_run_sink`]. Only takes
     /// effect on the [`Self::with_engine_factory`] path -- see that field's
-    /// own doc comment.
+    /// own doc comment -- but `run_agent` applies it to every legacy agent run.
     pub fn with_trace_config(mut self, config: TraceConfig) -> Self {
         self.trace_config = config;
         self
@@ -791,7 +781,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// joins the per-run composite whenever [`Self::with_trace_config`]'s
     /// `persist` flag is also set. Only takes effect on the
     /// [`Self::with_engine_factory`] path, exactly like
-    /// [`Self::with_trace_config`] itself. A pool that never calls this
+    /// [`Self::with_trace_config`] itself (`run_agent` applies it to every
+    /// agent run regardless). A pool that never calls this
     /// builder leaves `trace_config.persist` a no-op, matching
     /// `build_run_sink`'s own "no port available" contract.
     pub fn with_run_trace_port(mut self, port: Arc<dyn RunTracePort>) -> Self {
@@ -804,8 +795,9 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// [`crate::infrastructure::telemetry::build_run_sink`] itself produces, so every run
     /// dispatched through the per-run `engine_factory` hands its `RunFinished` event to
     /// `herald`. Only takes effect on the [`Self::with_engine_factory`] path, exactly like
-    /// [`Self::with_trace_config`]/[`Self::with_run_trace_port`]. A pool that never calls
-    /// this builder attaches no herald -- the untraced-for-cost path stays zero-cost.
+    /// [`Self::with_trace_config`]/[`Self::with_run_trace_port`]; `run_agent` composes a
+    /// herald sink labeled by `agent_model_label` for every agent run. A pool that never
+    /// calls this builder attaches no herald -- the untraced-for-cost path stays zero-cost.
     pub fn with_herald(mut self, herald: Arc<dyn Herald>) -> Self {
         self.herald = Some(herald);
         self
@@ -1247,23 +1239,42 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// whole input serialised when that key is absent or not a string. A
     /// redelivery simply restarts it. Without a wired `PaladinPort`, nacks
     /// for redelivery rather than executing (the 27-01 fallback, preserved
-    /// until a later plan always wires one).
+    /// until a later plan always wires one) -- and a nacked run never binds
+    /// the event bus.
     ///
-    /// **(WR-02) A documented, tested limitation: neither the D-24 live
-    /// event bus nor the PLAT-FR-14 webhook delivery hook run on this
-    /// path.** Both of this function's return points (the `Ok` branch
-    /// below and [`RunWorkerPool::record_engine_failure`] on the `Err`
-    /// branch) write status/outcome and ack/nack directly, with no
-    /// `event_bus.bind`/`publish` call and no `webhook_deliveries.enqueue`
-    /// call anywhere in between -- unlike the `Runnable::Workflow` path in
-    /// [`RunWorkerPool::run_once`], which does both. A run against a
-    /// code-registered agent therefore never fires a webhook and only
-    /// ever takes the degraded polling path on `GET /runs/{id}/stream`,
-    /// regardless of the `webhook` spec or event bus wiring the pool
-    /// carries. This is accepted and tracked (ledger row 31), not an
-    /// oversight -- see the `event_bus`/`webhook_deliveries` field docs
-    /// above and `agent_kind_run_with_a_webhook_enqueues_no_delivery` in
-    /// `worker_tests.rs`, the test that pins it.
+    /// **(PLAT-08, D-14/D-15) Same machinery as a graph run.** No engine hosts
+    /// this run, so it assembles the graph path's per-run trace pipeline
+    /// itself: `build_run_sink` (+ the herald sink, composed by the same
+    /// `compose_run_sink`) behind one standalone `TraceDispatcher`, the event
+    /// bus bound before the call, and the `execute_scoped` call wrapped in
+    /// `with_run_trace_scope` so the agent loop's own middleware, progress
+    /// and fallback records reach the same dispatcher. Because no engine
+    /// emits them, this method emits `RunStarted` (graph fingerprint
+    /// [`AGENT_RUN_FINGERPRINT`]), one superstep-0 `NodeStarted`/
+    /// `NodeFinished` pair for the agent call -- carrying its `PaladinResult`
+    /// usage and cost, so the dispatcher's `total_usage()`/`total_cost()`
+    /// are real -- and `RunFinished { total_supersteps: 0 }`. The live SSE
+    /// `node_started`/`node_finished`/`done`|`error` events therefore come
+    /// from the ONE `map_trace_event` mapping, never a hand-published event.
+    ///
+    /// **Exactly one terminal wire event.** A failure emits `RunFinished
+    /// { Failed }`, which maps to the single `error` event with `message:
+    /// null` -- the same shape a graph run's engine-emitted failure has.
+    /// This method makes no direct bus publish of its own and does not go
+    /// through `record_engine_failure` (whose own publish would be a second
+    /// `error`); it calls `persist_failure` instead. The failure text stays
+    /// readable through the tenant-scoped `GET /runs/{id}` `error` field,
+    /// never on the wire, the trace or the webhook payload.
+    ///
+    /// **Webhooks.** Both return paths enqueue the run's subscribed
+    /// `completed`/`failed` delivery strictly after the status write and ack
+    /// (D-40), through `enqueue_webhook_delivery` -> `webhook_delivery_for_outcome`;
+    /// an enqueue error is logged and never changes the run's status (P2).
+    ///
+    /// The `RunScope` (run id + ledger scope) and the `execute_scoped`
+    /// arguments are unchanged from 39-07/40-04 (D-00g): nothing here changes
+    /// what the Treasurer ledger settles for an agent run. The SSE `done`
+    /// status for a cancelled or halted agent run is out of scope (PLAT-09).
     async fn run_agent(
         &self,
         leased: &LeasedRun,
@@ -1394,6 +1405,10 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                         )
                         .await?;
                     self.queue.ack(&leased.token).await?;
+                    // D-40, D-15: strictly AFTER the status write and ack;
+                    // logged and never propagated (P2).
+                    self.enqueue_webhook_delivery(run, RunStatus::Completed, None)
+                        .await;
                     Ok(true)
                 }
                 .await

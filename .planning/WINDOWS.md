@@ -2,9 +2,9 @@
 schema_version: 1
 open_count: 2
 waived_count: 36
-fixed_count: 21
-total_count: 59
-last_updated: 2026-09-29T12:16:51.627Z
+fixed_count: 22
+total_count: 60
+last_updated: 2026-09-29T22:37:06.572Z
 ---
 
 # Broken Windows Ledger
@@ -74,6 +74,7 @@ last_updated: 2026-09-29T12:16:51.627Z
 | 57 | 40 | deviation | docs/src/deployment-topologies/http-service-host.md |  | 40-03: plan Task 2 negated grep '^\\s*api_keys\\s*:' over src/application/cli is a false positive on a Rust parameter (env.rs:22); intent verified by refined grep, not fixed | waived | Plan-text issue, not a code defect: 40-03's negated acceptance grep '^\\s*api_keys\\s*:' over src/application/cli matched a Rust parameter 'api_keys: &HashMap<K, String>' in src/application/cli/templates/env.rs; the intent (the onboarding template emits no tenantless api_keys YAML key) was verified by a refined grep in 40-03 and the template needed no change. Waived in 40-06 as directed by the phase orchestrator. | 2026-09-29T00:00:16.256Z | 2026-09-29T11:49:59.820Z |
 | 58 | 40 | deviation | crates/paladin-web/src/thread_controller.rs |  | (Phase 40 D-14 deferral, T-40-23) The /v1/threads routes -- GET /threads (lists every thread), GET /threads/{id}, GET /threads/{id}/state, GET /threads/{id}/history, POST /threads/{id}/resume, POST /threads/{id}/fork, DELETE /threads/{id} -- are not tenant-scoped because threads carry no tenant, so an authenticated principal can enumerate another tenant's threads and read their Waypoint state and history although that tenant's /runs routes answer 404. Closing condition: record a tenant on the thread (or derive it from the thread's runs) and route every /threads/{id}* handler through one shared visibility gate like run_controller::load_visible_run. Owner: Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11 hygiene phase. | open |  | 2026-09-29T11:49:59.678Z |  |
 | 59 | 40 | deviation | .project/current-exports.txt |  | (40-06 Task 2) The plan's acceptance grep for RunReadScope/TenantId in .project/current-exports.txt cannot pass by the tool's design: cargo-public-api lists a re-exported foreign-crate module as one 'pub use paladin::core::platform::container::principal' line (exactly as the existing cost and treasury_ledger lines), never its items. The refreshed baseline does carry every facade-visible Phase 40 item (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, BearerTokenAuthConfig.tenant, AuthConfig::validate, the principal re-export, cancel's Option<principal::PrincipalRef>) and make api-surface exits 0. Plan-text issue, not a code defect; left open for the operator to waive. | waived | Tool-design limitation, not a defect: cargo-public-api lists the re-exported principal module as a single pub-use line, so item-level names cannot appear in current-exports.txt. Every facade-visible Phase 40 item is present in the baseline (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, AuthConfig::validate, principal re-export); the 40-06 SUMMARY records the measured evidence. | 2026-09-29T11:49:59.952Z | 2026-09-29T12:16:51.627Z |
+| 60 | 45 | deviation | src/application/services/run/worker.rs |  | Closing condition of row 31 (WR-02) is met: run_agent's success and failure return paths now bind the live event bus, emit through map_trace_event (RunStarted/NodeStarted/NodeFinished/RunFinished via a per-run TraceDispatcher) and enqueue webhook deliveries via webhook_delivery_for_outcome; the pinning test is inverted to agent_kind_run_with_a_webhook_enqueues_a_delivery, with agent_kind_run_streams_done_live and agent_kind_run_emits_exactly_one_terminal_event as sibling evidence. Row 31 itself stays waived (only open->fixed\|waived transitions exist). Phase 45 plan 45-02 (PLAT-08). | fixed |  | 2026-09-29T22:37:02.721Z | 2026-09-29T22:37:06.572Z |
 
 ````json
 [
@@ -784,6 +785,18 @@ last_updated: 2026-09-29T12:16:51.627Z
     "reason": "Tool-design limitation, not a defect: cargo-public-api lists the re-exported principal module as a single pub-use line, so item-level names cannot appear in current-exports.txt. Every facade-visible Phase 40 item is present in the baseline (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, AuthConfig::validate, principal re-export); the 40-06 SUMMARY records the measured evidence.",
     "recorded_at": "2026-09-29T11:49:59.952Z",
     "resolved_at": "2026-09-29T12:16:51.627Z"
+  },
+  {
+    "id": 60,
+    "kind": "deviation",
+    "phase": "45",
+    "file": "src/application/services/run/worker.rs",
+    "line": null,
+    "description": "Closing condition of row 31 (WR-02) is met: run_agent's success and failure return paths now bind the live event bus, emit through map_trace_event (RunStarted/NodeStarted/NodeFinished/RunFinished via a per-run TraceDispatcher) and enqueue webhook deliveries via webhook_delivery_for_outcome; the pinning test is inverted to agent_kind_run_with_a_webhook_enqueues_a_delivery, with agent_kind_run_streams_done_live and agent_kind_run_emits_exactly_one_terminal_event as sibling evidence. Row 31 itself stays waived (only open->fixed|waived transitions exist). Phase 45 plan 45-02 (PLAT-08).",
+    "status": "fixed",
+    "reason": "",
+    "recorded_at": "2026-09-29T22:37:02.721Z",
+    "resolved_at": "2026-09-29T22:37:06.572Z"
   }
 ]
 ````

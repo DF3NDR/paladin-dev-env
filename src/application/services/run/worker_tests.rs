@@ -867,12 +867,13 @@ async fn webhook_delivery_repository_error_never_affects_run_status() {
     );
 }
 
-// --- agent_kind_run_with_a_webhook_enqueues_no_delivery (WR-02) ---------
+// --- agent_kind_run_with_a_webhook_enqueues_a_delivery (PLAT-08) --------
 
 /// An [`AssistantResolver`] resolving every id to a code-registered
 /// `Runnable::Agent` -- the legacy dispatch path `run_once` routes to
-/// [`super::worker::RunWorkerPool::run_agent`] BEFORE any event-bus
-/// bind/publish or webhook-delivery enqueue call.
+/// [`super::worker::RunWorkerPool::run_agent`], which binds the event bus,
+/// streams through the per-run trace dispatcher and enqueues its webhook
+/// deliveries exactly as the graph path does.
 struct AgentOnlyResolver;
 
 #[async_trait]
@@ -932,17 +933,15 @@ impl PaladinPort for AlwaysSucceedsPaladinPort {
     }
 }
 
-/// (WR-02) An `Agent`-kind run carrying a `webhook` spec subscribed to
-/// `completed` must complete normally and enqueue ZERO webhook deliveries
-/// -- `run_agent`'s dispatch never reaches the `webhook_delivery_for_outcome`
-/// -> `deliveries.enqueue` block that the `Runnable::Workflow` path uses
-/// (`webhook_delivery_enqueued_on_completed_event`, above). This is the
-/// tripwire for the documented carve-out on `RunWorkerPool`'s
-/// `event_bus`/`webhook_deliveries` field docs and on `run_agent` itself:
-/// if a future change wires the hook into `run_agent`, this test goes red
-/// and those docs must move with it.
+/// PLAT-08, D-15: assistant-kind parity. An `Agent`-kind run carrying a
+/// `webhook` spec subscribed to `completed` completes normally and enqueues
+/// EXACTLY ONE `Pending` delivery through the same
+/// `webhook_delivery_for_outcome` -> `enqueue` path the `Runnable::Workflow`
+/// path uses (`webhook_delivery_enqueued_on_completed_event`, above),
+/// strictly after the status write and ack. This is the WR-02 tripwire
+/// inverted (ledger row 31): it used to assert zero deliveries.
 #[tokio::test]
-async fn agent_kind_run_with_a_webhook_enqueues_no_delivery() {
+async fn agent_kind_run_with_a_webhook_enqueues_a_delivery() {
     let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
     let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
     let store = Arc::new(InMemoryWaypointStore::new());
@@ -972,18 +971,27 @@ async fn agent_kind_run_with_a_webhook_enqueues_no_delivery() {
     assert!(worker.run_once().await.unwrap());
 
     let run = repository.get(&run_id).await.unwrap().unwrap();
-    assert_eq!(
-        run.status,
-        RunStatus::Completed,
-        "the agent-kind run's status transitions are unaffected by the carve-out"
-    );
+    assert_eq!(run.status, RunStatus::Completed);
 
     let page = deliveries.list_for_run(&run_id, 10, None).await.unwrap();
-    assert!(
-        page.items.is_empty(),
-        "an Agent-kind run must enqueue zero webhook deliveries, got {}",
-        page.items.len()
+    assert_eq!(
+        page.items.len(),
+        1,
+        "an Agent-kind run must enqueue exactly one delivery"
     );
+    let delivery = &page.items[0];
+    assert!(matches!(
+        delivery.status,
+        paladin_core::platform::container::webhook::WebhookDeliveryStatus::Pending
+    ));
+    assert!(matches!(delivery.event, RunEventKind::Completed));
+
+    let payload: serde_json::Value = serde_json::from_str(&delivery.payload).unwrap();
+    assert_eq!(payload["run_id"], run_id.as_str());
+    assert_eq!(payload["status"], "completed");
+    assert_eq!(payload["event"], "completed");
+    assert_eq!(payload["assistant"]["assistant_id"], "code-agent");
+    assert_eq!(payload["assistant"]["version"], 1);
 }
 
 // --- 45-02 (PLAT-08): agent runs stream live through the one mapping ---

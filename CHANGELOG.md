@@ -227,6 +227,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   §9.6). `WINDOWS.md` row 32 (WR-03, "any authenticated principal can read every run") is closed;
   the `/v1/threads/*` routes remain unscoped and are tracked as a new open row.
 
+### Fixed
+
+- PLAT-08 / `WINDOWS.md` row 31 (WR-02): runs against a code-registered agent now stream live SSE
+  (`node_started`, `node_finished`, then `done` or `error`) through the same `map_trace_event`
+  mapping a graph run uses, persist their trace rows and feed the OTel and herald sinks when
+  those are wired, and enqueue `completed`/`failed` webhook deliveries through the same
+  SSRF-guarded delivery service. A graph run failing before its engine emits `RunStarted`
+  (including a corrupt fork) now enqueues its `failed` delivery too. An agent failure's `error`
+  event carries `message: null`, exactly like a graph engine failure — read the text from
+  `GET /runs/{run_id}`. Public API unchanged.
+
 ### Breaking Changes
 
 - **BREAKING (`paladin-web`): `Principal` gains the required `tenant_id: TenantId` field and is

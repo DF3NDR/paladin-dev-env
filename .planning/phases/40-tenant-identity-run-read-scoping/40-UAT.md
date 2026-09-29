@@ -3,25 +3,24 @@ status: testing
 phase: 40-tenant-identity-run-read-scoping
 source: [40-VERIFICATION.md]
 started: 2026-09-29T12:36:44Z
-updated: 2026-09-29T12:36:44Z
+updated: 2026-09-29T19:30:57Z
 ---
 
 ## Current Test
 
-number: 1
-name: Scope decision on code-review WR-01 (cross-tenant thread resume/fork via POST /v1/runs {thread_id} and POST /v1/threads/{id}/fork)
+number: 2
+name: Backstop truth (40-03): key-to-tenant mapping immutable after boot
 expected: |
-  Either a fix with a contract-style test for submit and fork (apply RunReadScope::permits to the
-  thread's latest run and return the same not-found error as a missing thread), or WINDOWS.md row 58
-  amended to name both write paths explicitly, before Phase 41 builds admission enforcement on the
-  thread path.
+  A human confirms the no-mutation-after-boot invariant on AgentAuthConfig (api_keys writes exist
+  only in #[cfg(test)]), or adds a held-out test that clones AgentAuthConfig into two router states
+  and asserts the same key resolves the same tenant under concurrent requests.
 awaiting: user response
 
 ## Tests
 
 ### 1. Scope decision on code-review WR-01
 expected: Either a fix with a contract-style test for submit and fork, or WINDOWS.md row 58 amended to name the POST /runs {thread_id} and fork paths explicitly. See 40-REVIEW.md WR-01 and 40-VERIFICATION.md human_verification item 1.
-result: [pending]
+result: pass
 
 ### 2. Backstop truth (40-03): key-to-tenant mapping immutable after boot
 expected: A human confirms the no-mutation-after-boot invariant on AgentAuthConfig (api_keys writes exist only in #[cfg(test)]), or adds a held-out test that clones AgentAuthConfig into two router states and asserts the same key resolves the same tenant under concurrent requests.
@@ -42,9 +41,9 @@ result: [pending]
 ## Summary
 
 total: 5
-passed: 0
+passed: 1
 issues: 0
-pending: 5
+pending: 4
 skipped: 0
 blocked: 0
 

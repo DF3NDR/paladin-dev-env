@@ -272,6 +272,7 @@ mod tests {
     use async_trait::async_trait;
     use axum::http::HeaderMap;
     use chrono::Utc;
+    use paladin_core::platform::container::treasury_ledger::LedgerScope;
     use paladin_ports::output::auth_port::{AuthClaims, AuthError, AuthToken};
     use uuid::Uuid;
 
@@ -505,6 +506,21 @@ mod tests {
             user.read_scope(),
             RunReadScope::Tenant(TenantId::new("acme").unwrap())
         );
+    }
+
+    /// D-15/D-16: a principal's ledger scope is exactly `(tenant, id)` --
+    /// the id is the key's configured name, never the secret.
+    #[test]
+    fn ledger_scope_is_the_principals_tenant_and_id() {
+        let principal = Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap());
+        assert_eq!(principal.ledger_scope(), LedgerScope::new("acme", "svc-a"));
+
+        let open = Principal::open_access();
+        assert_eq!(
+            open.ledger_scope(),
+            LedgerScope::new(TenantId::OPEN_ACCESS, "anonymous")
+        );
+        assert!(!open.ledger_scope().is_unattributed());
     }
 
     #[test]

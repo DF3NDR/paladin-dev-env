@@ -982,6 +982,274 @@ mod tests {
         }
     }
 
+    // --- 40-04 (D-16, HTTP path): every agent handler hands the executor the
+    // calling principal's ledger scope ------------------------------------
+
+    use paladin_core::platform::container::principal::TenantId;
+    use paladin_core::platform::container::run_scope::RunScope;
+    use paladin_core::platform::container::treasury_ledger::LedgerScope;
+    use std::sync::Mutex;
+
+    /// A buffered executor that records the [`RunScope`] handed to
+    /// `execute_scoped`, then answers like `MockExecutor::Succeeds`.
+    #[derive(Default)]
+    struct ScopeRecordingExecutor {
+        recorded: Mutex<Option<RunScope>>,
+    }
+
+    impl ScopeRecordingExecutor {
+        fn recorded_scope(&self) -> Option<RunScope> {
+            self.recorded.lock().expect("mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl PaladinExecutorPort for ScopeRecordingExecutor {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            Ok(PaladinResult::new(
+                "scoped".to_string(),
+                TokenUsage::new(5, 0),
+                10,
+                1,
+                StopReason::Completed,
+            ))
+        }
+
+        async fn execute_scoped(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+            scope: &RunScope,
+        ) -> Result<PaladinResult, PaladinError> {
+            *self.recorded.lock().expect("mutex poisoned") = Some(scope.clone());
+            self.execute(paladin, input).await
+        }
+    }
+
+    /// A streamer that records the [`RunScope`] handed to
+    /// `execute_stream_scoped`, then emits one final chunk.
+    #[derive(Default)]
+    struct ScopeRecordingStreamer {
+        recorded: Mutex<Option<RunScope>>,
+    }
+
+    impl ScopeRecordingStreamer {
+        fn recorded_scope(&self) -> Option<RunScope> {
+            self.recorded.lock().expect("mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl StreamingExecutorPort for ScopeRecordingStreamer {
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(Ok(PaladinStreamChunk {
+                        text: "scoped".to_string(),
+                        is_final: true,
+                        metadata: None,
+                    }))
+                    .await;
+            });
+            Ok(rx)
+        }
+
+        async fn execute_stream_scoped(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+            scope: &RunScope,
+        ) -> Result<PaladinStream, PaladinError> {
+            *self.recorded.lock().expect("mutex poisoned") = Some(scope.clone());
+            self.execute_stream(paladin, input).await
+        }
+    }
+
+    /// The `svc-a` key of tenant `acme` -- the calling principal every
+    /// attribution test below expects to see on the ledger scope.
+    fn svc_a_of_acme() -> Extension<Principal> {
+        Extension(Principal::new(
+            "svc-a",
+            UserRole::User,
+            TenantId::new("acme").unwrap(),
+        ))
+    }
+
+    fn acme_svc_a_scope() -> LedgerScope {
+        LedgerScope::new("acme", "svc-a")
+    }
+
+    fn execute_request(input: &str) -> Json<ExecuteRequest> {
+        Json(ExecuteRequest {
+            input: input.to_string(),
+            timeout_seconds: None,
+        })
+    }
+
+    /// State holding agent `id` backed by a scope-recording executor and,
+    /// when `streaming`, a scope-recording streamer; returns both handles.
+    fn state_with_scope_recording_agent(
+        id: &str,
+        streaming: bool,
+    ) -> (
+        AgentApiState,
+        Arc<ScopeRecordingExecutor>,
+        Arc<ScopeRecordingStreamer>,
+    ) {
+        let executor = Arc::new(ScopeRecordingExecutor::default());
+        let streamer = Arc::new(ScopeRecordingStreamer::default());
+        let registry = AgentRegistry::new();
+        let executor_port: Arc<dyn PaladinExecutorPort> = executor.clone();
+        let streamer_port: Option<Arc<dyn StreamingExecutorPort>> = if streaming {
+            Some(streamer.clone())
+        } else {
+            None
+        };
+        registry.insert_with_streaming(id, test_agent(id), executor_port, streamer_port);
+        (AgentApiState::new(Arc::new(registry)), executor, streamer)
+    }
+
+    /// T-40-16: `POST /agents/{id}/execute` hands the executor a scope whose
+    /// `ledger_scope` is exactly the authenticated principal's `(tenant, id)`
+    /// -- built from the `Principal`, never from the request body.
+    #[tokio::test]
+    async fn execute_agent_attributes_spend_to_the_callers_principal() {
+        let (state, executor, _) = state_with_scope_recording_agent("a", false);
+
+        let (status, _) = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("a".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("execute succeeds");
+        assert_eq!(status, StatusCode::OK);
+
+        let scope = executor
+            .recorded_scope()
+            .expect("execute_scoped must have been called");
+        assert_eq!(scope.ledger_scope, Some(acme_svc_a_scope()));
+        assert!(
+            scope.run_id.is_none(),
+            "a plain agent call carries no Platform run"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_agent_stream_attributes_spend_to_the_callers_principal() {
+        let (state, executor, streamer) = state_with_scope_recording_agent("s", true);
+
+        let response = execute_agent_stream(
+            State(state),
+            svc_a_of_acme(),
+            Path("s".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let scope = streamer
+            .recorded_scope()
+            .expect("execute_stream_scoped must have been called");
+        assert_eq!(scope.ledger_scope, Some(acme_svc_a_scope()));
+        assert!(
+            executor.recorded_scope().is_none(),
+            "the buffered executor is not consulted when a streamer exists"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_agent_stream_fallback_attributes_spend_to_the_callers_principal() {
+        let (state, executor, streamer) = state_with_scope_recording_agent("f", false);
+
+        let response = execute_agent_stream(
+            State(state),
+            svc_a_of_acme(),
+            Path("f".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let scope = executor
+            .recorded_scope()
+            .expect("the buffered fallback must call execute_scoped");
+        assert_eq!(scope.ledger_scope, Some(acme_svc_a_scope()));
+        assert!(streamer.recorded_scope().is_none());
+    }
+
+    #[tokio::test]
+    async fn enqueue_job_attributes_spend_to_the_callers_principal() {
+        let (state, executor, _) = state_with_scope_recording_agent("j", false);
+
+        let (status, _) = enqueue_job(
+            State(state),
+            svc_a_of_acme(),
+            Path("j".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("enqueue succeeds");
+        assert_eq!(status, StatusCode::ACCEPTED);
+
+        // The spawned task runs off the handler's future; wait for it.
+        let mut recorded = None;
+        for _ in 0..200 {
+            recorded = executor.recorded_scope();
+            if recorded.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let scope = recorded.expect("the spawned job must call execute_scoped");
+        assert_eq!(scope.ledger_scope, Some(acme_svc_a_scope()));
+    }
+
+    /// D-03/D-16: with auth disabled the middleware attaches the open-access
+    /// principal, so spend settles under `(open-access, anonymous)` -- a real
+    /// principal, never the unattributed sentinel.
+    #[tokio::test]
+    async fn open_access_execute_attributes_spend_to_the_open_access_tenant() {
+        let (state, executor, _) = state_with_scope_recording_agent("o", false);
+        // `AgentApiState::new` carries the default (disabled) auth config.
+        let app = agent_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/agents/o/execute")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"input":"hi"}"#))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let scope = executor
+            .recorded_scope()
+            .expect("execute_scoped must have been called");
+        let ledger_scope = scope
+            .ledger_scope
+            .expect("open access still carries a scope");
+        assert_eq!(
+            ledger_scope,
+            LedgerScope::new(TenantId::OPEN_ACCESS, "anonymous")
+        );
+        assert!(!ledger_scope.is_unattributed());
+    }
+
     fn state_with_streaming_usage_agent(
         id: &str,
         text: &str,

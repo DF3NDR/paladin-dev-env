@@ -7309,6 +7309,66 @@ mod streamed_cost_tests {
         assert_eq!(rows[0].amount.nanos(), 22_500_000);
         assert_eq!(rows[0].settlements, 1);
     }
+
+    /// 40-04 (D-16, HTTP path): through `Arc<dyn StreamingExecutorPort>` in
+    /// `EveryCall` mode, `execute_stream_scoped` settles the streamed priced
+    /// call under the scope's `ledger_scope` -- `(acme, svc-a)`, never the
+    /// sentinel.
+    #[tokio::test]
+    async fn stream_scoped_settles_under_the_scope_ledger_scope() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin("gpt-4");
+        let streamer: Arc<dyn StreamingExecutorPort> = Arc::new(service);
+        let scope = RunScope::default().with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+
+        let mut stream = streamer
+            .execute_stream_scoped(&paladin, "hi", &scope)
+            .await
+            .unwrap();
+        loop {
+            let item = stream.recv().await.expect("stream must emit a final chunk");
+            if item.unwrap().is_final {
+                break;
+            }
+        }
+
+        let attributed = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::ApiKey,
+                tenant_id: Some("acme".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(attributed.len(), 1, "the streamed call settled under acme");
+        assert_eq!(attributed[0].group, "svc-a");
+        assert_eq!(attributed[0].amount.nanos(), 22_500_000);
+        assert_eq!(attributed[0].settlements, 1);
+
+        let sentinel = ledger
+            .spend(SpendQuery {
+                tenant_id: Some(LedgerScope::UNATTRIBUTED.to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert!(
+            sentinel.is_empty(),
+            "a scoped stream never settles under the sentinel"
+        );
+    }
 }
 
 /// Plan 38-07: the agent loop folds each model call's cost into
@@ -7789,6 +7849,44 @@ mod agent_loop_cost_tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].group, LedgerScope::UNATTRIBUTED);
         assert_eq!(rows[0].settlements, 1);
+    }
+
+    /// D-16 (HTTP path): through `Arc<dyn PaladinExecutorPort>` -- the
+    /// handle `agent_controller` holds -- `execute_scoped` settles the priced
+    /// call under the scope's `ledger_scope`, proving the trait override
+    /// reaches the inherent scoped path rather than the default delegate.
+    #[tokio::test]
+    async fn executor_port_execute_scoped_settles_under_the_scope_ledger_scope() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            TokenUsage::new(1_000, 2_000),
+            Some(Cost::new(22_500_000, usd)),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let executor: Arc<dyn PaladinExecutorPort> = Arc::new(service);
+        let paladin = make_paladin(1);
+        let scope = RunScope::default().with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+
+        let _ = executor
+            .execute_scoped(&paladin, "hi", &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::ApiKey,
+                tenant_id: Some("acme".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("spend by api key succeeds");
+        assert_eq!(rows.len(), 1, "the call settled under tenant acme");
+        assert_eq!(rows[0].group, "svc-a");
+        assert_eq!(rows[0].settlements, 1);
+        assert_eq!(rows[0].amount.nanos(), 22_500_000);
     }
 
     /// D-07/D-08: `PlatformRunsOnly` never settles a plain `execute()` call

@@ -975,9 +975,15 @@ pub async fn cancel_run(
         .ok_or_else(|| ApiError::not_implemented(SUBMISSION_PORT_HINT))?;
     let id = parse_run_id(&run_id)?;
 
-    // NOTE (D-13, T-40-07, accepted for this plan): the visibility gate for cancel is wired
-    // in 40-05 alongside stream/webhook-deliveries and the full route matrix. This plan only
-    // retypes `requested_by` (D-04).
+    // D-13: visibility first -- a run of another tenant is the missing-run 404 before
+    // `RunSubmissionPort::cancel` (and its `allowed_roles` check) is ever reached, so a
+    // cancel neither leaks existence nor permits a cross-tenant mutation.
+    let repository = state
+        .run_repository
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(REPOSITORY_PORT_HINT))?;
+    load_visible_run(repository, &principal, &id).await?;
+
     let outcome = submission
         .cancel(&id, Some(PrincipalRef::from(&principal)))
         .await
@@ -1019,7 +1025,7 @@ pub async fn cancel_run(
 )]
 pub async fn list_webhook_deliveries(
     State(state): State<RunApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     Path(run_id): Path<String>,
     axum::extract::Query(params): axum::extract::Query<PageQuery>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
@@ -1034,6 +1040,13 @@ pub async fn list_webhook_deliveries(
         .as_deref()
         .map(decode_cursor::<WebhookDeliveryId>)
         .transpose()?;
+
+    // D-13: the run is checked first; `list_for_run` itself is untouched.
+    let repository = state
+        .run_repository
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(REPOSITORY_PORT_HINT))?;
+    load_visible_run(repository, &principal, &id).await?;
 
     let page = deliveries
         .list_for_run(&id, limit, cursor)
@@ -1104,7 +1117,7 @@ fn frame_run_events(
 )]
 pub async fn stream_run(
     State(state): State<RunApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     Path(run_id): Path<String>,
 ) -> Response {
     let Some(run_events) = state.run_events.as_ref() else {
@@ -1114,6 +1127,15 @@ pub async fn stream_run(
         Ok(id) => id,
         Err(error) => return error.into_response(),
     };
+
+    // D-13: visibility before any SSE upgrade -- a foreign tenant's run is the missing-run
+    // 404 here, and the stream port is never asked for it.
+    let Some(repository) = state.run_repository.as_ref() else {
+        return ApiError::not_implemented(REPOSITORY_PORT_HINT).into_response();
+    };
+    if let Err(error) = load_visible_run(repository, &principal, &id).await {
+        return error.into_response();
+    }
 
     match run_events.stream(&id).await {
         Ok(stream) => {
@@ -1208,6 +1230,15 @@ mod tests {
             },
             serde_json::json!({}),
         )
+    }
+
+    /// A `MockRepository` holding exactly `run`, so a `/runs/{run_id}*` handler test can
+    /// pass the D-13 `load_visible_run` gate (the test principals are Admin or open-access,
+    /// which see every run) and go on to exercise the route's own port.
+    fn repository_with(run: Run) -> Arc<MockRepository> {
+        let repository = Arc::new(MockRepository::default());
+        repository.seed(run);
+        repository
     }
 
     // --- Mock `RunSubmissionPort` ---------------------------------------
@@ -1943,7 +1974,11 @@ mod tests {
                 serde_json::json!({ "status": "completed", "waypoint_id": "wp-1" }),
             ),
         ];
-        let state = RunApiState::new().with_run_events(Arc::new(MockRunEventStreamPort { events }));
+        let mut run = sample_run("t-stream");
+        run.run_id = run_id.clone();
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_run_events(Arc::new(MockRunEventStreamPort { events }));
 
         let response = stream_run(State(state), tester_principal(), Path(run_id.to_string())).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -1974,6 +2009,19 @@ mod tests {
 
     #[tokio::test]
     async fn run_stream_unknown_run_returns_404() {
+        let run = sample_run("t-stream");
+        let run_id = run.run_id.clone();
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_run_events(Arc::new(AlwaysNotFound));
+        let response = stream_run(State(state), tester_principal(), Path(run_id.to_string())).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// D-13: the stream route needs the run store too -- with it unwired the gate cannot
+    /// run, and the route answers 501 naming the run store rather than opening a stream.
+    #[tokio::test]
+    async fn run_stream_returns_501_naming_the_run_store_when_only_events_are_wired() {
         let state = RunApiState::new().with_run_events(Arc::new(AlwaysNotFound));
         let response = stream_run(
             State(state),
@@ -1981,7 +2029,9 @@ mod tests {
             Path(RunId::new_v7().to_string()),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = read_response_body(response).await;
+        assert!(body.contains("run_store.backend"), "{body}");
     }
 
     /// D-26: the 15s heartbeat interval is asserted directly on the
@@ -2190,15 +2240,19 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_run_accepted_returns_202() {
-        let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
-            outcome: MockOutcome::Accepted,
-        }));
+        let run = sample_run("t-cancel");
+        let run_id = run.run_id.clone();
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_submission(Arc::new(MockSubmissionPort {
+                outcome: MockOutcome::Accepted,
+            }));
         let app = run_router(state);
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                    .uri(format!("/v1/runs/{run_id}/cancel"))
                     .body(Body::empty())
                     .expect("request builds"),
             )
@@ -2209,15 +2263,19 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_run_already_terminal_returns_409() {
-        let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
-            outcome: MockOutcome::AlreadyTerminal,
-        }));
+        let run = sample_run("t-cancel");
+        let run_id = run.run_id.clone();
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_submission(Arc::new(MockSubmissionPort {
+                outcome: MockOutcome::AlreadyTerminal,
+            }));
         let app = run_router(state);
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                    .uri(format!("/v1/runs/{run_id}/cancel"))
                     .body(Body::empty())
                     .expect("request builds"),
             )
@@ -2241,6 +2299,30 @@ mod tests {
             .await
             .expect("router responds");
         assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    /// D-13: with the submission port wired but the run store unwired, cancel answers 501
+    /// naming the run store -- the gate cannot run, so `RunSubmissionPort::cancel` is
+    /// never reached.
+    #[tokio::test]
+    async fn cancel_run_returns_501_naming_the_run_store_when_only_submission_is_wired() {
+        let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
+            outcome: MockOutcome::Accepted,
+        }));
+        let app = run_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = read_response_body(response).await;
+        assert!(body.contains("run_store.backend"), "{body}");
     }
 
     // --- list_webhook_deliveries (D-40, PLAT-FR-14) ------------------------
@@ -2340,11 +2422,36 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
     }
 
+    /// D-13: with the webhook port wired but the run store unwired, the route answers 501
+    /// naming the run store before `list_for_run` is reached.
     #[tokio::test]
-    async fn list_webhook_deliveries_empty_is_200_with_empty_items() {
-        let run_id = RunId::new_v7();
+    async fn list_webhook_deliveries_returns_501_naming_the_run_store_when_only_deliveries_wired() {
         let state =
             RunApiState::new().with_webhook_deliveries(Arc::new(MockWebhookDeliveries::default()));
+        let error = list_webhook_deliveries(
+            State(state),
+            tester_principal(),
+            Path(RunId::new_v7().to_string()),
+            axum::extract::Query(PageQuery {
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .expect_err("run store unwired");
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = read_response_body(response).await;
+        assert!(body.contains("run_store.backend"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn list_webhook_deliveries_empty_is_200_with_empty_items() {
+        let run = sample_run("t-wh");
+        let run_id = run.run_id.clone();
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_webhook_deliveries(Arc::new(MockWebhookDeliveries::default()));
         let (status, Json(body)) = list_webhook_deliveries(
             State(state),
             tester_principal(),
@@ -2363,7 +2470,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_webhook_deliveries_no_secret_in_body() {
-        let run_id = RunId::new_v7();
+        let run = sample_run("t-wh");
+        let run_id = run.run_id.clone();
         let repo = Arc::new(MockWebhookDeliveries::default());
         let delivery = paladin_core::platform::container::webhook::WebhookDelivery::new(
             WebhookDeliveryId::new_v7(),
@@ -2375,7 +2483,9 @@ mod tests {
             Utc::now(),
         );
         repo.items.lock().unwrap().push(delivery);
-        let state = RunApiState::new().with_webhook_deliveries(repo);
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_webhook_deliveries(repo);
         let (status, Json(body)) = list_webhook_deliveries(
             State(state),
             tester_principal(),
@@ -2488,15 +2598,19 @@ mod tests {
 
         #[tokio::test]
         async fn cancel_forbidden_role_is_403() {
-            let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
-                outcome: MockOutcome::Forbidden,
-            }));
+            let run = sample_run("t-cancel");
+            let run_id = run.run_id.clone();
+            let state = RunApiState::new()
+                .with_repository(repository_with(run))
+                .with_submission(Arc::new(MockSubmissionPort {
+                    outcome: MockOutcome::Forbidden,
+                }));
             let app = run_router(state);
             let response = app
                 .oneshot(
                     Request::builder()
                         .method("POST")
-                        .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                        .uri(format!("/v1/runs/{run_id}/cancel"))
                         .body(Body::empty())
                         .expect("request builds"),
                 )
@@ -2916,10 +3030,8 @@ mod tests {
                 cancel_callers: Mutex::new(Vec::new()),
             });
             let repository = Arc::new(MockRepository::default());
-            let run = sample_run("t-matrix").with_submitted_by(RunAttribution::new(
-                TenantId::new("acme").unwrap(),
-                "svc-a",
-            ));
+            let run = sample_run("t-matrix")
+                .with_submitted_by(RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a"));
             let run_id = run.run_id.clone();
             repository.seed(run);
 

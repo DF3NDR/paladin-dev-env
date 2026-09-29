@@ -1,20 +1,14 @@
 ---
-status: testing
+status: partial
 phase: 40-tenant-identity-run-read-scoping
 source: [40-VERIFICATION.md]
 started: 2026-09-29T12:36:44Z
-updated: 2026-09-29T19:40:34Z
+updated: 2026-09-29T19:44:28Z
 ---
 
 ## Current Test
 
-number: 5
-name: Disposition of code-review WR-02, WR-03 and WR-04
-expected: |
-  Decide whether to apply the shared permits check inside RunSubmissionService::cancel and a
-  generic-body repository-error helper in run_controller now, or file them (WINDOWS.md or Phase 46
-  hygiene). Neither blocks the roadmap criteria, which are met at the HTTP route level.
-awaiting: user response
+[testing paused — 1 item outstanding: test 4 blocked (third-party)]
 
 ## Tests
 
@@ -38,14 +32,14 @@ reason: "Blocked. CI runs 444 and 442 on the phase's final code tree fail at con
 
 ### 5. Disposition of code-review WR-02, WR-03 and WR-04
 expected: Decide whether to apply the shared permits check inside RunSubmissionService::cancel and a generic-body repository-error helper in run_controller now, or file them (WINDOWS.md or Phase 46 hygiene). Neither blocks the roadmap criteria, which are met at the HTTP route level.
-result: [pending]
+result: pass
 
 ## Summary
 
 total: 5
-passed: 3
+passed: 4
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 1
 

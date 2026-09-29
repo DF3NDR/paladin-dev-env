@@ -4,16 +4,16 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 40
 current_phase_name: Tenant Identity & Run-Read Scoping
-status: executing
-stopped_at: Completed 40-05-PLAN.md
-last_updated: "2026-09-29T01:58:58.486Z"
+status: verifying
+stopped_at: "Completed 40-06-PLAN.md (Phase 40 complete: 6/6 plans)"
+last_updated: "2026-09-29T12:14:50.659Z"
 last_activity: 2026-09-28
 last_activity_desc: Phase 40 execution started
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 23
-  completed_plans: 22
+  completed_plans: 23
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [██████████] 96%
+**Progress:** [██████████] 100%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 
 Phase: 40 (Tenant Identity & Run-Read Scoping) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-28 — Phase 40 execution started
 
 ## Performance Metrics
@@ -208,6 +208,7 @@ Last activity: 2026-09-28 — Phase 40 execution started
 | Phase 40 P03 | ~35m | 2 tasks | 3 files |
 | Phase 40 P04 | 17 min | 2 tasks | 9 files |
 | Phase 40 P05 | 15min | 2 tasks | 5 files |
+| Phase 40 P06 | 60min | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -291,6 +292,10 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 40]: 40-04: PaladinExecutorPort::execute_scoped and StreamingExecutorPort::execute_stream_scoped are defaulted scope-ignoring delegates (X-10.4); an unattributed agent-kind run's RunScope carries Some(sentinel), the None fallback is reached only by scope-less embedded callers
 - [Phase 40]: 40-05: stream/cancel/webhook-deliveries gate on load_visible_run and now answer 501 naming run_store.backend when the run store is unwired; the route matrix enumerates /v1/runs/{run_id}* from the router's own OpenAPI document
 - [Phase 40]: 40-05: utoipa descriptions are single-line strings and public handler docs name the private load_visible_run in plain backticks (cargo doc -D warnings)
+- [Phase ?]: 40-06: paladin-web | Principal semver allowlist entry reduced to struct_marked_non_exhaustive -- cargo-semver-checks 0.50.0 does not fire constructible_struct_adds_field for a field added to a struct made #[non_exhaustive] in the same change
+- [Phase ?]: 40-06: no Cargo.toml semver allow line added for Phase 40 -- every lint the D-27 diagnostic fired is already under an existing crate-wide allow
+- [Phase ?]: 40-06: WINDOWS.md row 32 stays waived (tool refuses WINDOWS_ALREADY_RESOLVED); closing condition recorded as met in CHANGELOG and ADR-0054; row 59 filed for the unsatisfiable RunReadScope current-exports grep
+- [Phase ?]: 40-06: a pub mod carries an outer /// doc or inner //! docs, never both -- rustdoc merges them and resolves intra-doc links in the parent scope (7 span-less warnings fixed in be3a9030)
 
 ### Pending Todos
 
@@ -493,8 +498,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-29T01:58:58.453Z
-**Stopped at:** Completed 40-05-PLAN.md
+**Last session:** 2026-09-29T12:14:50.628Z
+**Stopped at:** Completed 40-06-PLAN.md (Phase 40 complete: 6/6 plans)
 **Resume file:** None
 
 ## Operator Next Steps

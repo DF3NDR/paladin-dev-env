@@ -404,7 +404,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 40-06-PLAN.md — Release records: semver measurement and register reconciliation, CHANGELOGs, surface baseline, ADR-0054, WINDOWS.md, full gates (wave 4)
+- [x] 40-06-PLAN.md — Release records: semver measurement and register reconciliation, CHANGELOGs, surface baseline, ADR-0054, WINDOWS.md, full gates (wave 4)
 
 ### Phase 41: Admission-Time Allowance Enforcement
 

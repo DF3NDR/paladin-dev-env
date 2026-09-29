@@ -189,6 +189,13 @@ requirement_id = "PRICE-03"
 justification = "LlmResponse gained the additive cost: Option<Cost> field (D-10), priced per call by the PricingLlmAdapter decorator at the LlmPort boundary (D-09). #[serde(default, skip_serializing_if)] keeps legacy JSON byte-identical and deserialising as None (the served_by precedent, D-25); the struct stays constructible and is deliberately NOT #[non_exhaustive] for the same PaladinResult/Settings reason -- only full struct literals break, and every in-tree one (provider adapters, mocks, services, tests, benches, examples, doctests) was migrated to cost: None in the same commit."
 
 # --- Phase 40 (Tenant Identity & Run-Read Scoping, TENANT-01/02, PLAT-07) ---
+# Every entry below was measured in 40-06 by the D-27 method (cargo-semver-checks
+# 0.50.0, --baseline-version 0.10.1 --release-type minor, each crate's lints table
+# temporarily disabled and restored unchanged; see 40-06-SUMMARY.md). The tool
+# reported constructible_struct_adds_field for ApiKeyConfig.tenant,
+# BearerTokenAuthConfig.tenant and AgentAuthConfig.bearer_tenant, and ONLY
+# struct_marked_non_exhaustive for Principal; it reported nothing for SubmitRun,
+# ForkRun or RunSubmissionPort (register-only, as predicted).
 # D-18/D-00c convention: an entry whose `lint` value begins "register-only"
 # records a deliberate break that `cargo semver-checks` cannot itself detect
 # (no lint in its 0.50.0 catalog models a changed field or parameter TYPE,
@@ -198,17 +205,10 @@ justification = "LlmResponse gained the additive cost: Option<Cost> field (D-10)
 
 [[entry]]
 crate = "paladin-web"
-lint = "constructible_struct_adds_field"
-migration_row = "paladin-web | Principal"
-requirement_id = "TENANT-01"
-justification = "Principal gained the required tenant_id: TenantId field (D-01), server-derived from AgentAuthConfig, never from the request (D-02). No backward-compatible mitigation exists for a required field on a struct with no Default; every in-tree literal was migrated to Principal::new in the same commit; suppressed by the existing crate-wide allow line in crates/paladin-web/Cargo.toml."
-
-[[entry]]
-crate = "paladin-web"
 lint = "struct_marked_non_exhaustive"
 migration_row = "paladin-web | Principal"
 requirement_id = "TENANT-01"
-justification = "Principal is marked #[non_exhaustive] per X-10.3 option (a) (the LlmRequest/GarrisonEntry precedent, Task 1 option-a) so the next field this type gains is non-breaking; Principal::new is the one constructor every external caller now uses."
+justification = "Principal gained the required tenant_id: TenantId field (D-01), server-derived from AgentAuthConfig, never from the request (D-02), and is marked #[non_exhaustive] per X-10.3 option (a) (the LlmRequest/GarrisonEntry precedent, 40-01 Task 1 option-a) so the next field this type gains is non-breaking; Principal::new is the one constructor every external caller now uses. No backward-compatible mitigation exists for a required field on a struct with no Default; every in-tree literal was migrated in the same commit. This is the ONE entry for the pair: 40-01 predicted a second, constructible_struct_adds_field entry, but the 40-06 D-27 diagnostic (paladin-web lints table temporarily disabled, --baseline-version 0.10.1 --release-type minor) fires only struct_marked_non_exhaustive for Principal -- a struct marked #[non_exhaustive] in the same change is no longer exhaustively constructible, so the adds-field lint cannot fire -- and the predicted entry was removed rather than left contradicting the tool. Suppressed by the existing crate-wide allow line in crates/paladin-web/Cargo.toml."
 
 [[entry]]
 crate = "paladin-web"

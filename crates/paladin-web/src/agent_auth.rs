@@ -27,6 +27,7 @@ use axum::http::{HeaderMap, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use paladin_core::platform::container::principal::{PrincipalRef, RunReadScope, TenantId};
+use paladin_core::platform::container::treasury_ledger::LedgerScope;
 use paladin_core::platform::container::user::UserRole;
 use paladin_ports::output::auth_port::AuthPort;
 
@@ -74,6 +75,18 @@ impl Principal {
     /// to its own tenant.
     pub fn read_scope(&self) -> RunReadScope {
         RunReadScope::for_principal(self.role, &self.tenant_id)
+    }
+
+    /// The ledger scope spend caused by this principal settles under (D-16): its tenant and
+    /// its id (the API key's configured name or the bearer subject -- never a secret).
+    ///
+    /// Goes through the one core mapping, [`LedgerScope::from_attribution`] over this
+    /// principal's [`PrincipalRef::attribution`] (D-15), so the HTTP agent handlers and the
+    /// run worker can never disagree about how a principal becomes a scope. The open-access
+    /// principal yields `(open-access, anonymous)` -- a real principal, never the
+    /// unattributed sentinel (D-03).
+    pub fn ledger_scope(&self) -> LedgerScope {
+        LedgerScope::from_attribution(Some(&PrincipalRef::from(self).attribution()))
     }
 }
 

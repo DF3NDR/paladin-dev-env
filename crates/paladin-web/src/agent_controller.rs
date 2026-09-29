@@ -37,6 +37,7 @@ use serde_json::json;
 use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_ports::output::paladin_port::{PaladinStream, PaladinStreamChunk};
 
@@ -312,9 +313,12 @@ pub async fn execute_agent(
     let timeout = resolve_timeout(request.timeout_seconds, entry.timeout_secs, &state.timeouts)
         .map_err(|_| ApiError::bad_request("timeout_seconds must be a positive integer"))?;
 
+    // D-16: spend is attributed to the authenticated caller -- the scope is
+    // built from the `Principal` only, never from the request body.
+    let scope = RunScope::default().with_ledger_scope(principal.ledger_scope());
     let run = entry
         .executor
-        .execute(entry.paladin.as_ref(), &request.input);
+        .execute_scoped(entry.paladin.as_ref(), &request.input, &scope);
     match tokio::time::timeout(timeout, run).await {
         Ok(Ok(result)) => Ok((StatusCode::OK, ok_body(&ExecuteResponse::from(result)))),
         Ok(Err(error)) => Err(ApiError::bad_gateway(error.to_string())),
@@ -605,10 +609,14 @@ pub async fn execute_agent_stream(
             }
         };
 
+    // D-16: spend is attributed to the authenticated caller on both the
+    // streamed and the buffered-fallback branch below.
+    let scope = RunScope::default().with_ledger_scope(principal.ledger_scope());
+
     // Real token streaming when the agent has a streaming-capable executor.
     if let Some(streamer) = entry.streamer.clone() {
         return match streamer
-            .execute_stream(entry.paladin.as_ref(), &request.input)
+            .execute_stream_scoped(entry.paladin.as_ref(), &request.input, &scope)
             .await
         {
             Ok(rx) => {
@@ -622,7 +630,7 @@ pub async fn execute_agent_stream(
     // Fallback (no streaming backend): run buffered under the timeout, then frame as SSE.
     let run = entry
         .executor
-        .execute(entry.paladin.as_ref(), &request.input);
+        .execute_scoped(entry.paladin.as_ref(), &request.input, &scope);
     match tokio::time::timeout(timeout, run).await {
         Ok(Ok(result)) => {
             let response = ExecuteResponse::from(result);
@@ -686,10 +694,13 @@ pub async fn enqueue_job(
     let jobs = Arc::clone(&state.jobs);
     let jid = job_id.clone();
     let agent_id = id.clone();
+    // D-16: resolved from the authenticated caller before the spawn and moved
+    // in, so the detached job settles under the submitting principal.
+    let scope = RunScope::default().with_ledger_scope(principal.ledger_scope());
     tokio::spawn(async move {
         let run = entry
             .executor
-            .execute(entry.paladin.as_ref(), &request.input);
+            .execute_scoped(entry.paladin.as_ref(), &request.input, &scope);
         match tokio::time::timeout(timeout, run).await {
             Ok(Ok(result)) => {
                 let value = serde_json::to_value(ExecuteResponse::from(result))

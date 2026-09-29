@@ -3216,6 +3216,20 @@ impl PaladinExecutorPort for PaladinExecutionService {
         // Delegate to the existing public execute method
         self.execute(paladin, input).await
     }
+
+    /// Phase 40 D-16: the HTTP agent handlers hand their calling principal's
+    /// ledger scope through this override, so agent-execute spend settles
+    /// under the caller's tenant and API key id. Fully qualified so the
+    /// inherent `execute_scoped` (heartbeat-taking) is what resolves here,
+    /// never this trait method recursing into itself.
+    async fn execute_scoped(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        scope: &RunScope,
+    ) -> Result<PaladinResult, PaladinError> {
+        PaladinExecutionService::execute_scoped(self, paladin, input, None, scope).await
+    }
 }
 
 /// Streaming execution over [`LlmPort::generate_stream`].
@@ -3243,7 +3257,21 @@ impl StreamingExecutorPort for PaladinExecutionService {
         paladin: &Paladin,
         input: &str,
     ) -> Result<PaladinStream, PaladinError> {
-        self.execute_stream_inner(paladin, input, None).await
+        self.execute_stream_inner(paladin, input, None, None).await
+    }
+
+    /// Phase 40 D-16: the streamed counterpart of
+    /// `PaladinExecutorPort::execute_scoped` -- the scope's `ledger_scope`
+    /// is the only part of `scope` this single-pass path consumes (there is
+    /// no Vault recall and no Platform run id on a stream).
+    async fn execute_stream_scoped(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        scope: &RunScope,
+    ) -> Result<PaladinStream, PaladinError> {
+        self.execute_stream_inner(paladin, input, None, scope.ledger_scope.clone())
+            .await
     }
 }
 
@@ -3435,19 +3463,23 @@ impl PaladinExecutionService {
         input: &str,
         heartbeat: &HeartbeatHandle,
     ) -> Result<PaladinStream, PaladinError> {
-        self.execute_stream_inner(paladin, input, Some(heartbeat.clone()))
+        self.execute_stream_inner(paladin, input, Some(heartbeat.clone()), None)
             .await
     }
 
-    /// The shared body of `execute_stream` and `execute_stream_observed`:
-    /// `heartbeat` is `Some` only on the observed path and is beaten once
-    /// per forwarded chunk; the unobserved path is byte-identical to before
-    /// plan 25-09.
+    /// The shared body of `execute_stream`, `execute_stream_observed` and
+    /// `execute_stream_scoped`: `heartbeat` is `Some` only on the observed
+    /// path and is beaten once per forwarded chunk; `ledger_scope` is `Some`
+    /// only on the scoped path (Phase 40 D-16) and names the tenant and API
+    /// key id the priced terminal chunk settles under -- `None` settles
+    /// under the unattributed sentinel (D-10). The unobserved, unscoped
+    /// path is byte-identical to before plan 25-09.
     async fn execute_stream_inner(
         &self,
         paladin: &Paladin,
         input: &str,
         heartbeat: Option<HeartbeatHandle>,
+        ledger_scope: Option<LedgerScope>,
     ) -> Result<PaladinStream, PaladinError> {
         // --- D-04: before_model fires exactly once on this path (no loop,
         // no tool dispatch); after_model/around_tool are never invoked
@@ -3553,11 +3585,14 @@ impl PaladinExecutionService {
         // is stamped with the SAME execution id as this call's `run_id`.
         let execution_id = run_id;
 
-        // D-07/D-08 (39-05): the streamed path carries no `RunScope` (there
-        // is no `execute_stream_scoped`), so only `EveryCall` mode ever
-        // settles a stream, always under this execution's own id (never a
-        // Platform run id) -- resolved ONCE, before the spawn, since the
-        // spawned task owns no `&self`.
+        // D-07/D-08 (39-05): the streamed path carries no Platform run id
+        // (a stream is never worker-dispatched), so only `EveryCall` mode
+        // ever settles a stream, always under this execution's own id --
+        // resolved ONCE, before the spawn, since the spawned task owns no
+        // `&self`. Phase 40 D-16: the scope it settles under is the
+        // caller's `ledger_scope` (`execute_stream_scoped`, from the HTTP
+        // agent handler's principal), or the unattributed sentinel when
+        // the caller passed none (D-10).
         let stream_settlement = self
             .treasury_ledger
             .as_ref()
@@ -3568,7 +3603,13 @@ impl PaladinExecutionService {
                         error!("execution id {execution_id} did not parse as a RunId: {e}");
                     })
                     .ok()
-                    .map(|run_id| (ledger.clone(), run_id))
+                    .map(|run_id| {
+                        (
+                            ledger.clone(),
+                            ledger_scope.unwrap_or_else(LedgerScope::unattributed),
+                            run_id,
+                        )
+                    })
             });
 
         tokio::spawn(async move {
@@ -3611,18 +3652,11 @@ impl PaladinExecutionService {
                             // 1), naming `model_used` -- the only model
                             // identity a stream carries -- before the chunk
                             // is sent.
-                            if let (Some((ledger, run_id)), Some(cost)) =
+                            if let (Some((ledger, scope, run_id)), Some(cost)) =
                                 (stream_settlement.as_ref(), cost.as_ref())
                             {
-                                settle_agent_loop_call(
-                                    ledger,
-                                    &LedgerScope::unattributed(),
-                                    run_id,
-                                    1,
-                                    &model_used,
-                                    cost,
-                                )
-                                .await;
+                                settle_agent_loop_call(ledger, scope, run_id, 1, &model_used, cost)
+                                    .await;
                             }
                             let mut chunk_metadata = ChunkMetadata::new();
                             if let Some(usage) = usage.clone() {

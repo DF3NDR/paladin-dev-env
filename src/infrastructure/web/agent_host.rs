@@ -305,10 +305,16 @@ pub async fn build_agent_registry(settings: &Settings) -> Result<AgentRegistry, 
 /// `treasurer.pricing` table build, same per-agent construction via `build_agent` -- except
 /// every agent's [`PaladinExecutionService`] settles under
 /// [`AgentLoopSettlement::EveryCall`](crate::application::services::paladin::paladin_execution_service::AgentLoopSettlement::EveryCall)
-/// when `treasury_ledger` is `Some`. The ledger is observational in this phase (D-08,
-/// LEDGR-03): a settle failure never fails an agent's execution. Every priced call of every
-/// configured agent settles under its own execution id, with the [`LedgerScope::unattributed`](
-/// paladin_core::platform::container::treasury_ledger::LedgerScope::unattributed) scope (D-01).
+/// when `treasury_ledger` is `Some`. The ledger is observational (D-08, LEDGR-03): a settle
+/// failure never fails an agent's execution. Every priced call of every configured agent
+/// settles under its own execution id and, for a call made through the HTTP agent routes
+/// (`POST /v1/agents/{id}/execute`, its `/stream` variant and `/jobs`), under the calling
+/// principal's tenant and API key id -- the handlers pass `principal.ledger_scope()` through
+/// `PaladinExecutorPort::execute_scoped` / `StreamingExecutorPort::execute_stream_scoped`
+/// (Phase 40 D-16). The [`LedgerScope::unattributed`](
+/// paladin_core::platform::container::treasury_ledger::LedgerScope::unattributed) sentinel
+/// appears only for a caller that passes no scope at all (embedded library use of the
+/// plain `execute`/`execute_stream` methods, D-10).
 ///
 /// # Errors
 ///

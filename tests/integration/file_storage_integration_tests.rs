@@ -142,6 +142,15 @@ pub async fn run_all_file_storage_tests() -> Result<(), Box<dyn std::error::Erro
         ("file_operations", tests::test_file_operations_full_cycle()),
         ("batch_operations", tests::test_batch_operations()),
         ("presigned_urls", tests::test_presigned_urls()),
+        ("multipart_upload", tests::test_multipart_upload_lifecycle()),
+        (
+            "multipart_abort",
+            tests::test_multipart_abort_leaves_no_object(),
+        ),
+        (
+            "etag_opaque_token",
+            tests::test_etag_is_an_opaque_stable_token(),
+        ),
         ("storage_stats", tests::test_storage_statistics()),
         ("error_handling", tests::test_error_handling()),
         (
@@ -338,6 +347,7 @@ mod tests {
     #[ignore]
     pub async fn test_presigned_urls() -> Result<(), Box<dyn std::error::Error>> {
         let ctx = FileStorageTestContext::new().await?;
+        let http = reqwest::Client::new();
 
         let file_path = PathBuf::from("presigned/test.txt");
         let content = b"Test content for presigned URLs";
@@ -345,25 +355,155 @@ mod tests {
         // Upload file first
         ctx.adapter.upload_file(&file_path, content, None).await?;
 
-        // Test presigned download URL generation
+        // Presigned download URL: a real GET through it returns the exact bytes.
         let download_url = ctx
             .adapter
             .generate_download_url(&file_path, Duration::from_secs(3600), None)
             .await?;
 
-        assert!(download_url.contains(ctx.env.minio_endpoint.split(':').next().unwrap()));
-        println!("✅ Generated presigned download URL: {}", download_url);
+        // A presigned URL embeds the access key id and a live signature, so only the part
+        // before the query string is ever printed (the suite output lands in CI logs).
+        println!(
+            "✅ Generated presigned download URL for {}",
+            download_url.split('?').next().unwrap_or_default()
+        );
+        let response = http.get(&download_url).send().await?;
+        assert!(response.status().is_success());
+        assert_eq!(response.bytes().await?.as_ref(), content);
 
-        // Test presigned upload URL generation
+        // Presigned upload URL: a real PUT through it, then read the object back.
         let upload_path = PathBuf::from("presigned/upload.txt");
+        let upload_content = b"Uploaded through a presigned PUT".to_vec();
         let upload_url = ctx
             .adapter
             .generate_upload_url(&upload_path, Duration::from_secs(3600), None)
             .await?;
 
-        assert!(upload_url.contains(ctx.env.minio_endpoint.split(':').next().unwrap()));
-        println!("✅ Generated presigned upload URL: {}", upload_url);
+        println!(
+            "✅ Generated presigned upload URL for {}",
+            upload_url.split('?').next().unwrap_or_default()
+        );
+        let response = http
+            .put(&upload_url)
+            .body(upload_content.clone())
+            .send()
+            .await?;
+        assert!(response.status().is_success());
 
+        // Read it back through a presigned download URL for the same path.
+        let readback_url = ctx
+            .adapter
+            .generate_download_url(&upload_path, Duration::from_secs(3600), None)
+            .await?;
+        let response = http.get(&readback_url).send().await?;
+        assert!(response.status().is_success());
+        assert_eq!(response.bytes().await?.as_ref(), upload_content.as_slice());
+
+        ctx.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    pub async fn test_multipart_upload_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = FileStorageTestContext::new().await?;
+        let path = PathBuf::from("multipart/big.bin");
+
+        // The S3 and RustFS minimum for every non-final part is 5 MiB.
+        let part_one = vec![b'a'; 5 * 1024 * 1024];
+        let part_two = vec![b'b'; 1024];
+
+        let upload_id = ctx.adapter.create_multipart_upload(&path, None).await?;
+        let etag_one = ctx.adapter.upload_part(&upload_id, 1, &part_one).await?;
+        let etag_two = ctx.adapter.upload_part(&upload_id, 2, &part_two).await?;
+
+        let item = ctx
+            .adapter
+            .complete_multipart_upload(&upload_id, vec![(1, etag_one), (2, etag_two)])
+            .await?;
+        assert_eq!(item.size, (part_one.len() + part_two.len()) as u64);
+
+        // Compare, never print, the payload.
+        let mut expected = part_one;
+        expected.extend_from_slice(&part_two);
+        let downloaded = ctx.adapter.download_file(&path, None).await?;
+        assert_eq!(downloaded.len(), expected.len());
+        assert!(downloaded == expected, "downloaded bytes differ");
+
+        println!("✅ Multipart upload lifecycle test passed");
+        ctx.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    pub async fn test_multipart_abort_leaves_no_object() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = FileStorageTestContext::new().await?;
+        let path = PathBuf::from("multipart/aborted.bin");
+
+        let upload_id = ctx.adapter.create_multipart_upload(&path, None).await?;
+        ctx.adapter
+            .upload_part(&upload_id, 1, &vec![b'x'; 1024])
+            .await?;
+        ctx.adapter.abort_multipart_upload(&upload_id).await?;
+
+        assert!(!ctx.adapter.file_exists(&path).await?);
+
+        println!("✅ Multipart abort test passed");
+        ctx.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    pub async fn test_etag_is_an_opaque_stable_token() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = FileStorageTestContext::new().await?;
+        let path = PathBuf::from("etag/a.txt");
+
+        let overwrite = ctx.create_upload_options(Vec::new());
+        ctx.adapter
+            .upload_file(&path, b"first body", Some(overwrite.clone()))
+            .await?;
+
+        // The ETag is an opaque, quote-stripped change token, never compared with an MD5
+        // of the content (it is composite after a multipart upload).
+        let via_head = ctx
+            .adapter
+            .get_file_info(&path)
+            .await?
+            .md5_hash
+            .ok_or("get_file_info reported no ETag")?;
+        assert!(!via_head.is_empty());
+        assert!(!via_head.contains('"'));
+
+        let listing = ctx
+            .adapter
+            .list_files(Some(ListOptions {
+                prefix: Some("etag/".to_string()),
+                ..Default::default()
+            }))
+            .await?;
+        let via_list = listing
+            .files
+            .iter()
+            .find(|item| item.path == path)
+            .and_then(|item| item.md5_hash.clone())
+            .ok_or("list_files reported no ETag for the object")?;
+        assert_eq!(via_head, via_list);
+
+        // Re-uploading different bytes to the same path changes the token.
+        ctx.adapter
+            .upload_file(&path, b"second, different body", Some(overwrite))
+            .await?;
+        let after_overwrite = ctx
+            .adapter
+            .get_file_info(&path)
+            .await?
+            .md5_hash
+            .ok_or("get_file_info reported no ETag after overwrite")?;
+        assert_ne!(via_head, after_overwrite);
+
+        println!("✅ ETag opaque token test passed");
         ctx.cleanup().await?;
         Ok(())
     }

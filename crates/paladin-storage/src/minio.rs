@@ -5,7 +5,7 @@ use s3::BucketConfiguration;
 use s3::creds::Credentials;
 use s3::error::S3Error;
 use s3::region::Region;
-use s3::serde_types::Object;
+use s3::serde_types::{Object, Part};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,8 @@ use paladin_ports::output::file_storage_port::{
 };
 use paladin_ports::output::log_port::LogPort;
 
-/// Configuration for MinIO connection using rust-s3
+/// Configuration for an S3-compatible store connection using rust-s3 (RustFS in
+/// dev/test/CI; MinIO, AWS S3, DigitalOcean Spaces or any SigV4 S3 endpoint in production).
 #[doc(hidden)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MinioConfig {
@@ -58,7 +59,60 @@ impl Default for MinioConfig {
     }
 }
 
-/// MinIO adapter using rust-s3 crate
+/// Build the self-describing multipart upload token handed to callers.
+///
+/// The token is `<object key byte length>:<object key><S3 upload id>`. The
+/// `AdvancedFileStoragePort` multipart methods receive only the upload id, but the S3
+/// part, complete and abort calls also need the object key, so the key travels inside
+/// the id. That keeps the adapter stateless: nothing leaks and the token survives a
+/// restart or another replica. Callers must treat the token as opaque.
+fn encode_multipart_token(object_name: &str, s3_upload_id: &str) -> String {
+    format!("{}:{}{}", object_name.len(), object_name, s3_upload_id)
+}
+
+/// Split a multipart upload token into `(object key, S3 upload id)`.
+///
+/// Every malformed shape (no length prefix, a non-numeric length, a length past the
+/// end of the token, or a length that cuts a UTF-8 character) is
+/// [`FileStorageError::InvalidPath`]; this never panics and never touches the network.
+fn split_token(token: &str) -> FileStorageResult<(&str, &str)> {
+    let bad = || FileStorageError::InvalidPath("malformed multipart upload id".to_string());
+    let (len, rest) = token.split_once(':').ok_or_else(bad)?;
+    let n: usize = len.parse().map_err(|_| bad())?;
+    let key = rest.get(..n).ok_or_else(bad)?;
+    let upload_id = rest.get(n..).ok_or_else(bad)?;
+    Ok((key, upload_id))
+}
+
+/// Decode a multipart upload token and re-validate it before any request is made.
+///
+/// A caller can forge a token, so the decoded key goes through the same
+/// `validate_path` check `path_to_object_name` applies (no `..`, no leading `/`, not
+/// empty) and an empty S3 upload id is rejected. Returns `(object key, S3 upload id)`.
+fn decode_multipart_token(token: &str) -> FileStorageResult<(String, &str)> {
+    let (key, upload_id) = split_token(token)?;
+    if upload_id.is_empty() {
+        return Err(FileStorageError::InvalidPath(
+            "malformed multipart upload id".to_string(),
+        ));
+    }
+    <() as FileStorageUtils>::validate_path(Path::new(key))?;
+    Ok((key.to_string(), upload_id))
+}
+
+/// Extract the S3 `<Code>` value from an error body, bounded to 64 characters.
+///
+/// Only this short code is ever embedded in an error: a response body can carry
+/// arbitrary text, so the body itself is never propagated.
+fn s3_error_code(body: &str) -> String {
+    body.split_once("<Code>")
+        .and_then(|(_, rest)| rest.split_once("</Code>"))
+        .map(|(code, _)| code.chars().take(64).collect())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Adapter for an S3-compatible store using the rust-s3 crate (RustFS in dev/test/CI;
+/// MinIO, AWS S3, DigitalOcean Spaces or any SigV4 S3 endpoint in production).
 #[doc(hidden)]
 pub struct MinioAdapter {
     bucket: Box<Bucket>,
@@ -67,7 +121,7 @@ pub struct MinioAdapter {
 }
 
 impl MinioAdapter {
-    /// Create a new MinIO adapter using rust-s3
+    /// Create a new S3-compatible store adapter using rust-s3
     pub async fn new(
         config: MinioConfig,
         log_port: Option<Arc<dyn LogPort>>,
@@ -256,6 +310,8 @@ impl MinioAdapter {
 
         file_item.metadata = metadata;
 
+        // The store's quote-stripped ETag, used as an opaque change token. It is composite
+        // (`<md5>-<N>`) after a multipart upload, so it is not a verified digest of the content.
         if let Some(etag) = &object.e_tag {
             file_item.md5_hash = Some(etag.trim_matches('"').to_string());
         }
@@ -473,6 +529,8 @@ impl FileStoragePort for MinioAdapter {
         file_item.metadata = metadata;
         file_item.content_type = head_result.content_type.clone();
 
+        // The store's quote-stripped ETag, used as an opaque change token. It is composite
+        // (`<md5>-<N>`) after a multipart upload, so it is not a verified digest of the content.
         if let Some(etag) = &head_result.e_tag {
             file_item.md5_hash = Some(etag.trim_matches('"').to_string());
         }
@@ -535,12 +593,13 @@ impl FileStoragePort for MinioAdapter {
         let source_object = self.path_to_object_name(source_path)?;
         let dest_object = self.path_to_object_name(destination_path)?;
 
-        // S3 copy operation
-        let copy_source = format!("{}/{}", self.config.bucket, source_object);
-
-        self.execute_with_retry(|| self.bucket.copy_object_internal(&copy_source, &dest_object))
-            .await
-            .map_err(|e| FileStorageError::IoError(format!("Failed to copy file: {}", e)))?;
+        // rust-s3's `copy_object_internal` prepends `<bucket>/` itself, so pass the bare key.
+        self.execute_with_retry(|| {
+            self.bucket
+                .copy_object_internal(&source_object, &dest_object)
+        })
+        .await
+        .map_err(|e| FileStorageError::IoError(format!("Failed to copy file: {}", e)))?;
 
         let file_item = self.get_file_info(destination_path).await?;
 
@@ -890,6 +949,12 @@ impl AdvancedFileStoragePort for MinioAdapter {
         Ok(url)
     }
 
+    /// Start a multipart upload and return an opaque upload token.
+    ///
+    /// The returned id is `<key length>:<key><S3 upload id>`; callers must pass it back
+    /// unchanged to [`upload_part`](Self::upload_part),
+    /// [`complete_multipart_upload`](Self::complete_multipart_upload) or
+    /// [`abort_multipart_upload`](Self::abort_multipart_upload).
     async fn create_multipart_upload(
         &self,
         path: &Path,
@@ -905,36 +970,94 @@ impl AdvancedFileStoragePort for MinioAdapter {
                 FileStorageError::IoError(format!("Failed to initiate multipart upload: {}", e))
             })?;
 
-        Ok(response.upload_id)
+        Ok(encode_multipart_token(&object_name, &response.upload_id))
     }
 
+    /// Upload one part and return the part's ETag (raw, opaque to the port).
+    ///
+    /// Every non-final part must be at least 5 MiB on S3 and RustFS. `rust-s3` aborts
+    /// the whole upload itself when a part is rejected, so a later abort of that token
+    /// reports the upload as already gone.
     async fn upload_part(
         &self,
-        _upload_id: &str,
-        _part_number: u32,
-        _content: &[u8],
+        upload_id: &str,
+        part_number: u32,
+        content: &[u8],
     ) -> FileStorageResult<String> {
-        // Note: This would require implementing multipart upload with rust-s3
-        // The current version might not have direct support, so this is a placeholder
-        Err(FileStorageError::Unknown(
-            "Multipart upload not fully implemented with rust-s3".to_string(),
-        ))
+        let (key, id) = decode_multipart_token(upload_id)?;
+
+        let part = self
+            .bucket
+            .put_multipart_chunk(
+                content.to_vec(),
+                &key,
+                part_number,
+                id,
+                "application/octet-stream",
+            )
+            .await
+            .map_err(|e| FileStorageError::IoError(format!("Failed to upload part: {}", e)))?;
+
+        Ok(part.etag)
     }
 
+    /// Complete a multipart upload from its `(part number, ETag)` pairs.
+    ///
+    /// S3 can answer `200` with an `<Error>` body on completion, so both the status and
+    /// the body are checked; only the bounded S3 error code is reported, never the body.
+    /// `rust-s3` aborts the upload itself when a part fails, so completing after a
+    /// failed part reports the upload as gone.
     async fn complete_multipart_upload(
         &self,
-        _upload_id: &str,
-        _parts: Vec<(u32, String)>,
+        upload_id: &str,
+        parts: Vec<(u32, String)>,
     ) -> FileStorageResult<FileItem> {
-        Err(FileStorageError::Unknown(
-            "Multipart upload not fully implemented with rust-s3".to_string(),
-        ))
+        let (key, id) = decode_multipart_token(upload_id)?;
+
+        let parts = parts
+            .into_iter()
+            .map(|(part_number, etag)| Part { part_number, etag })
+            .collect();
+
+        let response = self
+            .bucket
+            .complete_multipart_upload(&key, id, parts)
+            .await
+            .map_err(|e| {
+                FileStorageError::IoError(format!("Failed to complete multipart upload: {}", e))
+            })?;
+
+        let body = response.as_str().unwrap_or_default();
+        if response.status_code() >= 300 || body.contains("<Error>") {
+            return Err(FileStorageError::IoError(format!(
+                "Failed to complete multipart upload: {}",
+                s3_error_code(body)
+            )));
+        }
+
+        self.get_file_info(Path::new(&key)).await
     }
 
-    async fn abort_multipart_upload(&self, _upload_id: &str) -> FileStorageResult<()> {
-        Err(FileStorageError::Unknown(
-            "Multipart upload not fully implemented with rust-s3".to_string(),
-        ))
+    /// Abort a multipart upload, discarding every uploaded part.
+    ///
+    /// A `404 NoSuchUpload` (already aborted or completed) is
+    /// [`FileStorageError::FileNotFound`]; `rust-s3` aborts an upload itself when a
+    /// part fails, so aborting after such a failure reports the same.
+    async fn abort_multipart_upload(&self, upload_id: &str) -> FileStorageResult<()> {
+        let (key, id) = decode_multipart_token(upload_id)?;
+
+        match self.bucket.abort_upload(&key, id).await {
+            Ok(()) => Ok(()),
+            Err(S3Error::HttpFailWithBody(404, body)) if body.contains("NoSuchUpload") => {
+                Err(FileStorageError::FileNotFound(
+                    "multipart upload not found or already finished".to_string(),
+                ))
+            }
+            Err(e) => Err(FileStorageError::IoError(format!(
+                "Failed to abort multipart upload: {}",
+                e
+            ))),
+        }
     }
 }
 
@@ -1186,6 +1309,50 @@ mod tests {
             ..Default::default()
         };
         assert!(!virtual_hosted_config.path_style);
+    }
+
+    #[test]
+    fn multipart_token_round_trips() {
+        let token = encode_multipart_token("uploads/a.bin", "ID-1");
+        assert_eq!(token, "13:uploads/a.binID-1");
+
+        let (key, id) = split_token(&token).expect("well-formed token splits");
+        assert_eq!(key, "uploads/a.bin");
+        assert_eq!(id, "ID-1");
+
+        let (key, id) = decode_multipart_token(&token).expect("well-formed token decodes");
+        assert_eq!(key, "uploads/a.bin");
+        assert_eq!(id, "ID-1");
+    }
+
+    #[test]
+    fn split_token_rejects_malformed_tokens() {
+        // no length prefix, non-numeric length, length past the end, and a slice that
+        // would cut a multi-byte character in half.
+        for bad in ["no-colon", "x:abc", "99:short", "1:\u{e9}rest"] {
+            assert!(
+                matches!(split_token(bad), Err(FileStorageError::InvalidPath(_))),
+                "expected InvalidPath for {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_multipart_token_rejects_a_traversal_key() {
+        let token = encode_multipart_token("../escape.bin", "ID-1");
+        assert!(matches!(
+            decode_multipart_token(&token),
+            Err(FileStorageError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn decode_multipart_token_rejects_an_empty_upload_id() {
+        let token = encode_multipart_token("uploads/a.bin", "");
+        assert!(matches!(
+            decode_multipart_token(&token),
+            Err(FileStorageError::InvalidPath(_))
+        ));
     }
 
     // Note: Tests requiring actual MinIO connection are in integration tests

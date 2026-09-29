@@ -224,8 +224,10 @@ jobs:
       # types as `-> Self` and turned this required check red on a
       # documentation-only commit. scripts/extract-public-api.sh reads this
       # variable and passes it to cargo as `+<toolchain>`; the install step
-      # below uses the same variable, so there is one literal to move. Move
-      # it together with a regenerated .project/current-exports.txt.
+      # below uses the same variable. The Makefile's PUBLIC_API_TOOLCHAIN
+      # default (`make api-surface` / `make api-surface-update`) carries the
+      # same literal so a local run renders the baseline the way CI does.
+      # Move both together with a regenerated .project/current-exports.txt.
       PUBLIC_API_TOOLCHAIN: nightly-2026-09-20
     steps:
       - name: Checkout code

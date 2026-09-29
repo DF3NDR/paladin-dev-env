@@ -263,6 +263,18 @@ merge. No library source change; no public API change.
 
 ### Fixed
 
+- **`make api-surface` drifted off CI's pinned nightly.** The `api-surface` and
+  `api-surface-update` Makefile targets called `scripts/extract-public-api.sh` without setting
+  `PUBLIC_API_TOOLCHAIN`, so a local run rendered the baseline with the floating `nightly`
+  while CI renders it with the dated `nightly-2026-09-20` pin. Once the local nightly moved past
+  2026-09-21 (rustdoc now prints derived return types as `-> Self`), `make api-surface` reported
+  hundreds of changed lines with no public item added, removed or changed — the exact drift the
+  pin exists to prevent, reintroduced through the Makefile. The Makefile now defaults
+  `PUBLIC_API_TOOLCHAIN` to the same dated nightly as `ci.yml` and passes it to both scripts;
+  `PUBLIC_API_TOOLCHAIN=nightly-YYYY-MM-DD make api-surface` still overrides it. The script
+  header and the CI job comment name the Makefile as the second holder of the literal, so the
+  next pin move updates both. No public item changed; the baseline is untouched.
+
 - **`paladin-battalion`'s publish-order defect (SHIP-06).** `crates/paladin-battalion/Cargo.toml`
   carried two *versioned* workspace `[dev-dependencies]` (`paladin-llm`, `paladin-storage`) that
   point forward in the publish order — `paladin-battalion` publishes before either of them, so

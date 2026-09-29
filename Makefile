@@ -7,6 +7,17 @@ DOCKER := docker
 DOCKER_COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
 PROJECT_NAME := paladin
 
+# Nightly used to render the public API baseline (.project/current-exports.txt).
+# Pinned, never floating: the baseline is rustdoc output and rustdoc's rendering
+# drifts between nightlies (2026-09-21: `-> Self` replaced fully qualified
+# return types, 606 lines red with no public item changed). CI pins the same
+# literal in the api-surface job of .github/workflows/ci.yml; without this
+# default, `make api-surface` ran scripts/extract-public-api.sh against the
+# floating local `nightly` and reported that drift as an API change. Move the
+# two literals together with a regenerated baseline (see the script header).
+# Override per invocation: PUBLIC_API_TOOLCHAIN=nightly-YYYY-MM-DD make api-surface
+PUBLIC_API_TOOLCHAIN ?= nightly-2026-09-20
+
 # Docker compose files
 COMPOSE_FILE := docker/docker-compose.yml
 COMPOSE_DEV_FILE := docker/docker-compose.dev.yml
@@ -385,13 +396,13 @@ openapi: ## Regenerate the committed OpenAPI baseline (crates/paladin-web/openap
 
 .PHONY: api-surface
 api-surface: ## Check the public API surface against the committed baseline
-	@echo "$(CYAN)Checking public API surface...$(NC)"
-	@./scripts/check-api-surface.sh .project/current-exports.txt
+	@echo "$(CYAN)Checking public API surface (toolchain: $(PUBLIC_API_TOOLCHAIN))...$(NC)"
+	@PUBLIC_API_TOOLCHAIN="$(PUBLIC_API_TOOLCHAIN)" ./scripts/check-api-surface.sh .project/current-exports.txt
 
 .PHONY: api-surface-update
 api-surface-update: ## Regenerate the committed public API baseline (.project/current-exports.txt)
-	@echo "$(CYAN)Regenerating public API baseline...$(NC)"
-	@./scripts/extract-public-api.sh .project/current-exports.txt
+	@echo "$(CYAN)Regenerating public API baseline (toolchain: $(PUBLIC_API_TOOLCHAIN))...$(NC)"
+	@PUBLIC_API_TOOLCHAIN="$(PUBLIC_API_TOOLCHAIN)" ./scripts/extract-public-api.sh .project/current-exports.txt
 	@echo "$(YELLOW)Remember to add a CHANGELOG.md entry describing the public surface change.$(NC)"
 
 .PHONY: bless-golden

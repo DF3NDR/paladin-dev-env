@@ -394,18 +394,42 @@ Every new route sits behind the same authentication middleware and the same rate
 |---|---|---|
 | **Invocation-shaped** | run submit/cancel/resume/fork | `authorize_invoke` against the target assistant's `allowed_roles` — any authenticated principal the assistant itself permits |
 | **Registry-shaped** | assistant create/publish-version/delete; schedule create/patch/delete; thread delete | `require_admin` — an admin-role credential |
-| **Reads** | every `GET` | authentication only |
+| **Reads** | every `GET` | authentication plus the tenant read scope below -- a principal reads only runs its tenant submitted, unless it is an admin |
 
-**What a `GET` can see today.** Every read route above needs authentication only — there is no
-per-resource ownership check. Any authenticated principal of any role can call `GET /runs` and
-`GET /runs/{run_id}` and see every run in the deployment, not just runs it submitted itself: the
-resolved assistant and thread ids, status, error text, and — via
-`GET /runs/{run_id}/webhook-deliveries` and the run's own `webhook` field — another caller's
-webhook target URL (the signing secret is always redacted, the URL is not). `run_id` values are
-time-ordered UUIDv7s, so walking `GET /runs` or guessing a nearby id is easier than for a random
-identifier. This is the intended model for a **single-tenant or mutually-trusted-principal
-deployment** — it is not a promise that one caller's runs are hidden from another. A
-finer-grained, per-tenant read scope is the tracked remediation, not yet built.
+**Which runs a caller can see (PLAT-07, Phase 40).** Every run records the principal that
+submitted it -- the tenant and the API key's configured name -- and the read routes serve only
+the runs the calling principal may see:
+
+- A **user-role** key sees only runs recorded under **its own tenant**. Two keys mapped to the
+  same tenant see each other's runs; a key of another tenant does not. A user-role key never
+  sees a run with no recorded principal.
+- An **admin-role** key (the deployment-operator role, the same one that gates the registry
+  routes) sees **every run**, including runs with no recorded principal -- schedule-fired runs,
+  runs submitted from the same process, and runs submitted before v0.11. When authentication is
+  disabled, the open-access principal is admin-role, so an open deployment keeps reading every
+  run.
+
+The tenant comes **only** from the key's configured mapping (`http.auth.api_keys[].tenant`, or
+`http.auth.bearer_token.tenant` for bearer principals). No header, query parameter or body
+field can name a tenant; a `tenant_id` query parameter on `GET /runs` is unknown and ignored.
+
+The scope applies the same way everywhere. `GET /runs` lists only visible runs -- the
+`thread_id`/`assistant_id`/`status` filters compose with the scope, so another tenant's
+`thread_id` yields an empty page, and the cursor walk stays gap-free because the filter runs
+inside the store's own query. `GET /runs/{run_id}`, `GET /runs/{run_id}/stream`,
+`GET /runs/{run_id}/webhook-deliveries` and `POST /runs/{run_id}/cancel` all answer the
+**same `404` as a run that does not exist** for a run the caller may not see -- never a `403`,
+never a different message -- so a foreign tenant cannot learn that a run exists or read its
+webhook target URL, and cancel is refused before any role check so it can never mutate another
+tenant's run. `RunResponse.submitted_by` shows the recording tenant and API key name
+(`{ "tenant_id", "api_key_id" }`, or `null` when no principal was recorded); it never carries the
+key value or the role. A client that used to read other principals' runs must use an
+admin-role key.
+
+`/v1/threads/*` reads are **not yet tenant-scoped**: threads carry no tenant, so
+`GET /threads`, `GET /threads/{id}/state` and `GET /threads/{id}/history` remain
+deployment-wide for any authenticated principal. That gap is tracked in the project's
+broken-windows ledger, not implied closed by the run scope above.
 
 ## Configuration
 

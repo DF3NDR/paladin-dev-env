@@ -35,31 +35,61 @@
 //! `RunSubmissionService`, which is the only layer that ever resolves
 //! `allowed_roles` -- `paladin-web` has no visibility into them,
 //! ADR-0031). Every read (`GET /runs`, `GET /runs/{run_id}`, `GET
-//! /runs/{run_id}/webhook-deliveries`) needs authentication only.
+//! /runs/{run_id}/stream`, `GET /runs/{run_id}/webhook-deliveries`) needs
+//! authentication and is tenant-scoped as described next; no read carries
+//! a role gate of its own.
 //!
-//! ## Read scope (WR-03) -- deployment-wide, not per-caller
+//! ## Read scope (PLAT-07) -- per tenant, with an operator bypass
 //!
-//! The three read routes above require only authentication:
-//! [`paladin_ports::output::run_repository_port::RunQuery`] carries no
-//! caller identity, and neither
-//! [`paladin_ports::output::run_repository_port::RunRepositoryPort::list`]/`get`
-//! nor
-//! [`paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort::list_for_run`]
-//! applies a requester-derived filter. **Any authenticated principal of any
-//! role can list and read every run in the deployment**, including the
-//! webhook target URL on `RunResponse::webhook` (secret redacted, URL
-//! not), the thread and assistant ids, and the error text of runs it did
-//! not submit. `run_id` is a time-ordered UUIDv7 (`RunId::new_v7`), so
-//! enumerating the id space by walking `GET /runs` -- or by guessing
-//! adjacent, time-clustered ids -- is materially easier than for a random
-//! identifier.
+//! Every run carries the principal that submitted it
+//! (`Run.submitted_by`: the tenant and the API key's configured name,
+//! recorded server-side from the key's configured mapping -- never from a
+//! header, query parameter or body field, D-02). The visibility rule is
+//! the tenant, with an Admin bypass (D-11):
 //!
-//! This is the intended model for v0.10: a **single-tenant or
-//! mutually-trusted-principal deployment**, not a multi-tenant one. A
-//! per-tenant read scope (filtering `RunQuery`/`get`/`list_for_run` by
-//! requester identity) is the remediation, and is tracked as an open item
-//! in the project's broken-windows ledger (`.planning/WINDOWS.md`, row 32)
-//! rather than left as an implicit assumption.
+//! - a **user-role principal** sees only runs whose recorded
+//!   `submitted_by.tenant_id` equals its own `tenant_id` -- never a run of
+//!   another tenant, and never a run with no recorded principal;
+//! - an **admin-role principal** -- including the open-access principal
+//!   attached when authentication is disabled -- sees every run, including
+//!   runs with no recorded principal (schedule-fired, same-process, or
+//!   submitted before v0.11, D-10).
+//!
+//! The rule is written once, as
+//! [`RunReadScope`](paladin_core::platform::container::principal::RunReadScope)
+//! in `paladin-core`, derived from the caller by
+//! [`Principal::read_scope`](crate::agent_auth::Principal::read_scope), and
+//! applied by exactly two mechanisms (D-12):
+//!
+//! 1. **List** -- `GET /runs` passes it as
+//!    [`RunQuery::scope`](paladin_ports::output::run_repository_port::RunQuery)
+//!    and each repository adapter applies it inside its own query, so the
+//!    page and cursor stay a correct keyset walk rather than a post-filtered
+//!    page. The `thread_id`/`assistant_id`/`status` filters compose with it
+//!    (AND): another tenant's thread simply yields an empty page (D-14).
+//! 2. **Single run** -- every `/runs/{run_id}*` route (`GET /runs/{run_id}`,
+//!    `GET /runs/{run_id}/stream` before the SSE upgrade, `POST
+//!    /runs/{run_id}/cancel` before `RunSubmissionPort::cancel` and its
+//!    `allowed_roles` check, `GET /runs/{run_id}/webhook-deliveries` before
+//!    `list_for_run`) enters through the private `load_visible_run` helper,
+//!    which fetches the run and checks `permits`. A run the caller may not
+//!    see answers the **same `404` as a missing run** -- no `403`, no
+//!    different code or message -- so a foreign tenant cannot learn that a
+//!    run exists (D-12, D-13). A route-enumerating test
+//!    (`every_run_id_route_hides_foreign_runs_behind_the_missing_run_404`)
+//!    reads the `/runs/{run_id}*` operations from this router's own OpenAPI
+//!    document and fails if any of them is not in its table, so a future
+//!    route cannot skip the gate unnoticed.
+//!
+//! `RunResponse::submitted_by` exposes the recorded tenant and API key name
+//! (never the key value, never the role; `null` when no principal was
+//! recorded, D-19).
+//!
+//! The thread routes (`/threads/{id}/state|history|resume|fork`, `DELETE
+//! /threads/{id}`) are **not** tenant-scoped -- threads carry no tenant --
+//! and remain deployment-wide; that gap is tracked separately in the
+//! project's broken-windows ledger (`.planning/WINDOWS.md`), not implied
+//! closed by the run scope described here.
 
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -77,7 +107,7 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::cost::Cost;
-use paladin_core::platform::container::principal::PrincipalRef;
+use paladin_core::platform::container::principal::{PrincipalRef, RunAttribution};
 use paladin_core::platform::container::run::{
     Run, RunCursor, RunEventKind, RunId, RunStatus, WebhookSpec,
 };
@@ -338,6 +368,30 @@ impl From<&Cost> for CostDto {
     }
 }
 
+/// Wire projection of a [`RunAttribution`] (D-19, TENANT-02): the principal recorded
+/// when the run was submitted.
+///
+/// `api_key_id` is the API key's configured name (the same string that appears in logs as
+/// the principal id) -- never the key value the caller authenticated with, and never the
+/// role: roles are config, not data, and are not persisted on the run row (D-08).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub struct RunAttributionDto {
+    /// The tenant the run is attributed to -- the tenant configured for the submitting
+    /// API key, never a value the caller supplied (D-02).
+    pub tenant_id: String,
+    /// The submitting API key's configured name (or a bearer principal's id).
+    pub api_key_id: String,
+}
+
+impl From<&RunAttribution> for RunAttributionDto {
+    fn from(attribution: &RunAttribution) -> Self {
+        Self {
+            tenant_id: attribution.tenant_id.as_str().to_string(),
+            api_key_id: attribution.api_key_id.clone(),
+        }
+    }
+}
+
 /// Response body for `GET /runs/{run_id}`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RunResponse {
@@ -373,6 +427,11 @@ pub struct RunResponse {
     /// persisted on the run row; a ledger read failure degrades this to `null`
     /// rather than failing the read (D-08).
     pub cost: Option<CostDto>,
+    /// The principal recorded when this run was submitted (D-19): the tenant and the API
+    /// key's configured name, never the key value or the role. `null` for a run with no
+    /// recorded principal -- schedule-fired, submitted from the same process, or
+    /// submitted before v0.11 (D-10). Always serialised, mirroring `cost`.
+    pub submitted_by: Option<RunAttributionDto>,
 }
 
 impl From<&Run> for RunResponse {
@@ -390,6 +449,7 @@ impl From<&Run> for RunResponse {
             webhook: run.webhook.as_ref().map(RunWebhookDto::from),
             pending_responses: run.pending_responses.len(),
             cost: None,
+            submitted_by: run.submitted_by.as_ref().map(RunAttributionDto::from),
         }
     }
 }
@@ -807,12 +867,15 @@ async fn load_visible_run(
 /// `GET /runs/{run_id}` -- the run's current status.
 ///
 /// Reads [`RunRepositoryPort`] directly (no submission port, no engine and
-/// no queue type named here -- ADR-0031, D-12).
+/// no queue type named here -- ADR-0031, D-12), through `load_visible_run`:
+/// a user-role principal sees only its own tenant's runs, an admin-role
+/// principal sees every run (D-11), and a run the caller may not see answers
+/// the same `404` as a missing run (D-12, PLAT-07).
 ///
 /// Returns:
 /// - `200 OK` with [`RunResponse`] on success;
 /// - `400 Bad Request` for a malformed run id;
-/// - `404 Not Found` if no run exists with that id;
+/// - `404 Not Found` for an unknown run, or a run the caller may not see;
 /// - `501 Not Implemented` if no run store is configured.
 #[utoipa::path(
     get,
@@ -820,10 +883,10 @@ async fn load_visible_run(
     tag = "runs",
     params(("run_id" = String, Path, description = "Run id")),
     responses(
-        (status = 200, description = "Run state", body = RunResponse),
+        (status = 200, description = "Run state. Tenant-scoped: a user-role principal can read only runs recorded under its own tenant; an admin-role principal can read every run. `submitted_by` is the recording tenant and API key name, or null for a run with no recorded principal.", body = RunResponse),
         (status = 400, description = "Invalid run id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
-        (status = 404, description = "Unknown run", body = ApiErrorBody),
+        (status = 404, description = "Unknown run, or a run the caller may not see", body = ApiErrorBody),
         (status = 501, description = "No run store backend configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
@@ -849,7 +912,14 @@ pub async fn get_run(
 }
 
 /// `GET /runs` -- paginated list, filterable by `thread_id`/`assistant_id`/
-/// `status` (D-47). Authenticated, any role.
+/// `status` (D-47). Authenticated, any role, and tenant-scoped (D-11,
+/// PLAT-07): a user-role principal lists only runs recorded under its own
+/// tenant, an admin-role principal lists every run including runs with no
+/// recorded principal. The scope is derived from the authenticated principal
+/// alone and applied inside the repository's own query as `RunQuery.scope`
+/// (D-12); a `tenant_id` query parameter is unknown and ignored (D-02). The
+/// filters compose with the scope (AND) -- another tenant's `thread_id`
+/// yields an empty page (D-14).
 ///
 /// Ordered `(submitted_at DESC, run_id DESC)`; a cursor walk gives a stable
 /// ordering for rows that already existed when the first page was fetched,
@@ -874,7 +944,7 @@ pub async fn get_run(
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: rows inserted after the first page was fetched may be omitted"),
     ),
     responses(
-        (status = 200, description = "A page of runs; { items: [], next_cursor: null } when empty", body = RunListResponse),
+        (status = 200, description = "A page of runs; { items: [], next_cursor: null } when empty. Tenant-scoped: a user-role principal sees only runs recorded under its own tenant, an admin-role principal sees every run. The scope comes from the authenticated principal only -- an unknown `tenant_id` query parameter is ignored.", body = RunListResponse),
         (status = 400, description = "Invalid limit, cursor, thread_id, or status", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 501, description = "No run store backend configured", body = ApiErrorBody),
@@ -935,19 +1005,24 @@ pub async fn list_runs(
 /// `POST /runs/{run_id}/cancel` -- idempotently request cancellation
 /// (D-16, D-46).
 ///
-/// Invocation-shaped: any authenticated principal, subject to the run's
-/// own assistant `allowed_roles`, checked inside
-/// [`RunSubmissionPort::cancel`] (`paladin-web` has no visibility into
-/// `allowed_roles` itself, ADR-0031).
+/// Visibility first (Phase 40 D-13, PLAT-07): the run is loaded through
+/// `load_visible_run`, so a run of another tenant answers the missing-run
+/// `404` before any role check -- cancel neither leaks the run's existence
+/// nor permits a cross-tenant mutation, and [`RunSubmissionPort::cancel`] is
+/// never reached for it. Then invocation-shaped: any authenticated principal
+/// that may see the run, subject to the run's own assistant `allowed_roles`,
+/// checked inside [`RunSubmissionPort::cancel`] (`paladin-web` has no
+/// visibility into `allowed_roles` itself, ADR-0031).
 ///
 /// Returns:
 /// - `202 Accepted` with [`CancelRunResponse`] on a non-terminal run
 ///   (idempotent -- a second call also answers `202`);
 /// - `400 Bad Request` for a malformed run id;
 /// - `403 Forbidden` if the principal's role is not permitted;
-/// - `404 Not Found` for an unknown run;
+/// - `404 Not Found` for an unknown run, or a run the caller may not see;
 /// - `409 Conflict` if the run is already terminal;
-/// - `501 Not Implemented` if no run submission backend is configured.
+/// - `501 Not Implemented` if no run submission backend, or no run store,
+///   is configured.
 #[utoipa::path(
     post,
     path = "/runs/{run_id}/cancel",
@@ -958,9 +1033,9 @@ pub async fn list_runs(
         (status = 400, description = "Invalid run id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Role not permitted for this run's assistant", body = ApiErrorBody),
-        (status = 404, description = "Unknown run", body = ApiErrorBody),
+        (status = 404, description = "Unknown run, or a run the caller may not see -- answered before any role check", body = ApiErrorBody),
         (status = 409, description = "The run is already terminal", body = ApiErrorBody),
-        (status = 501, description = "No run submission backend configured", body = ApiErrorBody),
+        (status = 501, description = "No run submission backend configured, or no run store configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
@@ -1000,12 +1075,18 @@ pub async fn cancel_run(
 }
 
 /// `GET /runs/{run_id}/webhook-deliveries` -- paginated delivery attempts,
-/// newest-first (D-40, PLAT-FR-14). Authenticated, any role.
+/// newest-first (D-40, PLAT-FR-14). Authenticated, any role, and
+/// tenant-scoped (Phase 40 D-13, PLAT-07): the run is loaded through
+/// `load_visible_run` before `list_for_run` is asked for anything, so
+/// another tenant's webhook target URLs and delivery diagnostics are behind
+/// the same missing-run `404` as a run that does not exist.
 ///
 /// Returns:
 /// - `200 OK` with [`WebhookDeliveryListResponse`] on success;
 /// - `400 Bad Request` for an invalid run id, `limit`, or `cursor`;
-/// - `501 Not Implemented` if no webhook delivery backend is configured.
+/// - `404 Not Found` for an unknown run, or a run the caller may not see;
+/// - `501 Not Implemented` if no webhook delivery backend, or no run store,
+///   is configured.
 #[utoipa::path(
     get,
     path = "/runs/{run_id}/webhook-deliveries",
@@ -1019,7 +1100,8 @@ pub async fn cancel_run(
         (status = 200, description = "A page of delivery attempts, newest-first; { items: [], next_cursor: null } when empty", body = WebhookDeliveryListResponse),
         (status = 400, description = "Invalid run id, limit, or cursor", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
-        (status = 501, description = "No webhook delivery backend configured", body = ApiErrorBody),
+        (status = 404, description = "Unknown run, or a run the caller may not see", body = ApiErrorBody),
+        (status = 501, description = "No webhook delivery backend configured, or no run store configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
@@ -1084,12 +1166,17 @@ fn frame_run_events(
 /// `GET /runs/{run_id}/stream` -- Server-Sent Events stream of a run's
 /// progress (PLAT-FR-07, D-24..D-27).
 ///
+/// Tenant-scoped (Phase 40 D-13, PLAT-07): the run is loaded through
+/// `load_visible_run` before any SSE upgrade, so another tenant's run
+/// answers the missing-run `404` and the stream port is never asked for it.
+///
 /// Returns:
 /// - `200 OK` `text/event-stream` on success, framing the seven wire events
 ///   this module's own docs table lists;
 /// - `400 Bad Request` for a malformed run id;
-/// - `404 Not Found` if no run exists with that id;
-/// - `501 Not Implemented` if no run event stream backend is configured.
+/// - `404 Not Found` for an unknown run, or a run the caller may not see;
+/// - `501 Not Implemented` if no run event stream backend, or no run store,
+///   is configured.
 #[utoipa::path(
     get,
     path = "/runs/{run_id}/stream",
@@ -1110,8 +1197,8 @@ fn frame_run_events(
             content_type = "text/event-stream"),
         (status = 400, description = "Invalid run id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
-        (status = 404, description = "Unknown run", body = ApiErrorBody),
-        (status = 501, description = "No run event stream backend configured", body = ApiErrorBody),
+        (status = 404, description = "Unknown run, or a run the caller may not see", body = ApiErrorBody),
+        (status = 501, description = "No run event stream backend configured, or no run store configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]

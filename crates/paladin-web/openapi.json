@@ -1288,7 +1288,7 @@
         "tags": [
           "runs"
         ],
-        "summary": "`GET /runs` -- paginated list, filterable by `thread_id`/`assistant_id`/\n`status` (D-47). Authenticated, any role.",
+        "summary": "`GET /runs` -- paginated list, filterable by `thread_id`/`assistant_id`/\n`status` (D-47). Authenticated, any role, and tenant-scoped (D-11,\nPLAT-07): a user-role principal lists only runs recorded under its own\ntenant, an admin-role principal lists every run including runs with no\nrecorded principal. The scope is derived from the authenticated principal\nalone and applied inside the repository's own query as `RunQuery.scope`\n(D-12); a `tenant_id` query parameter is unknown and ignored (D-02). The\nfilters compose with the scope (AND) -- another tenant's `thread_id`\nyields an empty page (D-14).",
         "description": "Ordered `(submitted_at DESC, run_id DESC)`; a cursor walk gives a stable\nordering for rows that already existed when the first page was fetched,\nbut is NOT a point-in-time snapshot -- a row inserted after the first\npage was read may be omitted from the walk (D-47 backstop). An empty\nresult set is `200 { items: [], next_cursor: null }`, never `404`.\n\nReturns:\n- `200 OK` with [`RunListResponse`] on success;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, an unparseable\n  `cursor`, an invalid `thread_id`, or an unknown `status`;\n- `501 Not Implemented` if no run store backend is configured.",
         "operationId": "list_runs",
         "parameters": [
@@ -1342,7 +1342,7 @@
         ],
         "responses": {
           "200": {
-            "description": "A page of runs; { items: [], next_cursor: null } when empty",
+            "description": "A page of runs; { items: [], next_cursor: null } when empty. Tenant-scoped: a user-role principal sees only runs recorded under its own tenant, an admin-role principal sees every run. The scope comes from the authenticated principal only -- an unknown `tenant_id` query parameter is ignored.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1496,7 +1496,7 @@
           "runs"
         ],
         "summary": "`GET /runs/{run_id}` -- the run's current status.",
-        "description": "Reads [`RunRepositoryPort`] directly (no submission port, no engine and\nno queue type named here -- ADR-0031, D-12).\n\nReturns:\n- `200 OK` with [`RunResponse`] on success;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` if no run exists with that id;\n- `501 Not Implemented` if no run store is configured.",
+        "description": "Reads [`RunRepositoryPort`] directly (no submission port, no engine and\nno queue type named here -- ADR-0031, D-12), through `load_visible_run`:\na user-role principal sees only its own tenant's runs, an admin-role\nprincipal sees every run (D-11), and a run the caller may not see answers\nthe same `404` as a missing run (D-12, PLAT-07).\n\nReturns:\n- `200 OK` with [`RunResponse`] on success;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` for an unknown run, or a run the caller may not see;\n- `501 Not Implemented` if no run store is configured.",
         "operationId": "get_run",
         "parameters": [
           {
@@ -1511,7 +1511,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Run state",
+            "description": "Run state. Tenant-scoped: a user-role principal can read only runs recorded under its own tenant; an admin-role principal can read every run. `submitted_by` is the recording tenant and API key name, or null for a run with no recorded principal.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1541,7 +1541,7 @@
             }
           },
           "404": {
-            "description": "Unknown run",
+            "description": "Unknown run, or a run the caller may not see",
             "content": {
               "application/json": {
                 "schema": {
@@ -1577,7 +1577,7 @@
           "runs"
         ],
         "summary": "`POST /runs/{run_id}/cancel` -- idempotently request cancellation\n(D-16, D-46).",
-        "description": "Invocation-shaped: any authenticated principal, subject to the run's\nown assistant `allowed_roles`, checked inside\n[`RunSubmissionPort::cancel`] (`paladin-web` has no visibility into\n`allowed_roles` itself, ADR-0031).\n\nReturns:\n- `202 Accepted` with [`CancelRunResponse`] on a non-terminal run\n  (idempotent -- a second call also answers `202`);\n- `400 Bad Request` for a malformed run id;\n- `403 Forbidden` if the principal's role is not permitted;\n- `404 Not Found` for an unknown run;\n- `409 Conflict` if the run is already terminal;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "description": "Visibility first (Phase 40 D-13, PLAT-07): the run is loaded through\n`load_visible_run`, so a run of another tenant answers the missing-run\n`404` before any role check -- cancel neither leaks the run's existence\nnor permits a cross-tenant mutation, and [`RunSubmissionPort::cancel`] is\nnever reached for it. Then invocation-shaped: any authenticated principal\nthat may see the run, subject to the run's own assistant `allowed_roles`,\nchecked inside [`RunSubmissionPort::cancel`] (`paladin-web` has no\nvisibility into `allowed_roles` itself, ADR-0031).\n\nReturns:\n- `202 Accepted` with [`CancelRunResponse`] on a non-terminal run\n  (idempotent -- a second call also answers `202`);\n- `400 Bad Request` for a malformed run id;\n- `403 Forbidden` if the principal's role is not permitted;\n- `404 Not Found` for an unknown run, or a run the caller may not see;\n- `409 Conflict` if the run is already terminal;\n- `501 Not Implemented` if no run submission backend, or no run store,\n  is configured.",
         "operationId": "cancel_run",
         "parameters": [
           {
@@ -1632,7 +1632,7 @@
             }
           },
           "404": {
-            "description": "Unknown run",
+            "description": "Unknown run, or a run the caller may not see -- answered before any role check",
             "content": {
               "application/json": {
                 "schema": {
@@ -1652,7 +1652,7 @@
             }
           },
           "501": {
-            "description": "No run submission backend configured",
+            "description": "No run submission backend configured, or no run store configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -1678,7 +1678,7 @@
           "runs"
         ],
         "summary": "`GET /runs/{run_id}/stream` -- Server-Sent Events stream of a run's\nprogress (PLAT-FR-07, D-24..D-27).",
-        "description": "Returns:\n- `200 OK` `text/event-stream` on success, framing the seven wire events\n  this module's own docs table lists;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` if no run exists with that id;\n- `501 Not Implemented` if no run event stream backend is configured.",
+        "description": "Tenant-scoped (Phase 40 D-13, PLAT-07): the run is loaded through\n`load_visible_run` before any SSE upgrade, so another tenant's run\nanswers the missing-run `404` and the stream port is never asked for it.\n\nReturns:\n- `200 OK` `text/event-stream` on success, framing the seven wire events\n  this module's own docs table lists;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` for an unknown run, or a run the caller may not see;\n- `501 Not Implemented` if no run event stream backend, or no run store,\n  is configured.",
         "operationId": "stream_run",
         "parameters": [
           {
@@ -1719,7 +1719,7 @@
             }
           },
           "404": {
-            "description": "Unknown run",
+            "description": "Unknown run, or a run the caller may not see",
             "content": {
               "application/json": {
                 "schema": {
@@ -1729,7 +1729,7 @@
             }
           },
           "501": {
-            "description": "No run event stream backend configured",
+            "description": "No run event stream backend configured, or no run store configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -1754,8 +1754,8 @@
         "tags": [
           "runs"
         ],
-        "summary": "`GET /runs/{run_id}/webhook-deliveries` -- paginated delivery attempts,\nnewest-first (D-40, PLAT-FR-14). Authenticated, any role.",
-        "description": "Returns:\n- `200 OK` with [`WebhookDeliveryListResponse`] on success;\n- `400 Bad Request` for an invalid run id, `limit`, or `cursor`;\n- `501 Not Implemented` if no webhook delivery backend is configured.",
+        "summary": "`GET /runs/{run_id}/webhook-deliveries` -- paginated delivery attempts,\nnewest-first (D-40, PLAT-FR-14). Authenticated, any role, and\ntenant-scoped (Phase 40 D-13, PLAT-07): the run is loaded through\n`load_visible_run` before `list_for_run` is asked for anything, so\nanother tenant's webhook target URLs and delivery diagnostics are behind\nthe same missing-run `404` as a run that does not exist.",
+        "description": "Returns:\n- `200 OK` with [`WebhookDeliveryListResponse`] on success;\n- `400 Bad Request` for an invalid run id, `limit`, or `cursor`;\n- `404 Not Found` for an unknown run, or a run the caller may not see;\n- `501 Not Implemented` if no webhook delivery backend, or no run store,\n  is configured.",
         "operationId": "list_webhook_deliveries",
         "parameters": [
           {
@@ -1819,8 +1819,18 @@
               }
             }
           },
+          "404": {
+            "description": "Unknown run, or a run the caller may not see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "501": {
-            "description": "No webhook delivery backend configured",
+            "description": "No webhook delivery backend configured, or no run store configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -3748,6 +3758,24 @@
           }
         }
       },
+      "RunAttributionDto": {
+        "type": "object",
+        "description": "Wire projection of a [`RunAttribution`] (D-19, TENANT-02): the principal recorded\nwhen the run was submitted.\n\n`api_key_id` is the API key's configured name (the same string that appears in logs as\nthe principal id) -- never the key value the caller authenticated with, and never the\nrole: roles are config, not data, and are not persisted on the run row (D-08).",
+        "required": [
+          "tenant_id",
+          "api_key_id"
+        ],
+        "properties": {
+          "api_key_id": {
+            "type": "string",
+            "description": "The submitting API key's configured name (or a bearer principal's id)."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the run is attributed to -- the tenant configured for the submitting\nAPI key, never a value the caller supplied (D-02)."
+          }
+        }
+      },
       "RunListResponse": {
         "type": "object",
         "description": "Response body for `GET /runs`.",
@@ -3839,6 +3867,17 @@
             "type": "string",
             "format": "date-time",
             "description": "When this run was submitted."
+          },
+          "submitted_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunAttributionDto",
+                "description": "The principal recorded when this run was submitted (D-19): the tenant and the API\nkey's configured name, never the key value or the role. `null` for a run with no\nrecorded principal -- schedule-fired, submitted from the same process, or\nsubmitted before v0.11 (D-10). Always serialised, mirroring `cost`."
+              }
+            ]
           },
           "thread_id": {
             "type": "string",

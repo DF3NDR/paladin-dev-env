@@ -71,8 +71,16 @@ the plans that follow in this same phase):
 | 0051 | `token-economy-versioning-x03-supersession` | Token-economy Phases 31-33 land as clean breaks inside the untagged v0.10.0, superseding corpus rule X-03 for those three phases only, on the operator's 2026-09-14 decision (Phase 30, plan 30-02) |
 | 0052 | `mid-run-treasurer-enforcement` | Mid-run Treasurer enforcement attachment point across `WarEngine` and `PaladinExecutionService` — metering at the `LlmPort` pricing decorator on both paths, halt at the engine superstep boundary and the agent-loop `TokenBudget` cutoff (D-13, Phase 38, plan 38-01) |
 | 0053 | `ledger-balance-model` | Treasury ledger balance model — append-only, derive-on-read; reserve/settle/release row kinds; `i64` nano-unit amounts with ISO 4217 currency; settlement idempotency key `(run_id, superstep, attempt)` with superstep-aggregate settlement granularity, D-15 kept unamended (D-14/D-15, Phase 38, plan 38-01) |
+| 0054 | `tenant-scoped-run-reads` | Tenant identity is server-derived (no header, query or body field can assert it) and every API key or bearer deployment maps to exactly one tenant with no implicit default; run reads are tenant-scoped through one shared `RunReadScope` rule applied by `RunQuery.scope` in every adapter and by `load_visible_run` on every `/runs/{run_id}*` route, with an operator (Admin) bypass and a hidden run answering the missing-run `404`, never `403` (D-02/D-05/D-11/D-12/D-13, Phase 40, plan 40-06) |
 
-**Next free ADR number: 0054**
+**Next free ADR number: 0055**
+
+*Dated note, 2026-09-29 (plan 40-06, ADR-0054):* the line advances by **one**, from 0054 to 0055,
+because Phase 40 plan 40-06 authored ADR-0054 (tenant identity is server-derived; run reads are
+tenant-scoped with an operator (Admin) bypass, D-02/D-05/D-11 and the `404`-not-`403` rule) after
+plans 40-01 through 40-05 landed the model it records. `ls .planning/decisions/0054-*.md` (re-run
+before writing this note) confirms the file exists with the expected number, not skipped or reused,
+and no existing index row above was renumbered, reworded or reordered.
 
 *Dated note, 2026-09-25 (plan 38-01, ADR-0053):* the line advances by **one**, from 0053 to 0054,
 because Phase 38 plan 38-01 authored ADR-0053 (the treasury ledger balance model, D-14/D-15) after

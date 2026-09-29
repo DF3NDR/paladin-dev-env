@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 2
-waived_count: 34
+open_count: 3
+waived_count: 35
 fixed_count: 21
-total_count: 57
-last_updated: 2026-09-29T00:00:16.256Z
+total_count: 59
+last_updated: 2026-09-29T11:49:59.952Z
 ---
 
 # Broken Windows Ledger
@@ -71,7 +71,9 @@ last_updated: 2026-09-29T00:00:16.256Z
 | 54 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 232 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 232 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:54.731Z | 2026-09-18T05:30:54.994Z |
 | 55 | 35 | unmet-truth | docs/src/appendix/battalion-patterns-guide.md | 354 | One of four battalion-patterns-guide.md example bodies Phase 35 plan 35-09 flagged as carrying pre-existing API-shape drift (D-07 fallback): the body at line 354 fails the D-00e throwaway scratch-compile probe (examples/_scratch.rs + cargo check --example _scratch --features llm-openai) even after the OpenAIAdapter casing fix -- missing Arc/OpenAIAdapter imports, an un-awaited async .build(), and further per-body Campaign/Phalanx/ChainOfCommand builder API drift. Probed, not rewritten, per D-07 scope. Recorded in .planning/phases/36.1-deferred-items-closure/36.1-evidence/36.1-04-scratch-probe.txt. | waived | appendix sample fenced `rust,ignore`, does not compile against the shipped API (see 36.1-04 probe); Owner: v0.11.0 docs-currency pass. Re-check: that milestone's discuss step. | 2026-09-18T05:30:55.190Z | 2026-09-18T05:30:55.444Z |
 | 56 | 38 | lint-warning | crates/paladin-core/src/platform/container/cost.rs |  | Pre-existing rustdoc broken_intra_doc_links (Cost/CurrencyCode/PriceRow unresolved in module doc comment); introduced by plan 38-02, out of scope for 38-04, logged to phase deferred-items.md | open |  | 2026-09-26T02:43:14.297Z |  |
-| 57 | 40 | deviation | docs/src/deployment-topologies/http-service-host.md |  | 40-03: plan Task 2 negated grep '^\\s*api_keys\\s*:' over src/application/cli is a false positive on a Rust parameter (env.rs:22); intent verified by refined grep, not fixed | open |  | 2026-09-29T00:00:16.256Z |  |
+| 57 | 40 | deviation | docs/src/deployment-topologies/http-service-host.md |  | 40-03: plan Task 2 negated grep '^\\s*api_keys\\s*:' over src/application/cli is a false positive on a Rust parameter (env.rs:22); intent verified by refined grep, not fixed | waived | Plan-text issue, not a code defect: 40-03's negated acceptance grep '^\\s*api_keys\\s*:' over src/application/cli matched a Rust parameter 'api_keys: &HashMap<K, String>' in src/application/cli/templates/env.rs; the intent (the onboarding template emits no tenantless api_keys YAML key) was verified by a refined grep in 40-03 and the template needed no change. Waived in 40-06 as directed by the phase orchestrator. | 2026-09-29T00:00:16.256Z | 2026-09-29T11:49:59.820Z |
+| 58 | 40 | deviation | crates/paladin-web/src/thread_controller.rs |  | (Phase 40 D-14 deferral, T-40-23) The /v1/threads routes -- GET /threads (lists every thread), GET /threads/{id}, GET /threads/{id}/state, GET /threads/{id}/history, POST /threads/{id}/resume, POST /threads/{id}/fork, DELETE /threads/{id} -- are not tenant-scoped because threads carry no tenant, so an authenticated principal can enumerate another tenant's threads and read their Waypoint state and history although that tenant's /runs routes answer 404. Closing condition: record a tenant on the thread (or derive it from the thread's runs) and route every /threads/{id}* handler through one shared visibility gate like run_controller::load_visible_run. Owner: Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11 hygiene phase. | open |  | 2026-09-29T11:49:59.678Z |  |
+| 59 | 40 | deviation | .project/current-exports.txt |  | (40-06 Task 2) The plan's acceptance grep for RunReadScope/TenantId in .project/current-exports.txt cannot pass by the tool's design: cargo-public-api lists a re-exported foreign-crate module as one 'pub use paladin::core::platform::container::principal' line (exactly as the existing cost and treasury_ledger lines), never its items. The refreshed baseline does carry every facade-visible Phase 40 item (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, BearerTokenAuthConfig.tenant, AuthConfig::validate, the principal re-export, cancel's Option<principal::PrincipalRef>) and make api-surface exits 0. Plan-text issue, not a code defect; left open for the operator to waive. | open |  | 2026-09-29T11:49:59.952Z |  |
 
 ````json
 [
@@ -754,9 +756,33 @@ last_updated: 2026-09-29T00:00:16.256Z
     "file": "docs/src/deployment-topologies/http-service-host.md",
     "line": null,
     "description": "40-03: plan Task 2 negated grep '^\\s*api_keys\\s*:' over src/application/cli is a false positive on a Rust parameter (env.rs:22); intent verified by refined grep, not fixed",
+    "status": "waived",
+    "reason": "Plan-text issue, not a code defect: 40-03's negated acceptance grep '^\\s*api_keys\\s*:' over src/application/cli matched a Rust parameter 'api_keys: &HashMap<K, String>' in src/application/cli/templates/env.rs; the intent (the onboarding template emits no tenantless api_keys YAML key) was verified by a refined grep in 40-03 and the template needed no change. Waived in 40-06 as directed by the phase orchestrator.",
+    "recorded_at": "2026-09-29T00:00:16.256Z",
+    "resolved_at": "2026-09-29T11:49:59.820Z"
+  },
+  {
+    "id": 58,
+    "kind": "deviation",
+    "phase": "40",
+    "file": "crates/paladin-web/src/thread_controller.rs",
+    "line": null,
+    "description": "(Phase 40 D-14 deferral, T-40-23) The /v1/threads routes -- GET /threads (lists every thread), GET /threads/{id}, GET /threads/{id}/state, GET /threads/{id}/history, POST /threads/{id}/resume, POST /threads/{id}/fork, DELETE /threads/{id} -- are not tenant-scoped because threads carry no tenant, so an authenticated principal can enumerate another tenant's threads and read their Waypoint state and history although that tenant's /runs routes answer 404. Closing condition: record a tenant on the thread (or derive it from the thread's runs) and route every /threads/{id}* handler through one shared visibility gate like run_controller::load_visible_run. Owner: Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11 hygiene phase.",
     "status": "open",
     "reason": "",
-    "recorded_at": "2026-09-29T00:00:16.256Z",
+    "recorded_at": "2026-09-29T11:49:59.678Z",
+    "resolved_at": null
+  },
+  {
+    "id": 59,
+    "kind": "deviation",
+    "phase": "40",
+    "file": ".project/current-exports.txt",
+    "line": null,
+    "description": "(40-06 Task 2) The plan's acceptance grep for RunReadScope/TenantId in .project/current-exports.txt cannot pass by the tool's design: cargo-public-api lists a re-exported foreign-crate module as one 'pub use paladin::core::platform::container::principal' line (exactly as the existing cost and treasury_ledger lines), never its items. The refreshed baseline does carry every facade-visible Phase 40 item (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, BearerTokenAuthConfig.tenant, AuthConfig::validate, the principal re-export, cancel's Option<principal::PrincipalRef>) and make api-surface exits 0. Plan-text issue, not a code defect; left open for the operator to waive.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-09-29T11:49:59.952Z",
     "resolved_at": null
   }
 ]

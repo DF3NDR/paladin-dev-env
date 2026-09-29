@@ -23,6 +23,10 @@ and this project follows lockstep workspace versioning.
   `runs.tenant_id`/`runs.api_key_id` columns plus the non-unique `idx_runs_tenant_submitted` index;
   `RUN_SCHEMA_VERSION` is unchanged and a pre-existing row reads back with no attribution
   (TENANT-02).
+- `009_add_run_attribution_check` migration (`migrations/postgres` only): `CHECK ((tenant_id IS NULL)
+  = (api_key_id IS NULL))` on `runs`, so the schema itself refuses a half-attributed row. SQLite
+  has no counterpart (`ALTER TABLE ... ADD COLUMN` cannot add a cross-column CHECK) and relies on
+  the read-time guard in `row_to_run` alone (phase 40 review WR-03).
 - The in-memory, SQLite and PostgreSQL run repositories persist and read `Run.submitted_by`, reject
   a half-attributed row, and apply `RunQuery.scope` inside `list` (`WHERE tenant_id = ?`) so a
   tenant-scoped page and its cursor stay a correct keyset walk; the shared run contract suite gains

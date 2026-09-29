@@ -1286,6 +1286,46 @@ mod tests {
         );
     }
 
+    /// Migration 009 (phase 40 review WR-03): the schema itself refuses a
+    /// half-attributed row, so a corrupt row can never exist for `row_to_run`
+    /// to reject at read time. SQLite has no counterpart (it cannot add a
+    /// cross-column CHECK via `ALTER TABLE ADD COLUMN`) and relies on the
+    /// read-time guard alone.
+    #[tokio::test]
+    async fn migration_009_rejects_a_half_attributed_row() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        let thread = ThreadId::new(format!("thread-attr-check-{}", uuid::Uuid::new_v4())).unwrap();
+        let run = contract_tests::sample_run(
+            &thread,
+            "attr-check-assistant",
+            contract_tests::contract_timestamp(),
+        );
+        store.insert(&run).await.unwrap();
+
+        for half in [
+            "UPDATE runs SET tenant_id = 'acme' WHERE run_id = $1",
+            "UPDATE runs SET api_key_id = 'svc-a' WHERE run_id = $1",
+        ] {
+            let result = sqlx::query(half)
+                .bind(run.run_id.as_str())
+                .execute(&store.pool)
+                .await;
+            assert!(
+                result.is_err(),
+                "a half-attributed row must violate runs_attribution_all_or_none: {half}"
+            );
+        }
+
+        // Both set (fully attributed) is allowed.
+        sqlx::query("UPDATE runs SET tenant_id = 'acme', api_key_id = 'svc-a' WHERE run_id = $1")
+            .bind(run.run_id.as_str())
+            .execute(&store.pool)
+            .await
+            .expect("a fully attributed row satisfies the constraint");
+    }
+
     //
     // Deliberate, single exception to the "no extra, non-contract
     // `#[tokio::test]`s in this module" rule below: this clause pins the

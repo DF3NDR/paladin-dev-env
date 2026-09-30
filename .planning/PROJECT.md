@@ -170,6 +170,28 @@ managed endpoint or MinIO through the same adapter); the RustFS todo is closed. 
 `passed`; UAT 5/5; `45-SECURITY.md` verified (31/31 threats closed, 4 accepted dev/test-credential
 risks). Next: `/gsd-verify-work 40` (its blocked UAT item was this CI run), then Phase 41.
 
+**Phase 40 complete (2026-09-30)** — tenant-identity-run-read-scoping, the third v0.11.0 phase
+(TENANT-01, TENANT-02, PLAT-07; 6 plans in 4 waves; code sealed at `be3a9030` on 2026-09-29,
+verified and sealed 2026-09-30 after Phase 45 delivered the CI run its UAT was blocked on). In the
+tree: every `http.auth.api_keys` entry carries a required `tenant` and `bearer_token.tenant` is
+required whenever bearer auth is enabled — `AuthConfig::validate` fails closed at boot on a missing
+tenant, an empty or duplicate key value, and never prints a key value; `authenticate()` is the only
+place a tenant is derived (D-02), so no header, body or query field can assert one. `Principal`
+carries `tenant_id` (registered break, MIGRATION.md §9.2 + semver allowlist), every `Run` records
+`submitted_by` (`tenant_id`, `api_key_id`) through SQLite `008` / Postgres attribution columns on a
+single INSERT, immutable under every later UPDATE, and `LedgerScope::from_attribution` replaces the
+`unattributed()` sentinel on both the worker and agent-execute settlement paths. `GET /v1/runs`
+scopes inside the keyset SQL on all three adapters (`RunQuery.scope`), and `GET /runs/{id}`,
+`/stream`, `/cancel` and `/webhook-deliveries` all pass through the one `load_visible_run` gate
+(owner or Admin 200, foreign tenant the identical missing-run 404); a route matrix built from the
+router's own OpenAPI document fails on any future `/runs/{run_id}*` route that skips it. Code
+review WR-01..WR-04 fixed (`ensure_thread_visible` on `POST /runs {thread_id}` and fork, `permits`
+inside `RunSubmissionService::cancel`, generic 500 body, attribution CHECK migration `009`).
+ADR-0054 records the decision; `/v1/threads/*` remain deployment-wide by D-14 (WINDOWS.md row 58,
+owner Phase 41 or a v0.11 hygiene phase). Evidence: UAT 5/5 (test 4 on ci.yml run 36770517439 —
+Postgres contract suites, coverage floor, `e2e_platform_api` all green); `40-SECURITY.md` verified
+26/26 threats closed (3 accepted, 1 transferred); verification `passed`. Next: `/gsd-plan-phase 41`.
+
 **Phase 39 complete (2026-09-28)** — spend-ledger, the second phase of milestone v0.11.0
 "Treasurer Spend Governance" (LEDGR-01..04; 8 plans in 5 waves, run sequentially on the main
 checkout). In the tree: the `TreasuryLedgerPort` (`reserve`/`settle`/`release`/`spend`/
@@ -1038,8 +1060,10 @@ while the code ships):
 - [ ] Rate pacing on 429 / `Retry-After`, Redis-shared pacing, and a stampede lock (FUT-09)
 - [ ] Legacy Battalion error/retry/timeout surfaces and `PaladinError::LlmError` removed (X-03 supersession)
 - [x] RustFS replaces the terminal MinIO pin (FUT-10) — Phase 45, ADR-0055 (STORE-01..03)
-- [ ] `GET /runs*` per-caller scoping (Phase 40, ADR-0054 — awaiting its verify-work);
-      `Runnable::Agent` SSE/webhook emission — ✓ Phase 45 (PLAT-08); SSE `done` → `Cancelled` (Phase 42)
+- [ ] `GET /runs*` per-caller scoping — ✓ Phase 40 (TENANT-01, TENANT-02, PLAT-07; ADR-0054;
+      verified 2026-09-30, UAT 5/5, security 26/26 closed; `/v1/threads/*` scoping deferred as
+      WINDOWS.md row 58, D-14); `Runnable::Agent` SSE/webhook emission — ✓ Phase 45 (PLAT-08);
+      SSE `done` → `Cancelled` (Phase 42)
 - [ ] Tracing overhead toward the ≤ 3 % bar — re-measured in Phase 45 at +19.36 % / +16.19 %
       (OBS-05, Verdict AMEND, row 61 waived by maintainer acceptance); the bar itself is not met
 - [ ] Docs currency and Treasurer docs; Nyquist hygiene; v2 debt lines; v0.11.0 crates.io release
@@ -1904,6 +1928,16 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-09-30 after **Phase 40: Tenant Identity & Run-Read Scoping** verified and
+sealed (out of sequence, after Phase 45): every API key maps to a tenant and `Principal` carries
+`tenant_id` (TENANT-01); every run records its submitting principal and the ledger scope derives
+from that attribution (TENANT-02); `GET /runs` and every `/runs/{id}*` read route go through the
+single `load_visible_run` gate with a 404 for foreign runs and an Admin bypass (PLAT-07, ADR-0054);
+the `Principal` break is registered in MIGRATION.md §9.2 and the semver allowlist. UAT 5/5 — test 4
+(CI-only evidence) unblocked by Phase 45's RustFS swap, ci.yml run 478 green; 40-SECURITY.md 26/26
+closed; code-review WR-01..WR-04 fixed. Thread-route scoping stays deferred as WINDOWS.md row 58
+(owner Phase 41 or a v0.11 hygiene phase). Next: `/gsd-plan-phase 41`.*
+
 *Last updated: 2026-09-30 after **Phase 45: RustFS Swap & Platform/Observability Deviations**
 completed — resequenced ahead of Phases 41-44: `rustfs/rustfs:1.0.0` in every live configuration
 with the `FileStoragePort` contract suite green in CI (STORE-01..03, ADR-0055), legacy

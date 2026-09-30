@@ -5,10 +5,10 @@ milestone_name: Crate Release
 current_phase: 41
 current_phase_name: Admission-Time Allowance Enforcement
 status: planning
-stopped_at: Phase 45 complete (UAT 5/5, 45-SECURITY.md verified 31/31, verification passed, row 61 waived); next /gsd-verify-work 40 then plan Phase 41
-last_updated: "2026-09-30T20:02:30.700Z"
+stopped_at: Phase 40 complete — UAT 5/5 (test 4 unblocked by Phase 45's CI run 478), `40-SECURITY.md` verified (26 threats closed, 0 open), `40-VERIFICATION.md` passed; Phases 38, 39, 40 and 45 sealed; ready to plan Phase 41
+last_updated: "2026-09-30T22:19:23.239Z"
 last_activity: 2026-09-30
-last_activity_desc: Phase 45 complete (UAT 5/5, security verified, verification passed); next in the resequenced order is Phase 41 after Phase 40's verify
+last_activity_desc: Phase 40 verified and sealed (UAT 5/5, security 26/26, verification passed); Phase 45 was already sealed, so the next phase in the resequenced order is Phase 41
 progress:
   total_phases: 4
   completed_phases: 4
@@ -20,15 +20,15 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-30 after Phase 45)
+See: .planning/PROJECT.md (updated 2026-09-30 after Phase 40)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
 **Current focus:** Phase 41 — Admission-Time Allowance Enforcement (first of the Phases 41-44 that
 Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 10 phases (38-47), 35/35
-requirements mapped; Phases 38, 39 and 45 sealed, Phase 40 executed and awaiting `/gsd-verify-work 40`
-(its UAT test 4 was blocked on the CI run that Phase 45 delivered). Source of truth:
+requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-30 once Phase 45's
+RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
 **Progress:** [████████████████████] 30/30 plans (100%) of the phases planned so far (38, 39, 40, 45);
@@ -52,14 +52,14 @@ under `milestones/`.
 
 Phase: 41 — Admission-Time Allowance Enforcement
 Plan: Not started
-Status: Ready to plan (Phase 40 verify-work is the standing prerequisite follow-up)
-Last activity: 2026-09-30 — Phase 45 complete: UAT 5/5, 45-SECURITY.md verified (31/31), verification passed
+Status: Ready to plan (no `41-CONTEXT.md` yet — discuss first, or plan directly)
+Last activity: 2026-09-30 — Phase 40 complete: UAT 5/5, 40-SECURITY.md verified (26/26), verification passed
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 439
+- Total plans completed: 445
 - Average duration: —
 - Total execution time: —
 
@@ -108,6 +108,7 @@ Last activity: 2026-09-30 — Phase 45 complete: UAT 5/5, 45-SECURITY.md verifie
 | 38 | 9 | - | - |
 | 39 | 8 | - | - |
 | 45 | 7 | - | - |
+| 40 | 6 | - | - |
 
 *Updated after each plan completion*
 
@@ -355,6 +356,14 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
   rebinding is a documented limitation (`src/application/services/run/webhook/ssrf.rs` module docs,
   `security.instructions.md`).
 
+- **`/v1/threads/*` routes are not tenant-scoped** (Phase 40 D-14 deferral, T-40-23 transferred,
+  WINDOWS.md row 58 open) — threads carry no tenant, so an authenticated principal can list any
+  thread and read its Waypoint state/history although that tenant's `/runs` routes answer 404; the
+  run-side mutation path (`POST /runs {thread_id}`, fork) is closed by WR-01's
+  `ensure_thread_visible`. Closing condition: record a tenant on the thread and route every
+  `/threads/{id}*` handler through one shared gate like `load_visible_run`. Owner: Phase 41 planning
+  if allowance enforcement needs thread ownership, else a v0.11 hygiene phase.
+
 - ~~**Terminal MinIO pin**~~ — **resolved by Phase 45 (2026-09-30):** every live configuration
   runs `rustfs/rustfs:1.0.0` (manifest-list digest recorded), `mc` is gone, the 11-case
   `FileStoragePort` contract suite is green in CI run 36751442387 and the k8s smoke pod is Ready
@@ -525,8 +534,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-30T20:05:00Z
-**Stopped at:** Phase 45 complete — UAT 5/5 passed, `45-SECURITY.md` verified (31 threats closed, 0 open), `45-VERIFICATION.md` passed, WINDOWS.md row 61 waived; ready to verify Phase 40 and then plan Phase 41
+**Last session:** 2026-09-30T22:25:00Z
+**Stopped at:** Phase 40 complete — UAT 5/5 (test 4 passed on ci.yml run 478 after the Phase 45 RustFS swap lifted the MinIO-pull blocker), `40-SECURITY.md` verified (26 threats closed, 0 open), `40-VERIFICATION.md` passed; ready to plan Phase 41
 **Resume file:** None
 
 ## Operator Next Steps
@@ -539,10 +548,18 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
   pushed on `claude/laughing-dirac-e0h2ax`; open a PR to `main` when convenient — that PR is also
   where `docs.yml` (Build MDBook) first runs for the retitled storage page.
 
-- **Next:** `/clear` then `/gsd-verify-work 40` — Phase 40's UAT test 4 was blocked on a green CI run
-  and Phase 45 D-02 named this follow-up; once it passes, Phase 40 is marked complete. Then
-  `/gsd-discuss-phase 41` (no `41-CONTEXT.md` yet) or `/gsd-plan-phase 41` — Phases 41-44 run before
-  46 and 47 (Phase 45 D-01 resequencing).
+- **Phase 40 (Tenant Identity & Run-Read Scoping) is sealed 2026-09-30:** `40-VERIFICATION.md`
+  passed, `40-UAT.md` complete (5/5 — WR-01 scope decision, backstop truth, judgment-tier
+  prohibitions and the credential-handling review, CI-only evidence on ci.yml run 36770517439 with
+  the Postgres contract suites, coverage floor and `e2e_platform_api` green, WR-02..04 disposition),
+  `40-SECURITY.md` verified (26 threats closed: 22 mitigated, 3 accepted, T-40-23 transferred to
+  WINDOWS.md row 58). ROADMAP row 40 reads 6/6 Complete. `/v1/threads/*` scoping stays open as
+  row 58 (owner Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11
+  hygiene phase).
+
+- **Next:** `/clear` then `/gsd-discuss-phase 41` (no `41-CONTEXT.md` yet) or `/gsd-plan-phase 41` —
+  Phases 41-44 run before 46 and 47 (Phase 45 D-01 resequencing). Phase 41 planning should decide
+  WINDOWS.md row 58's ownership.
 
 - **Phase 39 (Spend Ledger) sealed 2026-09-28** (verification passed, UAT 49/49, VALIDATION and
   SECURITY verified); **Phase 38 sealed 2026-09-26.**

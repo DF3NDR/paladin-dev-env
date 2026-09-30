@@ -234,7 +234,7 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 - [ ] **Phase 42: Mid-Run Halt & SSE Terminal Status** - A resumable, checkpoint-preserving halt when an in-flight run's next draw would overspend, on both the engine and agent-loop paths, plus the SSE `done`/`Cancelled` fix
 - [ ] **Phase 43: Rate Pacing** - In-process and Redis-shared 429 back-off with jitter, a distributed cache-stampede lock, and safe degradation when Redis is unavailable
 - [ ] **Phase 44: Legacy Clean-Break Removal** - Remove legacy Battalion `RetryPolicy`/`ErrorStrategy`/`NodeError`/timeouts and `PaladinError::LlmError(String)`, migrating the last string-matching retry check to the typed taxonomy
-- [ ] **Phase 45: RustFS Swap & Platform/Observability Deviations** - Replace MinIO with RustFS across dev/test and CI, wire SSE/webhook emission for legacy `Runnable::Agent` runs, and close the tracing-overhead gap
+- [x] **Phase 45: RustFS Swap & Platform/Observability Deviations** - Replace MinIO with RustFS across dev/test and CI, wire SSE/webhook emission for legacy `Runnable::Agent` runs, and close the tracing-overhead gap (completed 2026-09-30)
 - [ ] **Phase 46: Docs Currency & Hygiene** - Close the v0.10.0 audit's docs fixes, publish the Treasurer mdBook page and migration guide, reconcile Nyquist validation, and dispose of the three v2 debt lines
 - [ ] **Phase 47: v0.11.0 Crate Release** - Tag and publish v0.11.0: all 12 crates on crates.io, CHANGELOG and MIGRATION complete, publish-order gate green
 
@@ -619,7 +619,7 @@ feature work)
 | 42. Mid-Run Halt & SSE Terminal Status | v0.11.0 | 0/TBD | Not started | - |
 | 43. Rate Pacing | v0.11.0 | 0/TBD | Not started | - |
 | 44. Legacy Clean-Break Removal | v0.11.0 | 0/TBD | Not started | - |
-| 45. RustFS Swap & Platform/Observability Deviations | v0.11.0 | 0/TBD | Not started | - |
+| 45. RustFS Swap & Platform/Observability Deviations | v0.11.0 | 7/7 | Complete    | 2026-09-30 |
 | 46. Docs Currency & Hygiene | v0.11.0 | 0/TBD | Not started | - |
 | 47. v0.11.0 Crate Release | v0.11.0 | 0/TBD | Not started | - |
 

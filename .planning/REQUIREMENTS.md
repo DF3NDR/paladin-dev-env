@@ -119,7 +119,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
   Integration Tests and Kubernetes Smoke Test CI jobs run against RustFS pinned to an exact tag,
   with bucket bootstrap replacing `mc`; no MinIO image remains in any live configuration
 
-- [ ] **STORE-02**: The `FileStoragePort` contract suite (including presigned URLs, multipart
+- [x] **STORE-02**: The `FileStoragePort` contract suite (including presigned URLs, multipart
   uploads and ETags) passes against RustFS; the existing S3 adapter is reused, and a new adapter
   behind a feature flag is added only if that suite fails
 
@@ -233,7 +233,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LEGACY-03 | Phase 44 | Pending |
 | LEGACY-04 | Phase 44 | Pending |
 | STORE-01 | Phase 45 | Complete |
-| STORE-02 | Phase 45 | Pending |
+| STORE-02 | Phase 45 | Complete |
 | STORE-03 | Phase 45 | Complete |
 | PLAT-07 | Phase 40 | Complete |
 | PLAT-08 | Phase 45 | Complete |

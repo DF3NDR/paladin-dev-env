@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 45
-current_phase_name: RustFS Swap & Platform/Observability Deviations
-status: verifying
-stopped_at: Phase 45 executed (7/7 plans); verification human_needed — 45-UAT.md has 5 items (CI run id, actionlint, mdbook, OBS-05 acceptance of row 61, follow-ups)
-last_updated: "2026-09-30T17:06:59.520Z"
-last_activity: 2026-09-29
-last_activity_desc: Phase 45 execution started
+current_phase: 41
+current_phase_name: Admission-Time Allowance Enforcement
+status: planning
+stopped_at: Phase 45 complete (UAT 5/5, 45-SECURITY.md verified 31/31, verification passed, row 61 waived); next /gsd-verify-work 40 then plan Phase 41
+last_updated: "2026-09-30T20:02:30.700Z"
+last_activity: 2026-09-30
+last_activity_desc: Phase 45 complete (UAT 5/5, security verified, verification passed); next in the resequenced order is Phase 41 after Phase 40's verify
 progress:
   total_phases: 4
   completed_phases: 4
@@ -20,18 +20,19 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-24 at the start of milestone v0.11.0)
+See: .planning/PROJECT.md (updated 2026-09-30 after Phase 45)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 45 — RustFS Swap & Platform/Observability Deviations
-(`/gsd-new-project` roadmapper), 10 phases (38-47), 35/35 requirements mapped. Source of truth:
+**Current focus:** Phase 41 — Admission-Time Allowance Enforcement (first of the Phases 41-44 that
+Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 10 phases (38-47), 35/35
+requirements mapped; Phases 38, 39 and 45 sealed, Phase 40 executed and awaiting `/gsd-verify-work 40`
+(its UAT test 4 was blocked on the CI run that Phase 45 delivered). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
-Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [██████████] 100%
-requirements mapped, 100% coverage); no phase planned yet.
+**Progress:** [████████████████████] 30/30 plans (100%) of the phases planned so far (38, 39, 40, 45);
+Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -49,16 +50,16 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 45 (RustFS Swap & Platform/Observability Deviations) — EXECUTING
-Plan: 7 of 7
-Status: Phase complete — ready for verification
-Last activity: 2026-09-29 — Phase 45 execution started
+Phase: 41 — Admission-Time Allowance Enforcement
+Plan: Not started
+Status: Ready to plan (Phase 40 verify-work is the standing prerequisite follow-up)
+Last activity: 2026-09-30 — Phase 45 complete: UAT 5/5, 45-SECURITY.md verified (31/31), verification passed
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 432
+- Total plans completed: 439
 - Average duration: —
 - Total execution time: —
 
@@ -106,6 +107,7 @@ Last activity: 2026-09-29 — Phase 45 execution started
 | 37.1 | 16 | - | - |
 | 38 | 9 | - | - |
 | 39 | 8 | - | - |
+| 45 | 7 | - | - |
 
 *Updated after each plan completion*
 
@@ -240,11 +242,15 @@ Phases 22-37.1 is recorded in its own `NN-CONTEXT.md` (and the SUMMARY decision 
   `workspace.package.rust-version` and enforced by the `msrv` CI job (Phase 22.1; `MIGRATION.md`
   §9.3).
 
-- **Accepted deviations, to revisit** — tracing overhead +22.18 % (log sink) / +18.46 % (composite)
-  against PRD 07's ≤ 3 % bar (Phase 28 D-16/D-37, `WINDOWS.md` row 35); run-inspection routes
-  authenticated but single-tenant (Phase 27 WR-03, row 32); legacy `Runnable::Agent` runs emit no
-  SSE/webhook events (WR-02, row 31); SSE `done` reports `halted` for a caller-cancelled run whose
-  persisted status is `Cancelled` (Phase 27 D-14).
+- **Accepted deviations, to revisit** — tracing overhead re-measured in Phase 45 at +19.36 % (log
+  sink) / +16.19 % (composite) against PRD 07's ≤ 3 % bar after the D-17 fixes (was +22.18 % /
+  +18.46 %, Phase 28 D-16/D-37); the maintainer accepted the new figure at Phase 45 UAT test 4 and
+  `WINDOWS.md` row 61 (amending row 35) is waived with that acceptance text; the remaining cost is
+  in the dispatcher/sink path, not serialisation (`45-BENCH-EVIDENCE.md`). Closed in this milestone:
+  run-inspection routes are tenant-scoped (Phase 40, ADR-0054, row 32) and legacy `Runnable::Agent`
+  runs now emit SSE/webhook events (Phase 45 PLAT-08, row 31 → fixed row 60). Still open: SSE `done`
+  reports `halted` for a caller-cancelled run whose persisted status is `Cancelled` (Phase 27 D-14;
+  Phase 42).
 
 - **Release mechanics** — tags are cut on `main` merge commits per the Phase 29 two-SHA rule; the
   `.project/v0.10.0/09-program-acceptance-audit.md` sign-off boxes are ticked by a human, never an
@@ -316,16 +322,17 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 
 ### Pending Todos
 
-Both acknowledged as deferred at the v0.10.0 close (see *Deferred Items*); neither is resolved.
+One of the two todos acknowledged as deferred at the v0.10.0 close (see *Deferred Items*) remains:
 
 - `todos/pending/2026-08-13-verify-local-coverage-reproduction.md` — user-owned; walk the
-  documented `make services-up` → `make coverage` procedure on a Docker-capable machine and confirm
-  it reproduces the CI figure (now 90.44 %, not the 82.39 % the todo quotes). `recheck_by:
-  2026-10-16`.
+  documented `make services-up` → `make coverage` procedure on a Docker-capable machine (now
+  against the RustFS dev stack) and confirm it reproduces the CI figure (now 90.44 %, not the
+  82.39 % the todo quotes). `recheck_by: 2026-10-16`. Re-acknowledged as a follow-up at Phase 45
+  UAT test 5.
 
-- `todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md` — evaluate RustFS as the
-  dev/test object store (FUT-10); the quay.io MinIO pin from quick task 260913-15w is terminal.
-  `recheck_by: 2026-10-16`.
+- ~~`todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md`~~ — **closed by Phase 45**
+  (plan 45-06, ADR-0055): RustFS `1.0.0` is the dev/test and reference object store everywhere the
+  MinIO pin was; moved to `todos/completed/`.
 
 ### Blockers/Concerns
 
@@ -340,15 +347,18 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
   82 % floor (ADR-0006) is read from the CI `coverage` job (90.44 % at PR #56). The local
   reproduction walkthrough is the pending user-owned todo above.
 
-- **Tracing overhead** accepted at 6-7× the PRD bar (D-16); `TraceDispatcher::emit` /
-  `LogTraceSink` serialisation is the named optimisation target.
+- **Tracing overhead** now accepted at +19.36 % / +16.19 % (Phase 45 re-measure, row 61 waived);
+  serialisation is no longer the target — the target-off rows still cost +16-19 %, so any further
+  optimisation is in the dispatcher/sink path, or the I/O-bound re-scope Phase 45 D-19 deferred.
 
 - **Webhook SSRF guard does not pin the resolved address** between check and connect — DNS
   rebinding is a documented limitation (`src/application/services/run/webhook/ssrf.rs` module docs,
   `security.instructions.md`).
 
-- **Terminal MinIO pin** — no newer community `minio/minio` or `mc` tag will ever exist; the
-  dev/test stack and the Kubernetes smoke test depend on a frozen third-party image (FUT-10 todo).
+- ~~**Terminal MinIO pin**~~ — **resolved by Phase 45 (2026-09-30):** every live configuration
+  runs `rustfs/rustfs:1.0.0` (manifest-list digest recorded), `mc` is gone, the 11-case
+  `FileStoragePort` contract suite is green in CI run 36751442387 and the k8s smoke pod is Ready
+  (ADR-0055). The image is still a single third-party pin; bump it deliberately.
 
 - **`cargo-semver-checks` 0.50.0 coverage gap** for inherent-method return-type and tool-coverage
   classes — covered by `MIGRATION.md` §9.2 rows instead (Phases 32/33).
@@ -515,18 +525,27 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-30T17:06:58.151Z
-**Stopped at:** Phase 45 executed (7/7 plans); verification human_needed — 45-UAT.md has 5 items (CI run id, actionlint, mdbook, OBS-05 acceptance of row 61, follow-ups)
-**Resume file:** .planning/phases/45-rustfs-swap-platform-observability-deviations/45-UAT.md
+**Last session:** 2026-09-30T20:05:00Z
+**Stopped at:** Phase 45 complete — UAT 5/5 passed, `45-SECURITY.md` verified (31 threats closed, 0 open), `45-VERIFICATION.md` passed, WINDOWS.md row 61 waived; ready to verify Phase 40 and then plan Phase 41
+**Resume file:** None
 
 ## Operator Next Steps
 
-- **Phase 39 (Spend Ledger) is sealed 2026-09-28:** `39-VERIFICATION.md` passed, `39-UAT.md` complete (49/49,
-  3 human checkpoints), `39-VALIDATION.md` validated (Nyquist-compliant), `39-SECURITY.md` verified
-  (21 threats closed, 0 open). All artifacts pushed on `claude/laughing-dirac-e0h2ax`; open a PR to `main`
-  (`.planning/`-only) when convenient.
+- **Phase 45 (RustFS Swap & Platform/Observability Deviations) is sealed 2026-09-30:**
+  `45-VERIFICATION.md` passed, `45-UAT.md` complete (5/5: CI run 36751442387 green with the 11-case
+  contract suite and the k8s RustFS pod Ready, actionlint green, docs page confirmed, OBS-05 figure
+  accepted with WINDOWS.md row 61 waived, follow-ups acknowledged), `45-SECURITY.md` verified (31
+  threats closed, 0 open), ROADMAP/REQUIREMENTS ticked (STORE-01..03, PLAT-08, OBS-05). All artifacts
+  pushed on `claude/laughing-dirac-e0h2ax`; open a PR to `main` when convenient — that PR is also
+  where `docs.yml` (Build MDBook) first runs for the retitled storage page.
 
-- **Next:** `/clear` then `/gsd-discuss-phase 40` (no `40-CONTEXT.md` yet), or `/gsd-plan-phase 40` to plan directly.
+- **Next:** `/clear` then `/gsd-verify-work 40` — Phase 40's UAT test 4 was blocked on a green CI run
+  and Phase 45 D-02 named this follow-up; once it passes, Phase 40 is marked complete. Then
+  `/gsd-discuss-phase 41` (no `41-CONTEXT.md` yet) or `/gsd-plan-phase 41` — Phases 41-44 run before
+  46 and 47 (Phase 45 D-01 resequencing).
+
+- **Phase 39 (Spend Ledger) sealed 2026-09-28** (verification passed, UAT 49/49, VALIDATION and
+  SECURITY verified); **Phase 38 sealed 2026-09-26.**
 
 - **Still manual:** operator UAT of a real multi-model engine run (`paladin-cli treasury spend --group-by model`
   against a priced `treasurer:` table) — optional, not required for compliance.

@@ -145,6 +145,31 @@ Phase 37 plans; 2 open artifacts acknowledged — both already deferred by Phase
 entry points with `# Examples` doctests, `WINDOWS.md` `open_count: 0`, MSRV 1.88 measured. Full
 record: `MILESTONES.md`. **Next: `/gsd-new-milestone`** — new phases start at Phase 38.
 
+**Phase 45 complete (2026-09-30)** — rustfs-swap-platform-observability-deviations, resequenced
+ahead of Phases 41-44 (D-01) because every later phase's Coverage / Integration / Docker
+Integration / Kubernetes Smoke evidence was red on the terminal MinIO pin (STORE-01..03, PLAT-08,
+OBS-05; 7 plans in 4 waves). In the tree: every live configuration — CI service containers, the
+dev and test compose stacks, the devcontainer, the contract suite's `GenericImage` local mode and
+`k8s/rustfs.yaml` (renamed from `k8s/minio.yaml`; single-node `emptyDir`, console off, non-root
+uid 10001) — runs `rustfs/rustfs:1.0.0` with its manifest-list digest recorded, `mc` and the
+anonymous-read bucket policy are deleted, and the existing `rust-s3` adapter is reused unchanged
+in name (`MinioAdapter`/`APP_MINIO_*`) after the 11-case `FileStoragePort` contract suite
+(presigned URLs, stateless-token multipart, ETags) went green against RustFS; CI asserts the
+compiled-in and passed counts (≥ 11) so the suite can never silently skip. Legacy
+`Runnable::Agent` runs now stream live SSE and enqueue signed webhooks through the same
+`webhook_delivery_for_outcome` / SSRF-guarded path as graph runs, with exactly one terminal event
+(failure text stays on the tenant-scoped `GET /runs/{id}`); `WINDOWS.md` row 31 is closed (fixed
+row 60). `LogTraceSink` skips serialisation for a filtered `paladin::trace` target and reuses a
+bounded per-thread buffer, `CompositeSink` runs its last child in place; the three-point
+benchmark re-measure on the maintainer's machine read +19.36 % (log sink) / +16.19 % (composite)
+against PRD 07's ≤ 3 % bar — Verdict AMEND, accepted by the maintainer at UAT test 4, row 61
+waived, the I/O-bound re-scope deferred (D-19). ADR-0055 records the store decision; the storage
+page is reframed as S3-compatible with a RustFS quick start and a production section (AWS S3,
+managed endpoint or MinIO through the same adapter); the RustFS todo is closed. Evidence: CI run
+36751442387 (34 jobs green, pod `Ready`, "11 passed"), `45-BENCH-EVIDENCE.md`. Verification
+`passed`; UAT 5/5; `45-SECURITY.md` verified (31/31 threats closed, 4 accepted dev/test-credential
+risks). Next: `/gsd-verify-work 40` (its blocked UAT item was this CI run), then Phase 41.
+
 **Phase 39 complete (2026-09-28)** — spend-ledger, the second phase of milestone v0.11.0
 "Treasurer Spend Governance" (LEDGR-01..04; 8 plans in 5 waves, run sequentially on the main
 checkout). In the tree: the `TreasuryLedgerPort` (`reserve`/`settle`/`release`/`spend`/
@@ -1012,9 +1037,11 @@ while the code ships):
 - [ ] Durable spend ledger (port + in-memory / SQLite / Postgres) surfaced in heralds, CLI, traces
 - [ ] Rate pacing on 429 / `Retry-After`, Redis-shared pacing, and a stampede lock (FUT-09)
 - [ ] Legacy Battalion error/retry/timeout surfaces and `PaladinError::LlmError` removed (X-03 supersession)
-- [ ] RustFS replaces the terminal MinIO pin (FUT-10)
-- [ ] `GET /runs*` per-caller scoping; `Runnable::Agent` SSE/webhook emission; SSE `done` → `Cancelled`
-- [ ] Tracing overhead toward the ≤ 3 % bar
+- [x] RustFS replaces the terminal MinIO pin (FUT-10) — Phase 45, ADR-0055 (STORE-01..03)
+- [ ] `GET /runs*` per-caller scoping (Phase 40, ADR-0054 — awaiting its verify-work);
+      `Runnable::Agent` SSE/webhook emission — ✓ Phase 45 (PLAT-08); SSE `done` → `Cancelled` (Phase 42)
+- [ ] Tracing overhead toward the ≤ 3 % bar — re-measured in Phase 45 at +19.36 % / +16.19 %
+      (OBS-05, Verdict AMEND, row 61 waived by maintainer acceptance); the bar itself is not met
 - [ ] Docs currency and Treasurer docs; Nyquist hygiene; v2 debt lines; v0.11.0 crates.io release
 
 Carried-in open items (tracked, not requirements):
@@ -1877,6 +1904,13 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-09-30 after **Phase 45: RustFS Swap & Platform/Observability Deviations**
+completed — resequenced ahead of Phases 41-44: `rustfs/rustfs:1.0.0` in every live configuration
+with the `FileStoragePort` contract suite green in CI (STORE-01..03, ADR-0055), legacy
+`Runnable::Agent` runs emitting SSE and webhooks (PLAT-08, row 31 closed), tracing overhead
+re-measured at +19.36 % / +16.19 % and accepted (OBS-05, row 61 waived); verification `passed`,
+UAT 5/5, security 31/31 closed. Active bullets annotated; next `/gsd-verify-work 40` then Phase 41.*
+
 *Last updated: 2026-09-28 after **Phase 39: Spend Ledger** completed — the second v0.11.0 phase:
 `TreasuryLedgerPort` with in-memory, SQLite and Postgres adapters under one contract suite, the `007`
 migrations, race-proof reserve and idempotent settle, production settle writers on both run paths,

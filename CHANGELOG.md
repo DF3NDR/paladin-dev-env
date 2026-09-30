@@ -188,6 +188,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   end-to-end `tenant_scoped_run_read_tracer` pin the behaviour. Closes `WINDOWS.md` row 32
   (WR-03); ADR-0054 records the model.
 
+- The `AdvancedFileStoragePort` multipart trio is implemented on `MinioAdapter` behind an opaque,
+  self-describing upload-id token that is re-validated on every decode, and the `FileStoragePort`
+  contract suite gained multipart, ETag and exercised-presigned-URL cases, taking it to 11 cases
+  (STORE-02; Phase 45 plan 45-01).
+
 ### Changed
 
 - `GET /runs/{run_id}` and `GET /runs` carry a ledger-derived `cost: Option<CostDto>` (`{ nanos,
@@ -226,6 +231,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GET /runs/{run_id}` already did (PLAT-07; Phase 40 plans 40-01, 40-05; see `MIGRATION.md`
   §9.6). `WINDOWS.md` row 32 (WR-03, "any authenticated principal can read every run") is closed;
   the `/v1/threads/*` routes remain unscoped and are tracked as a new open row.
+- **The dev/test/CI and reference object store is RustFS (STORE-01, STORE-03; ADR-0055).** Every
+  live configuration now runs the pinned `rustfs/rustfs:1.0.0` (the manifest-list digest is in a
+  comment beside each `image:` line): CI's Integration Tests and Coverage jobs, the test and dev
+  compose files, the devcontainer, the Kubernetes manifest and the contract suite's local mode. The
+  store-side variables are now `RUSTFS_ACCESS_KEY` and `RUSTFS_SECRET_KEY`; the application-side
+  `APP_MINIO_*`, `MINIO_*` and `TEST_MINIO_*` names are unchanged, but a local `.env` must rename
+  its two store-side variables. Compose services are `rustfs` and `rustfs-test`, and the dev and
+  devcontainer volumes are `rustfs_data` and `rustfs-data`; old MinIO dev volumes are not migrated
+  (remove them with `docker volume rm`). The Kubernetes manifest `k8s/minio.yaml` is renamed
+  `k8s/rustfs.yaml` (Service `paladin-rustfs`, label `app: rustfs`, secret keys `RUSTFS_ACCESS_KEY`
+  and `RUSTFS_SECRET_KEY`); anyone applying the old path must switch, and it stays a single-node
+  reference manifest, not a production store. The `FileStoragePort` contract suite now runs in the
+  Integration Tests and Docker Integration Tests jobs, each with a check that at least 11 cases
+  ran, so it cannot pass vacuously. The storage page is retitled "S3-Compatible File Storage
+  Setup" and records the production-manifest decision.
+
+### Removed
+
+- The `mc` bootstrap: the compose init containers, the CI client-install and bucket-setup steps
+  and the checksum-verified client download. The adapter creates its own bucket.
+- The MinIO server and client images from every live configuration.
+- The anonymous-public read policy on `paladin-files` and the unused `paladin-analysis`,
+  `paladin-reports` and `paladin-backups` buckets from the dev compose.
+- The `testcontainers-modules` dev-dependency.
+- The `.github/actionlint.yaml` `services.command` suppression, which was dead configuration.
 
 ### Fixed
 
@@ -237,6 +267,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (including a corrupt fork) now enqueues its `failed` delivery too. An agent failure's `error`
   event carries `message: null`, exactly like a graph engine failure — read the text from
   `GET /runs/{run_id}`. Public API unchanged.
+- The file-storage adapter's bucket bootstrap is path-style: virtual-hosted bucket creation failed
+  on RustFS, and on MinIO without domain configuration. `copy_file` no longer double-prefixes the
+  bucket, and the integration harness no longer panics on a hostname endpoint or on a second
+  logger initialisation (STORE-01, STORE-02; Phase 45 plan 45-01).
 
 ### Breaking Changes
 

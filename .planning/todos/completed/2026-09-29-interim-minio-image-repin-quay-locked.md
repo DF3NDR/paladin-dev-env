@@ -1,3 +1,4 @@
+completed: 2026-09-30
 ---
 created: 2026-09-29T20:10:00Z
 title: Interim re-pin of the MinIO server/client images — quay.io locked anonymous pulls
@@ -5,10 +6,13 @@ area: infrastructure
 severity: blocker
 kind: quick-task
 blocks:
+
   - Phase 40 UAT test 4 (CI-only evidence) — .planning/phases/40-tenant-identity-run-read-scoping/40-UAT.md
   - every later phase's Coverage / Integration / Docker Integration / Kubernetes Smoke evidence
+
 superseded_by: Phase 45 (RustFS swap) — .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
 files:
+
   - .github/workflows/ci.yml
   - docker/docker-compose.test.yml
   - docker/docker-compose.yml
@@ -20,6 +24,7 @@ files:
   - docs/src/contributing/testing-guide.md
   - docs/src/deployment/cicd.md
   - docs/src/deployment/docker.md
+
 owner: repo maintainer
 recheck_by: 2026-10-06
 ---
@@ -64,13 +69,16 @@ docs that quote them; no adapter code, no port changes.
 1. **Pick a still-anonymously-pullable MinIO source and verify it before editing anything.**
    The sandbox that diagnosed this cannot reach any registry (proxy 403), so the candidates below
    are unverified. Verify with a plain `docker pull` from a runner-like environment first:
+
    - `cgr.dev/chainguard/minio` (Chainguard's rebuild of the same binaries; the free tier usually
      serves only a rolling tag, so pin by **digest**, not tag) — the replacement most other projects
      adopted.
+
    - Mirror the last known-good server + client images into this org's own registry
      (`ghcr.io/df3ndr/minio`, `ghcr.io/df3ndr/mc`) if any registry still serves them to an
      authenticated account, then pin by digest. This is the only option that makes the pin
      ours to keep and is the recommended shape if the bits can be obtained.
+
    - An authenticated quay.io pull (`docker login quay.io` with a registry secret in the four
      jobs) only if quay.io actually serves the image to a logged-in account — not confirmed.
    Whatever is chosen: exact tag **and** `@sha256:` digest, never `:latest` (the 2026-09-13 todo
@@ -80,8 +88,10 @@ docs that quote them; no adapter code, no port changes.
    - `.github/workflows/ci.yml` lines 706 and 1418 (the `minio:` service container in the
      Coverage and Integration Tests jobs; update the comment block above each that still says
      "quay.io still serves this last known-good community release").
+
    - `docker/docker-compose.test.yml` line 27 (`minio-test`), `docker/docker-compose.yml`
      line 23 (`minio`), `.devcontainer/docker-compose.yml` line 92.
+
    - `k8s/minio.yaml` line 24 (drives the Kubernetes Smoke Test via `kubectl apply` at
      ci.yml line 1815).
    Keep `server /data --console-address ":9001"`, the `/minio/health/live|ready` probes and the
@@ -116,3 +126,38 @@ Phase 45 is sequenced last in v0.11.0. Until this interim pin lands, Phases 41�
 coverage and integration evidence on every push. The alternative to this quick task is pulling
 Phase 45 (or just its image-swap slice) ahead of Phase 41; that is a roadmap decision for the
 maintainer, recorded in the Phase 40 UAT session of 2026-09-29.
+
+## Resolution (Phase 45)
+
+Superseded, not executed (D-02). The interim re-pin (Chainguard, a ghcr mirror or an authenticated
+quay pull) would have kept a third-party MinIO image and the `mc` client on the critical path; Phase
+45 removed MinIO from every live configuration instead and recorded the decision as ADR-0055
+(`.planning/decisions/0055-dev-test-reference-object-store-rustfs.md`). No interim image was
+selected or verified, and none was added.
+
+**Commits that removed the last MinIO image reference (the file inventory above, item by item).**
+
+- `7dfb48a9` (45-04): CI Integration Tests and Coverage service containers run the pinned RustFS
+  image; the `mc` client install and bucket-setup steps and the checksum-verified client download
+  are deleted
+
+- `870a491c` (45-04): `docker/docker-compose.test.yml` runs `rustfs-test`; the `mc` init container
+  is deleted; the Docker Integration and E2E jobs are rewired
+
+- `ed3fb5b8` (45-04): `k8s/minio.yaml` renamed to `k8s/rustfs.yaml`
+- `48e4ef23` (45-05): `docker/docker-compose.yml` runs `rustfs`; the `mc` init container, the
+  anonymous-public policy and the three unused buckets are deleted
+
+- `23d03465` (45-05): the devcontainer object store is RustFS (the last MinIO image reference in
+  live configuration)
+
+- `a2b22b1d` (45-01): `testcontainers-modules` removed; the contract suite's local mode runs the
+  pinned RustFS image
+
+The docs that quoted the old pin were updated in the same plans (45-04, 45-05) and the storage page
+in 45-06.
+
+**Follow-up (not a Phase 45 criterion).** Once CI is green on the phase's tree, run
+`/gsd-verify-work 40` so Phase 40 UAT test 4 flips from `blocked` to `pass`, and record the CI run
+id. See
+`.planning/phases/45-rustfs-swap-platform-observability-deviations/45-06-SUMMARY.md`.

@@ -1,3 +1,4 @@
+completed: 2026-09-30
 ---
 created: 2026-09-13T00:00:00Z
 title: Evaluate replacing MinIO with RustFS in the dev/test stack
@@ -5,11 +6,13 @@ area: infrastructure
 resolves_phase: 45
 severity: major
 files:
+
   - docker/docker-compose.test.yml
   - docker/docker-compose.yml
   - .github/workflows/ci.yml
   - k8s/minio.yaml
   - crates/paladin-storage
+
 owner: repo maintainer
 deferred_past: v0.10.0
 recheck_by: 2026-10-16
@@ -47,8 +50,10 @@ Sketch of the shape:
 - Add a new file-storage adapter in `crates/paladin-storage` implementing the existing
   `FileStoragePort`, alongside the existing MinIO/S3 adapter, behind its own Cargo feature flag so
   neither backend is forced on consumers.
+
 - Add adapter-parity integration tests exercised against a RustFS service container, proving the
   same `FileStoragePort` contract suite passes unchanged against both backends.
+
 - Once parity holds, swap the compose (`docker/docker-compose.test.yml`, `docker/docker-compose.yml`)
   and CI (`.github/workflows/ci.yml`) service definitions over to RustFS for dev/test.
 
@@ -61,9 +66,11 @@ Open questions to answer during evaluation:
 
 - RustFS's S3 API surface coverage versus what `paladin-storage` actually calls (bucket
   create/list, object put/get/delete, presigned URLs, multipart uploads if used).
+
 - Multi-arch container availability and release cadence — does RustFS publish a maintained,
   multi-arch image with a healthy release cadence, avoiding the exact failure mode this todo
   exists to prevent?
+
 - Project maturity and licence acceptability under the `cargo-deny` policy.
 - Whether the production `k8s/minio.yaml` manifest should follow the dev/test stack onto RustFS,
   or stay on a separately sourced, production-grade S3-compatible service.
@@ -91,3 +98,52 @@ requirement line does not shrink it to something this closing phase could absorb
 this file, so the milestone backlog carries it as well as the todo directory.
 
 **Re-check trigger.** 2026-10-16, or the v0.11.0 planning kickoff, whichever comes first.
+
+## Resolution (Phase 45)
+
+Resolved by Phase 45 (RustFS swap) on 2026-09-30; recorded as ADR-0055
+(`.planning/decisions/0055-dev-test-reference-object-store-rustfs.md`). Nothing here was closed
+silently: the four open questions are answered below and the commits that removed the last MinIO
+reference are named.
+
+**The four open questions.**
+
+- *S3 API surface:* the existing `rust-s3` adapter passes the completed 11-case `FileStoragePort`
+  contract suite (multipart, opaque ETag and exercised presigned URLs included) against RustFS
+  1.0.0 on an empty data directory (45-01), and the suite now runs in CI behind a compiled-in and a
+  passed count. No S3-surface gap was found, so no second adapter or feature was built (D-08); the
+  Solution sketch's separate-adapter route was not needed.
+
+- *Image and cadence:* `rustfs/rustfs:1.0.0`, multi-arch, pinned by exact tag with the manifest-list
+  digest in a comment beside every `image:` line (D-03). A newer GA tag had not been published at
+  the time; `1.0.1-preview.11` is a preview and was not adopted.
+
+- *Licence:* Apache-2.0, already on the `cargo-deny` allow-list.
+- *Production manifest:* follows the dev/test stack. `k8s/rustfs.yaml` is the one manifest for the
+  smoke test and the reference deployment (single-node, `emptyDir`, console off, non-root);
+  production points the same adapter at AWS S3, a managed endpoint or MinIO (D-11).
+
+**Commits that removed the last MinIO reference from live configuration.**
+
+- `7dfb48a9` (45-04): CI Integration Tests and Coverage service containers run the pinned RustFS
+  image; the `mc` client install and bucket-setup steps and the checksum-verified client download
+  are deleted
+
+- `870a491c` (45-04): `docker/docker-compose.test.yml` runs `rustfs-test`; the `mc` init container
+  is deleted; the Docker Integration and E2E jobs are rewired
+
+- `ed3fb5b8` (45-04): `k8s/minio.yaml` renamed to `k8s/rustfs.yaml`
+- `48e4ef23` (45-05): `docker/docker-compose.yml` runs `rustfs`; the `mc` init container, the
+  anonymous-public policy and the three unused buckets are deleted
+
+- `23d03465` (45-05): the devcontainer object store is RustFS (the last MinIO image reference in
+  live configuration)
+
+- `a2b22b1d` (45-01): `testcontainers-modules` removed; the contract suite's local mode runs the
+  pinned RustFS image
+
+The phase-wide grep for MinIO images, `mc` steps, MinIO health paths, the anonymous-public policy
+and `testcontainers-modules` over `.github docker k8s .devcontainer scripts Makefile .env.example
+tests Cargo.toml Cargo.lock` prints nothing, and exactly one RustFS tag appears across
+`.github docker k8s .devcontainer tests docs` (plan 45-06). See
+`.planning/phases/45-rustfs-swap-platform-observability-deviations/45-06-SUMMARY.md`.

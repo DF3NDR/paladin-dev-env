@@ -111,10 +111,10 @@ if command -v nc &> /dev/null; then
         echo -e "${YELLOW}⏭️  Redis not running (skipped)${NC}"
     fi
 
-    if docker ps | grep -q minio; then
-        test_command "MinIO connection" "nc -z minio 9000"
+    if docker ps | grep -q rustfs; then
+        test_command "RustFS connection" "nc -z rustfs 9000"
     else
-        echo -e "${YELLOW}⏭️  MinIO not running (skipped)${NC}"
+        echo -e "${YELLOW}⏭️  RustFS not running (skipped)${NC}"
     fi
 
     if docker ps | grep -q mysql; then

@@ -7,7 +7,7 @@ A professional, production-ready DevContainer configuration for the Paladin proj
 ### Core Files
 - ✅ **devcontainer.json** - VS Code DevContainer configuration with all extensions and settings
 - ✅ **Dockerfile.dev** - Development Docker image with full toolchain
-- ✅ **docker-compose.yml** - Orchestration for Redis, MinIO, and MySQL services
+- ✅ **docker-compose.yml** - Orchestration for Redis, RustFS, and MySQL services
 - ✅ **Dockerfile** (existing) - Production runtime image
 
 ### Automation Scripts
@@ -47,7 +47,7 @@ A professional, production-ready DevContainer configuration for the Paladin proj
 
 ### 🐳 Integrated Services
 - Redis 7 (port 6379)
-- MinIO (ports 9000, 9001)
+- RustFS (ports 9000, 9001)
 - MySQL 8.0 (port 3306)
 
 ### ⚡ Performance Optimizations
@@ -123,7 +123,7 @@ pd-doc        # Generate and open docs
 When services are running:
 - **Paladin API**: http://localhost:8080
 - **Metrics**: http://localhost:9090
-- **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
+- **RustFS Console**: http://localhost:9001/rustfs/console/index.html (paladin-dev/paladin-dev-secret)
 - **Redis**: localhost:6379
 - **MySQL**: localhost:3306 (paladin/paladinpass)
 

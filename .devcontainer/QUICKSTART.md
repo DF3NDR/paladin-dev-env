@@ -43,7 +43,7 @@ cargo audit   # Security audit
 
 ### Services
 ```bash
-pd-dev        # Start all services (Redis, MinIO, MySQL)
+pd-dev        # Start all services (Redis, RustFS, MySQL)
 pd-services   # Start services without app
 
 # Or use docker-compose directly
@@ -79,7 +79,7 @@ rust-gdb target/debug/paladin
 When services are running:
 - **Paladin API**: http://localhost:8080
 - **Metrics**: http://localhost:9090
-- **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
+- **RustFS Console**: http://localhost:9001/rustfs/console/index.html (paladin-dev/paladin-dev-secret)
 - **Redis**: localhost:6379
 
 ## 📦 Useful Cargo Commands
@@ -166,7 +166,7 @@ ANTHROPIC_API_KEY=...
 
 # Services
 REDIS_URL=redis://redis:6379
-MINIO_ENDPOINT=minio:9000
+MINIO_ENDPOINT=rustfs:9000
 DATABASE_URL=mysql://paladin:paladinpass@mysql:3306/paladin
 
 # Logging

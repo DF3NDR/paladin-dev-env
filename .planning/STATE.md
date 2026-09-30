@@ -4,16 +4,16 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 45
 current_phase_name: RustFS Swap & Platform/Observability Deviations
-status: executing
-stopped_at: "Phase 45 plan 45-07 at blocking-human checkpoint: maintainer bench measurement (points A/B/C) awaited"
-last_updated: "2026-09-30T00:38:11.683Z"
+status: verifying
+stopped_at: Completed 45-07-PLAN.md
+last_updated: "2026-09-30T16:46:17.791Z"
 last_activity: 2026-09-29
 last_activity_desc: Phase 45 execution started
 progress:
   total_phases: 4
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 30
-  completed_plans: 29
+  completed_plans: 30
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [██████████] 97%
+**Progress:** [██████████] 100%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 
 Phase: 45 (RustFS Swap & Platform/Observability Deviations) — EXECUTING
 Plan: 7 of 7
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-09-29 — Phase 45 execution started
 
 ## Performance Metrics
@@ -215,6 +215,7 @@ Last activity: 2026-09-29 — Phase 45 execution started
 | Phase 45 P04 | 95min | 3 tasks | 15 files |
 | Phase 45 P05 | 40min | 3 tasks | 16 files |
 | Phase 45 P06 | 50min | 3 tasks | 10 files |
+| Phase 45 P07 | n/a (human measurement) | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -311,6 +312,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 45-04: k8s RustFS runs with console disabled, non-root uid 10001; k8s/minio.yaml renamed to k8s/rustfs.yaml
 - [Phase ?]: 45-05: dev compose inherits the pinned RustFS image in the .dev.yml override; console stays on in dev/devcontainer (off in CI/k8s); coverage.sh log label kept
 - [Phase ?]: Phase 45-06: ADR-0055 records RustFS as the dev/test and reference object store; interim MinIO re-pin todo superseded not executed; s3-storage stays out of scripts/coverage.sh
+- [Phase 45]: 45-07: OBS-05 re-measured, Verdict AMEND: log_sink +19.36 %/composite +16.19 % at point C (target enabled); WINDOWS row 61 open pending maintainer acceptance at Phase 45 UAT, then windows waive 61
 
 ### Pending Todos
 
@@ -513,9 +515,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-30T00:38:11.413Z
-**Stopped at:** Phase 45 plan 45-07 at blocking-human checkpoint: maintainer bench measurement (points A/B/C) awaited
-**Resume file:** .planning/phases/45-rustfs-swap-platform-observability-deviations/45-07-PLAN.md
+**Last session:** 2026-09-30T16:46:17.748Z
+**Stopped at:** Completed 45-07-PLAN.md
+**Resume file:** None
 
 ## Operator Next Steps
 

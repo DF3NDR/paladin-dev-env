@@ -547,7 +547,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 45-07-PLAN.md — Wave 4 (OBS-05, non-autonomous): maintainer-run three-point bench re-measure; D-19 meet/amend recording (evidence, row 35 ledger row, docs, CHANGELOG)
+- [x] 45-07-PLAN.md — Wave 4 (OBS-05, non-autonomous): maintainer-run three-point bench re-measure; D-19 meet/amend recording (evidence, row 35 ledger row, docs, CHANGELOG)
 
 **Research flag**: yes — RustFS's S3 API-surface parity (presigned URLs, multipart uploads, ETag
 format) is MEDIUM-confidence only; the phase's first work item should close this via the existing

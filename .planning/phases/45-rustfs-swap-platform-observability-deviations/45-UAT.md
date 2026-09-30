@@ -3,15 +3,15 @@ status: testing
 phase: 45-rustfs-swap-platform-observability-deviations
 source: [45-VERIFICATION.md]
 started: 2026-09-30T17:06:56Z
-updated: 2026-09-30T19:50:20Z
+updated: 2026-09-30T19:52:52Z
 ---
 
 ## Current Test
 
-number: 4
-name: Maintainer acceptance of the OBS-05 re-measured tracing overhead
+number: 5
+name: Follow-ups (not Phase 45 criteria)
 expected: |
-  Decide whether to accept +19.36 % (log_sink) / +16.19 % (composite) at point C versus the <= 3 % PRD 07 bar as the new recorded figure (45-BENCH-EVIDENCE.md, WINDOWS.md row 61 open). If accepted, run "node .claude/gsd-core/bin/gsd-tools.cjs windows waive 61 \"<acceptance text>\"". If rejected, row 61 stays open and further optimisation or the I/O-bound re-scope becomes a follow-up. Weigh the noise caveat: point C run 1 measured +6.98 % / +7.29 %, and the target-off rows still cost +16-19 %, so the remaining cost is in the dispatcher/sink path, not serialisation.
+  On a Docker-capable machine, "make services-up" then "make coverage" reproduces CI's coverage figure (todo 2026-08-13); once CI is green, "/gsd-verify-work 40" flips Phase 40 UAT test 4 from blocked to pass (CONTEXT D-02).
 awaiting: user response
 
 ## Tests
@@ -30,7 +30,7 @@ result: pass — confirmed by maintainer. SUMMARY.md line 115 carries the "S3-Co
 
 ### 4. Maintainer acceptance of the OBS-05 re-measured tracing overhead
 expected: Decide whether to accept +19.36 % (log_sink) / +16.19 % (composite) at point C versus the <= 3 % PRD 07 bar as the new recorded figure (45-BENCH-EVIDENCE.md, WINDOWS.md row 61 open). If accepted, run "node .claude/gsd-core/bin/gsd-tools.cjs windows waive 61 \"<acceptance text>\"". If rejected, row 61 stays open and further optimisation or the I/O-bound re-scope becomes a follow-up. Weigh the noise caveat: point C run 1 measured +6.98 % / +7.29 %, and the target-off rows still cost +16-19 %, so the remaining cost is in the dispatcher/sink path, not serialisation. (Backstop truth from 45-07; CONTEXT D-19, Phase 28 D-37 precedent.)
-result: [pending]
+result: pass — maintainer accepted the +19.36 % / +16.19 % figure; WINDOWS.md row 61 waived at 2026-09-30T19:52:30Z with the acceptance text (open_count 3 -> 2).
 
 ### 5. Follow-ups (not Phase 45 criteria)
 expected: On a Docker-capable machine, "make services-up" then "make coverage" reproduces CI's coverage figure (todo 2026-08-13); once CI is green, "/gsd-verify-work 40" flips Phase 40 UAT test 4 from blocked to pass (CONTEXT D-02).
@@ -39,9 +39,9 @@ result: [pending]
 ## Summary
 
 total: 5
-passed: 3
+passed: 4
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 

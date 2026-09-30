@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 3
-waived_count: 36
+open_count: 2
+waived_count: 37
 fixed_count: 22
 total_count: 61
-last_updated: 2026-09-30T16:44:57.003Z
+last_updated: 2026-09-30T19:52:30.554Z
 ---
 
 # Broken Windows Ledger
@@ -75,7 +75,7 @@ last_updated: 2026-09-30T16:44:57.003Z
 | 58 | 40 | deviation | crates/paladin-web/src/thread_controller.rs |  | (Phase 40 D-14 deferral, T-40-23) The /v1/threads routes -- GET /threads (lists every thread), GET /threads/{id}, GET /threads/{id}/state, GET /threads/{id}/history, POST /threads/{id}/resume, POST /threads/{id}/fork, DELETE /threads/{id} -- are not tenant-scoped because threads carry no tenant, so an authenticated principal can enumerate another tenant's threads and read their Waypoint state and history although that tenant's /runs routes answer 404. Closing condition: record a tenant on the thread (or derive it from the thread's runs) and route every /threads/{id}* handler through one shared visibility gate like run_controller::load_visible_run. Owner: Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11 hygiene phase. | open |  | 2026-09-29T11:49:59.678Z |  |
 | 59 | 40 | deviation | .project/current-exports.txt |  | (40-06 Task 2) The plan's acceptance grep for RunReadScope/TenantId in .project/current-exports.txt cannot pass by the tool's design: cargo-public-api lists a re-exported foreign-crate module as one 'pub use paladin::core::platform::container::principal' line (exactly as the existing cost and treasury_ledger lines), never its items. The refreshed baseline does carry every facade-visible Phase 40 item (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, BearerTokenAuthConfig.tenant, AuthConfig::validate, the principal re-export, cancel's Option<principal::PrincipalRef>) and make api-surface exits 0. Plan-text issue, not a code defect; left open for the operator to waive. | waived | Tool-design limitation, not a defect: cargo-public-api lists the re-exported principal module as a single pub-use line, so item-level names cannot appear in current-exports.txt. Every facade-visible Phase 40 item is present in the baseline (execute_scoped, execute_stream_scoped, ApiKeyConfig.tenant, AuthConfig::validate, principal re-export); the 40-06 SUMMARY records the measured evidence. | 2026-09-29T11:49:59.952Z | 2026-09-29T12:16:51.627Z |
 | 60 | 45 | deviation | src/application/services/run/worker.rs |  | Closing condition of row 31 (WR-02) is met: run_agent's success and failure return paths now bind the live event bus, emit through map_trace_event (RunStarted/NodeStarted/NodeFinished/RunFinished via a per-run TraceDispatcher) and enqueue webhook deliveries via webhook_delivery_for_outcome; the pinning test is inverted to agent_kind_run_with_a_webhook_enqueues_a_delivery, with agent_kind_run_streams_done_live and agent_kind_run_emits_exactly_one_terminal_event as sibling evidence. Row 31 itself stays waived (only open->fixed\|waived transitions exist). Phase 45 plan 45-02 (PLAT-08). | fixed |  | 2026-09-29T22:37:02.721Z | 2026-09-29T22:37:06.572Z |
-| 61 | 45 | deviation | .planning/phases/45-rustfs-swap-platform-observability-deviations/45-BENCH-EVIDENCE.md |  | Amends row 35 (Phase 28 tracing-overhead deviation): OBS-05 re-measure at Phase 45 point C, paladin::trace target enabled, after the D-17 fixes (enablement guard, per-thread buffer reuse, CompositeSink last-child move) did NOT meet the <=3% bar: log_sink +19.36%, composite +16.19% against a 120.00us untraced baseline (maintainer's machine, 2026-09-30, 45-BENCH-EVIDENCE.md; Verdict: AMEND). Serialisation-skipped _target_off rows still cost +16.24%/+18.57%, so the remaining cost is not serialisation. Amended closing condition: accepted-pending at +19.36%/+16.19% after the D-17 fixes, 2026-09-30, 45-BENCH-EVIDENCE.md; the maintainer accepts this figure at Phase 45 UAT, then gsd-tools windows waive <id> with the acceptance text. The I/O-bound re-scope stays deferred (no I/O-bound bench added in Phase 45, D-19). Row 35 itself stays waived. | open |  | 2026-09-30T16:44:57.003Z |  |
+| 61 | 45 | deviation | .planning/phases/45-rustfs-swap-platform-observability-deviations/45-BENCH-EVIDENCE.md |  | Amends row 35 (Phase 28 tracing-overhead deviation): OBS-05 re-measure at Phase 45 point C, paladin::trace target enabled, after the D-17 fixes (enablement guard, per-thread buffer reuse, CompositeSink last-child move) did NOT meet the <=3% bar: log_sink +19.36%, composite +16.19% against a 120.00us untraced baseline (maintainer's machine, 2026-09-30, 45-BENCH-EVIDENCE.md; Verdict: AMEND). Serialisation-skipped _target_off rows still cost +16.24%/+18.57%, so the remaining cost is not serialisation. Amended closing condition: accepted-pending at +19.36%/+16.19% after the D-17 fixes, 2026-09-30, 45-BENCH-EVIDENCE.md; the maintainer accepts this figure at Phase 45 UAT, then gsd-tools windows waive <id> with the acceptance text. The I/O-bound re-scope stays deferred (no I/O-bound bench added in Phase 45, D-19). Row 35 itself stays waived. | waived | Maintainer accepted at Phase 45 UAT (test 4, 2026-09-30): +19.36% (log_sink) / +16.19% (composite) tracing overhead at point C recorded as the new figure in place of the <=3% PRD 07 bar; remaining cost sits in the dispatcher/sink path, not serialisation; I/O-bound re-scope stays deferred per D-19. | 2026-09-30T16:44:57.003Z | 2026-09-30T19:52:30.554Z |
 
 ````json
 [
@@ -806,10 +806,10 @@ last_updated: 2026-09-30T16:44:57.003Z
     "file": ".planning/phases/45-rustfs-swap-platform-observability-deviations/45-BENCH-EVIDENCE.md",
     "line": null,
     "description": "Amends row 35 (Phase 28 tracing-overhead deviation): OBS-05 re-measure at Phase 45 point C, paladin::trace target enabled, after the D-17 fixes (enablement guard, per-thread buffer reuse, CompositeSink last-child move) did NOT meet the <=3% bar: log_sink +19.36%, composite +16.19% against a 120.00us untraced baseline (maintainer's machine, 2026-09-30, 45-BENCH-EVIDENCE.md; Verdict: AMEND). Serialisation-skipped _target_off rows still cost +16.24%/+18.57%, so the remaining cost is not serialisation. Amended closing condition: accepted-pending at +19.36%/+16.19% after the D-17 fixes, 2026-09-30, 45-BENCH-EVIDENCE.md; the maintainer accepts this figure at Phase 45 UAT, then gsd-tools windows waive <id> with the acceptance text. The I/O-bound re-scope stays deferred (no I/O-bound bench added in Phase 45, D-19). Row 35 itself stays waived.",
-    "status": "open",
-    "reason": "",
+    "status": "waived",
+    "reason": "Maintainer accepted at Phase 45 UAT (test 4, 2026-09-30): +19.36% (log_sink) / +16.19% (composite) tracing overhead at point C recorded as the new figure in place of the <=3% PRD 07 bar; remaining cost sits in the dispatcher/sink path, not serialisation; I/O-bound re-scope stays deferred per D-19.",
     "recorded_at": "2026-09-30T16:44:57.003Z",
-    "resolved_at": null
+    "resolved_at": "2026-09-30T19:52:30.554Z"
   }
 ]
 ````

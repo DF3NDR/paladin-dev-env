@@ -78,4 +78,3 @@ engine/bench_superstep_cost_sinks_composite_target_off
                         Change within noise threshold.
 Found 6 outliers among 100 measurements (6.00%)
   6 (6.00%) high severe
-

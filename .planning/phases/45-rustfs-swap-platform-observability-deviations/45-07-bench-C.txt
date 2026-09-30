@@ -71,4 +71,3 @@ engine/bench_superstep_cost_sinks_composite_target_off
 Found 5 outliers among 100 measurements (5.00%)
   3 (3.00%) high mild
   2 (2.00%) high severe
-

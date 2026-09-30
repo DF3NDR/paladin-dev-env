@@ -1,20 +1,14 @@
 ---
-status: partial
+status: complete
 phase: 40-tenant-identity-run-read-scoping
 source: [40-VERIFICATION.md]
 started: 2026-09-29T12:36:44Z
-updated: 2026-09-29T19:44:28Z
+updated: 2026-09-30T22:14:43Z
 ---
 
 ## Current Test
 
-number: 4
-name: CI-only evidence
-expected: |
-  CI postgres-integration, coverage (82% line floor) and the web-server integration job (tests/integration/e2e_platform_api_test.rs) are green on the phase's final tree.
-  Blocker status: lifted. The MinIO pull failure was resolved by Phase 45 (RustFS swap, ADR-0055). The Phase 40 final code commit be3a9030 is an ancestor of HEAD 730f521f; every commit since touches only .planning/ or Phase 45 (RustFS/CI/docs).
-  Live evidence: ci.yml run 478 (id 36770517439, commit 730f521f, https://github.com/DF3NDR/paladin-dev-env/actions/runs/36770517439) concluded success. Green: "Run every *::postgres contract suite" (postgres-integration, no SKIP path), "Measure coverage" with cargo-llvm-cov (coverage job), "Run the e2e_platform_api test binary" (web-server integration, non-zero test selection asserted), Integration Tests (RustFS), Docker Integration Tests, Kubernetes Smoke Test, unit + doc tests, clippy/fmt/docs, audit, deny, API surface. Only skips are the by-design on-failure steps. Run 472 (id 36751442387, commit 2a97fd9c) also green on the same Phase 40 code.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
@@ -32,9 +26,7 @@ result: pass
 
 ### 4. CI-only evidence
 expected: CI postgres-integration, coverage (82% line floor) and the web-server integration job (tests/integration/e2e_platform_api_test.rs) are green on the phase's final tree. The sandbox has no Docker daemon and could not produce this evidence.
-result: blocked
-blocked_by: third-party
-reason: "Blocked. CI runs 444 and 442 on the phase's final code tree fail at container init: quay.io/minio/minio pin returns unauthorized (MinIO locked anonymous pulls ~2026-09-24; pin identical on main, main green 2026-09-23). Coverage, Integration, Docker Integration and K8s Smoke cannot run; postgres-integration, Redis, Ollama, audit, deny, API-surface are green. Not a Phase 40 defect; resolved by Phase 45 (RustFS swap) or an interim image re-pin."
+result: pass — ci.yml run 478 (id 36770517439, commit 730f521f, https://github.com/DF3NDR/paladin-dev-env/actions/runs/36770517439) concluded success on a tree containing the Phase 40 final code commit be3a9030 (every commit since touches only .planning/ or Phase 45). Green: "Run every *::postgres contract suite" (postgres-integration, SKIP path asserted not taken), "Measure coverage" via cargo-llvm-cov (coverage job, 82% floor), "Run the e2e_platform_api test binary" (web-server integration, zero-selection asserted not hit), Integration Tests (RustFS), Docker Integration Tests, Kubernetes Smoke Test, unit + doc tests, fmt/clippy/docs, audit, deny, API surface. Run 472 (id 36751442387, commit 2a97fd9c) also green on the same Phase 40 code. The earlier blocker (runs 442/444 failing at container init on the quay.io/minio/minio pull) was resolved by Phase 45's RustFS swap (ADR-0055); it was never a Phase 40 defect.
 
 ### 5. Disposition of code-review WR-02, WR-03 and WR-04
 expected: Decide whether to apply the shared permits check inside RunSubmissionService::cancel and a generic-body repository-error helper in run_controller now, or file them (WINDOWS.md or Phase 46 hygiene). Neither blocks the roadmap criteria, which are met at the HTTP route level.
@@ -43,10 +35,10 @@ result: pass
 ## Summary
 
 total: 5
-passed: 4
+passed: 5
 issues: 0
 pending: 0
 skipped: 0
-blocked: 1
+blocked: 0
 
 ## Gaps

@@ -288,7 +288,7 @@ harness and `paladin-cli eval run --repeat/--bless`, with E2E-1/2/3 dogfooded as
 `verified` (75/75 threats closed); coverage 90.28 % on `ff78a6b5`; api-surface baseline regenerated
 (3936 items). Known deviation: PRD 07 criterion 6's ≤3 % tracing-overhead bar measured at
 +22.18 % (log sink) / +18.46 % (composite) on the synthetic all-Function-node bench — non-CI-gating by
-D-37 and accepted by maintainer sign-off at close-out UAT.
+D-37 and accepted by maintainer sign-off at close-out UAT (re-measured in Phase 45: +19.36 %/+16.19 %, 45-BENCH-EVIDENCE.md).
 
 **Phase 27 complete (2026-09-08)** — platform-api, the v0.10.0 milestone's sixth planned phase: durable background runs (`Run` status machine, `RunRepositoryPort` SQLite/Postgres, `RunQueuePort` InMemory/Redis with Lua lease claims), a worker pool with lease heartbeats, resume-not-restart redelivery and cross-instance cancellation, Parley `AwaitingInput` release and same-`run_id` resume, live SSE streaming with a documented polling degraded mode, append-only versioned assistants with `WarGraphDoc` compile and a restart-stable fingerprint, cron schedules, HMAC-signed webhook delivery behind an SSRF guard, and the production-shaped HTTP surface (auth, rate limits, scopes, pagination, regenerated `openapi.json`, generated Python/TypeScript clients smoke-tested in CI). 26 plans (18 planned + 8 gap-closure), verification passed 6/6 after a gap-closure cycle whose live proof is `27-CI-EVIDENCE.md` (CI run 34245093476 @ `2bf43cd2`: `redis-queue` 19/19 live, `postgres-integration` 87/87 live, coverage 89.98 % ≥ 82 % floor, `sdk-clients` both generated clients reach `completed`, `api-surface` unchanged at 3763 items on CI's own nightly via the new `normalize-api-bounds.py` canonicaliser, new `e2e-platform-api` job 1/1). Code review of the gap-closure set: CR-01/WR-01…04 remediated; the second-pass advisories WR-27-01 (the `Ok(None)` signing-key arm in `webhook/service.rs`, fixed `4b6592de`) and IN-27-01 (stale eslint comment in `smoke.ts`, fixed `b5ee33d4`) are both closed in `27-REVIEW-FIX.md`. Security: `27-SECURITY.md` is `verified` with `threats_open: 0` — 107/107 threats closed at ASVS L1, the one blocking `high` (T-27-22-02, the WR-27-01 arm) re-audited closed on 2026-09-08 (`849acdb1`). Carried concerns: WINDOWS.md rows 31/32 track the deferred `Agent`-kind webhook/live-bus delivery and the unscoped run-read routes; webhook SSRF DNS rebinding remains a documented limitation.
 
@@ -655,7 +655,7 @@ unless a phase adopts them):
   `TraceConfig`/`OtelConfig`, `RunTracePort` with three adapters, default-on `LogTraceSink` and the
   `RUN_TRACE_EMITTER` task-local, `GraphShape` → Mermaid/DOT golden-frozen, the `paladin-eval`
   crate (scenario format, `ScenarioLlm`, twelve evaluators) (OBS-01 … OBS-04) — v0.10.0, Phase 28
-  (tracing overhead accepted at +22 %/+18 % vs ≤ 3 %, D-16)
+  (tracing overhead accepted at +22 %/+18 % vs ≤ 3 %, D-16; re-measured in Phase 45: +19.36 %/+16.19 %, 45-BENCH-EVIDENCE.md)
 - ✓ `MIGRATION.md` complete with a placeholder grep-gate, `v0_9_config_boot` compat test, OpenAPI
   golden diff over the six v0.9 routes, doc-08 protocol run (138-row evidence table), row-level
   `semver` job, real `make publish-dry-run`, `WINDOWS.md` triaged to `open_count: 0` (SHIP-01 …
@@ -1118,7 +1118,7 @@ Runtime posture: durable superstep engine with checkpoint/resume, HITL pause, pe
 tolerance, background-run platform API, trace stream + `paladin-eval`, lossless token accounting.
 Release posture unchanged from v0.9.0 (OIDC-only publishing, gated + idempotent pipeline) plus an
 offline publish-order gate learned from the `v0.10.0` partial publish. Known accepted deviation:
-tracing overhead +22 %/+18 % vs the ≤ 3 % PRD bar (D-16).
+tracing overhead +19.36 %/+16.19 % vs the ≤ 3 % PRD bar after the Phase 45 fixes (accepted-pending the maintainer at Phase 45 UAT, `WINDOWS.md` row 61; Phase 28 measured +22 %/+18 %, D-16).
 
 **Current state stamp (v0.9.0 close, 2026-09-01):** 4 shipped planning milestones (v0.7.1,
 v0.8.0, v0.9.0 on top of the twelve historical ones), 21 phases / 212 plans completed, ~142k
@@ -1850,7 +1850,7 @@ milestone must honour: the two-officer token model (`Commissary` in, `Treasurer`
 ADR-0049/0050); `paladin-memory` → `paladin-llm` as the workspace's one lateral adapter edge
 (Phase 33 D-01/D-03); MSRV 1.88 measured from the `time`/`rmcp` chain, single-sourced in
 `workspace.package.rust-version` (Phase 22.1); the tracing-overhead acceptance (Phase 28 D-16/D-37,
-`WINDOWS.md` row 35 — ⚠️ Revisit); single-tenant scoping of the run-inspection routes (Phase 27
+`WINDOWS.md` row 35, amended by row 61 at +19.36 %/+16.19 % in Phase 45 — ⚠️ Revisit); single-tenant scoping of the run-inspection routes (Phase 27
 WR-03, row 32 — ⚠️ Revisit); the SSE `done` event collapse (Phase 27 D-14 — ⚠️ Revisit); the maintainer
 recovery choice for the partial `v0.10.0` publish — option A, a `0.10.1` patch through the same
 pipeline with the `v0.10.0` tag left in place (Phase 37.1 D-02 — ✓ Good); and the rule that

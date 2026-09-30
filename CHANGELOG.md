@@ -246,6 +246,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Integration Tests and Docker Integration Tests jobs, each with a check that at least 11 cases
   ran, so it cannot pass vacuously. The storage page is retitled "S3-Compatible File Storage
   Setup" and records the production-manifest decision.
+- `LogTraceSink` skips JSON serialisation when the `paladin::trace` target is filtered and reuses
+  a per-thread buffer when it is enabled; `CompositeSink` hands the record to its last child
+  without cloning (OBS-05; Phase 45 plan 45-03; public API unchanged).
 
 ### Removed
 
@@ -299,6 +302,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absent from `GET /runs`; `/stream`, `/cancel` and `/webhook-deliveries` also answer `501` without
   a run store. Cross-tenant operator reads need an `admin`-role key (PLAT-07; 40-01, 40-05;
   `MIGRATION.md` §9.6).
+
+### Known limitations
+
+- **Tracing overhead still exceeds the ≤3% bar after the Phase 45 fixes (OBS-05).** Re-measured
+  on the maintainer's machine on 2026-09-30 with the `paladin::trace` target enabled:
+  **+19.36%** (log sink) and **+16.19%** (composite sink) against a 120.00µs untraced baseline on
+  the same all-Function-node synthetic superstep benchmark. These figures supersede the
+  `[0.10.0]` figures (+22.18% / +18.46%) for the next release; the two measurements are not
+  distinguishable given the run-to-run noise on a shared machine. Even with serialisation fully
+  skipped the sink path costs roughly +16% / +19%, so the remaining cost is not serialisation.
+  Tracing sinks stay opt-in and `trace.state_values` stays default-off. The figure is
+  accepted-pending the maintainer's acceptance at Phase 45 UAT; the I/O-bound re-scope of the
+  bar remains deferred. Evidence:
+  `.planning/phases/45-rustfs-swap-platform-observability-deviations/45-BENCH-EVIDENCE.md`;
+  ledger row 61 (amends row 35).
 
 ## [0.10.1] - 2026-09-20
 

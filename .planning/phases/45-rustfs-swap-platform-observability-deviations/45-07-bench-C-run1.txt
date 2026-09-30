@@ -1,0 +1,74 @@
+    Finished `bench` profile [optimized] target(s) in 0.55s
+     Running benches/engine_benchmarks.rs (target/release/deps/engine_benchmarks-dcbe029d8138705c)
+Gnuplot not found, using plotters backend
+Benchmarking engine/bench_superstep_cost_sinks_none
+Benchmarking engine/bench_superstep_cost_sinks_none: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_none: Collecting 100 samples in estimated 3.1706 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_none: Analyzing
+engine/bench_superstep_cost_sinks_none
+                        time:   [123.67 µs 128.97 µs 135.20 µs]
+                        change: [+1.4488% +5.9348% +10.835%] (p = 0.01 < 0.05)
+                        Performance has regressed.
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_log_sink
+Benchmarking engine/bench_superstep_cost_sinks_log_sink: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_log_sink: Collecting 100 samples in estimated 3.6871 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_log_sink: Analyzing
+engine/bench_superstep_cost_sinks_log_sink
+                        time:   [135.12 µs 137.97 µs 141.45 µs]
+                        change: [-5.1012% +0.7068% +5.3921%] (p = 0.83 > 0.05)
+                        No change in performance detected.
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+
+Benchmarking engine/bench_superstep_cost_sinks_composite
+Benchmarking engine/bench_superstep_cost_sinks_composite: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_composite: Collecting 100 samples in estimated 3.3262 s (20k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_composite: Analyzing
+engine/bench_superstep_cost_sinks_composite
+                        time:   [136.47 µs 138.37 µs 140.64 µs]
+                        change: [-1.6255% +1.3223% +4.2804%] (p = 0.38 > 0.05)
+                        No change in performance detected.
+Found 6 outliers among 100 measurements (6.00%)
+  4 (4.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off: Collecting 100 samples in estimated 3.1094 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off: Analyzing
+engine/bench_superstep_cost_sinks_none_target_off
+                        time:   [112.09 µs 114.12 µs 116.26 µs]
+                        change: [+3.1157% +7.3273% +13.174%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off: Collecting 100 samples in estimated 3.5134 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off: Analyzing
+engine/bench_superstep_cost_sinks_log_sink_target_off
+                        time:   [136.91 µs 139.91 µs 143.73 µs]
+                        change: [-0.4212% +6.8897% +13.586%] (p = 0.04 < 0.05)
+                        Change within noise threshold.
+Found 12 outliers among 100 measurements (12.00%)
+  2 (2.00%) high mild
+  10 (10.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off: Collecting 100 samples in estimated 3.1048 s (20k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off: Analyzing
+engine/bench_superstep_cost_sinks_composite_target_off
+                        time:   [135.57 µs 138.37 µs 141.73 µs]
+                        change: [-2.1069% +1.2697% +4.6875%] (p = 0.48 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 100 measurements (5.00%)
+  2 (2.00%) high mild
+  3 (3.00%) high severe
+

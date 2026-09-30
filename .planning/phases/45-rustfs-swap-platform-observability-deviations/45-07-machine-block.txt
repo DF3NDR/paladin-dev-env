@@ -1,0 +1,9 @@
+Model name:                              Intel(R) Xeon(R) CPU E3-1505M v5 @ 2.80GHz
+8
+               total        used        free      shared  buff/cache   available
+Mem:            62Gi        17Gi       8.4Gi       2.4Gi        40Gi        45Gi
+Swap:          2.0Gi          0B       2.0Gi
+Linux 6.8.0-138-generic x86_64
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+cargo 1.97.1 (c980f4866 2026-06-30)
+Wed Sep 30 16:41:02 UTC 2026

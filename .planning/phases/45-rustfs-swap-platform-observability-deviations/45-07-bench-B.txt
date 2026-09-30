@@ -1,0 +1,81 @@
+   Compiling paladin-ports v0.10.1 (/workspace/crates/paladin-ports)
+   Compiling paladin-llm v0.10.1 (/workspace/crates/paladin-llm)
+   Compiling paladin-battalion v0.10.1 (/workspace/crates/paladin-battalion)
+   Compiling paladin-storage v0.10.1 (/workspace/crates/paladin-storage)
+   Compiling paladin-web v0.10.1 (/workspace/crates/paladin-web)
+   Compiling paladin-memory v0.10.1 (/workspace/crates/paladin-memory)
+   Compiling paladin-eval v0.10.1 (/workspace/crates/paladin-eval)
+   Compiling paladin-ai v0.10.1 (/workspace)
+    Finished `bench` profile [optimized] target(s) in 2m 28s
+     Running benches/engine_benchmarks.rs (target/release/deps/engine_benchmarks-dcbe029d8138705c)
+Gnuplot not found, using plotters backend
+Benchmarking engine/bench_superstep_cost_sinks_none
+Benchmarking engine/bench_superstep_cost_sinks_none: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_none: Collecting 100 samples in estimated 3.2650 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_none: Analyzing
+engine/bench_superstep_cost_sinks_none
+                        time:   [111.94 µs 115.16 µs 119.42 µs]
+                        change: [+0.3894% +3.7474% +7.4699%] (p = 0.04 < 0.05)
+                        Change within noise threshold.
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_log_sink
+Benchmarking engine/bench_superstep_cost_sinks_log_sink: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_log_sink: Collecting 100 samples in estimated 3.5298 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_log_sink: Analyzing
+engine/bench_superstep_cost_sinks_log_sink
+                        time:   [132.83 µs 135.96 µs 140.00 µs]
+                        change: [+0.9739% +5.2970% +11.639%] (p = 0.04 < 0.05)
+                        Change within noise threshold.
+Found 5 outliers among 100 measurements (5.00%)
+  1 (1.00%) high mild
+  4 (4.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_composite
+Benchmarking engine/bench_superstep_cost_sinks_composite: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_composite: Collecting 100 samples in estimated 3.6379 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_composite: Analyzing
+engine/bench_superstep_cost_sinks_composite
+                        time:   [132.68 µs 135.05 µs 137.93 µs]
+                        change: [+0.9575% +4.4573% +7.6790%] (p = 0.01 < 0.05)
+                        Change within noise threshold.
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off: Collecting 100 samples in estimated 3.5279 s (30k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off: Analyzing
+engine/bench_superstep_cost_sinks_none_target_off
+                        time:   [110.56 µs 111.88 µs 113.28 µs]
+                        change: [-8.3097% -3.1537% +1.4058%] (p = 0.25 > 0.05)
+                        No change in performance detected.
+Found 3 outliers among 100 measurements (3.00%)
+  3 (3.00%) high mild
+
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off: Collecting 100 samples in estimated 3.3784 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off: Analyzing
+engine/bench_superstep_cost_sinks_log_sink_target_off
+                        time:   [129.95 µs 133.51 µs 138.10 µs]
+                        change: [-2.5572% +1.6115% +7.4187%] (p = 0.66 > 0.05)
+                        No change in performance detected.
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off: Collecting 100 samples in estimated 3.4379 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off: Analyzing
+engine/bench_superstep_cost_sinks_composite_target_off
+                        time:   [131.11 µs 132.88 µs 135.12 µs]
+                        change: [+0.9377% +4.2589% +8.0002%] (p = 0.02 < 0.05)
+                        Change within noise threshold.
+Found 6 outliers among 100 measurements (6.00%)
+  6 (6.00%) high severe
+

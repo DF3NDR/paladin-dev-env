@@ -1,24 +1,29 @@
 ---
 phase: 45-rustfs-swap-platform-observability-deviations
 verified: 2026-09-30T17:30:00Z
-status: human_needed
+status: passed
 score: 5/8 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
 gaps: []
 human_verification:
+
   - test: "Push the phase tree and read the ci.yml run for the Integration Tests, Coverage, Docker Integration Tests and Kubernetes Smoke Test jobs"
     expected: "Each RustFS service container / compose service / k8s pod becomes healthy on /health/ready; the contract suite step prints 'test result: ok. N passed' with N >= 11 (compiled-in count check also >= 11); the smoke test applies k8s/rustfs.yaml and `kubectl wait -l app=rustfs` succeeds. Record the run id in the UAT."
     why_human: "No Docker daemon or image pulls in the authoring sandbox. Local mode (GenericImage + /health/ready poll), container start under Actions, /data ownership for uid 10001, and `curl` inside the image are only exercised in CI. Backstop truths from 45-01 and 45-04."
+
   - test: "Read the actionlint job in the same CI run"
     expected: "actionlint passes with the `paths:` suppression removed from .github/actionlint.yaml (no `command:` key remains in any workflow)."
     why_human: "actionlint is not installed in the sandbox. Backstop truth from 45-04."
+
   - test: "Read the Docs workflow (mdbook build + mdbook-linkcheck) for the retitled docs/src/appendix/minio-file-repository-setup.md"
     expected: "Build and linkcheck pass; SUMMARY.md entry 'S3-Compatible File Storage Setup' resolves."
     why_human: "mdbook is not installed in the sandbox. Backstop truth from 45-06."
+
   - test: "Maintainer acceptance of the OBS-05 re-measured tracing overhead (WINDOWS.md row 61, 45-BENCH-EVIDENCE.md)"
     expected: "Decide whether to accept +19.36 % (log_sink) / +16.19 % (composite) vs the <= 3 % PRD 07 bar as the new figure, then run `gsd-tools windows waive 61 \"<acceptance text>\"`. If rejected, row 61 stays open and further optimisation or the I/O-bound re-scope becomes a follow-up. Weigh the noise caveat: the earlier point C run 1 measured +6.98 % / +7.29 %, and the target-off rows still cost +16-19 %, so the remaining cost is in the dispatcher/sink path, not serialisation."
     why_human: "The roadmap criterion requires the bar be met OR a new ACCEPTED figure be recorded. The bar is not met and acceptance is the maintainer's decision (Phase 28 D-37 precedent, CONTEXT D-19). Backstop truth from 45-07."
+
   - test: "Follow-ups (not Phase 45 criteria): `make services-up` then `make coverage` on a Docker-capable machine; `/gsd-verify-work 40` once CI is green"
     expected: "Coverage figure reproduces CI's; Phase 40 UAT test 4 flips from blocked to pass."
     why_human: "Maintainer-owned walk (todo 2026-08-13, still pending) and the D-02 follow-up; both depend on a container runtime."

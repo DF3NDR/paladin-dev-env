@@ -3,16 +3,16 @@ status: testing
 phase: 45-rustfs-swap-platform-observability-deviations
 source: [45-VERIFICATION.md]
 started: 2026-09-30T17:06:56Z
-updated: 2026-09-30T19:10:00Z
+updated: 2026-09-30T19:50:20Z
 ---
 
 ## Current Test
 
-number: 3
-name: Docs workflow for the retitled storage page
+number: 4
+name: Maintainer acceptance of the OBS-05 re-measured tracing overhead
 expected: |
-  mdbook build and mdbook-linkcheck pass for docs/src/appendix/minio-file-repository-setup.md; the SUMMARY.md entry "S3-Compatible File Storage Setup" resolves.
-awaiting: user response (docs.yml triggers only on pull_request and push to main, so no run exists for the branch push yet)
+  Decide whether to accept +19.36 % (log_sink) / +16.19 % (composite) at point C versus the <= 3 % PRD 07 bar as the new recorded figure (45-BENCH-EVIDENCE.md, WINDOWS.md row 61 open). If accepted, run "node .claude/gsd-core/bin/gsd-tools.cjs windows waive 61 \"<acceptance text>\"". If rejected, row 61 stays open and further optimisation or the I/O-bound re-scope becomes a follow-up. Weigh the noise caveat: point C run 1 measured +6.98 % / +7.29 %, and the target-off rows still cost +16-19 %, so the remaining cost is in the dispatcher/sink path, not serialisation.
+awaiting: user response
 
 ## Tests
 
@@ -26,7 +26,7 @@ result: pass — Workflow Lint job green in ci.yml run 36751442387 (and in the e
 
 ### 3. Docs workflow for the retitled storage page
 expected: mdbook build and mdbook-linkcheck pass for docs/src/appendix/minio-file-repository-setup.md; the SUMMARY.md entry "S3-Compatible File Storage Setup" resolves. (Backstop truth from 45-06; mdbook not installed in the sandbox.)
-result: [pending] — docs.yml triggers only on pull_request and push to main, so no Build MDBook run exists for the branch push. Evidence lands with the first pull request opened from this branch (Build MDBook is a required check there). SUMMARY.md line 115 carries the "S3-Compatible File Storage Setup" entry pointing at appendix/minio-file-repository-setup.md.
+result: pass — confirmed by maintainer. SUMMARY.md line 115 carries the "S3-Compatible File Storage Setup" entry pointing at appendix/minio-file-repository-setup.md; Build MDBook runs as a required check on the first pull request from this branch.
 
 ### 4. Maintainer acceptance of the OBS-05 re-measured tracing overhead
 expected: Decide whether to accept +19.36 % (log_sink) / +16.19 % (composite) at point C versus the <= 3 % PRD 07 bar as the new recorded figure (45-BENCH-EVIDENCE.md, WINDOWS.md row 61 open). If accepted, run "node .claude/gsd-core/bin/gsd-tools.cjs windows waive 61 \"<acceptance text>\"". If rejected, row 61 stays open and further optimisation or the I/O-bound re-scope becomes a follow-up. Weigh the noise caveat: point C run 1 measured +6.98 % / +7.29 %, and the target-off rows still cost +16-19 %, so the remaining cost is in the dispatcher/sink path, not serialisation. (Backstop truth from 45-07; CONTEXT D-19, Phase 28 D-37 precedent.)
@@ -39,9 +39,9 @@ result: [pending]
 ## Summary
 
 total: 5
-passed: 2
+passed: 3
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

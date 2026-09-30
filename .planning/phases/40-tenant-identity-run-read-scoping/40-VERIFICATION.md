@@ -1,35 +1,43 @@
 ---
 phase: 40-tenant-identity-run-read-scoping
 verified: 2026-09-29T12:45:00Z
-status: human_needed
+status: passed
 score: 4/4 roadmap success criteria verified; 43/44 plan truths verified (1 abstained, insufficient_spec; 0 failed)
 behavior_unverified: 0
 overrides_applied: 1
 overrides:
+
   - must_have: ".project/current-exports.txt contains RunReadScope (40-06 artifact)"
     reason: "cargo-public-api lists a re-exported foreign-crate module as one `pub use paladin::core::platform::container::principal` line and never its items; every facade-visible Phase 40 item is present in the refreshed baseline and `make api-surface` exits 0. Tool-design limitation recorded and waived as WINDOWS.md row 59."
     accepted_by: "operator (WINDOWS.md row 59 waiver)"
     accepted_at: "2026-09-29T12:16:51Z"
 deferred:
+
   - truth: "Schedule-fired runs record their submitting principal (today `schedule/service.rs` passes `requested_by: None`, so they persist `submitted_by = None`, are Admin-only visible, and settle under the `unattributed` ledger sentinel)"
     addressed_in: "Phase 41"
     evidence: "40-CONTEXT D-10 and ADR-0054 rule 3 defer schedule-principal inheritance to Phase 41; Phase 41 SC 2 ('Submitting a run while the caller's tenant or API-key allowance is exhausted is refused ... before any run row is written') cannot be evaluated for a principal-less run path"
+
   - truth: "`/v1/threads/*` routes are tenant-scoped"
     addressed_in: "Phase 41 planning or a v0.11 hygiene phase (WINDOWS.md row 58, open)"
     evidence: "PLAT-07 names only `GET /runs` and `/runs/{id}*`; 40-CONTEXT D-14 and ADR-0054 'Downstream Consumers' record the deferral; WINDOWS.md row 58 carries the closing condition and owner"
 human_verification:
+
   - test: "Scope decision on code-review WR-01 (40-REVIEW.md): `POST /v1/runs` with a caller-supplied `thread_id`, and `POST /v1/threads/{id}/fork`, accept another tenant's thread without a tenant check (`src/application/services/run/submission.rs` submit: `request.thread_id.unwrap_or_else(generate_thread_id)` with no visibility check; fork: `RunQuery { thread_id, ..Default::default() }` is `scope: All` and the principal is never compared to the thread's runs). A user-role principal of tenant B can resume/fork tenant A's Waypoint into a run attributed to B, which B may then read. Decide whether this is inside PLAT-07's intent (fix: when `thread_id` is `Some` and `requested_by` is `Some`, look up the thread's latest run with `scope: All` and return the same not-found error as a missing thread when `RunReadScope::for_principal(role, tenant).permits(&latest)` is false) or part of the D-14 thread-tenancy deferral (then extend WINDOWS.md row 58 to name the `POST /runs {thread_id}` and fork paths explicitly)."
     expected: "Either a fix with a contract-style test for submit and fork, or WINDOWS.md row 58 amended to name both paths, before Phase 41 builds admission enforcement on the thread path."
     why_human: "The four roadmap success criteria name only read routes and are met; whether cross-tenant thread resume via a write route is inside this phase's goal ('no caller can read another caller's runs') is a scope judgment the verifier cannot make."
+
   - test: "Backstop truth (40-03, `verification: backstop`): 'the key-to-tenant mapping is immutable after boot -- `AgentAuthConfig` is built once by `build_auth_config`, cloned into each router state, and never written again, so concurrent requests cannot observe a changing tenant for the same key.' Structural observation only: `grep -nE 'api_keys\\.(insert|remove|clear|retain|extend)|api_keys\\s*=' crates/paladin-web/src/*.rs` finds writes only inside `#[cfg(test)]` modules, and `require_authentication` reads `state.agent_auth()` immutably."
     expected: "A human confirms the no-mutation-after-boot invariant (or adds a held-out test that clones `AgentAuthConfig` into two router states and asserts the same key resolves the same tenant under concurrent requests)."
     why_human: "Tagged non-inferable at spec time; symbol presence and wiring are not explicit evidence for a concurrency invariant. Recorded as `insufficient_spec`, not as a failure."
+
   - test: "Judgment-tier prohibitions (20 `must_haves.prohibitions` items across the six plans, all `verification: null`). The verifier's non-authoritative LLM-judge verdict is 'held' for every item (table in 'Prohibitions' below), with test-backed evidence for 11 of them. The remaining 9 rest on code reading: no API-key value in any log, error, response body, persisted row, doc or example (D-00g; the 40-06 SUMMARY records the manual credential-handling review of `git diff 629ef660..HEAD` as clean); no new Medieval-military officer word; no Snyk step; no tenant field on any request DTO."
     expected: "A human reviews the flagged prohibitions and confirms or rejects the non-authoritative verdicts; in particular re-runs the credential-handling review required by `.github/instructions/security.instructions.md` over the Phase 40 diff."
     why_human: "ADR-550 D4: judgment-tier prohibitions are never a silent pass in an autonomous run; they are flagged `unverified-prohibition -- human review recommended`."
+
   - test: "CI-only evidence this sandbox cannot produce (no Docker daemon, ~11 GB disk): the eight live PostgreSQL clauses in `crates/paladin-storage/src/run/postgres.rs` (six shared contract clauses plus `insert_with_latest_persists_attribution` and `unattributed_run_is_stored_as_sql_null`) self-skip locally; the 82 % `cargo llvm-cov --fail-under-lines` coverage job; the `web-server`-feature integration target `tests/integration/e2e_platform_api_test.rs` (exercises `/stream` and `/webhook-deliveries` with an Admin key). The full `cargo test --workspace` figure (57 suites, 6067 passed, 0 failed, 229 ignored) is the 40-06 SUMMARY's record of the gate run on `be3a9030`; the only saved workspace log in the scratchpad is dated 2026-09-26 (5855 passed) and predates this phase, so that figure was not independently re-observed here. Every commit after `be3a9030` touches only `.planning/` (confirmed with `git log --stat`)."
     expected: "CI `postgres-integration`, `coverage` and the integration job are green on the phase's final tree."
     why_human: "Requires Docker services and a full-workspace build that the environment and disk budget do not allow; recorded as CI-only, neither a pass nor a failure."
+
   - test: "Disposition of code-review WR-02, WR-03 and WR-04 (40-REVIEW.md), confirmed against the tree: (WR-02) `RunSubmissionService::cancel` receives `Option<PrincipalRef>` carrying `tenant_id` but only feeds `role` to `authorize_invocation`, so tenant isolation on cancel is enforced solely by `run_controller::cancel_run`'s `load_visible_run` pre-check -- an in-process embedder calling the port directly can cancel a foreign run; (WR-03/04) `row_to_run` returns `RunRepositoryError::Serialization` for a half-attributed or invalid-tenant row and `load_visible_run`/`list_runs` map every repository error through `ApiError::internal(e.to_string())` (`crates/paladin-web/src/error.rs:135` echoes the message verbatim), so a corrupt foreign row answers 500 with backend text instead of the uniform 404, and one corrupt row fails a tenant's whole list page."
     expected: "Decide: apply the shared `permits` check inside `RunSubmissionService::cancel` and a generic-body repository-error helper now, or file them (WINDOWS.md or Phase 46 hygiene). Neither blocks the roadmap criteria, which are stated at the HTTP route level and are met there."
     why_human: "Defense-in-depth and hardening trade-offs; the roadmap contract is satisfied as written."

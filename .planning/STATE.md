@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 45
 current_phase_name: RustFS Swap & Platform/Observability Deviations
 status: executing
-stopped_at: Completed 45-03-PLAN.md
-last_updated: "2026-09-29T23:39:50.789Z"
+stopped_at: Completed 45-04-PLAN.md
+last_updated: "2026-09-30T00:02:34.990Z"
 last_activity: 2026-09-29
 last_activity_desc: Phase 45 execution started
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 30
-  completed_plans: 26
+  completed_plans: 27
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [█████████░] 87%
+**Progress:** [█████████░] 90%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,7 +50,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 45 (RustFS Swap & Platform/Observability Deviations) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 Status: Ready to execute
 Last activity: 2026-09-29 — Phase 45 execution started
 
@@ -212,6 +212,7 @@ Last activity: 2026-09-29 — Phase 45 execution started
 | Phase 45 P01 | 55min | 3 tasks | 9 files |
 | Phase 45 P02 | 45min | 3 tasks | 7 files |
 | Phase 45 P03 | 40min | 3 tasks | 6 files |
+| Phase 45 P04 | 95min | 3 tasks | 15 files |
 
 ## Accumulated Context
 
@@ -304,6 +305,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 45-02: agent runs route failure through RunFinished{Failed} then persist_failure (one terminal event); record_engine_failure keeps its direct publish for graph-path callers
 - [Phase ?]: 45-02: WINDOWS row 31 stays waived; closure recorded as fixed row 60 via the ledger tool (40-06 precedent)
 - [Phase ?]: 45-03: LogTraceSink stays a Copy unit struct with a thread-local bounded buffer; enablement guard kept outside write_trace_line; TraceDispatcher::emit gets no guard (seq/tallies/replay, D-00f) - rustdoc only
+- [Phase ?]: 45-04: s3-storage not added to Coverage job or scripts/coverage.sh (Pitfall 7); contract suite gated by its own compiled-in and passed-count CI steps
+- [Phase ?]: 45-04: k8s RustFS runs with console disabled, non-root uid 10001; k8s/minio.yaml renamed to k8s/rustfs.yaml
 
 ### Pending Todos
 
@@ -506,8 +509,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-29T23:39:50.768Z
-**Stopped at:** Completed 45-03-PLAN.md
+**Last session:** 2026-09-30T00:02:34.969Z
+**Stopped at:** Completed 45-04-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

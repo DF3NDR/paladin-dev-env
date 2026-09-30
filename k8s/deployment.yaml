@@ -55,17 +55,17 @@ spec:
               done
               echo "Redis is ready!"
 
-        - name: wait-for-minio
+        - name: wait-for-rustfs
           image: busybox:1.36
           command:
             - sh
             - -c
             - |
-              until nc -z paladin-minio 9000; do
-                echo "Waiting for MinIO..."
+              until nc -z paladin-rustfs 9000; do
+                echo "Waiting for RustFS..."
                 sleep 2
               done
-              echo "MinIO is ready!"
+              echo "RustFS is ready!"
 
       containers:
         - name: paladin

@@ -484,7 +484,7 @@ kubectl rollout restart statefulset redis
 kubectl get secret redis-auth -o jsonpath='{.data.password}' | base64 -d
 ```
 
-### MinIO/S3 Errors
+### Object Store (RustFS/S3) Errors
 
 **Symptoms:**
 - File storage operations fail
@@ -492,17 +492,21 @@ kubectl get secret redis-auth -o jsonpath='{.data.password}' | base64 -d
 
 **Diagnosis:**
 ```bash
-# Test MinIO connectivity
+# Test object-store connectivity (RustFS readiness endpoint)
 kubectl exec deployment/paladin -- \
-  curl -v http://minio:9000/minio/health/live
+  curl -v http://paladin-rustfs:9000/health/ready
 ```
 
 **Solutions:**
 ```bash
 # Fix: Update credentials
-kubectl create secret generic minio-credentials \
-  --from-literal=access-key="minioadmin" \
-  --from-literal=secret-key="minioadmin"
+# RUSTFS_* are the store-side root credentials; MINIO_* are the application-side names
+# (unchanged) and must match unless you provision a separate RustFS IAM user.
+kubectl create secret generic paladin-secrets \
+  --from-literal=RUSTFS_ACCESS_KEY="<your-access-key>" \
+  --from-literal=RUSTFS_SECRET_KEY="<your-secret-key>" \
+  --from-literal=MINIO_ACCESS_KEY="<your-access-key>" \
+  --from-literal=MINIO_SECRET_KEY="<your-secret-key>"
 ```
 
 ### LLM Provider Issues

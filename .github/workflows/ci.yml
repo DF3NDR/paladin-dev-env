@@ -1796,23 +1796,23 @@ jobs:
             --from-literal=OPENAI_API_KEY=dummy \
             --from-literal=DEEPSEEK_API_KEY=dummy \
             --from-literal=ANTHROPIC_API_KEY=dummy \
-            --from-literal=MINIO_ROOT_USER=minioadmin \
-            --from-literal=MINIO_ROOT_PASSWORD=minioadmin \
-            --from-literal=MINIO_ACCESS_KEY=paladin \
-            --from-literal=MINIO_SECRET_KEY=paladin-secret \
+            --from-literal=RUSTFS_ACCESS_KEY=smokeadmin \
+            --from-literal=RUSTFS_SECRET_KEY=smokepass123 \
+            --from-literal=MINIO_ACCESS_KEY=smokeadmin \
+            --from-literal=MINIO_SECRET_KEY=smokepass123 \
             -n paladin
 
       - name: Apply Kubernetes manifests
         run: |
           kubectl apply -f k8s/configmap.yaml
           kubectl apply -f k8s/redis.yaml
-          kubectl apply -f k8s/minio.yaml
+          kubectl apply -f k8s/rustfs.yaml
           sleep 20
 
       - name: Wait for dependencies
         run: |
           kubectl wait --for=condition=ready pod -l app=redis -n paladin --timeout=120s
-          kubectl wait --for=condition=ready pod -l app=minio -n paladin --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=rustfs -n paladin --timeout=120s
 
       - name: Build and load Docker image
         run: |
@@ -1869,8 +1869,9 @@ jobs:
           kubectl logs -l app=paladin -n paladin --tail=200 || true
           echo "=== Redis Logs ==="
           kubectl logs -l app=redis -n paladin --tail=100 || true
-          echo "=== MinIO Logs ==="
-          kubectl logs -l app=minio -n paladin --tail=100 || true
+          # RustFS logs mostly to files at `warn`, so this dump is thin.
+          echo "=== RustFS Logs ==="
+          kubectl logs -l app=rustfs -n paladin --tail=100 || true
           echo "=== Events ==="
           kubectl get events -n paladin --sort-by='.lastTimestamp'
 

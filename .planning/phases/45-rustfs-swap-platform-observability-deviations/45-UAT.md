@@ -1,18 +1,14 @@
 ---
-status: testing
+status: complete
 phase: 45-rustfs-swap-platform-observability-deviations
 source: [45-VERIFICATION.md]
 started: 2026-09-30T17:06:56Z
-updated: 2026-09-30T19:52:52Z
+updated: 2026-09-30T19:54:16Z
 ---
 
 ## Current Test
 
-number: 5
-name: Follow-ups (not Phase 45 criteria)
-expected: |
-  On a Docker-capable machine, "make services-up" then "make coverage" reproduces CI's coverage figure (todo 2026-08-13); once CI is green, "/gsd-verify-work 40" flips Phase 40 UAT test 4 from blocked to pass (CONTEXT D-02).
-awaiting: user response
+[testing complete]
 
 ## Tests
 
@@ -34,14 +30,14 @@ result: pass — maintainer accepted the +19.36 % / +16.19 % figure; WINDOWS.md 
 
 ### 5. Follow-ups (not Phase 45 criteria)
 expected: On a Docker-capable machine, "make services-up" then "make coverage" reproduces CI's coverage figure (todo 2026-08-13); once CI is green, "/gsd-verify-work 40" flips Phase 40 UAT test 4 from blocked to pass (CONTEXT D-02).
-result: [pending]
+result: pass — maintainer confirmed; both items remain tracked as follow-ups outside Phase 45 criteria.
 
 ## Summary
 
 total: 5
-passed: 4
+passed: 5
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 

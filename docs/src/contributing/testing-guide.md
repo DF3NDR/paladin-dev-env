@@ -11,7 +11,7 @@ cargo test --workspace --lib
 # All tests (unit + integration)
 make test-all
 
-# Integration tests with Docker services (Redis, MinIO, MySQL)
+# Integration tests with Docker services (Redis, RustFS, MySQL)
 make test-integration-docker
 
 # Doc tests only
@@ -476,7 +476,7 @@ cargo binstall cargo-llvm-cov
 ```
 
 The gated measurement runs against `--features integration-tests`, which needs live Redis and
-MinIO. **Start them first** — `make services-up` — or your local figure will not match CI's.
+RustFS. **Start them first** — `make services-up` — or your local figure will not match CI's.
 
 ### Local generation
 
@@ -484,7 +484,7 @@ Two-step sequence — measuring does not implicitly start services (a Make depen
 containers as a side effect of reading a number would be surprising):
 
 ```bash
-# 1. Start Redis and MinIO (once per session)
+# 1. Start Redis and RustFS (once per session)
 make services-up
 
 # 2. Measure coverage — LCOV report plus the fail-under-lines threshold check
@@ -511,7 +511,7 @@ without the aggregate `llm-all` feature silently excludes the other six adapters
 the numerator and the denominator — see the full job table on
 [CI/CD Guide](../deployment/cicd.md) for where this invocation runs in CI.
 
-If `make coverage` fails with a Redis/MinIO connection error, that is `make coverage` itself
+If `make coverage` fails with a Redis/RustFS connection error, that is `make coverage` itself
 telling you to run `make services-up` first — it fails loudly with a pointer rather than starting
 containers for you.
 
@@ -574,7 +574,7 @@ was skipped or targeted the wrong toolchain. Re-run it against the active toolch
 (`rustup show`).
 
 **Local figure lower than CI's** — the services were not running. `--features integration-tests`
-exercises Redis- and MinIO-backed code paths; if `make services-up` was not run first, those tests
+exercises Redis- and RustFS-backed code paths; if `make services-up` was not run first, those tests
 skip or fail, and the lines they would have covered count as missed. Run `make services-up`, then
 re-run `make coverage`.
 

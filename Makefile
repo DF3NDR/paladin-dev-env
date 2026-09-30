@@ -47,7 +47,7 @@ examples: ## Show common usage examples
 	@echo "  make setup                    # First time setup"
 	@echo "  make dev                      # Start dev environment"
 	@echo "  make watch                    # Watch for changes"
-	@echo "  make test-integration-minio   # Test MinIO integration"
+	@echo "  make test-integration-minio   # Test object-store (RustFS) integration"
 	@echo ""
 	@echo "$(YELLOW)Testing:$(NC)"
 	@echo "  make test-all                 # Run all tests"
@@ -64,7 +64,7 @@ examples: ## Show common usage examples
 	@echo "$(YELLOW)Services Management:$(NC)"
 	@echo "  make services-up              # Start all services"
 	@echo "  make redis-cli                # Connect to Redis"
-	@echo "  make minio-console            # Open MinIO console"
+	@echo "  make minio-console            # Open the RustFS console"
 	@echo "  make health                   # Check service health"
 
 .PHONY: status
@@ -110,7 +110,7 @@ dev: ## Start development environment with hot reload
 	@echo "$(GREEN)✅ Development environment started$(NC)"
 	@echo "Services available at:"
 	@echo "  - Application: http://localhost:8080"
-	@echo "  - MinIO Console: http://localhost:9001"
+	@echo "  - RustFS Console: http://localhost:9001/rustfs/console/index.html"
 	@echo "  - Redis Commander: http://localhost:8081"
 
 .PHONY: dev-logs
@@ -162,8 +162,8 @@ test-integration-redis: ## Run Redis integration tests only
 	@./scripts/run_integration_tests.sh -t "redis" -m local
 
 .PHONY: test-integration-minio
-test-integration-minio: ## Run MinIO integration tests only
-	@echo "$(CYAN)Running MinIO integration tests...$(NC)"
+test-integration-minio: ## Run object-store (RustFS) integration tests only
+	@echo "$(CYAN)Running object-store (RustFS) integration tests...$(NC)"
 	@./scripts/run_integration_tests.sh -t "file_storage" -m local
 
 .PHONY: test-all
@@ -329,7 +329,7 @@ coverage: ## Measure workspace coverage (mirrors CI's `coverage` job — require
 	@# Delegates to scripts/coverage.sh — shared with CI's `coverage` job so the
 	@# feature list cannot drift. The script auto-detects service endpoints, so this
 	@# works both on the host (localhost:6380/9010) and inside the devcontainer
-	@# (redis:6379 / minio:9000), which the old hardcoded preflight could not.
+	@# (redis:6379 / rustfs:9000), which the old hardcoded preflight could not.
 	@bash scripts/coverage.sh
 
 .PHONY: coverage-html
@@ -517,10 +517,10 @@ redis-cli: ## Connect to Redis CLI
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec redis redis-cli
 
 .PHONY: minio-console
-minio-console: ## Open MinIO console
-	@echo "$(CYAN)Opening MinIO console...$(NC)"
-	@echo "MinIO Console: http://localhost:9001"
-	@echo "Credentials: minioadmin/minioadmin"
+minio-console: ## Open the RustFS console (target name kept for muscle memory)
+	@echo "$(CYAN)Opening RustFS console...$(NC)"
+	@echo "RustFS Console: http://localhost:9001/rustfs/console/index.html"
+	@echo "Credentials: paladin-dev / paladin-dev-secret (RUSTFS_ACCESS_KEY / RUSTFS_SECRET_KEY in .env)"
 
 ##@ Database & Storage
 
@@ -531,10 +531,11 @@ db-reset: ## Reset database
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) restart paladin-app
 
 .PHONY: storage-reset
-storage-reset: ## Reset MinIO storage
-	@echo "$(CYAN)Resetting MinIO storage...$(NC)"
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec minio rm -rf /data/* || true
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) restart minio minio-init
+storage-reset: ## Reset RustFS storage
+	@echo "$(CYAN)Resetting RustFS storage...$(NC)"
+	@# No init container: the app recreates its bucket on next start (MinioAdapter::new).
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec rustfs sh -c 'rm -rf /data/*' || true
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) restart rustfs
 
 .PHONY: data-reset
 data-reset: db-reset storage-reset ## Reset all data
@@ -686,8 +687,8 @@ health: ## Check service health
 	@echo "$(CYAN)Checking service health...$(NC)"
 	@echo "Redis:"
 	@curl -f http://localhost:6379 2>/dev/null && echo "✅ Redis OK" || echo "❌ Redis DOWN"
-	@echo "MinIO:"
-	@curl -f http://localhost:9000/minio/health/live 2>/dev/null && echo "✅ MinIO OK" || echo "❌ MinIO DOWN"
+	@echo "RustFS:"
+	@curl -f http://localhost:9000/health/ready 2>/dev/null && echo "✅ RustFS OK" || echo "❌ RustFS DOWN"
 	@echo "Application:"
 	@curl -f http://localhost:8080/health 2>/dev/null && echo "✅ App OK" || echo "❌ App DOWN or no health endpoint"
 
@@ -723,7 +724,7 @@ devcontainer-network: ## Create DevContainer network
 .PHONY: devcontainer-services
 devcontainer-services: ## Start DevContainer services
 	@echo "$(CYAN)Starting DevContainer services...$(NC)"
-	@$(DOCKER_COMPOSE) -f .devcontainer/docker-compose.yml up -d redis minio mysql
+	@$(DOCKER_COMPOSE) -f .devcontainer/docker-compose.yml up -d redis rustfs mysql
 	@echo "$(GREEN)✅ Services started$(NC)"
 
 .PHONY: devcontainer-services-down

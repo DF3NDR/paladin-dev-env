@@ -539,7 +539,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 45-04-PLAN.md — Wave 2 (STORE-01/02): CI Integration/Coverage/Docker Integration/E2E/k8s smoke on `rustfs/rustfs:1.0.0`, `mc` deleted, suite runs with a tests-ran check, `k8s/minio.yaml` → `k8s/rustfs.yaml`
-- [ ] 45-05-PLAN.md — Wave 2 (STORE-01): dev compose, devcontainer, Makefile, `.env.example`, coverage probe and dev docs on RustFS
+- [x] 45-05-PLAN.md — Wave 2 (STORE-01): dev compose, devcontainer, Makefile, `.env.example`, coverage probe and dev docs on RustFS
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

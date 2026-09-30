@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 45
 current_phase_name: RustFS Swap & Platform/Observability Deviations
 status: executing
-stopped_at: Completed 45-04-PLAN.md
-last_updated: "2026-09-30T00:02:34.990Z"
+stopped_at: Completed 45-05-PLAN.md
+last_updated: "2026-09-30T00:10:16.055Z"
 last_activity: 2026-09-29
 last_activity_desc: Phase 45 execution started
 progress:
   total_phases: 4
   completed_phases: 3
   total_plans: 30
-  completed_plans: 27
+  completed_plans: 28
 ---
 
 # Project State
@@ -30,7 +30,7 @@ provider, transport, or storage implementation.
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 Awaiting operator approval before `/gsd-plan-phase 38`.
 
-**Progress:** [█████████░] 90%
+**Progress:** [█████████░] 93%
 requirements mapped, 100% coverage); no phase planned yet.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,7 +50,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 45 (RustFS Swap & Platform/Observability Deviations) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 Status: Ready to execute
 Last activity: 2026-09-29 — Phase 45 execution started
 
@@ -213,6 +213,7 @@ Last activity: 2026-09-29 — Phase 45 execution started
 | Phase 45 P02 | 45min | 3 tasks | 7 files |
 | Phase 45 P03 | 40min | 3 tasks | 6 files |
 | Phase 45 P04 | 95min | 3 tasks | 15 files |
+| Phase 45 P05 | 40min | 3 tasks | 16 files |
 
 ## Accumulated Context
 
@@ -307,6 +308,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 45-03: LogTraceSink stays a Copy unit struct with a thread-local bounded buffer; enablement guard kept outside write_trace_line; TraceDispatcher::emit gets no guard (seq/tallies/replay, D-00f) - rustdoc only
 - [Phase ?]: 45-04: s3-storage not added to Coverage job or scripts/coverage.sh (Pitfall 7); contract suite gated by its own compiled-in and passed-count CI steps
 - [Phase ?]: 45-04: k8s RustFS runs with console disabled, non-root uid 10001; k8s/minio.yaml renamed to k8s/rustfs.yaml
+- [Phase ?]: 45-05: dev compose inherits the pinned RustFS image in the .dev.yml override; console stays on in dev/devcontainer (off in CI/k8s); coverage.sh log label kept
 
 ### Pending Todos
 
@@ -509,8 +511,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-30T00:02:34.969Z
-**Stopped at:** Completed 45-04-PLAN.md
+**Last session:** 2026-09-30T00:10:16.032Z
+**Stopped at:** Completed 45-05-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

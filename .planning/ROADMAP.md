@@ -543,7 +543,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 45-06-PLAN.md — Wave 3 (STORE-03): ADR-0055, storage docs reframed with the production-manifest decision, phase-wide no-MinIO gate, CHANGELOG, MinIO todos closed
+- [x] 45-06-PLAN.md — Wave 3 (STORE-03): ADR-0055, storage docs reframed with the production-manifest decision, phase-wide no-MinIO gate, CHANGELOG, MinIO todos closed
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

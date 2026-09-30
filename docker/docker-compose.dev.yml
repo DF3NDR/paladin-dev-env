@@ -6,18 +6,14 @@ services:
     ports:
       - "6379:6379"
 
-  minio:
+  # Inherits the pinned image from docker-compose.yml (no image line here).
+  rustfs:
     environment:
-      MINIO_ROOT_USER: devuser
-      MINIO_ROOT_PASSWORD: devpassword123
+      RUSTFS_ACCESS_KEY: devuser
+      RUSTFS_SECRET_KEY: devpassword123
     ports:
       - "9000:9000"
       - "9001:9001"
-
-  minio-init:
-    environment:
-      MINIO_ROOT_USER: devuser
-      MINIO_ROOT_PASSWORD: devpassword123
 
   paladin-app:
     build:

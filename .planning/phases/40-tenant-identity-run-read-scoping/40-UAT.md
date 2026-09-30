@@ -8,7 +8,13 @@ updated: 2026-09-29T19:44:28Z
 
 ## Current Test
 
-[testing paused — 1 item outstanding: test 4 blocked (third-party)]
+number: 4
+name: CI-only evidence
+expected: |
+  CI postgres-integration, coverage (82% line floor) and the web-server integration job (tests/integration/e2e_platform_api_test.rs) are green on the phase's final tree.
+  Blocker status: lifted. The MinIO pull failure was resolved by Phase 45 (RustFS swap, ADR-0055). The Phase 40 final code commit be3a9030 is an ancestor of HEAD 730f521f; every commit since touches only .planning/ or Phase 45 (RustFS/CI/docs).
+  Live evidence: ci.yml run 478 (id 36770517439, commit 730f521f, https://github.com/DF3NDR/paladin-dev-env/actions/runs/36770517439) concluded success. Green: "Run every *::postgres contract suite" (postgres-integration, no SKIP path), "Measure coverage" with cargo-llvm-cov (coverage job), "Run the e2e_platform_api test binary" (web-server integration, non-zero test selection asserted), Integration Tests (RustFS), Docker Integration Tests, Kubernetes Smoke Test, unit + doc tests, clippy/fmt/docs, audit, deny, API surface. Only skips are the by-design on-failure steps. Run 472 (id 36751442387, commit 2a97fd9c) also green on the same Phase 40 code.
+awaiting: user response
 
 ## Tests
 

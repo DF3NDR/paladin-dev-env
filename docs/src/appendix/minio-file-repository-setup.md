@@ -2,6 +2,8 @@
 
 This section describes how to set up and use the MinIO file storage adapter for the paladin framework using the `rust-s3` crate, alongside the Redis queue adapter.
 
+The development, test, CI and reference Kubernetes object store is RustFS, recorded as ADR-0055 (`.planning/decisions/0055-dev-test-reference-object-store-rustfs.md`).
+
 > This is appendix reference material, not a tutorial: the code blocks below are illustrative
 > fragments fenced `rust,ignore` and are not compiled by mdBook's build. The API forms are
 > verified against `crates/paladin-ports/src/output/file_storage_port.rs` and

@@ -867,14 +867,29 @@ jobs:
 
       - name: Start infrastructure services
         run: |
-          docker compose -f docker/docker-compose.test.yml up -d redis-test minio-test minio-test-init
-          # Wait for MinIO init container to finish creating buckets
-          timeout 120 sh -c 'until docker inspect paladin-minio-test-init --format="{{.State.Status}}" 2>/dev/null | grep -q exited; do sleep 2; done'
+          # --wait blocks until both healthchecks pass; there is no bucket-init container
+          # (MinioAdapter::new creates the bucket it needs).
+          docker compose -f docker/docker-compose.test.yml up -d --wait redis-test rustfs-test
           echo "Infrastructure services ready"
 
       - name: Run integration tests in Docker
         run: |
           docker compose -f docker/docker-compose.test.yml run --no-deps --rm integration-tests
+
+      # Same vacuous-pass guard as the service-container job: the suite is gated behind
+      # `s3-storage`, and a run that executes zero cases must fail, not pass. Runs inside
+      # the compose network against `rustfs-test` / `redis-test` (see the
+      # `integration-tests` service environment).
+      - name: Run file storage contract suite in Docker
+        run: |
+          set -o pipefail
+          docker compose -f docker/docker-compose.test.yml run --no-deps --rm -T integration-tests cargo test --test lib --features integration-tests,s3-storage file_storage_integration_tests -- --ignored --test-threads=1 --nocapture 2>&1 | tee docker-file-storage-suite.log
+          PASSED=$(sed -n 's/^test result: ok\. \([0-9][0-9]*\) passed.*/\1/p' docker-file-storage-suite.log | tail -n 1)
+          echo "file storage contract suite passed: ${PASSED:-0}"
+          if [ -z "${PASSED}" ] || [ "${PASSED}" -lt 11 ]; then
+            echo "::error::expected 'test result: ok' with at least 11 passed, got '${PASSED:-none}'"
+            exit 1
+          fi
 
       - name: Collect logs on failure
         if: failure()
@@ -1875,8 +1890,8 @@ jobs:
       - name: Create environment file
         run: |
           cat > docker/.env << 'EOF'
-          MINIO_ROOT_USER=e2euser
-          MINIO_ROOT_PASSWORD=e2epassword123
+          RUSTFS_ACCESS_KEY=e2euser
+          RUSTFS_SECRET_KEY=e2epassword123
           REDIS_PASSWORD=e2eredispass
           LLM_API_KEY=test-key
           EOF
@@ -1891,18 +1906,19 @@ jobs:
           # Check Redis
           docker compose -f docker/docker-compose.yml exec -T redis redis-cli -a "${REDIS_PASSWORD:-changeme}" --no-auth-warning ping
 
-          # Check MinIO
-          curl -f http://localhost:9000/minio/health/live
+          # Check RustFS
+          curl -f http://localhost:9000/health/ready
 
           # Check application (if health endpoint exists)
           timeout 60 bash -c 'until curl -f http://localhost:8080/health 2>/dev/null; do sleep 2; done' || echo "App health check skipped"
 
       - name: Run end-to-end tests
         run: |
-          # Run integration tests against the deployed test services (MinIO + Redis)
-          # Tests are marked #[ignore] to skip in unit-test runs; --ignored opts them in here
+          # Run the file storage contract suite against the test compose services (RustFS + Redis)
+          # Tests are marked #[ignore] to skip in unit-test runs; --ignored opts them in here.
+          # `s3-storage` is required: without it the filter matches zero tests and passes.
           docker compose -f docker/docker-compose.test.yml run --rm integration-tests \
-            cargo test file_storage_integration_tests --test lib -- --ignored --test-threads=1 --nocapture
+            cargo test --test lib --features integration-tests,s3-storage file_storage_integration_tests -- --ignored --test-threads=1 --nocapture
 
       - name: Collect logs
         if: failure()

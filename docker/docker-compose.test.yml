@@ -15,59 +15,33 @@ services:
       timeout: 3s
       retries: 5
 
-  minio-test:
-    # Pinned rather than floating: Docker Hub deleted the community MinIO
-    # repositories on 2026-09-12 and MinIO no longer publishes
-    # community-edition images. quay.io still serves this last known-good
-    # community release and no newer community tag will ever appear. Server
-    # manifest digest:
-    # sha256:cf3dadcfa1fb0324f43958bad1abba986d53c4ecc04d4d50b46c7dcda28bd3cd
-    # Long-term replacement tracked in
-    # .planning/todos/pending/2026-09-13-evaluate-rustfs-replacement-for-minio.md
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
-    container_name: paladin-minio-test
+  rustfs-test:
+    # Pinned rather than floating: the community MinIO images are gone (Docker Hub
+    # deleted them on 2026-09-12, quay.io locked anonymous pulls on 2026-09-24).
+    # RustFS is Apache-2.0 and multi-arch. Manifest-list digest:
+    # sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+    # A re-pin is a deliberate commit, never automatic (Phase 45 D-03).
+    # No `command:` key: the image entrypoint appends /data itself. No bucket-init
+    # service either: `MinioAdapter::new` creates the bucket it needs (D-05).
+    image: rustfs/rustfs:1.0.0
+    container_name: paladin-rustfs-test
     ports:
       - "9010:9000"
-      - "9011:9001"
     environment:
-      MINIO_ROOT_USER: testuser
-      MINIO_ROOT_PASSWORD: testpass123
-      MINIO_CONSOLE_ADDRESS: ":9001"
-    command: server /data --console-address ":9001"
+      RUSTFS_ACCESS_KEY: testuser
+      RUSTFS_SECRET_KEY: testpass123
+      RUSTFS_CONSOLE_ENABLE: "false"
     tmpfs:
-      - /data
+      # The image runs as uid 10001, so a root-owned tmpfs would be unwritable.
+      - /data:mode=1777
     networks:
       - paladin-test-network
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/health/ready" ]
       interval: 5s
       timeout: 3s
       retries: 10
-      start_period: 10s
-
-  minio-test-init:
-    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
-    container_name: paladin-minio-test-init
-    depends_on:
-      minio-test:
-        condition: service_healthy
-    environment:
-      MINIO_ROOT_USER: testuser
-      MINIO_ROOT_PASSWORD: testpass123
-    entrypoint: |
-      /bin/sh -c "
-      echo 'Waiting for MinIO test to be ready...'
-      until mc alias set minio http://minio-test:9000 \$$MINIO_ROOT_USER \$$MINIO_ROOT_PASSWORD; do
-        echo 'MinIO test not ready, waiting...'
-        sleep 2
-      done
-      echo 'MinIO test is ready. Creating test buckets...'
-      mc mb minio/test-bucket --ignore-existing
-      mc mb minio/integration-tests --ignore-existing
-      echo 'Test bucket initialization complete'
-      "
-    networks:
-      - paladin-test-network
+      start_period: 5s
 
   # Ollama Tier 2 suite (17-07, D-15): the phase's only end-to-end exercise of
   # the shared CompatEngine against a real implementation of the
@@ -157,22 +131,28 @@ services:
       target: test
     container_name: paladin-integration-tests
     depends_on:
-      minio-test:
+      rustfs-test:
         condition: service_healthy
       redis-test:
         condition: service_healthy
-      minio-test-init:
-        condition: service_completed_successfully
     environment:
       - RUST_LOG=debug
       - RUST_BACKTRACE=1
       - APP_REDIS_HOST=redis-test
       - APP_REDIS_PORT=6379
-      - APP_MINIO_ENDPOINT=minio-test:9000
+      - APP_MINIO_ENDPOINT=rustfs-test:9000
       - APP_MINIO_ACCESS_KEY=testuser
       - APP_MINIO_SECRET_KEY=testpass123
       - APP_MINIO_BUCKET=test-bucket
       - APP_MINIO_SECURE=false
+      # Inside the compose network the harness would otherwise fall into local
+      # testcontainers mode (no Docker socket here); point it at the services.
+      - USE_EXTERNAL_TEST_SERVICES=true
+      - TEST_REDIS_HOST=redis-test
+      - TEST_REDIS_PORT=6379
+      - TEST_MINIO_ENDPOINT=rustfs-test:9000
+      - TEST_MINIO_ACCESS_KEY=testuser
+      - TEST_MINIO_SECRET_KEY=testpass123
     command: cargo test --features integration-tests -- --test-threads=1 --nocapture
     networks:
       - paladin-test-network

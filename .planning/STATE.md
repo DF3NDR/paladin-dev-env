@@ -5,12 +5,12 @@ milestone_name: Crate Release
 current_phase: 41
 current_phase_name: Admission-Time Allowance Enforcement
 status: planning
-stopped_at: Phase 40 complete — UAT 5/5 (test 4 unblocked by Phase 45's CI run 478), `40-SECURITY.md` verified (26 threats closed, 0 open), `40-VERIFICATION.md` passed; Phases 38, 39, 40 and 45 sealed; ready to plan Phase 41
-last_updated: "2026-09-30T22:19:23.239Z"
+stopped_at: Phase 41 context gathered
+last_updated: "2026-10-02T01:19:53.214Z"
 last_activity: 2026-09-30
-last_activity_desc: Phase 40 verified and sealed (UAT 5/5, security 26/26, verification passed); Phase 45 was already sealed, so the next phase in the resequenced order is Phase 41
+last_activity_desc: "Phase 40 complete: UAT 5/5, 40-SECURITY.md verified (26/26), verification passed"
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 4
   total_plans: 30
   completed_plans: 30
@@ -534,9 +534,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-09-30T22:25:00Z
-**Stopped at:** Phase 40 complete — UAT 5/5 (test 4 passed on ci.yml run 478 after the Phase 45 RustFS swap lifted the MinIO-pull blocker), `40-SECURITY.md` verified (26 threats closed, 0 open), `40-VERIFICATION.md` passed; ready to plan Phase 41
-**Resume file:** None
+**Last session:** 2026-10-02T01:19:53.193Z
+**Stopped at:** Phase 41 context gathered
+**Resume file:** .planning/phases/41-admission-time-allowance-enforcement/41-CONTEXT.md
 
 ## Operator Next Steps
 

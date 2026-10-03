@@ -1,5 +1,4 @@
 pub mod aegis;
-/// The Treasurer's admission value types (ALLOW-01/02/04, D-14) -- pure, serde-derived, no I/O.
 pub mod allowance;
 pub mod arsenal;
 pub mod assistant;

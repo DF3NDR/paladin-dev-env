@@ -726,6 +726,9 @@ pub(crate) fn map_submission_error(err: RunSubmissionError) -> ApiError {
         )),
         RunSubmissionError::Backend { message } => internal_repo_error("run submission", message),
         RunSubmissionError::NotWired => ApiError::not_implemented(SUBMISSION_PORT_HINT),
+        // Phase 41 D-12: an exhausted allowance is a 429 with its own code, never the per-IP
+        // limiter's. Explicit arm so the trailing catch-all never turns it into a 500.
+        RunSubmissionError::AllowanceExhausted(refusal) => ApiError::allowance_exhausted(&refusal),
         other => internal_repo_error("run submission", other),
     }
 }
@@ -3403,5 +3406,23 @@ mod tests {
             message: LEAKY_REPO_TEXT.to_string(),
         });
         assert_generic_internal(&err);
+    }
+
+    #[test]
+    fn map_submission_error_maps_allowance_exhausted_to_429() {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+        };
+        let usd = CurrencyCode::new("USD").unwrap();
+        let err = map_submission_error(RunSubmissionError::AllowanceExhausted(AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::Tenant,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(10, usd.clone()),
+            ceiling: Cost::new(10, usd),
+            window: None,
+            evaluated_at: Utc::now(),
+        }));
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.to_body()["error"]["code"], "allowance_exhausted");
     }
 }

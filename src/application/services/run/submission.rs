@@ -17,6 +17,7 @@ use paladin_core::platform::container::principal::{PrincipalRef, RunReadScope};
 use paladin_core::platform::container::run::{ForkSpec, Run, RunId};
 use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::ThreadId;
+use paladin_ports::input::allowance_admission_port::{AdmissionError, AllowanceAdmissionPort};
 use paladin_ports::input::run_submission_port::{
     CancelOutcome, ForkRun, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
 };
@@ -82,6 +83,20 @@ fn map_repository_error(err: RunRepositoryError) -> RunSubmissionError {
 fn map_queue_error(err: QueueError) -> RunSubmissionError {
     RunSubmissionError::Backend {
         message: err.to_string(),
+    }
+}
+
+/// Map an [`AllowanceAdmissionPort::admit`] failure (Phase 41): a refusal is the typed
+/// [`RunSubmissionError::AllowanceExhausted`]; a backend failure stays a `Backend` error (the
+/// request is not admitted -- fail closed, D-10). `AdmissionError` is a foreign
+/// `#[non_exhaustive]` enum, so any future variant falls back to its display text.
+fn map_admission_error(err: AdmissionError) -> RunSubmissionError {
+    match err {
+        AdmissionError::Refused(refusal) => RunSubmissionError::AllowanceExhausted(refusal),
+        AdmissionError::Backend { message } => RunSubmissionError::Backend { message },
+        other => RunSubmissionError::Backend {
+            message: other.to_string(),
+        },
     }
 }
 
@@ -163,6 +178,10 @@ pub struct RunSubmissionService {
     /// its own precondition without this collaborator, so failing closed
     /// (a genuine 501) is the honest answer, not a silently skipped check.
     waypoints: Option<Arc<dyn WaypointPort>>,
+    /// The Treasurer's admission check (Phase 41, D-06), wired via
+    /// [`RunSubmissionService::with_treasurer`]. `None` (the default) means admission is a
+    /// no-op.
+    treasurer: Option<Arc<dyn AllowanceAdmissionPort>>,
 }
 
 impl RunSubmissionService {
@@ -185,6 +204,7 @@ impl RunSubmissionService {
             local_tokens: LocalRunTokens::new(),
             ssrf_guard: SsrfGuard::new(false),
             waypoints: None,
+            treasurer: None,
         }
     }
 
@@ -202,6 +222,18 @@ impl RunSubmissionService {
     /// inject a stubbed resolver in tests.
     pub fn with_ssrf_guard(mut self, ssrf_guard: SsrfGuard) -> Self {
         self.ssrf_guard = ssrf_guard;
+        self
+    }
+
+    /// Attach the Treasurer's admission check (Phase 41, D-06): `submit` asks it whether the
+    /// caller's allowance is exhausted after the SSRF guard, `resolve`, role authorization and
+    /// thread-visibility check, and before any run row is written. `None` (the default) means
+    /// admission is a no-op; production wiring attaches one only when `treasurer.allowance` has
+    /// entries.
+    ///
+    /// A request with no principal (`requested_by: None`) is never gated (D-07).
+    pub fn with_treasurer(mut self, treasurer: Arc<dyn AllowanceAdmissionPort>) -> Self {
+        self.treasurer = Some(treasurer);
         self
     }
 
@@ -281,6 +313,39 @@ impl RunSubmissionService {
             })
         }
     }
+
+    /// Insert `run` (freezing `latest` when `use_latest`) and enqueue it -- the two writes
+    /// `submit` makes after admission, kept together so `submit` can confirm or abandon the
+    /// admission on the one result.
+    async fn persist_and_enqueue(
+        &self,
+        run: &mut Run,
+        use_latest: bool,
+    ) -> Result<(), RunSubmissionError> {
+        if use_latest {
+            let resolved_version = self
+                .repository
+                .insert_with_latest(run)
+                .await
+                .map_err(map_repository_error)?;
+            run.assistant.version = resolved_version;
+        } else {
+            self.repository
+                .insert(run)
+                .await
+                .map_err(map_repository_error)?;
+        }
+        self.queue
+            .enqueue(QueuedRun {
+                run_id: run.run_id.clone(),
+                thread_id: run.thread_id.clone(),
+                attempt: run.attempt,
+                enqueued_at: Utc::now(),
+            })
+            .await
+            .map_err(map_queue_error)?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -341,28 +406,27 @@ impl RunSubmissionPort for RunSubmissionService {
             run = run.with_submitted_by(principal_ref.attribution());
         }
 
-        if use_latest {
-            let resolved_version = self
-                .repository
-                .insert_with_latest(&run)
-                .await
-                .map_err(map_repository_error)?;
-            run.assistant.version = resolved_version;
-        } else {
-            self.repository
-                .insert(&run)
-                .await
-                .map_err(map_repository_error)?;
+        // Phase 41 D-06/D-07: the allowance check, BEFORE any row is written. A request with no
+        // principal (an internal caller) is never gated. Admission is a check only (D-05).
+        let admission = match (&self.treasurer, &run.submitted_by) {
+            (Some(treasurer), Some(subject)) => Some(
+                treasurer
+                    .admit(subject, Some(&run.run_id))
+                    .await
+                    .map_err(map_admission_error)?,
+            ),
+            _ => None,
+        };
+
+        let persisted = self.persist_and_enqueue(&mut run, use_latest).await;
+
+        if let (Some(treasurer), Some(admission)) = (&self.treasurer, &admission) {
+            match &persisted {
+                Ok(()) => treasurer.confirm(admission).await,
+                Err(_) => treasurer.abandon(admission).await,
+            }
         }
-        self.queue
-            .enqueue(QueuedRun {
-                run_id: run.run_id.clone(),
-                thread_id: run.thread_id.clone(),
-                attempt: run.attempt,
-                enqueued_at: Utc::now(),
-            })
-            .await
-            .map_err(map_queue_error)?;
+        persisted?;
 
         Ok(RunAccepted {
             run_id: run.run_id,
@@ -1247,5 +1311,218 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    // --- Phase 41 (41-01): the Treasurer admission slot --------------------
+
+    use paladin_core::platform::container::allowance::{
+        Admission, AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+    };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use std::sync::Mutex;
+
+    /// What a [`RecordingTreasurer`] answers to `admit`.
+    enum Script {
+        Admit,
+        Refuse,
+        Backend,
+    }
+
+    /// An `AllowanceAdmissionPort` double that returns a scripted result and records every
+    /// `admit` / `confirm` / `abandon` call.
+    struct RecordingTreasurer {
+        script: Script,
+        admits: Mutex<u32>,
+        confirms: Mutex<u32>,
+        abandons: Mutex<u32>,
+    }
+
+    impl RecordingTreasurer {
+        fn new(script: Script) -> Arc<Self> {
+            Arc::new(Self {
+                script,
+                admits: Mutex::new(0),
+                confirms: Mutex::new(0),
+                abandons: Mutex::new(0),
+            })
+        }
+
+        fn counts(&self) -> (u32, u32, u32) {
+            (
+                *self.admits.lock().unwrap(),
+                *self.confirms.lock().unwrap(),
+                *self.abandons.lock().unwrap(),
+            )
+        }
+    }
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for RecordingTreasurer {
+        async fn admit(
+            &self,
+            _subject: &paladin_core::platform::container::principal::RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            *self.admits.lock().unwrap() += 1;
+            match self.script {
+                Script::Admit => Ok(Admission::none()),
+                Script::Refuse => {
+                    let usd = CurrencyCode::new("USD").unwrap();
+                    Err(AdmissionError::Refused(AllowanceRefusal {
+                        scope_kind: AllowanceScopeKind::ApiKey,
+                        limit_kind: AllowanceLimitKind::Lifetime,
+                        balance: Cost::new(10, usd.clone()),
+                        ceiling: Cost::new(10, usd),
+                        window: None,
+                        evaluated_at: Utc::now(),
+                    }))
+                }
+                Script::Backend => Err(AdmissionError::Backend {
+                    message: "ledger down".to_string(),
+                }),
+            }
+        }
+
+        async fn confirm(&self, _admission: &Admission) {
+            *self.confirms.lock().unwrap() += 1;
+        }
+
+        async fn abandon(&self, _admission: &Admission) {
+            *self.abandons.lock().unwrap() += 1;
+        }
+    }
+
+    fn submit_as(thread: Option<&str>, requested_by: Option<PrincipalRef>) -> SubmitRun {
+        SubmitRun {
+            assistant_id: "wf1".to_string(),
+            version: None,
+            thread_id: thread.map(|t| ThreadId::new(t).unwrap()),
+            input: serde_json::json!({}),
+            webhook: None,
+            requested_by,
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_refused_by_the_treasurer_touches_nothing() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Refuse);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let err = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RunSubmissionError::AllowanceExhausted(_)),
+            "got {err:?}"
+        );
+        assert_eq!(queue.depth().await.unwrap(), 0);
+        assert!(
+            repository
+                .list(RunQuery::default())
+                .await
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        assert_eq!(
+            treasurer.counts(),
+            (1, 0, 0),
+            "a refusal is never confirmed"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_without_a_principal_never_calls_the_treasurer() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Refuse);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let accepted = service.submit(submit_as(None, None)).await.unwrap();
+
+        assert!(repository.get(&accepted.run_id).await.unwrap().is_some());
+        assert_eq!(treasurer.counts(), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn submit_admitted_calls_confirm_after_enqueue() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let accepted = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        assert!(repository.get(&accepted.run_id).await.unwrap().is_some());
+        assert_eq!(queue.depth().await.unwrap(), 1);
+        assert_eq!(treasurer.counts(), (1, 1, 0));
+    }
+
+    #[tokio::test]
+    async fn submit_admission_backend_error_fails_closed_as_backend() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Backend);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let err = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap_err();
+
+        match err {
+            RunSubmissionError::Backend { message } => assert_eq!(message, "ledger down"),
+            other => panic!("expected a Backend error, got {other:?}"),
+        }
+        assert_eq!(queue.depth().await.unwrap(), 0);
+        assert!(
+            repository
+                .list(RunQuery::default())
+                .await
+                .unwrap()
+                .items
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_insert_failure_after_admission_calls_abandon() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, _repository, _queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = service.with_treasurer(treasurer.clone());
+        let principal = || Some(principal_ref("acme", "svc-a", UserRole::User));
+
+        service
+            .submit(submit_as(Some("busy-thread"), principal()))
+            .await
+            .unwrap();
+        let err = service
+            .submit(submit_as(Some("busy-thread"), principal()))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RunSubmissionError::ThreadBusy { .. }),
+            "{err:?}"
+        );
+        // First submit: admit + confirm. Second: admit, then the busy insert, then abandon.
+        assert_eq!(treasurer.counts(), (2, 1, 1));
     }
 }

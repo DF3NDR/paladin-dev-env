@@ -29,16 +29,20 @@ use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::principal::{PrincipalRef, RunAttribution, TenantId};
 use paladin_core::platform::container::run::{RunId, RunStatus};
+use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
 use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::NodeId;
 use paladin_ports::input::run_submission_port::{ForkRun, RunSubmissionPort, SubmitRun};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::run_queue_port::RunQueuePort;
-use paladin_ports::output::run_repository_port::RunRepositoryPort;
+use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryPort};
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::waypoint_port::WaypointPort;
 use paladin_storage::run::in_memory::InMemoryRunRepository;
 use paladin_storage::run::sqlite::SqliteRunRepository;
 use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+use paladin_storage::treasury::contract_tests::{settle_request, usd};
+use paladin_storage::treasury::sqlite::SqliteTreasuryLedger;
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_web::agent_auth::{AgentAuthConfig, Principal};
 use paladin_web::run_controller::{RunApiState, run_router};
@@ -46,6 +50,8 @@ use paladin_web::run_controller::{RunApiState, run_router};
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
 use super::submission::RunSubmissionService;
 use super::worker::RunWorkerPool;
+use crate::application::services::treasurer::{Treasurer, window_for};
+use crate::config::treasurer::TreasurerConfig;
 
 /// A [`PaladinPort`] that must never be called -- every graph in this
 /// module is `Function`-only, mirroring `worker_tests.rs`'s/
@@ -134,6 +140,194 @@ fn cleanup(path: &std::path::PathBuf) {
     let _ = std::fs::remove_file(path);
     let _ = std::fs::remove_file(format!("{}-wal", path.display()));
     let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+}
+
+/// The Phase 41 admission tracer (ALLOW-01, ALLOW-02, D-01, D-02, D-04, D-05, D-06, D-12, D-13,
+/// D-14): an operator-configured per-API-key rolling-window allowance travels
+/// `TreasurerConfig` (config) -> `AllowancePolicy` -> `Treasurer` (facade service,
+/// `AllowanceAdmissionPort`) -> `TreasuryLedgerPort::store_now` + `balance` (SQLite) ->
+/// `RunSubmissionService::submit` refusing before any row -> `429 allowance_exhausted` with a
+/// store-clock `Retry-After` -- driven through the real `run_router` over an on-disk SQLite
+/// store shared by the run repository and the ledger (production shares one run-store file).
+///
+/// Pitfall 10: windows are epoch-aligned, so a UTC window boundary crossed between seeding and
+/// asserting would make the test lie. The window is read from the store clock before seeding
+/// and after the POST; when they differ the whole scenario is re-run once on a fresh store.
+#[tokio::test(flavor = "multi_thread")]
+async fn allowance_admission_tracer() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for attempt in 1..=2 {
+            if run_allowance_tracer_once().await {
+                return;
+            }
+            eprintln!("allowance_admission_tracer: a window boundary was crossed (attempt {attempt}); re-running");
+        }
+        panic!("the allowance window boundary was crossed on both attempts");
+    })
+    .await
+    .expect("allowance_admission_tracer timed out");
+}
+
+/// One full run of the tracer scenario. Returns `false` (having asserted nothing about the
+/// refusal) when the allowance window rolled over while the scenario ran.
+async fn run_allowance_tracer_once() -> bool {
+    let (path, url) = temp_sqlite_url("allowance");
+    let repository: Arc<dyn RunRepositoryPort> =
+        Arc::new(SqliteRunRepository::new(&url).await.unwrap());
+    let ledger = Arc::new(SqliteTreasuryLedger::new(&url).await.unwrap());
+    let ledger_port: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("allowance-wf", build_chain_graph(1)));
+
+    // D-02: the allowance grammar, deserialized exactly as an operator would write it.
+    let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+        "currency": "USD",
+        "allowance": { "api_keys": { "svc-a": { "period": "1d", "amount": "2.50" } } }
+    }))
+    .unwrap();
+    let policy = config.allowance_policy().unwrap();
+    let treasurer = Treasurer::new(policy, Arc::clone(&ledger_port));
+    let submission: Arc<dyn RunSubmissionPort> = Arc::new(
+        RunSubmissionService::new(repository.clone(), queue.clone(), resolver.clone())
+            .with_treasurer(Arc::new(treasurer)),
+    );
+
+    let mut api_keys = HashMap::new();
+    api_keys.insert(
+        "tracer-key-a".to_string(),
+        Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap()),
+    );
+    api_keys.insert(
+        "tracer-key-b".to_string(),
+        Principal::new("svc-b", UserRole::User, TenantId::new("acme").unwrap()),
+    );
+    let auth = AgentAuthConfig {
+        enabled: true,
+        api_keys,
+        token_verifier: None,
+        bearer_tenant: None,
+    };
+    let app = run_router(
+        RunApiState::new()
+            .with_submission(submission)
+            .with_repository(repository.clone())
+            .with_auth(auth),
+    );
+
+    // Seed: svc-a's own key has already spent its whole 2.50 USD allowance in this window.
+    let window_before = window_for(ledger.store_now().await.unwrap(), 86_400).unwrap();
+    ledger
+        .settle(settle_request(
+            LedgerScope::new("acme", "svc-a"),
+            SettlementKey::new(RunId::new_v7(), 0, 0),
+            2_500_000_000,
+            usd(),
+            "gpt-4",
+        ))
+        .await
+        .unwrap();
+
+    let post = |key: &'static str| {
+        let app = app.clone();
+        async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/runs")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", key)
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "assistant_id": "allowance-wf",
+                            "input": {}
+                        }))
+                        .unwrap(),
+                    ))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds")
+        }
+    };
+
+    let refused = post("tracer-key-a").await;
+    let window_after = window_for(ledger.store_now().await.unwrap(), 86_400).unwrap();
+    if window_before != window_after {
+        cleanup(&path);
+        return false;
+    }
+
+    // (a) 429, (b) Retry-After, (c) the dedicated body code.
+    assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+    let retry_after: u64 = refused
+        .headers()
+        .get("retry-after")
+        .expect("a window refusal carries Retry-After")
+        .to_str()
+        .unwrap()
+        .parse()
+        .expect("Retry-After is whole seconds");
+    assert!(
+        (1..=86_400).contains(&retry_after),
+        "Retry-After must lie inside one window, got {retry_after}"
+    );
+    let bytes = axum::body::to_bytes(refused.into_body(), usize::MAX)
+        .await
+        .expect("read refusal body");
+    let body: serde_json::Value = serde_json::from_slice(&bytes).expect("refusal body is JSON");
+    assert_eq!(body["error"]["code"], "allowance_exhausted");
+
+    // (d) exactly the six D-13 keys, with the refused ceiling's own figures.
+    let details = body["error"]["details"]
+        .as_object()
+        .expect("details object");
+    let mut keys: Vec<&str> = details.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "balance",
+            "ceiling",
+            "kind",
+            "scope",
+            "window_end",
+            "window_start"
+        ]
+    );
+    assert_eq!(details["scope"], "api_key");
+    assert_eq!(details["kind"], "window");
+    assert_eq!(details["balance"], "2.5000 USD");
+    assert_eq!(details["ceiling"], "2.5000 USD");
+    let start = chrono::DateTime::parse_from_rfc3339(details["window_start"].as_str().unwrap())
+        .expect("window_start is RFC 3339");
+    let end = chrono::DateTime::parse_from_rfc3339(details["window_end"].as_str().unwrap())
+        .expect("window_end is RFC 3339");
+    assert_eq!(end - start, chrono::Duration::days(1));
+
+    // (e) D-13 / D-00g: the body never repeats the tenant, the key name or the key value.
+    let raw = String::from_utf8_lossy(&bytes);
+    for forbidden in ["acme", "svc-a", "tracer-key-a"] {
+        assert!(
+            !raw.contains(forbidden),
+            "the refusal body must not contain {forbidden:?}: {raw}"
+        );
+    }
+
+    // (f) Nothing was persisted: no run row, no queue entry.
+    let listed = repository.list(RunQuery::default()).await.unwrap();
+    assert!(
+        listed.items.is_empty(),
+        "a refused submit writes no run row"
+    );
+    assert_eq!(queue.depth().await.unwrap(), 0);
+
+    // (g) Another key of the same tenant has no allowance entry and is admitted (D-03).
+    let admitted = post("tracer-key-b").await;
+    assert_eq!(admitted.status(), StatusCode::ACCEPTED);
+
+    cleanup(&path);
+    true
 }
 
 /// PRD acceptance 3 / D-52: ten concurrent `POST /v1/runs` for ONE thread,

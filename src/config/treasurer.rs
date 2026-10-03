@@ -24,20 +24,36 @@
 //!
 //! No field in this tree is secret-shaped: prices and an ISO currency code carry no credential.
 //!
-//! Later phases (41, 43) add `allowance` and pacing keys under this same `treasurer:` section.
+//! Phase 41 adds the `allowance` subtree (ALLOW-01, D-02): operator-configured per-API-key
+//! rolling-window allowances, `treasurer.allowance.api_keys.<name>: { period, amount }`, with
+//! `period` written as `<integer><m|h|d>` (1m to 366d) and `amount` a decimal string in whole
+//! currency units. Omitted, the subtree is inert. Later phases (41, 43) add the rest of the
+//! allowance grammar and pacing keys under this same `treasurer:` section.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::application::services::treasurer::{AllowancePolicy, ScopeAllowance};
 use crate::config::env_utils::{EnvOverridable, read_env};
 use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
+use paladin_core::platform::container::principal::TenantId;
+
+/// The default warn threshold, in whole percent of a ceiling, until 41-03 makes it configurable.
+const DEFAULT_WARN_AT_PERCENT: u8 = 80;
+
+/// The longest allowance period, in seconds (366 days). A longer period is rejected, never
+/// clamped (D-00d).
+pub const MAX_ALLOWANCE_PERIOD_SECS: u64 = 31_622_400;
+
+/// The shortest allowance period, in seconds (one minute).
+const MIN_ALLOWANCE_PERIOD_SECS: u64 = 60;
 
 /// The largest nano-units-per-1M-tokens price representable in a [`PriceRowConfig`] axis, as a
 /// decimal string, for use in error messages (`i64::MAX` nano-units = `9223372036.854775807`).
 const MAX_PRICE_DISPLAY: &str = "9223372036.854775807";
 
-/// Errors constructing an `i64` nano-units-per-1M price from an operator-entered decimal string.
+/// Errors constructing an `i64` nano-unit figure from an operator-entered decimal string.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PriceParseError {
     /// Not the narrow grammar: ASCII digits, optionally `.` followed by 1-9 ASCII digits. No
@@ -50,14 +66,16 @@ enum PriceParseError {
     Overflow,
 }
 
-/// Parse a decimal-string price (nano-units per 1M tokens, D-01) with exact integer arithmetic.
+/// Parse a decimal string into `i64` nano-units with exact integer arithmetic -- one grammar for
+/// both a per-1M-token price (D-01) and an allowance amount in whole currency units, where
+/// `"25.00"` is `25_000_000_000` nano-units.
 ///
 /// Accepts exactly one or more ASCII digits, optionally followed by `.` and one to nine ASCII
 /// digits -- no sign, whitespace, exponent, thousands separator or `NaN`/`inf` spelling. No
 /// floating point is used anywhere in this function; the integer part is accumulated with
 /// `checked_mul`/`checked_add`, and the fractional digits are right-padded to nine places and
 /// added as a nano-unit remainder.
-fn parse_price_nanos_per_million(raw: &str) -> Result<i64, PriceParseError> {
+fn parse_decimal_nanos(raw: &str) -> Result<i64, PriceParseError> {
     let mut parts = raw.splitn(2, '.');
     let int_part = parts.next().unwrap_or_default();
     let frac_part = parts.next();
@@ -101,6 +119,131 @@ fn parse_price_nanos_per_million(raw: &str) -> Result<i64, PriceParseError> {
     scaled_int
         .checked_add(frac_value)
         .ok_or(PriceParseError::Overflow)
+}
+
+/// Errors constructing an allowance period from an operator-entered string.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PeriodParseError {
+    /// Not `<digits><m|h|d>`: empty, signed, padded with whitespace, decimal, an upper-case or
+    /// unknown unit (including `s` and `w`).
+    Malformed,
+    /// The period does not fit in `u64` seconds, or is outside `1m..=366d`.
+    OutOfRange,
+}
+
+/// Parse an allowance period: one or more ASCII digits followed by exactly one unit byte `m`
+/// (60 s), `h` (3600 s) or `d` (86400 s), with checked arithmetic. Never trims, never clamps;
+/// anything below 60 seconds or above [`MAX_ALLOWANCE_PERIOD_SECS`] is rejected.
+fn parse_period_secs(raw: &str) -> Result<u64, PeriodParseError> {
+    let unit_secs: u64 = match raw.as_bytes().last() {
+        Some(b'm') => 60,
+        Some(b'h') => 3_600,
+        Some(b'd') => 86_400,
+        _ => return Err(PeriodParseError::Malformed),
+    };
+    // The last byte is an ASCII unit, so this slice always ends on a char boundary.
+    let digits = &raw[..raw.len() - 1];
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(PeriodParseError::Malformed);
+    }
+    let mut count: u64 = 0;
+    for b in digits.bytes() {
+        count = count
+            .checked_mul(10)
+            .and_then(|c| c.checked_add(u64::from(b - b'0')))
+            .ok_or(PeriodParseError::OutOfRange)?;
+    }
+    let secs = count
+        .checked_mul(unit_secs)
+        .ok_or(PeriodParseError::OutOfRange)?;
+    if !(MIN_ALLOWANCE_PERIOD_SECS..=MAX_ALLOWANCE_PERIOD_SECS).contains(&secs) {
+        return Err(PeriodParseError::OutOfRange);
+    }
+    Ok(secs)
+}
+
+/// One scope's allowance entry as operator-entered strings (ALLOW-01, D-02).
+///
+/// Both fields are required by serde, and an unknown key is a load error.
+///
+/// # Examples
+///
+/// ```
+/// use paladin::config::treasurer::AllowanceEntryConfig;
+///
+/// let entry = AllowanceEntryConfig {
+///     period: "1d".to_string(),
+///     amount: "2.50".to_string(),
+/// };
+/// assert_eq!(entry.period, "1d");
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AllowanceEntryConfig {
+    /// The window period as `<integer><m|h|d>`, between `1m` and `366d` (e.g. `"1d"`).
+    pub period: String,
+    /// The window ceiling as a decimal string in whole currency units (e.g. `"2.50"`).
+    pub amount: String,
+}
+
+/// The `treasurer.allowance` subtree (ALLOW-01, D-02): per-API-key rolling-window allowances,
+/// keyed by the API key's configured name. Omitted, it is inert. **Config-file only**.
+///
+/// # Examples
+///
+/// ```
+/// use paladin::config::treasurer::AllowanceConfig;
+///
+/// assert!(AllowanceConfig::default().is_empty());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AllowanceConfig {
+    /// API key name -> window allowance.
+    pub api_keys: BTreeMap<String, AllowanceEntryConfig>,
+}
+
+impl AllowanceConfig {
+    /// Whether no allowance is configured.
+    pub fn is_empty(&self) -> bool {
+        self.api_keys.is_empty()
+    }
+
+    /// Resolve every entry, in key order, into an [`AllowancePolicy`] denominated in
+    /// `currency`: decimal strings and periods become integers once, here.
+    ///
+    /// # Errors
+    ///
+    /// A `String` naming the full config path of the first invalid entry: an invalid key name,
+    /// a malformed or zero amount, or a malformed or out-of-range period.
+    pub fn resolve(&self, currency: &CurrencyCode) -> Result<AllowancePolicy, String> {
+        let mut policy = AllowancePolicy::new(currency.clone(), DEFAULT_WARN_AT_PERCENT);
+        for (name, entry) in &self.api_keys {
+            TenantId::new(name.as_str()).map_err(|e| {
+                format!("treasurer.allowance.api_keys.{name} is not a valid API key name: {e}")
+            })?;
+            let amount = match parse_decimal_nanos(&entry.amount) {
+                Ok(nanos) if nanos > 0 => nanos,
+                _ => {
+                    return Err(format!(
+                        "treasurer.allowance.api_keys.{name}.amount must be a positive decimal \
+                         string in whole currency units (digits with an optional fractional \
+                         part of at most 9 places) (got {:?})",
+                        entry.amount
+                    ));
+                }
+            };
+            let period = parse_period_secs(&entry.period).map_err(|_| {
+                format!(
+                    "treasurer.allowance.api_keys.{name}.period must be <integer><m|h|d> \
+                     between 1m and 366d (got {:?})",
+                    entry.period
+                )
+            })?;
+            policy = policy.with_api_key(name.as_str(), ScopeAllowance::new(period, amount));
+        }
+        Ok(policy)
+    }
 }
 
 /// One model's per-1M-token price row, as operator-entered decimal strings (D-01, D-06).
@@ -167,6 +310,8 @@ pub struct TreasurerConfig {
     /// case-sensitively against the string an `LlmResponse` reports. **Config-file only**: no
     /// environment variable can populate this map (see the module-level documentation).
     pub pricing: BTreeMap<String, PriceRowConfig>,
+    /// Operator-configured allowances (ALLOW-01, D-02). Omitted, the subtree is inert.
+    pub allowance: AllowanceConfig,
 }
 
 impl Default for TreasurerConfig {
@@ -174,6 +319,7 @@ impl Default for TreasurerConfig {
         Self {
             currency: "USD".to_string(),
             pricing: BTreeMap::new(),
+            allowance: AllowanceConfig::default(),
         }
     }
 }
@@ -237,22 +383,51 @@ impl TreasurerConfig {
         Ok(table)
     }
 
-    /// Validate this configuration without discarding a built [`PriceTable`].
+    /// Resolve the `allowance` subtree into an [`AllowancePolicy`] in this configuration's
+    /// currency (ALLOW-01, D-02).
     ///
-    /// Exactly `self.price_table().map(|_| ())` -- validation and the table
+    /// # Errors
+    ///
+    /// A `String` naming the first failure: a malformed currency (the same message
+    /// [`TreasurerConfig::price_table`] gives), or an invalid allowance entry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::config::treasurer::TreasurerConfig;
+    ///
+    /// let policy = TreasurerConfig::default().allowance_policy()?;
+    /// assert!(policy.is_empty());
+    /// # Ok::<(), String>(())
+    /// ```
+    pub fn allowance_policy(&self) -> Result<AllowancePolicy, String> {
+        let currency = CurrencyCode::new(&self.currency).map_err(|_| {
+            format!(
+                "treasurer.currency must be exactly three ASCII uppercase letters (got {:?})",
+                self.currency
+            )
+        })?;
+        self.allowance.resolve(&currency)
+    }
+
+    /// Validate this configuration without discarding what it builds.
+    ///
+    /// Checks the price table (`self.price_table()`) and the allowance policy
+    /// (`self.allowance_policy()`) -- validation and the values
     /// `crate::infrastructure::web::agent_host` and
     /// `crate::infrastructure::web::facade_provisioner` build from this same configuration can
     /// never disagree.
     ///
     /// # Errors
     ///
-    /// See [`TreasurerConfig::price_table`].
+    /// See [`TreasurerConfig::price_table`] and [`TreasurerConfig::allowance_policy`].
     pub fn validate(&self) -> Result<(), String> {
-        self.price_table().map(|_| ())
+        self.price_table()?;
+        self.allowance_policy().map(|_| ())
     }
 
     fn parse_axis(model: &str, axis: &str, raw: &str) -> Result<i64, String> {
-        parse_price_nanos_per_million(raw).map_err(|e| match e {
+        parse_decimal_nanos(raw).map_err(|e| match e {
             PriceParseError::Malformed => format!(
                 "treasurer.pricing.{model}.{axis} must be a non-negative decimal string \
                  (digits with an optional fractional part of at most 9 places) (got {raw:?})"
@@ -347,18 +522,15 @@ mod tests {
 
     #[test]
     fn parses_decimal_prices_exactly() {
-        assert_eq!(parse_price_nanos_per_million("2.50"), Ok(2_500_000_000));
-        assert_eq!(parse_price_nanos_per_million("10.00"), Ok(10_000_000_000));
-        assert_eq!(parse_price_nanos_per_million("0.15"), Ok(150_000_000));
-        assert_eq!(parse_price_nanos_per_million("002.50"), Ok(2_500_000_000));
-        assert_eq!(parse_price_nanos_per_million("0"), Ok(0));
-        assert_eq!(parse_price_nanos_per_million("0.0"), Ok(0));
-        assert_eq!(parse_price_nanos_per_million("0.000000000"), Ok(0));
-        assert_eq!(parse_price_nanos_per_million("0.000000001"), Ok(1));
-        assert_eq!(
-            parse_price_nanos_per_million("9223372036.854775807"),
-            Ok(i64::MAX)
-        );
+        assert_eq!(parse_decimal_nanos("2.50"), Ok(2_500_000_000));
+        assert_eq!(parse_decimal_nanos("10.00"), Ok(10_000_000_000));
+        assert_eq!(parse_decimal_nanos("0.15"), Ok(150_000_000));
+        assert_eq!(parse_decimal_nanos("002.50"), Ok(2_500_000_000));
+        assert_eq!(parse_decimal_nanos("0"), Ok(0));
+        assert_eq!(parse_decimal_nanos("0.0"), Ok(0));
+        assert_eq!(parse_decimal_nanos("0.000000000"), Ok(0));
+        assert_eq!(parse_decimal_nanos("0.000000001"), Ok(1));
+        assert_eq!(parse_decimal_nanos("9223372036.854775807"), Ok(i64::MAX));
     }
 
     #[test]
@@ -369,6 +541,7 @@ mod tests {
             let config = TreasurerConfig {
                 currency: "USD".to_string(),
                 pricing: BTreeMap::from([("gpt-4".to_string(), row(bad, "1.00"))]),
+                allowance: AllowanceConfig::default(),
             };
             let err = config
                 .price_table()
@@ -389,6 +562,7 @@ mod tests {
         let too_fine = TreasurerConfig {
             currency: "USD".to_string(),
             pricing: BTreeMap::from([("gpt-4".to_string(), row("0.0000000001", "1.00"))]),
+            allowance: AllowanceConfig::default(),
         };
         let err = too_fine.price_table().expect_err("should be rejected");
         assert!(err.contains("9 decimal places"), "{err}");
@@ -396,6 +570,7 @@ mod tests {
         let overflow = TreasurerConfig {
             currency: "USD".to_string(),
             pricing: BTreeMap::from([("gpt-4".to_string(), row("9223372036.854775808", "1.00"))]),
+            allowance: AllowanceConfig::default(),
         };
         let err = overflow.price_table().expect_err("should be rejected");
         assert!(err.contains("largest representable price"), "{err}");
@@ -407,6 +582,7 @@ mod tests {
             let config = TreasurerConfig {
                 currency: bad.to_string(),
                 pricing: BTreeMap::new(),
+                allowance: AllowanceConfig::default(),
             };
             let err = config
                 .price_table()
@@ -423,6 +599,7 @@ mod tests {
         let config = TreasurerConfig {
             currency: "USD".to_string(),
             pricing: BTreeMap::from([(String::new(), row("1.00", "1.00"))]),
+            allowance: AllowanceConfig::default(),
         };
         let err = config
             .price_table()
@@ -440,6 +617,7 @@ mod tests {
         let config = TreasurerConfig {
             currency: "USD".to_string(),
             pricing: BTreeMap::from([("gpt-4".to_string(), with_cache)]),
+            allowance: AllowanceConfig::default(),
         };
         let table = config.price_table().expect("should build");
         let price_row = table.row("gpt-4").expect("row should exist");
@@ -449,6 +627,7 @@ mod tests {
         let plain = TreasurerConfig {
             currency: "USD".to_string(),
             pricing: BTreeMap::from([("gpt-4".to_string(), row("2.00", "5.00"))]),
+            allowance: AllowanceConfig::default(),
         };
         let table = plain.price_table().expect("should build");
         let price_row = table.row("gpt-4").expect("row should exist");
@@ -505,5 +684,151 @@ mod tests {
         unsafe {
             env::remove_var("APP_TREASURER_CURRENCY");
         }
+    }
+
+    fn allowance_config(entries: &[(&str, &str, &str)]) -> TreasurerConfig {
+        let mut config = TreasurerConfig::default();
+        for (name, period, amount) in entries {
+            config.allowance.api_keys.insert(
+                (*name).to_string(),
+                AllowanceEntryConfig {
+                    period: (*period).to_string(),
+                    amount: (*amount).to_string(),
+                },
+            );
+        }
+        config
+    }
+
+    #[test]
+    fn allowance_omitted_is_inert() {
+        let wrapper = deserialize_wrapper("treasurer:\n  currency: \"USD\"\n");
+        assert!(wrapper.treasurer.allowance.is_empty());
+        let policy = wrapper.treasurer.allowance_policy().expect("inert policy");
+        assert!(policy.is_empty());
+        assert!(wrapper.treasurer.validate().is_ok());
+    }
+
+    #[test]
+    fn allowance_api_key_entry_resolves_to_nanos_and_seconds() {
+        let wrapper = deserialize_wrapper(
+            "treasurer:\n  allowance:\n    api_keys:\n      svc-a:\n        period: \"1h\"\n        amount: \"2.50\"\n",
+        );
+        let policy = wrapper.treasurer.allowance_policy().expect("valid policy");
+        let subject = paladin_core::platform::container::principal::RunAttribution::new(
+            TenantId::new("acme").expect("tenant"),
+            "svc-a",
+        );
+        let ceilings = policy.ceilings_for(&subject);
+        assert_eq!(ceilings.len(), 1);
+        assert_eq!(ceilings[0].ceiling_nanos, 2_500_000_000);
+        assert_eq!(ceilings[0].period_secs, Some(3_600));
+        assert_eq!(ceilings[0].warn_at, 80);
+    }
+
+    #[test]
+    fn allowance_rejects_zero_amount_naming_the_path() {
+        for zero in ["0", "0.0", "0.000000000"] {
+            let err = allowance_config(&[("ci-runner", "1d", zero)])
+                .allowance_policy()
+                .expect_err("a zero amount is rejected");
+            assert!(
+                err.contains("treasurer.allowance.api_keys.ci-runner.amount must be a positive"),
+                "{err}"
+            );
+            assert!(err.contains(&format!("(got {zero:?})")), "{err}");
+        }
+    }
+
+    #[test]
+    fn allowance_rejects_malformed_amount_and_period_naming_the_path() {
+        let err = allowance_config(&[("ci-runner", "1d", "-1")])
+            .allowance_policy()
+            .expect_err("negative amount");
+        assert!(
+            err.contains("treasurer.allowance.api_keys.ci-runner.amount"),
+            "{err}"
+        );
+
+        let err = allowance_config(&[("ci-runner", "1d", "1.0000000001")])
+            .allowance_policy()
+            .expect_err("too fine");
+        assert!(err.contains("api_keys.ci-runner.amount"), "{err}");
+
+        let err = allowance_config(&[("ci-runner", "90s", "5")])
+            .allowance_policy()
+            .expect_err("seconds are not a unit");
+        assert!(
+            err.contains(
+                "treasurer.allowance.api_keys.ci-runner.period must be <integer><m|h|d> between 1m and 366d (got \"90s\")"
+            ),
+            "{err}"
+        );
+
+        let err = allowance_config(&[("bad name", "1d", "5")])
+            .allowance_policy()
+            .expect_err("whitespace key name");
+        assert!(err.contains("not a valid API key name"), "{err}");
+
+        let mut bad_currency = allowance_config(&[("k", "1d", "5")]);
+        bad_currency.currency = "usd".to_string();
+        let err = bad_currency.allowance_policy().expect_err("currency");
+        assert!(
+            err.starts_with("treasurer.currency must be exactly three"),
+            "{err}"
+        );
+        assert!(bad_currency.validate().is_err());
+    }
+
+    #[test]
+    fn allowance_validate_reports_allowance_errors() {
+        let config = allowance_config(&[("k", "0m", "5")]);
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn period_grammar_accepts_minutes_hours_days_within_bounds() {
+        assert_eq!(parse_period_secs("1m"), Ok(60));
+        assert_eq!(parse_period_secs("90m"), Ok(5_400));
+        assert_eq!(parse_period_secs("1h"), Ok(3_600));
+        assert_eq!(parse_period_secs("7d"), Ok(604_800));
+        assert_eq!(parse_period_secs("366d"), Ok(MAX_ALLOWANCE_PERIOD_SECS));
+        assert_eq!(parse_period_secs("0001m"), Ok(60));
+    }
+
+    #[test]
+    fn period_grammar_rejects_everything_else() {
+        for bad in [
+            "",
+            "h",
+            "0m",
+            "59s",
+            "1H",
+            " 1h",
+            "1h ",
+            "1.5h",
+            "-1h",
+            "367d",
+            "1w",
+            "+1h",
+            "1",
+            "99999999999999999999d",
+            "1hh",
+            "m1",
+        ] {
+            assert!(parse_period_secs(bad).is_err(), "{bad:?} must be rejected");
+        }
+        assert_eq!(MAX_ALLOWANCE_PERIOD_SECS, 366 * 86_400);
+    }
+
+    #[test]
+    fn allowance_unknown_keys_fail_to_load() {
+        let yaml = "treasurer:\n  allowance:\n    api_keys:\n      svc-a:\n        period: \"1d\"\n        amount: \"1\"\n        burst: \"3\"\n";
+        let result: Result<Wrapper, _> = Config::builder()
+            .add_source(File::from_str(yaml, FileFormat::Yaml))
+            .build()
+            .expect("config should build")
+            .try_deserialize();
+        assert!(result.is_err(), "an unknown entry key should fail to load");
     }
 }

@@ -4,7 +4,8 @@
 //! ([`crate::platform::container::treasury_ledger::ReservationId`],
 //! [`crate::platform::container::treasury_ledger::SettlementKey`]), and the request/query/response shapes
 //! `TreasuryLedgerPort` (`paladin-ports`) and its adapters (`paladin-storage`) exchange --
-//! including [`BalanceQuery`], the admission-time balance read (Phase 41 D-04).
+//! including [`crate::platform::container::treasury_ledger::BalanceQuery`], the admission-time
+//! balance read (Phase 41 D-04).
 //!
 //! ADR-0053 governs the model implemented here (cited, not re-argued, D-00a): the ledger is
 //! append-only and derive-on-read -- a scope+window balance is a plain `SUM` of every row's

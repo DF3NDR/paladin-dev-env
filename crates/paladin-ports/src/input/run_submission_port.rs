@@ -10,6 +10,7 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+use paladin_core::platform::container::allowance::AllowanceRefusal;
 use paladin_core::platform::container::principal::PrincipalRef;
 use paladin_core::platform::container::run::{RunId, RunStatus, WebhookSpec};
 use paladin_core::platform::container::waypoint::{ThreadId, WaypointId};
@@ -86,7 +87,8 @@ pub struct CancelOutcome {
 /// Every way [`RunSubmissionPort::submit`] can reject a request (D-12).
 ///
 /// `#[non_exhaustive]`: 27-07 adds `cancel`-shaped variants, 27-13 adds
-/// `WebhookRejected`, 27-15 adds fork-shaped variants.
+/// `WebhookRejected`, 27-15 adds fork-shaped variants, 41-01 adds
+/// `AllowanceExhausted`.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RunSubmissionError {
@@ -172,6 +174,11 @@ pub enum RunSubmissionError {
     /// No run store/queue is configured (the D-24 501 precedent).
     #[error("run submission is not wired: configure run_store and run_queue")]
     NotWired,
+    /// The caller's tenant or API-key allowance is exhausted: a balance has reached a
+    /// configured ceiling (Phase 41, ALLOW-02). Nothing was persisted -- no run row, no queue
+    /// entry. `paladin-web` renders this as `429 allowance_exhausted` (D-12, D-14).
+    #[error("{0}")]
+    AllowanceExhausted(AllowanceRefusal),
 }
 
 /// Port trait for submitting a run (D-12).

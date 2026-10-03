@@ -291,4 +291,21 @@ mod contract_suite {
         )
         .await;
     }
+
+    #[tokio::test]
+    async fn created_by_round_trips() {
+        contract_tests::created_by_round_trips(&InMemoryRunScheduleRepository::new()).await;
+    }
+
+    #[tokio::test]
+    async fn null_created_by_reads_back_none() {
+        contract_tests::null_created_by_reads_back_none(&InMemoryRunScheduleRepository::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn update_never_changes_created_by() {
+        contract_tests::update_never_changes_created_by(&InMemoryRunScheduleRepository::new())
+            .await;
+    }
 }

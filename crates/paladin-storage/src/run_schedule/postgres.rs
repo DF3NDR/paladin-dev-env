@@ -18,6 +18,7 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
 
+use paladin_core::platform::container::principal::{RunAttribution, TenantId};
 use paladin_core::platform::container::run::WebhookSpec;
 use paladin_core::platform::container::run_schedule::{
     OnMissed, RUN_SCHEDULE_SCHEMA_VERSION, RunSchedule, RunScheduleId, RunScheduleUpdate,
@@ -32,23 +33,24 @@ use crate::waypoint::redact::redact_database_url_password;
 const INSERT_SCHEDULE: &str = "INSERT INTO run_schedules \
      (schedule_id, assistant_id, assistant_version, cron, timezone, input, enabled, \
       thread_strategy, on_missed, webhook, last_tick, next_tick, skipped_ticks, \
-      created_at, updated_at, schema_version) \
+      created_at, updated_at, schema_version, tenant_id, api_key_id) \
      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9, $10::jsonb, $11, $12, $13, \
-             $14, $15, $16)";
+             $14, $15, $16, $17, $18)";
 
 const SELECT_BY_ID: &str = "SELECT schedule_id, assistant_id, assistant_version, cron, \
      timezone, input, enabled, thread_strategy, on_missed, webhook, last_tick, next_tick, \
-     skipped_ticks, created_at, updated_at, schema_version FROM run_schedules \
-     WHERE schedule_id = $1";
+     skipped_ticks, created_at, updated_at, schema_version, tenant_id, api_key_id \
+     FROM run_schedules WHERE schedule_id = $1";
 
 const LIST_PREFIX: &str = "SELECT schedule_id, assistant_id, assistant_version, cron, \
      timezone, input, enabled, thread_strategy, on_missed, webhook, last_tick, next_tick, \
-     skipped_ticks, created_at, updated_at, schema_version FROM run_schedules WHERE 1 = 1";
+     skipped_ticks, created_at, updated_at, schema_version, tenant_id, api_key_id \
+     FROM run_schedules WHERE 1 = 1";
 
 const DUE_QUERY: &str = "SELECT schedule_id, assistant_id, assistant_version, cron, \
      timezone, input, enabled, thread_strategy, on_missed, webhook, last_tick, next_tick, \
-     skipped_ticks, created_at, updated_at, schema_version FROM run_schedules \
-     WHERE enabled = TRUE AND next_tick IS NOT NULL AND next_tick <= $1 \
+     skipped_ticks, created_at, updated_at, schema_version, tenant_id, api_key_id \
+     FROM run_schedules WHERE enabled = TRUE AND next_tick IS NOT NULL AND next_tick <= $1 \
      ORDER BY next_tick ASC LIMIT $2";
 
 const CLAIM_TICK: &str = "UPDATE run_schedules SET last_tick = $1, next_tick = $2 \
@@ -179,6 +181,26 @@ impl PostgresRunScheduleRepository {
         let created_at: DateTime<Utc> = row.try_get("created_at").map_err(backend_err)?;
         let updated_at: DateTime<Utc> = row.try_get("updated_at").map_err(backend_err)?;
         let schema_version: String = row.try_get("schema_version").map_err(backend_err)?;
+        let tenant_id: Option<String> = row.try_get("tenant_id").map_err(backend_err)?;
+        let api_key_id: Option<String> = row.try_get("api_key_id").map_err(backend_err)?;
+        let created_by = match (tenant_id, api_key_id) {
+            (Some(tenant_id), Some(api_key_id)) => {
+                let tenant_id = TenantId::new(tenant_id).map_err(|e| {
+                    RunScheduleRepositoryError::Serialization {
+                        message: format!("invalid tenant_id: {e}"),
+                    }
+                })?;
+                Some(RunAttribution::new(tenant_id, api_key_id))
+            }
+            (None, None) => None,
+            _ => {
+                return Err(RunScheduleRepositoryError::Serialization {
+                    message: "run schedule row attribution is incomplete: tenant_id and \
+                              api_key_id must both be set or both be NULL"
+                        .to_string(),
+                });
+            }
+        };
 
         if schema_version != RUN_SCHEDULE_SCHEMA_VERSION {
             return Err(RunScheduleRepositoryError::UnknownSchemaVersion {
@@ -200,6 +222,7 @@ impl PostgresRunScheduleRepository {
         schedule.created_at = created_at;
         schedule.updated_at = updated_at;
         schedule.schema_version = schema_version;
+        schedule.created_by = created_by;
         Ok(schedule)
     }
 }
@@ -243,6 +266,8 @@ impl RunScheduleRepositoryPort for PostgresRunScheduleRepository {
             .bind(schedule.created_at)
             .bind(schedule.updated_at)
             .bind(&schedule.schema_version)
+            .bind(schedule.created_by.as_ref().map(|a| a.tenant_id.as_str()))
+            .bind(schedule.created_by.as_ref().map(|a| a.api_key_id.as_str()))
             .execute(&self.pool)
             .await
             .map_err(|e| self.map_insert_error(e, &schedule.schedule_id))?;
@@ -646,5 +671,53 @@ mod tests {
             return;
         };
         contract_tests::increment_skipped_increments_and_persists(&store).await;
+    }
+
+    #[tokio::test]
+    async fn created_by_round_trips() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::created_by_round_trips(&store).await;
+    }
+
+    #[tokio::test]
+    async fn null_created_by_reads_back_none() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::null_created_by_reads_back_none(&store).await;
+    }
+
+    #[tokio::test]
+    async fn update_never_changes_created_by() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::update_never_changes_created_by(&store).await;
+    }
+
+    #[tokio::test]
+    async fn half_attributed_schedule_row_is_rejected_on_read() {
+        // PostgreSQL refuses to write a half-attributed row at all: the
+        // `run_schedules_created_by_all_or_none` CHECK rejects the raw UPDATE.
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        let schedule = contract_tests::sample_schedule("half-attributed");
+        let id = schedule.schedule_id.clone();
+        store.insert(schedule).await.unwrap();
+
+        let result = sqlx::query("UPDATE run_schedules SET tenant_id = $1 WHERE schedule_id = $2")
+            .bind("acme")
+            .bind(id.as_str())
+            .execute(&store.pool)
+            .await;
+        let err = result.expect_err("the all-or-none CHECK must reject a half-attributed row");
+        assert!(
+            err.to_string()
+                .contains("run_schedules_created_by_all_or_none"),
+            "expected the CHECK constraint name in the error, got {err}"
+        );
     }
 }

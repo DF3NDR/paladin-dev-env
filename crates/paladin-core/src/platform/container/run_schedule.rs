@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::platform::container::principal::RunAttribution;
 use crate::platform::container::run::WebhookSpec;
 use crate::platform::container::waypoint::ThreadId;
 
@@ -214,6 +215,14 @@ pub struct RunSchedule {
     /// Schema version this row was persisted under (X-04).
     #[serde(default = "default_run_schedule_schema_version")]
     pub schema_version: String,
+    /// The creating principal's attribution (tenant id and API key name, D-08).
+    ///
+    /// `None` means the schedule was created before Phase 41 or by a principal-less embedder;
+    /// such a schedule fires unattributed and is never gated by an allowance. When `Some`, every
+    /// run the schedule fires is attributed to and admitted against it. It is identity only --
+    /// never a role, never a key value -- and `PATCH` never changes it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<RunAttribution>,
 }
 
 impl RunSchedule {
@@ -243,7 +252,14 @@ impl RunSchedule {
             created_at: now,
             updated_at: now,
             schema_version: RUN_SCHEDULE_SCHEMA_VERSION.to_string(),
+            created_by: None,
         }
+    }
+
+    /// Record the creating principal's attribution (D-08). Identity only; never a role.
+    pub fn with_created_by(mut self, attribution: RunAttribution) -> Self {
+        self.created_by = Some(attribution);
+        self
     }
 
     /// Pin a specific assistant version.
@@ -371,6 +387,22 @@ mod tests {
             serde_json::to_string(&OnMissed::RunOnce).unwrap(),
             "\"run_once\""
         );
+    }
+
+    #[test]
+    fn run_schedule_created_by_defaults_to_none_and_round_trips_through_serde() {
+        use crate::platform::container::principal::TenantId;
+
+        let schedule = RunSchedule::new(RunScheduleId::new_v7(), "a1", "* * * * *");
+        assert!(schedule.created_by.is_none());
+        let json = serde_json::to_value(&schedule).unwrap();
+        assert!(json.get("created_by").is_none());
+
+        let attribution = RunAttribution::new(TenantId::new("acme").unwrap(), "ops");
+        let attributed = schedule.with_created_by(attribution.clone());
+        let json = serde_json::to_string(&attributed).unwrap();
+        let restored: RunSchedule = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.created_by, Some(attribution));
     }
 
     #[test]

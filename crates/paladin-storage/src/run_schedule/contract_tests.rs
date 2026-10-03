@@ -13,8 +13,10 @@ use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
 
+use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+use paladin_core::platform::container::run::WebhookSpec;
 use paladin_core::platform::container::run_schedule::{
-    OnMissed, RunSchedule, RunScheduleId, RunScheduleUpdate,
+    OnMissed, RunSchedule, RunScheduleId, RunScheduleUpdate, ThreadStrategy,
 };
 use paladin_ports::output::run_schedule_repository_port::{
     RunScheduleRepositoryError, RunScheduleRepositoryPort,
@@ -298,4 +300,104 @@ pub async fn increment_skipped_increments_and_persists(port: &dyn RunScheduleRep
 
     let loaded = port.get(&id).await.unwrap().unwrap();
     assert_eq!(loaded.skipped_ticks, 2);
+}
+
+// ── created_by (Phase 41, D-08) ───────────────────────────────────────────
+
+/// Build the attribution fixture the `created_by` clauses stamp.
+fn creator_fixture() -> RunAttribution {
+    RunAttribution::new(
+        TenantId::new("acme").expect("fixture tenant is valid"),
+        "ops",
+    )
+}
+
+/// A schedule inserted with `created_by` reads the same attribution back from
+/// `get`, `list` and `due` (D-08).
+pub async fn created_by_round_trips(port: &dyn RunScheduleRepositoryPort) {
+    let past = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
+    let schedule = sample_schedule("created-by")
+        .with_created_by(creator_fixture())
+        .with_next_tick(past);
+    let id = schedule.schedule_id.clone();
+    port.insert(schedule).await.unwrap();
+
+    let via_get = port.get(&id).await.unwrap().unwrap();
+    assert_eq!(via_get.created_by, Some(creator_fixture()));
+
+    // `list` pages ascending by id; walk the pages until this clause's row
+    // is found (tolerant of rows other clauses left in a shared backend).
+    let mut cursor = None;
+    let mut via_list = None;
+    for _ in 0..1000 {
+        let page = port.list(50, cursor.clone()).await.unwrap();
+        if let Some(found) = page.items.into_iter().find(|s| s.schedule_id == id) {
+            via_list = Some(found);
+            break;
+        }
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    let via_list = via_list.expect("list must return the inserted schedule");
+    assert_eq!(via_list.created_by, Some(creator_fixture()));
+
+    let now = Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap();
+    let due = port.due(now, 0).await.unwrap();
+    let via_due = due
+        .into_iter()
+        .find(|s| s.schedule_id == id)
+        .expect("due must return the inserted schedule");
+    assert_eq!(via_due.created_by, Some(creator_fixture()));
+}
+
+/// A schedule with no creator reads back `None` (stored as NULL in both
+/// columns, D-08).
+pub async fn null_created_by_reads_back_none(port: &dyn RunScheduleRepositoryPort) {
+    let schedule = sample_schedule("no-creator");
+    let id = schedule.schedule_id.clone();
+    port.insert(schedule).await.unwrap();
+
+    let loaded = port.get(&id).await.unwrap().unwrap();
+    assert!(loaded.created_by.is_none());
+}
+
+/// `update` with every patchable field changed, plus `increment_skipped` and
+/// `claim_tick`, leaves `created_by` unchanged (D-08: `PATCH` never
+/// re-assigns the creator).
+pub async fn update_never_changes_created_by(port: &dyn RunScheduleRepositoryPort) {
+    let t1 = Utc.with_ymd_and_hms(2026, 1, 1, 0, 5, 0).unwrap();
+    let t2 = t1 + chrono::Duration::minutes(5);
+    let schedule = sample_schedule("keep-creator")
+        .with_created_by(creator_fixture())
+        .with_next_tick(t1);
+    let id = schedule.schedule_id.clone();
+    port.insert(schedule).await.unwrap();
+
+    port.update(
+        &id,
+        RunScheduleUpdate {
+            cron: Some("0 0 * * *".to_string()),
+            timezone: Some("Europe/Berlin".to_string()),
+            input: Some(serde_json::json!({"changed": true})),
+            enabled: Some(false),
+            thread_strategy: Some(ThreadStrategy::NewThreadPerTick),
+            on_missed: Some(OnMissed::RunOnce),
+            webhook: Some(WebhookSpec {
+                url: "https://example.com/hook".to_string(),
+                secret: None,
+                events: vec![],
+            }),
+            next_tick: Some(t2),
+        },
+    )
+    .await
+    .unwrap();
+    port.increment_skipped(&id).await.unwrap();
+    assert!(port.claim_tick(&id, t2, t2, t2).await.unwrap());
+
+    let loaded = port.get(&id).await.unwrap().unwrap();
+    assert_eq!(loaded.cron, "0 0 * * *");
+    assert_eq!(loaded.created_by, Some(creator_fixture()));
 }

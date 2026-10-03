@@ -433,7 +433,7 @@ Plans:
 **Wave 2** *(blocked on Wave 1 completion)*
 
 - [x] 41-02-PLAN.md — Postgres balance and the full balance contract on all three adapters; Treasurer boundary/order/short-circuit/fail-closed/idempotency/concurrency proofs over a scripted store clock (wave 2)
-- [ ] 41-03-PLAN.md — Full treasurer.allowance grammar (tenants, lifetime, warn_at, operator webhook target, strict keys, env overrides, redacted secret), D-11 boot coherence and the Treasurer wired in build_run_api (wave 2)
+- [x] 41-03-PLAN.md — Full treasurer.allowance grammar (tenants, lifetime, warn_at, operator webhook target, strict keys, env overrides, redacted secret), D-11 boot coherence and the Treasurer wired in build_run_api (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

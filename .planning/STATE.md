@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 41
 current_phase_name: Admission-Time Allowance Enforcement
 status: executing
-stopped_at: Completed 41-02-PLAN.md
-last_updated: "2026-10-03T22:26:53.765Z"
+stopped_at: Completed 41-03-PLAN.md
+last_updated: "2026-10-03T23:02:04.697Z"
 last_activity: 2026-10-03
 last_activity_desc: Phase 41 execution resumed (wave continue)
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 39
-  completed_plans: 32
+  completed_plans: 33
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([████████░░] 82%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([█████████░] 85%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 41 (Admission-Time Allowance Enforcement) — EXECUTING
-Plan: 3 of 9
+Plan: 4 of 9
 Status: Ready to execute
 Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 
@@ -221,6 +221,7 @@ Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 | Phase 45 P07 | n/a (human measurement) | 2 tasks | 10 files |
 | Phase 41 P01 | 45min | 4 tasks | 28 files |
 | Phase 41 P02 | 40min | 2 tasks | 6 files |
+| Phase 41 P03 | 75min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -325,6 +326,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 41] 41-01: TreasuryLedgerPort::balance is a defaulted method (InvalidRequest) so the 9.2 register rows are N with no allowlist entry; admission fails closed on any ledger error and a request with no principal never reaches the Treasurer
 - [Phase ?]: [Phase 41] 41-01: design checkpoint resolved option-b -- D-17 operator webhook payload amended to carry tenant_id and api_key_id (twelve keys)
 - [Phase ?]: 41-02: No Treasurer production change needed; admission rule proven over a scripted store clock. Over-admission race remains an accepted ADR-0056/Phase 42 backstop
+- [Phase ?]: 41-03: allowance webhook secret is env-supplied (APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET) because the config loader does not expand ${VAR}; WINDOWS row 62 tracks the example configs
+- [Phase ?]: 41-03: build_run_api runs the D-11 allowance coherence check before the disabled-store early return and builds one Treasurer only when entries exist
 
 ### Pending Todos
 
@@ -539,8 +542,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-03T22:26:53.736Z
-**Stopped at:** Completed 41-02-PLAN.md
+**Last session:** 2026-10-03T23:02:04.669Z
+**Stopped at:** Completed 41-03-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

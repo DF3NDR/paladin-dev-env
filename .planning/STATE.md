@@ -4,7 +4,7 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 41
 current_phase_name: Admission-Time Allowance Enforcement
-status: planning
+status: ready
 stopped_at: Phase 41 context gathered
 last_updated: "2026-10-03T14:43:24.635Z"
 last_activity: 2026-10-03
@@ -52,7 +52,7 @@ under `milestones/`.
 
 Phase: 41 — Admission-Time Allowance Enforcement
 Plan: Not started (9 plans in 8 waves)
-Status: Ready to plan (no `41-CONTEXT.md` yet — discuss first, or plan directly)
+Status: Ready to execute (9 plans in 8 waves; plan-checker passed after 1 revision; execution stops at the 41-01 Task 1 decision checkpoint)
 Last activity: 2026-10-03 — Phase 41 planning complete: 9 plans in 8 waves, plan-checker passed after 1 revision
 
 ## Performance Metrics

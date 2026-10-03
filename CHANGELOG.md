@@ -23,6 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   twice an allowance across one boundary, by design. `RunSubmissionService::with_treasurer`,
   `RunSubmissionError::AllowanceExhausted` and `ApiError::allowance_exhausted` are the new
   public surface; see `MIGRATION.md` §9.2 and §9.6. Later Phase 41 plans extend this entry.
+  **Plan 41-03 completes the operator grammar:** `treasurer.allowance` now also takes
+  `tenants.<id>` entries, an optional `lifetime` cap and per-entry `warn_at`, a global `warn_at`
+  (default `80`), and an optional operator `webhook { url, secret }` target (the secret is
+  redacted from `Debug` and `Serialize`; supply it with `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`,
+  since a `${VAR}` placeholder in YAML is not expanded). `paladin-server` now refuses to boot,
+  naming the path, when an allowance entry is set while `run_store.backend` is `disabled` or
+  names an API key or tenant the authentication configuration does not know. `build_run_api`
+  builds the one `Treasurer` over the run store's ledger and returns it as
+  `RunApiHandles.treasurer`; `paladin_web::agent_auth::OPEN_ACCESS_PRINCIPAL_ID` names the
+  open-access principal.
 
 - **Operator-configured treasurer price table, wired into both production run paths (PRICE-01,
   PRICE-03; Phase 38 plan 38-03).** A new `treasurer:` config section (`Settings.treasurer:
@@ -209,6 +219,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (STORE-02; Phase 45 plan 45-01).
 
 ### Changed
+
+- **`treasurer:` now rejects unknown keys (Phase 41 plan 41-03).** `TreasurerConfig` and every
+  `treasurer.allowance` struct fail the config load on an unrecognised key (for example
+  `allowence:` or `perid:`) instead of silently enforcing nothing. The allowance keys were
+  unreleased, so no published configuration is affected.
 
 - `GET /runs/{run_id}` and `GET /runs` carry a ledger-derived `cost: Option<CostDto>` (`{ nanos,
   currency, display }`), computed from `TreasuryLedgerPort::spend` at read time — one query per

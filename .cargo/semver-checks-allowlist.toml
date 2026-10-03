@@ -251,3 +251,10 @@ lint = "register-only (cargo-semver-checks 0.50.0 has no field- or parameter-typ
 migration_row = "paladin-ports | RunSubmissionPort"
 requirement_id = "TENANT-01, PLAT-07"
 justification = "RunSubmissionPort::cancel's requested_by parameter retyped from Option<(String, UserRole)> to Option<PrincipalRef> (D-04); every in-tree implementor and caller was migrated in the same commit. Same register-only basis as the SubmitRun/ForkRun rows above."
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | RunApiHandles"
+requirement_id = "ALLOW-01, ALLOW-02"
+justification = "RunApiHandles gained the treasurer: Option<Arc<dyn AllowanceAdmissionPort>> field (D-06) -- the Treasurer admission port build_run_api builds when treasurer.allowance has entries, None otherwise; paladin-server hands the same port to AgentApiState (41-04). The in-tree literals are the two inside build_run_api; suppressed by the root Cargo.toml's crate-wide allow line."

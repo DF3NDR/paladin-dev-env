@@ -25,6 +25,7 @@
 //! `WarEngine`/`RunWorkerPool`'s generic bound without this module (or its caller) ever
 //! needing to know or care whether the underlying backend is SQLite or Postgres.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,8 +38,10 @@ use paladin_battalion::engine::WarEngine;
 use paladin_battalion::engine::registries::EngineRegistries;
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_core::platform::container::assistant::AssistantSource;
+use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::run::AssistantRef;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
+use paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort;
 use paladin_ports::input::assistant_admin_port::AssistantAdminPort;
 use paladin_ports::input::run_event_stream_port::RunEventStreamPort;
 use paladin_ports::input::run_submission_port::RunSubmissionPort;
@@ -52,6 +55,7 @@ use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
+use paladin_web::agent_auth::OPEN_ACCESS_PRINCIPAL_ID;
 use paladin_web::{AgentAuthConfig, AgentRegistry, RunApiState};
 
 use crate::application::services::assistant::{
@@ -67,6 +71,7 @@ use crate::application::services::run::webhook::{
 };
 use crate::application::services::run::worker::{RunWorkerOptions, RunWorkerPool};
 use crate::application::services::run::{RunEventBus, RunEventStreamService};
+use crate::application::services::treasurer::Treasurer;
 use crate::config::assistants::AssistantsConfig;
 use crate::config::engine::EngineConfig;
 use crate::config::env_utils::EnvOverridable;
@@ -120,6 +125,9 @@ pub struct RunApiHandles {
     /// thread with an active run row re-enqueues durably (PLAT-FR-06, D-19..D-23) instead of
     /// spawning in-process. `None` when the run store is disabled.
     pub parley_extras: Option<(Arc<dyn RunRepositoryPort>, Arc<dyn RunQueuePort>)>,
+    /// The Treasurer's admission port (D-06), shared with paladin-server's `AgentApiState`
+    /// (41-04). `None` when `treasurer.allowance` has no entries.
+    pub treasurer: Option<Arc<dyn AllowanceAdmissionPort>>,
     /// Every background task this call spawned (the worker pool, the webhook delivery
     /// drain loop, and -- when `schedules.enabled` -- the schedule tick loop), all
     /// registered with the caller's own [`ShutdownCoordinator`] (D-13). Empty when the run
@@ -472,7 +480,10 @@ async fn build_redis_run_queue(
 /// built without the matching feature (naming the feature); `run_store` is enabled but no
 /// waypoint store is wired (naming `waypoint_store.backend`); a configured backend fails to
 /// connect or migrate; or the run engine's `PaladinPort` cannot be built from `settings`
-/// (an unresolvable default LLM provider).
+/// (an unresolvable default LLM provider); or `treasurer.allowance` is incoherent (D-11):
+/// it has entries while `run_store.backend` is `disabled`, an `api_keys.<name>` entry names
+/// no key in `http.auth.api_keys`, or a `tenants.<id>` entry names a tenant no key maps to.
+/// The coherence check runs first, so a disabled run store cannot hide it.
 pub async fn build_run_api(
     configs: RunApiConfigs,
     settings: &Settings,
@@ -481,12 +492,23 @@ pub async fn build_run_api(
     auth: AgentAuthConfig,
     code_registry: Arc<AgentRegistry>,
 ) -> Result<RunApiHandles, Box<dyn std::error::Error>> {
+    // D-11: an allowance that would silently enforce nothing is a boot error, checked BEFORE
+    // the disabled-store early return so a disabled store cannot hide a configured allowance.
+    let treasurer_config = settings.get_treasurer_config();
+    let (known_tenants, known_api_keys) = known_allowance_targets(&auth);
+    treasurer_config.allowance.validate_against(
+        &known_tenants,
+        &known_api_keys,
+        matches!(configs.run_store.backend, RunStoreBackend::Disabled),
+    )?;
+
     if matches!(configs.run_store.backend, RunStoreBackend::Disabled) {
         return Ok(RunApiHandles {
             run_state: RunApiState::new().with_auth(auth),
             thread_run_submission: None,
             run_repository: None,
             parley_extras: None,
+            treasurer: None,
             tasks: Vec::new(),
         });
     }
@@ -618,7 +640,26 @@ pub async fn build_run_api(
 
     let mut tasks = Arc::clone(&pool).spawn(RunWorkerOptions::from(&configs.run_worker));
 
-    let submission_service = RunSubmissionService::new(
+    // D-06, C14: one Treasurer over the run store's own ledger, built only when an allowance
+    // entry exists (no entries => admission is a no-op and nothing is built).
+    let treasurer: Option<Arc<dyn AllowanceAdmissionPort>> = if treasurer_config
+        .allowance
+        .is_empty()
+    {
+        None
+    } else {
+        let policy = treasurer_config
+            .allowance_policy()
+            .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
+        // Enforcement must never be skipped: a configured run store always yields a ledger, so
+        // `None` here is an error, not a reason to run unguarded.
+        let ledger = treasury_ledger.as_ref().ok_or(
+            "treasurer.allowance has entries but no treasury ledger was built from run_store.backend",
+        )?;
+        Some(Arc::new(Treasurer::new(policy, Arc::clone(ledger))) as Arc<dyn AllowanceAdmissionPort>)
+    };
+
+    let mut submission_service = RunSubmissionService::new(
         Arc::clone(&run_repository),
         Arc::clone(&run_queue),
         Arc::clone(&resolver),
@@ -626,6 +667,9 @@ pub async fn build_run_api(
     .with_local_tokens(pool.local_tokens())
     .with_waypoints(Arc::clone(&waypoint_store))
     .with_ssrf_guard(SsrfGuard::new(configs.webhooks.allow_private));
+    if let Some(treasurer) = &treasurer {
+        submission_service = submission_service.with_treasurer(Arc::clone(treasurer));
+    }
     let run_submission: Arc<dyn RunSubmissionPort> = Arc::new(submission_service);
 
     // PLAT-05: the schedule tick loop is spawned only when `schedules.enabled` (D-50) --
@@ -691,8 +735,32 @@ pub async fn build_run_api(
         thread_run_submission: Some(Arc::clone(&run_submission)),
         run_repository: Some(Arc::clone(&run_repository)),
         parley_extras: Some((run_repository, run_queue)),
+        treasurer,
         tasks,
     })
+}
+
+/// The tenants and API key names the authentication configuration knows -- the targets a
+/// `treasurer.allowance` entry may name (D-11).
+///
+/// Key names are the configured principal ids (never the key values); tenants come from every
+/// API key's principal plus the bearer-token tenant. With authentication disabled the
+/// open-access principal and tenant are valid targets (Open Question 4).
+fn known_allowance_targets(auth: &AgentAuthConfig) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut tenants = BTreeSet::new();
+    let mut keys = BTreeSet::new();
+    for principal in auth.api_keys.values() {
+        keys.insert(principal.id.clone());
+        tenants.insert(principal.tenant_id.as_str().to_string());
+    }
+    if let Some(tenant) = &auth.bearer_tenant {
+        tenants.insert(tenant.as_str().to_string());
+    }
+    if !auth.enabled {
+        keys.insert(OPEN_ACCESS_PRINCIPAL_ID.to_string());
+        tenants.insert(TenantId::OPEN_ACCESS.to_string());
+    }
+    (tenants, keys)
 }
 
 #[cfg(test)]
@@ -922,6 +990,386 @@ mod tests {
             disabled_handles.run_state.treasury_ledger.is_none(),
             "a disabled run store must wire no treasury ledger"
         );
+    }
+
+    // ---- Phase 41 (41-03): allowance coherence (D-11) and Treasurer wiring (D-06, C14) ----
+
+    fn principal_auth(keys: &[(&str, &str, &str)]) -> AgentAuthConfig {
+        use paladin_core::platform::container::user::UserRole;
+        let api_keys = keys
+            .iter()
+            .map(|(secret, name, tenant)| {
+                (
+                    (*secret).to_string(),
+                    paladin_web::Principal::new(
+                        *name,
+                        UserRole::User,
+                        TenantId::new(*tenant).expect("tenant id"),
+                    ),
+                )
+            })
+            .collect();
+        AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        }
+    }
+
+    fn allowance_settings(
+        api_keys: &[(&str, &str, &str)],
+        tenants: &[(&str, &str, &str)],
+    ) -> Settings {
+        use crate::config::treasurer::AllowanceEntryConfig;
+        let entry = |period: &str, amount: &str| AllowanceEntryConfig {
+            period: period.to_string(),
+            amount: amount.to_string(),
+            lifetime: None,
+            warn_at: None,
+        };
+        let mut settings = Settings::default();
+        for (name, period, amount) in api_keys {
+            settings
+                .treasurer
+                .allowance
+                .api_keys
+                .insert((*name).to_string(), entry(period, amount));
+        }
+        for (id, period, amount) in tenants {
+            settings
+                .treasurer
+                .allowance
+                .tenants
+                .insert((*id).to_string(), entry(period, amount));
+        }
+        settings
+    }
+
+    async fn build_err(
+        configs: RunApiConfigs,
+        settings: &Settings,
+        auth: AgentAuthConfig,
+    ) -> String {
+        build_run_api(
+            configs,
+            settings,
+            ShutdownCoordinator::new(),
+            None,
+            auth,
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .err()
+        .expect("an incoherent allowance configuration must stop the boot")
+        .to_string()
+    }
+
+    fn sqlite_configs(url: &str) -> RunApiConfigs {
+        let mut configs = default_configs();
+        configs.run_store.backend = RunStoreBackend::Sqlite {
+            path: url.to_string(),
+        };
+        configs.run_queue.backend = RunQueueBackend::InMemory;
+        configs.run_worker.concurrency = 1;
+        configs
+    }
+
+    async fn sqlite_waypoints(url: &str) -> Arc<dyn WaypointPort> {
+        Arc::new(
+            paladin_storage::waypoint::sqlite::SqliteWaypointStore::new(url)
+                .await
+                .expect("waypoint store opens"),
+        )
+    }
+
+    #[tokio::test]
+    async fn build_run_api_refuses_allowances_without_a_run_store() {
+        let settings = allowance_settings(&[("svc-a", "1d", "2.50")], &[]);
+        let err = build_err(
+            default_configs(),
+            &settings,
+            principal_auth(&[("secret-a", "svc-a", "acme")]),
+        )
+        .await;
+        assert!(err.contains("treasurer.allowance"), "{err}");
+        assert!(err.contains("run_store.backend"), "{err}");
+        assert!(
+            !err.contains("secret-a"),
+            "a key value must never be echoed: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_run_api_with_a_disabled_store_and_no_allowance_is_unchanged() {
+        let handles = build_run_api(
+            default_configs(),
+            &Settings::default(),
+            ShutdownCoordinator::new(),
+            None,
+            principal_auth(&[("secret-a", "svc-a", "acme")]),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .expect("disabled store, no allowance: boots as before");
+        assert!(handles.treasurer.is_none());
+        assert!(handles.tasks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn build_run_api_rejects_an_allowance_for_an_unknown_api_key() {
+        let settings = allowance_settings(&[("ghost", "1d", "2.50")], &[]);
+        let err = build_err(
+            sqlite_configs("sqlite::memory:"),
+            &settings,
+            principal_auth(&[("secret-a", "svc-a", "acme")]),
+        )
+        .await;
+        assert!(err.contains("treasurer.allowance.api_keys.ghost"), "{err}");
+        assert!(err.contains("http.auth.api_keys"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn build_run_api_rejects_an_allowance_for_an_unknown_tenant() {
+        let settings = allowance_settings(&[], &[("globex", "1d", "25.00")]);
+        let err = build_err(
+            sqlite_configs("sqlite::memory:"),
+            &settings,
+            principal_auth(&[("secret-a", "svc-a", "acme")]),
+        )
+        .await;
+        assert!(err.contains("treasurer.allowance.tenants.globex"), "{err}");
+    }
+
+    #[test]
+    fn open_access_targets_are_known_only_when_auth_is_disabled() {
+        let (tenants, keys) = known_allowance_targets(&AgentAuthConfig::default());
+        assert!(keys.contains(OPEN_ACCESS_PRINCIPAL_ID));
+        assert!(tenants.contains(TenantId::OPEN_ACCESS));
+        let (tenants, keys) = known_allowance_targets(&principal_auth(&[("s", "svc-a", "acme")]));
+        assert!(!keys.contains(OPEN_ACCESS_PRINCIPAL_ID));
+        assert!(!tenants.contains(TenantId::OPEN_ACCESS));
+        assert!(keys.contains("svc-a") && tenants.contains("acme"));
+        assert!(
+            !keys.contains("s"),
+            "the key VALUE is never a known allowance target"
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_accepts_open_access_targets_when_auth_is_disabled() {
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let (run_path, run_url) = temp_sqlite_url("open_access_allowance");
+        let (wp_path, wp_url) = temp_sqlite_url("open_access_allowance_wp");
+        let settings = allowance_settings(
+            &[("anonymous", "1d", "2.50")],
+            &[("open-access", "1d", "25.00")],
+        );
+        let coordinator = ShutdownCoordinator::new();
+        let handles = build_run_api(
+            sqlite_configs(&run_url),
+            &settings,
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            AgentAuthConfig::default(),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .expect("open-access allowance targets are accepted with auth disabled");
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        assert!(handles.treasurer.is_some());
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        cleanup(&run_path);
+        cleanup(&wp_path);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_wires_a_treasurer_only_when_allowances_are_configured() {
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let auth = || principal_auth(&[("secret-a", "svc-a", "acme")]);
+
+        let (run_path, run_url) = temp_sqlite_url("no_allowance");
+        let (wp_path, wp_url) = temp_sqlite_url("no_allowance_wp");
+        let coordinator = ShutdownCoordinator::new();
+        let without = build_run_api(
+            sqlite_configs(&run_url),
+            &Settings::default(),
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            auth(),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .expect("sqlite run store without allowances wires");
+        assert!(without.treasurer.is_none(), "no entries: no Treasurer");
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        cleanup(&run_path);
+        cleanup(&wp_path);
+
+        let (run_path, run_url) = temp_sqlite_url("with_allowance");
+        let (wp_path, wp_url) = temp_sqlite_url("with_allowance_wp");
+        let coordinator = ShutdownCoordinator::new();
+        let with = build_run_api(
+            sqlite_configs(&run_url),
+            &allowance_settings(&[("svc-a", "1d", "2.50")], &[("acme", "7d", "25.00")]),
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            auth(),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .expect("sqlite run store with allowances wires");
+        assert!(with.treasurer.is_some(), "entries present: one Treasurer");
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        cleanup(&run_path);
+        cleanup(&wp_path);
+
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+    }
+
+    /// The production wiring, end to end: an exhausted key is refused through the real run
+    /// router, and a key with no entry still submits. A UTC window rollover between seeding
+    /// and the POST (Pitfall 10) re-runs the scenario once against the new window.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn wired_treasurer_refuses_an_exhausted_key_through_the_run_router() {
+        use crate::application::services::treasurer::window_for;
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_core::platform::container::paladin::PaladinData;
+        use paladin_core::platform::container::run::RunId;
+        use paladin_core::platform::container::treasury_ledger::{
+            LedgerScope, SettleRequest, SettlementKey,
+        };
+
+        struct NoopExecutor;
+        #[async_trait]
+        impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort for NoopExecutor {
+            async fn execute(
+                &self,
+                _paladin: &paladin_core::platform::container::paladin::Paladin,
+                _input: &str,
+            ) -> Result<
+                paladin_ports::output::paladin_port::PaladinResult,
+                paladin_core::platform::container::paladin_error::PaladinError,
+            > {
+                Err(
+                    paladin_core::platform::container::paladin_error::PaladinError::ExecutionError(
+                        "the allowance wiring test never runs the agent".to_string(),
+                    ),
+                )
+            }
+        }
+
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let (run_path, run_url) = temp_sqlite_url("wired_treasurer");
+        let (wp_path, wp_url) = temp_sqlite_url("wired_treasurer_wp");
+
+        let registry = Arc::new(AgentRegistry::new());
+        let paladin = Arc::new(paladin_core::base::entity::node::Node::new(
+            PaladinData {
+                system_prompt: "hi".to_string(),
+                name: "AllowanceAgent".to_string(),
+                ..Default::default()
+            },
+            Some("AllowanceAgent".to_string()),
+        ));
+        registry.insert("allowance-agent", paladin, Arc::new(NoopExecutor));
+
+        let configs = sqlite_configs(&run_url);
+        let ledger = build_treasury_ledger(&configs.run_store)
+            .await
+            .expect("ledger opens")
+            .expect("a sqlite run store yields a ledger");
+        let coordinator = ShutdownCoordinator::new();
+        let handles = build_run_api(
+            configs,
+            // 1d per RESEARCH Pitfall 10: a short window would roll over mid-test.
+            &allowance_settings(&[("svc-a", "1d", "2.50")], &[]),
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            principal_auth(&[("key-a", "svc-a", "acme"), ("key-b", "svc-b", "acme")]),
+            registry,
+        )
+        .await
+        .expect("sqlite run store with an allowance wires");
+        assert!(handles.treasurer.is_some());
+        let app = paladin_web::run_router(handles.run_state);
+
+        let post = |key: &'static str| {
+            let app = app.clone();
+            async move {
+                app.oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", key)
+                        .body(Body::from(
+                            r#"{"assistant_id":"allowance-agent","input":{}}"#,
+                        ))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds")
+            }
+        };
+
+        let mut settled = false;
+        for _ in 0..2 {
+            let before =
+                window_for(ledger.store_now().await.expect("store clock"), 86_400).expect("window");
+            let usd = CurrencyCode::new("USD").expect("usd");
+            ledger
+                .settle(SettleRequest::unreserved(
+                    LedgerScope::new("acme", "svc-a"),
+                    SettlementKey::new(RunId::new_v7(), 0, 0),
+                    Cost::new(2_500_000_000, usd),
+                    std::collections::BTreeMap::from([("gpt-4".to_string(), 2_500_000_000_i64)]),
+                ))
+                .await
+                .expect("seed the key at its ceiling");
+            let refused = post("key-a").await;
+            let after =
+                window_for(ledger.store_now().await.expect("store clock"), 86_400).expect("window");
+            if before != after {
+                continue;
+            }
+            assert_eq!(refused.status(), StatusCode::TOO_MANY_REQUESTS);
+            let bytes = axum::body::to_bytes(refused.into_body(), usize::MAX)
+                .await
+                .expect("read body");
+            let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON body");
+            assert_eq!(body["error"]["code"], "allowance_exhausted");
+
+            // A key with no entry (and a tenant with none) is admitted (D-03).
+            let admitted = post("key-b").await;
+            assert_eq!(admitted.status(), StatusCode::ACCEPTED);
+            settled = true;
+            break;
+        }
+        assert!(
+            settled,
+            "a UTC window boundary was crossed on both attempts"
+        );
+
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        cleanup(&run_path);
+        cleanup(&wp_path);
     }
 
     #[tokio::test]

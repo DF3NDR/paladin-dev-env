@@ -34,6 +34,12 @@ use paladin_ports::output::auth_port::AuthPort;
 use crate::agent_controller::AgentApiState;
 use crate::error::ApiError;
 
+/// The principal id the open-access principal carries when authentication is disabled.
+///
+/// A `treasurer.allowance.api_keys` entry may name it (alongside `tenants.open-access`), so an
+/// operator running without authentication can still bound the deployment's spend (D-11).
+pub const OPEN_ACCESS_PRINCIPAL_ID: &str = "anonymous";
+
 /// An authenticated caller: an identifier, tenant and role used for authorization and
 /// run-read scoping (Phase 40, TENANT-01, D-01).
 ///
@@ -68,7 +74,11 @@ impl Principal {
     /// documented open-access sentinel tenant (D-03) -- deployment-wide reads happen
     /// through the Admin arm of [`RunReadScope::for_principal`] (D-11), not a bypass.
     fn open_access() -> Self {
-        Self::new("anonymous", UserRole::Admin, TenantId::open_access())
+        Self::new(
+            OPEN_ACCESS_PRINCIPAL_ID,
+            UserRole::Admin,
+            TenantId::open_access(),
+        )
     }
 
     /// Derive this principal's run-read scope (D-12): `All` for `Admin`, otherwise scoped

@@ -820,24 +820,33 @@ Do not trim: ` 1h`, `1H`, `1.5h`, `-1h`, `0m` are all rejected (never clamp, D-0
 | A6 | A UUIDv7 produced by `RunId::new_v7()` is acceptable as a delivery correlation id and `ThreadId::new("treasurer-notices")` validates | C3 | Use a real generated thread id instead; trivial |
 | A7 | Postgres contract tests cannot run locally (no daemon, no server here) so CI's `postgres-integration` job is the only proof for the Postgres legs | Environment Availability | A local cluster would give earlier feedback |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+Every question below is resolved by a Phase 41 plan; each carries its own RESOLVED note citing the plan and task that settles it.
 
 1. **How is the operator webhook secret supplied?**
    - Known: no `${VAR}` expansion code exists (C7); `treasurer.currency` is the only scalar env override today.
    - Unclear: whether the existing `http.auth.api_keys[].key: "${...}"` examples work in practice.
    - Recommendation: add `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`, pin the `${}` behaviour with a test, and ask the operator whether the api_keys examples need a follow-up.
+   - **RESOLVED:** 41-03 Task 1 adds the `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` env override and pins the literal `${VAR}` behaviour with `yaml_env_placeholder_is_not_expanded`; 41-03 Task 2 files the conditional WINDOWS.md deviation row for the `http.auth.api_keys[].key: "${...}"` examples (owner: Phase 46 docs currency); 41-08 wires the secret onto `WebhookDeliveryService::with_operator_notice_secret`.
 
 2. **Which `RunEventKind` disposition for operator rows?** (C3 Option A vs B.) Recommendation: Option A with a correlation `RunId`. Decide at the checkpoint, before migration `011`.
+   - **RESOLVED (design fixed in 41-01 Task 1 item 6, operator confirmation at that checkpoint):** C3 Option A -- `RunEventKind::AllowanceWarning`, the enum marked `#[non_exhaustive]`, a fresh correlation `RunId` no run owns and the fixed thread `treasurer-notices`; an option-c redirect recorded in 41-01-SUMMARY.md overrides it. Implemented by 41-08 Tasks 1-2.
 
 3. **Should the trace event also be emitted on the HTTP agent paths?** Known: no worker emitter exists there; the precedent is "emit if an emitter is wired". Recommendation: carry the warning in `RunScope`; emit when an emitter exists; render the herald line only on the streaming final chunk. Confirm the scope is acceptable.
+   - **RESOLVED:** 41-07 Task 2 adds `RunScope.allowance_warnings`; `PaladinExecutionService` emits it once when a trace emitter is wired and the streamed final chunk's `ExecutionMetadata` carries the herald line. The best-effort nature of these two legs on the agent routes (the durable notice row and the operator webhook always fire) is recorded in ADR-0056 by 41-09 Task 1 and in platform-api.md by 41-08 Task 3.
 
 4. **`allowance.api_keys` / `tenants` with auth disabled.** Accept exactly `anonymous` / `open-access` as valid targets when `http.auth.enabled = false`? (Needs constants exported from `agent_auth.rs`.) Recommendation: yes.
+   - **RESOLVED (yes):** 41-03 Task 2 adds `paladin_web::agent_auth::OPEN_ACCESS_PRINCIPAL_ID` and makes the D-11 cross-check accept `api_keys.anonymous` / `tenants.open-access` when `http.auth.enabled` is false (`build_run_api_accepts_open_access_targets_when_auth_is_disabled`).
 
 5. **Maximum `period`, and lifetime-only entries.** D-02 requires `period` and `amount`; a lifetime-only cap is not expressible. Recommend a documented max (366d) and leaving lifetime-only as a future extension.
+   - **RESOLVED:** 41-01 Task 1 item 8 records the discretion call and 41-01 Task 3 implements it (`MAX_ALLOWANCE_PERIOD_SECS` = 366 days, `period` and `amount` required on every entry, so a lifetime-only entry is not expressible); 41-03 Task 1 documents it in config.example.yml and configuration.md.
 
 6. **Does an allowance-refused schedule tick count as `skipped_ticks`?** Today any non-`ThreadBusy` submit error becomes `SkipReason::SubmissionError` without incrementing the counter. Recommendation: add `SkipReason::AllowanceExhausted` (enum is `#[non_exhaustive]`) and call `increment_skipped`, so operators see the missed tick in the PLAT-FR-13 counter.
+   - **RESOLVED (yes):** 41-05 Task 2 adds `SkipReason::AllowanceExhausted` and calls `increment_skipped` on an allowance-refused tick (`tick_for_an_exhausted_creator_is_skipped_and_counted`).
 
 7. **Is `ScheduleResponse` to expose `created_by`?** `GET /schedules` is not tenant-scoped, so exposing it would reveal tenant names across tenants. Recommendation: do not expose in this phase.
+   - **RESOLVED (no):** 41-05 Task 2 keeps `created_by` out of `ScheduleResponse` (`schedule_response_does_not_expose_the_creator`, plus an awk acceptance check on the struct).
 
 ## Environment Availability
 

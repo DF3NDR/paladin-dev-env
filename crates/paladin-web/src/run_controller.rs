@@ -782,6 +782,7 @@ pub async fn submit_run(
         input: body.input,
         webhook,
         requested_by: Some(PrincipalRef::from(&principal)),
+        attributed_to: None,
     };
 
     let accepted = submission

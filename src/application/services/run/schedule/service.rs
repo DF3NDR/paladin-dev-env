@@ -79,6 +79,11 @@ pub enum SkipReason {
     /// already advanced -- so this schedule is not retried until its next
     /// natural due time.
     SubmissionError,
+    /// The schedule creator's tenant or API-key allowance was exhausted at the tick
+    /// (Phase 41, D-08). Nothing was submitted and `skipped_ticks` was incremented on the row;
+    /// the tick is still recorded as claimed, so the schedule is next tried at its next natural
+    /// due time.
+    AllowanceExhausted,
 }
 
 /// The outcome of processing one due schedule during a
@@ -344,7 +349,11 @@ impl ScheduleService {
                         thread_id: Some(thread_id),
                         input: schedule.input.clone(),
                         webhook: schedule.webhook.clone(),
+                        // Schedule-fired runs have no live principal: the role check stays
+                        // skipped (written decision, C13) and the creator's identity -- never
+                        // a role -- attributes the run and drives its admission (D-08).
                         requested_by: None,
+                        attributed_to: schedule.created_by.clone(),
                     };
 
                     match self.submission.submit(request).await {
@@ -361,6 +370,23 @@ impl ScheduleService {
                             ScheduleTickOutcome::Skipped {
                                 schedule_id,
                                 reason: SkipReason::ThreadBusy,
+                            }
+                        }
+                        Err(RunSubmissionError::AllowanceExhausted(refusal)) => {
+                            // The refusal's `Display` carries figures only -- never a tenant,
+                            // key name or key value (D-13).
+                            log::warn!(
+                                "schedule {schedule_id}: tick skipped, creator allowance \
+                                 exhausted: {refusal}"
+                            );
+                            if let Err(error) = self.repo.increment_skipped(&schedule_id).await {
+                                log::warn!(
+                                    "schedule {schedule_id}: increment_skipped failed: {error}"
+                                );
+                            }
+                            ScheduleTickOutcome::Skipped {
+                                schedule_id,
+                                reason: SkipReason::AllowanceExhausted,
                             }
                         }
                         Err(error) => {

@@ -31,6 +31,7 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use paladin_core::platform::container::principal::PrincipalRef;
 use paladin_core::platform::container::run::{RunEventKind, WebhookSpec};
 use paladin_core::platform::container::run_schedule::{
     OnMissed, RunSchedule, RunScheduleId, RunScheduleUpdate, ThreadStrategy,
@@ -388,6 +389,10 @@ pub async fn create_schedule(
         thread_strategy,
         on_missed,
         webhook,
+        // D-08: the creator is the authenticated principal's identity (tenant id and key
+        // name, never the role). It is deliberately NOT echoed back in `ScheduleResponse`
+        // while `GET /schedules` is not tenant-scoped.
+        created_by: Some(PrincipalRef::from(&principal).attribution()),
     };
 
     let schedule = schedules.create(create).await.map_err(map_admin_error)?;
@@ -626,6 +631,9 @@ mod tests {
     #[derive(Default)]
     struct TestAdminPort {
         schedules: Mutex<HashMap<String, RunSchedule>>,
+        /// The last `CreateRunSchedule` this port received, so a test can assert what the
+        /// handler handed the admin service.
+        last_create: Mutex<Option<CreateRunSchedule>>,
     }
 
     #[async_trait]
@@ -634,6 +642,7 @@ mod tests {
             &self,
             create: CreateRunSchedule,
         ) -> Result<RunSchedule, ScheduleAdminError> {
+            *self.last_create.lock().unwrap() = Some(create.clone());
             if create.cron.trim().is_empty() {
                 return Err(ScheduleAdminError::Invalid {
                     violations: vec![
@@ -667,6 +676,9 @@ mod tests {
             }
             if !create.enabled {
                 schedule = schedule.disabled();
+            }
+            if let Some(attribution) = create.created_by {
+                schedule = schedule.with_created_by(attribution);
             }
             self.schedules
                 .lock()
@@ -824,6 +836,46 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.0, StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn create_schedule_records_the_creating_principal() {
+        use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+        use paladin_core::platform::container::user::UserRole;
+
+        let (state, admin) = admin_state();
+        let principal = Extension(Principal::new(
+            "ops",
+            UserRole::Admin,
+            TenantId::new("acme").unwrap(),
+        ));
+        let _response = create_schedule(State(state), principal, Json(create_request()))
+            .await
+            .unwrap();
+
+        let recorded = admin.last_create.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            recorded.created_by,
+            Some(RunAttribution::new(TenantId::new("acme").unwrap(), "ops")),
+            "the handler must stamp the principal's tenant and key name"
+        );
+    }
+
+    #[tokio::test]
+    async fn schedule_response_does_not_expose_the_creator() {
+        let (state, _admin) = admin_state();
+        let response = create_schedule(State(state), admin_principal(), Json(create_request()))
+            .await
+            .unwrap();
+        assert_eq!(response.0, StatusCode::CREATED);
+        let body = read_json(response.1.into_response()).await;
+        let text = body.to_string();
+        for forbidden in ["created_by", "tenant_id", "api_key_id", "test-tenant"] {
+            assert!(
+                !text.contains(forbidden),
+                "the 201 body must not expose the creator ({forbidden}): {text}"
+            );
+        }
     }
 
     #[tokio::test]

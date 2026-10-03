@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use thiserror::Error;
 
 use paladin_core::platform::container::allowance::AllowanceRefusal;
-use paladin_core::platform::container::principal::PrincipalRef;
+use paladin_core::platform::container::principal::{PrincipalRef, RunAttribution};
 use paladin_core::platform::container::run::{RunId, RunStatus, WebhookSpec};
 use paladin_core::platform::container::waypoint::{ThreadId, WaypointId};
 
@@ -33,6 +33,15 @@ pub struct SubmitRun {
     /// `None` means an internal caller with no principal (skips the role check).
     /// The tenant is server-derived -- never taken from the request.
     pub requested_by: Option<PrincipalRef>,
+    /// Identity used for a principal-less submission (schedule-fired runs, D-08).
+    ///
+    /// Consulted only when `requested_by` is `None`: it is then stamped onto the run as
+    /// `submitted_by` and is the subject the allowance admission gate checks. It carries a
+    /// tenant id and an API key name only -- it never grants, implies or bypasses a role, and
+    /// the invocation role check reads `requested_by` alone (a schedule-fired run therefore
+    /// keeps skipping the role check, exactly as before). When `requested_by` is `Some`, this
+    /// field is ignored.
+    pub attributed_to: Option<RunAttribution>,
 }
 
 /// A request to fork a NEW run from a specific Waypoint on an existing
@@ -238,6 +247,7 @@ pub enum RunSubmissionError {
 ///         input: serde_json::json!({}),
 ///         webhook: None,
 ///         requested_by: None,
+///         attributed_to: None,
 ///     };
 ///
 ///     let accepted = port.submit(request).await?;
@@ -328,6 +338,7 @@ mod tests {
             input: serde_json::json!({}),
             webhook: None,
             requested_by: None,
+            attributed_to: None,
         };
         let err = port.submit(request).await.unwrap_err();
         assert!(matches!(err, RunSubmissionError::NotWired));

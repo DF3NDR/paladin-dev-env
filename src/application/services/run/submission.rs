@@ -154,6 +154,7 @@ fn map_cancel_error(err: RunRepositoryError) -> RunSubmissionError {
 ///             input: serde_json::json!({}),
 ///             webhook: None,
 ///             requested_by: None,
+///             attributed_to: None,
 ///         })
 ///         .await
 ///         .unwrap_err();
@@ -436,11 +437,19 @@ impl RunSubmissionPort for RunSubmissionService {
         if let Some(webhook) = request.webhook {
             run = run.with_webhook(webhook);
         }
-        // D-08: stamp the submitting principal's attribution onto the run BEFORE it is
-        // ever inserted -- `None` (an internal/same-process caller) leaves `submitted_by`
-        // `None` (D-10).
-        if let Some(principal_ref) = &request.requested_by {
-            run = run.with_submitted_by(principal_ref.attribution());
+        // D-08: stamp the effective attribution onto the run BEFORE it is ever inserted.
+        // The submitting principal wins; `attributed_to` (a schedule-fired run's creator,
+        // Phase 41 D-08) applies only when there is no principal. `None` for both (an
+        // internal/same-process caller) leaves `submitted_by` `None` (D-10). The role check
+        // and the thread-visibility guard above read `requested_by` alone: `attributed_to`
+        // is identity only and never grants or implies a role (C13).
+        if let Some(attribution) = request
+            .requested_by
+            .as_ref()
+            .map(PrincipalRef::attribution)
+            .or(request.attributed_to)
+        {
+            run = run.with_submitted_by(attribution);
         }
 
         // Phase 41 D-06/D-07: the allowance check, BEFORE any row is written, with confirm /
@@ -678,6 +687,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -706,6 +716,7 @@ mod tests {
                     events: vec![],
                 }),
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap_err();
@@ -736,6 +747,7 @@ mod tests {
                     events: vec![],
                 }),
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -756,6 +768,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -775,6 +788,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap_err();
@@ -796,6 +810,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -808,6 +823,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap_err();
@@ -894,6 +910,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -953,6 +970,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -988,6 +1006,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: Some(principal_ref("acme", "svc-a", UserRole::User)),
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -1017,6 +1036,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -1039,6 +1059,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: Some(principal.clone()),
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -1050,6 +1071,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: Some(principal),
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -1095,6 +1117,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: Some(principal_ref("acme", "svc-a", UserRole::User)),
+                attributed_to: None,
             })
             .await
             .unwrap_err();
@@ -1111,6 +1134,7 @@ mod tests {
             input: serde_json::json!({}),
             webhook: None,
             requested_by,
+            attributed_to: None,
         }
     }
 
@@ -1348,6 +1372,7 @@ mod tests {
         confirms: Mutex<u32>,
         abandons: Mutex<u32>,
         last_run_id: Mutex<Option<RunId>>,
+        last_subject: Mutex<Option<paladin_core::platform::container::principal::RunAttribution>>,
     }
 
     impl RecordingTreasurer {
@@ -1358,7 +1383,15 @@ mod tests {
                 confirms: Mutex::new(0),
                 abandons: Mutex::new(0),
                 last_run_id: Mutex::new(None),
+                last_subject: Mutex::new(None),
             })
+        }
+
+        /// The subject the most recent `admit` was called with.
+        fn last_subject(
+            &self,
+        ) -> Option<paladin_core::platform::container::principal::RunAttribution> {
+            self.last_subject.lock().unwrap().clone()
         }
 
         /// The run id the most recent `admit` was called with.
@@ -1379,10 +1412,11 @@ mod tests {
     impl AllowanceAdmissionPort for RecordingTreasurer {
         async fn admit(
             &self,
-            _subject: &paladin_core::platform::container::principal::RunAttribution,
+            subject: &paladin_core::platform::container::principal::RunAttribution,
             run_id: Option<&RunId>,
         ) -> Result<Admission, AdmissionError> {
             *self.admits.lock().unwrap() += 1;
+            *self.last_subject.lock().unwrap() = Some(subject.clone());
             *self.last_run_id.lock().unwrap() = run_id.cloned();
             match self.script {
                 Script::Admit => Ok(Admission::none()),
@@ -1420,7 +1454,99 @@ mod tests {
             input: serde_json::json!({}),
             webhook: None,
             requested_by,
+            attributed_to: None,
         }
+    }
+
+    // --- Phase 41 (41-05, D-08): attributed_to for principal-less (schedule-fired) runs ---
+
+    fn acme_ops() -> paladin_core::platform::container::principal::RunAttribution {
+        paladin_core::platform::container::principal::RunAttribution::new(
+            paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+            "ops",
+        )
+    }
+
+    #[tokio::test]
+    async fn attributed_to_attributes_and_admits_a_principal_less_submission() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let mut request = submit_as(None, None);
+        request.attributed_to = Some(acme_ops());
+        let accepted = service.submit(request).await.unwrap();
+
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(stored.submitted_by, Some(acme_ops()));
+        assert_eq!(treasurer.last_subject(), Some(acme_ops()));
+        assert_eq!(treasurer.counts(), (1, 1, 0));
+    }
+
+    #[tokio::test]
+    async fn requested_by_takes_precedence_over_attributed_to() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let principal = principal_ref("globex", "svc-b", UserRole::User);
+        let mut request = submit_as(None, Some(principal.clone()));
+        request.attributed_to = Some(acme_ops());
+        let accepted = service.submit(request).await.unwrap();
+
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(stored.submitted_by, Some(principal.attribution()));
+        assert_eq!(treasurer.last_subject(), Some(principal.attribution()));
+    }
+
+    #[tokio::test]
+    async fn attributed_to_never_triggers_the_role_check() {
+        struct RestrictedToUsers;
+
+        #[async_trait]
+        impl AssistantResolver for RestrictedToUsers {
+            async fn resolve(
+                &self,
+                assistant_id: &str,
+                version: Option<u32>,
+            ) -> Result<ResolvedAssistant, ResolveError> {
+                Ok(ResolvedAssistant {
+                    reference: paladin_core::platform::container::run::AssistantRef {
+                        assistant_id: assistant_id.to_string(),
+                        version: version.unwrap_or(1),
+                    },
+                    runnable: Runnable::Workflow(empty_graph()),
+                    allowed_roles: vec![UserRole::User],
+                    source: AssistantSource::Code,
+                })
+            }
+        }
+
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let service =
+            RunSubmissionService::new(repository.clone(), queue, Arc::new(RestrictedToUsers));
+
+        // Written decision (D-08, C13): the attribution is identity only. A submission that
+        // carries nothing but `attributed_to` is still an internal caller as far as the
+        // invocation role check goes, so the restricted assistant accepts it.
+        let mut request = submit_as(None, None);
+        request.attributed_to = Some(acme_ops());
+        let accepted = service.submit(request).await.unwrap();
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(stored.submitted_by, Some(acme_ops()));
+
+        // Control: a real principal whose role is not allowed is still refused.
+        let err = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "ops", UserRole::Admin)),
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RunSubmissionError::Forbidden { .. }));
     }
 
     #[tokio::test]

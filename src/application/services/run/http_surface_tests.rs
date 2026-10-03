@@ -538,6 +538,7 @@ async fn fork_run_completes_from_waypoint() {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();

@@ -330,6 +330,106 @@ async fn run_allowance_tracer_once() -> bool {
     true
 }
 
+/// Edge ALLOW-02/concurrency (41-04): eight concurrent `POST /v1/runs` by ONE exhausted API
+/// key through the real `run_router` all answer `429 allowance_exhausted`, and the run
+/// repository and queue stay empty -- admission is a check before any write, so racing
+/// refused callers cannot leak a row or a queue entry between them.
+///
+/// The ledger is the in-memory adapter and the key carries a lifetime cap alongside its window
+/// so a window boundary crossed mid-test cannot make the balance read zero.
+#[tokio::test(flavor = "multi_thread")]
+async fn parallel_submissions_by_an_exhausted_key_are_all_refused_and_write_nothing() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let ledger: Arc<dyn TreasuryLedgerPort> =
+            Arc::new(paladin_storage::treasury::in_memory::InMemoryTreasuryLedger::new());
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("parallel-wf", build_chain_graph(1)));
+
+        let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+            "currency": "USD",
+            "allowance": { "api_keys": { "svc-a": {
+                "period": "1d", "amount": "2.50", "lifetime": "2.50"
+            } } }
+        }))
+        .unwrap();
+        let treasurer = Treasurer::new(config.allowance_policy().unwrap(), Arc::clone(&ledger));
+        let submission: Arc<dyn RunSubmissionPort> = Arc::new(
+            RunSubmissionService::new(repository.clone(), queue.clone(), resolver.clone())
+                .with_treasurer(Arc::new(treasurer)),
+        );
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "parallel-key-a".to_string(),
+            Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        let app = run_router(
+            RunApiState::new()
+                .with_submission(submission)
+                .with_repository(repository.clone())
+                .with_auth(AgentAuthConfig {
+                    enabled: true,
+                    api_keys,
+                    token_verifier: None,
+                    bearer_tenant: None,
+                }),
+        );
+
+        ledger
+            .settle(settle_request(
+                LedgerScope::new("acme", "svc-a"),
+                SettlementKey::new(RunId::new_v7(), 0, 0),
+                2_500_000_000,
+                usd(),
+                "gpt-4",
+            ))
+            .await
+            .unwrap();
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let app = app.clone();
+            handles.push(tokio::spawn(async move {
+                app.oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", "parallel-key-a")
+                        .body(Body::from(
+                            serde_json::to_vec(&serde_json::json!({
+                                "assistant_id": "parallel-wf",
+                                "input": {}
+                            }))
+                            .unwrap(),
+                        ))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds")
+                .status()
+            }));
+        }
+        for handle in handles {
+            assert_eq!(
+                handle.await.unwrap(),
+                StatusCode::TOO_MANY_REQUESTS,
+                "every concurrent submission by the exhausted key is refused"
+            );
+        }
+
+        let listed = repository.list(RunQuery::default()).await.unwrap();
+        assert!(listed.items.is_empty(), "refused submissions write no row");
+        assert_eq!(queue.depth().await.unwrap(), 0);
+    })
+    .await
+    .expect(
+        "parallel_submissions_by_an_exhausted_key_are_all_refused_and_write_nothing did not hang",
+    );
+}
+
 /// PRD acceptance 3 / D-52: ten concurrent `POST /v1/runs` for ONE thread,
 /// through the real `run_router` (oneshot, cloned router) over
 /// `SqliteRunRepository` on a temp file -- exactly one `202` and nine `409

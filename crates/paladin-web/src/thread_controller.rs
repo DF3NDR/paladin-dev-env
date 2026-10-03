@@ -2106,6 +2106,32 @@ mod tests {
         ThreadBusy,
         UnknownWaypoint,
         Forbidden,
+        AllowanceExhausted,
+    }
+
+    /// A window refusal: the key's 2.50 USD daily allowance is spent (Phase 41).
+    fn window_allowance_refusal() -> paladin_core::platform::container::allowance::AllowanceRefusal
+    {
+        use chrono::TimeZone;
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        let usd = CurrencyCode::new("USD").expect("USD");
+        let at = |day, hour| {
+            chrono::Utc
+                .with_ymd_and_hms(2026, 10, day, hour, 0, 0)
+                .single()
+                .expect("instant")
+        };
+        AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Window,
+            balance: Cost::new(2_500_000_000, usd.clone()),
+            ceiling: Cost::new(2_500_000_000, usd),
+            window: Some((at(3, 0), at(4, 0))),
+            evaluated_at: at(3, 23),
+        }
     }
 
     struct MockForkSubmissionPort {
@@ -2153,6 +2179,9 @@ mod tests {
                 ForkOutcome::Forbidden => Err(RunSubmissionError::Forbidden {
                     reason: "role not permitted for this assistant".to_string(),
                 }),
+                ForkOutcome::AllowanceExhausted => Err(RunSubmissionError::AllowanceExhausted(
+                    window_allowance_refusal(),
+                )),
             }
         }
     }
@@ -2243,6 +2272,37 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Phase 41 (D-06, D-12, Pitfall 7): a fork refused by the Treasurer reaches the client as
+    /// the same `429 allowance_exhausted` (with `Retry-After`) `POST /v1/runs` answers, through
+    /// the shared `map_submission_error`.
+    #[tokio::test]
+    async fn fork_route_maps_allowance_exhausted_to_429() {
+        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
+            outcome: ForkOutcome::AllowanceExhausted,
+        }));
+        let err = fork_thread(
+            State(state),
+            admin(),
+            Path("t".to_string()),
+            Json(fork_body()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.to_body()["error"]["code"], "allowance_exhausted");
+
+        let response = axum::response::IntoResponse::into_response(err);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok()),
+            Some("3600"),
+            "a window refusal carries Retry-After"
+        );
     }
 
     // --- delete_thread (D-45) -------------------------------------------

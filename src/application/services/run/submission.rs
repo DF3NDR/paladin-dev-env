@@ -346,6 +346,43 @@ impl RunSubmissionService {
             .map_err(map_queue_error)?;
         Ok(())
     }
+
+    /// The one admission lifecycle `submit` and `fork` share (Phase 41, D-06, D-07, D-10):
+    /// ask the Treasurer BEFORE any row is written, persist, then `confirm` on success or
+    /// `abandon` on a persistence failure, so a run that was admitted but never enqueued does
+    /// not hold an allowance notice.
+    ///
+    /// A request with no principal (`run.submitted_by` is `None`, an internal caller) or a
+    /// service without a Treasurer is never gated and never touches `confirm` / `abandon`.
+    /// A refusal returns [`RunSubmissionError::AllowanceExhausted`]; any other admission error
+    /// returns [`RunSubmissionError::Backend`] (fail closed) -- in both cases nothing is
+    /// persisted. Admission is a check only (D-05): the role never reaches the Treasurer, so an
+    /// `Admin` principal is bound exactly like a `User` (D-09).
+    async fn admit_and_persist(
+        &self,
+        run: &mut Run,
+        use_latest: bool,
+    ) -> Result<(), RunSubmissionError> {
+        let admission = match (&self.treasurer, &run.submitted_by) {
+            (Some(treasurer), Some(subject)) => Some(
+                treasurer
+                    .admit(subject, Some(&run.run_id))
+                    .await
+                    .map_err(map_admission_error)?,
+            ),
+            _ => None,
+        };
+
+        let persisted = self.persist_and_enqueue(run, use_latest).await;
+
+        if let (Some(treasurer), Some(admission)) = (&self.treasurer, &admission) {
+            match &persisted {
+                Ok(()) => treasurer.confirm(admission).await,
+                Err(_) => treasurer.abandon(admission).await,
+            }
+        }
+        persisted
+    }
 }
 
 #[async_trait]
@@ -406,27 +443,9 @@ impl RunSubmissionPort for RunSubmissionService {
             run = run.with_submitted_by(principal_ref.attribution());
         }
 
-        // Phase 41 D-06/D-07: the allowance check, BEFORE any row is written. A request with no
-        // principal (an internal caller) is never gated. Admission is a check only (D-05).
-        let admission = match (&self.treasurer, &run.submitted_by) {
-            (Some(treasurer), Some(subject)) => Some(
-                treasurer
-                    .admit(subject, Some(&run.run_id))
-                    .await
-                    .map_err(map_admission_error)?,
-            ),
-            _ => None,
-        };
-
-        let persisted = self.persist_and_enqueue(&mut run, use_latest).await;
-
-        if let (Some(treasurer), Some(admission)) = (&self.treasurer, &admission) {
-            match &persisted {
-                Ok(()) => treasurer.confirm(admission).await,
-                Err(_) => treasurer.abandon(admission).await,
-            }
-        }
-        persisted?;
+        // Phase 41 D-06/D-07: the allowance check, BEFORE any row is written, with confirm /
+        // abandon on the persistence result -- the lifecycle `fork` shares.
+        self.admit_and_persist(&mut run, use_latest).await?;
 
         Ok(RunAccepted {
             run_id: run.run_id,
@@ -499,7 +518,9 @@ impl RunSubmissionPort for RunSubmissionService {
     /// [`WaypointPort`]), copies the assistant reference from the thread's
     /// most recent run, then inserts and enqueues a NEW run carrying
     /// `fork_from`. Subject to the same busy-thread and SSRF checks
-    /// [`RunSubmissionPort::submit`] enforces.
+    /// [`RunSubmissionPort::submit`] enforces, and to the same Treasurer allowance check
+    /// (Phase 41, D-06): an exhausted principal is refused with
+    /// [`RunSubmissionError::AllowanceExhausted`] before the fork's run row is written.
     async fn fork(&self, request: ForkRun) -> Result<RunAccepted, RunSubmissionError> {
         // D-42: same write-time SSRF guard `submit` runs.
         if let Some(webhook) = &request.webhook
@@ -594,19 +615,10 @@ impl RunSubmissionPort for RunSubmissionService {
             run = run.with_webhook(webhook);
         }
 
-        self.repository
-            .insert(&run)
-            .await
-            .map_err(map_repository_error)?;
-        self.queue
-            .enqueue(QueuedRun {
-                run_id: run.run_id.clone(),
-                thread_id: run.thread_id.clone(),
-                attempt: run.attempt,
-                enqueued_at: Utc::now(),
-            })
-            .await
-            .map_err(map_queue_error)?;
+        // Phase 41 D-06/D-07: a fork starts spend exactly like a submit, so it runs the same
+        // admit -> insert -> enqueue -> confirm / abandon lifecycle. The fork's run row pins the
+        // assistant version it copied, so `use_latest` is `false` (a plain `insert`).
+        self.admit_and_persist(&mut run, false).await?;
 
         Ok(RunAccepted {
             run_id: run.run_id,
@@ -1335,6 +1347,7 @@ mod tests {
         admits: Mutex<u32>,
         confirms: Mutex<u32>,
         abandons: Mutex<u32>,
+        last_run_id: Mutex<Option<RunId>>,
     }
 
     impl RecordingTreasurer {
@@ -1344,7 +1357,13 @@ mod tests {
                 admits: Mutex::new(0),
                 confirms: Mutex::new(0),
                 abandons: Mutex::new(0),
+                last_run_id: Mutex::new(None),
             })
+        }
+
+        /// The run id the most recent `admit` was called with.
+        fn last_run_id(&self) -> Option<RunId> {
+            self.last_run_id.lock().unwrap().clone()
         }
 
         fn counts(&self) -> (u32, u32, u32) {
@@ -1361,9 +1380,10 @@ mod tests {
         async fn admit(
             &self,
             _subject: &paladin_core::platform::container::principal::RunAttribution,
-            _run_id: Option<&RunId>,
+            run_id: Option<&RunId>,
         ) -> Result<Admission, AdmissionError> {
             *self.admits.lock().unwrap() += 1;
+            *self.last_run_id.lock().unwrap() = run_id.cloned();
             match self.script {
                 Script::Admit => Ok(Admission::none()),
                 Script::Refuse => {
@@ -1524,5 +1544,300 @@ mod tests {
         );
         // First submit: admit + confirm. Second: admit, then the busy insert, then abandon.
         assert_eq!(treasurer.counts(), (2, 1, 1));
+    }
+
+    // --- Phase 41 (41-04): fork admission and the Admin binding -------------
+
+    use paladin_core::platform::container::battlefield::Battlefield;
+    use paladin_core::platform::container::run::RunStatus;
+    use paladin_core::platform::container::waypoint::{
+        FrontierSnapshot, GraphFingerprint, Waypoint, WaypointId, WaypointStatus,
+    };
+    use paladin_ports::output::waypoint_port::WaypointPort;
+    use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    use std::collections::BTreeMap;
+
+    /// A thread with one completed run and one saved Waypoint -- everything `fork` needs to
+    /// reach its admission slot. `service` builds a fresh [`RunSubmissionService`] over the same
+    /// repository / queue / waypoints with an optional Treasurer double.
+    struct ForkFixture {
+        repository: Arc<dyn RunRepositoryPort>,
+        queue: Arc<dyn RunQueuePort>,
+        resolver: Arc<dyn AssistantResolver>,
+        waypoints: Arc<dyn WaypointPort>,
+        thread: ThreadId,
+        from_waypoint: WaypointId,
+    }
+
+    impl ForkFixture {
+        async fn new() -> Self {
+            let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+            let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+            let resolver: Arc<dyn AssistantResolver> =
+                Arc::new(CodeWorkflowResolver::new().register("wf1", empty_graph()));
+            let waypoints: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+            let fixture = Self {
+                repository,
+                queue,
+                resolver,
+                waypoints,
+                thread: ThreadId::new("fork-thread").unwrap(),
+                from_waypoint: WaypointId::generate(),
+            };
+
+            // An unattributed original run, driven to `Completed` so the thread is not busy.
+            let accepted = fixture
+                .service(None)
+                .submit(submit_as(Some("fork-thread"), None))
+                .await
+                .unwrap();
+            for (from, to) in [
+                (RunStatus::Queued, RunStatus::Running),
+                (RunStatus::Running, RunStatus::Completed),
+            ] {
+                fixture
+                    .repository
+                    .update_status(&accepted.run_id, from, to, Utc::now())
+                    .await
+                    .unwrap();
+            }
+
+            let mut waypoint = Waypoint::new_root(
+                fixture.thread.clone(),
+                1,
+                GraphFingerprint::from_canonical_bytes(b"submission-fork-test-graph"),
+                Battlefield::new(BattlefieldSchema::new(Vec::new())),
+                Vec::new(),
+                Vec::new(),
+                WaypointStatus::Completed,
+                BTreeMap::new(),
+                FrontierSnapshot::default(),
+            );
+            waypoint.waypoint_id = fixture.from_waypoint;
+            fixture.waypoints.save(&waypoint).await.unwrap();
+            fixture
+        }
+
+        fn service(&self, treasurer: Option<Arc<RecordingTreasurer>>) -> RunSubmissionService {
+            let service = RunSubmissionService::new(
+                self.repository.clone(),
+                self.queue.clone(),
+                self.resolver.clone(),
+            )
+            .with_waypoints(self.waypoints.clone());
+            match treasurer {
+                Some(treasurer) => service.with_treasurer(treasurer),
+                None => service,
+            }
+        }
+
+        /// A fork of the fixture's thread by `requested_by`.
+        fn fork_by(&self, requested_by: Option<PrincipalRef>) -> ForkRun {
+            ForkRun {
+                thread_id: self.thread.clone(),
+                from_waypoint_id: self.from_waypoint,
+                edit: None,
+                webhook: None,
+                requested_by,
+            }
+        }
+
+        async fn run_count(&self) -> usize {
+            self.repository
+                .list(RunQuery::default())
+                .await
+                .unwrap()
+                .items
+                .len()
+        }
+    }
+
+    /// An `Admin` of `acme` -- the original run is unattributed, so only an `Admin`
+    /// (`RunReadScope::All`) may fork it (the Phase 40 tenant guard).
+    fn acme_admin() -> PrincipalRef {
+        principal_ref("acme", "ops", UserRole::Admin)
+    }
+
+    #[tokio::test]
+    async fn fork_by_an_exhausted_principal_is_refused_and_touches_nothing() {
+        let fixture = ForkFixture::new().await;
+        let depth_before = fixture.queue.depth().await.unwrap();
+        let runs_before = fixture.run_count().await;
+        let treasurer = RecordingTreasurer::new(Script::Refuse);
+        let service = fixture.service(Some(treasurer.clone()));
+
+        let err = service
+            .fork(fixture.fork_by(Some(acme_admin())))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RunSubmissionError::AllowanceExhausted(_)),
+            "got {err:?}"
+        );
+        assert_eq!(fixture.queue.depth().await.unwrap(), depth_before);
+        assert_eq!(fixture.run_count().await, runs_before, "no run is inserted");
+        assert_eq!(
+            treasurer.counts(),
+            (1, 0, 0),
+            "a refusal is never confirmed"
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_admitted_confirms_after_enqueue() {
+        let fixture = ForkFixture::new().await;
+        let depth_before = fixture.queue.depth().await.unwrap();
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = fixture.service(Some(treasurer.clone()));
+
+        let accepted = service
+            .fork(fixture.fork_by(Some(acme_admin())))
+            .await
+            .unwrap();
+
+        let stored = fixture.repository.get(&accepted.run_id).await.unwrap();
+        assert!(stored.is_some(), "the fork's run row is persisted");
+        assert_eq!(fixture.queue.depth().await.unwrap(), depth_before + 1);
+        assert_eq!(treasurer.counts(), (1, 1, 0));
+        assert_eq!(
+            treasurer.last_run_id(),
+            Some(accepted.run_id),
+            "admit is called with the new run's id"
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_failing_after_admission_calls_abandon_once() {
+        let fixture = ForkFixture::new().await;
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = fixture.service(Some(treasurer.clone()));
+        let depth_before = fixture.queue.depth().await.unwrap();
+
+        // The first fork is accepted and leaves a Queued run on the thread. A second run
+        // handed straight to the admit-then-persist lifecycle (as if it had passed `fork`'s own
+        // busy check a moment earlier -- the insert race) is refused by the repository's
+        // one-active-run-per-thread invariant AFTER admission.
+        service
+            .fork(fixture.fork_by(Some(acme_admin())))
+            .await
+            .unwrap();
+        let first_fork = fixture
+            .repository
+            .list(RunQuery::default())
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .next()
+            .expect("a run exists");
+        let mut racing = Run::new(
+            RunId::new_v7(),
+            fixture.thread.clone(),
+            first_fork.assistant,
+            serde_json::json!({}),
+        )
+        .with_submitted_by(acme_admin().attribution());
+        let err = service
+            .admit_and_persist(&mut racing, false)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RunSubmissionError::ThreadBusy { .. }),
+            "{err:?}"
+        );
+        // fork #1: admit + confirm; the failed persist: admit + abandon.
+        assert_eq!(treasurer.counts(), (2, 1, 1));
+        assert_eq!(fixture.queue.depth().await.unwrap(), depth_before + 1);
+        assert!(
+            fixture
+                .repository
+                .get(&racing.run_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "the failed insert persists no run"
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_without_a_principal_never_calls_the_treasurer() {
+        let fixture = ForkFixture::new().await;
+        let treasurer = RecordingTreasurer::new(Script::Refuse);
+        let service = fixture.service(Some(treasurer.clone()));
+
+        let accepted = service.fork(fixture.fork_by(None)).await.unwrap();
+
+        assert!(
+            fixture
+                .repository
+                .get(&accepted.run_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(treasurer.counts(), (0, 0, 0));
+    }
+
+    /// D-09: the Treasurer receives a `RunAttribution` only, so an `Admin` principal with a
+    /// configured allowance is refused exactly like a `User` -- through a REAL `Treasurer` over
+    /// an in-memory ledger, not a scripted double. The ceiling is a lifetime cap (alongside the
+    /// window) so a window boundary crossed mid-test cannot make the balance read zero.
+    #[tokio::test]
+    async fn admin_principal_is_bound_by_its_allowance() {
+        use crate::application::services::treasurer::Treasurer;
+        use crate::config::treasurer::TreasurerConfig;
+        use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
+        use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+        use paladin_storage::treasury::contract_tests::{settle_request, usd};
+        use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+        let ledger: Arc<dyn TreasuryLedgerPort> = Arc::new(InMemoryTreasuryLedger::new());
+        let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+            "currency": "USD",
+            "allowance": { "api_keys": { "ops": {
+                "period": "1d", "amount": "2.50", "lifetime": "2.50"
+            } } }
+        }))
+        .unwrap();
+        let treasurer = Treasurer::new(config.allowance_policy().unwrap(), Arc::clone(&ledger));
+        let service = service.with_treasurer(Arc::new(treasurer));
+
+        // `ops` of `acme` has already spent its whole allowance.
+        ledger
+            .settle(settle_request(
+                LedgerScope::new("acme", "ops"),
+                SettlementKey::new(RunId::new_v7(), 0, 0),
+                2_500_000_000,
+                usd(),
+                "gpt-4",
+            ))
+            .await
+            .unwrap();
+
+        let err = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "ops", UserRole::Admin)),
+            ))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RunSubmissionError::AllowanceExhausted(_)),
+            "an Admin is bound by its allowance, got {err:?}"
+        );
+        assert_eq!(queue.depth().await.unwrap(), 0);
+        assert!(
+            repository
+                .list(RunQuery::default())
+                .await
+                .unwrap()
+                .items
+                .is_empty()
+        );
     }
 }

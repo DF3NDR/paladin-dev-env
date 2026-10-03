@@ -33,6 +33,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   builds the one `Treasurer` over the run store's ledger and returns it as
   `RunApiHandles.treasurer`; `paladin_web::agent_auth::OPEN_ACCESS_PRINCIPAL_ID` names the
   open-access principal.
+  **Plan 41-04 closes the coverage:** the same admission check now also gates
+  `POST /v1/threads/{id}/fork` and the three HTTP agent routes that start spend --
+  `POST /v1/agents/{id}/execute`, `/execute/stream` (a plain JSON `429` before any stream opens)
+  and `/jobs` (refused before a job id is issued) -- so a caller refused at `POST /v1/runs`
+  cannot spend the same allowance through another route. An `Admin` principal is bound like any
+  other, and a failing allowance check answers `500` and runs nothing. `AgentApiState` gains
+  `treasurer` and `with_treasurer`, and `paladin-server` hands it the Treasurer `build_run_api`
+  built. The `429` is published on all five operations in `crates/paladin-web/openapi.json`; the
+  frozen v0.9 golden gate carries a third sanctioned exception that removes only that `429`
+  entry from the three agent operations.
 
 - **Operator-configured treasurer price table, wired into both production run paths (PRICE-01,
   PRICE-03; Phase 38 plan 38-03).** A new `treasurer:` config section (`Settings.treasurer:

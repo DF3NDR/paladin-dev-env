@@ -258,3 +258,10 @@ lint = "constructible_struct_adds_field"
 migration_row = "paladin-ai | RunApiHandles"
 requirement_id = "ALLOW-01, ALLOW-02"
 justification = "RunApiHandles gained the treasurer: Option<Arc<dyn AllowanceAdmissionPort>> field (D-06) -- the Treasurer admission port build_run_api builds when treasurer.allowance has entries, None otherwise; paladin-server hands the same port to AgentApiState (41-04). The in-tree literals are the two inside build_run_api; suppressed by the root Cargo.toml's crate-wide allow line."
+
+[[entry]]
+crate = "paladin-web"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-web | AgentApiState"
+requirement_id = "ALLOW-02"
+justification = "AgentApiState gained the treasurer: Option<Arc<dyn AllowanceAdmissionPort>> field (D-06, C1, C4) plus the with_treasurer builder -- the agent routes' admission port. AgentApiState::new sets None, so in-tree code and any caller that builds the state through new stay ungated and unchanged; paladin-server attaches the Treasurer build_run_api built so execute, execute/stream and jobs enforce the same policy over the same ledger as POST /v1/runs (D-07: a caller refused there must not spend the same allowance through an agent route). Suppressed by the existing crate-wide allow line in crates/paladin-web/Cargo.toml."

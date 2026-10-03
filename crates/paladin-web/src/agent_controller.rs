@@ -334,9 +334,6 @@ async fn admit_principal(
 /// Returns:
 /// - `200 OK` with [`ExecuteResponse`] on success;
 /// - `404 Not Found` if no agent is registered under `id`;
-/// - `429 Too Many Requests` (`allowance_exhausted`, with `Retry-After` for a window
-///   ceiling) if the caller's allowance is spent -- the agent is not invoked (D-07);
-/// - `500` if the allowance check itself fails -- fail closed, the agent is not invoked (D-10);
 /// - `502 Bad Gateway` if execution fails; `504` on timeout;
 /// - `400 Bad Request` (via the `Json` extractor) if the body is missing/invalid.
 #[utoipa::path(
@@ -351,11 +348,18 @@ async fn admit_principal(
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Role not permitted for this agent", body = ApiErrorBody),
         (status = 404, description = "Unknown agent", body = ApiErrorBody),
+        (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
         (status = 502, description = "Upstream execution failure", body = ApiErrorBody),
         (status = 504, description = "Execution timed out", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
+// Allowance (Phase 41, D-06, D-07, D-10): an exhausted caller is answered `429
+// allowance_exhausted` (with `Retry-After` for a window ceiling) and a failing allowance check
+// `500`, in both cases before the agent is invoked. This is a plain comment, not rustdoc, on
+// purpose: utoipa copies a handler's doc comment into the operation `description`, and the
+// frozen v0.9 golden gate (`tests/openapi_golden_v0_9.rs`) compares that text -- the published
+// contract for the refusal is the `429` response entry on the `utoipa::path` above.
 pub async fn execute_agent(
     State(state): State<AgentApiState>,
     Extension(principal): Extension<Principal>,
@@ -629,10 +633,7 @@ fn timed_event_stream(
 /// endpoint always works). Execution is bounded by the resolved timeout: on expiry the
 /// stream yields a terminal `error` event (streaming) or returns `504` (buffered
 /// fallback). Maps unknown id → `404`, invalid `timeout_seconds` → `400`, and an
-/// up-front execution failure → `502`. An exhausted allowance answers a plain JSON
-/// `429 allowance_exhausted` (with `Retry-After` for a window ceiling) *before* any stream
-/// opens, and a failing allowance check answers `500`; the agent is invoked in neither case
-/// (D-07, D-10).
+/// up-front execution failure → `502`.
 #[utoipa::path(
     post,
     path = "/agents/{id}/execute/stream",
@@ -648,11 +649,15 @@ fn timed_event_stream(
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Role not permitted for this agent", body = ApiErrorBody),
         (status = 404, description = "Unknown agent", body = ApiErrorBody),
+        (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
         (status = 502, description = "Upstream execution failure", body = ApiErrorBody),
         (status = 504, description = "Execution timed out", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
+// Allowance (Phase 41): a refusal is a plain JSON `429 allowance_exhausted` (with `Retry-After`
+// for a window ceiling) returned BEFORE any stream opens; a failing allowance check is a `500`.
+// Neither invokes the agent. Plain comment, not rustdoc -- see `execute_agent` (golden gate).
 pub async fn execute_agent_stream(
     State(state): State<AgentApiState>,
     Extension(principal): Extension<Principal>,
@@ -731,10 +736,7 @@ pub async fn execute_agent_stream(
 ///
 /// Spawns a task that runs the agent (buffered) under the resolved timeout, recording
 /// the outcome in the job store. Returns `202 Accepted` with `{ "job_id": ... }`. Maps
-/// unknown id → `404` and invalid `timeout_seconds` → `400`. An exhausted allowance is
-/// refused synchronously with `429 allowance_exhausted` -- before any job is created or
-/// spawned, so the caller is never handed a job id for work that would later fail (C4) --
-/// and a failing allowance check answers `500` the same way (D-10).
+/// unknown id → `404` and invalid `timeout_seconds` → `400`.
 #[utoipa::path(
     post,
     path = "/agents/{id}/jobs",
@@ -747,9 +749,13 @@ pub async fn execute_agent_stream(
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Role not permitted for this agent", body = ApiErrorBody),
         (status = 404, description = "Unknown agent", body = ApiErrorBody),
+        (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
+// Allowance (Phase 41, C4): a refusal (`429 allowance_exhausted`) or a failing check (`500`) is
+// answered synchronously BEFORE `jobs.create()` and the spawn, so the caller is never handed a
+// job id for work that would later fail. Plain comment, not rustdoc -- see `execute_agent`.
 pub async fn enqueue_job(
     State(state): State<AgentApiState>,
     Extension(principal): Extension<Principal>,

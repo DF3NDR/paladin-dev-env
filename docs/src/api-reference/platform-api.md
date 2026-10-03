@@ -83,6 +83,9 @@ field, if echoed at all, always redacts `secret` to `"***"`.
 it would race a concurrent execution over the same Waypoint chain. The `409` body names
 `POST /v1/threads/{thread_id}/resume` as the remedy.
 
+**`429 allowance_exhausted`.** A caller whose API-key or tenant allowance is spent is refused
+before anything is persisted -- see [Allowance refusals](#allowance-refusals).
+
 ### Cancelling a run
 
 ```
@@ -415,6 +418,55 @@ admin-role key.
 `GET /threads`, `GET /threads/{id}/state` and `GET /threads/{id}/history` remain
 deployment-wide for any authenticated principal. That gap is tracked in the project's
 broken-windows ledger, not implied closed by the run scope above.
+
+### Allowance refusals
+
+When the operator configures a spend allowance (`treasurer.allowance`, see the
+[configuration guide](../getting-started/configuration.md)), a caller whose API key or tenant has
+reached a ceiling is refused with `429 allowance_exhausted` -- before any run, job or queue entry
+is created. Five routes answer it, because each starts LLM spend under the calling principal:
+
+| Route | Refusal behaviour |
+|---|---|
+| `POST /v1/runs` | refused before the run row is written |
+| `POST /v1/threads/{id}/fork` | refused before the fork's run row is written |
+| `POST /v1/agents/{id}/execute` | refused before the agent is invoked |
+| `POST /v1/agents/{id}/execute/stream` | a plain JSON `429` returned before any event stream opens |
+| `POST /v1/agents/{id}/jobs` | refused synchronously: no job id is issued and nothing is spawned |
+
+If the allowance check itself cannot be completed (for example the spend ledger is unreachable),
+the same routes answer `500` and run nothing -- the check fails closed. A request with no
+principal, or a principal with no configured allowance, is never gated.
+
+The body is the standard error envelope with the dedicated code `allowance_exhausted`; its
+`details` carry exactly the refused ceiling's own figures and never the caller's tenant or key:
+
+```json
+{
+  "error": {
+    "code": "allowance_exhausted",
+    "message": "...",
+    "details": {
+      "scope": "api_key",
+      "kind": "window",
+      "balance": "2.5000 USD",
+      "ceiling": "2.5000 USD",
+      "window_start": "2026-10-03T00:00:00Z",
+      "window_end": "2026-10-04T00:00:00Z"
+    }
+  }
+}
+```
+
+`scope` is `api_key` or `tenant`; `kind` is `window` or `lifetime`; `balance` and `ceiling` are
+display strings; `window_start`/`window_end` are RFC 3339 and `null` for a lifetime ceiling.
+
+A `Retry-After` header carries the whole seconds from the **ledger store's clock** (not the web
+server's) to the window's end. It is omitted for a lifetime ceiling, which never reopens.
+
+An `admin`-role key is bound by its allowance exactly like any other key: the role is not part of
+the check. The per-IP rate limiter also answers `429`, but with the different code
+`too_many_requests`, so a client can tell quota from pacing by the body code alone.
 
 ## Configuration
 

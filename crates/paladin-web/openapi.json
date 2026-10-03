@@ -348,6 +348,16 @@
               }
             }
           },
+          "429": {
+            "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "502": {
             "description": "Upstream execution failure",
             "content": {
@@ -447,6 +457,16 @@
           },
           "404": {
             "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
             "content": {
               "application/json": {
                 "schema": {
@@ -558,6 +578,16 @@
           },
           "404": {
             "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
             "content": {
               "application/json": {
                 "schema": {
@@ -1461,6 +1491,26 @@
           },
           "409": {
             "description": "Thread busy -- the remedy is POST /threads/{id}/resume",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The allowance check itself failed; the request is refused and nothing runs (fail closed)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2609,6 +2659,26 @@
           },
           "409": {
             "description": "Thread busy -- a run is already active on this thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The allowance check itself failed; the request is refused and nothing runs (fail closed)",
             "content": {
               "application/json": {
                 "schema": {

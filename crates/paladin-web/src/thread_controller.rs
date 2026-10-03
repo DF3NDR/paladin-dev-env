@@ -1001,6 +1001,8 @@ pub async fn get_thread(
         (status = 403, description = "Role not permitted for this assistant", body = ApiErrorBody),
         (status = 404, description = "Unknown thread or waypoint", body = ApiErrorBody),
         (status = 409, description = "Thread busy -- a run is already active on this thread", body = ApiErrorBody),
+        (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
+        (status = 500, description = "The allowance check itself failed; the request is refused and nothing runs (fail closed)", body = ApiErrorBody),
         (status = 501, description = "No run submission backend configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),

@@ -14,6 +14,7 @@
 //! - drop `info.version` -- one sanctioned normalisation; any other inequality is a real,
 //!   reported SHIP-02 failure, never something to normalise away
 //! - drop the ONE sanctioned `ExecuteResponse` field rename below (Phase 31, D-24 / ADR-0051)
+//! - drop the `429` response entries Phase 41 adds to three operations (below)
 //!
 //! This file has no environment-variable-driven regeneration escape hatch (unlike
 //! `crates/paladin-web/src/openapi.rs::openapi_matches_committed_baseline`, whose committed
@@ -48,6 +49,23 @@
 //! [`strip_known_v0_10_execute_response_divergence`] removes this field (and the `CostDto` schema
 //! it introduces) alongside the Phase 31 exception, for the same reason: so this gate keeps
 //! catching any OTHER, unintentional break to a pre-existing v0.9 path or schema.
+
+//!
+//! ## Phase 41 exception: allowance 429 on the agent routes (D-12, ALLOW-02)
+//!
+//! `.planning/phases/41-admission-time-allowance-enforcement/41-CONTEXT.md` D-12 documents the
+//! new `429 allowance_exhausted` answer in the OpenAPI document, and ALLOW-02 (plan 41-04) makes
+//! `POST /v1/agents/{id}/execute`, `.../execute/stream` and `.../jobs` produce it, because those
+//! routes settle spend under the calling principal and would otherwise let a refused caller spend
+//! the same allowance. A `429` response entry is purely additive for a client -- no field, schema
+//! or status a v0.9 client already handles changes -- but it is absent from the frozen `v0.9.0`
+//! baseline by construction. [`strip_known_v0_11_allowance_429`] removes exactly the `"429"` key
+//! from `responses` on exactly those three operations in BOTH documents before any comparison, so
+//! this is a third sanctioned, narrowly-scoped, explicitly-documented exception alongside
+//! `info.version` and the `ExecuteResponse` rename/addition above -- never a loosening of the
+//! gate's general power: every other response, status, schema and path on all six v0.9 paths is
+//! still compared in full, and
+//! [`allowance_429_exception_is_narrowly_scoped`] fails if the exception ever widens.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -90,11 +108,29 @@ fn generated_spec() -> Value {
     serde_json::to_value(paladin_web::openapi::openapi_spec()).expect("serialize generated spec")
 }
 
-/// Restrict a document's `paths` object to the six v0.9 paths named in [`V0_9_PATHS`].
+/// The three v0.9 operations (`POST`) that gained a `429 allowance_exhausted` response in
+/// Phase 41 (D-12, ALLOW-02) -- spelled out here, never derived, so the exception can only ever
+/// remove an entry from exactly these three operations.
+const ALLOWANCE_429_PATHS: &[&str] = &[
+    "/v1/agents/{id}/execute",
+    "/v1/agents/{id}/execute/stream",
+    "/v1/agents/{id}/jobs",
+];
+
+/// Restrict a document's `paths` object to the six v0.9 paths named in [`V0_9_PATHS`], with the
+/// Phase 41 `429` exception ([`strip_known_v0_11_allowance_429`]) already applied.
 ///
 /// Returns a `serde_json::Value::Object` so the result is directly comparable via
 /// [`assert_deep_eq`] and iteration order is irrelevant to the comparison.
 fn restrict_paths(doc: &Value) -> Value {
+    let mut restricted = restrict_paths_unstripped(doc);
+    strip_known_v0_11_allowance_429(&mut restricted);
+    restricted
+}
+
+/// [`restrict_paths`] without the Phase 41 exception -- used only to prove the exception's own
+/// scope.
+fn restrict_paths_unstripped(doc: &Value) -> Value {
     let paths = doc
         .get("paths")
         .and_then(Value::as_object)
@@ -106,6 +142,23 @@ fn restrict_paths(doc: &Value) -> Value {
         }
     }
     Value::Object(restricted)
+}
+
+/// Remove the ONE sanctioned Phase 41 divergence (see this file's module docs): the `"429"`
+/// entry of `responses` on the `post` operation of the three [`ALLOWANCE_429_PATHS`], from a
+/// restricted `paths` object in place. Nothing else -- not a sibling status, not another
+/// operation, not a schema -- is touched.
+fn strip_known_v0_11_allowance_429(restricted_paths: &mut Value) {
+    for &path in ALLOWANCE_429_PATHS {
+        if let Some(responses) = restricted_paths
+            .get_mut(path)
+            .and_then(|item| item.get_mut("post"))
+            .and_then(|operation| operation.get_mut("responses"))
+            .and_then(Value::as_object_mut)
+        {
+            responses.remove("429");
+        }
+    }
 }
 
 /// Walk two `Value`s and report the first differing JSON pointer, so a failure names exactly
@@ -420,6 +473,77 @@ fn execute_response_exception_is_narrowly_scoped() {
                 "{label}: {field} must survive the exception"
             );
         }
+    }
+}
+
+/// The Phase 41 `429` exception strips exactly the `"429"` response key from exactly the three
+/// agent operations: proven against the real generated and baseline documents, so a future edit
+/// that widens it (another status, another operation, a schema) breaks this test.
+#[test]
+fn allowance_429_exception_is_narrowly_scoped() {
+    let generated = restrict_paths_unstripped(&generated_spec());
+    let baseline = restrict_paths_unstripped(&load_baseline());
+
+    let status_keys = |doc: &Value, path: &str| -> Vec<String> {
+        doc[path]["post"]["responses"]
+            .as_object()
+            .expect("responses object")
+            .keys()
+            .cloned()
+            .collect()
+    };
+
+    for &path in ALLOWANCE_429_PATHS {
+        // Before stripping: the generated document documents the 429, the frozen one cannot.
+        assert!(
+            generated[path]["post"]["responses"]
+                .get("429")
+                .is_some_and(|response| !response.is_null()),
+            "{path}: the generated document must carry the Phase 41 429 response"
+        );
+        assert!(
+            baseline[path]["post"]["responses"].get("429").is_none(),
+            "{path}: the frozen v0.9.0 baseline must never carry a 429"
+        );
+    }
+
+    let mut generated_stripped = generated.clone();
+    strip_known_v0_11_allowance_429(&mut generated_stripped);
+    let mut baseline_stripped = baseline.clone();
+    strip_known_v0_11_allowance_429(&mut baseline_stripped);
+
+    for &path in ALLOWANCE_429_PATHS {
+        let mut stripped_keys = status_keys(&generated_stripped, path);
+        let mut frozen_keys = status_keys(&baseline, path);
+        stripped_keys.sort();
+        frozen_keys.sort();
+        assert_eq!(
+            stripped_keys, frozen_keys,
+            "{path}: after stripping, only the 429 key may differ from the frozen baseline"
+        );
+    }
+
+    // The exception reaches nothing else: every other path is identical before and after.
+    for &path in V0_9_PATHS {
+        if ALLOWANCE_429_PATHS.contains(&path) {
+            continue;
+        }
+        assert_eq!(
+            generated[path], generated_stripped[path],
+            "{path}: the 429 exception must not touch any other path"
+        );
+    }
+    // ...and on the three operations, every other response is unchanged by it.
+    for &path in ALLOWANCE_429_PATHS {
+        let mut expected = generated[path].clone();
+        expected["post"]["responses"]
+            .as_object_mut()
+            .expect("responses object")
+            .remove("429");
+        assert_eq!(
+            generated_stripped[path], expected,
+            "{path}: the exception must remove the 429 entry and nothing else"
+        );
     }
 }
 

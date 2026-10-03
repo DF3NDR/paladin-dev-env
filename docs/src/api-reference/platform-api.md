@@ -266,6 +266,26 @@ submitting; `run_once` submits exactly once, then recomputes.
 `ScheduleResponse.webhook.secret` always renders `"***"` (or `null` if unset) — the raw secret is
 accepted on write but never echoed back.
 
+**Creator attribution and allowances.** `POST /v1/schedules` records the creating principal's
+tenant id and API key name on the schedule. A run the schedule fires is attributed to that
+creator, so its spend settles under the creator's tenant and key, and each tick is admitted
+against the creator's allowance like a `POST /v1/runs` by that key. A tick whose creator's
+tenant or API-key allowance is exhausted fires **no run**: it is skipped, `skipped_ticks` on the
+schedule is incremented, and nothing is written to the run store or the queue. If the creator's
+key was later removed from the configuration, the schedule stays attributed by the recorded names
+and is gated by the tenant allowance only. The creator is deliberately **not** returned in the
+schedule responses, because `GET /v1/schedules` is not tenant-scoped. `PATCH` never changes it.
+
+**Known gap: schedules created before this release.** A schedule created before creator
+attribution existed has no recorded creator. It keeps firing exactly as before, unattributed and
+not gated by any allowance. To bring it under allowances, re-create it through
+`POST /v1/schedules` (a backfill and a `PATCH` re-assignment are not implemented).
+
+**The role check is not applied at fire time.** A schedule-fired run carries the creator's
+identity (tenant id and key name) but never a role, so it skips the assistant's `allowed_roles`
+check exactly as it did before. A schedule created by an Admin on an assistant whose
+`allowed_roles` excludes Admin therefore still fires.
+
 ## Webhooks
 
 A run's or schedule's `webhook` spec `{ url, secret?, events }` subscribes to lifecycle events

@@ -17,6 +17,15 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- `010_add_run_schedule_created_by` migrations (`migrations/{sqlite,postgres}`): nullable
+  `run_schedules.tenant_id` / `run_schedules.api_key_id` columns recording the schedule's creating
+  principal, plus the PostgreSQL CHECK `run_schedules_created_by_all_or_none`. SQLite numbering
+  skips `009` (PostgreSQL-only) and the adapter rejects a half-attributed row on read. The
+  in-memory, SQLite and PostgreSQL run schedule repositories round-trip `RunSchedule.created_by`
+  and never change it on `update`; the shared schedule contract suite gains
+  `created_by_round_trips`, `null_created_by_reads_back_none` and `update_never_changes_created_by`
+  (ALLOW-02, D-08).
+
 - The `AdvancedFileStoragePort` multipart trio (`upload_part`, `complete_multipart_upload`,
   `abort_multipart_upload`) is implemented on `MinioAdapter`; the upload id returned by
   `create_multipart_upload` is now an opaque token that callers pass back unchanged

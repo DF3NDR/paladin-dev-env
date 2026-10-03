@@ -43,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   built. The `429` is published on all five operations in `crates/paladin-web/openapi.json`; the
   frozen v0.9 golden gate carries a third sanctioned exception that removes only that `429`
   entry from the three agent operations.
+  **Plan 41-05 brings schedule-fired runs under allowances:** `POST /v1/schedules` records the
+  creating principal's tenant id and API key name on the schedule (migration `010` on SQLite and
+  PostgreSQL), every fired run is attributed to that creator, and a tick whose creator's
+  allowance is exhausted is skipped (`SkipReason::AllowanceExhausted`, counted in
+  `skipped_ticks`) instead of spending. A schedule created before this release has no recorded
+  creator and keeps firing unattributed and ungated; the creator is never exposed in the
+  schedule responses, and the invocation role check is unchanged at fire time.
 
 - **Operator-configured treasurer price table, wired into both production run paths (PRICE-01,
   PRICE-03; Phase 38 plan 38-03).** A new `treasurer:` config section (`Settings.treasurer:
@@ -229,6 +236,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (STORE-02; Phase 45 plan 45-01).
 
 ### Changed
+
+- **`SubmitRun.attributed_to` and `CreateRunSchedule.created_by` (Phase 41 plan 41-05).** Both
+  are new `Option<RunAttribution>` fields on plain public structs, so a caller that builds
+  `SubmitRun { .. }` or `CreateRunSchedule { .. }` with a struct literal must add the field
+  (`attributed_to: None` / `created_by: None` keeps today's behaviour). `RunSchedule` gains
+  `created_by` and `with_created_by`, and `SkipReason` gains `AllowanceExhausted`; both types
+  were already `#[non_exhaustive]`. See `MIGRATION.md` §9.2.
 
 - **`treasurer:` now rejects unknown keys (Phase 41 plan 41-03).** `TreasurerConfig` and every
   `treasurer.allowance` struct fail the config load on an unrecognised key (for example

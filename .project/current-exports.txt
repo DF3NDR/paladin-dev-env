@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-03 22:55:32 UTC
+# Public API Surface - Generated 2026-10-03 23:47:13 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -3233,6 +3233,7 @@ impl core::marker::UnsafeUnpin for paladin::application::services::run::schedule
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::run::schedule::service::ScheduleTickOutcome
 impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::run::schedule::service::ScheduleTickOutcome
 #[non_exhaustive] pub enum paladin::application::services::run::schedule::service::SkipReason
+pub paladin::application::services::run::schedule::service::SkipReason::AllowanceExhausted
 pub paladin::application::services::run::schedule::service::SkipReason::Missed
 pub paladin::application::services::run::schedule::service::SkipReason::SubmissionError
 pub paladin::application::services::run::schedule::service::SkipReason::ThreadBusy
@@ -3310,6 +3311,7 @@ impl core::marker::UnsafeUnpin for paladin::application::services::run::schedule
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::run::schedule::service::ScheduleTickOutcome
 impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::run::schedule::service::ScheduleTickOutcome
 #[non_exhaustive] pub enum paladin::application::services::run::schedule::SkipReason
+pub paladin::application::services::run::schedule::SkipReason::AllowanceExhausted
 pub paladin::application::services::run::schedule::SkipReason::Missed
 pub paladin::application::services::run::schedule::SkipReason::SubmissionError
 pub paladin::application::services::run::schedule::SkipReason::ThreadBusy
@@ -8342,4 +8344,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4156
+Total public items: 4158

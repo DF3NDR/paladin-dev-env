@@ -265,3 +265,17 @@ lint = "constructible_struct_adds_field"
 migration_row = "paladin-web | AgentApiState"
 requirement_id = "ALLOW-02"
 justification = "AgentApiState gained the treasurer: Option<Arc<dyn AllowanceAdmissionPort>> field (D-06, C1, C4) plus the with_treasurer builder -- the agent routes' admission port. AgentApiState::new sets None, so in-tree code and any caller that builds the state through new stay ungated and unchanged; paladin-server attaches the Treasurer build_run_api built so execute, execute/stream and jobs enforce the same policy over the same ledger as POST /v1/runs (D-07: a caller refused there must not spend the same allowance through an agent route). Suppressed by the existing crate-wide allow line in crates/paladin-web/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ports | SubmitRun"
+requirement_id = "ALLOW-02"
+justification = "SubmitRun gained the attributed_to: Option<RunAttribution> field (D-08, C13) -- identity for a principal-less (schedule-fired) submission, never a role; the invocation role check still reads requested_by alone. The in-tree literals were migrated in the same commit; suppressed by the crate-wide allow line in crates/paladin-ports/Cargo.toml. Second entry for the pair: the first records the register-only Phase 40 field-type change (the ExecuteResponse two-entry precedent)."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ports | CreateRunSchedule"
+requirement_id = "ALLOW-02"
+justification = "CreateRunSchedule gained the created_by: Option<RunAttribution> field (D-08) -- the creating principal's tenant id and API key name, set by POST /v1/schedules from the authenticated principal and None for embedders. The in-tree literals were migrated in the same commit; suppressed by the crate-wide allow line in crates/paladin-ports/Cargo.toml."

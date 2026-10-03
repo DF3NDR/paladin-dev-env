@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 41
 current_phase_name: Admission-Time Allowance Enforcement
 status: executing
-stopped_at: Completed 41-04-PLAN.md
-last_updated: "2026-10-03T23:16:33.993Z"
+stopped_at: Completed 41-05-PLAN.md
+last_updated: "2026-10-03T23:56:21.936Z"
 last_activity: 2026-10-03
 last_activity_desc: Phase 41 execution resumed (wave continue)
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 39
-  completed_plans: 34
+  completed_plans: 35
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 87%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([█████████░] 90%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 41 (Admission-Time Allowance Enforcement) — EXECUTING
-Plan: 5 of 9
+Plan: 6 of 9
 Status: Ready to execute
 Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 
@@ -223,6 +223,7 @@ Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 | Phase 41 P02 | 40min | 2 tasks | 6 files |
 | Phase 41 P03 | 75min | 2 tasks | 11 files |
 | Phase 41 P04 | 60min | 3 tasks | 12 files |
+| Phase 41 P05 | 75min | 3 tasks | 22 files |
 
 ## Accumulated Context
 
@@ -331,6 +332,9 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 41-03: build_run_api runs the D-11 allowance coherence check before the disabled-store early return and builds one Treasurer only when entries exist
 - [Phase ?]: 41-04: fork and submit share one private admit_and_persist lifecycle; agent routes admit then confirm back to back via admit_principal (jobs refuses before jobs.create)
 - [Phase ?]: 41-04: agent-handler rustdoc left unchanged because utoipa copies it into the frozen v0.9 operation description; golden exception removes only responses[429] on three agent operations
+- [Phase 41]: Schedule-fired runs keep skipping authorize_invocation: SubmitRun.attributed_to is identity only, never a role (41-05, D-08/C13)
+- [Phase 41]: ScheduleResponse does not expose a schedule's created_by while GET /v1/schedules is not tenant-scoped (41-05, Open Question 7)
+- [Phase 41]: Pre-Phase-41 schedules (NULL created_by) fire unattributed and ungated; tracked as open WINDOWS.md row 63 (41-05, D-08)
 
 ### Pending Todos
 
@@ -545,8 +549,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-03T23:16:33.960Z
-**Stopped at:** Completed 41-04-PLAN.md
+**Last session:** 2026-10-03T23:56:21.909Z
+**Stopped at:** Completed 41-05-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

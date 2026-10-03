@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-API-key rolling-window allowances, refused at admission (ALLOW-01, ALLOW-02; Phase 41
+  plan 41-01).** A new `treasurer.allowance.api_keys.<name>: { period, amount }` config subtree
+  (`period` as `<integer><m|h|d>` from `1m` to `366d`, `amount` a decimal string in whole
+  currency units; omitted, it is inert) is checked at admission by the new `Treasurer` service
+  (`AllowanceAdmissionPort`, `paladin-ports`) against the spend ledger's new
+  `TreasuryLedgerPort::balance` read -- a defaulted method, overridden by the in-memory and
+  SQLite adapters. An exhausted caller is refused by `POST /v1/runs` with
+  `429 allowance_exhausted` (`error.details`: `scope`, `kind`, `balance`, `ceiling`,
+  `window_start`, `window_end`) and a `Retry-After` computed from the ledger's own clock, before
+  any run is persisted; a request with no principal, or a principal with no allowance entry, is
+  never gated. Windows are tumbling and aligned to the UTC epoch, so a tenant can spend up to
+  twice an allowance across one boundary, by design. `RunSubmissionService::with_treasurer`,
+  `RunSubmissionError::AllowanceExhausted` and `ApiError::allowance_exhausted` are the new
+  public surface; see `MIGRATION.md` §9.2 and §9.6. Later Phase 41 plans extend this entry.
+
 - **Operator-configured treasurer price table, wired into both production run paths (PRICE-01,
   PRICE-03; Phase 38 plan 38-03).** A new `treasurer:` config section (`Settings.treasurer:
   TreasurerConfig`, `Settings::get_treasurer_config`) lets an operator write a per-model price

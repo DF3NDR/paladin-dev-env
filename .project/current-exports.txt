@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-09-29 11:45:07 UTC
+# Public API Surface - Generated 2026-10-03 17:30:09 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -3368,6 +3368,7 @@ impl paladin::application::services::run::submission::RunSubmissionService
 pub fn paladin::application::services::run::submission::RunSubmissionService::new(alloc::sync::Arc<dyn paladin_ports::output::run_repository_port::RunRepositoryPort>, alloc::sync::Arc<dyn paladin_ports::output::run_queue_port::RunQueuePort>, alloc::sync::Arc<dyn paladin::application::services::run::resolver::AssistantResolver>) -> Self
 pub fn paladin::application::services::run::submission::RunSubmissionService::with_local_tokens(self, paladin::application::services::run::cancel::LocalRunTokens) -> Self
 pub fn paladin::application::services::run::submission::RunSubmissionService::with_ssrf_guard(self, paladin::application::services::run::webhook::ssrf::SsrfGuard) -> Self
+pub fn paladin::application::services::run::submission::RunSubmissionService::with_treasurer(self, alloc::sync::Arc<dyn paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort>) -> Self
 pub fn paladin::application::services::run::submission::RunSubmissionService::with_waypoints(self, alloc::sync::Arc<dyn paladin_ports::output::waypoint_port::WaypointPort>) -> Self
 impl paladin_ports::input::run_submission_port::RunSubmissionPort for paladin::application::services::run::submission::RunSubmissionService
 pub fn paladin::application::services::run::submission::RunSubmissionService::cancel<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::run::RunId, core::option::Option<paladin_core::platform::container::principal::PrincipalRef>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_ports::input::run_submission_port::CancelOutcome, paladin_ports::input::run_submission_port::RunSubmissionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -3921,6 +3922,7 @@ impl paladin::application::services::run::submission::RunSubmissionService
 pub fn paladin::application::services::run::submission::RunSubmissionService::new(alloc::sync::Arc<dyn paladin_ports::output::run_repository_port::RunRepositoryPort>, alloc::sync::Arc<dyn paladin_ports::output::run_queue_port::RunQueuePort>, alloc::sync::Arc<dyn paladin::application::services::run::resolver::AssistantResolver>) -> Self
 pub fn paladin::application::services::run::submission::RunSubmissionService::with_local_tokens(self, paladin::application::services::run::cancel::LocalRunTokens) -> Self
 pub fn paladin::application::services::run::submission::RunSubmissionService::with_ssrf_guard(self, paladin::application::services::run::webhook::ssrf::SsrfGuard) -> Self
+pub fn paladin::application::services::run::submission::RunSubmissionService::with_treasurer(self, alloc::sync::Arc<dyn paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort>) -> Self
 pub fn paladin::application::services::run::submission::RunSubmissionService::with_waypoints(self, alloc::sync::Arc<dyn paladin_ports::output::waypoint_port::WaypointPort>) -> Self
 impl paladin_ports::input::run_submission_port::RunSubmissionPort for paladin::application::services::run::submission::RunSubmissionService
 pub fn paladin::application::services::run::submission::RunSubmissionService::cancel<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::run::RunId, core::option::Option<paladin_core::platform::container::principal::PrincipalRef>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_ports::input::run_submission_port::CancelOutcome, paladin_ports::input::run_submission_port::RunSubmissionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -4008,6 +4010,94 @@ pub use paladin::application::services::sanctum::rag_retrieval_service::Retrieva
 pub use paladin::application::services::sanctum::rag_retrieval_service::ShedItem
 pub use paladin::application::services::sanctum::rag_retrieval_service::rag_omission_marker
 pub use paladin::application::services::sanctum::rag_retrieval_service::retrieve_context_with_timeout
+pub mod paladin::application::services::treasurer
+pub struct paladin::application::services::treasurer::AllowancePolicy
+impl paladin::application::services::treasurer::AllowancePolicy
+pub fn paladin::application::services::treasurer::AllowancePolicy::ceilings_for(&self, &paladin_core::platform::container::principal::RunAttribution) -> alloc::vec::Vec<paladin::application::services::treasurer::Ceiling>
+pub fn paladin::application::services::treasurer::AllowancePolicy::currency(&self) -> &paladin_core::platform::container::cost::CurrencyCode
+pub fn paladin::application::services::treasurer::AllowancePolicy::is_empty(&self) -> bool
+pub fn paladin::application::services::treasurer::AllowancePolicy::new(paladin_core::platform::container::cost::CurrencyCode, u8) -> Self
+pub fn paladin::application::services::treasurer::AllowancePolicy::with_api_key(self, impl core::convert::Into<alloc::string::String>, paladin::application::services::treasurer::ScopeAllowance) -> Self
+pub fn paladin::application::services::treasurer::AllowancePolicy::with_tenant(self, impl core::convert::Into<alloc::string::String>, paladin::application::services::treasurer::ScopeAllowance) -> Self
+impl core::clone::Clone for paladin::application::services::treasurer::AllowancePolicy
+pub fn paladin::application::services::treasurer::AllowancePolicy::clone(&self) -> paladin::application::services::treasurer::AllowancePolicy
+impl core::cmp::Eq for paladin::application::services::treasurer::AllowancePolicy
+impl core::cmp::PartialEq for paladin::application::services::treasurer::AllowancePolicy
+pub fn paladin::application::services::treasurer::AllowancePolicy::eq(&self, &paladin::application::services::treasurer::AllowancePolicy) -> bool
+impl core::fmt::Debug for paladin::application::services::treasurer::AllowancePolicy
+pub fn paladin::application::services::treasurer::AllowancePolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::application::services::treasurer::AllowancePolicy
+impl core::marker::Freeze for paladin::application::services::treasurer::AllowancePolicy
+impl core::marker::Send for paladin::application::services::treasurer::AllowancePolicy
+impl core::marker::Sync for paladin::application::services::treasurer::AllowancePolicy
+impl core::marker::Unpin for paladin::application::services::treasurer::AllowancePolicy
+impl core::marker::UnsafeUnpin for paladin::application::services::treasurer::AllowancePolicy
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::treasurer::AllowancePolicy
+impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::treasurer::AllowancePolicy
+pub struct paladin::application::services::treasurer::Ceiling
+pub paladin::application::services::treasurer::Ceiling::api_key_id: core::option::Option<alloc::string::String>
+pub paladin::application::services::treasurer::Ceiling::ceiling_nanos: i64
+pub paladin::application::services::treasurer::Ceiling::limit_kind: paladin_core::platform::container::allowance::AllowanceLimitKind
+pub paladin::application::services::treasurer::Ceiling::period_secs: core::option::Option<u64>
+pub paladin::application::services::treasurer::Ceiling::scope_kind: paladin_core::platform::container::allowance::AllowanceScopeKind
+pub paladin::application::services::treasurer::Ceiling::tenant_id: alloc::string::String
+pub paladin::application::services::treasurer::Ceiling::warn_at: u8
+impl core::clone::Clone for paladin::application::services::treasurer::Ceiling
+pub fn paladin::application::services::treasurer::Ceiling::clone(&self) -> paladin::application::services::treasurer::Ceiling
+impl core::cmp::Eq for paladin::application::services::treasurer::Ceiling
+impl core::cmp::PartialEq for paladin::application::services::treasurer::Ceiling
+pub fn paladin::application::services::treasurer::Ceiling::eq(&self, &paladin::application::services::treasurer::Ceiling) -> bool
+impl core::fmt::Debug for paladin::application::services::treasurer::Ceiling
+pub fn paladin::application::services::treasurer::Ceiling::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::application::services::treasurer::Ceiling
+impl core::marker::Freeze for paladin::application::services::treasurer::Ceiling
+impl core::marker::Send for paladin::application::services::treasurer::Ceiling
+impl core::marker::Sync for paladin::application::services::treasurer::Ceiling
+impl core::marker::Unpin for paladin::application::services::treasurer::Ceiling
+impl core::marker::UnsafeUnpin for paladin::application::services::treasurer::Ceiling
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::treasurer::Ceiling
+impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::treasurer::Ceiling
+pub struct paladin::application::services::treasurer::ScopeAllowance
+impl paladin::application::services::treasurer::ScopeAllowance
+pub fn paladin::application::services::treasurer::ScopeAllowance::amount_nanos(&self) -> i64
+pub fn paladin::application::services::treasurer::ScopeAllowance::lifetime_nanos(&self) -> core::option::Option<i64>
+pub fn paladin::application::services::treasurer::ScopeAllowance::new(u64, i64) -> Self
+pub fn paladin::application::services::treasurer::ScopeAllowance::period_secs(&self) -> u64
+pub fn paladin::application::services::treasurer::ScopeAllowance::warn_at(&self) -> core::option::Option<u8>
+pub fn paladin::application::services::treasurer::ScopeAllowance::with_lifetime(self, i64) -> Self
+pub fn paladin::application::services::treasurer::ScopeAllowance::with_warn_at(self, u8) -> Self
+impl core::clone::Clone for paladin::application::services::treasurer::ScopeAllowance
+pub fn paladin::application::services::treasurer::ScopeAllowance::clone(&self) -> paladin::application::services::treasurer::ScopeAllowance
+impl core::cmp::Eq for paladin::application::services::treasurer::ScopeAllowance
+impl core::cmp::PartialEq for paladin::application::services::treasurer::ScopeAllowance
+pub fn paladin::application::services::treasurer::ScopeAllowance::eq(&self, &paladin::application::services::treasurer::ScopeAllowance) -> bool
+impl core::fmt::Debug for paladin::application::services::treasurer::ScopeAllowance
+pub fn paladin::application::services::treasurer::ScopeAllowance::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::application::services::treasurer::ScopeAllowance
+impl core::marker::Freeze for paladin::application::services::treasurer::ScopeAllowance
+impl core::marker::Send for paladin::application::services::treasurer::ScopeAllowance
+impl core::marker::Sync for paladin::application::services::treasurer::ScopeAllowance
+impl core::marker::Unpin for paladin::application::services::treasurer::ScopeAllowance
+impl core::marker::UnsafeUnpin for paladin::application::services::treasurer::ScopeAllowance
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::treasurer::ScopeAllowance
+impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::treasurer::ScopeAllowance
+pub struct paladin::application::services::treasurer::Treasurer
+impl paladin::application::services::treasurer::Treasurer
+pub fn paladin::application::services::treasurer::Treasurer::new(paladin::application::services::treasurer::AllowancePolicy, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
+impl core::fmt::Debug for paladin::application::services::treasurer::Treasurer
+pub fn paladin::application::services::treasurer::Treasurer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort for paladin::application::services::treasurer::Treasurer
+pub fn paladin::application::services::treasurer::Treasurer::abandon<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::allowance::Admission) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn paladin::application::services::treasurer::Treasurer::admit<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::principal::RunAttribution, core::option::Option<&'life2 paladin_core::platform::container::run::RunId>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::allowance::Admission, paladin_ports::input::allowance_admission_port::AdmissionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn paladin::application::services::treasurer::Treasurer::confirm<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::allowance::Admission) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl core::marker::Freeze for paladin::application::services::treasurer::Treasurer
+impl core::marker::Send for paladin::application::services::treasurer::Treasurer
+impl core::marker::Sync for paladin::application::services::treasurer::Treasurer
+impl core::marker::Unpin for paladin::application::services::treasurer::Treasurer
+impl core::marker::UnsafeUnpin for paladin::application::services::treasurer::Treasurer
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::treasurer::Treasurer
+impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::treasurer::Treasurer
+pub fn paladin::application::services::treasurer::window_for(chrono::datetime::DateTime<chrono::offset::utc::Utc>, u64) -> core::option::Option<(chrono::datetime::DateTime<chrono::offset::utc::Utc>, chrono::datetime::DateTime<chrono::offset::utc::Utc>)>
 pub mod paladin::application::services::waypoint_retention
 pub struct paladin::application::services::waypoint_retention::WaypointRetentionService
 impl paladin::application::services::waypoint_retention::WaypointRetentionService
@@ -5589,6 +5679,52 @@ impl core::marker::UnsafeUnpin for paladin::config::trace::TraceConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::trace::TraceConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::trace::TraceConfig
 pub mod paladin::config::treasurer
+pub struct paladin::config::treasurer::AllowanceConfig
+pub paladin::config::treasurer::AllowanceConfig::api_keys: alloc::collections::btree::map::BTreeMap<alloc::string::String, paladin::config::treasurer::AllowanceEntryConfig>
+impl paladin::config::treasurer::AllowanceConfig
+pub fn paladin::config::treasurer::AllowanceConfig::is_empty(&self) -> bool
+pub fn paladin::config::treasurer::AllowanceConfig::resolve(&self, &paladin_core::platform::container::cost::CurrencyCode) -> core::result::Result<paladin::application::services::treasurer::AllowancePolicy, alloc::string::String>
+impl core::clone::Clone for paladin::config::treasurer::AllowanceConfig
+pub fn paladin::config::treasurer::AllowanceConfig::clone(&self) -> paladin::config::treasurer::AllowanceConfig
+impl core::cmp::PartialEq for paladin::config::treasurer::AllowanceConfig
+pub fn paladin::config::treasurer::AllowanceConfig::eq(&self, &paladin::config::treasurer::AllowanceConfig) -> bool
+impl core::default::Default for paladin::config::treasurer::AllowanceConfig
+pub fn paladin::config::treasurer::AllowanceConfig::default() -> paladin::config::treasurer::AllowanceConfig
+impl core::fmt::Debug for paladin::config::treasurer::AllowanceConfig
+pub fn paladin::config::treasurer::AllowanceConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::treasurer::AllowanceConfig
+impl serde_core::ser::Serialize for paladin::config::treasurer::AllowanceConfig
+pub fn paladin::config::treasurer::AllowanceConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::treasurer::AllowanceConfig where paladin::config::treasurer::AllowanceConfig: core::default::Default
+pub fn paladin::config::treasurer::AllowanceConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::treasurer::AllowanceConfig
+impl core::marker::Send for paladin::config::treasurer::AllowanceConfig
+impl core::marker::Sync for paladin::config::treasurer::AllowanceConfig
+impl core::marker::Unpin for paladin::config::treasurer::AllowanceConfig
+impl core::marker::UnsafeUnpin for paladin::config::treasurer::AllowanceConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::AllowanceConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::AllowanceConfig
+pub struct paladin::config::treasurer::AllowanceEntryConfig
+pub paladin::config::treasurer::AllowanceEntryConfig::amount: alloc::string::String
+pub paladin::config::treasurer::AllowanceEntryConfig::period: alloc::string::String
+impl core::clone::Clone for paladin::config::treasurer::AllowanceEntryConfig
+pub fn paladin::config::treasurer::AllowanceEntryConfig::clone(&self) -> paladin::config::treasurer::AllowanceEntryConfig
+impl core::cmp::PartialEq for paladin::config::treasurer::AllowanceEntryConfig
+pub fn paladin::config::treasurer::AllowanceEntryConfig::eq(&self, &paladin::config::treasurer::AllowanceEntryConfig) -> bool
+impl core::fmt::Debug for paladin::config::treasurer::AllowanceEntryConfig
+pub fn paladin::config::treasurer::AllowanceEntryConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::treasurer::AllowanceEntryConfig
+impl serde_core::ser::Serialize for paladin::config::treasurer::AllowanceEntryConfig
+pub fn paladin::config::treasurer::AllowanceEntryConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::treasurer::AllowanceEntryConfig
+pub fn paladin::config::treasurer::AllowanceEntryConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::treasurer::AllowanceEntryConfig
+impl core::marker::Send for paladin::config::treasurer::AllowanceEntryConfig
+impl core::marker::Sync for paladin::config::treasurer::AllowanceEntryConfig
+impl core::marker::Unpin for paladin::config::treasurer::AllowanceEntryConfig
+impl core::marker::UnsafeUnpin for paladin::config::treasurer::AllowanceEntryConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::AllowanceEntryConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::AllowanceEntryConfig
 pub struct paladin::config::treasurer::PriceRowConfig
 pub paladin::config::treasurer::PriceRowConfig::cache_read: core::option::Option<alloc::string::String>
 pub paladin::config::treasurer::PriceRowConfig::cache_write: core::option::Option<alloc::string::String>
@@ -5614,9 +5750,11 @@ impl core::marker::UnsafeUnpin for paladin::config::treasurer::PriceRowConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::PriceRowConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::PriceRowConfig
 pub struct paladin::config::treasurer::TreasurerConfig
+pub paladin::config::treasurer::TreasurerConfig::allowance: paladin::config::treasurer::AllowanceConfig
 pub paladin::config::treasurer::TreasurerConfig::currency: alloc::string::String
 pub paladin::config::treasurer::TreasurerConfig::pricing: alloc::collections::btree::map::BTreeMap<alloc::string::String, paladin::config::treasurer::PriceRowConfig>
 impl paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::allowance_policy(&self) -> core::result::Result<paladin::application::services::treasurer::AllowancePolicy, alloc::string::String>
 pub fn paladin::config::treasurer::TreasurerConfig::price_table(&self) -> core::result::Result<paladin_core::platform::container::cost::PriceTable, alloc::string::String>
 pub fn paladin::config::treasurer::TreasurerConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
 impl core::clone::Clone for paladin::config::treasurer::TreasurerConfig
@@ -5641,6 +5779,7 @@ impl core::marker::Unpin for paladin::config::treasurer::TreasurerConfig
 impl core::marker::UnsafeUnpin for paladin::config::treasurer::TreasurerConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::TreasurerConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::TreasurerConfig
+pub const paladin::config::treasurer::MAX_ALLOWANCE_PERIOD_SECS: u64
 pub mod paladin::config::user_config
 pub struct paladin::config::user_config::UserServiceFactory
 impl paladin::config::user_config::UserServiceFactory
@@ -6860,9 +6999,11 @@ impl core::marker::UnsafeUnpin for paladin::config::trace::TraceConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::trace::TraceConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::trace::TraceConfig
 pub struct paladin::config::TreasurerConfig
+pub paladin::config::TreasurerConfig::allowance: paladin::config::treasurer::AllowanceConfig
 pub paladin::config::TreasurerConfig::currency: alloc::string::String
 pub paladin::config::TreasurerConfig::pricing: alloc::collections::btree::map::BTreeMap<alloc::string::String, paladin::config::treasurer::PriceRowConfig>
 impl paladin::config::treasurer::TreasurerConfig
+pub fn paladin::config::treasurer::TreasurerConfig::allowance_policy(&self) -> core::result::Result<paladin::application::services::treasurer::AllowancePolicy, alloc::string::String>
 pub fn paladin::config::treasurer::TreasurerConfig::price_table(&self) -> core::result::Result<paladin_core::platform::container::cost::PriceTable, alloc::string::String>
 pub fn paladin::config::treasurer::TreasurerConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
 impl core::clone::Clone for paladin::config::treasurer::TreasurerConfig
@@ -8100,4 +8241,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4044
+Total public items: 4109

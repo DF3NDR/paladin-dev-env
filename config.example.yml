@@ -267,6 +267,41 @@ treasurer:
   #     prompt: "3.00"
   #     completion: "15.00"
 
+  # Spend allowances (ALLOW-01, Phase 41) -- OMIT `allowance:` to disable; the section is inert
+  # when absent. A request is refused with `429 allowance_exhausted` BEFORE it starts when its
+  # API key's or tenant's spend in the current window (or lifetime) has reached the ceiling.
+  #
+  # - `period` is `<integer><m|h|d>` between 1m and 366d; `amount` and `lifetime` are decimal
+  #   strings in WHOLE units of `treasurer.currency` (never a token count). `period` and `amount`
+  #   are required on every entry; `lifetime` and `warn_at` are optional.
+  # - Windows are tumbling and aligned to the UTC epoch, computed from the store clock, so spend
+  #   resets on the boundary and a scope can spend up to twice an allowance across one boundary.
+  # - `warn_at` is an integer percent 0..=100 (0 disables warnings); the global value applies to
+  #   every entry that does not set its own.
+  # - Every `api_keys.<name>` must name a key in `http.auth.api_keys` and every `tenants.<id>` a
+  #   tenant one of those keys (or `http.auth.bearer_token.tenant`) maps to, and the section
+  #   needs `run_store.backend` set -- otherwise the server REFUSES TO BOOT. A typo anywhere
+  #   under `treasurer:` is a load error. With `http.auth.enabled: false` use `api_keys.anonymous`
+  #   and `tenants.open-access`.
+  # - Admin keys are bound like any other key.
+  # - The webhook `secret` is NOT read from a `${...}` placeholder (this loader does not expand
+  #   them): set it with APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET. A private-address `url` also
+  #   needs `webhooks.allow_private: true`.
+  # allowance:
+  #   warn_at: 80
+  #   webhook:
+  #     url: "https://ops.example.com/paladin-allowance"
+  #   tenants:
+  #     acme:
+  #       period: "24h"
+  #       amount: "25.00"
+  #       lifetime: "500.00"
+  #   api_keys:
+  #     ci-runner:
+  #       period: "1h"
+  #       amount: "2.50"
+  #       warn_at: 90
+
 # Runtime trace pipeline configuration (X-09, D-36). Every field below is
 # written out explicitly and is IDENTICAL to what TraceConfig::default()
 # produces -- the whole `trace:` section may be OMITTED ENTIRELY with no

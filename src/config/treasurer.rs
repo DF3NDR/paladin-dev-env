@@ -22,15 +22,22 @@
 //! [`TreasurerConfig::validate`] rejects a lowercase override exactly as it would a lowercase
 //! file value.
 //!
-//! No field in this tree is secret-shaped: prices and an ISO currency code carry no credential.
+//! No pricing field is secret-shaped: prices and an ISO currency code carry no credential.
 //!
-//! Phase 41 adds the `allowance` subtree (ALLOW-01, D-02): operator-configured per-API-key
-//! rolling-window allowances, `treasurer.allowance.api_keys.<name>: { period, amount }`, with
-//! `period` written as `<integer><m|h|d>` (1m to 366d) and `amount` a decimal string in whole
-//! currency units. Omitted, the subtree is inert. Later phases (41, 43) add the rest of the
-//! allowance grammar and pacing keys under this same `treasurer:` section.
+//! Phase 41 adds the `allowance` subtree (ALLOW-01, D-02): operator-configured rolling-window
+//! allowances, `treasurer.allowance.tenants.<id>` and `treasurer.allowance.api_keys.<name>`,
+//! each an entry with a required `period` (`<integer><m|h|d>`, 1m to 366d) and `amount` (a
+//! decimal string in whole currency units) and an optional `lifetime` cap and `warn_at` percent.
+//! A global `warn_at` (default 80) and an optional operator `webhook { url, secret }` sit beside
+//! the maps. Omitted, the subtree is inert. Every struct under `treasurer:` rejects an unknown
+//! key, so a typo such as `allowence:` fails to load rather than enforcing nothing, and
+//! [`AllowanceConfig::validate_against`] stops a boot whose entries name no configured key or
+//! tenant or have no run store to enforce against (D-11). The webhook `secret` is the one
+//! credential-shaped field in this tree: it is redacted from `Debug`, skipped by `Serialize`,
+//! and supplied through `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` (a `${VAR}` placeholder in a
+//! YAML file is not expanded by the loader).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -39,8 +46,8 @@ use crate::config::env_utils::{EnvOverridable, read_env};
 use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
 use paladin_core::platform::container::principal::TenantId;
 
-/// The default warn threshold, in whole percent of a ceiling, until 41-03 makes it configurable.
-const DEFAULT_WARN_AT_PERCENT: u8 = 80;
+/// The default global warn threshold, in whole percent of a ceiling (`treasurer.allowance.warn_at`).
+pub const DEFAULT_ALLOWANCE_WARN_AT: u8 = 80;
 
 /// The longest allowance period, in seconds (366 days). A longer period is rejected, never
 /// clamped (D-00d).
@@ -164,7 +171,10 @@ fn parse_period_secs(raw: &str) -> Result<u64, PeriodParseError> {
 
 /// One scope's allowance entry as operator-entered strings (ALLOW-01, D-02).
 ///
-/// Both fields are required by serde, and an unknown key is a load error.
+/// `period` and `amount` are required by serde -- a lifetime-only entry is not expressible, so
+/// every entry carries a window ceiling. `lifetime` (a cumulative cap since the ledger began)
+/// and `warn_at` (a per-entry override of the global warn threshold) are optional. An unknown
+/// key is a load error.
 ///
 /// # Examples
 ///
@@ -174,6 +184,8 @@ fn parse_period_secs(raw: &str) -> Result<u64, PeriodParseError> {
 /// let entry = AllowanceEntryConfig {
 ///     period: "1d".to_string(),
 ///     amount: "2.50".to_string(),
+///     lifetime: Some("100.00".to_string()),
+///     warn_at: None,
 /// };
 /// assert_eq!(entry.period, "1d");
 /// ```
@@ -184,10 +196,57 @@ pub struct AllowanceEntryConfig {
     pub period: String,
     /// The window ceiling as a decimal string in whole currency units (e.g. `"2.50"`).
     pub amount: String,
+    /// An optional lifetime cap as a decimal string in whole currency units: the most the scope
+    /// may ever spend, however many windows pass.
+    #[serde(default)]
+    pub lifetime: Option<String>,
+    /// An optional per-entry warn threshold, an integer percent `0..=100`, overriding the global
+    /// `treasurer.allowance.warn_at`.
+    #[serde(default)]
+    pub warn_at: Option<u8>,
 }
 
-/// The `treasurer.allowance` subtree (ALLOW-01, D-02): per-API-key rolling-window allowances,
-/// keyed by the API key's configured name. Omitted, it is inert. **Config-file only**.
+/// The operator webhook target a threshold crossing is delivered to (D-17).
+///
+/// The `secret` is credential-shaped: it is never rendered by [`std::fmt::Debug`] (the manual
+/// impl prints `[redacted]`), never serialised outward (`skip_serializing`), and never echoed in
+/// a validation error. A `${VAR}` placeholder in a YAML file is **not** expanded by the config
+/// loader, so supply the secret through `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`.
+///
+/// # Examples
+///
+/// ```
+/// use paladin::config::treasurer::AllowanceWebhookConfig;
+///
+/// let hook = AllowanceWebhookConfig {
+///     url: "https://ops.example.com/hook".to_string(),
+///     secret: Some("s3cr3t-value".to_string()),
+/// };
+/// assert!(!format!("{hook:?}").contains("s3cr3t-value"));
+/// ```
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AllowanceWebhookConfig {
+    /// The `http(s)` URL the Treasurer's notices are posted to. Scheme and address checks belong
+    /// to the SSRF guard at wiring time, not to this type.
+    pub url: String,
+    /// The HMAC signing secret, if any. Never rendered by `Debug` and never serialised.
+    #[serde(default, skip_serializing)]
+    pub secret: Option<String>,
+}
+
+impl std::fmt::Debug for AllowanceWebhookConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AllowanceWebhookConfig")
+            .field("url", &self.url)
+            .field("secret", &self.secret.as_ref().map(|_| "[redacted]"))
+            .finish()
+    }
+}
+
+/// The `treasurer.allowance` subtree (ALLOW-01, D-02): per-tenant and per-API-key rolling-window
+/// allowances, an optional global warn threshold and an optional operator webhook target.
+/// Omitted, it is inert. The two maps are **config-file only**.
 ///
 /// # Examples
 ///
@@ -195,54 +254,179 @@ pub struct AllowanceEntryConfig {
 /// use paladin::config::treasurer::AllowanceConfig;
 ///
 /// assert!(AllowanceConfig::default().is_empty());
+/// assert_eq!(AllowanceConfig::default().warn_at, 80);
 /// ```
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AllowanceConfig {
-    /// API key name -> window allowance.
+    /// The global warn threshold, an integer percent `0..=100` of a ceiling (`0` disables
+    /// warnings). Defaults to [`DEFAULT_ALLOWANCE_WARN_AT`].
+    pub warn_at: u8,
+    /// The operator webhook target for threshold crossings, if any.
+    pub webhook: Option<AllowanceWebhookConfig>,
+    /// Tenant id -> allowance shared by every key of that tenant.
+    pub tenants: BTreeMap<String, AllowanceEntryConfig>,
+    /// API key name -> allowance held by that key.
     pub api_keys: BTreeMap<String, AllowanceEntryConfig>,
 }
 
+impl Default for AllowanceConfig {
+    fn default() -> Self {
+        Self {
+            warn_at: DEFAULT_ALLOWANCE_WARN_AT,
+            webhook: None,
+            tenants: BTreeMap::new(),
+            api_keys: BTreeMap::new(),
+        }
+    }
+}
+
+/// The message for an integer percent outside `0..=100`, naming its full config path.
+fn warn_at_error(path: &str, got: u8) -> String {
+    format!("{path} must be an integer percent between 0 and 100 (got {got})")
+}
+
+/// Parse one positive decimal figure (`amount` or `lifetime`), naming `path` on failure.
+fn parse_positive_nanos(path: &str, raw: &str) -> Result<i64, String> {
+    match parse_decimal_nanos(raw) {
+        Ok(nanos) if nanos > 0 => Ok(nanos),
+        _ => Err(format!(
+            "{path} must be a positive decimal string in whole currency units (digits with an \
+             optional fractional part of at most 9 places, at most {MAX_PRICE_DISPLAY}) \
+             (got {raw:?})"
+        )),
+    }
+}
+
 impl AllowanceConfig {
-    /// Whether no allowance is configured.
+    /// Whether no allowance entry is configured. A `webhook` or `warn_at` alone enforces
+    /// nothing, so it does not count.
     pub fn is_empty(&self) -> bool {
-        self.api_keys.is_empty()
+        self.tenants.is_empty() && self.api_keys.is_empty()
     }
 
-    /// Resolve every entry, in key order, into an [`AllowancePolicy`] denominated in
-    /// `currency`: decimal strings and periods become integers once, here.
+    /// Resolve every entry -- tenants first, then API keys, each in key order -- into an
+    /// [`AllowancePolicy`] denominated in `currency`: decimal strings and periods become
+    /// integers once, here.
     ///
     /// # Errors
     ///
-    /// A `String` naming the full config path of the first invalid entry: an invalid key name,
-    /// a malformed or zero amount, or a malformed or out-of-range period.
+    /// A `String` naming the full config path and raw value of the first invalid item: a
+    /// `warn_at` above 100, an invalid map key, a malformed or zero `amount` or `lifetime`, a
+    /// malformed or out-of-range `period`, or an empty webhook `url`. A webhook secret is never
+    /// echoed.
     pub fn resolve(&self, currency: &CurrencyCode) -> Result<AllowancePolicy, String> {
-        let mut policy = AllowancePolicy::new(currency.clone(), DEFAULT_WARN_AT_PERCENT);
+        if self.warn_at > 100 {
+            return Err(warn_at_error("treasurer.allowance.warn_at", self.warn_at));
+        }
+        if let Some(webhook) = &self.webhook
+            && webhook.url.trim().is_empty()
+        {
+            return Err("treasurer.allowance.webhook.url must be a non-empty http(s) URL".into());
+        }
+
+        let mut policy = AllowancePolicy::new(currency.clone(), self.warn_at);
+        for (id, entry) in &self.tenants {
+            TenantId::new(id.as_str()).map_err(|e| {
+                format!("treasurer.allowance.tenants: {id:?} is not a valid tenant id: {e}")
+            })?;
+            let allowance = Self::resolve_entry("tenants", id, entry)?;
+            policy = policy.with_tenant(id.as_str(), allowance);
+        }
         for (name, entry) in &self.api_keys {
             TenantId::new(name.as_str()).map_err(|e| {
-                format!("treasurer.allowance.api_keys.{name} is not a valid API key name: {e}")
+                format!("treasurer.allowance.api_keys: {name:?} is not a valid API key name: {e}")
             })?;
-            let amount = match parse_decimal_nanos(&entry.amount) {
-                Ok(nanos) if nanos > 0 => nanos,
-                _ => {
-                    return Err(format!(
-                        "treasurer.allowance.api_keys.{name}.amount must be a positive decimal \
-                         string in whole currency units (digits with an optional fractional \
-                         part of at most 9 places) (got {:?})",
-                        entry.amount
-                    ));
-                }
-            };
-            let period = parse_period_secs(&entry.period).map_err(|_| {
-                format!(
-                    "treasurer.allowance.api_keys.{name}.period must be <integer><m|h|d> \
-                     between 1m and 366d (got {:?})",
-                    entry.period
-                )
-            })?;
-            policy = policy.with_api_key(name.as_str(), ScopeAllowance::new(period, amount));
+            let allowance = Self::resolve_entry("api_keys", name, entry)?;
+            policy = policy.with_api_key(name.as_str(), allowance);
         }
         Ok(policy)
+    }
+
+    /// Resolve one entry of `map` (`tenants` or `api_keys`) keyed `id`.
+    fn resolve_entry(
+        map: &str,
+        id: &str,
+        entry: &AllowanceEntryConfig,
+    ) -> Result<ScopeAllowance, String> {
+        let base = format!("treasurer.allowance.{map}.{id}");
+        let amount = parse_positive_nanos(&format!("{base}.amount"), &entry.amount)?;
+        let period = parse_period_secs(&entry.period).map_err(|_| {
+            format!(
+                "{base}.period must be <integer><m|h|d> between 1m and 366d (got {:?})",
+                entry.period
+            )
+        })?;
+        let mut allowance = ScopeAllowance::new(period, amount);
+        if let Some(raw) = &entry.lifetime {
+            allowance =
+                allowance.with_lifetime(parse_positive_nanos(&format!("{base}.lifetime"), raw)?);
+        }
+        if let Some(percent) = entry.warn_at {
+            if percent > 100 {
+                return Err(warn_at_error(&format!("{base}.warn_at"), percent));
+            }
+            allowance = allowance.with_warn_at(percent);
+        }
+        Ok(allowance)
+    }
+
+    /// Cross-check the allowance entries against the rest of the server's configuration (D-11).
+    ///
+    /// Pure: the caller supplies the tenants and API key names the authentication configuration
+    /// knows and whether the run store is disabled.
+    ///
+    /// # Errors
+    ///
+    /// A `String` naming the offending path when the allowance has entries and the run store is
+    /// disabled (allowances are enforced against the spend ledger, which needs a run store), when
+    /// an `api_keys.<name>` entry names no known API key, or when a `tenants.<id>` entry names no
+    /// known tenant. An empty allowance is always `Ok`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    /// use paladin::config::treasurer::AllowanceConfig;
+    ///
+    /// let none = BTreeSet::new();
+    /// assert!(AllowanceConfig::default().validate_against(&none, &none, true).is_ok());
+    /// ```
+    pub fn validate_against(
+        &self,
+        known_tenants: &BTreeSet<String>,
+        known_api_keys: &BTreeSet<String>,
+        run_store_disabled: bool,
+    ) -> Result<(), String> {
+        if self.is_empty() {
+            return Ok(());
+        }
+        if run_store_disabled {
+            return Err(
+                "treasurer.allowance has entries but run_store.backend is disabled -- \
+                        allowances are enforced against the spend ledger, which needs a run \
+                        store (set run_store.backend)"
+                    .to_string(),
+            );
+        }
+        for name in self.api_keys.keys() {
+            if !known_api_keys.contains(name) {
+                return Err(format!(
+                    "treasurer.allowance.api_keys.{name} names no key in http.auth.api_keys -- \
+                     a removed key must also lose its allowance entry; its surviving schedules \
+                     stay gated by their tenant's allowance"
+                ));
+            }
+        }
+        for id in self.tenants.keys() {
+            if !known_tenants.contains(id) {
+                return Err(format!(
+                    "treasurer.allowance.tenants.{id} names a tenant no http.auth.api_keys \
+                     entry or http.auth.bearer_token.tenant maps to"
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -300,7 +484,7 @@ pub struct PriceRowConfig {
 /// assert!(!table.is_empty());
 /// ```
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TreasurerConfig {
     /// The ISO 4217 three-letter currency every price in `pricing` is denominated in.
     /// Defaults to `"USD"`. Validated as exactly three ASCII uppercase letters -- never
@@ -449,7 +633,17 @@ impl EnvOverridable for TreasurerConfig {
         if let Some(v) = read_env::<String>("APP_TREASURER_CURRENCY") {
             self.currency = v;
         }
-        // `pricing` is config-file only (see module docs) -- no env var reads into this map.
+        // `pricing` and the allowance maps are config-file only (see module docs) -- no env var
+        // reads into a collection.
+        if let Some(v) = read_env::<u8>("APP_TREASURER_ALLOWANCE_WARN_AT") {
+            self.allowance.warn_at = v;
+        }
+        // A secret without a url delivers nothing, so it is applied only to an existing webhook.
+        if let Some(webhook) = self.allowance.webhook.as_mut()
+            && let Some(v) = read_env::<String>("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET")
+        {
+            webhook.secret = Some(v);
+        }
     }
 }
 
@@ -694,6 +888,8 @@ mod tests {
                 AllowanceEntryConfig {
                     period: (*period).to_string(),
                     amount: (*amount).to_string(),
+                    lifetime: None,
+                    warn_at: None,
                 },
             );
         }
@@ -821,14 +1017,350 @@ mod tests {
         assert_eq!(MAX_ALLOWANCE_PERIOD_SECS, 366 * 86_400);
     }
 
-    #[test]
-    fn allowance_unknown_keys_fail_to_load() {
-        let yaml = "treasurer:\n  allowance:\n    api_keys:\n      svc-a:\n        period: \"1d\"\n        amount: \"1\"\n        burst: \"3\"\n";
+    fn fail_to_load(yaml: &str) {
         let result: Result<Wrapper, _> = Config::builder()
             .add_source(File::from_str(yaml, FileFormat::Yaml))
             .build()
             .expect("config should build")
             .try_deserialize();
-        assert!(result.is_err(), "an unknown entry key should fail to load");
+        assert!(result.is_err(), "should fail to load: {yaml}");
+    }
+
+    fn subject(
+        tenant: &str,
+        key: &str,
+    ) -> paladin_core::platform::container::principal::RunAttribution {
+        paladin_core::platform::container::principal::RunAttribution::new(
+            TenantId::new(tenant).expect("tenant"),
+            key,
+        )
+    }
+
+    #[test]
+    fn allowance_full_grammar_resolves_every_limit_kind() {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind,
+        };
+        let wrapper = deserialize_wrapper(
+            "treasurer:\n  allowance:\n    warn_at: 90\n    tenants:\n      acme:\n        period: \"24h\"\n        amount: \"25.00\"\n        lifetime: \"500.00\"\n    api_keys:\n      ci-runner:\n        period: \"1h\"\n        amount: \"2.50\"\n        warn_at: 95\n",
+        );
+        let policy = wrapper.treasurer.allowance_policy().expect("valid policy");
+        let ceilings = policy.ceilings_for(&subject("acme", "ci-runner"));
+        assert_eq!(ceilings.len(), 3, "{ceilings:?}");
+        assert_eq!(ceilings[0].scope_kind, AllowanceScopeKind::ApiKey);
+        assert_eq!(ceilings[0].limit_kind, AllowanceLimitKind::Window);
+        assert_eq!(ceilings[0].period_secs, Some(3_600));
+        assert_eq!(ceilings[0].ceiling_nanos, 2_500_000_000);
+        assert_eq!(ceilings[0].warn_at, 95);
+        assert_eq!(ceilings[1].scope_kind, AllowanceScopeKind::Tenant);
+        assert_eq!(ceilings[1].period_secs, Some(86_400));
+        assert_eq!(ceilings[1].ceiling_nanos, 25_000_000_000);
+        assert_eq!(ceilings[1].warn_at, 90);
+        assert_eq!(ceilings[2].limit_kind, AllowanceLimitKind::Lifetime);
+        assert_eq!(ceilings[2].period_secs, None);
+        assert_eq!(ceilings[2].ceiling_nanos, 500_000_000_000);
+        assert_eq!(ceilings[2].warn_at, 90);
+    }
+
+    #[test]
+    fn allowance_warn_at_defaults_to_80_and_accepts_0_and_100() {
+        assert_eq!(
+            AllowanceConfig::default().warn_at,
+            DEFAULT_ALLOWANCE_WARN_AT
+        );
+        assert_eq!(DEFAULT_ALLOWANCE_WARN_AT, 80);
+        let mut config = allowance_config(&[("k", "1d", "5")]);
+        let ceilings = config
+            .allowance_policy()
+            .expect("default")
+            .ceilings_for(&subject("acme", "k"));
+        assert_eq!(ceilings[0].warn_at, 80);
+        for edge in [0u8, 100] {
+            config.allowance.warn_at = edge;
+            let ceilings = config
+                .allowance
+                .resolve(&CurrencyCode::new("USD").expect("usd"))
+                .expect("edge accepted")
+                .ceilings_for(&subject("acme", "k"));
+            assert_eq!(ceilings[0].warn_at, edge);
+        }
+        config.allowance.warn_at = 80;
+        for edge in [0u8, 100] {
+            config
+                .allowance
+                .api_keys
+                .get_mut("k")
+                .expect("entry")
+                .warn_at = Some(edge);
+            let ceilings = config
+                .allowance_policy()
+                .expect("entry edge accepted")
+                .ceilings_for(&subject("acme", "k"));
+            assert_eq!(ceilings[0].warn_at, edge);
+            assert!(config.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn allowance_warn_at_above_100_is_rejected_globally_and_per_entry() {
+        let mut config = allowance_config(&[("k", "1d", "5")]);
+        config.allowance.warn_at = 101;
+        let err = config.validate().expect_err("global 101");
+        assert!(
+            err.contains(
+                "treasurer.allowance.warn_at must be an integer percent between 0 and 100 (got 101)"
+            ),
+            "{err}"
+        );
+        config.allowance.warn_at = 80;
+        config
+            .allowance
+            .api_keys
+            .get_mut("k")
+            .expect("entry")
+            .warn_at = Some(101);
+        let err = config.validate().expect_err("entry 101");
+        assert!(
+            err.contains("treasurer.allowance.api_keys.k.warn_at"),
+            "{err}"
+        );
+        assert!(err.contains("(got 101)"), "{err}");
+    }
+
+    #[test]
+    fn allowance_lifetime_rejects_non_positive_malformed_and_overflowing_values() {
+        for bad in [
+            "0",
+            "-1",
+            "1e3",
+            "1,000",
+            " 5",
+            "5 ",
+            "+5",
+            "",
+            "5.0000000001",
+            "9223372037",
+        ] {
+            let mut config = TreasurerConfig::default();
+            config.allowance.tenants.insert(
+                "acme".to_string(),
+                AllowanceEntryConfig {
+                    period: "1d".to_string(),
+                    amount: "5".to_string(),
+                    lifetime: Some(bad.to_string()),
+                    warn_at: None,
+                },
+            );
+            let err = config
+                .validate()
+                .expect_err(&format!("{bad:?} should be rejected"));
+            assert!(
+                err.contains("treasurer.allowance.tenants.acme.lifetime"),
+                "{bad:?}: {err}"
+            );
+            assert!(err.contains(&format!("(got {bad:?})")), "{bad:?}: {err}");
+        }
+    }
+
+    #[test]
+    fn allowance_decimal_grammar_is_exact_to_one_nano_unit() {
+        let config = allowance_config(&[("one", "1d", "0.000000001"), ("big", "1d", "25.00")]);
+        let policy = config.allowance_policy().expect("valid");
+        assert_eq!(
+            policy.ceilings_for(&subject("acme", "one"))[0].ceiling_nanos,
+            1
+        );
+        assert_eq!(
+            policy.ceilings_for(&subject("acme", "big"))[0].ceiling_nanos,
+            25_000_000_000
+        );
+        let mut config = TreasurerConfig::default();
+        config.allowance.tenants.insert(
+            "acme".to_string(),
+            AllowanceEntryConfig {
+                period: "1d".to_string(),
+                amount: "5".to_string(),
+                lifetime: Some("0.000000001".to_string()),
+                warn_at: None,
+            },
+        );
+        let ceilings = config
+            .allowance_policy()
+            .expect("valid")
+            .ceilings_for(&subject("acme", "x"));
+        assert_eq!(ceilings[1].ceiling_nanos, 1);
+    }
+
+    #[test]
+    fn allowance_unknown_keys_fail_to_load() {
+        // The section-level typo from RESEARCH Pitfall 17, then one case per struct.
+        fail_to_load("treasurer:\n  allowence:\n    api_keys: {}\n");
+        fail_to_load(
+            "treasurer:\n  allowance:\n    api_key:\n      svc-a:\n        period: \"1d\"\n        amount: \"1\"\n",
+        );
+        fail_to_load(
+            "treasurer:\n  allowance:\n    api_keys:\n      svc-a:\n        perid: \"1d\"\n        amount: \"1\"\n",
+        );
+        fail_to_load(
+            "treasurer:\n  allowance:\n    tenants:\n      acme:\n        period: \"1d\"\n        amount: \"1\"\n        lifetim: \"9\"\n",
+        );
+        fail_to_load(
+            "treasurer:\n  allowance:\n    webhook:\n      url: \"https://x.example\"\n      secrett: \"s\"\n",
+        );
+    }
+
+    #[test]
+    fn allowance_invalid_map_keys_are_rejected() {
+        for bad in ["", "has space"] {
+            let mut config = allowance_config(&[("ok", "1d", "5")]);
+            config
+                .allowance
+                .tenants
+                .insert(bad.to_string(), config.allowance.api_keys["ok"].clone());
+            let err = config
+                .validate()
+                .expect_err(&format!("tenant key {bad:?} should be rejected"));
+            assert!(err.contains("treasurer.allowance.tenants"), "{err}");
+            assert!(err.contains("not a valid tenant id"), "{err}");
+        }
+    }
+
+    #[test]
+    fn allowance_empty_webhook_url_is_rejected() {
+        let mut config = allowance_config(&[("k", "1d", "5")]);
+        config.allowance.webhook = Some(AllowanceWebhookConfig {
+            url: String::new(),
+            secret: Some("s3cr3t-value".to_string()),
+        });
+        let err = config.validate().expect_err("empty url");
+        assert!(err.contains("treasurer.allowance.webhook.url"), "{err}");
+        assert!(!err.contains("s3cr3t-value"), "{err}");
+    }
+
+    #[test]
+    fn allowance_webhook_secret_is_redacted_from_debug_and_serialize() {
+        let mut config = allowance_config(&[("k", "1d", "5")]);
+        config.allowance.webhook = Some(AllowanceWebhookConfig {
+            url: "https://ops.example.com/hook".to_string(),
+            secret: Some("s3cr3t-value".to_string()),
+        });
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("s3cr3t-value"), "{debug}");
+        assert!(debug.contains("[redacted]"), "{debug}");
+        assert!(debug.contains("https://ops.example.com/hook"), "{debug}");
+        let json = serde_json::to_string(&config).expect("serialize");
+        assert!(!json.contains("s3cr3t-value"), "{json}");
+    }
+
+    #[test]
+    fn yaml_env_placeholder_is_not_expanded() {
+        // C7: the loader performs no ${VAR} expansion, so the placeholder arrives literally.
+        let wrapper = deserialize_wrapper(
+            "treasurer:\n  allowance:\n    webhook:\n      url: \"https://ops.example.com/hook\"\n      secret: \"${ALLOWANCE_WEBHOOK_SECRET}\"\n",
+        );
+        let secret = wrapper
+            .treasurer
+            .allowance
+            .webhook
+            .and_then(|w| w.secret)
+            .expect("secret loads");
+        assert_eq!(secret, "${ALLOWANCE_WEBHOOK_SECRET}");
+    }
+
+    #[test]
+    #[serial]
+    fn env_override_allowance_warn_at() {
+        unsafe {
+            env::set_var("APP_TREASURER_ALLOWANCE_WARN_AT", "70");
+        }
+        let mut config = TreasurerConfig::default();
+        config.apply_env_overrides();
+        unsafe {
+            env::remove_var("APP_TREASURER_ALLOWANCE_WARN_AT");
+        }
+        assert_eq!(config.allowance.warn_at, 70);
+    }
+
+    #[test]
+    #[serial]
+    fn env_override_allowance_webhook_secret_only_with_a_webhook() {
+        unsafe {
+            env::set_var("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET", "from-env");
+        }
+        let mut without = TreasurerConfig::default();
+        without.apply_env_overrides();
+        assert!(without.allowance.webhook.is_none());
+
+        let mut with = TreasurerConfig::default();
+        with.allowance.webhook = Some(AllowanceWebhookConfig {
+            url: "https://ops.example.com/hook".to_string(),
+            secret: None,
+        });
+        with.apply_env_overrides();
+        unsafe {
+            env::remove_var("APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET");
+        }
+        assert_eq!(
+            with.allowance.webhook.and_then(|w| w.secret).as_deref(),
+            Some("from-env")
+        );
+    }
+
+    fn names(items: &[&str]) -> BTreeSet<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn validate_against_rejects_allowances_without_a_run_store() {
+        let config = allowance_config(&[("k", "1d", "5")]);
+        let err = config
+            .allowance
+            .validate_against(&names(&["acme"]), &names(&["k"]), true)
+            .expect_err("disabled store");
+        assert!(err.contains("treasurer.allowance"), "{err}");
+        assert!(err.contains("run_store.backend"), "{err}");
+    }
+
+    #[test]
+    fn validate_against_rejects_unknown_api_keys_and_tenants() {
+        let config = allowance_config(&[("ghost", "1d", "5")]);
+        let err = config
+            .allowance
+            .validate_against(&names(&["acme"]), &names(&["k"]), false)
+            .expect_err("unknown key");
+        assert!(err.contains("treasurer.allowance.api_keys.ghost"), "{err}");
+        assert!(err.contains("http.auth.api_keys"), "{err}");
+
+        let mut config = TreasurerConfig::default();
+        config.allowance.tenants.insert(
+            "globex".to_string(),
+            AllowanceEntryConfig {
+                period: "1d".to_string(),
+                amount: "5".to_string(),
+                lifetime: None,
+                warn_at: None,
+            },
+        );
+        let err = config
+            .allowance
+            .validate_against(&names(&["acme"]), &names(&["k"]), false)
+            .expect_err("unknown tenant");
+        assert!(err.contains("treasurer.allowance.tenants.globex"), "{err}");
+    }
+
+    #[test]
+    fn validate_against_accepts_known_targets_and_empty_allowances() {
+        let config = allowance_config(&[("k", "1d", "5")]);
+        assert!(
+            config
+                .allowance
+                .validate_against(&names(&["acme"]), &names(&["k"]), false)
+                .is_ok()
+        );
+        assert!(
+            AllowanceConfig::default()
+                .validate_against(&names(&[]), &names(&[]), true)
+                .is_ok()
+        );
     }
 }

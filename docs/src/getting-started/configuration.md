@@ -406,6 +406,86 @@ herald:
 **Env vars:** `APP_HERALD_DEFAULT_FORMATTER`, `APP_HERALD_JSON_PRETTY`,
 `APP_HERALD_MARKDOWN_INCLUDE_COLORS`, `APP_HERALD_TABLE_BORDER_STYLE`
 
+## Treasurer allowances
+
+`treasurer.allowance` caps how much an API key or a tenant may spend, enforced when a run is
+submitted: a request whose scope has already reached a ceiling is refused with
+`429 allowance_exhausted` before anything is persisted. Amounts are operator-currency figures
+(`treasurer.currency`), never token counts. Omit the section and nothing is enforced.
+
+```yaml
+treasurer:
+  currency: "USD"
+  allowance:
+    warn_at: 80
+    webhook:
+      url: "https://ops.example.com/paladin-allowance"
+    tenants:
+      acme:
+        period: "24h"
+        amount: "25.00"
+        lifetime: "500.00"
+    api_keys:
+      ci-runner:
+        period: "1h"
+        amount: "2.50"
+        warn_at: 90
+```
+
+| Key | Type | Default | Env override |
+| --- | --- | --- | --- |
+| `treasurer.allowance.warn_at` | integer percent `0..=100` | `80` | `APP_TREASURER_ALLOWANCE_WARN_AT` |
+| `treasurer.allowance.webhook.url` | non-empty `http(s)` URL | none | none |
+| `treasurer.allowance.webhook.secret` | string, never rendered or serialised | none | `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` (applied only when a `webhook` exists) |
+| `treasurer.allowance.tenants.<id>` | entry | none | none (config file only) |
+| `treasurer.allowance.api_keys.<name>` | entry | none | none (config file only) |
+| entry `period` (required) | `<integer><m\|h\|d>`, `1m` to `366d` | none | none |
+| entry `amount` (required) | decimal string, whole currency units | none | none |
+| entry `lifetime` | decimal string, whole currency units | none | none |
+| entry `warn_at` | integer percent `0..=100` | the global `warn_at` | none |
+
+Decimal strings are exact: up to nine digits after the point, no sign, exponent, separator or
+whitespace, positive, and at most `9223372036.854775807`. `"25.00"` is twenty-five units;
+`"0.000000001"` is one nano-unit. A value that does not fit is a boot error naming its full path,
+never rounded or clamped. A `${VAR}` placeholder in the YAML file is **not** expanded -- the
+`webhook.secret` is supplied with `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`. A lifetime-only entry
+is not expressible: every entry carries a window `period` and `amount`.
+
+### Window and limit model
+
+Windows are tumbling and aligned to the UTC epoch, computed from the ledger's own clock, so a
+scope's spend resets on the boundary and can reach twice an allowance across one boundary. A
+caller can hold up to four ceilings, evaluated in a fixed order: API-key window, API-key
+lifetime, tenant window, tenant lifetime. A balance at or above a ceiling is exhausted (`>=`),
+and the first exhausted ceiling decides the refusal. Admin keys are bound like any other key.
+
+### Warn threshold
+
+`warn_at` is a percent of a ceiling. `0` disables warnings for the entry. `100` never notifies,
+because a balance at the ceiling is refused rather than warned about. A value above `100` is
+rejected, never clamped.
+
+### Boot coherence
+
+`paladin-server` refuses to start, naming the offending path, when:
+
+- `treasurer.allowance` has any entry while `run_store.backend` is `disabled` -- allowances are
+  enforced against the spend ledger, which needs a run store;
+- an `api_keys.<name>` entry names no key in `http.auth.api_keys`;
+- a `tenants.<id>` entry names a tenant that no `http.auth.api_keys` entry or
+  `http.auth.bearer_token.tenant` maps to;
+- any key under `treasurer:` is misspelled (`allowence:`, `api_key:`, `perid:`).
+
+With `http.auth.enabled: false` the open-access principal is the key `anonymous` in the tenant
+`open-access`, so `api_keys.anonymous` and `tenants.open-access` are accepted.
+
+### Caveats
+
+Changing `treasurer.currency` while allowances are in force makes every allowanced principal's
+admission fail closed until the ledger is migrated: its history is in the old currency. The
+operator webhook target must pass the same address guard as run webhooks, so a private address
+needs `webhooks.allow_private: true` (delivery lands later in this phase).
+
 ## Token Budget Terminology
 
 Paladin uses `max_tokens` in four independent, non-overlapping senses:
@@ -417,7 +497,7 @@ Paladin uses `max_tokens` in four independent, non-overlapping senses:
 | Per-request completion cap | `LlmRequest` metadata `"max_tokens"` (OpenAI/DeepSeek fallback-override); `ANTHROPIC_MAX_TOKENS` env var, read by `AnthropicConfig::from_env()` (Anthropic, required, env-only — no YAML key) | provider adapters (`crates/paladin-llm/src/openai/adapter.rs`, `crates/paladin-llm/src/anthropic/adapter.rs`) |
 | Run-level budget cap | `agent_runtime.token_budget.max_tokens` | `src/application/services/paladin/middleware/limits.rs` |
 
-Any future spend-governance cap uses a distinct key, `allowance`, never `max_tokens`.
+The spend-governance cap is a distinct key, `treasurer.allowance` (operator-currency amounts, never a token count), described in [Treasurer allowances](#treasurer-allowances).
 
 ## Autonomous Features
 

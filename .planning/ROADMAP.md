@@ -423,7 +423,41 @@ persisted, and the operator gets an early warning before that happens.
 
   3. Crossing a configurable warn threshold (e.g. 80%) emits exactly one trace event plus a herald
      and webhook notice per window, without blocking the run.
-**Plans**: TBD
+**Plans**: 9 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 41-01-PLAN.md — Checkpoint on the consolidated design (C1/C3/C5/C6/C10/C11/C13 against D-04/D-08/D-16/D-17), then the tracer: per-API-key window allowance → AllowancePolicy → Treasurer → store_now + TreasuryLedgerPort::balance → submit refuses before any row → 429 allowance_exhausted + Retry-After on POST /v1/runs; register the surface (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 41-02-PLAN.md — Postgres balance and the full balance contract on all three adapters; Treasurer boundary/order/short-circuit/fail-closed/idempotency/concurrency proofs over a scripted store clock (wave 2)
+- [ ] 41-03-PLAN.md — Full treasurer.allowance grammar (tenants, lifetime, warn_at, operator webhook target, strict keys, env overrides, redacted secret), D-11 boot coherence and the Treasurer wired in build_run_api (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 41-04-PLAN.md — Gate fork and the HTTP agent execute/stream/jobs routes, Treasurer attached to AgentApiState, Admin bound, OpenAPI 429 with the v0.9 golden exception (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 41-05-PLAN.md — Schedule-fired runs: migration 010 creator columns, RunSchedule/CreateRunSchedule.created_by, SubmitRun.attributed_to, SkipReason::AllowanceExhausted, role check unchanged (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 41-06-PLAN.md — Once-per-window notices: migrations 011/012, TreasuryNoticePort on three adapters with the sixteen-way race clause, warn-crossing claim with confirm/abandon (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 41-07-PLAN.md — TraceEvent::AllowanceWarning emitted by the worker on first dispatch, one herald line in all three heralds, the HTTP agent path through RunScope (wave 6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 41-08-PLAN.md — Operator webhook notice through the existing delivery queue: RunEventKind::AllowanceWarning, operator signing secret, boot-time SSRF check, rollout docs (wave 7)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 41-09-PLAN.md — ADR-0056, PROMOTION.md to 0057, facade re-export, consolidated register row, crate CHANGELOGs, public-API baseline, full phase gate (wave 8)
 
 ### Phase 42: Mid-Run Halt & SSE Terminal Status
 

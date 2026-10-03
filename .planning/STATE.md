@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 41
 current_phase_name: Admission-Time Allowance Enforcement
 status: executing
-stopped_at: Completed 41-03-PLAN.md
-last_updated: "2026-10-03T23:02:04.697Z"
+stopped_at: Completed 41-04-PLAN.md
+last_updated: "2026-10-03T23:16:33.993Z"
 last_activity: 2026-10-03
 last_activity_desc: Phase 41 execution resumed (wave continue)
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 39
-  completed_plans: 33
+  completed_plans: 34
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 85%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([█████████░] 87%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 41 (Admission-Time Allowance Enforcement) — EXECUTING
-Plan: 4 of 9
+Plan: 5 of 9
 Status: Ready to execute
 Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 
@@ -222,6 +222,7 @@ Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 | Phase 41 P01 | 45min | 4 tasks | 28 files |
 | Phase 41 P02 | 40min | 2 tasks | 6 files |
 | Phase 41 P03 | 75min | 2 tasks | 11 files |
+| Phase 41 P04 | 60min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -328,6 +329,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 41-02: No Treasurer production change needed; admission rule proven over a scripted store clock. Over-admission race remains an accepted ADR-0056/Phase 42 backstop
 - [Phase ?]: 41-03: allowance webhook secret is env-supplied (APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET) because the config loader does not expand ${VAR}; WINDOWS row 62 tracks the example configs
 - [Phase ?]: 41-03: build_run_api runs the D-11 allowance coherence check before the disabled-store early return and builds one Treasurer only when entries exist
+- [Phase ?]: 41-04: fork and submit share one private admit_and_persist lifecycle; agent routes admit then confirm back to back via admit_principal (jobs refuses before jobs.create)
+- [Phase ?]: 41-04: agent-handler rustdoc left unchanged because utoipa copies it into the frozen v0.9 operation description; golden exception removes only responses[429] on three agent operations
 
 ### Pending Todos
 
@@ -542,8 +545,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-03T23:02:04.669Z
-**Stopped at:** Completed 41-03-PLAN.md
+**Last session:** 2026-10-03T23:16:33.960Z
+**Stopped at:** Completed 41-04-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

@@ -65,7 +65,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
   and an optional lifetime cap, distinct from every existing `max_tokens` meaning; window boundaries
   are computed in UTC from the store or server clock, never a worker's local clock
 
-- [ ] **ALLOW-02**: Submitting a run while the caller's tenant or API-key allowance is exhausted is
+- [x] **ALLOW-02**: Submitting a run while the caller's tenant or API-key allowance is exhausted is
   refused at admission with a typed error, and no run is persisted
 
 - [ ] **ALLOW-03**: A run in flight whose next draw would overspend halts cleanly — typed Treasurer
@@ -219,7 +219,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TENANT-01 | Phase 40 | Complete |
 | TENANT-02 | Phase 40 | Complete |
 | ALLOW-01 | Phase 41 | Pending |
-| ALLOW-02 | Phase 41 | Pending |
+| ALLOW-02 | Phase 41 | Complete |
 | ALLOW-03 | Phase 42 | Pending |
 | ALLOW-04 | Phase 41 | Pending |
 | ALLOW-05 | Phase 42 | Pending |

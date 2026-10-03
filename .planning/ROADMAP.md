@@ -437,7 +437,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 41-04-PLAN.md — Gate fork and the HTTP agent execute/stream/jobs routes, Treasurer attached to AgentApiState, Admin bound, OpenAPI 429 with the v0.9 golden exception (wave 3)
+- [x] 41-04-PLAN.md — Gate fork and the HTTP agent execute/stream/jobs routes, Treasurer attached to AgentApiState, Admin bound, OpenAPI 429 with the v0.9 golden exception (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

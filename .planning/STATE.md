@@ -4,15 +4,15 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 41
 current_phase_name: Admission-Time Allowance Enforcement
-status: ready
+status: executing
 stopped_at: Phase 41 context gathered
-last_updated: "2026-10-03T14:43:24.635Z"
+last_updated: "2026-10-03T15:02:30.007Z"
 last_activity: 2026-10-03
-last_activity_desc: "Phase 41 planning complete: 9 plans in 8 waves, plan-checker passed after 1 revision"
+last_activity_desc: Phase 41 execution started
 progress:
   total_phases: 5
   completed_phases: 4
-  total_plans: 30
+  total_plans: 39
   completed_plans: 30
 ---
 
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-30 after Phase 40)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 41 — Admission-Time Allowance Enforcement (first of the Phases 41-44 that
+**Current focus:** Phase 41 — Admission-Time Allowance Enforcement
 Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 10 phases (38-47), 35/35
 requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-30 once Phase 45's
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
@@ -50,10 +50,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 41 — Admission-Time Allowance Enforcement
-Plan: Not started (9 plans in 8 waves)
-Status: Ready to execute (9 plans in 8 waves; plan-checker passed after 1 revision; execution stops at the 41-01 Task 1 decision checkpoint)
-Last activity: 2026-10-03 — Phase 41 planning complete: 9 plans in 8 waves, plan-checker passed after 1 revision
+Phase: 41 (Admission-Time Allowance Enforcement) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 41
+Last activity: 2026-10-03 — Phase 41 execution started
 
 ## Performance Metrics
 

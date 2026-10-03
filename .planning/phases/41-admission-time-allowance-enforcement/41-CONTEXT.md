@@ -292,6 +292,12 @@ see *Deferred Ideas*.
   (they are not the caller's). Omitting `webhook:` disables only the webhook leg; trace and
   herald still fire. — **Reversibility:** costly — the payload key set is a documented contract
   (`platform-api.md` Webhooks section) and a prohibition boundary like `WebhookPayload`'s.
+  *Amended 2026-10-03 at the plan 41-01 Task 1 design checkpoint (operator selected
+  **option-b** during `/gsd-plan-phase 41`):* the operator payload also carries `"tenant_id"`
+  and `"api_key_id"` — the tenant id and the API key **name** (`ApiKeyConfig.name`), never a key
+  value — so a notice from the HTTP agent path (where `run_id` is `null`) still identifies the
+  scope that crossed. The documented key set is therefore twelve keys, not ten; D-00g already
+  classes key names and tenant ids as log-safe. Plan 41-08 implements the option-b branch.
 - **D-18:** The trace and herald legs are **one new `TraceEvent::AllowanceWarning { scope_kind,
   limit_kind, balance, ceiling, window_start, window_end, warn_at }`** (additive under
   `#[non_exhaustive]`, `#[serde(default)]` discipline, N/A-registered per D-00e) emitted exactly

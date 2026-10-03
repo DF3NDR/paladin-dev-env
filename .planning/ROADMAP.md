@@ -428,7 +428,7 @@ persisted, and the operator gets an early warning before that happens.
 Plans:
 **Wave 1**
 
-- [ ] 41-01-PLAN.md — Checkpoint on the consolidated design (C1/C3/C5/C6/C10/C11/C13 against D-04/D-08/D-16/D-17), then the tracer: per-API-key window allowance → AllowancePolicy → Treasurer → store_now + TreasuryLedgerPort::balance → submit refuses before any row → 429 allowance_exhausted + Retry-After on POST /v1/runs; register the surface (wave 1)
+- [x] 41-01-PLAN.md — Checkpoint on the consolidated design (C1/C3/C5/C6/C10/C11/C13 against D-04/D-08/D-16/D-17), then the tracer: per-API-key window allowance → AllowancePolicy → Treasurer → store_now + TreasuryLedgerPort::balance → submit refuses before any row → 429 allowance_exhausted + Retry-After on POST /v1/runs; register the surface (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

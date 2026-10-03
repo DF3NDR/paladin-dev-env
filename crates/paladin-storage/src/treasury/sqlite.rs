@@ -37,7 +37,8 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::treasury_ledger::{
-    ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SpendGroupBy, SpendQuery, SpendRow,
+    BalanceQuery, ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SpendGroupBy,
+    SpendQuery, SpendRow,
 };
 use paladin_ports::output::treasury_ledger_port::{TreasuryLedgerError, TreasuryLedgerPort};
 
@@ -116,6 +117,34 @@ const RELEASE_INSERT: &str = "\
 const SPEND_SELECT_PREFIX: &str = "\
     SELECT tenant_id, api_key_id, run_id, currency, charged_nanos, model_breakdown \
     FROM treasury_ledger WHERE kind = 'settle'";
+
+/// `balance`'s foreign-currency probe prefix (D-00h): any row in the tenant (and optional key,
+/// optional half-open window) carrying a currency other than the requested one. Extended with
+/// `push_bind` only -- never an `? IS NULL OR` predicate, and never a caller value in SQL text.
+const BALANCE_FOREIGN_PREFIX: &str = "\
+    SELECT currency FROM treasury_ledger WHERE tenant_id = ";
+
+/// `balance`'s `SUM` prefix: the signed contributions of every row in the same scope, in the
+/// requested currency (ADR-0053: reserve, settle and release rows alike).
+const BALANCE_SUM_PREFIX: &str = "\
+    SELECT COALESCE(SUM(amount_nanos), 0) FROM treasury_ledger WHERE tenant_id = ";
+
+/// Push the optional key and half-open window predicates `balance` shares between its two
+/// statements, binding every value.
+fn push_balance_scope(builder: &mut QueryBuilder<'_, Sqlite>, query: &BalanceQuery) {
+    if let Some(api_key_id) = &query.api_key_id {
+        builder.push(" AND api_key_id = ");
+        builder.push_bind(api_key_id.clone());
+    }
+    if let Some(since) = query.since {
+        builder.push(" AND attributed_at >= ");
+        builder.push_bind(crate::run::storage_timestamp(since));
+    }
+    if let Some(until) = query.until {
+        builder.push(" AND attributed_at < ");
+        builder.push_bind(crate::run::storage_timestamp(until));
+    }
+}
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
@@ -611,6 +640,53 @@ impl TreasuryLedgerPort for SqliteTreasuryLedger {
     async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
         self.store_clock().await
     }
+
+    async fn balance(&self, query: BalanceQuery) -> Result<Cost, TreasuryLedgerError> {
+        crate::treasury::validate_balance(&query)?;
+
+        // Both statements run inside one read transaction so they see one snapshot (a plain
+        // BEGIN, not IMMEDIATE: this is a read and must not take the write lock).
+        let mut tx = self.pool.begin().await.map_err(|e| self.wrap_error(e))?;
+
+        let mut probe: QueryBuilder<Sqlite> = QueryBuilder::new(BALANCE_FOREIGN_PREFIX);
+        probe.push_bind(query.tenant_id.clone());
+        push_balance_scope(&mut probe, &query);
+        probe.push(" AND currency <> ");
+        probe.push_bind(query.currency.as_str().to_string());
+        probe.push(" LIMIT 1");
+        let foreign: Option<String> = probe
+            .build_query_scalar()
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        if let Some(found) = foreign {
+            tx.rollback().await.map_err(|e| self.wrap_error(e))?;
+            let found_currency =
+                CurrencyCode::new(&found).map_err(|e| TreasuryLedgerError::Serialization {
+                    message: format!("stored currency '{found}' is invalid: {e}"),
+                })?;
+            return Err(TreasuryLedgerError::CurrencyMismatch {
+                expected: query.currency,
+                found: found_currency,
+            });
+        }
+
+        let mut sum: QueryBuilder<Sqlite> = QueryBuilder::new(BALANCE_SUM_PREFIX);
+        sum.push_bind(query.tenant_id.clone());
+        push_balance_scope(&mut sum, &query);
+        sum.push(" AND currency = ");
+        sum.push_bind(query.currency.as_str().to_string());
+        let total: i64 = sum
+            .build_query_scalar()
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        tx.commit().await.map_err(|e| self.wrap_error(e))?;
+
+        Ok(Cost::new(total, query.currency))
+    }
 }
 
 /// Fold one (group, currency, nanos) contribution into `folded`, incrementing that entry's
@@ -854,6 +930,13 @@ mod tests {
     async fn unattributed_scope_is_grouped_under_the_sentinel() {
         contract_tests::unattributed_scope_is_grouped_under_the_sentinel(&fresh_store().await)
             .await;
+    }
+
+    // ── Phase 41 (41-01) balance clause ───────────────────────────────────
+
+    #[tokio::test]
+    async fn tenant_balance_equals_sum_of_key_balances() {
+        contract_tests::tenant_balance_equals_sum_of_key_balances(&fresh_store().await).await;
     }
 
     // The concurrency clause that needs a REAL shared on-disk database -- ten concurrent

@@ -20,8 +20,8 @@ use tokio::sync::Mutex;
 
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::treasury_ledger::{
-    LedgerEntryKind, LedgerScope, ReservationId, ReserveRequest, SettleOutcome, SettleRequest,
-    SettlementKey, SpendGroupBy, SpendQuery, SpendRow,
+    BalanceQuery, LedgerEntryKind, LedgerScope, ReservationId, ReserveRequest, SettleOutcome,
+    SettleRequest, SettlementKey, SpendGroupBy, SpendQuery, SpendRow,
 };
 use paladin_ports::output::treasury_ledger_port::{TreasuryLedgerError, TreasuryLedgerPort};
 
@@ -362,6 +362,42 @@ impl TreasuryLedgerPort for InMemoryTreasuryLedger {
     async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
         Ok(crate::run::storage_timestamp(Utc::now()))
     }
+
+    async fn balance(&self, query: BalanceQuery) -> Result<Cost, TreasuryLedgerError> {
+        crate::treasury::validate_balance(&query)?;
+
+        let state = self.state.lock().await;
+
+        // One predicate for the foreign-currency probe and the SUM, so both see the same rows.
+        let in_scope = |e: &&Entry| {
+            e.scope.tenant_id == query.tenant_id
+                && query
+                    .api_key_id
+                    .as_ref()
+                    .is_none_or(|key| &e.scope.api_key_id == key)
+                && query.since.is_none_or(|since| e.attributed_at >= since)
+                && query.until.is_none_or(|until| e.attributed_at < until)
+        };
+
+        if let Some(entry) = state
+            .entries
+            .iter()
+            .filter(in_scope)
+            .find(|e| e.currency != query.currency)
+        {
+            return Err(TreasuryLedgerError::CurrencyMismatch {
+                expected: query.currency,
+                found: entry.currency.clone(),
+            });
+        }
+
+        let sum = state
+            .entries
+            .iter()
+            .filter(in_scope)
+            .fold(0i64, |acc, e| acc.saturating_add(e.amount_nanos));
+        Ok(Cost::new(sum, query.currency))
+    }
 }
 
 /// Fold one (group, currency, nanos) contribution into `folded`, incrementing that entry's
@@ -501,5 +537,12 @@ mod contract_suite {
     async fn concurrent_duplicate_settles_charge_once() {
         let store: Arc<dyn TreasuryLedgerPort> = Arc::new(fresh_store());
         contract_tests::concurrent_duplicate_settles_charge_once(store).await;
+    }
+
+    // ── Phase 41 (41-01) balance clause ───────────────────────────────────
+
+    #[tokio::test]
+    async fn tenant_balance_equals_sum_of_key_balances() {
+        contract_tests::tenant_balance_equals_sum_of_key_balances(&fresh_store()).await;
     }
 }

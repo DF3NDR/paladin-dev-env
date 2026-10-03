@@ -22,8 +22,8 @@ use uuid::Uuid;
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::treasury_ledger::{
-    LedgerScope, ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SettlementKey,
-    SpendGroupBy, SpendQuery,
+    BalanceQuery, LedgerScope, ReservationId, ReserveRequest, SettleOutcome, SettleRequest,
+    SettlementKey, SpendGroupBy, SpendQuery,
 };
 use paladin_ports::output::treasury_ledger_port::{TreasuryLedgerError, TreasuryLedgerPort};
 
@@ -1428,4 +1428,70 @@ pub async fn unattributed_scope_is_grouped_under_the_sentinel(port: &dyn Treasur
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].group, LedgerScope::UNATTRIBUTED);
+}
+
+// -- Balance (Phase 41 D-04, C10) ------------------------------------------
+
+/// The balance of a tenant with no key restriction equals the sum of its per-key balances, and
+/// never includes another tenant's rows (the phase's first red test): settles of 3 and 4
+/// nano-units under two keys of one tenant give `balance(tenant, None) == 7 ==
+/// balance(tenant, k1) + balance(tenant, k2)`, while a 100-nano settle under a different
+/// tenant never appears.
+pub async fn tenant_balance_equals_sum_of_key_balances(port: &dyn TreasuryLedgerPort) {
+    let scope_one = contract_scope("tenant-sum");
+    let key_one = scope_one.api_key_id.clone();
+    let key_two = "key-tenant-sum-second".to_string();
+    let scope_two = LedgerScope::new(scope_one.tenant_id.clone(), key_two.clone());
+    let other_tenant = contract_scope("tenant-sum-other");
+    let currency = usd();
+
+    port.settle(settle_request(
+        scope_one.clone(),
+        SettlementKey::new(RunId::new_v7(), 1, 1),
+        3,
+        currency.clone(),
+        "gpt-4",
+    ))
+    .await
+    .unwrap();
+    port.settle(settle_request(
+        scope_two,
+        SettlementKey::new(RunId::new_v7(), 1, 1),
+        4,
+        currency.clone(),
+        "gpt-4",
+    ))
+    .await
+    .unwrap();
+    port.settle(settle_request(
+        other_tenant,
+        SettlementKey::new(RunId::new_v7(), 1, 1),
+        100,
+        currency.clone(),
+        "gpt-4",
+    ))
+    .await
+    .unwrap();
+
+    let query = |api_key_id: Option<&str>| BalanceQuery {
+        tenant_id: scope_one.tenant_id.clone(),
+        api_key_id: api_key_id.map(str::to_string),
+        currency: currency.clone(),
+        since: None,
+        until: None,
+    };
+
+    let whole = port.balance(query(None)).await.unwrap();
+    let first = port.balance(query(Some(&key_one))).await.unwrap();
+    let second = port.balance(query(Some(&key_two))).await.unwrap();
+
+    assert_eq!(
+        whole.nanos(),
+        7,
+        "the tenant balance must exclude other tenants"
+    );
+    assert_eq!(first.nanos(), 3);
+    assert_eq!(second.nanos(), 4);
+    assert_eq!(whole.nanos(), first.nanos() + second.nanos());
+    assert_eq!(whole.currency(), &currency);
 }

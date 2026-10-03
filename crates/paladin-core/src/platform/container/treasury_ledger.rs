@@ -3,7 +3,8 @@
 //! Pure value types with no I/O: the append-only ledger's row kinds, its identity types
 //! ([`crate::platform::container::treasury_ledger::ReservationId`],
 //! [`crate::platform::container::treasury_ledger::SettlementKey`]), and the request/query/response shapes
-//! `TreasuryLedgerPort` (`paladin-ports`) and its adapters (`paladin-storage`) exchange.
+//! `TreasuryLedgerPort` (`paladin-ports`) and its adapters (`paladin-storage`) exchange --
+//! including [`BalanceQuery`], the admission-time balance read (Phase 41 D-04).
 //!
 //! ADR-0053 governs the model implemented here (cited, not re-argued, D-00a): the ledger is
 //! append-only and derive-on-read -- a scope+window balance is a plain `SUM` of every row's
@@ -25,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::platform::container::cost::Cost;
+use crate::platform::container::cost::{Cost, CurrencyCode};
 use crate::platform::container::principal::RunAttribution;
 use crate::platform::container::run::RunId;
 
@@ -381,6 +382,45 @@ pub struct SpendQuery {
     pub run_ids: Vec<RunId>,
 }
 
+/// The parameters a `balance` call takes (Phase 41 D-04, C10): the read admission and holds
+/// build on.
+///
+/// `api_key_id: None` sums every key of the tenant. `since` and `until` bound the half-open
+/// window `[since, until)` over `attributed_at`; either being `None` means unbounded, so a
+/// lifetime ceiling is both `None` (no far-future sentinel). The result is the plain `SUM` of
+/// the signed `amount_nanos` of every row -- reserve, settle and release contributions alike
+/// (ADR-0053) -- in `currency`.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::cost::CurrencyCode;
+/// use paladin_core::platform::container::treasury_ledger::BalanceQuery;
+///
+/// let lifetime_for_one_key = BalanceQuery {
+///     tenant_id: "acme".to_string(),
+///     api_key_id: Some("svc-a".to_string()),
+///     currency: CurrencyCode::new("USD")?,
+///     since: None,
+///     until: None,
+/// };
+/// assert!(lifetime_for_one_key.since.is_none() && lifetime_for_one_key.until.is_none());
+/// # Ok::<(), paladin_core::platform::container::cost::CostError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BalanceQuery {
+    /// The tenant to sum.
+    pub tenant_id: String,
+    /// Restrict to one API key; `None` sums every key of the tenant.
+    pub api_key_id: Option<String>,
+    /// The currency the balance is read in.
+    pub currency: CurrencyCode,
+    /// The window's start instant (inclusive); `None` is unbounded.
+    pub since: Option<DateTime<Utc>>,
+    /// The window's end instant (exclusive); `None` is unbounded.
+    pub until: Option<DateTime<Utc>>,
+}
+
 /// One row of a `spend` result: one (group value, currency) pair (LEDGR-04). `spend` never
 /// combines two currencies into one row (D-09).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -428,7 +468,6 @@ pub fn format_cost(cost: &Cost) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::container::cost::CurrencyCode;
     use crate::platform::container::herald::ExecutionMetadata;
     use crate::platform::container::principal::{RunAttribution, TenantId};
     use crate::platform::container::token_usage::TokenUsage;

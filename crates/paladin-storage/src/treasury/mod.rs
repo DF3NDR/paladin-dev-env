@@ -8,7 +8,8 @@
 //! This plan (39-02) completes the shared contract suite (`reserve`/`release`, idempotency,
 //! spend windows/grouping/ordering, validation, store clock) and adds `InMemoryTreasuryLedger`,
 //! proving every clause identically on the in-memory and SQLite adapters. The Postgres adapter
-//! follows in 39-03.
+//! follows in 39-03. Phase 41 (41-01) adds the admission-time `balance` read to the in-memory and
+//! SQLite adapters (the PostgreSQL override follows in 41-02).
 
 /// In-memory `TreasuryLedgerPort` implementation, always available (no feature gate, mirroring
 /// `crate::run::in_memory`'s D-01 precedent).
@@ -28,7 +29,9 @@ pub mod sqlite;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 
-use paladin_core::platform::container::treasury_ledger::{ReserveRequest, SettleRequest};
+use paladin_core::platform::container::treasury_ledger::{
+    BalanceQuery, ReserveRequest, SettleRequest,
+};
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
 
 /// Shared, backend-agnostic validation every adapter's `settle` runs before any I/O (D-00e's
@@ -148,6 +151,39 @@ pub(crate) fn validate_reserve(request: &ReserveRequest) -> Result<(), TreasuryL
         });
     }
 
+    Ok(())
+}
+
+/// Shared, backend-agnostic validation every adapter's `balance` runs before any I/O (D-00e).
+///
+/// # Errors
+///
+/// Returns [`TreasuryLedgerError::InvalidRequest`] when:
+/// - `query.tenant_id` is empty.
+/// - `query.api_key_id` is `Some("")`.
+/// - both bounds are present and `since >= until`.
+pub(crate) fn validate_balance(query: &BalanceQuery) -> Result<(), TreasuryLedgerError> {
+    if query.tenant_id.trim().is_empty() {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: "balance query tenant_id must not be empty".to_string(),
+        });
+    }
+    if query
+        .api_key_id
+        .as_deref()
+        .is_some_and(|key| key.trim().is_empty())
+    {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: "balance query api_key_id must not be empty when present".to_string(),
+        });
+    }
+    if let (Some(since), Some(until)) = (query.since, query.until)
+        && since >= until
+    {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: "balance query since must be before until".to_string(),
+        });
+    }
     Ok(())
 }
 
@@ -371,5 +407,56 @@ mod tests {
             validate_reserve(&request),
             Err(TreasuryLedgerError::CurrencyMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn balance_rejects_an_invalid_query_before_any_io() {
+        use chrono::{Duration, Utc};
+        use paladin_core::platform::container::treasury_ledger::BalanceQuery;
+
+        let base = BalanceQuery {
+            tenant_id: "acme".to_string(),
+            api_key_id: None,
+            currency: usd(),
+            since: None,
+            until: None,
+        };
+        assert!(validate_balance(&base).is_ok());
+
+        let empty_tenant = BalanceQuery {
+            tenant_id: String::new(),
+            ..base.clone()
+        };
+        assert!(matches!(
+            validate_balance(&empty_tenant),
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ));
+
+        let empty_key = BalanceQuery {
+            api_key_id: Some(String::new()),
+            ..base.clone()
+        };
+        assert!(matches!(
+            validate_balance(&empty_key),
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ));
+
+        let now = Utc::now();
+        let inverted = BalanceQuery {
+            since: Some(now),
+            until: Some(now),
+            ..base.clone()
+        };
+        assert!(matches!(
+            validate_balance(&inverted),
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ));
+
+        let bounded = BalanceQuery {
+            since: Some(now),
+            until: Some(now + Duration::seconds(1)),
+            ..base
+        };
+        assert!(validate_balance(&bounded).is_ok());
     }
 }

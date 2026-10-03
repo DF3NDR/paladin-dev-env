@@ -37,7 +37,7 @@ use thiserror::Error;
 
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::treasury_ledger::{
-    ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SpendQuery, SpendRow,
+    BalanceQuery, ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SpendQuery, SpendRow,
 };
 
 /// Errors returned by [`TreasuryLedgerPort`] methods (X-06 — structured, never a bare
@@ -256,6 +256,35 @@ pub trait TreasuryLedgerPort: Send + Sync {
     /// Phase 41 can compute window boundaries from one authoritative clock shared by every
     /// worker and the CLI alike.
     async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError>;
+
+    /// The balance of a tenant (or one of its API keys) over a half-open window (Phase 41
+    /// D-04, C10): the plain `SUM` of signed `amount_nanos` over every row -- reserve, settle
+    /// and release contributions alike (ADR-0053) -- whose `attributed_at` lies in
+    /// `[query.since, query.until)`, an absent bound being unbounded (a lifetime ceiling is
+    /// both `None`). `query.api_key_id: None` sums every key of the tenant. This is the read
+    /// Phase 41 admission and Phase 42 holds build on.
+    ///
+    /// A row of another currency inside the scope and window is
+    /// [`TreasuryLedgerError::CurrencyMismatch`] -- never converted, never silently combined
+    /// (D-00h). An empty scope is zero in the requested currency. The port stays policy-free
+    /// (D-00a): it compares nothing against a ceiling, it only reports the figure.
+    ///
+    /// The default body answers [`TreasuryLedgerError::InvalidRequest`] so that adding this
+    /// method breaks no existing implementor (X-10.4); an adapter that does not override it
+    /// makes admission fail closed (D-10), never open.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TreasuryLedgerError::InvalidRequest`] for a malformed query (an empty
+    /// `tenant_id`, an empty `api_key_id`, or `since >= until` -- validated before any I/O) or
+    /// from the default body, and [`TreasuryLedgerError::CurrencyMismatch`] when a row in scope
+    /// carries a currency other than `query.currency`.
+    async fn balance(&self, query: BalanceQuery) -> Result<Cost, TreasuryLedgerError> {
+        let _ = query;
+        Err(TreasuryLedgerError::InvalidRequest {
+            message: "this TreasuryLedgerPort does not implement balance".to_string(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -302,6 +331,26 @@ mod tests {
 
         async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
             Ok(Utc::now())
+        }
+    }
+
+    #[tokio::test]
+    async fn an_implementor_that_does_not_override_balance_answers_invalid_request() {
+        let ledger: Box<dyn TreasuryLedgerPort> = Box::new(MockLedger {
+            settled: Mutex::new(HashSet::new()),
+        });
+        let query = BalanceQuery {
+            tenant_id: "acme".to_string(),
+            api_key_id: None,
+            currency: CurrencyCode::new("USD").unwrap(),
+            since: None,
+            until: None,
+        };
+        match ledger.balance(query).await {
+            Err(TreasuryLedgerError::InvalidRequest { message }) => {
+                assert!(message.contains("does not implement balance"), "{message}");
+            }
+            other => panic!("expected the default InvalidRequest, got {other:?}"),
         }
     }
 

@@ -34,11 +34,14 @@ use futures::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use paladin_core::platform::container::allowance::Admission;
 use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::principal::PrincipalRef;
 use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::token_usage::TokenUsage;
+use paladin_ports::input::allowance_admission_port::{AdmissionError, AllowanceAdmissionPort};
 use paladin_ports::output::paladin_port::{PaladinStream, PaladinStreamChunk};
 
 use utoipa_axum::router::OpenApiRouter;
@@ -69,6 +72,9 @@ pub struct AgentApiState {
     pub jobs: Arc<JobStore>,
     /// Authentication configuration (disabled = open; see `agent_auth`).
     pub auth: crate::agent_auth::AgentAuthConfig,
+    /// The Treasurer's admission port (D-06, C1); `None` -- no allowances configured -- leaves
+    /// every route ungated.
+    pub treasurer: Option<Arc<dyn AllowanceAdmissionPort>>,
 }
 
 impl AgentApiState {
@@ -81,6 +87,7 @@ impl AgentApiState {
             timeouts: TimeoutPolicy::default(),
             jobs: Arc::new(JobStore::default()),
             auth: crate::agent_auth::AgentAuthConfig::default(),
+            treasurer: None,
         }
     }
 
@@ -99,6 +106,17 @@ impl AgentApiState {
     /// Set the authentication configuration.
     pub fn with_auth(mut self, auth: crate::agent_auth::AgentAuthConfig) -> Self {
         self.auth = auth;
+        self
+    }
+
+    /// Attach the Treasurer's admission port (D-06, C1, C4).
+    ///
+    /// The agent routes settle spend under the calling principal (Phase 40 D-16), so a caller
+    /// refused at `POST /v1/runs` must not be able to spend the same allowance here (D-07):
+    /// `execute`, `execute/stream` and `jobs` each ask this port before any work starts. A
+    /// state built without it leaves every agent route ungated.
+    pub fn with_treasurer(mut self, treasurer: Arc<dyn AllowanceAdmissionPort>) -> Self {
+        self.treasurer = Some(treasurer);
         self
     }
 }
@@ -272,6 +290,43 @@ pub(crate) fn ok_body<T: Serialize>(value: &T) -> JsonValue {
     Json(serde_json::to_value(value).unwrap_or(serde_json::Value::Null))
 }
 
+// --- Allowance admission ----------------------------------------------------
+
+/// Ask the Treasurer whether `principal` may start spend (D-06, D-07, C4).
+///
+/// The one gate shared by `execute`, `execute/stream` and `jobs`:
+///
+/// - no Treasurer attached (no allowances configured) -> `Ok(Admission::none())`;
+/// - the principal is mapped to its [`RunAttribution`](paladin_core::platform::container::principal::RunAttribution)
+///   only -- the role never reaches the Treasurer, so an `Admin` is bound exactly like a
+///   `User` (D-09);
+/// - an admission is confirmed immediately: unlike a run submission there is no row whose
+///   insert could still fail after the check (RESEARCH Pattern 3), so confirm follows admit
+///   back to back;
+/// - a refusal becomes `429 allowance_exhausted` ([`ApiError::allowance_exhausted`]);
+/// - any other error fails closed with a generic `500` (D-10). The detail is logged
+///   server-side and carries no key value; the response carries none of it (T-41-21).
+async fn admit_principal(
+    state: &AgentApiState,
+    principal: &Principal,
+) -> Result<Admission, ApiError> {
+    let Some(treasurer) = &state.treasurer else {
+        return Ok(Admission::none());
+    };
+    let subject = PrincipalRef::from(principal).attribution();
+    match treasurer.admit(&subject, None).await {
+        Ok(admission) => {
+            treasurer.confirm(&admission).await;
+            Ok(admission)
+        }
+        Err(AdmissionError::Refused(refusal)) => Err(ApiError::allowance_exhausted(&refusal)),
+        Err(error) => {
+            log::error!("agent route allowance check failed: {error}");
+            Err(ApiError::internal("allowance check failed"))
+        }
+    }
+}
+
 // --- Handlers ---------------------------------------------------------------
 
 /// `POST /agents/{id}/execute` — look the agent up by id and run it.
@@ -279,6 +334,9 @@ pub(crate) fn ok_body<T: Serialize>(value: &T) -> JsonValue {
 /// Returns:
 /// - `200 OK` with [`ExecuteResponse`] on success;
 /// - `404 Not Found` if no agent is registered under `id`;
+/// - `429 Too Many Requests` (`allowance_exhausted`, with `Retry-After` for a window
+///   ceiling) if the caller's allowance is spent -- the agent is not invoked (D-07);
+/// - `500` if the allowance check itself fails -- fail closed, the agent is not invoked (D-10);
 /// - `502 Bad Gateway` if execution fails; `504` on timeout;
 /// - `400 Bad Request` (via the `Json` extractor) if the body is missing/invalid.
 #[utoipa::path(
@@ -312,6 +370,11 @@ pub async fn execute_agent(
 
     let timeout = resolve_timeout(request.timeout_seconds, entry.timeout_secs, &state.timeouts)
         .map_err(|_| ApiError::bad_request("timeout_seconds must be a positive integer"))?;
+
+    // D-06/D-07: an exhausted (or unverifiable) caller is refused before any work starts.
+    // The binding is kept (underscore-prefixed until then) because 41-07 threads its
+    // warnings into the `RunScope` below.
+    let _admission = admit_principal(&state, &principal).await?;
 
     // D-16: spend is attributed to the authenticated caller -- the scope is
     // built from the `Principal` only, never from the request body.
@@ -566,7 +629,10 @@ fn timed_event_stream(
 /// endpoint always works). Execution is bounded by the resolved timeout: on expiry the
 /// stream yields a terminal `error` event (streaming) or returns `504` (buffered
 /// fallback). Maps unknown id → `404`, invalid `timeout_seconds` → `400`, and an
-/// up-front execution failure → `502`.
+/// up-front execution failure → `502`. An exhausted allowance answers a plain JSON
+/// `429 allowance_exhausted` (with `Retry-After` for a window ceiling) *before* any stream
+/// opens, and a failing allowance check answers `500`; the agent is invoked in neither case
+/// (D-07, D-10).
 #[utoipa::path(
     post,
     path = "/agents/{id}/execute/stream",
@@ -608,6 +674,12 @@ pub async fn execute_agent_stream(
                     .into_response();
             }
         };
+
+    // D-06/D-07: refuse before either the streaming or the buffered branch starts work.
+    let _admission = match admit_principal(&state, &principal).await {
+        Ok(admission) => admission,
+        Err(error) => return error.into_response(),
+    };
 
     // D-16: spend is attributed to the authenticated caller on both the
     // streamed and the buffered-fallback branch below.
@@ -659,7 +731,10 @@ pub async fn execute_agent_stream(
 ///
 /// Spawns a task that runs the agent (buffered) under the resolved timeout, recording
 /// the outcome in the job store. Returns `202 Accepted` with `{ "job_id": ... }`. Maps
-/// unknown id → `404` and invalid `timeout_seconds` → `400`.
+/// unknown id → `404` and invalid `timeout_seconds` → `400`. An exhausted allowance is
+/// refused synchronously with `429 allowance_exhausted` -- before any job is created or
+/// spawned, so the caller is never handed a job id for work that would later fail (C4) --
+/// and a failing allowance check answers `500` the same way (D-10).
 #[utoipa::path(
     post,
     path = "/agents/{id}/jobs",
@@ -689,6 +764,9 @@ pub async fn enqueue_job(
 
     let timeout = resolve_timeout(request.timeout_seconds, entry.timeout_secs, &state.timeouts)
         .map_err(|_| ApiError::bad_request("timeout_seconds must be a positive integer"))?;
+
+    // C4: refuse before `jobs.create()` and before the spawn -- never a job id for refused work.
+    let _admission = admit_principal(&state, &principal).await?;
 
     let job_id = state.jobs.create();
     let jobs = Arc::clone(&state.jobs);
@@ -1259,6 +1337,329 @@ mod tests {
             LedgerScope::new(TenantId::OPEN_ACCESS, "anonymous")
         );
         assert!(!ledger_scope.is_unattributed());
+    }
+
+    // --- 41-04 (D-06, D-07, D-10, C4): the three HTTP agent routes that start
+    // spend are gated by one admission helper -----------------------------
+
+    use paladin_core::platform::container::allowance::{AllowanceLimitKind, AllowanceRefusal};
+    use paladin_core::platform::container::principal::RunAttribution;
+    use paladin_core::platform::container::run::RunId;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// An executor that counts every call (buffered or scoped) and answers like
+    /// `MockExecutor::Succeeds`; a refused caller must leave the count at zero.
+    #[derive(Default)]
+    struct CountingExecutor {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl PaladinExecutorPort for CountingExecutor {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(PaladinResult::new(
+                "counted".to_string(),
+                TokenUsage::new(5, 0),
+                10,
+                1,
+                StopReason::Completed,
+            ))
+        }
+    }
+
+    /// A streamer that counts every call and emits one final chunk.
+    #[derive(Default)]
+    struct CountingStreamer {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl StreamingExecutorPort for CountingStreamer {
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(Ok(PaladinStreamChunk {
+                        text: "counted".to_string(),
+                        is_final: true,
+                        metadata: None,
+                    }))
+                    .await;
+            });
+            Ok(rx)
+        }
+    }
+
+    fn window_refusal() -> AllowanceRefusal {
+        use chrono::TimeZone;
+        use paladin_core::platform::container::allowance::AllowanceScopeKind;
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        let usd = CurrencyCode::new("USD").expect("USD");
+        let at = |day, hour| {
+            chrono::Utc
+                .with_ymd_and_hms(2026, 10, day, hour, 0, 0)
+                .single()
+                .expect("instant")
+        };
+        AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Window,
+            balance: Cost::new(2_500_000_000, usd.clone()),
+            ceiling: Cost::new(2_500_000_000, usd),
+            window: Some((at(3, 0), at(4, 0))),
+            evaluated_at: at(3, 23),
+        }
+    }
+
+    /// Admits are refused with a window `allowance_exhausted`.
+    struct RefusingAdmission;
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for RefusingAdmission {
+        async fn admit(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            Err(AdmissionError::Refused(window_refusal()))
+        }
+        async fn confirm(&self, _admission: &Admission) {}
+        async fn abandon(&self, _admission: &Admission) {}
+    }
+
+    /// The allowance check itself fails (a ledger outage): fail closed (D-10).
+    struct FailingAdmission;
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for FailingAdmission {
+        async fn admit(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            Err(AdmissionError::Backend {
+                message: "ledger unreachable: secret-detail".to_string(),
+            })
+        }
+        async fn confirm(&self, _admission: &Admission) {}
+        async fn abandon(&self, _admission: &Admission) {}
+    }
+
+    /// Admits every call and records each `admit` subject / run id and each
+    /// `confirm` / `abandon`.
+    #[derive(Default)]
+    struct RecordingAdmission {
+        admits: Mutex<Vec<(RunAttribution, Option<RunId>)>>,
+        confirms: AtomicUsize,
+        abandons: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for RecordingAdmission {
+        async fn admit(
+            &self,
+            subject: &RunAttribution,
+            run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            self.admits
+                .lock()
+                .expect("mutex poisoned")
+                .push((subject.clone(), run_id.cloned()));
+            Ok(Admission::none())
+        }
+        async fn confirm(&self, _admission: &Admission) {
+            self.confirms.fetch_add(1, Ordering::SeqCst);
+        }
+        async fn abandon(&self, _admission: &Admission) {
+            self.abandons.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// State holding agent `id` backed by a counting executor (and, when `streaming`,
+    /// a counting streamer), gated by `treasurer`.
+    fn gated_state(
+        id: &str,
+        streaming: bool,
+        treasurer: Arc<dyn AllowanceAdmissionPort>,
+    ) -> (AgentApiState, Arc<CountingExecutor>, Arc<CountingStreamer>) {
+        let executor = Arc::new(CountingExecutor::default());
+        let streamer = Arc::new(CountingStreamer::default());
+        let registry = AgentRegistry::new();
+        let executor_port: Arc<dyn PaladinExecutorPort> = executor.clone();
+        let streamer_port: Option<Arc<dyn StreamingExecutorPort>> = if streaming {
+            Some(streamer.clone())
+        } else {
+            None
+        };
+        registry.insert_with_streaming(id, test_agent(id), executor_port, streamer_port);
+        let state = AgentApiState::new(Arc::new(registry)).with_treasurer(treasurer);
+        (state, executor, streamer)
+    }
+
+    #[tokio::test]
+    async fn execute_refused_by_the_treasurer_is_429_and_never_executes() {
+        let (state, executor, _) = gated_state("a", false, Arc::new(RefusingAdmission));
+
+        let err = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("a".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect_err("an exhausted caller is refused");
+
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.retry_after(), Some(3_600));
+        assert_eq!(err.to_body()["error"]["code"], "allowance_exhausted");
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn stream_refused_by_the_treasurer_is_429_and_never_executes() {
+        for streaming in [true, false] {
+            let (state, executor, streamer) =
+                gated_state("s", streaming, Arc::new(RefusingAdmission));
+
+            let response = execute_agent_stream(
+                State(state),
+                svc_a_of_acme(),
+                Path("s".to_string()),
+                execute_request("hi"),
+            )
+            .await;
+
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok()),
+                Some("3600")
+            );
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            assert!(
+                content_type.starts_with("application/json"),
+                "a refusal is a plain JSON response, never an SSE stream: {content_type}"
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body reads");
+            let body: serde_json::Value = serde_json::from_slice(&bytes).expect("json body");
+            assert_eq!(body["error"]["code"], "allowance_exhausted");
+            assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+            assert_eq!(streamer.calls.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn jobs_refused_by_the_treasurer_is_429_without_a_job() {
+        let (state, executor, _) = gated_state("j", false, Arc::new(RefusingAdmission));
+        let jobs = Arc::clone(&state.jobs);
+
+        let err = enqueue_job(
+            State(state),
+            svc_a_of_acme(),
+            Path("j".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect_err("an exhausted caller is refused");
+
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.to_body()["error"]["code"], "allowance_exhausted");
+        assert!(
+            err.to_body().to_string().find("job_id").is_none(),
+            "a refused caller is never handed a job id"
+        );
+        assert!(jobs.is_empty(), "no job is created for refused work");
+        // Give a (wrongly) spawned task the chance to run before asserting.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn agent_routes_fail_closed_when_the_allowance_check_fails() {
+        let (state, executor, streamer) = gated_state("f", true, Arc::new(FailingAdmission));
+        let jobs = Arc::clone(&state.jobs);
+
+        let err = execute_agent(
+            State(state.clone()),
+            svc_a_of_acme(),
+            Path("f".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect_err("fail closed");
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // T-41-21: the backend detail never reaches the client.
+        assert!(!err.to_body().to_string().contains("secret-detail"));
+
+        let response = execute_agent_stream(
+            State(state.clone()),
+            svc_a_of_acme(),
+            Path("f".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        let err = enqueue_job(
+            State(state),
+            svc_a_of_acme(),
+            Path("f".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect_err("fail closed");
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        assert!(jobs.is_empty());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(streamer.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn admitted_agent_call_passes_the_callers_attribution_and_confirms() {
+        let recording = Arc::new(RecordingAdmission::default());
+        let (state, executor, _) = gated_state("ok", false, recording.clone());
+
+        let (status, _) = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("ok".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("an admitted caller runs");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(executor.calls.load(Ordering::SeqCst), 1);
+        let admits = recording.admits.lock().expect("mutex poisoned");
+        assert_eq!(admits.len(), 1);
+        assert_eq!(
+            admits[0].0,
+            RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a")
+        );
+        assert_eq!(admits[0].1, None, "the agent path has no run id");
+        assert_eq!(recording.confirms.load(Ordering::SeqCst), 1);
+        assert_eq!(recording.abandons.load(Ordering::SeqCst), 0);
     }
 
     fn state_with_streaming_usage_agent(

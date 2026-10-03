@@ -226,13 +226,20 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         thread_state = thread_state.with_run_submission(run_submission);
     }
 
-    let state = AgentApiState::new(Arc::clone(&registry))
+    let mut state = AgentApiState::new(Arc::clone(&registry))
         .with_provisioner(Arc::new(provisioner))
         .with_timeouts(TimeoutPolicy {
             default_secs: timeouts.default_seconds,
             max_secs: timeouts.max_seconds,
         })
         .with_auth(auth);
+    // Phase 41 D-06, D-07, C4: the agent routes settle spend under the calling principal, so
+    // they share the ONE Treasurer `build_run_api` built over the run store's ledger -- one
+    // policy over one ledger for the run and the agent routes. `None` (no allowances
+    // configured) leaves them ungated, exactly as before.
+    if let Some(treasurer) = run_handles.treasurer.clone() {
+        state = state.with_treasurer(treasurer);
+    }
     let layers = HttpLayersConfig {
         cors_allow_origins: http.cors_allow_origins.clone(),
         body_limit_bytes: http.body_limit_bytes,
@@ -246,7 +253,8 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Optionally serve the OpenAPI spec + Swagger UI (unversioned, unauthenticated).
     let docs_enabled = http.docs.enabled;
     // `thread_router`'s and `run_router`'s output are merged ALONGSIDE `agent_router`'s,
-    // never inside it, so `AgentApiState` stays untouched (D-24, D-44).
+    // never inside it, so the run pipeline's state stays out of `AgentApiState` (D-24, D-44);
+    // `AgentApiState` carries only the Treasurer's admission handle, attached above.
     let routes = agent_router(state.clone())
         .merge(thread_router(thread_state))
         .merge(run_router(run_handles.run_state));

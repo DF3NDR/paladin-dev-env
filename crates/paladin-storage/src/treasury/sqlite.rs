@@ -120,7 +120,7 @@ const SPEND_SELECT_PREFIX: &str = "\
 
 /// `balance`'s foreign-currency probe prefix (D-00h): any row in the tenant (and optional key,
 /// optional half-open window) carrying a currency other than the requested one. Extended with
-/// `push_bind` only -- never an `? IS NULL OR` predicate, and never a caller value in SQL text.
+/// `push_bind` only -- never a nullable-parameter OR-predicate, and never a caller value in SQL text.
 const BALANCE_FOREIGN_PREFIX: &str = "\
     SELECT currency FROM treasury_ledger WHERE tenant_id = ";
 
@@ -939,6 +939,47 @@ mod tests {
         contract_tests::tenant_balance_equals_sum_of_key_balances(&fresh_store().await).await;
     }
 
+    #[tokio::test]
+    async fn balance_sums_signed_contributions_in_window() {
+        contract_tests::balance_sums_signed_contributions_in_window(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn key_balance_excludes_other_keys_and_tenants() {
+        contract_tests::key_balance_excludes_other_keys_and_tenants(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn balance_window_is_half_open() {
+        contract_tests::balance_window_is_half_open(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn balance_unbounded_counts_every_row() {
+        contract_tests::balance_unbounded_counts_every_row(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn balance_mixed_currency_is_currency_mismatch() {
+        contract_tests::balance_mixed_currency_is_currency_mismatch(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn balance_of_empty_scope_is_zero_in_requested_currency() {
+        contract_tests::balance_of_empty_scope_is_zero_in_requested_currency(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn balance_rejects_an_invalid_query() {
+        contract_tests::balance_rejects_an_invalid_query(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn balance_is_read_only() {
+        contract_tests::balance_is_read_only(&fresh_store().await).await;
+    }
+
     // The concurrency clause that needs a REAL shared on-disk database -- ten concurrent
     // settles of one key against a single SQLite file, proving the partial unique index (not
     // an in-process lock) enforces settlement idempotency under true multi-connection
@@ -985,6 +1026,60 @@ mod tests {
             SETTLE_INSERT.contains("WHERE kind = 'settle' DO NOTHING"),
             "SETTLE_INSERT's ON CONFLICT arbiter predicate must textually match the migration's \
              partial unique index predicate (Pitfall 3)"
+        );
+    }
+
+    // ── Exact-instant window edges (adapter-local, 41-02) ─────────────────
+
+    /// Rows attributed exactly at `window_start` and exactly at `window_end` land in the window
+    /// that starts, respectively ends, at that instant -- half-open, no gap and no overlap. The
+    /// rows are inserted raw so their `attributed_at` is a whole-second instant the store clock
+    /// could never be made to hit.
+    #[tokio::test]
+    async fn balance_counts_a_row_at_window_start_and_excludes_one_at_window_end() {
+        let store = fresh_store().await;
+        let ws = "2026-01-01T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let we = ws + chrono::Duration::hours(1);
+
+        for (entry_id, nanos, attributed_at) in [("edge-ws", 3_i64, ws), ("edge-we", 5_i64, we)] {
+            let stamped = crate::run::storage_timestamp(attributed_at);
+            sqlx::query(
+                "INSERT INTO treasury_ledger \
+                   (entry_id, kind, tenant_id, api_key_id, reservation_id, run_id, superstep, \
+                    attempt, amount_nanos, charged_nanos, currency, model_breakdown, \
+                    attributed_at, recorded_at, schema_version) \
+                 VALUES (?, 'reserve', 'edge-tenant', 'edge-key', NULL, NULL, NULL, NULL, ?, 0, \
+                         'USD', '{}', ?, ?, 'v1')",
+            )
+            .bind(entry_id)
+            .bind(nanos)
+            .bind(stamped)
+            .bind(stamped)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        }
+
+        let query = |since: DateTime<Utc>, until: DateTime<Utc>| BalanceQuery {
+            tenant_id: "edge-tenant".to_string(),
+            api_key_id: Some("edge-key".to_string()),
+            currency: usd(),
+            since: Some(since),
+            until: Some(until),
+        };
+
+        assert_eq!(
+            store.balance(query(ws, we)).await.unwrap(),
+            Cost::new(3, usd()),
+            "[ws, we) must count the row at ws and exclude the row at we"
+        );
+        assert_eq!(
+            store
+                .balance(query(we, we + chrono::Duration::hours(1)))
+                .await
+                .unwrap(),
+            Cost::new(5, usd()),
+            "[we, we + 1h) must count the row at we and not the row at ws"
         );
     }
 }

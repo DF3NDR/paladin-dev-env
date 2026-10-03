@@ -545,4 +545,104 @@ mod contract_suite {
     async fn tenant_balance_equals_sum_of_key_balances() {
         contract_tests::tenant_balance_equals_sum_of_key_balances(&fresh_store()).await;
     }
+
+    #[tokio::test]
+    async fn balance_sums_signed_contributions_in_window() {
+        contract_tests::balance_sums_signed_contributions_in_window(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn key_balance_excludes_other_keys_and_tenants() {
+        contract_tests::key_balance_excludes_other_keys_and_tenants(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn balance_window_is_half_open() {
+        contract_tests::balance_window_is_half_open(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn balance_unbounded_counts_every_row() {
+        contract_tests::balance_unbounded_counts_every_row(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn balance_mixed_currency_is_currency_mismatch() {
+        contract_tests::balance_mixed_currency_is_currency_mismatch(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn balance_of_empty_scope_is_zero_in_requested_currency() {
+        contract_tests::balance_of_empty_scope_is_zero_in_requested_currency(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn balance_rejects_an_invalid_query() {
+        contract_tests::balance_rejects_an_invalid_query(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn balance_is_read_only() {
+        contract_tests::balance_is_read_only(&fresh_store()).await;
+    }
+
+    // ── Exact-instant window edges (adapter-local, 41-02) ─────────────────
+
+    /// Rows attributed exactly at `window_start` and exactly at `window_end` land in the window
+    /// that starts, respectively ends, at that instant -- half-open, no gap and no overlap.
+    #[tokio::test]
+    async fn balance_counts_a_row_at_window_start_and_excludes_one_at_window_end() {
+        use chrono::{DateTime, Utc};
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_core::platform::container::treasury_ledger::{
+            BalanceQuery, LedgerEntryKind, LedgerScope,
+        };
+
+        use super::Entry;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let ws = "2026-01-01T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let we = ws + chrono::Duration::hours(1);
+        let scope = LedgerScope::new("edge-tenant", "edge-key");
+
+        let store = fresh_store();
+        {
+            let mut state = store.state.lock().await;
+            for (nanos, attributed_at) in [(3, ws), (5, we)] {
+                state.entries.push(Entry {
+                    kind: LedgerEntryKind::Reserve,
+                    scope: scope.clone(),
+                    reservation: None,
+                    key: None,
+                    amount_nanos: nanos,
+                    charged_nanos: 0,
+                    currency: usd.clone(),
+                    model_breakdown: std::collections::BTreeMap::new(),
+                    attributed_at,
+                });
+            }
+        }
+
+        let query = |since: DateTime<Utc>, until: DateTime<Utc>| BalanceQuery {
+            tenant_id: "edge-tenant".to_string(),
+            api_key_id: Some("edge-key".to_string()),
+            currency: usd.clone(),
+            since: Some(since),
+            until: Some(until),
+        };
+
+        assert_eq!(
+            store.balance(query(ws, we)).await.unwrap(),
+            Cost::new(3, usd.clone()),
+            "[ws, we) must count the row at ws and exclude the row at we"
+        );
+        assert_eq!(
+            store
+                .balance(query(we, we + chrono::Duration::hours(1)))
+                .await
+                .unwrap(),
+            Cost::new(5, usd),
+            "[we, we + 1h) must count the row at we and not the row at ws"
+        );
+    }
 }

@@ -1495,3 +1495,437 @@ pub async fn tenant_balance_equals_sum_of_key_balances(port: &dyn TreasuryLedger
     assert_eq!(whole.nanos(), first.nanos() + second.nanos());
     assert_eq!(whole.currency(), &currency);
 }
+
+/// Build a [`BalanceQuery`] over `tenant_id` (and optionally one key) in `currency` for the
+/// half-open window `[since, until)`.
+fn balance_query(
+    tenant_id: &str,
+    api_key_id: Option<&str>,
+    currency: &CurrencyCode,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+) -> BalanceQuery {
+    BalanceQuery {
+        tenant_id: tenant_id.to_string(),
+        api_key_id: api_key_id.map(str::to_string),
+        currency: currency.clone(),
+        since,
+        until,
+    }
+}
+
+/// Signed reserve, settle and release contributions sum per ADR-0053: a 10-nano hold settled at
+/// 7 nets to 7, and a 5-nano hold that is released nets to 0, so the balance is 7 -- the same
+/// figure `observed_balance` reads through `reserve` for the same scope and window.
+pub async fn balance_sums_signed_contributions_in_window(port: &dyn TreasuryLedgerPort) {
+    let scope = contract_scope("balance-signed-sum");
+    let currency = usd();
+    let now = port.store_now().await.unwrap();
+    let window_start = now - chrono::Duration::hours(1);
+    let window_end = now + chrono::Duration::hours(1);
+    let key = SettlementKey::new(RunId::new_v7(), 1, 1);
+
+    let held = port
+        .reserve(ReserveRequest {
+            scope: scope.clone(),
+            hold: Cost::new(10, currency.clone()),
+            ceiling: Cost::new(100, currency.clone()),
+            window_start,
+            window_end,
+            key: Some(key.clone()),
+        })
+        .await
+        .expect("the first reserve must be admitted");
+    port.settle(SettleRequest {
+        scope: scope.clone(),
+        key,
+        amount: Cost::new(7, currency.clone()),
+        model_breakdown: BTreeMap::from([("gpt-4".to_string(), 7)]),
+        reservation: Some(held),
+    })
+    .await
+    .expect("the reserved settle must succeed");
+
+    let released = port
+        .reserve(ReserveRequest {
+            scope: scope.clone(),
+            hold: Cost::new(5, currency.clone()),
+            ceiling: Cost::new(100, currency.clone()),
+            window_start,
+            window_end,
+            key: None,
+        })
+        .await
+        .expect("the second reserve must be admitted");
+    port.release(released).await.unwrap();
+
+    let balance = port
+        .balance(balance_query(
+            &scope.tenant_id,
+            Some(&scope.api_key_id),
+            &currency,
+            Some(window_start),
+            Some(window_end),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(balance, Cost::new(7, currency.clone()));
+
+    let observed = observed_balance(port, &scope, window_start, window_end, &currency).await;
+    assert_eq!(
+        balance.nanos(),
+        observed,
+        "balance must agree with the figure reserve reads for the same scope and window"
+    );
+}
+
+/// A key-scoped balance counts only its own key's rows: settles under `(tenant, k1)`,
+/// `(tenant, k2)` and `(other tenant, k1)` leave `balance(tenant, Some(k1))` at its own row.
+pub async fn key_balance_excludes_other_keys_and_tenants(port: &dyn TreasuryLedgerPort) {
+    let tenant = contract_scope("key-balance-isolation").tenant_id;
+    let other_tenant = contract_scope("key-balance-isolation-other").tenant_id;
+    let currency = usd();
+
+    for (scope_tenant, key, nanos) in [
+        (&tenant, "k1", 3),
+        (&tenant, "k2", 40),
+        (&other_tenant, "k1", 500),
+    ] {
+        port.settle(settle_request(
+            LedgerScope::new(scope_tenant.clone(), key),
+            SettlementKey::new(RunId::new_v7(), 1, 1),
+            nanos,
+            currency.clone(),
+            "gpt-4",
+        ))
+        .await
+        .unwrap();
+    }
+
+    let first = port
+        .balance(balance_query(&tenant, Some("k1"), &currency, None, None))
+        .await
+        .unwrap();
+    assert_eq!(
+        first.nanos(),
+        3,
+        "k1 must count only its own tenant's own row"
+    );
+
+    let second = port
+        .balance(balance_query(&tenant, Some("k2"), &currency, None, None))
+        .await
+        .unwrap();
+    assert_eq!(second.nanos(), 40);
+
+    let other = port
+        .balance(balance_query(
+            &other_tenant,
+            Some("k1"),
+            &currency,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(other.nanos(), 500);
+}
+
+/// `balance`'s window is half-open `[since, until)`: a row stamped between two sleep-bracketed
+/// store-clock samples `t0 < t1` is counted by `[t0, t1)` and excluded from `[t1, t1 + 1h)`,
+/// while a row stamped before `t0` is counted only by the window that ends at `t0`.
+pub async fn balance_window_is_half_open(port: &dyn TreasuryLedgerPort) {
+    let scope = contract_scope("balance-half-open-window");
+    let currency = usd();
+    let query = |since: DateTime<Utc>, until: DateTime<Utc>| {
+        balance_query(
+            &scope.tenant_id,
+            Some(&scope.api_key_id),
+            &currency,
+            Some(since),
+            Some(until),
+        )
+    };
+
+    port.settle(settle_request(
+        scope.clone(),
+        SettlementKey::new(RunId::new_v7(), 1, 1),
+        1,
+        currency.clone(),
+        "gpt-4",
+    ))
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let t0 = port.store_now().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    port.settle(settle_request(
+        scope.clone(),
+        SettlementKey::new(RunId::new_v7(), 1, 1),
+        2,
+        currency.clone(),
+        "gpt-4",
+    ))
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let t1 = port.store_now().await.unwrap();
+
+    let before = port
+        .balance(query(t0 - chrono::Duration::hours(1), t0))
+        .await
+        .unwrap();
+    assert_eq!(
+        before.nanos(),
+        1,
+        "[t0 - 1h, t0) must hold only the row stamped before t0"
+    );
+
+    let inside = port.balance(query(t0, t1)).await.unwrap();
+    assert_eq!(
+        inside.nanos(),
+        2,
+        "[t0, t1) must hold only the row stamped between the samples"
+    );
+
+    let after = port
+        .balance(query(t1, t1 + chrono::Duration::hours(1)))
+        .await
+        .unwrap();
+    assert_eq!(
+        after.nanos(),
+        0,
+        "[t1, t1 + 1h) must exclude a row stamped before t1"
+    );
+}
+
+/// With neither bound set `balance` counts every row of the scope; a lower bound sampled between
+/// two settles counts only the later one.
+pub async fn balance_unbounded_counts_every_row(port: &dyn TreasuryLedgerPort) {
+    let scope = contract_scope("balance-unbounded");
+    let currency = usd();
+
+    port.settle(settle_request(
+        scope.clone(),
+        SettlementKey::new(RunId::new_v7(), 1, 1),
+        2,
+        currency.clone(),
+        "gpt-4",
+    ))
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let t = port.store_now().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    port.settle(settle_request(
+        scope.clone(),
+        SettlementKey::new(RunId::new_v7(), 1, 1),
+        3,
+        currency.clone(),
+        "gpt-4",
+    ))
+    .await
+    .unwrap();
+
+    let all = port
+        .balance(balance_query(
+            &scope.tenant_id,
+            Some(&scope.api_key_id),
+            &currency,
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(all.nanos(), 5, "an unbounded query must count every row");
+
+    let later = port
+        .balance(balance_query(
+            &scope.tenant_id,
+            Some(&scope.api_key_id),
+            &currency,
+            Some(t),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(later.nanos(), 3, "since = t must count only the later row");
+}
+
+/// A USD row and an EUR row in one scope and window make a USD balance
+/// `CurrencyMismatch { expected: USD, found: EUR }` -- never a conversion (D-00h) -- while a
+/// window that excludes both rows is simply zero.
+pub async fn balance_mixed_currency_is_currency_mismatch(port: &dyn TreasuryLedgerPort) {
+    let scope = contract_scope("balance-mixed-currency");
+    let run_id = RunId::new_v7();
+
+    port.settle(settle_request(
+        scope.clone(),
+        SettlementKey::new(run_id.clone(), 1, 1),
+        5,
+        usd(),
+        "gpt-4",
+    ))
+    .await
+    .unwrap();
+    port.settle(settle_request(
+        scope.clone(),
+        SettlementKey::new(run_id, 2, 1),
+        3,
+        eur(),
+        "gpt-4",
+    ))
+    .await
+    .unwrap();
+
+    let err = port
+        .balance(balance_query(
+            &scope.tenant_id,
+            Some(&scope.api_key_id),
+            &usd(),
+            None,
+            None,
+        ))
+        .await
+        .unwrap_err();
+    match err {
+        TreasuryLedgerError::CurrencyMismatch { expected, found } => {
+            assert_eq!(expected, usd());
+            assert_eq!(found, eur());
+        }
+        other => panic!("expected CurrencyMismatch, got {other:?}"),
+    }
+
+    let now = port.store_now().await.unwrap();
+    let outside = port
+        .balance(balance_query(
+            &scope.tenant_id,
+            Some(&scope.api_key_id),
+            &usd(),
+            Some(now + chrono::Duration::hours(1)),
+            None,
+        ))
+        .await
+        .expect("a foreign-currency row outside the window must not poison the read");
+    assert_eq!(outside.nanos(), 0);
+}
+
+/// A scope with no rows has a zero balance in the requested currency, whatever it is.
+pub async fn balance_of_empty_scope_is_zero_in_requested_currency(port: &dyn TreasuryLedgerPort) {
+    let scope = contract_scope("balance-empty-scope");
+    let balance = port
+        .balance(balance_query(
+            &scope.tenant_id,
+            Some(&scope.api_key_id),
+            &eur(),
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(balance, Cost::new(0, eur()));
+}
+
+/// An empty tenant id, an empty key id and an empty or inverted window each fail with
+/// `InvalidRequest` before any read (D-04).
+pub async fn balance_rejects_an_invalid_query(port: &dyn TreasuryLedgerPort) {
+    let currency = usd();
+    let now = port.store_now().await.unwrap();
+
+    let empty_tenant = port
+        .balance(balance_query("", None, &currency, None, None))
+        .await;
+    assert!(
+        matches!(
+            empty_tenant,
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ),
+        "an empty tenant_id must be InvalidRequest, got {empty_tenant:?}"
+    );
+
+    let empty_key = port
+        .balance(balance_query("acme", Some(""), &currency, None, None))
+        .await;
+    assert!(
+        matches!(empty_key, Err(TreasuryLedgerError::InvalidRequest { .. })),
+        "an empty api_key_id must be InvalidRequest, got {empty_key:?}"
+    );
+
+    let empty_window = port
+        .balance(balance_query("acme", None, &currency, Some(now), Some(now)))
+        .await;
+    assert!(
+        matches!(
+            empty_window,
+            Err(TreasuryLedgerError::InvalidRequest { .. })
+        ),
+        "since == until must be InvalidRequest, got {empty_window:?}"
+    );
+
+    let inverted = port
+        .balance(balance_query(
+            "acme",
+            None,
+            &currency,
+            Some(now),
+            Some(now - chrono::Duration::seconds(1)),
+        ))
+        .await;
+    assert!(
+        matches!(inverted, Err(TreasuryLedgerError::InvalidRequest { .. })),
+        "since > until must be InvalidRequest, got {inverted:?}"
+    );
+}
+
+/// `balance` writes nothing: five reads leave the scope's `spend` rows and settlement counts
+/// exactly as they were.
+pub async fn balance_is_read_only(port: &dyn TreasuryLedgerPort) {
+    let scope = contract_scope("balance-read-only");
+    let currency = usd();
+
+    for nanos in [4, 6] {
+        port.settle(settle_request(
+            scope.clone(),
+            SettlementKey::new(RunId::new_v7(), 1, 1),
+            nanos,
+            currency.clone(),
+            "gpt-4",
+        ))
+        .await
+        .unwrap();
+    }
+
+    let snapshot = |rows: Vec<paladin_core::platform::container::treasury_ledger::SpendRow>| {
+        rows.into_iter()
+            .map(|row| (row.group, row.amount.nanos(), row.settlements))
+            .collect::<Vec<_>>()
+    };
+    let spend_query = || SpendQuery {
+        group_by: SpendGroupBy::Run,
+        tenant_id: Some(scope.tenant_id.clone()),
+        ..Default::default()
+    };
+
+    let before = snapshot(port.spend(spend_query()).await.unwrap());
+    assert_eq!(before.len(), 2);
+
+    for _ in 0..5 {
+        let balance = port
+            .balance(balance_query(
+                &scope.tenant_id,
+                Some(&scope.api_key_id),
+                &currency,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(balance.nanos(), 10);
+    }
+
+    let after = snapshot(port.spend(spend_query()).await.unwrap());
+    assert_eq!(
+        before, after,
+        "balance must not add, remove or change any ledger row"
+    );
+}

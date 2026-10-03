@@ -44,7 +44,8 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::treasury_ledger::{
-    ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SpendGroupBy, SpendQuery, SpendRow,
+    BalanceQuery, ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SpendGroupBy,
+    SpendQuery, SpendRow,
 };
 use paladin_ports::output::treasury_ledger_port::{TreasuryLedgerError, TreasuryLedgerPort};
 
@@ -80,6 +81,36 @@ const FOREIGN_CURRENCY_QUERY: &str = "\
     SELECT currency FROM treasury_ledger \
     WHERE tenant_id = $1 AND api_key_id = $2 AND attributed_at >= $3 AND attributed_at < $4 \
       AND currency <> $5 LIMIT 1";
+
+/// `balance`'s foreign-currency probe prefix (D-00h): any row in the tenant (and optional key,
+/// optional half-open window) carrying a currency other than the requested one. Extended with
+/// `push_bind` only -- never a nullable-parameter OR-predicate, and never a caller value in SQL text.
+const BALANCE_FOREIGN_PREFIX: &str = "\
+    SELECT currency FROM treasury_ledger WHERE tenant_id = ";
+
+/// `balance`'s `SUM` prefix: the signed contributions of every row in the same scope, in the
+/// requested currency (ADR-0053: reserve, settle and release rows alike). `::BIGINT` is
+/// required -- `SUM(BIGINT)` decodes to `NUMERIC` otherwise, which does not fit `i64`.
+const BALANCE_SUM_PREFIX: &str = "\
+    SELECT COALESCE(SUM(amount_nanos), 0)::BIGINT FROM treasury_ledger WHERE tenant_id = ";
+
+/// Push the optional key and half-open window predicates `balance` shares between its two
+/// statements, binding every value (timestamps go through `crate::run::storage_timestamp`
+/// exactly like `spend` and `reserve`).
+fn push_balance_scope(builder: &mut QueryBuilder<'_, Postgres>, query: &BalanceQuery) {
+    if let Some(api_key_id) = &query.api_key_id {
+        builder.push(" AND api_key_id = ");
+        builder.push_bind(api_key_id.clone());
+    }
+    if let Some(since) = query.since {
+        builder.push(" AND attributed_at >= ");
+        builder.push_bind(crate::run::storage_timestamp(since));
+    }
+    if let Some(until) = query.until {
+        builder.push(" AND attributed_at < ");
+        builder.push_bind(crate::run::storage_timestamp(until));
+    }
+}
 
 /// A `reserve` row: `amount_nanos = +hold`, `charged_nanos = 0`, an empty `model_breakdown`
 /// (D-06 -- reserve rows are not idempotency-keyed, so `run_id`/`superstep`/`attempt` may be
@@ -632,6 +663,53 @@ impl TreasuryLedgerPort for PostgresTreasuryLedger {
             .await
             .map_err(|e| self.wrap_error(e))
     }
+
+    async fn balance(&self, query: BalanceQuery) -> Result<Cost, TreasuryLedgerError> {
+        crate::treasury::validate_balance(&query)?;
+
+        // Both statements run inside one read transaction (no advisory lock: this is a read
+        // and must never serialize against writers -- admission is check-only, D-05).
+        let mut tx = self.pool.begin().await.map_err(|e| self.wrap_error(e))?;
+
+        let mut probe: QueryBuilder<Postgres> = QueryBuilder::new(BALANCE_FOREIGN_PREFIX);
+        probe.push_bind(query.tenant_id.clone());
+        push_balance_scope(&mut probe, &query);
+        probe.push(" AND currency <> ");
+        probe.push_bind(query.currency.as_str().to_string());
+        probe.push(" LIMIT 1");
+        let foreign: Option<String> = probe
+            .build_query_scalar()
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        if let Some(found) = foreign {
+            tx.rollback().await.map_err(|e| self.wrap_error(e))?;
+            let found_currency =
+                CurrencyCode::new(&found).map_err(|e| TreasuryLedgerError::Serialization {
+                    message: format!("stored currency '{found}' is invalid: {e}"),
+                })?;
+            return Err(TreasuryLedgerError::CurrencyMismatch {
+                expected: query.currency,
+                found: found_currency,
+            });
+        }
+
+        let mut sum: QueryBuilder<Postgres> = QueryBuilder::new(BALANCE_SUM_PREFIX);
+        sum.push_bind(query.tenant_id.clone());
+        push_balance_scope(&mut sum, &query);
+        sum.push(" AND currency = ");
+        sum.push_bind(query.currency.as_str().to_string());
+        let total: i64 = sum
+            .build_query_scalar()
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        tx.commit().await.map_err(|e| self.wrap_error(e))?;
+
+        Ok(Cost::new(total, query.currency))
+    }
 }
 
 /// Fold one (group, currency, nanos) contribution into `folded`, incrementing that entry's
@@ -897,6 +975,80 @@ mod tests {
             return;
         };
         contract_tests::unattributed_scope_is_grouped_under_the_sentinel(&store).await;
+    }
+
+    // ── Phase 41 (41-01, 41-02) balance clauses ───────────────────────────
+
+    #[tokio::test]
+    async fn tenant_balance_equals_sum_of_key_balances() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::tenant_balance_equals_sum_of_key_balances(&store).await;
+    }
+
+    #[tokio::test]
+    async fn balance_sums_signed_contributions_in_window() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::balance_sums_signed_contributions_in_window(&store).await;
+    }
+
+    #[tokio::test]
+    async fn key_balance_excludes_other_keys_and_tenants() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::key_balance_excludes_other_keys_and_tenants(&store).await;
+    }
+
+    #[tokio::test]
+    async fn balance_window_is_half_open() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::balance_window_is_half_open(&store).await;
+    }
+
+    #[tokio::test]
+    async fn balance_unbounded_counts_every_row() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::balance_unbounded_counts_every_row(&store).await;
+    }
+
+    #[tokio::test]
+    async fn balance_mixed_currency_is_currency_mismatch() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::balance_mixed_currency_is_currency_mismatch(&store).await;
+    }
+
+    #[tokio::test]
+    async fn balance_of_empty_scope_is_zero_in_requested_currency() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::balance_of_empty_scope_is_zero_in_requested_currency(&store).await;
+    }
+
+    #[tokio::test]
+    async fn balance_rejects_an_invalid_query() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::balance_rejects_an_invalid_query(&store).await;
+    }
+
+    #[tokio::test]
+    async fn balance_is_read_only() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::balance_is_read_only(&store).await;
     }
 
     // ── Adapter-local tests (not part of the shared contract suite) ───────

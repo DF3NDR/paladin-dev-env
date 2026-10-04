@@ -79,6 +79,7 @@ use crate::infrastructure::adapters::arsenal::tool_result_formatter::ToolResultF
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
 use paladin_battalion::llm_failure::to_paladin_error;
+use paladin_core::platform::container::allowance::AllowanceWarning;
 use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::run_scope::RunScope;
@@ -3228,6 +3229,9 @@ impl PaladinExecutorPort for PaladinExecutionService {
         input: &str,
         scope: &RunScope,
     ) -> Result<PaladinResult, PaladinError> {
+        // D-18: the allowance warnings an HTTP agent-route admission won, emitted once
+        // before the loop starts (a no-op with no emitter and no warning).
+        self.emit_scope_allowance_warnings(scope);
         PaladinExecutionService::execute_scoped(self, paladin, input, None, scope).await
     }
 }
@@ -3257,7 +3261,8 @@ impl StreamingExecutorPort for PaladinExecutionService {
         paladin: &Paladin,
         input: &str,
     ) -> Result<PaladinStream, PaladinError> {
-        self.execute_stream_inner(paladin, input, None, None).await
+        self.execute_stream_inner(paladin, input, None, None, Vec::new())
+            .await
     }
 
     /// Phase 40 D-16: the streamed counterpart of
@@ -3270,8 +3275,17 @@ impl StreamingExecutorPort for PaladinExecutionService {
         input: &str,
         scope: &RunScope,
     ) -> Result<PaladinStream, PaladinError> {
-        self.execute_stream_inner(paladin, input, None, scope.ledger_scope.clone())
-            .await
+        // D-18: emitted once before the provider stream opens; the same warnings also ride
+        // the final chunk's `ExecutionMetadata` (see `execute_stream_inner`).
+        self.emit_scope_allowance_warnings(scope);
+        self.execute_stream_inner(
+            paladin,
+            input,
+            None,
+            scope.ledger_scope.clone(),
+            scope.allowance_warnings.clone(),
+        )
+        .await
     }
 }
 
@@ -3463,7 +3477,7 @@ impl PaladinExecutionService {
         input: &str,
         heartbeat: &HeartbeatHandle,
     ) -> Result<PaladinStream, PaladinError> {
-        self.execute_stream_inner(paladin, input, Some(heartbeat.clone()), None)
+        self.execute_stream_inner(paladin, input, Some(heartbeat.clone()), None, Vec::new())
             .await
     }
 
@@ -3472,14 +3486,18 @@ impl PaladinExecutionService {
     /// path and is beaten once per forwarded chunk; `ledger_scope` is `Some`
     /// only on the scoped path (Phase 40 D-16) and names the tenant and API
     /// key id the priced terminal chunk settles under -- `None` settles
-    /// under the unattributed sentinel (D-10). The unobserved, unscoped
-    /// path is byte-identical to before plan 25-09.
+    /// under the unattributed sentinel (D-10). `allowance_warnings` (Phase 41
+    /// D-18) are the warnings an HTTP agent-route admission won: every final
+    /// chunk's `ExecutionMetadata` carries them, so the herald renders one
+    /// allowance line; empty on every other path, which stays byte-identical
+    /// to before plan 25-09.
     async fn execute_stream_inner(
         &self,
         paladin: &Paladin,
         input: &str,
         heartbeat: Option<HeartbeatHandle>,
         ledger_scope: Option<LedgerScope>,
+        allowance_warnings: Vec<AllowanceWarning>,
     ) -> Result<PaladinStream, PaladinError> {
         // --- D-04: before_model fires exactly once on this path (no loop,
         // no tool dispatch); after_model/around_tool are never invoked
@@ -3505,8 +3523,14 @@ impl PaladinExecutionService {
                 // No model call at all: emit the finished output as the sole,
                 // final chunk, still carrying a produced ExecutionMetadata
                 // (D-12) -- no usage, no cost, but a real execution record.
-                let execution =
-                    Self::stream_execution_metadata(run_id, started_at, &model_used, None, None);
+                let execution = Self::stream_execution_metadata(
+                    run_id,
+                    started_at,
+                    &model_used,
+                    None,
+                    None,
+                    &allowance_warnings,
+                );
                 let metadata = execution.map(|exec| ChunkMetadata::new().with_execution(exec));
                 let (tx, rx) = mpsc::channel::<Result<PaladinStreamChunk, PaladinError>>(1);
                 let _ = tx
@@ -3674,6 +3698,7 @@ impl PaladinExecutionService {
                                 &model_used,
                                 usage.as_ref(),
                                 cost.as_ref(),
+                                &allowance_warnings,
                             );
                             if let Some(execution) = execution {
                                 chunk_metadata = chunk_metadata.with_execution(execution);
@@ -3711,8 +3736,14 @@ impl PaladinExecutionService {
             // one, still carrying a produced ExecutionMetadata (D-12) with
             // no usage and no cost (the stream never reported a terminal
             // chunk to read either from).
-            let execution =
-                Self::stream_execution_metadata(execution_id, started_at, &model_used, None, None);
+            let execution = Self::stream_execution_metadata(
+                execution_id,
+                started_at,
+                &model_used,
+                None,
+                None,
+                &allowance_warnings,
+            );
             let metadata = execution.map(|exec| ChunkMetadata::new().with_execution(exec));
             let _ = tx
                 .send(Ok(PaladinStreamChunk {
@@ -3724,6 +3755,23 @@ impl PaladinExecutionService {
         });
 
         Ok(rx)
+    }
+
+    /// Emit each of `scope`'s allowance warnings once as a
+    /// [`TraceEvent::AllowanceWarning`] through whichever [`TraceEmitter`] is available
+    /// (D-18, RESEARCH Pattern 7): this service's own, else the ambient
+    /// `current_trace_emitter()` -- the `MiddlewareEvent` precedent. A no-op with no warning or
+    /// no emitter; never fails or delays the call.
+    fn emit_scope_allowance_warnings(&self, scope: &RunScope) {
+        if scope.allowance_warnings.is_empty() {
+            return;
+        }
+        let Some(emitter) = self.trace_emitter.clone().or_else(current_trace_emitter) else {
+            return;
+        };
+        for warning in &scope.allowance_warnings {
+            emitter.emit(TraceEvent::from(warning.clone()));
+        }
     }
 
     /// Build the streamed agent loop's `ExecutionMetadata` (D-12) for one final chunk:
@@ -3739,6 +3787,7 @@ impl PaladinExecutionService {
         model_used: &str,
         usage: Option<&paladin_core::platform::container::token_usage::TokenUsage>,
         cost: Option<&paladin_core::platform::container::cost::Cost>,
+        allowance_warnings: &[AllowanceWarning],
     ) -> Option<ExecutionMetadata> {
         let mut builder = ExecutionMetadata::builder()
             .execution_id(execution_id)
@@ -3752,6 +3801,9 @@ impl PaladinExecutionService {
         match builder.build() {
             Ok(mut metadata) => {
                 metadata.calculate_duration();
+                // D-18: the won allowance warnings, rendered by every herald through
+                // `ExecutionMetadata::allowance_warning_display` (no-op when empty).
+                metadata.with_allowance_warnings(allowance_warnings);
                 Some(metadata)
             }
             Err(e) => {
@@ -7996,5 +8048,213 @@ mod agent_loop_cost_tests {
         assert_eq!(with_failing_ledger.output, baseline.output);
         assert_eq!(with_failing_ledger.cost, baseline.cost);
         assert_eq!(with_failing_ledger.loop_count, baseline.loop_count);
+    }
+}
+
+/// Phase 41 D-18: the allowance warnings an HTTP agent-route admission won travel in
+/// `RunScope::allowance_warnings`; the execution service emits them once through its trace
+/// emitter and the streamed final chunk's `ExecutionMetadata` carries the herald line.
+#[cfg(test)]
+mod allowance_warning_tests {
+    use super::*;
+    use crate::core::base::entity::node::Node;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use paladin_core::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+    use paladin_core::platform::container::cost::CurrencyCode;
+    use paladin_core::platform::container::waypoint::ThreadId;
+    use paladin_herald::MarkdownHerald;
+    use paladin_herald::markdown_herald::MarkdownHeraldConfig;
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::trace_sink_port::{
+        StandaloneEmitter, TraceRecord, TraceSink, TraceSinkError,
+    };
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: std::sync::Mutex<Vec<TraceRecord>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TraceSink for RecordingSink {
+        async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+            self.events.lock().unwrap().push(record);
+            Ok(())
+        }
+    }
+
+    /// The sink drains on its own schedule: wait (bounded) for `expected` records.
+    async fn records_eventually(sink: &RecordingSink, expected: usize) -> Vec<TraceRecord> {
+        for _ in 0..300 {
+            let events = sink.events.lock().unwrap().clone();
+            if events.len() >= expected {
+                return events;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        sink.events.lock().unwrap().clone()
+    }
+
+    fn warning() -> AllowanceWarning {
+        let usd = CurrencyCode::new("USD").unwrap();
+        AllowanceWarning {
+            scope_kind: AllowanceScopeKind::Tenant,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(20_500_000_000, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window_start: None,
+            window_end: None,
+            warn_at: 80,
+        }
+    }
+
+    fn paladin() -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            model: "gpt-4".to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            ..Default::default()
+        };
+        Node::new(data, None)
+    }
+
+    fn service() -> PaladinExecutionService {
+        let llm: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_response("answer"));
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_herald(Arc::new(MarkdownHerald::with_config(
+            MarkdownHeraldConfig {
+                include_colors: false,
+                heading_level: 2,
+            },
+        )))
+    }
+
+    fn emitter_over(sink: &Arc<RecordingSink>) -> Arc<dyn TraceEmitter> {
+        Arc::new(StandaloneEmitter::new(
+            ThreadId::new("allowance-warning-test").unwrap(),
+            None,
+            Some(sink.clone() as Arc<dyn TraceSink>),
+        ))
+    }
+
+    #[tokio::test]
+    async fn scoped_execute_emits_scope_allowance_warnings_through_the_emitter() {
+        let sink = Arc::new(RecordingSink::default());
+        let service = service().with_trace_emitter(emitter_over(&sink));
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let result = PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &scope)
+            .await
+            .unwrap();
+        assert_eq!(result.output, "answer");
+
+        let events = records_eventually(&sink, 1).await;
+        let warnings: Vec<_> = events
+            .iter()
+            .filter_map(|r| AllowanceWarning::from_trace_event(&r.event))
+            .collect();
+        assert_eq!(warnings, vec![warning()], "exactly one warning: {events:?}");
+    }
+
+    #[tokio::test]
+    async fn scoped_execute_without_an_emitter_ignores_allowance_warnings() {
+        let service = service();
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let with = PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &scope)
+            .await
+            .unwrap();
+        let without =
+            PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &RunScope::default())
+                .await
+                .unwrap();
+        assert_eq!(with.output, without.output);
+        assert_eq!(with.usage, without.usage);
+    }
+
+    #[tokio::test]
+    async fn scoped_execute_with_no_warnings_emits_no_allowance_event() {
+        let sink = Arc::new(RecordingSink::default());
+        let service = service().with_trace_emitter(emitter_over(&sink));
+
+        PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &RunScope::default())
+            .await
+            .unwrap();
+
+        let events = sink.events.lock().unwrap().clone();
+        assert!(
+            events
+                .iter()
+                .all(|r| AllowanceWarning::from_trace_event(&r.event).is_none()),
+            "{events:?}"
+        );
+    }
+
+    /// Drain a scoped stream and return its final chunk's metadata.
+    async fn final_chunk_metadata(
+        service: &PaladinExecutionService,
+        scope: &RunScope,
+    ) -> ChunkMetadata {
+        let mut stream =
+            StreamingExecutorPort::execute_stream_scoped(service, &paladin(), "hi", scope)
+                .await
+                .unwrap();
+        loop {
+            let chunk = stream
+                .recv()
+                .await
+                .expect("stream must emit a final chunk")
+                .unwrap();
+            if chunk.is_final {
+                return chunk.metadata.expect("the final chunk carries metadata");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn streamed_final_chunk_metadata_carries_allowance_warnings() {
+        let service = service();
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let metadata = final_chunk_metadata(&service, &scope).await;
+        let execution = metadata
+            .execution
+            .expect("the final chunk carries ExecutionMetadata");
+        assert_eq!(
+            execution.allowance_warning_display().as_deref(),
+            Some("\u{26A0} allowance: 82% of 25.0000 USD (tenant, lifetime cap)")
+        );
+        let text = service
+            .finalize_stream_output(&execution)
+            .unwrap()
+            .expect("a herald is configured");
+        assert_eq!(text.matches("allowance:").count(), 1, "{text}");
+
+        // A scope without a warning renders no allowance line at all.
+        let plain = final_chunk_metadata(&service, &RunScope::default())
+            .await
+            .execution
+            .expect("the final chunk carries ExecutionMetadata");
+        assert_eq!(plain.allowance_warning_display(), None);
+    }
+
+    #[tokio::test]
+    async fn streamed_scope_warnings_are_emitted_once_through_the_emitter() {
+        let sink = Arc::new(RecordingSink::default());
+        let service = service().with_trace_emitter(emitter_over(&sink));
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let _ = final_chunk_metadata(&service, &scope).await;
+
+        let events = records_eventually(&sink, 2).await;
+        let count = events
+            .iter()
+            .filter(|r| AllowanceWarning::from_trace_event(&r.event).is_some())
+            .count();
+        assert_eq!(count, 1, "{events:?}");
     }
 }

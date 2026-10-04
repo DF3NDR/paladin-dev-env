@@ -1537,3 +1537,347 @@ async fn worker_run_result_is_identical_with_and_without_sinks() {
         );
     }
 }
+
+// --- 41-07 (D-18, C6): allowance warnings on the run's own stream -------
+
+mod allowance_warnings {
+    use super::*;
+
+    use paladin_core::platform::container::allowance::{
+        AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, NoticeOutcome, NoticeRecord,
+    };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_core::platform::container::heartbeat::HeartbeatHandle;
+    use paladin_core::platform::container::run_scope::RunScope;
+    use paladin_core::platform::container::trace::TraceRecord;
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
+    use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+
+    use crate::config::trace::TraceConfig;
+
+    fn persisting_config() -> TraceConfig {
+        TraceConfig {
+            log_sink: false,
+            persist: true,
+            ..TraceConfig::default()
+        }
+    }
+
+    fn notice_for(run_id: &RunId) -> NoticeRecord {
+        use chrono::TimeZone;
+        let usd = CurrencyCode::new("USD").unwrap();
+        NoticeRecord {
+            notice_id: format!("notice-{run_id}"),
+            tenant_id: "acme".to_string(),
+            api_key_id: Some("svc-a".to_string()),
+            warning: AllowanceWarning {
+                scope_kind: AllowanceScopeKind::ApiKey,
+                limit_kind: AllowanceLimitKind::Window,
+                balance: Cost::new(20_500_000_000, usd.clone()),
+                ceiling: Cost::new(25_000_000_000, usd),
+                window_start: chrono::Utc.with_ymd_and_hms(2026, 10, 2, 0, 0, 0).single(),
+                window_end: chrono::Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single(),
+                warn_at: 80,
+            },
+            run_id: Some(run_id.clone()),
+            recorded_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Seed `notices` with one row naming `run_id` as its admitting run.
+    async fn seed(notices: &InMemoryTreasuryLedger, run_id: &RunId) {
+        let outcome = notices.record(&notice_for(run_id)).await.unwrap();
+        assert_eq!(outcome, NoticeOutcome::Recorded);
+    }
+
+    /// Poll the persisted trace until the terminal row lands (the persisting sink drains on
+    /// its own schedule), then return every record in `seq` order.
+    async fn read_traces(traces: &InMemoryRunTraceStore, thread_id: &ThreadId) -> Vec<TraceRecord> {
+        let mut rows = Vec::new();
+        for _ in 0..100 {
+            rows = traces.read(thread_id, 0, 100).await.unwrap();
+            if rows
+                .iter()
+                .any(|r| matches!(r.event, TraceEvent::RunFinished { .. }))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        rows
+    }
+
+    fn allowance_rows(rows: &[TraceRecord]) -> Vec<&TraceRecord> {
+        rows.iter()
+            .filter(|r| matches!(r.event, TraceEvent::AllowanceWarning { .. }))
+            .collect()
+    }
+
+    /// A graph pool with a persisted trace store and, when given, a notice store.
+    #[allow(clippy::type_complexity)]
+    fn graph_pool(
+        notices: Option<Arc<dyn TreasuryNoticePort>>,
+    ) -> (
+        RunWorkerPool<InMemoryWaypointStore>,
+        Arc<dyn RunRepositoryPort>,
+        Arc<dyn RunQueuePort>,
+        Arc<InMemoryRunTraceStore>,
+    ) {
+        let traces = Arc::new(InMemoryRunTraceStore::new());
+        let (pool, repository, queue, _store, _counters) =
+            build_traced_pool(persisting_config(), None);
+        let mut pool = pool.with_run_trace_port(traces.clone());
+        if let Some(notices) = notices {
+            pool = pool.with_treasury_notices(notices);
+        }
+        (pool, repository, queue, traces)
+    }
+
+    #[tokio::test]
+    async fn first_dispatch_emits_one_allowance_warning_before_run_started() {
+        let notices = Arc::new(InMemoryTreasuryLedger::new());
+        let (pool, repository, queue, traces) = graph_pool(Some(notices.clone()));
+        let (run_id, thread_id) = submit(&repository, &queue, "chain").await;
+        seed(&notices, &run_id).await;
+
+        assert!(pool.run_once().await.unwrap());
+        assert_eq!(
+            repository.get(&run_id).await.unwrap().unwrap().status,
+            RunStatus::Completed
+        );
+
+        let rows = read_traces(&traces, &thread_id).await;
+        let warnings = allowance_rows(&rows);
+        assert_eq!(warnings.len(), 1, "exactly one allowance_warning: {rows:?}");
+        assert_eq!(warnings[0].run_id.as_ref(), Some(&run_id));
+        let started = rows
+            .iter()
+            .find(|r| matches!(r.event, TraceEvent::RunStarted { .. }))
+            .expect("the run has a RunStarted row");
+        assert!(
+            warnings[0].seq < started.seq,
+            "the warning ({}) must precede RunStarted ({})",
+            warnings[0].seq,
+            started.seq
+        );
+        let seqs: Vec<u64> = rows.iter().map(|r| r.seq).collect();
+        assert_eq!(
+            seqs,
+            (1..=rows.len() as u64).collect::<Vec<_>>(),
+            "the stream stays gapless: no seq collision"
+        );
+        // The persisted row carries no tenant id or key name (D-00g).
+        let json = serde_json::to_string(warnings[0]).unwrap();
+        assert!(!json.contains("acme") && !json.contains("svc-a"), "{json}");
+    }
+
+    #[tokio::test]
+    async fn running_redelivery_does_not_reemit_the_allowance_warning() {
+        let notices = Arc::new(InMemoryTreasuryLedger::new());
+        let (pool, repository, queue, traces) = graph_pool(Some(notices.clone()));
+        let (run_id, thread_id) = submit(&repository, &queue, "chain").await;
+        seed(&notices, &run_id).await;
+        // The run was already dispatched once: a redelivery meets `Running`.
+        repository
+            .update_status(
+                &run_id,
+                RunStatus::Queued,
+                RunStatus::Running,
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+
+        assert!(pool.run_once().await.unwrap());
+
+        let rows = read_traces(&traces, &thread_id).await;
+        assert!(!rows.is_empty(), "the redelivered run still traces");
+        assert!(allowance_rows(&rows).is_empty(), "{rows:?}");
+    }
+
+    #[tokio::test]
+    async fn awaiting_input_resume_does_not_reemit_the_allowance_warning() {
+        let notices = Arc::new(InMemoryTreasuryLedger::new());
+        let (pool, repository, queue, traces) = graph_pool(Some(notices.clone()));
+        let (run_id, thread_id) = submit(&repository, &queue, "chain").await;
+        seed(&notices, &run_id).await;
+        for (from, to) in [
+            (RunStatus::Queued, RunStatus::Running),
+            (RunStatus::Running, RunStatus::AwaitingInput),
+        ] {
+            repository
+                .update_status(&run_id, from, to, chrono::Utc::now())
+                .await
+                .unwrap();
+        }
+
+        assert!(pool.run_once().await.unwrap());
+
+        let rows = read_traces(&traces, &thread_id).await;
+        assert!(!rows.is_empty(), "the resumed run still traces");
+        assert!(allowance_rows(&rows).is_empty(), "{rows:?}");
+    }
+
+    #[tokio::test]
+    async fn pool_without_a_notice_store_emits_no_allowance_warning() {
+        // A notice exists for the run, but this pool never had a store attached.
+        let notices = Arc::new(InMemoryTreasuryLedger::new());
+        let (pool, repository, queue, traces) = graph_pool(None);
+        let (run_id, thread_id) = submit(&repository, &queue, "chain").await;
+        seed(&notices, &run_id).await;
+
+        assert!(pool.run_once().await.unwrap());
+        assert_eq!(
+            repository.get(&run_id).await.unwrap().unwrap().status,
+            RunStatus::Completed
+        );
+        let rows = read_traces(&traces, &thread_id).await;
+        assert!(!rows.is_empty());
+        assert!(allowance_rows(&rows).is_empty(), "{rows:?}");
+    }
+
+    /// A notice store whose every read fails.
+    struct FailingNotices;
+
+    #[async_trait]
+    impl TreasuryNoticePort for FailingNotices {
+        async fn record(
+            &self,
+            _notice: &NoticeRecord,
+        ) -> Result<NoticeOutcome, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::Backend {
+                source: "always fails".into(),
+            })
+        }
+
+        async fn notices_for_run(
+            &self,
+            _run_id: &RunId,
+        ) -> Result<Vec<NoticeRecord>, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::Backend {
+                source: "read failed".into(),
+            })
+        }
+
+        async fn discard(&self, _notice_ids: &[String]) -> Result<(), TreasuryLedgerError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn notice_read_failure_never_fails_the_run() {
+        let (pool, repository, queue, traces) = graph_pool(Some(Arc::new(FailingNotices)));
+        let (run_id, thread_id) = submit(&repository, &queue, "chain").await;
+
+        assert!(pool.run_once().await.unwrap());
+        assert_eq!(
+            repository.get(&run_id).await.unwrap().unwrap().status,
+            RunStatus::Completed,
+            "a notice read failure must never change the run's outcome"
+        );
+        let rows = read_traces(&traces, &thread_id).await;
+        assert!(allowance_rows(&rows).is_empty(), "{rows:?}");
+        assert!(
+            rows.iter()
+                .any(|r| matches!(r.event, TraceEvent::RunStarted { .. })),
+            "the run still started"
+        );
+    }
+
+    /// A [`PaladinPort`] that records whether the `RunScope` it was handed carried allowance
+    /// warnings (the worker path must never pass them: the dispatcher emits them once).
+    struct ScopeRecordingPort {
+        scope_warning_counts: std::sync::Mutex<Vec<usize>>,
+    }
+
+    #[async_trait]
+    impl PaladinPort for ScopeRecordingPort {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            unreachable!("the worker calls execute_scoped")
+        }
+
+        async fn execute_scoped(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+            _heartbeat: &HeartbeatHandle,
+            scope: &RunScope,
+        ) -> Result<PaladinResult, PaladinError> {
+            self.scope_warning_counts
+                .lock()
+                .unwrap()
+                .push(scope.allowance_warnings.len());
+            Ok(PaladinResult {
+                output: "agent completed".to_string(),
+                usage: TokenUsage::new(11, 7),
+                ..Default::default()
+            })
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            unreachable!("this test never streams")
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn agent_run_first_dispatch_emits_the_allowance_warning_once() {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let resolver: Arc<dyn AssistantResolver> = Arc::new(AgentOnlyResolver);
+        let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+        let traces = Arc::new(InMemoryRunTraceStore::new());
+        let notices = Arc::new(InMemoryTreasuryLedger::new());
+        let port = Arc::new(ScopeRecordingPort {
+            scope_warning_counts: std::sync::Mutex::new(Vec::new()),
+        });
+        let pool = RunWorkerPool::new(
+            engine,
+            store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_paladin_port(port.clone())
+        .with_trace_config(persisting_config())
+        .with_run_trace_port(traces.clone())
+        .with_treasury_notices(notices.clone());
+
+        let (run_id, thread_id) = submit(&repository, &queue, "code-agent").await;
+        seed(&notices, &run_id).await;
+
+        assert!(pool.run_once().await.unwrap());
+        assert_eq!(
+            repository.get(&run_id).await.unwrap().unwrap().status,
+            RunStatus::Completed
+        );
+
+        let rows = read_traces(&traces, &thread_id).await;
+        let warnings = allowance_rows(&rows);
+        assert_eq!(warnings.len(), 1, "emitted exactly once: {rows:?}");
+        assert_eq!(
+            warnings[0].seq, 1,
+            "before RunStarted, the run's lowest seq"
+        );
+        assert!(matches!(rows[1].event, TraceEvent::RunStarted { .. }));
+        assert_eq!(
+            *port.scope_warning_counts.lock().unwrap(),
+            vec![0],
+            "the worker-path RunScope must not also carry the warning"
+        );
+    }
+}

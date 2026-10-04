@@ -30,6 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::platform::container::allowance::AllowanceWarning;
 use crate::platform::container::run::RunId;
 use crate::platform::container::treasury_ledger::LedgerScope;
 use crate::platform::container::vault::Namespace;
@@ -89,6 +90,14 @@ pub struct RunScope {
     /// value. Omitted from the serialized form when `None` (additive).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ledger_scope: Option<LedgerScope>,
+
+    /// The allowance warnings an HTTP agent-route admission won (Phase 41 D-18), emitted once by
+    /// `PaladinExecutionService` through its trace emitter and folded into the streamed final
+    /// chunk's `ExecutionMetadata`. The run worker never sets this: a worker-path run's
+    /// dispatcher emits its warnings itself from the durable notice store, so the event is
+    /// emitted exactly once. Omitted from the serialized form when empty (additive).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowance_warnings: Vec<AllowanceWarning>,
 }
 
 impl RunScope {
@@ -152,6 +161,39 @@ impl RunScope {
         self.ledger_scope = Some(scope);
         self
     }
+
+    /// Builds a [`RunScope`] carrying the allowance `warnings` an admission won (Phase 41
+    /// D-18). The only way to set `allowance_warnings` on a `#[non_exhaustive]` struct from
+    /// outside this crate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::allowance::{
+    ///     AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+    /// };
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_core::platform::container::run_scope::RunScope;
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let warning = AllowanceWarning {
+    ///     scope_kind: AllowanceScopeKind::Tenant,
+    ///     limit_kind: AllowanceLimitKind::Lifetime,
+    ///     balance: Cost::new(80, usd.clone()),
+    ///     ceiling: Cost::new(100, usd),
+    ///     window_start: None,
+    ///     window_end: None,
+    ///     warn_at: 80,
+    /// };
+    /// let scope = RunScope::default().with_allowance_warnings(vec![warning.clone()]);
+    /// assert_eq!(scope.allowance_warnings, vec![warning]);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn with_allowance_warnings(mut self, warnings: Vec<AllowanceWarning>) -> Self {
+        self.allowance_warnings = warnings;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -168,6 +210,39 @@ mod tests {
         let scope = RunScope::default();
         assert!(scope.vault_namespace.is_none());
         assert!(scope.run_id.is_none());
+    }
+
+    #[test]
+    fn run_scope_allowance_warnings_default_empty_omitted_and_round_trip() {
+        use crate::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+        use crate::platform::container::cost::{Cost, CurrencyCode};
+
+        let empty = RunScope::default();
+        assert!(empty.allowance_warnings.is_empty());
+        assert!(
+            !serde_json::to_string(&empty)
+                .unwrap()
+                .contains("allowance_warnings")
+        );
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let warning = AllowanceWarning {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(80, usd.clone()),
+            ceiling: Cost::new(100, usd),
+            window_start: None,
+            window_end: None,
+            warn_at: 80,
+        };
+        let scope = RunScope::default().with_allowance_warnings(vec![warning]);
+        let json = serde_json::to_string(&scope).unwrap();
+        assert!(json.contains("allowance_warnings"), "{json}");
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, scope);
+        // A scope serialized before this field existed still deserializes.
+        let old: RunScope = serde_json::from_str("{}").unwrap();
+        assert!(old.allowance_warnings.is_empty());
     }
 
     #[test]

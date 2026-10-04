@@ -58,6 +58,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notice, and a notice-store failure never blocks or fails the run. The notice carries the
   admitting run's id, and a run that is admitted but never persisted gives its notice back. The
   trace event, herald line and operator webhook that observe the notice follow in later entries.
+  **Plan 41-07 adds the trace event and the herald line:** each won notice becomes exactly one
+  new `TraceEvent::AllowanceWarning` (scope kind, limit kind, balance, ceiling, window bounds and
+  `warn_at`; never a tenant id or key name) on the admitted run's own trace stream, emitted by the
+  run worker on the run's first dispatch before `RunStarted` (graph runs and agent-kind runs alike;
+  a redelivery or an input resume emits nothing) so its `seq` never collides. The markdown, JSON
+  and table heralds render one allowance line (`⚠ allowance: 82% of 25.0000 USD (api_key, window
+  resets 2026-10-03T00:00:00Z)`, or `... (tenant, lifetime cap)`) through the shared
+  `ExecutionMetadata::allowance_warning_display`; a run without a warning renders exactly as
+  before. On the HTTP agent routes the warning travels in the new `RunScope::allowance_warnings`
+  and is emitted once by `PaladinExecutionService`, and the streamed final chunk's metadata
+  carries the same line. New public items: `RunWorkerPool::with_treasury_notices`,
+  `RunScope::with_allowance_warnings`, `ExecutionMetadata::with_allowance_warnings` and
+  `allowance_warning_display`, `AllowanceWarning::herald_line`. Upgrade every replica before
+  setting `warn_at`: an older build reads the new `run_traces` record kind as unknown.
   Migration `012` adds a tenant-wide `treasury_ledger (tenant_id, attributed_at)` index for the
   admission balance read.
 

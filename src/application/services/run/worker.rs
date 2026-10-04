@@ -65,6 +65,7 @@ use paladin_ports::output::trace_sink_port::{
     CompositeSink, RUN_TRACE_EMITTER, TraceEmitter, TraceSink,
 };
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
@@ -642,6 +643,12 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// this pool, matching every other optional field's own "a pool that
     /// never calls the builder is unaffected" contract.
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    /// The Treasurer's durable once-per-window notice store (Phase 41 D-18, C6), wired via
+    /// [`RunWorkerPool::with_treasury_notices`]: on a run's FIRST dispatch (`Queued`) the pool
+    /// reads the notices the admission won for this run id and emits one
+    /// [`TraceEvent::AllowanceWarning`] per row through the run's own dispatcher, before
+    /// `RunStarted`. `None` (the default) means no notice is ever read.
+    treasury_notices: Option<Arc<dyn TreasuryNoticePort>>,
 }
 
 impl<W: WaypointPort + 'static> RunWorkerPool<W> {
@@ -683,6 +690,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             run_trace_port: None,
             herald: None,
             treasury_ledger: None,
+            treasury_notices: None,
         }
     }
 
@@ -834,6 +842,59 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         self
     }
 
+    /// Attach the Treasurer's durable notice store (Phase 41 D-18, C6): on a run's first
+    /// dispatch (`Queued` only -- never a `Running` redelivery or an `AwaitingInput` resume)
+    /// the pool reads `notices_for_run(run_id)` and emits one
+    /// [`TraceEvent::AllowanceWarning`] per row through that run's own trace dispatcher,
+    /// immediately before `RunStarted`, for graph runs and agent-kind runs alike. Emitting from
+    /// the worker, never from the submitting process, is what keeps the run's `seq` counter
+    /// collision-free. A read failure is logged and never affects the run (D-15), and a run
+    /// with no trace sink emits nothing. A pool that never calls this builder reads no notice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use paladin::application::services::run::RunWorkerPool;
+    /// use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
+    /// use paladin_ports::output::waypoint_port::WaypointPort;
+    ///
+    /// fn attach<W: WaypointPort + 'static>(
+    ///     pool: RunWorkerPool<W>,
+    ///     notices: Arc<dyn TreasuryNoticePort>,
+    /// ) -> RunWorkerPool<W> {
+    ///     pool.with_treasury_notices(notices)
+    /// }
+    /// ```
+    pub fn with_treasury_notices(mut self, notices: Arc<dyn TreasuryNoticePort>) -> Self {
+        self.treasury_notices = Some(notices);
+        self
+    }
+
+    /// Emit one [`TraceEvent::AllowanceWarning`] per notice the admission won for `run`
+    /// through `emitter`, in recorded order (D-18, C6). Called on a first dispatch only, after
+    /// the run's own emitter exists and before `RunStarted`, so the events take the run's own
+    /// lowest `seq` values. Silent when no notice store is wired; a read failure is logged
+    /// (run id and error, never a figure) and the run proceeds (D-15, T-41-36).
+    async fn emit_allowance_warnings(&self, run: &Run, emitter: &dyn TraceEmitter) {
+        let Some(notices) = &self.treasury_notices else {
+            return;
+        };
+        match notices.notices_for_run(&run.run_id).await {
+            Ok(records) => {
+                for record in records {
+                    emitter.emit(TraceEvent::from(record.warning));
+                }
+            }
+            Err(error) => {
+                log::warn!(
+                    "allowance notice read failed for run {}: {error}",
+                    run.run_id
+                );
+            }
+        }
+    }
+
     /// Wire the D-40 durable webhook delivery queue: `run_once` enqueues a
     /// `Pending` [`WebhookDelivery`] on every terminal/suspension
     /// transition whose run subscribes to that event, straight from the
@@ -926,6 +987,10 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             self.queue.ack(&leased.token).await?;
             return Ok(true);
         };
+
+        // D-18, C6: only a run's first dispatch (`Queued`) carries its admission's allowance
+        // warnings; a `Running` redelivery or an `AwaitingInput` resume never re-emits them.
+        let first_dispatch = matches!(run.status, RunStatus::Queued);
 
         // D-07: `attempt` is the persisted `Run.attempt` counter this
         // dispatch settles under (39-07) -- `run.attempt` on a first
@@ -1086,6 +1151,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // sees the live path rather than falling back to degraded.
         if let Some(bus) = &self.event_bus {
             bus.bind(run.thread_id.clone(), run.run_id.clone()).await;
+        }
+
+        // D-18: the admission's allowance warnings, on this run's own stream, before the
+        // engine's own `RunStarted`. Needs the run's own emitter (a traced factory-built run).
+        if first_dispatch && let Some(emitter) = run_trace_emitter.as_deref() {
+            self.emit_allowance_warnings(&run, emitter).await;
         }
 
         let heartbeat = LeaseHeartbeat::spawn(self.queue.clone(), leased.token.clone(), self.lease);
@@ -1327,6 +1398,13 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         }
 
         let node_id = NodeId::new(run.assistant.assistant_id.clone());
+        // D-18: the admission's allowance warnings first, so they take this run's lowest `seq`
+        // values; the `RunScope` below deliberately does NOT carry them (emitted once, here).
+        if matches!(run.status, RunStatus::Queued)
+            && let Some(emitter) = emitter.as_deref()
+        {
+            self.emit_allowance_warnings(run, emitter).await;
+        }
         dispatcher.emit(TraceEvent::RunStarted {
             run_id: Some(run.run_id.clone()),
             graph_fingerprint: AGENT_RUN_FINGERPRINT.to_string(),

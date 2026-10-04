@@ -695,6 +695,15 @@ pub async fn build_run_api(
     if let Some(ledger) = &treasury_ledger {
         pool = pool.with_treasury_ledger(Arc::clone(ledger));
     }
+    // ALLOW-04, D-18, C6: the once-per-window notice store, opened once whenever a run store is
+    // configured -- independent of whether any allowance exists (reading an empty table is
+    // cheap, and it keeps the worker correct across a config change). The worker reads a
+    // run's notices on its first dispatch and emits one allowance trace event per row; the
+    // Treasurer below claims through the same store.
+    let treasury_notices = build_treasury_notices(&configs.run_store).await?;
+    if let Some(notices) = &treasury_notices {
+        pool = pool.with_treasury_notices(Arc::clone(notices));
+    }
     let pool = Arc::new(pool);
 
     let mut tasks = Arc::clone(&pool).spawn(RunWorkerOptions::from(&configs.run_worker));
@@ -717,11 +726,11 @@ pub async fn build_run_api(
         )?;
         // ALLOW-04, D-16: the once-per-window notice store beside the ledger. A configured run
         // store always yields one, exactly like the ledger.
-        let notices = build_treasury_notices(&configs.run_store).await?.ok_or(
+        let notices = treasury_notices.as_ref().ok_or(
             "treasurer.allowance has entries but no treasury notice store was built from run_store.backend",
         )?;
         Some(
-            Arc::new(Treasurer::new(policy, Arc::clone(ledger)).with_notices(notices))
+            Arc::new(Treasurer::new(policy, Arc::clone(ledger)).with_notices(Arc::clone(notices)))
                 as Arc<dyn AllowanceAdmissionPort>,
         )
     };

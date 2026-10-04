@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-04 00:23:09 UTC
+# Public API Surface - Generated 2026-10-04 00:50:21 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -3692,6 +3692,7 @@ pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_run_t
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_shutdown_coordinator(self, paladin_battalion::engine::shutdown::ShutdownCoordinator) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_trace_config(self, paladin::config::trace::TraceConfig) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasury_ledger(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
+pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasury_notices(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_notice_port::TreasuryNoticePort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_webhook_deliveries(self, alloc::sync::Arc<dyn paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort>) -> Self
 impl<W> core::marker::Freeze for paladin::application::services::run::worker::RunWorkerPool<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Freeze, alloc::sync::Arc<W>: core::marker::Freeze, core::option::Option<alloc::sync::Arc<(dyn core::ops::function::Fn(tokio_util::sync::cancellation_token::CancellationToken) -> paladin_battalion::engine::WarEngine<W> + core::marker::Send + core::marker::Sync)>>: core::marker::Freeze
 impl<W> core::marker::Send for paladin::application::services::run::worker::RunWorkerPool<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Send, alloc::sync::Arc<W>: core::marker::Send, core::option::Option<alloc::sync::Arc<(dyn core::ops::function::Fn(tokio_util::sync::cancellation_token::CancellationToken) -> paladin_battalion::engine::WarEngine<W> + core::marker::Send + core::marker::Sync)>>: core::marker::Send
@@ -3968,6 +3969,7 @@ pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_run_t
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_shutdown_coordinator(self, paladin_battalion::engine::shutdown::ShutdownCoordinator) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_trace_config(self, paladin::config::trace::TraceConfig) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasury_ledger(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
+pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasury_notices(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_notice_port::TreasuryNoticePort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_webhook_deliveries(self, alloc::sync::Arc<dyn paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort>) -> Self
 impl<W> core::marker::Freeze for paladin::application::services::run::worker::RunWorkerPool<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Freeze, alloc::sync::Arc<W>: core::marker::Freeze, core::option::Option<alloc::sync::Arc<(dyn core::ops::function::Fn(tokio_util::sync::cancellation_token::CancellationToken) -> paladin_battalion::engine::WarEngine<W> + core::marker::Send + core::marker::Sync)>>: core::marker::Freeze
 impl<W> core::marker::Send for paladin::application::services::run::worker::RunWorkerPool<W> where alloc::sync::Arc<paladin_battalion::engine::WarEngine<W>>: core::marker::Send, alloc::sync::Arc<W>: core::marker::Send, core::option::Option<alloc::sync::Arc<(dyn core::ops::function::Fn(tokio_util::sync::cancellation_token::CancellationToken) -> paladin_battalion::engine::WarEngine<W> + core::marker::Send + core::marker::Sync)>>: core::marker::Send
@@ -7890,7 +7892,7 @@ impl core::fmt::Debug for paladin::infrastructure::telemetry::herald_sink::Heral
 pub fn paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl paladin_ports::output::trace_sink_port::TraceSink for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
 pub fn paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink::on_event<'life0, 'async_trait>(&'life0 self, paladin_core::platform::container::trace::TraceRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), paladin_ports::output::trace_sink_port::TraceSinkError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl core::marker::Freeze for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl !core::marker::Freeze for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
 impl core::marker::Send for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
 impl core::marker::Sync for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
 impl core::marker::Unpin for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
@@ -7940,7 +7942,7 @@ impl core::fmt::Debug for paladin::infrastructure::telemetry::herald_sink::Heral
 pub fn paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl paladin_ports::output::trace_sink_port::TraceSink for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
 pub fn paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink::on_event<'life0, 'async_trait>(&'life0 self, paladin_core::platform::container::trace::TraceRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), paladin_ports::output::trace_sink_port::TraceSinkError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
-impl core::marker::Freeze for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
+impl !core::marker::Freeze for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
 impl core::marker::Send for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
 impl core::marker::Sync for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
 impl core::marker::Unpin for paladin::infrastructure::telemetry::herald_sink::HeraldTraceSink
@@ -8345,4 +8347,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4159
+Total public items: 4161

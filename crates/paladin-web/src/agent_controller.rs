@@ -376,13 +376,15 @@ pub async fn execute_agent(
         .map_err(|_| ApiError::bad_request("timeout_seconds must be a positive integer"))?;
 
     // D-06/D-07: an exhausted (or unverifiable) caller is refused before any work starts.
-    // The binding is kept (underscore-prefixed until then) because 41-07 threads its
-    // warnings into the `RunScope` below.
-    let _admission = admit_principal(&state, &principal).await?;
+    let admission = admit_principal(&state, &principal).await?;
 
     // D-16: spend is attributed to the authenticated caller -- the scope is
-    // built from the `Principal` only, never from the request body.
-    let scope = RunScope::default().with_ledger_scope(principal.ledger_scope());
+    // built from the `Principal` only, never from the request body. D-18: the
+    // warnings this admission won ride the scope so the execution service emits
+    // them once.
+    let scope = RunScope::default()
+        .with_ledger_scope(principal.ledger_scope())
+        .with_allowance_warnings(admission.warnings().cloned().collect());
     let run = entry
         .executor
         .execute_scoped(entry.paladin.as_ref(), &request.input, &scope);
@@ -681,14 +683,17 @@ pub async fn execute_agent_stream(
         };
 
     // D-06/D-07: refuse before either the streaming or the buffered branch starts work.
-    let _admission = match admit_principal(&state, &principal).await {
+    let admission = match admit_principal(&state, &principal).await {
         Ok(admission) => admission,
         Err(error) => return error.into_response(),
     };
 
     // D-16: spend is attributed to the authenticated caller on both the
-    // streamed and the buffered-fallback branch below.
-    let scope = RunScope::default().with_ledger_scope(principal.ledger_scope());
+    // streamed and the buffered-fallback branch below. D-18: the streamed final
+    // chunk's metadata carries the warnings this admission won.
+    let scope = RunScope::default()
+        .with_ledger_scope(principal.ledger_scope())
+        .with_allowance_warnings(admission.warnings().cloned().collect());
 
     // Real token streaming when the agent has a streaming-capable executor.
     if let Some(streamer) = entry.streamer.clone() {
@@ -772,15 +777,18 @@ pub async fn enqueue_job(
         .map_err(|_| ApiError::bad_request("timeout_seconds must be a positive integer"))?;
 
     // C4: refuse before `jobs.create()` and before the spawn -- never a job id for refused work.
-    let _admission = admit_principal(&state, &principal).await?;
+    let admission = admit_principal(&state, &principal).await?;
 
     let job_id = state.jobs.create();
     let jobs = Arc::clone(&state.jobs);
     let jid = job_id.clone();
     let agent_id = id.clone();
     // D-16: resolved from the authenticated caller before the spawn and moved
-    // in, so the detached job settles under the submitting principal.
-    let scope = RunScope::default().with_ledger_scope(principal.ledger_scope());
+    // in, so the detached job settles under the submitting principal. D-18: the
+    // warnings this admission won ride along.
+    let scope = RunScope::default()
+        .with_ledger_scope(principal.ledger_scope())
+        .with_allowance_warnings(admission.warnings().cloned().collect());
     tokio::spawn(async move {
         let run = entry
             .executor
@@ -1310,6 +1318,142 @@ mod tests {
         assert_eq!(scope.ledger_scope, Some(acme_svc_a_scope()));
     }
 
+    // --- 41-07 (D-18): the warnings an admission won ride the RunScope ------
+
+    /// Admits every call and wins one allowance notice (a warn threshold was crossed).
+    struct WarningAdmission;
+
+    fn won_notice() -> AllowanceNotice {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+
+        let usd = CurrencyCode::new("USD").expect("USD is a valid currency code");
+        AllowanceNotice {
+            notice_id: "notice-1".to_string(),
+            tenant_id: "acme".to_string(),
+            api_key_id: Some("svc-a".to_string()),
+            warning: AllowanceWarning {
+                scope_kind: AllowanceScopeKind::ApiKey,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(80, usd.clone()),
+                ceiling: Cost::new(100, usd),
+                window_start: None,
+                window_end: None,
+                warn_at: 80,
+            },
+            run_id: None,
+            recorded_at: chrono::Utc::now(),
+        }
+    }
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for WarningAdmission {
+        async fn admit(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            Ok(Admission::none().with_notice(won_notice()))
+        }
+        async fn confirm(&self, _admission: &Admission) {}
+        async fn abandon(&self, _admission: &Admission) {}
+    }
+
+    fn expected_warnings() -> Vec<paladin_core::platform::container::allowance::AllowanceWarning> {
+        vec![won_notice().warning]
+    }
+
+    #[tokio::test]
+    async fn execute_agent_threads_the_won_warning_into_the_run_scope() {
+        let (state, executor, _) = state_with_scope_recording_agent("w", false);
+        let state = state.with_treasurer(Arc::new(WarningAdmission));
+
+        let (status, _) = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("w".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("execute succeeds");
+        assert_eq!(status, StatusCode::OK);
+
+        let scope = executor
+            .recorded_scope()
+            .expect("execute_scoped was called");
+        assert_eq!(scope.allowance_warnings, expected_warnings());
+    }
+
+    #[tokio::test]
+    async fn execute_agent_stream_threads_the_won_warning_into_the_run_scope() {
+        let (state, _, streamer) = state_with_scope_recording_agent("w", true);
+        let state = state.with_treasurer(Arc::new(WarningAdmission));
+
+        let response = execute_agent_stream(
+            State(state),
+            svc_a_of_acme(),
+            Path("w".to_string()),
+            execute_request("hi"),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let scope = streamer
+            .recorded_scope()
+            .expect("execute_stream_scoped was called");
+        assert_eq!(scope.allowance_warnings, expected_warnings());
+    }
+
+    #[tokio::test]
+    async fn enqueue_job_threads_the_won_warning_into_the_run_scope() {
+        let (state, executor, _) = state_with_scope_recording_agent("w", false);
+        let state = state.with_treasurer(Arc::new(WarningAdmission));
+
+        let (status, _) = enqueue_job(
+            State(state),
+            svc_a_of_acme(),
+            Path("w".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("enqueue succeeds");
+        assert_eq!(status, StatusCode::ACCEPTED);
+
+        let mut recorded = None;
+        for _ in 0..200 {
+            recorded = executor.recorded_scope();
+            if recorded.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let scope = recorded.expect("the spawned job must call execute_scoped");
+        assert_eq!(scope.allowance_warnings, expected_warnings());
+    }
+
+    /// No Treasurer (or no warning won): the scope carries no warning, exactly as before.
+    #[tokio::test]
+    async fn execute_agent_without_a_won_warning_leaves_the_scope_warning_free() {
+        let (state, executor, _) = state_with_scope_recording_agent("w", false);
+
+        let (status, _) = execute_agent(
+            State(state),
+            svc_a_of_acme(),
+            Path("w".to_string()),
+            execute_request("hi"),
+        )
+        .await
+        .expect("execute succeeds");
+        assert_eq!(status, StatusCode::OK);
+
+        let scope = executor
+            .recorded_scope()
+            .expect("execute_scoped was called");
+        assert!(scope.allowance_warnings.is_empty());
+    }
+
     /// D-03/D-16: with auth disabled the middleware attaches the open-access
     /// principal, so spend settles under `(open-access, anonymous)` -- a real
     /// principal, never the unattributed sentinel.
@@ -1348,7 +1492,9 @@ mod tests {
     // --- 41-04 (D-06, D-07, D-10, C4): the three HTTP agent routes that start
     // spend are gated by one admission helper -----------------------------
 
-    use paladin_core::platform::container::allowance::{AllowanceLimitKind, AllowanceRefusal};
+    use paladin_core::platform::container::allowance::{
+        AllowanceLimitKind, AllowanceNotice, AllowanceRefusal,
+    };
     use paladin_core::platform::container::principal::RunAttribution;
     use paladin_core::platform::container::run::RunId;
     use std::sync::atomic::{AtomicUsize, Ordering};

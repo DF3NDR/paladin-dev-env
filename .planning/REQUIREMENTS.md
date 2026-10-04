@@ -73,7 +73,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
   or the period resets; this holds on both engine-driven (`WarEngine`) and agent-loop
   (`PaladinExecutionService`) runs, with the enforcement attachment point recorded in an ADR
 
-- [ ] **ALLOW-04**: A configurable warn threshold (for example 80%) emits one trace event plus a
+- [x] **ALLOW-04**: A configurable warn threshold (for example 80%) emits one trace event plus a
   herald and webhook notice per window, without blocking the run
 
 - [ ] **ALLOW-05**: The Treasurer derives the per-run `TokenBudget` from the remaining allowance and
@@ -221,7 +221,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ALLOW-01 | Phase 41 | Pending |
 | ALLOW-02 | Phase 41 | Complete |
 | ALLOW-03 | Phase 42 | Pending |
-| ALLOW-04 | Phase 41 | Pending |
+| ALLOW-04 | Phase 41 | Complete |
 | ALLOW-05 | Phase 42 | Pending |
 | PACE-01 | Phase 43 | Pending |
 | PACE-02 | Phase 43 | Pending |

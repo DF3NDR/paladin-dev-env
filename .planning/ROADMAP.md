@@ -453,7 +453,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 41-08-PLAN.md — Operator webhook notice through the existing delivery queue: RunEventKind::AllowanceWarning, operator signing secret, boot-time SSRF check, the integrated warn-path proof (notice row + operator webhook + trace event + herald line once per window), rollout docs (wave 7)
+- [x] 41-08-PLAN.md — Operator webhook notice through the existing delivery queue: RunEventKind::AllowanceWarning, operator signing secret, boot-time SSRF check, the integrated warn-path proof (notice row + operator webhook + trace event + herald line once per window), rollout docs (wave 7)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

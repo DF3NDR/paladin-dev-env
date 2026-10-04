@@ -1966,4 +1966,168 @@ mod tests {
                 .is_empty()
         );
     }
+
+    // --- Phase 41 (41-06): once-per-window notices through the real lifecycle -----------------
+
+    use paladin_core::platform::container::allowance::{NoticeOutcome, NoticeRecord};
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
+    use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
+
+    /// A [`TreasuryNoticePort`] over a real in-memory store (so deduplication is the adapter's)
+    /// that also records the run id of every claim attempt and every discarded id list.
+    struct SpyNotices {
+        inner: paladin_storage::treasury::in_memory::InMemoryTreasuryLedger,
+        attempts: Mutex<Vec<Option<RunId>>>,
+        discards: Mutex<Vec<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl TreasuryNoticePort for SpyNotices {
+        async fn record(
+            &self,
+            notice: &NoticeRecord,
+        ) -> Result<NoticeOutcome, TreasuryLedgerError> {
+            self.attempts.lock().unwrap().push(notice.run_id.clone());
+            self.inner.record(notice).await
+        }
+
+        async fn notices_for_run(
+            &self,
+            run_id: &RunId,
+        ) -> Result<Vec<NoticeRecord>, TreasuryLedgerError> {
+            self.inner.notices_for_run(run_id).await
+        }
+
+        async fn discard(&self, notice_ids: &[String]) -> Result<(), TreasuryLedgerError> {
+            self.discards.lock().unwrap().push(notice_ids.to_vec());
+            self.inner.discard(notice_ids).await
+        }
+    }
+
+    /// A submission service over a REAL [`Treasurer`] whose ledger and notice store are one
+    /// in-memory store, with `ops` of `acme` holding a 2.50 lifetime cap and 2.00 already spent
+    /// (80%, a crossing on the lifetime ceiling that no window rollover can change).
+    async fn notice_fixture() -> (
+        RunSubmissionService,
+        Arc<dyn RunRepositoryPort>,
+        Arc<SpyNotices>,
+    ) {
+        use crate::application::services::treasurer::Treasurer;
+        use crate::config::treasurer::TreasurerConfig;
+        use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
+        use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+        use paladin_storage::treasury::contract_tests::{settle_request, usd};
+
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let spy = Arc::new(SpyNotices {
+            inner: paladin_storage::treasury::in_memory::InMemoryTreasuryLedger::new(),
+            attempts: Mutex::new(Vec::new()),
+            discards: Mutex::new(Vec::new()),
+        });
+        let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+            "currency": "USD",
+            "allowance": { "api_keys": { "ops": {
+                "period": "1d", "amount": "100.00", "lifetime": "2.50"
+            } } }
+        }))
+        .unwrap();
+        let ledger: Arc<dyn TreasuryLedgerPort> = Arc::new(spy.inner.clone());
+        ledger
+            .settle(settle_request(
+                LedgerScope::new("acme", "ops"),
+                SettlementKey::new(RunId::new_v7(), 0, 0),
+                2_000_000_000,
+                usd(),
+                "gpt-4",
+            ))
+            .await
+            .unwrap();
+        let treasurer =
+            Treasurer::new(config.allowance_policy().unwrap(), ledger).with_notices(spy.clone());
+        (service.with_treasurer(Arc::new(treasurer)), repository, spy)
+    }
+
+    #[tokio::test]
+    async fn admitted_submission_records_its_notice_against_the_persisted_run() {
+        let (service, repository, notices) = notice_fixture().await;
+
+        let accepted = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "ops", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        // The run the notice names is the run that was persisted.
+        assert!(repository.get(&accepted.run_id).await.unwrap().is_some());
+        let rows = notices.notices_for_run(&accepted.run_id).await.unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the crossing's notice names the admitted run"
+        );
+        assert_eq!(rows[0].run_id.as_ref(), Some(&accepted.run_id));
+        assert_eq!(rows[0].tenant_id, "acme");
+        assert!(
+            notices.discards.lock().unwrap().is_empty(),
+            "a successful submission discards nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn threadbusy_after_a_won_notice_abandons_it_so_the_next_admission_rewins() {
+        let (service, _repository, notices) = notice_fixture().await;
+        let ops = || Some(principal_ref("acme", "ops", UserRole::User));
+
+        // Another key of the same tenant, with no allowance entry (never reads the ledger),
+        // occupies the thread -- so the tenant guard admits `ops` to the thread and the refusal
+        // is the insert-time one-active-run invariant.
+        service
+            .submit(submit_on_thread(
+                "busy-thread",
+                Some(principal_ref("acme", "other", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        // The principal's admission wins the window's notice, then the insert is refused.
+        let err = service
+            .submit(submit_on_thread("busy-thread", ops()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RunSubmissionError::ThreadBusy { .. }),
+            "{err:?}"
+        );
+
+        let attempts = notices.attempts.lock().unwrap().clone();
+        assert_eq!(attempts.len(), 1, "one claim was made");
+        let phantom_run = attempts[0]
+            .clone()
+            .expect("the claim names the admitting run");
+        assert_eq!(
+            notices.discards.lock().unwrap().len(),
+            1,
+            "the abandoned admission discards what it won"
+        );
+        assert!(
+            notices
+                .notices_for_run(&phantom_run)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a run that never persisted holds no notice"
+        );
+
+        // The next admission in the same window wins the notice again, with its own run id.
+        let accepted = service
+            .submit(submit_on_thread("free-thread", ops()))
+            .await
+            .unwrap();
+        let rows = notices.notices_for_run(&accepted.run_id).await.unwrap();
+        assert_eq!(rows.len(), 1, "the next admission re-wins the notice");
+        assert_ne!(accepted.run_id, phantom_run);
+    }
 }

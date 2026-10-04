@@ -51,6 +51,7 @@ use paladin_ports::output::run_queue_port::RunQueuePort;
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::run_schedule_repository_port::RunScheduleRepositoryPort;
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
@@ -431,6 +432,64 @@ async fn build_postgres_treasury_ledger(
     .into())
 }
 
+/// Build the Treasurer's once-per-window notice store (ALLOW-04, D-16) from the SAME
+/// [`RunStoreBackend`] selection [`build_treasury_ledger`] reads, arm for arm: `Disabled` ->
+/// `Ok(None)`; `Sqlite { path }` -> a
+/// [`SqliteTreasuryLedger`](paladin_storage::treasury::sqlite::SqliteTreasuryLedger) on that
+/// exact database file (it implements [`TreasuryNoticePort`] beside the ledger port, and its
+/// construction applies the `treasury_notices` migration); `Postgres { url_env }` -> a
+/// [`PostgresTreasuryLedger`](paladin_storage::treasury::postgres::PostgresTreasuryLedger) on
+/// that exact database, on a build with `storage-postgres` (a named-feature error otherwise).
+///
+/// # Errors
+///
+/// Returns an error naming the sqlite path, the postgres env var, or (without
+/// `storage-postgres`) the missing cargo feature -- never the database URL's own value
+/// (T-39-04).
+pub async fn build_treasury_notices(
+    config: &RunStoreConfig,
+) -> Result<Option<Arc<dyn TreasuryNoticePort>>, Box<dyn std::error::Error>> {
+    match &config.backend {
+        RunStoreBackend::Disabled => Ok(None),
+        RunStoreBackend::Sqlite { path } => {
+            let store = paladin_storage::treasury::sqlite::SqliteTreasuryLedger::new(path)
+                .await
+                .map_err(|e| format!("failed to open sqlite treasury notices at '{path}': {e}"))?;
+            Ok(Some(Arc::new(store) as Arc<dyn TreasuryNoticePort>))
+        }
+        RunStoreBackend::Postgres { url_env } => build_postgres_treasury_notices(url_env).await,
+    }
+}
+
+#[cfg(feature = "storage-postgres")]
+async fn build_postgres_treasury_notices(
+    url_env: &str,
+) -> Result<Option<Arc<dyn TreasuryNoticePort>>, Box<dyn std::error::Error>> {
+    let url = std::env::var(url_env).map_err(|_| {
+        format!("run store postgres backend names env var '{url_env}', which is not set")
+    })?;
+    let store = paladin_storage::treasury::postgres::PostgresTreasuryLedger::new(&url)
+        .await
+        .map_err(|e| format!("failed to open postgres treasury notices: {e}"))?;
+    Ok(Some(Arc::new(store) as Arc<dyn TreasuryNoticePort>))
+}
+
+/// Without `storage-postgres` a configured `Postgres` run store backend is a startup error
+/// naming the missing feature, never a silent fallback -- mirrors
+/// [`build_postgres_treasury_ledger`]'s own twin.
+#[cfg(not(feature = "storage-postgres"))]
+async fn build_postgres_treasury_notices(
+    url_env: &str,
+) -> Result<Option<Arc<dyn TreasuryNoticePort>>, Box<dyn std::error::Error>> {
+    Err(format!(
+        "run_store.backend is configured as 'postgres' (env var '{url_env}') but this binary \
+         was built without the 'storage-postgres' feature; rebuild with \
+         --features storage-postgres,web-server, or set APP_RUN_STORE_BACKEND=disabled or \
+         =sqlite"
+    )
+    .into())
+}
+
 #[cfg(feature = "redis-queue")]
 async fn build_redis_run_queue(
     url_env: &str,
@@ -656,7 +715,15 @@ pub async fn build_run_api(
         let ledger = treasury_ledger.as_ref().ok_or(
             "treasurer.allowance has entries but no treasury ledger was built from run_store.backend",
         )?;
-        Some(Arc::new(Treasurer::new(policy, Arc::clone(ledger))) as Arc<dyn AllowanceAdmissionPort>)
+        // ALLOW-04, D-16: the once-per-window notice store beside the ledger. A configured run
+        // store always yields one, exactly like the ledger.
+        let notices = build_treasury_notices(&configs.run_store).await?.ok_or(
+            "treasurer.allowance has entries but no treasury notice store was built from run_store.backend",
+        )?;
+        Some(
+            Arc::new(Treasurer::new(policy, Arc::clone(ledger)).with_notices(notices))
+                as Arc<dyn AllowanceAdmissionPort>,
+        )
     };
 
     let mut submission_service = RunSubmissionService::new(
@@ -1370,6 +1437,204 @@ mod tests {
         }
         cleanup(&run_path);
         cleanup(&wp_path);
+    }
+
+    /// The production wiring records a warn notice: a key at 80% of its allowance is admitted
+    /// through the real run router and the durable once-per-window notice names the persisted
+    /// run, read back through a store opened by `build_treasury_notices` on the same file. A UTC
+    /// window rollover between seeding and the POST (Pitfall 10) re-runs the scenario once.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn wired_treasurer_records_a_warn_notice_for_the_admitted_run() {
+        use crate::application::services::treasurer::window_for;
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_core::platform::container::paladin::PaladinData;
+        use paladin_core::platform::container::run::RunId;
+        use paladin_core::platform::container::treasury_ledger::{
+            LedgerScope, SettleRequest, SettlementKey,
+        };
+
+        struct NoopExecutor;
+        #[async_trait]
+        impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort for NoopExecutor {
+            async fn execute(
+                &self,
+                _paladin: &paladin_core::platform::container::paladin::Paladin,
+                _input: &str,
+            ) -> Result<
+                paladin_ports::output::paladin_port::PaladinResult,
+                paladin_core::platform::container::paladin_error::PaladinError,
+            > {
+                Err(
+                    paladin_core::platform::container::paladin_error::PaladinError::ExecutionError(
+                        "the notice wiring test never runs the agent".to_string(),
+                    ),
+                )
+            }
+        }
+
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let (run_path, run_url) = temp_sqlite_url("wired_notice");
+        let (wp_path, wp_url) = temp_sqlite_url("wired_notice_wp");
+
+        let registry = Arc::new(AgentRegistry::new());
+        let paladin = Arc::new(paladin_core::base::entity::node::Node::new(
+            PaladinData {
+                system_prompt: "hi".to_string(),
+                name: "NoticeAgent".to_string(),
+                ..Default::default()
+            },
+            Some("NoticeAgent".to_string()),
+        ));
+        registry.insert("notice-agent", paladin, Arc::new(NoopExecutor));
+
+        let configs = sqlite_configs(&run_url);
+        let ledger = build_treasury_ledger(&configs.run_store)
+            .await
+            .expect("ledger opens")
+            .expect("a sqlite run store yields a ledger");
+        let notices = build_treasury_notices(&configs.run_store)
+            .await
+            .expect("notice store opens")
+            .expect("a sqlite run store yields a notice store");
+        let coordinator = ShutdownCoordinator::new();
+        let handles = build_run_api(
+            configs,
+            &allowance_settings(&[("svc-a", "1d", "2.50")], &[]),
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            principal_auth(&[("key-a", "svc-a", "acme")]),
+            registry,
+        )
+        .await
+        .expect("sqlite run store with an allowance wires");
+        let app = paladin_web::run_router(handles.run_state);
+
+        let mut recorded = false;
+        for _ in 0..2 {
+            let before =
+                window_for(ledger.store_now().await.expect("store clock"), 86_400).expect("window");
+            let usd = CurrencyCode::new("USD").expect("usd");
+            ledger
+                .settle(SettleRequest::unreserved(
+                    LedgerScope::new("acme", "svc-a"),
+                    SettlementKey::new(RunId::new_v7(), 0, 0),
+                    // 2.00 of a 2.50 window: exactly the default 80% warn threshold.
+                    Cost::new(2_000_000_000, usd),
+                    std::collections::BTreeMap::from([("gpt-4".to_string(), 2_000_000_000_i64)]),
+                ))
+                .await
+                .expect("seed the key at its warn threshold");
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", "key-a")
+                        .body(Body::from(r#"{"assistant_id":"notice-agent","input":{}}"#))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            let after =
+                window_for(ledger.store_now().await.expect("store clock"), 86_400).expect("window");
+            if before != after {
+                continue;
+            }
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read body");
+            let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON body");
+            let run_id = RunId::parse(body["run_id"].as_str().expect("run_id in the body"))
+                .expect("a valid run id");
+
+            let rows = notices.notices_for_run(&run_id).await.expect("read back");
+            assert_eq!(
+                rows.len(),
+                1,
+                "the crossing's notice names the admitted run"
+            );
+            assert_eq!(rows[0].tenant_id, "acme");
+            assert_eq!(rows[0].api_key_id.as_deref(), Some("svc-a"));
+            assert_eq!(rows[0].warning.balance.nanos(), 2_000_000_000);
+            assert_eq!(rows[0].warning.ceiling.nanos(), 2_500_000_000);
+            recorded = true;
+            break;
+        }
+        assert!(
+            recorded,
+            "a UTC window boundary was crossed on both attempts"
+        );
+
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        cleanup(&run_path);
+        cleanup(&wp_path);
+    }
+
+    #[tokio::test]
+    async fn build_treasury_notices_disabled_is_none() {
+        let notices = build_treasury_notices(&RunStoreConfig::default())
+            .await
+            .expect("a disabled run store never fails to build");
+        assert!(
+            notices.is_none(),
+            "RunStoreBackend::Disabled must wire no notice store"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_treasury_notices_sqlite_round_trips() {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, NoticeOutcome, NoticeRecord,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_core::platform::container::run::RunId;
+
+        let (path, url) = temp_sqlite_url("treasury_notices");
+        let config = RunStoreConfig {
+            backend: RunStoreBackend::Sqlite { path: url },
+        };
+        let notices = build_treasury_notices(&config)
+            .await
+            .expect("a configured sqlite backend must open")
+            .expect("a configured sqlite backend must wire Some");
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let run = RunId::new_v7();
+        let record = NoticeRecord {
+            notice_id: "wired-notice-1".to_string(),
+            tenant_id: "acme".to_string(),
+            api_key_id: None,
+            warning: AllowanceWarning {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(80, usd.clone()),
+                ceiling: Cost::new(100, usd),
+                window_start: None,
+                window_end: None,
+                warn_at: 80,
+            },
+            run_id: Some(run.clone()),
+            recorded_at: chrono::DateTime::from_timestamp(1_000_000_000, 0).unwrap(),
+        };
+        assert_eq!(
+            notices.record(&record).await.unwrap(),
+            NoticeOutcome::Recorded
+        );
+        assert_eq!(
+            notices.notices_for_run(&run).await.unwrap(),
+            vec![record],
+            "the wired store round-trips a notice"
+        );
+        cleanup(&path);
     }
 
     #[tokio::test]

@@ -753,3 +753,386 @@ async fn concurrent_admissions_write_no_ledger_rows() {
         "admission never writes, so concurrent admissions cannot corrupt the ledger"
     );
 }
+
+// -- the warn leg: once-per-window notices (ALLOW-04, D-15, D-16, 41-06) -----------------------
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use paladin_core::platform::container::allowance::{NoticeOutcome, NoticeRecord};
+use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
+
+/// A [`TreasuryNoticePort`] over a real [`InMemoryTreasuryLedger`] (so deduplication is the
+/// adapter's own) that also records every `record` attempt and every `discard`, and can be told
+/// to fail either.
+#[derive(Default)]
+struct RecordingNotices {
+    inner: InMemoryTreasuryLedger,
+    attempts: Mutex<Vec<NoticeRecord>>,
+    discards: Mutex<Vec<Vec<String>>>,
+    fail_record: AtomicBool,
+    fail_discard: AtomicBool,
+}
+
+impl RecordingNotices {
+    fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    fn attempts(&self) -> Vec<NoticeRecord> {
+        self.attempts.lock().expect("not poisoned").clone()
+    }
+
+    fn discards(&self) -> Vec<Vec<String>> {
+        self.discards.lock().expect("not poisoned").clone()
+    }
+}
+
+#[async_trait]
+impl TreasuryNoticePort for RecordingNotices {
+    async fn record(&self, notice: &NoticeRecord) -> Result<NoticeOutcome, TreasuryLedgerError> {
+        self.attempts
+            .lock()
+            .expect("not poisoned")
+            .push(notice.clone());
+        if self.fail_record.load(Ordering::SeqCst) {
+            return Err(TreasuryLedgerError::Backend {
+                source: "scripted notice store failure".into(),
+            });
+        }
+        self.inner.record(notice).await
+    }
+
+    async fn notices_for_run(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Vec<NoticeRecord>, TreasuryLedgerError> {
+        self.inner.notices_for_run(run_id).await
+    }
+
+    async fn discard(&self, notice_ids: &[String]) -> Result<(), TreasuryLedgerError> {
+        self.discards
+            .lock()
+            .expect("not poisoned")
+            .push(notice_ids.to_vec());
+        if self.fail_discard.load(Ordering::SeqCst) {
+            return Err(TreasuryLedgerError::Backend {
+                source: "scripted notice discard failure".into(),
+            });
+        }
+        self.inner.discard(notice_ids).await
+    }
+}
+
+fn treasurer_with_notices(
+    policy: AllowancePolicy,
+    ledger: &Arc<FakeLedger>,
+    notices: &Arc<RecordingNotices>,
+) -> Treasurer {
+    treasurer(policy, ledger).with_notices(notices.clone())
+}
+
+#[tokio::test]
+async fn crossing_at_the_threshold_records_one_notice_with_the_run_id() {
+    // 80 of 100 is exactly 80%: the inclusive boundary.
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 80);
+    let notices = RecordingNotices::new();
+    let treasurer = treasurer_with_notices(key_policy(), &ledger, &notices);
+    let run = RunId::new_v7();
+
+    let admission = treasurer
+        .admit(&subject("acme", "svc-a"), Some(&run))
+        .await
+        .expect("a crossing is still admitted");
+
+    assert_eq!(admission.notices().len(), 1);
+    let notice = &admission.notices()[0];
+    assert_eq!(notice.tenant_id, "acme");
+    assert_eq!(notice.api_key_id.as_deref(), Some("svc-a"));
+    assert_eq!(notice.run_id.as_ref(), Some(&run));
+    assert_eq!(notice.recorded_at, at(NOW), "the truncated store instant");
+    let warning = &notice.warning;
+    assert_eq!(warning.scope_kind, AllowanceScopeKind::ApiKey);
+    assert_eq!(warning.limit_kind, AllowanceLimitKind::Window);
+    assert_eq!(warning.balance.nanos(), 80, "the PRE-admission balance");
+    assert_eq!(warning.ceiling.nanos(), C);
+    assert_eq!(warning.window_start, Some(at(WS)));
+    assert_eq!(warning.window_end, Some(at(WE)));
+    assert_eq!(warning.warn_at, 80);
+
+    // The durable row exists and names the admitting run.
+    let rows = notices.notices_for_run(&run).await.expect("read back");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].notice_id, notice.notice_id);
+}
+
+#[tokio::test]
+async fn one_nano_below_the_threshold_records_nothing() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 79);
+    let notices = RecordingNotices::new();
+    let treasurer = treasurer_with_notices(key_policy(), &ledger, &notices);
+
+    let admission = admit_svc_a(&treasurer).await.expect("admitted");
+
+    assert!(admission.is_empty());
+    assert!(
+        notices.attempts().is_empty(),
+        "a balance below the threshold must not even attempt a claim"
+    );
+}
+
+#[tokio::test]
+async fn second_admission_in_the_window_records_nothing() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 85);
+    let notices = RecordingNotices::new();
+    let treasurer = treasurer_with_notices(key_policy(), &ledger, &notices);
+
+    let first = admit_svc_a(&treasurer).await.expect("admitted");
+    let second = admit_svc_a(&treasurer).await.expect("admitted");
+
+    assert_eq!(first.notices().len(), 1);
+    assert!(second.is_empty(), "the window's notice was already won");
+    assert_eq!(
+        notices.attempts().len(),
+        2,
+        "the second admission still attempted (and lost) the claim -- dedup is the store's"
+    );
+}
+
+#[tokio::test]
+async fn every_applicable_ceiling_is_checked_for_a_crossing() {
+    // Key window 85/100 (85%), tenant window 450/500 (90%) -- the tenant balance includes a
+    // sibling key's 365. Key lifetime 85/1000 and tenant lifetime 450/800 (56%) stay below 80%.
+    let ledger = FakeLedger::new(at(NOW))
+        .with_row("acme", "svc-a", at(WS), 85)
+        .with_row("acme", "svc-b", at(WS), 365);
+    let notices = RecordingNotices::new();
+    let treasurer = treasurer_with_notices(four_ceiling_policy(), &ledger, &notices);
+
+    let admission = admit_svc_a(&treasurer).await.expect("admitted");
+
+    let shape: Vec<_> = admission
+        .warnings()
+        .map(|w| {
+            (
+                w.scope_kind,
+                w.limit_kind,
+                w.balance.nanos(),
+                w.ceiling.nanos(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        shape,
+        vec![
+            (
+                AllowanceScopeKind::ApiKey,
+                AllowanceLimitKind::Window,
+                85,
+                100
+            ),
+            (
+                AllowanceScopeKind::Tenant,
+                AllowanceLimitKind::Window,
+                450,
+                500
+            ),
+        ]
+    );
+    assert_eq!(
+        admission.notices()[1].api_key_id,
+        None,
+        "tenant scope has no key"
+    );
+}
+
+#[tokio::test]
+async fn a_refused_admission_claims_no_notice() {
+    // The key window is exhausted (refused) while the tenant window would cross: nothing is
+    // claimed, because the claim happens only on the admitted path.
+    let ledger = FakeLedger::new(at(NOW))
+        .with_row("acme", "svc-a", at(WS), 100)
+        .with_row("acme", "svc-b", at(WS), 350);
+    let notices = RecordingNotices::new();
+    let treasurer = treasurer_with_notices(four_ceiling_policy(), &ledger, &notices);
+
+    refusal_of(admit_svc_a(&treasurer).await);
+
+    assert!(notices.attempts().is_empty());
+}
+
+#[tokio::test]
+async fn warn_at_zero_and_one_hundred_never_notify() {
+    for warn_at in [0_u8, 100] {
+        let policy = AllowancePolicy::new(usd(), 80)
+            .with_api_key("svc-a", ScopeAllowance::new(P, C).with_warn_at(warn_at));
+        // 99 of 100: as close to the ceiling as an admitted request can be.
+        let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 99);
+        let notices = RecordingNotices::new();
+        let treasurer = treasurer_with_notices(policy, &ledger, &notices);
+
+        let admission = admit_svc_a(&treasurer).await.expect("admitted");
+
+        assert!(admission.is_empty(), "warn_at {warn_at} must never notify");
+        assert!(notices.attempts().is_empty(), "warn_at {warn_at}");
+    }
+}
+
+#[tokio::test]
+async fn crossing_math_is_exact_at_a_huge_ceiling() {
+    // 80% of i64::MAX is 7_378_697_629_483_820_645.6: the smallest crossing balance is ...646.
+    let ceiling = i64::MAX;
+    let boundary = 7_378_697_629_483_820_646_i64;
+    for (balance, expected) in [(boundary - 1, 0_usize), (boundary, 1)] {
+        let policy =
+            AllowancePolicy::new(usd(), 80).with_api_key("svc-a", ScopeAllowance::new(P, ceiling));
+        let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), balance);
+        let notices = RecordingNotices::new();
+        let treasurer = treasurer_with_notices(policy, &ledger, &notices);
+
+        let admission = admit_svc_a(&treasurer).await.expect("admitted");
+
+        assert_eq!(admission.notices().len(), expected, "balance {balance}");
+    }
+}
+
+#[tokio::test]
+async fn notices_store_failure_never_blocks_admission() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 90);
+    let notices = RecordingNotices::new();
+    notices.fail_record.store(true, Ordering::SeqCst);
+    let treasurer = treasurer_with_notices(key_policy(), &ledger, &notices);
+
+    let admission = admit_svc_a(&treasurer)
+        .await
+        .expect("a notice-store failure must never fail an admitted run");
+
+    assert!(admission.is_empty(), "no notice was won");
+    assert_eq!(notices.attempts().len(), 1, "the claim was attempted");
+}
+
+#[tokio::test]
+async fn without_a_notice_store_the_warn_leg_is_off() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 90);
+    let treasurer = treasurer(key_policy(), &ledger);
+
+    let admission = admit_svc_a(&treasurer).await.expect("admitted");
+
+    assert!(admission.is_empty());
+    // abandon with nothing attached is a no-op, not a panic.
+    treasurer.abandon(&admission).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sixteen_concurrent_crossings_yield_exactly_one_notice() {
+    // One real in-memory store is BOTH the ledger and the notice store: the seeded balance of
+    // 100 is 80% of a 125 lifetime cap, a window-independent crossing.
+    let store = seeded_ledger().await;
+    let treasurer =
+        Arc::new(Treasurer::new(lifetime_policy(125), store.clone()).with_notices(store.clone()));
+
+    let mut handles = Vec::new();
+    for _ in 0..16 {
+        let treasurer = treasurer.clone();
+        let run = RunId::new_v7();
+        handles.push(tokio::spawn(async move {
+            treasurer.admit(&subject("acme", "svc-a"), Some(&run)).await
+        }));
+    }
+    let mut won = 0;
+    for handle in handles {
+        let admission = handle
+            .await
+            .expect("the admission task did not panic")
+            .expect("every concurrent admission is admitted");
+        won += admission.notices().len();
+    }
+
+    assert_eq!(won, 1, "exactly one of the sixteen carries the notice");
+}
+
+#[tokio::test]
+async fn abandon_discards_only_this_admissions_notices() {
+    let policy = AllowancePolicy::new(usd(), 80)
+        .with_api_key("svc-a", ScopeAllowance::new(P, C))
+        .with_api_key("svc-b", ScopeAllowance::new(P, C));
+    let ledger = FakeLedger::new(at(NOW))
+        .with_row("acme", "svc-a", at(WS), 85)
+        .with_row("acme", "svc-b", at(WS), 85);
+    let notices = RecordingNotices::new();
+    let treasurer = treasurer_with_notices(policy, &ledger, &notices);
+    let (run_a, run_b, run_retry) = (RunId::new_v7(), RunId::new_v7(), RunId::new_v7());
+
+    let admission_a = treasurer
+        .admit(&subject("acme", "svc-a"), Some(&run_a))
+        .await
+        .expect("admitted");
+    let admission_b = treasurer
+        .admit(&subject("acme", "svc-b"), Some(&run_b))
+        .await
+        .expect("admitted");
+    assert_eq!(admission_a.notices().len(), 1);
+    assert_eq!(admission_b.notices().len(), 1);
+
+    // A's run never persisted: give its notice back.
+    treasurer.abandon(&admission_a).await;
+
+    assert_eq!(
+        notices.discards(),
+        vec![vec![admission_a.notices()[0].notice_id.clone()]],
+        "exactly A's own notice id is discarded"
+    );
+    assert!(
+        notices
+            .notices_for_run(&run_a)
+            .await
+            .expect("read")
+            .is_empty()
+    );
+    assert_eq!(
+        notices.notices_for_run(&run_b).await.expect("read").len(),
+        1,
+        "B's notice is untouched"
+    );
+
+    // The next admission in the window wins the notice again, with its own run id.
+    let retried = treasurer
+        .admit(&subject("acme", "svc-a"), Some(&run_retry))
+        .await
+        .expect("admitted");
+    assert_eq!(retried.notices().len(), 1);
+    assert_eq!(retried.notices()[0].run_id.as_ref(), Some(&run_retry));
+}
+
+#[tokio::test]
+async fn abandon_of_an_empty_admission_touches_nothing_and_a_discard_error_is_swallowed() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 85);
+    let notices = RecordingNotices::new();
+    let treasurer = treasurer_with_notices(key_policy(), &ledger, &notices);
+
+    treasurer.abandon(&Admission::none()).await;
+    assert!(notices.discards().is_empty(), "nothing to discard, no call");
+
+    let admission = admit_svc_a(&treasurer).await.expect("admitted");
+    notices.fail_discard.store(true, Ordering::SeqCst);
+    // A failing discard is logged, never propagated: abandon has no error to return.
+    treasurer.abandon(&admission).await;
+    assert_eq!(notices.discards().len(), 1);
+}
+
+#[tokio::test]
+async fn agent_path_admission_records_a_notice_without_a_run_id() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 85);
+    let notices = RecordingNotices::new();
+    let treasurer = treasurer_with_notices(key_policy(), &ledger, &notices);
+
+    let admission = treasurer
+        .admit(&subject("acme", "svc-a"), None)
+        .await
+        .expect("admitted");
+
+    assert_eq!(admission.notices().len(), 1);
+    assert_eq!(admission.notices()[0].run_id, None);
+    let attempts = notices.attempts();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].run_id, None, "the HTTP agent path has no run");
+}

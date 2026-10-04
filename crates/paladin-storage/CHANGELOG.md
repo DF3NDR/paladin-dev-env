@@ -17,6 +17,13 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 41 (allowance admission, ALLOW-01/02/04): `TreasuryLedgerPort::balance` on the in-memory,
+  SQLite and PostgreSQL ledgers behind one shared contract suite; the once-per-window
+  `TreasuryNoticePort` store (`treasury_notices`, migration `011`) on all three adapters; migration
+  `010` (`run_schedules.tenant_id` / `api_key_id`, the schedule creator columns, round-tripped by every
+  schedule adapter) and migration `012` (`idx_treasury_ledger_tenant_window`); webhook adapters accept
+  the `allowance_warning` event kind.
+
 - `011_create_treasury_notices` migrations (`migrations/{sqlite,postgres}`): the `treasury_notices`
   table with the unique `idx_treasury_notices_once` identity `(scope_kind, tenant_id, api_key_id,
   limit_kind, window_start, ceiling_nanos)`, `api_key_id` `NOT NULL` with `''` for tenant scope and

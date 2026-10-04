@@ -5,6 +5,7 @@
 #[allow(missing_docs)]
 pub mod container {
     // ── flat file modules from paladin-core ───────────────────────────────────
+    pub use paladin_core::platform::container::allowance;
     pub use paladin_core::platform::container::autonomous_config;
     pub use paladin_core::platform::container::citadel;
     pub use paladin_core::platform::container::citadel_error;

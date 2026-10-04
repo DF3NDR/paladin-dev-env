@@ -9,6 +9,12 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 41 (allowance admission, ALLOW-01/02/04): `AllowanceAdmissionPort` and `AdmissionError`
+  (input), `TreasuryNoticePort` (output), and the defaulted `TreasuryLedgerPort::balance`
+  (`BalanceQuery`).
+- `RunSubmissionError::AllowanceExhausted(AllowanceRefusal)`, `SubmitRun.attributed_to` and
+  `CreateRunSchedule.created_by` (see `MIGRATION.md` §9.2).
+
 - `LlmResponse.cost: Option<Cost>` additive field, priced by `paladin_llm`'s
   `PricingLlmAdapter::generate` from the response's own served model (PRICE-03; see
   `MIGRATION.md` §9.2).

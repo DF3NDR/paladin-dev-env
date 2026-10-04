@@ -7,6 +7,13 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Phase 41 (allowance warnings, ALLOW-04): the markdown, JSON and table heralds each render one
+  `allowance:` line (for example `⚠ allowance: 82% of 25.0000 USD (api_key, window resets ...)`) from
+  `ExecutionMetadata::allowance_warning_display()`; a run without a warning renders byte-identically.
+
+
 ### Changed
 
 - All three heralds (markdown, JSON, table) render a run's cost exclusively through

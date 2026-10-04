@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Facade re-export of the allowance module (Phase 41 plan 41-09, D-20).** The `paladin` facade now
+  re-exports `paladin::core::platform::container::allowance` (`AllowanceRefusal`, `AllowanceWarning`,
+  `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `crosses_warn_threshold`, ...), beside
+  `container::principal` and `container::treasury_ledger`, so a facade user needs no direct
+  `paladin-core` dependency to name them. `.project/current-exports.txt` is refreshed; ADR-0056
+  records the admission model and `MIGRATION.md` §9.2 carries one consolidated new-types row per crate.
+
 - **Per-API-key rolling-window allowances, refused at admission (ALLOW-01, ALLOW-02; Phase 41
   plan 41-01).** A new `treasurer.allowance.api_keys.<name>: { period, amount }` config subtree
   (`period` as `<integer><m|h|d>` from `1m` to `366d`, `amount` a decimal string in whole

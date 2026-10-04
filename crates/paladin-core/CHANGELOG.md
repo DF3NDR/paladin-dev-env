@@ -9,6 +9,16 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 41 (allowance admission, ALLOW-01/02/04): `platform::container::allowance` module with
+  `AllowanceScopeKind`, `AllowanceLimitKind`, `AllowanceRefusal`, `AllowanceWarning`,
+  `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `LIFETIME_WINDOW_START` and the
+  integer-only `crosses_warn_threshold`; `BalanceQuery` in `treasury_ledger`.
+- `TraceEvent::AllowanceWarning` (the thirteenth variant) and `RunEventKind::AllowanceWarning`
+  (`RunEventKind` is now `#[non_exhaustive]` and gains `as_str`, the one to-string source).
+- `RunSchedule.created_by: Option<RunAttribution>` and `with_created_by`; `RunScope.allowance_warnings`
+  and `with_allowance_warnings`; `ExecutionMetadata::with_allowance_warnings` and
+  `allowance_warning_display` (see `MIGRATION.md` §9.2).
+
 - `platform::container::cost` module: `Cost`, `CurrencyCode`, `CostError`, `PriceRow`,
   `PriceTable`, `cost_of_call`, `CostTally` — pure `i64` nano-unit fixed-point cost arithmetic, no
   floating point anywhere in the module (PRICE-02).

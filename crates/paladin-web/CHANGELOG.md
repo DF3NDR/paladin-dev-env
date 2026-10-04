@@ -9,6 +9,12 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 41 (allowance admission, ALLOW-02): `429 allowance_exhausted` with a store-clock `Retry-After`
+  on `POST /v1/runs`, `POST /v1/threads/{id}/fork` and the agent `execute`, `execute/stream` and
+  `jobs` routes; `ApiError::with_retry_after` / `retry_after` / `allowance_exhausted`;
+  `AgentApiState.treasurer` / `with_treasurer`; `OPEN_ACCESS_PRINCIPAL_ID`; the `429` response in the
+  OpenAPI document (a narrow, tested exception to the frozen v0.9 golden gate).
+
 - `CostDto { nanos, currency, display }` (`run_controller.rs`) — the crate's one wire projection
   of `paladin_core::cost::Cost`, `display` produced by `treasury_ledger::format_cost` (LEDGR-04).
 - `RunApiState.treasury_ledger`/`with_treasury_ledger`.

@@ -445,7 +445,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 41-06-PLAN.md — Once-per-window notices: migrations 011/012, TreasuryNoticePort on three adapters with the sixteen-way race clause, warn-crossing claim with confirm/abandon (wave 5)
+- [x] 41-06-PLAN.md — Once-per-window notices: migrations 011/012, TreasuryNoticePort on three adapters with the sixteen-way race clause, warn-crossing claim with confirm/abandon (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

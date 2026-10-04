@@ -457,7 +457,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 41-09-PLAN.md — ADR-0056, PROMOTION.md to 0057, facade re-export, consolidated register row, crate CHANGELOGs, public-API baseline, full phase gate (wave 8)
+- [x] 41-09-PLAN.md — ADR-0056, PROMOTION.md to 0057, facade re-export, consolidated register row, crate CHANGELOGs, public-API baseline, full phase gate (wave 8)
 
 ### Phase 42: Mid-Run Halt & SSE Terminal Status
 

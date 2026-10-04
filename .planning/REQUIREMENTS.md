@@ -61,7 +61,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Allowances (ALLOW)
 
-- [ ] **ALLOW-01**: Operator can set an `allowance` per tenant and per API key with a rolling period
+- [x] **ALLOW-01**: Operator can set an `allowance` per tenant and per API key with a rolling period
   and an optional lifetime cap, distinct from every existing `max_tokens` meaning; window boundaries
   are computed in UTC from the store or server clock, never a worker's local clock
 
@@ -218,7 +218,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LEDGR-04 | Phase 39 | Complete |
 | TENANT-01 | Phase 40 | Complete |
 | TENANT-02 | Phase 40 | Complete |
-| ALLOW-01 | Phase 41 | Pending |
+| ALLOW-01 | Phase 41 | Complete |
 | ALLOW-02 | Phase 41 | Complete |
 | ALLOW-03 | Phase 42 | Pending |
 | ALLOW-04 | Phase 41 | Complete |

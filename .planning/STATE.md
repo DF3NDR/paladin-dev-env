@@ -4,16 +4,16 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 41
 current_phase_name: Admission-Time Allowance Enforcement
-status: executing
-stopped_at: Completed 41-08-PLAN.md
-last_updated: "2026-10-04T01:23:51.663Z"
+status: verifying
+stopped_at: Completed 41-09-PLAN.md
+last_updated: "2026-10-04T02:46:06.267Z"
 last_activity: 2026-10-03
 last_activity_desc: Phase 41 execution resumed (wave continue)
 progress:
   total_phases: 5
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 39
-  completed_plans: 38
+  completed_plans: 39
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([██████████] 97%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([██████████] 100%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -52,7 +52,7 @@ under `milestones/`.
 
 Phase: 41 (Admission-Time Allowance Enforcement) — EXECUTING
 Plan: 9 of 9
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 
 ## Performance Metrics
@@ -227,6 +227,7 @@ Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 | Phase 41 P06 | 75min | 3 tasks | 24 files |
 | Phase 41 P07 | 65min | 2 tasks | 17 files |
 | Phase 41 P08 | ~2h | 3 tasks | 21 files |
+| Phase 41 P09 | 40min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -344,6 +345,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 41]: Operator allowance notice rides the durable webhook_deliveries queue via RunEventKind::AllowanceWarning and a correlation run id no run owns (C3 Option A, twelve-key payload, option-b)
 - [Phase 41]: Operator webhook secret is held only on WebhookDeliveryService and signs allowance_warning deliveries before any run lookup; never on the row
 - [Phase 41]: build_run_api SSRF-checks treasurer.allowance.webhook.url at boot before spawning anything; enable the webhook only after every replica runs this build (Pitfall 12)
+- [Phase ?]: ADR-0056 (allowance admission model) accepted: tumbling UTC windows, check-only admission, every-limit composition, no role bypass, fail-closed, store-deduped notices; over-admission race closed by Phase 42
 
 ### Pending Todos
 
@@ -558,8 +560,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-04T01:23:51.632Z
-**Stopped at:** Completed 41-08-PLAN.md
+**Last session:** 2026-10-04T02:46:06.239Z
+**Stopped at:** Completed 41-09-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

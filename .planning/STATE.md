@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 41
 current_phase_name: Admission-Time Allowance Enforcement
 status: executing
-stopped_at: Completed 41-06-PLAN.md
-last_updated: "2026-10-04T00:30:28.167Z"
+stopped_at: Completed 41-07-PLAN.md
+last_updated: "2026-10-04T00:58:42.992Z"
 last_activity: 2026-10-03
 last_activity_desc: Phase 41 execution resumed (wave continue)
 progress:
   total_phases: 5
   completed_phases: 4
   total_plans: 39
-  completed_plans: 36
+  completed_plans: 37
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 92%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([██████████] 95%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 41 (Admission-Time Allowance Enforcement) — EXECUTING
-Plan: 7 of 9
+Plan: 8 of 9
 Status: Ready to execute
 Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 
@@ -225,6 +225,7 @@ Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 | Phase 41 P04 | 60min | 3 tasks | 12 files |
 | Phase 41 P05 | 75min | 3 tasks | 22 files |
 | Phase 41 P06 | 75min | 3 tasks | 24 files |
+| Phase 41 P07 | 65min | 2 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -338,6 +339,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 41]: Pre-Phase-41 schedules (NULL created_by) fire unattributed and ungated; tracked as open WINDOWS.md row 63 (41-05, D-08)
 - [Phase ?]: 41-06: notices dedup is store-enforced (unique idx_treasury_notices_once + ON CONFLICT DO NOTHING); api_key_id '' for tenant scope and epoch window_start for lifetime; claim before insert, abandon discards; notice failure never blocks a run
 - [Phase ?]: 41-06: validate_notice rejects a window notice without bounds and a lifetime notice with a window, so adapters agree on lifetime read-back
+- [Phase 41]: 41-07: allowance trace event emitted by the worker on the Queued first dispatch before RunStarted; one shared herald line via ExecutionMetadata::allowance_warning_display; notice store opened once in build_run_api and shared by pool and Treasurer
 
 ### Pending Todos
 
@@ -552,8 +554,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-04T00:30:28.139Z
-**Stopped at:** Completed 41-06-PLAN.md
+**Last session:** 2026-10-04T00:58:42.964Z
+**Stopped at:** Completed 41-07-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

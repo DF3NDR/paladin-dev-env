@@ -449,7 +449,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 41-07-PLAN.md — TraceEvent::AllowanceWarning emitted by the worker on first dispatch, one herald line in all three heralds, the HTTP agent path through RunScope (wave 6)
+- [x] 41-07-PLAN.md — TraceEvent::AllowanceWarning emitted by the worker on first dispatch, one herald line in all three heralds, the HTTP agent path through RunScope (wave 6)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

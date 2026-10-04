@@ -3,7 +3,7 @@ status: testing
 phase: 41-admission-time-allowance-enforcement
 source: [41-VERIFICATION.md]
 started: 2026-10-04T12:45:00Z
-updated: 2026-10-04T12:45:00Z
+updated: 2026-10-04T12:04:53Z
 ---
 
 ## Current Test
@@ -35,12 +35,16 @@ result: [pending]
 expected: Confirm ADR-0056 records the race and its closure by Phase 42's reservation at the superstep boundary, and accept it as a known property of check-only admission (D-05). Why human: cannot be proven or prevented mechanically under D-05; the Treasurer proofs show admission is read-only and concurrency-safe, but two simultaneous admissions can both pass.
 result: [pending]
 
+### 4. Backstop truths: crash between a won notice claim and the run insert (41-06) and `RunWorkerPool::with_treasury_notices` inside `build_run_api` (41-08)
+expected: Accept that a crash in the window between a won notice claim and the run insert can lose one window's notice but never duplicates it or persists a run, and that the production-builder attachment of the notice store to the worker pool has no observable output of its own. The worker tests and the integrated tracer prove the same code path with the same builder call. Why human: both are `verification: backstop` truths (non-inferable by construction) and so abstain rather than pass.
+result: [pending]
+
 ## Summary
 
-total: 3
+total: 4
 passed: 0
 issues: 0
-pending: 3
+pending: 4
 skipped: 0
 blocked: 0
 

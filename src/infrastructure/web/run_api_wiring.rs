@@ -72,7 +72,7 @@ use crate::application::services::run::webhook::{
 };
 use crate::application::services::run::worker::{RunWorkerOptions, RunWorkerPool};
 use crate::application::services::run::{RunEventBus, RunEventStreamService};
-use crate::application::services::treasurer::Treasurer;
+use crate::application::services::treasurer::{OperatorNoticeTarget, Treasurer};
 use crate::config::assistants::AssistantsConfig;
 use crate::config::engine::EngineConfig;
 use crate::config::env_utils::EnvOverridable;
@@ -580,6 +580,26 @@ pub async fn build_run_api(
         );
     };
 
+    // ALLOW-04, D-17, T-41-38: the operator webhook URL passes the SSRF guard at boot, failing
+    // closed with the config key path in the message, BEFORE anything is spawned. The delivery
+    // service re-checks it at send time through its own guard. A private or loopback target
+    // needs `webhooks.allow_private`; the cloud metadata address is always rejected. Only
+    // checked when a Treasurer will actually be built (an allowance entry exists).
+    if !treasurer_config.allowance.is_empty()
+        && let Some(webhook) = &treasurer_config.allowance.webhook
+    {
+        SsrfGuard::new(configs.webhooks.allow_private)
+            .check_url(&webhook.url)
+            .await
+            .map_err(|rejection| {
+                format!(
+                    "treasurer.allowance.webhook.url rejected by the SSRF guard: {rejection} -- a \
+                     private or loopback target needs webhooks.allow_private: true (the cloud \
+                     metadata address is always rejected)"
+                )
+            })?;
+    }
+
     let (run_repository, assistant_repository, schedule_repository, webhook_repository) =
         match &configs.run_store.backend {
             RunStoreBackend::Disabled => unreachable!("handled above"),
@@ -729,10 +749,18 @@ pub async fn build_run_api(
         let notices = treasury_notices.as_ref().ok_or(
             "treasurer.allowance has entries but no treasury notice store was built from run_store.backend",
         )?;
-        Some(
-            Arc::new(Treasurer::new(policy, Arc::clone(ledger)).with_notices(Arc::clone(notices)))
-                as Arc<dyn AllowanceAdmissionPort>,
-        )
+        let mut treasurer =
+            Treasurer::new(policy, Arc::clone(ledger)).with_notices(Arc::clone(notices));
+        // ALLOW-04, D-17: the operator webhook rides the SAME durable delivery queue the run
+        // webhooks use (never a second HTTP client). The URL was SSRF-checked above; the
+        // signing secret is attached to the delivery service below, never to this target.
+        if let Some(webhook) = &treasurer_config.allowance.webhook {
+            treasurer = treasurer.with_operator_webhook(OperatorNoticeTarget::new(
+                webhook.url.clone(),
+                Arc::clone(&webhook_repository),
+            ));
+        }
+        Some(Arc::new(treasurer) as Arc<dyn AllowanceAdmissionPort>)
     };
 
     let mut submission_service = RunSubmissionService::new(
@@ -775,7 +803,16 @@ pub async fn build_run_api(
         Arc::clone(&run_repository),
         WebhookDeliveryOptions::from(&configs.webhooks),
     )
-    .map_err(|e| format!("failed to build the webhook delivery HTTP client: {e}"))?;
+    .map_err(|e| format!("failed to build the webhook delivery HTTP client: {e}"))?
+    // ALLOW-04, D-17, C3: the operator target's HMAC key, held on the service and signed with
+    // before any run lookup -- never written to a delivery row.
+    .with_operator_notice_secret(
+        treasurer_config
+            .allowance
+            .webhook
+            .as_ref()
+            .and_then(|webhook| webhook.secret.clone()),
+    );
     tasks.push(Arc::new(webhook_service).spawn(&coordinator));
 
     let assistant_service: Arc<dyn AssistantAdminPort> = Arc::new(AssistantService::new(
@@ -1577,6 +1614,355 @@ mod tests {
         }
         assert!(
             recorded,
+            "a UTC window boundary was crossed on both attempts"
+        );
+
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        cleanup(&run_path);
+        cleanup(&wp_path);
+    }
+
+    // ---- Phase 41 (41-08): the operator webhook leg (D-17, T-41-38, C3) ----
+
+    /// `allowance_settings` for `svc-a` plus an operator webhook target.
+    fn operator_webhook_settings(url: &str, secret: Option<&str>) -> Settings {
+        use crate::config::treasurer::AllowanceWebhookConfig;
+        let mut settings = allowance_settings(&[("svc-a", "1d", "2.50")], &[]);
+        settings.treasurer.allowance.webhook = Some(AllowanceWebhookConfig {
+            url: url.to_string(),
+            secret: secret.map(str::to_string),
+        });
+        settings
+    }
+
+    /// Boot `build_run_api` over fresh SQLite files, returning the result and the temp paths.
+    async fn build_with_webhook_settings(
+        label: &str,
+        settings: &Settings,
+        allow_private: bool,
+    ) -> (
+        Result<RunApiHandles, Box<dyn std::error::Error>>,
+        ShutdownCoordinator,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        let (run_path, run_url) = temp_sqlite_url(label);
+        let (wp_path, wp_url) = temp_sqlite_url(&format!("{label}_wp"));
+        let mut configs = sqlite_configs(&run_url);
+        configs.webhooks.allow_private = allow_private;
+        let coordinator = ShutdownCoordinator::new();
+        let result = build_run_api(
+            configs,
+            settings,
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            principal_auth(&[("key-a", "svc-a", "acme")]),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await;
+        (result, coordinator, run_path, wp_path)
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_rejects_a_private_operator_webhook_without_allow_private() {
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let settings = operator_webhook_settings("http://127.0.0.1:9/hook", Some("op-secret-xyz"));
+        let (result, coordinator, run_path, wp_path) =
+            build_with_webhook_settings("op_hook_private", &settings, false).await;
+        let message = result
+            .err()
+            .expect("a loopback operator webhook must stop the boot")
+            .to_string();
+        assert!(
+            message.contains("treasurer.allowance.webhook.url"),
+            "names the config key: {message}"
+        );
+        assert!(
+            message.contains("webhooks.allow_private"),
+            "points at the escape hatch: {message}"
+        );
+        assert!(
+            !message.contains("op-secret-xyz"),
+            "never echoes the secret: {message}"
+        );
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        cleanup(&run_path);
+        cleanup(&wp_path);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_accepts_a_private_operator_webhook_with_allow_private() {
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let settings = operator_webhook_settings("http://127.0.0.1:9/hook", Some("op-secret-xyz"));
+        let (result, coordinator, run_path, wp_path) =
+            build_with_webhook_settings("op_hook_allowed", &settings, true).await;
+        let handles = result.expect("allow_private admits a loopback operator webhook");
+        assert!(handles.treasurer.is_some());
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        cleanup(&run_path);
+        cleanup(&wp_path);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_rejects_the_metadata_address_even_with_allow_private() {
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let settings = operator_webhook_settings("http://169.254.169.254/latest", None);
+        let (result, coordinator, run_path, wp_path) =
+            build_with_webhook_settings("op_hook_metadata", &settings, true).await;
+        let message = result
+            .err()
+            .expect("the cloud metadata address is always rejected")
+            .to_string();
+        assert!(
+            message.contains("treasurer.allowance.webhook.url"),
+            "{message}"
+        );
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        cleanup(&run_path);
+        cleanup(&wp_path);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_without_an_operator_webhook_builds_no_target() {
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        // An allowance and no webhook: the Treasurer is built without a target and the delivery
+        // drain loop still spawns (run webhooks need it). A private default needs no
+        // `allow_private` because nothing is checked.
+        let settings = allowance_settings(&[("svc-a", "1d", "2.50")], &[]);
+        let (result, coordinator, run_path, wp_path) =
+            build_with_webhook_settings("op_hook_none", &settings, false).await;
+        let handles = result.expect("an allowance without a webhook wires");
+        assert!(handles.treasurer.is_some());
+        assert!(
+            handles.tasks.len() >= 2,
+            "the worker pool and the webhook delivery loop both spawn"
+        );
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        cleanup(&run_path);
+        cleanup(&wp_path);
+    }
+
+    /// The production wiring delivers one signed operator notice: a key at exactly its 80% warn
+    /// threshold is admitted through the real run router, exactly one notice row names the
+    /// admitted run, and the spawned drain loop (with the Treasurer's operator target and the
+    /// delivery service's operator secret both wired by `build_run_api`) delivers exactly one
+    /// `allowance_warning` POST whose HMAC verifies over the captured raw bytes. A UTC window
+    /// rollover between seeding and the POST (Pitfall 10) re-runs the scenario once.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_wires_the_allowance_warn_path() {
+        use crate::application::services::treasurer::window_for;
+        use hmac::{Hmac, Mac};
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_core::platform::container::paladin::PaladinData;
+        use paladin_core::platform::container::run::RunId;
+        use paladin_core::platform::container::treasury_ledger::{
+            LedgerScope, SettleRequest, SettlementKey,
+        };
+        use sha2::Sha256;
+        use std::sync::Mutex;
+
+        struct NoopExecutor;
+        #[async_trait]
+        impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort for NoopExecutor {
+            async fn execute(
+                &self,
+                _paladin: &paladin_core::platform::container::paladin::Paladin,
+                _input: &str,
+            ) -> Result<
+                paladin_ports::output::paladin_port::PaladinResult,
+                paladin_core::platform::container::paladin_error::PaladinError,
+            > {
+                Err(
+                    paladin_core::platform::container::paladin_error::PaladinError::ExecutionError(
+                        "the operator webhook wiring test never runs the agent".to_string(),
+                    ),
+                )
+            }
+        }
+
+        // (raw body, signature header, event header) of every POST the receiver saw.
+        type Captured = Arc<Mutex<Vec<(Vec<u8>, String, String)>>>;
+        let mut receiver = mockito::Server::new_async().await;
+        let captured: Captured = Arc::new(Mutex::new(Vec::new()));
+        {
+            let sink = Arc::clone(&captured);
+            receiver
+                .mock("POST", "/hook")
+                .with_status_code_from_request(move |req| {
+                    let header = |name: &str| {
+                        req.header(name)
+                            .first()
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or_default()
+                            .to_string()
+                    };
+                    sink.lock().expect("not poisoned").push((
+                        req.body().cloned().unwrap_or_default(),
+                        header("x-paladin-signature"),
+                        header("x-paladin-event"),
+                    ));
+                    200
+                })
+                .expect_at_least(0)
+                .create_async()
+                .await;
+        }
+
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let (run_path, run_url) = temp_sqlite_url("wired_operator");
+        let (wp_path, wp_url) = temp_sqlite_url("wired_operator_wp");
+
+        let registry = Arc::new(AgentRegistry::new());
+        let paladin = Arc::new(paladin_core::base::entity::node::Node::new(
+            PaladinData {
+                system_prompt: "hi".to_string(),
+                name: "OperatorAgent".to_string(),
+                ..Default::default()
+            },
+            Some("OperatorAgent".to_string()),
+        ));
+        registry.insert("operator-agent", paladin, Arc::new(NoopExecutor));
+
+        let mut configs = sqlite_configs(&run_url);
+        configs.webhooks.allow_private = true;
+        let ledger = build_treasury_ledger(&configs.run_store)
+            .await
+            .expect("ledger opens")
+            .expect("a sqlite run store yields a ledger");
+        let notices = build_treasury_notices(&configs.run_store)
+            .await
+            .expect("notice store opens")
+            .expect("a sqlite run store yields a notice store");
+        let mut settings = allowance_settings(&[("svc-w", "1d", "1.00")], &[]);
+        settings.treasurer.allowance.webhook =
+            Some(crate::config::treasurer::AllowanceWebhookConfig {
+                url: format!("{}/hook", receiver.url()),
+                secret: Some("op-secret".to_string()),
+            });
+        let coordinator = ShutdownCoordinator::new();
+        let handles = build_run_api(
+            configs,
+            &settings,
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            principal_auth(&[("key-w", "svc-w", "acme")]),
+            registry,
+        )
+        .await
+        .expect("sqlite run store with an allowance and an operator webhook wires");
+        let app = paladin_web::run_router(handles.run_state);
+
+        let mut delivered = false;
+        for _ in 0..2 {
+            let before =
+                window_for(ledger.store_now().await.expect("store clock"), 86_400).expect("window");
+            let usd = CurrencyCode::new("USD").expect("usd");
+            ledger
+                .settle(SettleRequest::unreserved(
+                    LedgerScope::new("acme", "svc-w"),
+                    SettlementKey::new(RunId::new_v7(), 0, 0),
+                    // 0.80 of a 1.00 window: exactly the default 80% warn threshold.
+                    Cost::new(800_000_000, usd),
+                    std::collections::BTreeMap::from([("gpt-4".to_string(), 800_000_000_i64)]),
+                ))
+                .await
+                .expect("seed the key at its warn threshold");
+            captured.lock().expect("not poisoned").clear();
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", "key-w")
+                        .body(Body::from(
+                            r#"{"assistant_id":"operator-agent","input":{}}"#,
+                        ))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            let after =
+                window_for(ledger.store_now().await.expect("store clock"), 86_400).expect("window");
+            if before != after {
+                continue;
+            }
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read body");
+            let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON body");
+            let run_id = RunId::parse(body["run_id"].as_str().expect("run_id in the body"))
+                .expect("a valid run id");
+
+            let rows = notices.notices_for_run(&run_id).await.expect("read back");
+            assert_eq!(rows.len(), 1, "exactly one notice row for the admitted run");
+
+            // The spawned drain loop delivers it: poll every 100 ms for at most 10 s.
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while captured.lock().expect("not poisoned").is_empty()
+                && std::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            // Let a (wrong) duplicate delivery surface before asserting exactly one.
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            let seen = captured.lock().expect("not poisoned").clone();
+            assert_eq!(seen.len(), 1, "exactly one operator POST");
+            let (raw, signature, event) = &seen[0];
+            assert_eq!(event, "allowance_warning");
+            let mut mac =
+                <Hmac<Sha256> as Mac>::new_from_slice(b"op-secret").expect("any key length");
+            mac.update(raw);
+            let expected = format!(
+                "sha256={}",
+                mac.finalize()
+                    .into_bytes()
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            );
+            assert_eq!(signature, &expected, "signed with the operator secret");
+            let payload: serde_json::Value = serde_json::from_slice(raw).expect("JSON payload");
+            assert_eq!(payload["run_id"], serde_json::json!(run_id));
+            assert_eq!(payload["tenant_id"], "acme");
+            assert_eq!(payload["api_key_id"], "svc-w");
+            delivered = true;
+            break;
+        }
+        assert!(
+            delivered,
             "a UTC window boundary was crossed on both attempts"
         );
 

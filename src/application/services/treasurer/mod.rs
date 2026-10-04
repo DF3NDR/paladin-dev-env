@@ -19,6 +19,12 @@
 //!   failure is logged and the run is still admitted. A claim is made BEFORE the run row is
 //!   inserted, so `abandon` gives an admitted-but-never-persisted run's notices back (a crash in
 //!   between can lose a window's notice but never duplicate it).
+//! - **The operator webhook rides the durable queue** (ALLOW-04, D-17): when an
+//!   [`OperatorNoticeTarget`] is attached ([`Treasurer::with_operator_webhook`]), `confirm`
+//!   enqueues one `webhook_deliveries` row (event `allowance_warning`) per notice the
+//!   admission won, delivered later by the existing signed, SSRF-guarded, no-redirect
+//!   `WebhookDeliveryService`. This module never builds an HTTP client and never holds the
+//!   signing secret -- the delivery service does (C3).
 //!
 //! This module imports `paladin_core` and `paladin_ports` only, never a storage adapter
 //! (hexagonal, D-06).
@@ -37,14 +43,68 @@ use paladin_core::platform::container::allowance::{
 };
 use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::principal::RunAttribution;
-use paladin_core::platform::container::run::RunId;
+use paladin_core::platform::container::run::{RunEventKind, RunId};
 use paladin_core::platform::container::treasury_ledger::{BalanceQuery, format_cost};
+use paladin_core::platform::container::waypoint::ThreadId;
+use paladin_core::platform::container::webhook::{WebhookDelivery, WebhookDeliveryId};
 use paladin_ports::input::allowance_admission_port::{AdmissionError, AllowanceAdmissionPort};
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
+use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
+
+use crate::application::services::run::webhook::AllowanceWarningPayload;
 
 pub use policy::{AllowancePolicy, Ceiling, ScopeAllowance};
 pub use window::window_for;
+
+/// The thread id every operator allowance delivery row carries (C3 Option A). No run lives on
+/// this thread, which is one of the two reasons an operator notice never appears under a
+/// caller's `GET /v1/runs/{id}/webhook-deliveries` (the other is the correlation run id).
+pub const OPERATOR_NOTICE_THREAD_ID: &str = "treasurer-notices";
+
+/// Where an operator allowance notice is delivered (D-17): the operator's webhook URL and the
+/// durable delivery queue the notice is enqueued onto.
+///
+/// Carries no signing secret: the secret lives on `WebhookDeliveryService`
+/// (`with_operator_notice_secret`) and never touches a delivery row. `Debug` prints the URL
+/// only.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use paladin::application::services::treasurer::OperatorNoticeTarget;
+/// use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
+///
+/// let target = OperatorNoticeTarget::new(
+///     "https://ops.example.com/allowance",
+///     Arc::new(InMemoryWebhookDeliveryRepository::new()),
+/// );
+/// assert!(format!("{target:?}").contains("ops.example.com"));
+/// ```
+#[derive(Clone)]
+pub struct OperatorNoticeTarget {
+    url: String,
+    deliveries: Arc<dyn WebhookDeliveryRepositoryPort>,
+}
+
+impl OperatorNoticeTarget {
+    /// Build a target delivering to `url` through the `deliveries` queue.
+    pub fn new(url: impl Into<String>, deliveries: Arc<dyn WebhookDeliveryRepositoryPort>) -> Self {
+        Self {
+            url: url.into(),
+            deliveries,
+        }
+    }
+}
+
+impl std::fmt::Debug for OperatorNoticeTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OperatorNoticeTarget")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
+    }
+}
 
 /// The Treasurer facade service: an [`AllowancePolicy`] evaluated over a [`TreasuryLedgerPort`].
 ///
@@ -73,6 +133,8 @@ pub struct Treasurer {
     ledger: Arc<dyn TreasuryLedgerPort>,
     /// The once-per-window notice store (ALLOW-04). `None` leaves the warn leg off.
     notices: Option<Arc<dyn TreasuryNoticePort>>,
+    /// The operator webhook target (D-17). `None` disables only the webhook leg.
+    operator_webhook: Option<OperatorNoticeTarget>,
 }
 
 impl std::fmt::Debug for Treasurer {
@@ -80,6 +142,7 @@ impl std::fmt::Debug for Treasurer {
         f.debug_struct("Treasurer")
             .field("policy_set", &!self.policy.is_empty())
             .field("notices", &self.notices.is_some())
+            .field("operator_webhook", &self.operator_webhook)
             .finish_non_exhaustive()
     }
 }
@@ -91,6 +154,7 @@ impl Treasurer {
             policy,
             ledger,
             notices: None,
+            operator_webhook: None,
         }
     }
 
@@ -102,6 +166,68 @@ impl Treasurer {
     pub fn with_notices(mut self, notices: Arc<dyn TreasuryNoticePort>) -> Self {
         self.notices = Some(notices);
         self
+    }
+
+    /// Attach the operator webhook target (ALLOW-04, D-17).
+    ///
+    /// Every notice an admission won is enqueued onto the target's delivery queue by
+    /// [`AllowanceAdmissionPort::confirm`]. Without a target only the webhook leg is off: the
+    /// notice row, the trace event and the herald line still occur.
+    #[must_use]
+    pub fn with_operator_webhook(mut self, target: OperatorNoticeTarget) -> Self {
+        self.operator_webhook = Some(target);
+        self
+    }
+
+    /// Enqueue one operator delivery for a won notice. Best-effort: every failure is logged
+    /// at `error` (scope kind, tenant id, error -- never a key value or the secret) and
+    /// swallowed, because the run is already admitted and the notice row already exists.
+    async fn enqueue_operator_delivery(
+        &self,
+        target: &OperatorNoticeTarget,
+        notice: &AllowanceNotice,
+    ) {
+        let scope = notice.warning.scope_kind.as_str();
+        let payload = match serde_json::to_string(&AllowanceWarningPayload::from_notice(notice)) {
+            Ok(payload) => payload,
+            Err(error) => {
+                log::error!(
+                    "operator allowance notice not enqueued ({scope} scope, tenant {}): \
+                     payload serialization failed: {error}",
+                    notice.tenant_id
+                );
+                return;
+            }
+        };
+        let thread_id = match ThreadId::new(OPERATOR_NOTICE_THREAD_ID) {
+            Ok(thread_id) => thread_id,
+            Err(error) => {
+                log::error!(
+                    "operator allowance notice not enqueued ({scope} scope, tenant {}): \
+                     invalid notice thread id: {error}",
+                    notice.tenant_id
+                );
+                return;
+            }
+        };
+        // A fresh correlation run id that no run owns (C3 Option A): the row can never be
+        // listed under the admitting run, and the delivery service signs it without a run
+        // lookup. The REAL admitting run id travels in the payload.
+        let delivery = WebhookDelivery::new(
+            WebhookDeliveryId::new_v7(),
+            RunId::new_v7(),
+            thread_id,
+            RunEventKind::AllowanceWarning,
+            target.url.clone(),
+            payload,
+            notice.recorded_at,
+        );
+        if let Err(error) = target.deliveries.enqueue(delivery).await {
+            log::error!(
+                "operator allowance notice not enqueued ({scope} scope, tenant {}): {error}",
+                notice.tenant_id
+            );
+        }
     }
 
     /// Claim the notice for one warn crossing and, when this admission won it, return it.
@@ -260,9 +386,22 @@ impl AllowanceAdmissionPort for Treasurer {
         Ok(admission)
     }
 
-    /// Nothing to confirm in this plan: the durable notice already exists, written at `admit`
-    /// time. The operator webhook leg attaches here in 41-08.
-    async fn confirm(&self, _admission: &Admission) {}
+    /// Deliver the operator notices this admission won (D-17): when an
+    /// [`OperatorNoticeTarget`] is attached, enqueue exactly one `allowance_warning` delivery
+    /// per won notice through the durable webhook queue. The durable notice row already exists
+    /// from `admit`; this adds only the webhook leg.
+    ///
+    /// Best-effort: a serialization, thread-id or enqueue failure is logged at `error` and not
+    /// retried, and `confirm` never fails or blocks the run. With no target attached nothing
+    /// is enqueued.
+    async fn confirm(&self, admission: &Admission) {
+        let Some(target) = &self.operator_webhook else {
+            return;
+        };
+        for notice in admission.notices() {
+            self.enqueue_operator_delivery(target, notice).await;
+        }
+    }
 
     /// Give back the notices this admission won (RESEARCH Pattern 3): the run was admitted but
     /// never persisted or enqueued, so the next admission in the same window must win them

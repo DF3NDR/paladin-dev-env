@@ -1136,3 +1136,261 @@ async fn agent_path_admission_records_a_notice_without_a_run_id() {
     assert_eq!(attempts.len(), 1);
     assert_eq!(attempts[0].run_id, None, "the HTTP agent path has no run");
 }
+
+// -- the operator webhook leg: confirm enqueues one delivery per won notice (D-17, 41-08) ------
+
+use paladin_core::platform::container::webhook::{
+    WebhookAttemptResult, WebhookDelivery as OperatorDelivery, WebhookDeliveryId,
+};
+use paladin_ports::output::webhook_delivery_port::{
+    WebhookDeliveryPage, WebhookDeliveryRepositoryError, WebhookDeliveryRepositoryPort,
+};
+use paladin_storage::webhook::in_memory::InMemoryWebhookDeliveryRepository;
+
+const OPERATOR_URL: &str = "https://ops.example.com/allowance";
+
+/// A delivery queue whose `enqueue` always fails and counts its attempts; every other method
+/// is unreachable from `confirm`.
+#[derive(Default)]
+struct FailingDeliveries {
+    enqueue_attempts: std::sync::atomic::AtomicU32,
+}
+
+#[async_trait]
+impl WebhookDeliveryRepositoryPort for FailingDeliveries {
+    async fn enqueue(
+        &self,
+        _delivery: OperatorDelivery,
+    ) -> Result<(), WebhookDeliveryRepositoryError> {
+        self.enqueue_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(WebhookDeliveryRepositoryError::Backend {
+            source: "scripted enqueue failure".into(),
+        })
+    }
+
+    async fn get(
+        &self,
+        _delivery_id: &WebhookDeliveryId,
+    ) -> Result<Option<OperatorDelivery>, WebhookDeliveryRepositoryError> {
+        Ok(None)
+    }
+
+    async fn claim_due(
+        &self,
+        _now: DateTime<Utc>,
+        _limit: u32,
+    ) -> Result<Vec<OperatorDelivery>, WebhookDeliveryRepositoryError> {
+        Ok(Vec::new())
+    }
+
+    async fn record_attempt(
+        &self,
+        _delivery_id: &WebhookDeliveryId,
+        _result: WebhookAttemptResult,
+    ) -> Result<(), WebhookDeliveryRepositoryError> {
+        Ok(())
+    }
+
+    async fn list_for_run(
+        &self,
+        _run_id: &RunId,
+        _limit: u32,
+        _cursor: Option<WebhookDeliveryId>,
+    ) -> Result<WebhookDeliveryPage, WebhookDeliveryRepositoryError> {
+        Ok(WebhookDeliveryPage::default())
+    }
+}
+
+fn treasurer_with_operator_webhook(
+    policy: AllowancePolicy,
+    ledger: &Arc<FakeLedger>,
+    notices: &Arc<RecordingNotices>,
+    deliveries: Arc<dyn WebhookDeliveryRepositoryPort>,
+) -> Treasurer {
+    treasurer_with_notices(policy, ledger, notices)
+        .with_operator_webhook(OperatorNoticeTarget::new(OPERATOR_URL, deliveries))
+}
+
+/// A ledger whose key window (85 of 100) and tenant window (450 of 500) both cross 80%.
+fn two_crossing_ledger() -> Arc<FakeLedger> {
+    FakeLedger::new(at(NOW))
+        .with_row("acme", "svc-a", at(WS), 85)
+        .with_row("acme", "svc-b", at(WS), 365)
+}
+
+#[tokio::test]
+async fn confirm_enqueues_one_operator_delivery_per_won_notice() {
+    let ledger = two_crossing_ledger();
+    let notices = RecordingNotices::new();
+    let deliveries = Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let treasurer = treasurer_with_operator_webhook(
+        four_ceiling_policy(),
+        &ledger,
+        &notices,
+        deliveries.clone(),
+    );
+    let run = RunId::new_v7();
+
+    let admission = treasurer
+        .admit(&subject("acme", "svc-a"), Some(&run))
+        .await
+        .expect("admitted");
+    assert_eq!(admission.notices().len(), 2);
+    // `admit` alone enqueues nothing: the webhook leg is `confirm`'s.
+    assert!(
+        deliveries
+            .claim_due(at(NOW), 10)
+            .await
+            .expect("claim")
+            .is_empty()
+    );
+
+    treasurer.confirm(&admission).await;
+
+    let claimed = deliveries.claim_due(at(NOW), 10).await.expect("claim");
+    assert_eq!(claimed.len(), 2, "exactly one delivery per won notice");
+    for delivery in &claimed {
+        assert_eq!(delivery.event, RunEventKind::AllowanceWarning);
+        assert_eq!(delivery.url, OPERATOR_URL);
+        assert_eq!(delivery.thread_id.as_str(), OPERATOR_NOTICE_THREAD_ID);
+        assert_ne!(delivery.run_id, run, "a correlation id no run owns");
+    }
+    let mut stored: Vec<String> = claimed.iter().map(|d| d.payload.clone()).collect();
+    let mut expected: Vec<String> = admission
+        .notices()
+        .iter()
+        .map(|n| serde_json::to_string(&AllowanceWarningPayload::from_notice(n)).expect("json"))
+        .collect();
+    stored.sort();
+    expected.sort();
+    assert_eq!(stored, expected, "payload serialized once, stored verbatim");
+    // The real admitting run travels in the payload.
+    let value: serde_json::Value = serde_json::from_str(&claimed[0].payload).expect("json");
+    assert_eq!(value["run_id"], serde_json::json!(run));
+    assert_eq!(value["tenant_id"], "acme");
+}
+
+#[tokio::test]
+async fn operator_delivery_is_not_listed_for_the_admitting_run() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 85);
+    let notices = RecordingNotices::new();
+    let deliveries = Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let treasurer =
+        treasurer_with_operator_webhook(key_policy(), &ledger, &notices, deliveries.clone());
+    let run = RunId::new_v7();
+
+    let admission = treasurer
+        .admit(&subject("acme", "svc-a"), Some(&run))
+        .await
+        .expect("admitted");
+    treasurer.confirm(&admission).await;
+
+    let listed = deliveries
+        .list_for_run(&run, 100, None)
+        .await
+        .expect("list");
+    assert!(
+        listed.items.is_empty(),
+        "the admitting run's own delivery list never shows an operator notice"
+    );
+    assert_eq!(
+        deliveries
+            .claim_due(at(NOW), 10)
+            .await
+            .expect("claim")
+            .len(),
+        1,
+        "the notice is queued, just not under the run"
+    );
+}
+
+#[tokio::test]
+async fn confirm_without_an_operator_target_enqueues_nothing() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 85);
+    let notices = RecordingNotices::new();
+    // No `with_operator_webhook`: the queue below is reachable by nothing the Treasurer holds,
+    // and the notice leg alone still works.
+    let treasurer = treasurer_with_notices(key_policy(), &ledger, &notices);
+    let run = RunId::new_v7();
+
+    let admission = treasurer
+        .admit(&subject("acme", "svc-a"), Some(&run))
+        .await
+        .expect("admitted");
+    treasurer.confirm(&admission).await;
+
+    assert_eq!(admission.notices().len(), 1, "the notice row still occurs");
+    assert_eq!(notices.notices_for_run(&run).await.expect("read").len(), 1);
+    assert!(format!("{treasurer:?}").contains("operator_webhook: None"));
+}
+
+#[tokio::test]
+async fn abandon_never_enqueues() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 85);
+    let notices = RecordingNotices::new();
+    let deliveries = Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let treasurer =
+        treasurer_with_operator_webhook(key_policy(), &ledger, &notices, deliveries.clone());
+
+    let admission = admit_svc_a(&treasurer).await.expect("admitted");
+    treasurer.abandon(&admission).await;
+
+    assert!(
+        deliveries
+            .claim_due(at(NOW), 10)
+            .await
+            .expect("claim")
+            .is_empty(),
+        "an abandoned admission gives its notice back and sends nothing"
+    );
+}
+
+#[tokio::test]
+async fn enqueue_failure_is_logged_and_never_blocks() {
+    let ledger = two_crossing_ledger();
+    let notices = RecordingNotices::new();
+    let deliveries = Arc::new(FailingDeliveries::default());
+    let treasurer = treasurer_with_operator_webhook(
+        four_ceiling_policy(),
+        &ledger,
+        &notices,
+        deliveries.clone(),
+    );
+
+    let admission = admit_svc_a(&treasurer).await.expect("admitted");
+    // Returns normally: `confirm` has no error to surface and the run is unaffected.
+    treasurer.confirm(&admission).await;
+
+    assert_eq!(
+        deliveries
+            .enqueue_attempts
+            .load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "one attempt per won notice, never retried"
+    );
+}
+
+#[tokio::test]
+async fn agent_path_operator_payload_has_a_null_run_id() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 85);
+    let notices = RecordingNotices::new();
+    let deliveries = Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let treasurer =
+        treasurer_with_operator_webhook(key_policy(), &ledger, &notices, deliveries.clone());
+
+    let admission = treasurer
+        .admit(&subject("acme", "svc-a"), None)
+        .await
+        .expect("admitted");
+    treasurer.confirm(&admission).await;
+
+    let claimed = deliveries.claim_due(at(NOW), 10).await.expect("claim");
+    assert_eq!(claimed.len(), 1);
+    let value: serde_json::Value = serde_json::from_str(&claimed[0].payload).expect("json");
+    assert!(value["run_id"].is_null(), "no run row on the agent path");
+    assert_eq!(
+        value["api_key_id"], "svc-a",
+        "the key NAME identifies the scope"
+    );
+}

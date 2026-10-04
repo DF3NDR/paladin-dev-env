@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-03 23:47:13 UTC
+# Public API Surface - Generated 2026-10-04 00:23:09 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -4086,6 +4086,7 @@ impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::tr
 pub struct paladin::application::services::treasurer::Treasurer
 impl paladin::application::services::treasurer::Treasurer
 pub fn paladin::application::services::treasurer::Treasurer::new(paladin::application::services::treasurer::AllowancePolicy, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
+pub fn paladin::application::services::treasurer::Treasurer::with_notices(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_notice_port::TreasuryNoticePort>) -> Self
 impl core::fmt::Debug for paladin::application::services::treasurer::Treasurer
 pub fn paladin::application::services::treasurer::Treasurer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort for paladin::application::services::treasurer::Treasurer
@@ -8344,4 +8345,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4158
+Total public items: 4159

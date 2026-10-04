@@ -17,6 +17,20 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- `011_create_treasury_notices` migrations (`migrations/{sqlite,postgres}`): the `treasury_notices`
+  table with the unique `idx_treasury_notices_once` identity `(scope_kind, tenant_id, api_key_id,
+  limit_kind, window_start, ceiling_nanos)`, `api_key_id` `NOT NULL` with `''` for tenant scope and
+  the Unix epoch as a lifetime notice's `window_start` (a NULL in a unique key never conflicts), and
+  the partial `idx_treasury_notices_run`. The in-memory, SQLite and PostgreSQL treasury adapters
+  implement the new `TreasuryNoticePort` (`record` / `notices_for_run` / `discard`) with
+  `INSERT ... ON CONFLICT DO NOTHING`; the shared `notice_contract_tests` suite proves first-claim
+  wins, tenant-scope and lifetime dedup, re-arm on a raised ceiling, a distinct window, a
+  sixteen-way concurrent claim yielding exactly one `Recorded`, per-run read-back and discard
+  (ALLOW-04, D-16).
+- `012_add_treasury_ledger_tenant_index` migrations: the additive
+  `idx_treasury_ledger_tenant_window` index on `treasury_ledger (tenant_id, attributed_at)` for
+  tenant-wide allowance balance reads; `007` is untouched.
+
 - `010_add_run_schedule_created_by` migrations (`migrations/{sqlite,postgres}`): nullable
   `run_schedules.tenant_id` / `run_schedules.api_key_id` columns recording the schedule's creating
   principal, plus the PostgreSQL CHECK `run_schedules_created_by_all_or_none`. SQLite numbering

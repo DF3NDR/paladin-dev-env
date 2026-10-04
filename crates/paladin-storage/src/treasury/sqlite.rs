@@ -1245,6 +1245,31 @@ mod tests {
         );
     }
 
+    /// Migrations `011` and `012` apply after `010` on a fresh database: the notices table, its
+    /// unique identity index and the additive tenant-window ledger index all exist.
+    #[tokio::test]
+    async fn migrations_011_and_012_apply_to_a_fresh_database() {
+        let store = fresh_store().await;
+        for name in [
+            "treasury_notices",
+            "idx_treasury_notices_once",
+            "idx_treasury_notices_run",
+            "idx_treasury_ledger_tenant_window",
+        ] {
+            let found: Option<String> =
+                sqlx::query_scalar("SELECT name FROM sqlite_master WHERE name = ?")
+                    .bind(name)
+                    .fetch_optional(&store.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                found.as_deref(),
+                Some(name),
+                "{name} must exist after migration"
+            );
+        }
+    }
+
     // ── Exact-instant window edges (adapter-local, 41-02) ─────────────────
 
     /// Rows attributed exactly at `window_start` and exactly at `window_end` land in the window

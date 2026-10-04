@@ -50,6 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `skipped_ticks`) instead of spending. A schedule created before this release has no recorded
   creator and keeps firing unattributed and ungated; the creator is never exposed in the
   schedule responses, and the invocation role check is unchanged at fire time.
+  **Plan 41-06 adds the warn-threshold notice store:** a balance that reaches `warn_at` percent of
+  a ceiling on an admitted request now claims one durable notice per scope, limit, window and
+  ceiling (new `treasury_notices` table, migration `011` on SQLite and PostgreSQL; new
+  `TreasuryNoticePort`; `Treasurer::with_notices`). The once-per-window rule is enforced by the
+  store, not by process memory, so it holds across replicas; raising a ceiling re-arms the
+  notice, and a notice-store failure never blocks or fails the run. The notice carries the
+  admitting run's id, and a run that is admitted but never persisted gives its notice back. The
+  trace event, herald line and operator webhook that observe the notice follow in later entries.
+  Migration `012` adds a tenant-wide `treasury_ledger (tenant_id, attributed_at)` index for the
+  admission balance read.
 
 - **Operator-configured treasurer price table, wired into both production run paths (PRICE-01,
   PRICE-03; Phase 38 plan 38-03).** A new `treasurer:` config section (`Settings.treasurer:

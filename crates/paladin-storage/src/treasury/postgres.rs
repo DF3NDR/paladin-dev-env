@@ -1294,6 +1294,32 @@ mod tests {
         );
     }
 
+    /// Migrations `011` and `012` apply after `010`: the notices table, its unique identity
+    /// index and the additive tenant-window ledger index all exist.
+    #[tokio::test]
+    async fn migrations_011_and_012_are_applied() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        for name in [
+            "idx_treasury_notices_once",
+            "idx_treasury_notices_run",
+            "idx_treasury_ledger_tenant_window",
+        ] {
+            let found: Option<String> =
+                sqlx::query_scalar("SELECT indexname FROM pg_indexes WHERE indexname = $1")
+                    .bind(name)
+                    .fetch_optional(&store.pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                found.as_deref(),
+                Some(name),
+                "{name} must exist after migration"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn connection_error_redacts_password_from_database_url() {
         let url = "postgres://user:hunter2-secret@127.0.0.1:1/nonexistent";

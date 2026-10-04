@@ -48,13 +48,7 @@ const CLAIM_ROW: &str = "UPDATE webhook_deliveries SET status = 'in_flight', upd
      WHERE delivery_id = $2 AND status IN ('pending', 'retrying') AND next_attempt_at <= $3";
 
 fn event_to_str(event: RunEventKind) -> &'static str {
-    match event {
-        RunEventKind::AwaitingInput => "awaiting_input",
-        RunEventKind::Completed => "completed",
-        RunEventKind::Failed => "failed",
-        RunEventKind::Halted => "halted",
-        RunEventKind::Cancelled => "cancelled",
-    }
+    event.as_str()
 }
 
 fn event_from_str(s: &str) -> Result<RunEventKind, WebhookDeliveryRepositoryError> {
@@ -64,6 +58,7 @@ fn event_from_str(s: &str) -> Result<RunEventKind, WebhookDeliveryRepositoryErro
         "failed" => Ok(RunEventKind::Failed),
         "halted" => Ok(RunEventKind::Halted),
         "cancelled" => Ok(RunEventKind::Cancelled),
+        "allowance_warning" => Ok(RunEventKind::AllowanceWarning),
         other => Err(WebhookDeliveryRepositoryError::Serialization {
             message: format!("unknown run event kind: {other:?}"),
         }),
@@ -524,5 +519,16 @@ mod tests {
             return;
         };
         contract_tests::list_for_run_orders_descending_by_created_at(&store).await;
+    }
+
+    #[tokio::test]
+    async fn operator_allowance_delivery_round_trips_and_is_not_listed_for_other_runs() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::operator_allowance_delivery_round_trips_and_is_not_listed_for_other_runs(
+            &store,
+        )
+        .await;
     }
 }

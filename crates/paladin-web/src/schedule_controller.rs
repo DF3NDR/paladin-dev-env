@@ -94,14 +94,7 @@ impl From<&WebhookSpec> for WebhookResponseDto {
 }
 
 fn event_kind_label(kind: RunEventKind) -> String {
-    match kind {
-        RunEventKind::AwaitingInput => "awaiting_input",
-        RunEventKind::Completed => "completed",
-        RunEventKind::Failed => "failed",
-        RunEventKind::Halted => "halted",
-        RunEventKind::Cancelled => "cancelled",
-    }
-    .to_string()
+    kind.as_str().to_string()
 }
 
 fn parse_event_kind(raw: &str) -> Result<RunEventKind, ApiError> {
@@ -619,6 +612,22 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tower::ServiceExt;
+
+    #[test]
+    fn caller_cannot_subscribe_a_schedule_webhook_to_allowance_warning() {
+        // Operator-level notice, never caller-subscribable (Phase 41, D-17, C3).
+        let err = to_webhook_spec(WebhookRequestDto {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            events: vec!["allowance_warning".to_string()],
+        })
+        .unwrap_err();
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(
+            err.to_body().to_string().contains("allowance_warning"),
+            "the 400 names the unknown kind"
+        );
+    }
 
     use crate::run_controller::run_router;
 

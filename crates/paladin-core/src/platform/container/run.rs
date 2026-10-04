@@ -281,11 +281,26 @@ pub struct AssistantRef {
     pub version: u32,
 }
 
-/// The run lifecycle events a [`WebhookSpec`] may subscribe to: the four
-/// terminal statuses plus `AwaitingInput` (HITL suspension is a notable
-/// event even though the run is not yet finished).
+/// The events a webhook delivery row can carry: the run lifecycle events a
+/// [`WebhookSpec`] may subscribe to (the four terminal statuses plus
+/// `AwaitingInput`, since HITL suspension is a notable event even though the
+/// run is not yet finished) and the operator-level
+/// [`AllowanceWarning`](RunEventKind::AllowanceWarning) notice.
+///
+/// The enum is `#[non_exhaustive]` so a further event kind is not a breaking
+/// change for downstream matches (Phase 41, D-17).
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::run::RunEventKind;
+///
+/// assert_eq!(RunEventKind::Completed.as_str(), "completed");
+/// assert_eq!(RunEventKind::AllowanceWarning.as_str(), "allowance_warning");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RunEventKind {
     /// The run's `AwaitingInput` suspension.
     AwaitingInput,
@@ -297,6 +312,34 @@ pub enum RunEventKind {
     Halted,
     /// The run reached `Cancelled`.
     Cancelled,
+    /// An operator-level Treasurer allowance warning (Phase 41, D-17) -- never a run
+    /// lifecycle event and never subscribable by a caller's WebhookSpec.
+    AllowanceWarning,
+}
+
+impl RunEventKind {
+    /// The serde wire string of this event kind -- the value persisted in the
+    /// `webhook_deliveries.event` column and sent as the `X-Paladin-Event`
+    /// header (one source of truth for every adapter and controller).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::run::RunEventKind;
+    ///
+    /// assert_eq!(RunEventKind::AwaitingInput.as_str(), "awaiting_input");
+    /// ```
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AwaitingInput => "awaiting_input",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Halted => "halted",
+            Self::Cancelled => "cancelled",
+            Self::AllowanceWarning => "allowance_warning",
+        }
+    }
 }
 
 /// A caller-supplied webhook delivery target for a [`Run`]'s lifecycle
@@ -744,6 +787,25 @@ mod tests {
         assert_eq!(RunStatus::Failed.as_str(), "failed");
         assert_eq!(RunStatus::Halted.as_str(), "halted");
         assert_eq!(RunStatus::Cancelled.as_str(), "cancelled");
+    }
+
+    #[test]
+    fn run_event_kind_as_str_equals_the_serde_wire_string_for_every_variant() {
+        for kind in [
+            RunEventKind::AwaitingInput,
+            RunEventKind::Completed,
+            RunEventKind::Failed,
+            RunEventKind::Halted,
+            RunEventKind::Cancelled,
+            RunEventKind::AllowanceWarning,
+        ] {
+            assert_eq!(
+                serde_json::to_value(kind).unwrap(),
+                serde_json::Value::String(kind.as_str().to_string()),
+                "{kind:?}"
+            );
+        }
+        assert_eq!(RunEventKind::AllowanceWarning.as_str(), "allowance_warning");
     }
 
     #[test]

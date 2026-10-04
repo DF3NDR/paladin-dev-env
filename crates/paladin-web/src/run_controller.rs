@@ -498,14 +498,7 @@ impl From<&WebhookSpec> for RunWebhookDto {
 }
 
 fn event_kind_label(kind: RunEventKind) -> String {
-    match kind {
-        RunEventKind::AwaitingInput => "awaiting_input",
-        RunEventKind::Completed => "completed",
-        RunEventKind::Failed => "failed",
-        RunEventKind::Halted => "halted",
-        RunEventKind::Cancelled => "cancelled",
-    }
-    .to_string()
+    kind.as_str().to_string()
 }
 
 fn parse_event_kind(raw: &str) -> Result<RunEventKind, ApiError> {
@@ -1330,6 +1323,23 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
     use tower::ServiceExt; // for `Router::oneshot`
+
+    #[test]
+    fn caller_cannot_subscribe_a_run_webhook_to_allowance_warning() {
+        // `allowance_warning` is an operator-level notice (Phase 41, D-17, C3): the
+        // caller-facing parser must keep rejecting it with a 400.
+        let err = to_run_webhook_spec(RunWebhookRequestDto {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            events: vec!["allowance_warning".to_string()],
+        })
+        .unwrap_err();
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(
+            err.to_body().to_string().contains("allowance_warning"),
+            "the 400 names the unknown kind"
+        );
+    }
 
     fn sample_run(thread: &str) -> Run {
         Run::new(

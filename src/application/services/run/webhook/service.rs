@@ -29,6 +29,7 @@ use chrono::{DateTime, Utc};
 use tokio::task::JoinHandle;
 
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
+use paladin_core::platform::container::run::RunEventKind;
 use paladin_core::platform::container::webhook::{
     WebhookAttemptOutcome, WebhookAttemptResult, WebhookDelivery,
 };
@@ -139,6 +140,10 @@ pub struct WebhookDeliveryService {
     guard: SsrfGuard,
     client: reqwest::Client,
     options: WebhookDeliveryOptions,
+    /// The operator target's HMAC key (`treasurer.allowance.webhook.secret`), used to sign
+    /// `allowance_warning` deliveries. Held here, never on a delivery row, and never
+    /// rendered by `Debug` (the service has no `Debug` impl).
+    operator_notice_secret: Option<String>,
 }
 
 impl WebhookDeliveryService {
@@ -164,7 +169,21 @@ impl WebhookDeliveryService {
             guard,
             client,
             options,
+            operator_notice_secret: None,
         })
+    }
+
+    /// Set the operator target's HMAC signing key for `allowance_warning` deliveries
+    /// (Phase 41, D-17).
+    ///
+    /// The key is held on the service and never written to a delivery row (prohibition P1):
+    /// an operator delivery names no run, so it cannot read a signing value from a run's own
+    /// `WebhookSpec`. `None` signs with the empty key, exactly like a run webhook that
+    /// carries no secret. Every other event keeps signing with its own run's secret.
+    #[must_use]
+    pub fn with_operator_notice_secret(mut self, secret: Option<String>) -> Self {
+        self.operator_notice_secret = secret;
+        self
     }
 
     /// Override the SSRF guard -- tests inject a stubbed resolver so the
@@ -218,84 +237,92 @@ impl WebhookDeliveryService {
         // The signing value lives on the RUN's own WebhookSpec, never on
         // the delivery row (prohibition P1) -- read it fresh at send time.
         let new_attempt = delivery.attempt + 1;
-        let signing_key = match self.runs.get(&delivery.run_id).await {
-            Ok(Some(run)) => run
-                .webhook
-                .as_ref()
-                .and_then(|webhook| webhook.secret.clone())
-                .unwrap_or_default(),
-            Ok(None) => {
-                log::warn!(
-                    "webhook delivery service: run {} not found for delivery {delivery_id}; \
+        let signing_key = if delivery.event == RunEventKind::AllowanceWarning {
+            // C3 (Phase 41, D-17): an operator allowance notice names a correlation run id
+            // no run owns, so there is no run whose secret could sign it -- and looking one
+            // up would reschedule the delivery forever (Pitfall 4). It is signed with the
+            // operator secret held on the service, before and instead of any run lookup.
+            self.operator_notice_secret.clone().unwrap_or_default()
+        } else {
+            match self.runs.get(&delivery.run_id).await {
+                Ok(Some(run)) => run
+                    .webhook
+                    .as_ref()
+                    .and_then(|webhook| webhook.secret.clone())
+                    .unwrap_or_default(),
+                Ok(None) => {
+                    log::warn!(
+                        "webhook delivery service: run {} not found for delivery {delivery_id}; \
                      rescheduling rather than sending with a fallback empty key",
-                    delivery.run_id
-                );
-                // WR-27-01 (27-REVIEW.md): the sibling of the WR-01 fix
-                // above -- the run row that supplies this delivery's OWN
-                // signing secret does not exist. Signing with a fallback
-                // empty key and sending anyway carries the exact same
-                // hazard WR-01 closed for the `Err` arm, so this is
-                // rescheduled identically rather than sent.
-                let delay = chrono::Duration::from_std(backoff_for(new_attempt))
-                    .unwrap_or_else(|_| chrono::Duration::zero());
-                self.finish(
-                    &delivery_id,
-                    WebhookAttemptResult {
-                        outcome: WebhookAttemptOutcome::Retrying {
-                            next_attempt_at: (self.options.now)() + delay,
+                        delivery.run_id
+                    );
+                    // WR-27-01 (27-REVIEW.md): the sibling of the WR-01 fix
+                    // above -- the run row that supplies this delivery's OWN
+                    // signing secret does not exist. Signing with a fallback
+                    // empty key and sending anyway carries the exact same
+                    // hazard WR-01 closed for the `Err` arm, so this is
+                    // rescheduled identically rather than sent.
+                    let delay = chrono::Duration::from_std(backoff_for(new_attempt))
+                        .unwrap_or_else(|_| chrono::Duration::zero());
+                    self.finish(
+                        &delivery_id,
+                        WebhookAttemptResult {
+                            outcome: WebhookAttemptOutcome::Retrying {
+                                next_attempt_at: (self.options.now)() + delay,
+                            },
+                            response_status: None,
+                            error: Some(bounded_error(&format!(
+                                "run {} not found while loading signing key",
+                                delivery.run_id
+                            ))),
                         },
-                        response_status: None,
-                        error: Some(bounded_error(&format!(
-                            "run {} not found while loading signing key",
-                            delivery.run_id
-                        ))),
-                    },
-                )
-                .await;
-                return;
-            }
-            Err(error) => {
-                log::warn!(
-                    "webhook delivery service: failed to load run {} for delivery {delivery_id}: {error}",
-                    delivery.run_id
-                );
-                // WR-01 (27-REVIEW.md): the run lookup that supplies this
-                // delivery's OWN signing secret failed with a backend
-                // error -- signing with a fallback empty key and sending
-                // anyway would hand a receiver a payload it must reject as
-                // mis-signed, while still burning one of the delivery's
-                // budgeted five attempts (`record_attempt` unconditionally
-                // increments `attempt`, see the tradeoff note below).
-                // Rescheduling instead costs the identical attempt but
-                // never ships a payload known in advance to be
-                // mis-signed -- strictly better than the alternative, even
-                // though it means a delivery can still dead-letter after
-                // enough transient backend errors despite the receiving
-                // target having been reachable the entire time.
-                //
-                // Tradeoff recorded as a deliberate non-goal: suppressing
-                // the `attempt` increment on this reschedule would need a
-                // new `WebhookDeliveryRepositoryPort` method threaded
-                // across the trait and its three adapters (in-memory,
-                // sqlite, postgres) -- out of this gap-closure plan's
-                // scope.
-                let delay = chrono::Duration::from_std(backoff_for(new_attempt))
-                    .unwrap_or_else(|_| chrono::Duration::zero());
-                self.finish(
-                    &delivery_id,
-                    WebhookAttemptResult {
-                        outcome: WebhookAttemptOutcome::Retrying {
-                            next_attempt_at: (self.options.now)() + delay,
+                    )
+                    .await;
+                    return;
+                }
+                Err(error) => {
+                    log::warn!(
+                        "webhook delivery service: failed to load run {} for delivery {delivery_id}: {error}",
+                        delivery.run_id
+                    );
+                    // WR-01 (27-REVIEW.md): the run lookup that supplies this
+                    // delivery's OWN signing secret failed with a backend
+                    // error -- signing with a fallback empty key and sending
+                    // anyway would hand a receiver a payload it must reject as
+                    // mis-signed, while still burning one of the delivery's
+                    // budgeted five attempts (`record_attempt` unconditionally
+                    // increments `attempt`, see the tradeoff note below).
+                    // Rescheduling instead costs the identical attempt but
+                    // never ships a payload known in advance to be
+                    // mis-signed -- strictly better than the alternative, even
+                    // though it means a delivery can still dead-letter after
+                    // enough transient backend errors despite the receiving
+                    // target having been reachable the entire time.
+                    //
+                    // Tradeoff recorded as a deliberate non-goal: suppressing
+                    // the `attempt` increment on this reschedule would need a
+                    // new `WebhookDeliveryRepositoryPort` method threaded
+                    // across the trait and its three adapters (in-memory,
+                    // sqlite, postgres) -- out of this gap-closure plan's
+                    // scope.
+                    let delay = chrono::Duration::from_std(backoff_for(new_attempt))
+                        .unwrap_or_else(|_| chrono::Duration::zero());
+                    self.finish(
+                        &delivery_id,
+                        WebhookAttemptResult {
+                            outcome: WebhookAttemptOutcome::Retrying {
+                                next_attempt_at: (self.options.now)() + delay,
+                            },
+                            response_status: None,
+                            error: Some(bounded_error(&format!(
+                                "signing key load failed for run {}: {error}",
+                                delivery.run_id
+                            ))),
                         },
-                        response_status: None,
-                        error: Some(bounded_error(&format!(
-                            "signing key load failed for run {}: {error}",
-                            delivery.run_id
-                        ))),
-                    },
-                )
-                .await;
-                return;
+                    )
+                    .await;
+                    return;
+                }
             }
         };
 
@@ -428,18 +455,11 @@ impl WebhookDeliveryService {
     }
 }
 
-/// `RunEventKind` (paladin-core) carries no `as_str` of its own -- this
-/// mirrors `paladin-storage`'s `event_to_str` (`webhook/sqlite.rs`), the
-/// wire value for the `X-Paladin-Event` header.
+/// The wire value for the `X-Paladin-Event` header -- delegates to
+/// [`RunEventKind::as_str`](paladin_core::platform::container::run::RunEventKind::as_str),
+/// the single to-string source shared with the storage adapters.
 fn event_wire_name(event: paladin_core::platform::container::run::RunEventKind) -> &'static str {
-    use paladin_core::platform::container::run::RunEventKind;
-    match event {
-        RunEventKind::AwaitingInput => "awaiting_input",
-        RunEventKind::Completed => "completed",
-        RunEventKind::Failed => "failed",
-        RunEventKind::Halted => "halted",
-        RunEventKind::Cancelled => "cancelled",
-    }
+    event.as_str()
 }
 
 /// Redact-then-truncate a delivery-failure diagnostic before it is

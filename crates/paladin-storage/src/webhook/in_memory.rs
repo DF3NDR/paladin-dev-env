@@ -267,4 +267,12 @@ mod contract_suite {
         )
         .await;
     }
+
+    #[tokio::test]
+    async fn operator_allowance_delivery_round_trips_and_is_not_listed_for_other_runs() {
+        contract_tests::operator_allowance_delivery_round_trips_and_is_not_listed_for_other_runs(
+            &InMemoryWebhookDeliveryRepository::new(),
+        )
+        .await;
+    }
 }

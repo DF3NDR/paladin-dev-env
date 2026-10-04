@@ -294,3 +294,63 @@ pub async fn list_for_run_orders_descending_by_created_at(
     expected_ids.reverse();
     assert_eq!(ids, expected_ids, "must be ordered DESC by created_at");
 }
+
+// ── operator allowance notice (Phase 41, D-17) ───────────────────────────
+
+/// An operator allowance notice (`RunEventKind::AllowanceWarning`, a
+/// correlation run id no run owns, the `treasurer-notices` thread) round-trips
+/// through `enqueue` and `get` with its event intact (the shared decoder
+/// `claim_due` uses too, so an older binary's rejection is the Pitfall 12 shape), and is
+/// never listed for any other run (C3 Option A).
+pub async fn operator_allowance_delivery_round_trips_and_is_not_listed_for_other_runs(
+    port: &dyn WebhookDeliveryRepositoryPort,
+) {
+    // Far-future `next_attempt_at`: this clause never claims, and a never-due row cannot
+    // be swept into another clause's `claim_due` batch on a shared database.
+    let now = Utc.with_ymd_and_hms(2100, 1, 1, 0, 0, 0).unwrap();
+    let correlation = RunId::new_v7();
+    let payload = r#"{"event":"allowance_warning","run_id":null}"#;
+    let delivery = WebhookDelivery::new(
+        WebhookDeliveryId::new_v7(),
+        correlation.clone(),
+        ThreadId::new("treasurer-notices").unwrap(),
+        RunEventKind::AllowanceWarning,
+        "https://ops.example.com/allowance",
+        payload,
+        now,
+    );
+    let id = delivery.delivery_id.clone();
+    port.enqueue(delivery).await.unwrap();
+
+    // A caller's run (the admitting run) has its own, unrelated delivery.
+    let admitting_run = RunId::new_v7();
+    let own = WebhookDelivery::new(
+        WebhookDeliveryId::new_v7(),
+        admitting_run.clone(),
+        ThreadId::new("thread-admitting").unwrap(),
+        RunEventKind::Completed,
+        "https://example.com/hook-admitting",
+        "{}",
+        now,
+    );
+    let own_id = own.delivery_id.clone();
+    port.enqueue(own).await.unwrap();
+
+    let loaded = port.get(&id).await.unwrap().unwrap();
+    assert_eq!(loaded.event, RunEventKind::AllowanceWarning);
+    assert_eq!(loaded.payload, payload, "payload stored verbatim");
+    assert_eq!(loaded.thread_id.as_str(), "treasurer-notices");
+    assert_eq!(loaded.run_id, correlation);
+
+    // The admitting run lists only its own delivery, never the operator row.
+    let page = port.list_for_run(&admitting_run, 100, None).await.unwrap();
+    let ids: Vec<_> = page.items.iter().map(|d| d.delivery_id.clone()).collect();
+    assert_eq!(ids, vec![own_id.clone()]);
+
+    // Another, unrelated run lists nothing.
+    let page = port
+        .list_for_run(&RunId::new_v7(), 100, None)
+        .await
+        .unwrap();
+    assert!(page.items.is_empty());
+}

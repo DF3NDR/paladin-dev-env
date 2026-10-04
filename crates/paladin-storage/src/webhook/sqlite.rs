@@ -57,18 +57,11 @@ const LIST_FOR_RUN_PREFIX: &str = "SELECT delivery_id, run_id, thread_id, event,
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
-/// `RunEventKind` (paladin-core) carries no `as_str`/`from_str` of its own;
-/// these mirror `on_missed_to_str`/`on_missed_from_str`'s precedent
-/// (`run_schedule/sqlite.rs`) as a plain TEXT enum column (no payload, so
-/// no JSON).
+/// `RunEventKind::as_str` (paladin-core) is the single to-string source;
+/// `event_from_str` is its inverse for the plain TEXT enum column (no
+/// payload, so no JSON), accepting the operator `allowance_warning` kind.
 fn event_to_str(event: RunEventKind) -> &'static str {
-    match event {
-        RunEventKind::AwaitingInput => "awaiting_input",
-        RunEventKind::Completed => "completed",
-        RunEventKind::Failed => "failed",
-        RunEventKind::Halted => "halted",
-        RunEventKind::Cancelled => "cancelled",
-    }
+    event.as_str()
 }
 
 fn event_from_str(s: &str) -> Result<RunEventKind, WebhookDeliveryRepositoryError> {
@@ -78,6 +71,7 @@ fn event_from_str(s: &str) -> Result<RunEventKind, WebhookDeliveryRepositoryErro
         "failed" => Ok(RunEventKind::Failed),
         "halted" => Ok(RunEventKind::Halted),
         "cancelled" => Ok(RunEventKind::Cancelled),
+        "allowance_warning" => Ok(RunEventKind::AllowanceWarning),
         other => Err(WebhookDeliveryRepositoryError::Serialization {
             message: format!("unknown run event kind: {other:?}"),
         }),
@@ -486,6 +480,14 @@ mod tests {
     #[tokio::test]
     async fn list_for_run_orders_descending_by_created_at() {
         contract_tests::list_for_run_orders_descending_by_created_at(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn operator_allowance_delivery_round_trips_and_is_not_listed_for_other_runs() {
+        contract_tests::operator_allowance_delivery_round_trips_and_is_not_listed_for_other_runs(
+            &fresh_store().await,
+        )
+        .await;
     }
 
     #[tokio::test]

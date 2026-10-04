@@ -73,8 +73,16 @@ the plans that follow in this same phase):
 | 0053 | `ledger-balance-model` | Treasury ledger balance model — append-only, derive-on-read; reserve/settle/release row kinds; `i64` nano-unit amounts with ISO 4217 currency; settlement idempotency key `(run_id, superstep, attempt)` with superstep-aggregate settlement granularity, D-15 kept unamended (D-14/D-15, Phase 38, plan 38-01) |
 | 0054 | `tenant-scoped-run-reads` | Tenant identity is server-derived (no header, query or body field can assert it) and every API key or bearer deployment maps to exactly one tenant with no implicit default; run reads are tenant-scoped through one shared `RunReadScope` rule applied by `RunQuery.scope` in every adapter and by `load_visible_run` on every `/runs/{run_id}*` route, with an operator (Admin) bypass and a hidden run answering the missing-run `404`, never `403` (D-02/D-05/D-11/D-12/D-13, Phase 40, plan 40-06) |
 | 0055 | `dev-test-reference-object-store-rustfs` | The dev/test/CI and reference Kubernetes object store is RustFS, pinned to `rustfs/rustfs:1.0.0` (exact tag plus manifest-list digest) in every live configuration; the existing `rust-s3` adapter is reused and proven by the 11-case `FileStoragePort` contract suite, the adapter's own path-style `ensure_bucket_exists` replaces the `mc` bootstrap, health is `/health` and `/health/ready`, and `k8s/rustfs.yaml` (renamed from the MinIO manifest) is the one manifest for the smoke test and the reference deployment, with production pointing the same adapter at AWS S3, a managed endpoint or MinIO (D-03/D-05/D-08/D-11/D-12, Phase 45, plan 45-06) |
+| 0056 | `allowance-admission-model` | Allowance admission model — tumbling UTC-epoch windows read from the store clock only (up to 2x boundary burst accepted), every configured limit must fit in the fixed order key-window → key-lifetime → tenant-window → tenant-lifetime, check-only admission with no hold (the same-instant over-admission race accepted and closed by Phase 42's reservation, ADR-0052), no role bypass, fail closed when an allowance applies, and once-per-window notices enforced by a unique index with `''`/epoch sentinels (claim-before-insert with abandon); records the 41-01 checkpoint outcome (option-b, operator webhook payload amended to twelve keys) (D-01/D-03/D-05/D-09/D-10/D-16, Phase 41, plan 41-09) |
 
-**Next free ADR number: 0056**
+**Next free ADR number: 0057**
+
+*Dated note, 2026-10-04 (plan 41-09, ADR-0056):* the line advances by **one**, from 0056 to 0057,
+because Phase 41 plan 41-09 authored ADR-0056 (the allowance admission model: tumbling UTC windows,
+check-only admission, every-limit composition, store-deduped notices, D-01/D-03/D-05/D-09/D-10/D-16)
+after plans 41-01 through 41-08 landed the model it records. `ls .planning/decisions/0056-*.md` (re-run
+before writing this note) confirmed no file held the number, so it is not skipped or reused, and no
+existing index row above was renumbered, reworded or reordered.
 
 *Dated note, 2026-09-30 (plan 45-06, ADR-0055):* the line advances by **one**, from 0055 to 0056,
 because Phase 45 plan 45-06 authored ADR-0055 (the dev/test and reference object store is RustFS,

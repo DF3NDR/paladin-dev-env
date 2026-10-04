@@ -35,12 +35,17 @@ use sqlx::sqlite::{Sqlite, SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::{QueryBuilder, Row};
 use uuid::Uuid;
 
+use paladin_core::platform::container::allowance::{
+    LIFETIME_WINDOW_START, NoticeOutcome, NoticeRecord,
+};
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::treasury_ledger::{
     BalanceQuery, ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SpendGroupBy,
     SpendQuery, SpendRow,
 };
 use paladin_ports::output::treasury_ledger_port::{TreasuryLedgerError, TreasuryLedgerPort};
+use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
 
 use crate::waypoint::redact::redact_database_url_password;
 
@@ -59,6 +64,31 @@ const SETTLE_INSERT: &str = "\
        schema_version) \
     VALUES (?, 'settle', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
     ON CONFLICT (run_id, superstep, attempt) WHERE kind = 'settle' DO NOTHING";
+
+// The `ON CONFLICT (...)` column list below MUST textually match
+// `011_create_treasury_notices.sql`'s `idx_treasury_notices_once` index column list, or SQLite
+// cannot infer that unique index as the conflict target (Pitfall 3;
+// `notice_arbiter_matches_the_migration` proves this stays true). `api_key_id` is bound as `''`
+// for tenant scope and `window_start` as the epoch for a lifetime notice (C5): no key column is
+// ever NULL. Bound in order: notice_id, scope_kind, tenant_id, api_key_id, limit_kind,
+// window_start, window_end, ceiling_nanos, currency, balance_nanos, warn_at, run_id,
+// recorded_at, schema_version.
+const NOTICE_INSERT: &str = "\
+    INSERT INTO treasury_notices \
+      (notice_id, scope_kind, tenant_id, api_key_id, limit_kind, window_start, window_end, \
+       ceiling_nanos, currency, balance_nanos, warn_at, run_id, recorded_at, schema_version) \
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+    ON CONFLICT (scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling_nanos) \
+    DO NOTHING";
+
+/// Every notice recorded for one admitting run, oldest first. Bound: run_id.
+const NOTICES_FOR_RUN: &str = "\
+    SELECT notice_id, scope_kind, tenant_id, api_key_id, limit_kind, window_start, window_end, \
+           ceiling_nanos, currency, balance_nanos, warn_at, run_id, recorded_at \
+    FROM treasury_notices WHERE run_id = ? ORDER BY recorded_at ASC, notice_id ASC";
+
+/// Delete one notice by id (an abandoned admission's own row). Bound: notice_id.
+const NOTICE_DELETE: &str = "DELETE FROM treasury_notices WHERE notice_id = ?";
 
 /// The store's own clock (ALLOW-01, ADR-0053 §2) -- an RFC 3339 string SQLite's `chrono` decode
 /// already parses identically to every other `DateTime<Utc>` column in this codebase.
@@ -689,6 +719,103 @@ impl TreasuryLedgerPort for SqliteTreasuryLedger {
     }
 }
 
+#[async_trait]
+impl TreasuryNoticePort for SqliteTreasuryLedger {
+    async fn record(&self, notice: &NoticeRecord) -> Result<NoticeOutcome, TreasuryLedgerError> {
+        crate::treasury::validate_notice(notice)?;
+
+        // One statement, so no explicit transaction: the unique index arbitrates every
+        // concurrent claim, and the connection's busy timeout absorbs write-lock contention.
+        let window_start = crate::run::storage_timestamp(
+            notice.warning.window_start.unwrap_or(LIFETIME_WINDOW_START),
+        );
+        let window_end = notice.warning.window_end.map(crate::run::storage_timestamp);
+        let result = sqlx::query(NOTICE_INSERT)
+            .bind(&notice.notice_id)
+            .bind(notice.warning.scope_kind.as_str())
+            .bind(&notice.tenant_id)
+            .bind(notice.api_key_id.as_deref().unwrap_or(""))
+            .bind(notice.warning.limit_kind.as_str())
+            .bind(window_start)
+            .bind(window_end)
+            .bind(notice.warning.ceiling.nanos())
+            .bind(notice.warning.ceiling.currency().as_str())
+            .bind(notice.warning.balance.nanos())
+            .bind(i64::from(notice.warning.warn_at))
+            .bind(notice.run_id.as_ref().map(RunId::as_str))
+            .bind(crate::run::storage_timestamp(notice.recorded_at))
+            .bind(TREASURY_LEDGER_SCHEMA_VERSION)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        Ok(if result.rows_affected() == 0 {
+            NoticeOutcome::AlreadyRecorded
+        } else {
+            NoticeOutcome::Recorded
+        })
+    }
+
+    async fn notices_for_run(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Vec<NoticeRecord>, TreasuryLedgerError> {
+        let rows = sqlx::query(NOTICES_FOR_RUN)
+            .bind(run_id.as_str())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+
+        rows.iter()
+            .map(|row| {
+                crate::treasury::RawNotice {
+                    notice_id: row.try_get("notice_id").map_err(|e| self.wrap_error(e))?,
+                    scope_kind: row.try_get("scope_kind").map_err(|e| self.wrap_error(e))?,
+                    tenant_id: row.try_get("tenant_id").map_err(|e| self.wrap_error(e))?,
+                    api_key_id: row.try_get("api_key_id").map_err(|e| self.wrap_error(e))?,
+                    limit_kind: row.try_get("limit_kind").map_err(|e| self.wrap_error(e))?,
+                    window_start: row
+                        .try_get("window_start")
+                        .map_err(|e| self.wrap_error(e))?,
+                    window_end: row.try_get("window_end").map_err(|e| self.wrap_error(e))?,
+                    ceiling_nanos: row
+                        .try_get("ceiling_nanos")
+                        .map_err(|e| self.wrap_error(e))?,
+                    currency: row.try_get("currency").map_err(|e| self.wrap_error(e))?,
+                    balance_nanos: row
+                        .try_get("balance_nanos")
+                        .map_err(|e| self.wrap_error(e))?,
+                    warn_at: row.try_get("warn_at").map_err(|e| self.wrap_error(e))?,
+                    run_id: row.try_get("run_id").map_err(|e| self.wrap_error(e))?,
+                    recorded_at: row.try_get("recorded_at").map_err(|e| self.wrap_error(e))?,
+                }
+                .into_record()
+            })
+            .collect()
+    }
+
+    async fn discard(&self, notice_ids: &[String]) -> Result<(), TreasuryLedgerError> {
+        if notice_ids.is_empty() {
+            return Ok(());
+        }
+        // One transaction, so a discard never leaves an admission's notices half-released.
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+        for notice_id in notice_ids {
+            sqlx::query(NOTICE_DELETE)
+                .bind(notice_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| self.wrap_error(e))?;
+        }
+        tx.commit().await.map_err(|e| self.wrap_error(e))?;
+        Ok(())
+    }
+}
+
 /// Fold one (group, currency, nanos) contribution into `folded`, incrementing that entry's
 /// settlement count by one.
 fn fold_one(
@@ -1026,6 +1153,95 @@ mod tests {
             SETTLE_INSERT.contains("WHERE kind = 'settle' DO NOTHING"),
             "SETTLE_INSERT's ON CONFLICT arbiter predicate must textually match the migration's \
              partial unique index predicate (Pitfall 3)"
+        );
+    }
+
+    // ── Notice clauses (ALLOW-04, D-16, 41-06) ───────────────────────────
+
+    use crate::treasury::notice_contract_tests as notices;
+    use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
+
+    #[tokio::test]
+    async fn first_claim_wins_duplicate_is_already_recorded() {
+        notices::first_claim_wins_duplicate_is_already_recorded(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn tenant_scope_duplicate_dedups() {
+        notices::tenant_scope_duplicate_dedups(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn lifetime_notice_dedups_per_ceiling() {
+        notices::lifetime_notice_dedups_per_ceiling(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn raised_ceiling_rearms_the_same_window() {
+        notices::raised_ceiling_rearms_the_same_window(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn distinct_window_start_is_a_distinct_notice() {
+        notices::distinct_window_start_is_a_distinct_notice(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn notices_for_run_returns_only_that_runs_rows() {
+        notices::notices_for_run_returns_only_that_runs_rows(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn discard_removes_only_the_named_rows() {
+        notices::discard_removes_only_the_named_rows(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn notice_round_trips_every_field() {
+        notices::notice_round_trips_every_field(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn invalid_notice_is_rejected_before_io() {
+        notices::invalid_notice_is_rejected_before_io(&fresh_store().await).await;
+    }
+
+    // The notice race needs a REAL shared on-disk database: sixteen claims over several pooled
+    // connections, so the unique index (not a single in-process connection) arbitrates.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sixteen_concurrent_claims_yield_exactly_one_recorded() {
+        let path = std::env::temp_dir().join(format!(
+            "paladin_treasury_notice_race_test_{}.sqlite",
+            Uuid::new_v4()
+        ));
+        let url = format!("sqlite://{}", path.display());
+        let store: Arc<dyn TreasuryNoticePort> =
+            Arc::new(SqliteTreasuryLedger::new_shared_file(&url).await.unwrap());
+
+        notices::sixteen_concurrent_claims_yield_exactly_one_recorded(store).await;
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(format!("{}-wal", path.display()));
+        let _ = std::fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    /// The `ON CONFLICT` column list must read exactly like the migration's unique index column
+    /// list, or SQLite cannot infer the index as the arbiter (Pitfall 3).
+    #[test]
+    fn notice_arbiter_matches_the_migration() {
+        let migration = include_str!("../../migrations/sqlite/011_create_treasury_notices.sql");
+        let columns =
+            "(scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling_nanos)";
+        assert!(
+            migration.contains(&format!(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_treasury_notices_once ON treasury_notices {columns};"
+            )),
+            "the migration's unique index must list exactly {columns}"
+        );
+        assert!(
+            NOTICE_INSERT.contains(&format!("ON CONFLICT {columns} DO NOTHING")),
+            "NOTICE_INSERT's ON CONFLICT column list must textually match the migration's \
+             idx_treasury_notices_once (Pitfall 3)"
         );
     }
 

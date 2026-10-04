@@ -15,6 +15,11 @@
 /// `crate::run::in_memory`'s D-01 precedent).
 pub mod in_memory;
 
+/// Shared `TreasuryNoticePort` contract suite (ALLOW-04, D-16): one generic async function per
+/// notice clause, invoked unchanged by every backend's own `#[tokio::test]`s. Plain module (not
+/// `#[cfg(test)]`), registered next to [`contract_tests`].
+pub mod notice_contract_tests;
+
 /// Shared `TreasuryLedgerPort` contract suite (D-11): one generic async function per clause,
 /// invoked unchanged by every backend's own `#[tokio::test]`s. Plain module (not
 /// `#[cfg(test)]`), mirroring `crate::run::contract_tests`.
@@ -29,6 +34,9 @@ pub mod sqlite;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 
+use paladin_core::platform::container::allowance::{
+    AllowanceLimitKind, AllowanceScopeKind, NoticeRecord,
+};
 use paladin_core::platform::container::treasury_ledger::{
     BalanceQuery, ReserveRequest, SettleRequest,
 };
@@ -186,6 +194,175 @@ pub(crate) fn validate_balance(query: &BalanceQuery) -> Result<(), TreasuryLedge
     }
     Ok(())
 }
+
+/// Shared, backend-agnostic validation every adapter's `TreasuryNoticePort::record` runs before
+/// any I/O (D-00e).
+///
+/// # Errors
+///
+/// Returns [`TreasuryLedgerError::InvalidRequest`] when:
+/// - `notice_id` or `tenant_id` is empty.
+/// - an `ApiKey`-scope notice has no (or an empty) `api_key_id`.
+/// - a `Tenant`-scope notice carries an `api_key_id`.
+/// - `warning.warn_at` is above 100.
+/// - a `Window` notice lacks either window bound, or a `Lifetime` notice carries one.
+/// - the ceiling's and the balance's currencies differ.
+pub(crate) fn validate_notice(notice: &NoticeRecord) -> Result<(), TreasuryLedgerError> {
+    if notice.notice_id.trim().is_empty() {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: "notice notice_id must not be empty".to_string(),
+        });
+    }
+    if notice.tenant_id.trim().is_empty() {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: "notice tenant_id must not be empty".to_string(),
+        });
+    }
+    match (notice.warning.scope_kind, notice.api_key_id.as_deref()) {
+        (AllowanceScopeKind::ApiKey, None) => {
+            return Err(TreasuryLedgerError::InvalidRequest {
+                message: "an api_key-scope notice requires an api_key_id".to_string(),
+            });
+        }
+        (AllowanceScopeKind::ApiKey, Some(key)) if key.trim().is_empty() => {
+            return Err(TreasuryLedgerError::InvalidRequest {
+                message: "an api_key-scope notice requires a non-empty api_key_id".to_string(),
+            });
+        }
+        (AllowanceScopeKind::Tenant, Some(_)) => {
+            return Err(TreasuryLedgerError::InvalidRequest {
+                message: "a tenant-scope notice must not carry an api_key_id".to_string(),
+            });
+        }
+        _ => {}
+    }
+    if notice.warning.warn_at > 100 {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: format!(
+                "notice warn_at must be at most 100 (got {})",
+                notice.warning.warn_at
+            ),
+        });
+    }
+    let has_window = notice.warning.window_start.is_some() && notice.warning.window_end.is_some();
+    let has_no_window =
+        notice.warning.window_start.is_none() && notice.warning.window_end.is_none();
+    match notice.warning.limit_kind {
+        AllowanceLimitKind::Window if !has_window => {
+            return Err(TreasuryLedgerError::InvalidRequest {
+                message: "a window notice requires both window_start and window_end".to_string(),
+            });
+        }
+        AllowanceLimitKind::Lifetime if !has_no_window => {
+            return Err(TreasuryLedgerError::InvalidRequest {
+                message: "a lifetime notice must not carry a window".to_string(),
+            });
+        }
+        _ => {}
+    }
+    if notice.warning.ceiling.currency() != notice.warning.balance.currency() {
+        return Err(TreasuryLedgerError::InvalidRequest {
+            message: format!(
+                "notice ceiling currency {} does not match balance currency {}",
+                notice.warning.ceiling.currency(),
+                notice.warning.balance.currency()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// SQL-adapter row decoding for `treasury_notices`, compiled only when a SQL backend is.
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+mod notice_row {
+    use chrono::{DateTime, Utc};
+    use paladin_core::platform::container::allowance::{
+        AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, NoticeRecord,
+    };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_core::platform::container::run::RunId;
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
+
+    /// One `treasury_notices` row as a SQL adapter reads it, before it is turned back into a
+    /// [`NoticeRecord`]. Shared by the SQLite and PostgreSQL adapters so the `''` and epoch
+    /// sentinel mapping (C5) lives in exactly one place.
+    #[derive(Debug)]
+    pub(crate) struct RawNotice {
+        pub notice_id: String,
+        pub scope_kind: String,
+        pub tenant_id: String,
+        pub api_key_id: String,
+        pub limit_kind: String,
+        pub window_start: DateTime<Utc>,
+        pub window_end: Option<DateTime<Utc>>,
+        pub ceiling_nanos: i64,
+        pub currency: String,
+        pub balance_nanos: i64,
+        pub warn_at: i64,
+        pub run_id: Option<String>,
+        pub recorded_at: DateTime<Utc>,
+    }
+
+    impl RawNotice {
+        /// Rebuild the [`NoticeRecord`]: `''` becomes `api_key_id: None`, and a `lifetime` row
+        /// reads back with both window bounds `None` (its stored `window_start` is only the epoch
+        /// identity sentinel).
+        ///
+        /// # Errors
+        ///
+        /// Returns [`TreasuryLedgerError::Serialization`] when a stored column holds a value this
+        /// adapter could never have written (an unknown kind, an invalid currency or run id, a
+        /// `warn_at` outside `0..=100`).
+        pub(crate) fn into_record(self) -> Result<NoticeRecord, TreasuryLedgerError> {
+            let bad = |what: &str, value: &str| TreasuryLedgerError::Serialization {
+                message: format!("stored notice {what} '{value}' is not valid"),
+            };
+            let scope_kind = match self.scope_kind.as_str() {
+                "tenant" => AllowanceScopeKind::Tenant,
+                "api_key" => AllowanceScopeKind::ApiKey,
+                other => return Err(bad("scope_kind", other)),
+            };
+            let limit_kind = match self.limit_kind.as_str() {
+                "window" => AllowanceLimitKind::Window,
+                "lifetime" => AllowanceLimitKind::Lifetime,
+                other => return Err(bad("limit_kind", other)),
+            };
+            let currency =
+                CurrencyCode::new(&self.currency).map_err(|_| bad("currency", &self.currency))?;
+            let warn_at = u8::try_from(self.warn_at)
+                .ok()
+                .filter(|w| *w <= 100)
+                .ok_or_else(|| bad("warn_at", &self.warn_at.to_string()))?;
+            let run_id = self
+                .run_id
+                .map(|raw| RunId::parse(raw.as_str()).map_err(|_| bad("run_id", &raw)))
+                .transpose()?;
+            let (window_start, window_end) = match limit_kind {
+                AllowanceLimitKind::Window => (Some(self.window_start), self.window_end),
+                AllowanceLimitKind::Lifetime => (None, None),
+            };
+            Ok(NoticeRecord {
+                notice_id: self.notice_id,
+                tenant_id: self.tenant_id,
+                api_key_id: Some(self.api_key_id).filter(|key| !key.is_empty()),
+                warning: AllowanceWarning {
+                    scope_kind,
+                    limit_kind,
+                    balance: Cost::new(self.balance_nanos, currency.clone()),
+                    ceiling: Cost::new(self.ceiling_nanos, currency),
+                    window_start,
+                    window_end,
+                    warn_at,
+                },
+                run_id,
+                recorded_at: self.recorded_at,
+            })
+        }
+    }
+}
+
+#[cfg(any(feature = "sqlite", feature = "postgres"))]
+pub(crate) use notice_row::RawNotice;
 
 #[cfg(test)]
 mod tests {

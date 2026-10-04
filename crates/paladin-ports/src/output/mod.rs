@@ -62,6 +62,10 @@ pub mod trace_sink_port;
 /// Treasury ledger port (LEDGR-01..04, ADR-0053): the append-only, derive-on-read spend ledger
 /// contract every backend adapter (InMemory/SQLite/Postgres, `paladin-storage`) implements.
 pub mod treasury_ledger_port;
+/// Treasury notice port (ALLOW-04, D-16): the store-enforced once-per-window allowance notice
+/// contract the Treasurer claims warn crossings through, implemented beside the ledger by every
+/// `paladin-storage` treasury adapter.
+pub mod treasury_notice_port;
 /// User persistence repository port.
 pub mod user_repository_port;
 /// `ConfinedVault` -- the Vault's namespace-confinement enforcement point

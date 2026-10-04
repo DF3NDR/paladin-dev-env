@@ -18,12 +18,15 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
 
+use paladin_core::platform::container::allowance::{NoticeOutcome, NoticeRecord};
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::treasury_ledger::{
     BalanceQuery, LedgerEntryKind, LedgerScope, ReservationId, ReserveRequest, SettleOutcome,
     SettleRequest, SettlementKey, SpendGroupBy, SpendQuery, SpendRow,
 };
 use paladin_ports::output::treasury_ledger_port::{TreasuryLedgerError, TreasuryLedgerPort};
+use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
 
 /// One append-only ledger row. Mirrors the SQL adapters' columns closely enough to prove
 /// identical port semantics -- not a shared representation with them.
@@ -44,6 +47,9 @@ struct Entry {
 struct LedgerState {
     entries: Vec<Entry>,
     settled: HashSet<SettlementKey>,
+    /// The once-per-window notices (ALLOW-04, D-16): the in-memory twin of the SQL adapters'
+    /// `treasury_notices` table and its unique index, checked and pushed under the same lock.
+    notices: Vec<NoticeRecord>,
 }
 
 /// In-memory `TreasuryLedgerPort` implementation (LEDGR-01, always available, no feature gate).
@@ -400,6 +406,92 @@ impl TreasuryLedgerPort for InMemoryTreasuryLedger {
     }
 }
 
+/// The once-per-window identity of a notice (D-16): the in-memory twin of the SQL adapters'
+/// `idx_treasury_notices_once` column list. A tenant-scope key is `''` and a lifetime window
+/// start is the epoch, so the comparison is field by field with no `Option` ever compared (C5).
+fn notice_identity(
+    notice: &NoticeRecord,
+) -> (
+    paladin_core::platform::container::allowance::AllowanceScopeKind,
+    &str,
+    &str,
+    paladin_core::platform::container::allowance::AllowanceLimitKind,
+    DateTime<Utc>,
+    i64,
+) {
+    (
+        notice.warning.scope_kind,
+        notice.tenant_id.as_str(),
+        notice.api_key_id.as_deref().unwrap_or(""),
+        notice.warning.limit_kind,
+        crate::run::storage_timestamp(
+            notice
+                .warning
+                .window_start
+                .unwrap_or(paladin_core::platform::container::allowance::LIFETIME_WINDOW_START),
+        ),
+        notice.warning.ceiling.nanos(),
+    )
+}
+
+/// `notice` with every instant truncated exactly as the SQL adapters store it, so a notice reads
+/// back identically on every adapter.
+fn normalized_notice(notice: &NoticeRecord) -> NoticeRecord {
+    let mut stored = notice.clone();
+    stored.recorded_at = crate::run::storage_timestamp(stored.recorded_at);
+    stored.warning.window_start = stored
+        .warning
+        .window_start
+        .map(crate::run::storage_timestamp);
+    stored.warning.window_end = stored.warning.window_end.map(crate::run::storage_timestamp);
+    stored
+}
+
+#[async_trait]
+impl TreasuryNoticePort for InMemoryTreasuryLedger {
+    async fn record(&self, notice: &NoticeRecord) -> Result<NoticeOutcome, TreasuryLedgerError> {
+        crate::treasury::validate_notice(notice)?;
+
+        // One lock across the identity check and the push: the in-memory unique index.
+        let mut state = self.state.lock().await;
+        let identity = notice_identity(notice);
+        if state
+            .notices
+            .iter()
+            .any(|existing| notice_identity(existing) == identity)
+        {
+            return Ok(NoticeOutcome::AlreadyRecorded);
+        }
+        state.notices.push(normalized_notice(notice));
+        Ok(NoticeOutcome::Recorded)
+    }
+
+    async fn notices_for_run(
+        &self,
+        run_id: &RunId,
+    ) -> Result<Vec<NoticeRecord>, TreasuryLedgerError> {
+        let state = self.state.lock().await;
+        let mut rows: Vec<NoticeRecord> = state
+            .notices
+            .iter()
+            .filter(|n| n.run_id.as_ref() == Some(run_id))
+            .cloned()
+            .collect();
+        rows.sort_by(|a, b| {
+            a.recorded_at
+                .cmp(&b.recorded_at)
+                .then_with(|| a.notice_id.cmp(&b.notice_id))
+        });
+        Ok(rows)
+    }
+
+    async fn discard(&self, notice_ids: &[String]) -> Result<(), TreasuryLedgerError> {
+        let mut state = self.state.lock().await;
+        state.notices.retain(|n| !notice_ids.contains(&n.notice_id));
+        Ok(())
+    }
+}
+
 /// Fold one (group, currency, nanos) contribution into `folded`, incrementing that entry's
 /// settlement count by one. Mirrors `sqlite::fold_one` exactly (D-11: identical semantics on
 /// every adapter).
@@ -584,6 +676,62 @@ mod contract_suite {
     #[tokio::test]
     async fn balance_is_read_only() {
         contract_tests::balance_is_read_only(&fresh_store()).await;
+    }
+
+    // ── Notice clauses (ALLOW-04, D-16, 41-06) ───────────────────────────
+
+    use crate::treasury::notice_contract_tests as notices;
+
+    #[tokio::test]
+    async fn first_claim_wins_duplicate_is_already_recorded() {
+        notices::first_claim_wins_duplicate_is_already_recorded(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn tenant_scope_duplicate_dedups() {
+        notices::tenant_scope_duplicate_dedups(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn lifetime_notice_dedups_per_ceiling() {
+        notices::lifetime_notice_dedups_per_ceiling(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn raised_ceiling_rearms_the_same_window() {
+        notices::raised_ceiling_rearms_the_same_window(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn distinct_window_start_is_a_distinct_notice() {
+        notices::distinct_window_start_is_a_distinct_notice(&fresh_store()).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn sixteen_concurrent_claims_yield_exactly_one_recorded() {
+        let store: Arc<dyn paladin_ports::output::treasury_notice_port::TreasuryNoticePort> =
+            Arc::new(fresh_store());
+        notices::sixteen_concurrent_claims_yield_exactly_one_recorded(store).await;
+    }
+
+    #[tokio::test]
+    async fn notices_for_run_returns_only_that_runs_rows() {
+        notices::notices_for_run_returns_only_that_runs_rows(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn discard_removes_only_the_named_rows() {
+        notices::discard_removes_only_the_named_rows(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn notice_round_trips_every_field() {
+        notices::notice_round_trips_every_field(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn invalid_notice_is_rejected_before_io() {
+        notices::invalid_notice_is_rejected_before_io(&fresh_store()).await;
     }
 
     // ── Exact-instant window edges (adapter-local, 41-02) ─────────────────

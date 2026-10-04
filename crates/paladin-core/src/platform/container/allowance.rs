@@ -17,6 +17,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::platform::container::cost::Cost;
+use crate::platform::container::run::RunId;
 use crate::platform::container::treasury_ledger::format_cost;
 
 /// Which identity an allowance ceiling is held against.
@@ -180,12 +181,135 @@ pub struct AllowanceWarning {
 }
 
 /// A once-per-window notice this admission won the right to emit (41-06).
+///
+/// Carries everything `AllowanceAdmissionPort::confirm` needs to deliver the operator notice
+/// without re-reading the notice store (41-08): the warning, the tenant and (for an API-key
+/// scope) the key name, the admitting run and the store instant the notice was recorded at.
+/// Tenant ids and key names are log-safe identifiers; no key value ever appears here
+/// (D-00g).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllowanceNotice {
     /// Stable identifier of the notice row.
     pub notice_id: String,
+    /// The tenant the notice was recorded for.
+    pub tenant_id: String,
+    /// The API key name; `Some` exactly for an API-key-scope notice.
+    pub api_key_id: Option<String>,
     /// The warning the notice carries.
     pub warning: AllowanceWarning,
+    /// The run whose admission won the notice; `None` on the HTTP agent path (no run row).
+    pub run_id: Option<RunId>,
+    /// The store instant (whole seconds) the notice was recorded at.
+    pub recorded_at: DateTime<Utc>,
+}
+
+impl From<&NoticeRecord> for AllowanceNotice {
+    fn from(record: &NoticeRecord) -> Self {
+        Self {
+            notice_id: record.notice_id.clone(),
+            tenant_id: record.tenant_id.clone(),
+            api_key_id: record.api_key_id.clone(),
+            warning: record.warning.clone(),
+            run_id: record.run_id.clone(),
+            recorded_at: record.recorded_at,
+        }
+    }
+}
+
+/// The storage key of a lifetime notice's window: the Unix epoch.
+///
+/// A lifetime ceiling has no window, but the notice's unique identity needs a non-null
+/// `window_start` (a NULL in a unique key never conflicts, C5), so lifetime notices are stored
+/// with this fixed instant and read back with both window bounds `None`.
+pub const LIFETIME_WINDOW_START: DateTime<Utc> = DateTime::<Utc>::UNIX_EPOCH;
+
+/// Whether a balance has crossed the warn threshold of a ceiling (D-15).
+///
+/// `true` when `balance_nanos` is at least `warn_at` percent of `ceiling_nanos`; `warn_at == 0`
+/// never crosses (the feature is off). The comparison is
+/// `balance * 100 >= ceiling * warn_at` in `i128` -- an `i64` times a percent can never overflow
+/// `i128`, so no checked arithmetic is needed -- with no floating point, so it is exact at every
+/// `i64` nano-unit ceiling. Admission refuses a balance at the ceiling, so `warn_at == 100` can never
+/// be observed on an admitted path.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::allowance::crosses_warn_threshold;
+///
+/// assert!(crosses_warn_threshold(80, 100, 80));
+/// assert!(!crosses_warn_threshold(79, 100, 80));
+/// assert!(!crosses_warn_threshold(99, 100, 0));
+/// ```
+pub fn crosses_warn_threshold(balance_nanos: i64, ceiling_nanos: i64, warn_at: u8) -> bool {
+    if warn_at == 0 {
+        return false;
+    }
+    i128::from(balance_nanos) * 100 >= i128::from(ceiling_nanos) * i128::from(warn_at)
+}
+
+/// The result of recording a notice claim.
+///
+/// Losing a claim is never an error: another admission (possibly on another replica) already
+/// recorded this notice's identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoticeOutcome {
+    /// This claim won: the row now exists and the caller owns the emission.
+    Recorded,
+    /// The identity was already recorded; nothing was written.
+    AlreadyRecorded,
+}
+
+/// A durable once-per-window notice row (D-16).
+///
+/// The identity is `(scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling)`:
+/// a raised ceiling re-arms the notice for the same window, a new window is a new notice, and
+/// changing `warn_at` alone does not re-arm. `api_key_id` is `Some` exactly for API-key scope;
+/// `run_id` is the admitting run (`None` on the HTTP agent path).
+///
+/// # Examples
+///
+/// ```
+/// use chrono::{TimeZone, Utc};
+/// use paladin_core::platform::container::allowance::{
+///     AllowanceLimitKind, AllowanceNotice, AllowanceScopeKind, AllowanceWarning, NoticeRecord,
+/// };
+/// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+///
+/// let usd = CurrencyCode::new("USD")?;
+/// let record = NoticeRecord {
+///     notice_id: "n-1".to_string(),
+///     tenant_id: "acme".to_string(),
+///     api_key_id: None,
+///     warning: AllowanceWarning {
+///         scope_kind: AllowanceScopeKind::Tenant,
+///         limit_kind: AllowanceLimitKind::Lifetime,
+///         balance: Cost::new(80, usd.clone()),
+///         ceiling: Cost::new(100, usd),
+///         window_start: None,
+///         window_end: None,
+///         warn_at: 80,
+///     },
+///     run_id: None,
+///     recorded_at: Utc.timestamp_opt(0, 0).single().ok_or("bad instant")?,
+/// };
+/// assert_eq!(AllowanceNotice::from(&record).notice_id, "n-1");
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NoticeRecord {
+    /// Stable identifier of the notice row (a fresh UUIDv7 string per claim attempt).
+    pub notice_id: String,
+    /// The tenant the notice is held against.
+    pub tenant_id: String,
+    /// The API key name; `Some` exactly for API-key scope.
+    pub api_key_id: Option<String>,
+    /// The warning the notice carries (pre-admission balance, ceiling, window, threshold).
+    pub warning: AllowanceWarning,
+    /// The admitting run; `None` on the HTTP agent path.
+    pub run_id: Option<RunId>,
+    /// The store instant the claim was made at.
+    pub recorded_at: DateTime<Utc>,
 }
 
 /// The outcome of a successful admission: the notices (if any) it won.
@@ -379,9 +503,82 @@ mod tests {
         };
         let admission = Admission::none().with_notice(AllowanceNotice {
             notice_id: "n-1".to_string(),
+            tenant_id: "acme".to_string(),
+            api_key_id: Some("svc-a".to_string()),
             warning: warning.clone(),
+            run_id: None,
+            recorded_at: at(3, 12, 0, 0),
         });
         assert!(!admission.is_empty());
         assert_eq!(admission.warnings().next(), Some(&warning));
+    }
+
+    #[test]
+    fn crossing_is_inclusive_at_the_threshold() {
+        assert!(crosses_warn_threshold(80, 100, 80));
+        assert!(crosses_warn_threshold(81, 100, 80));
+        assert!(crosses_warn_threshold(2_000_000_000, 2_500_000_000, 80));
+    }
+
+    #[test]
+    fn one_nano_below_the_threshold_does_not_cross() {
+        assert!(!crosses_warn_threshold(79, 100, 80));
+        assert!(!crosses_warn_threshold(1_999_999_999, 2_500_000_000, 80));
+    }
+
+    #[test]
+    fn warn_at_zero_never_crosses() {
+        assert!(!crosses_warn_threshold(0, 100, 0));
+        assert!(!crosses_warn_threshold(99, 100, 0));
+        assert!(!crosses_warn_threshold(i64::MAX, i64::MAX, 0));
+    }
+
+    #[test]
+    fn crossing_math_is_exact_at_i64_max() {
+        // 80% of i64::MAX is not an integer; the exact boundary is the smallest balance whose
+        // x100 product reaches ceiling x 80, found by integer search around the real value.
+        let ceiling = i64::MAX;
+        let boundary = (i128::from(ceiling) * 80 + 99) / 100; // ceil(ceiling * 0.8)
+        let boundary = i64::try_from(boundary).expect("80% of i64::MAX fits i64");
+        assert!(crosses_warn_threshold(boundary, ceiling, 80));
+        assert!(!crosses_warn_threshold(boundary - 1, ceiling, 80));
+        // A balance equal to the ceiling crosses every non-zero threshold without overflow.
+        assert!(crosses_warn_threshold(ceiling, ceiling, 100));
+        assert!(crosses_warn_threshold(ceiling, ceiling, 1));
+    }
+
+    #[test]
+    fn lifetime_window_start_is_the_unix_epoch() {
+        assert_eq!(LIFETIME_WINDOW_START.timestamp(), 0);
+    }
+
+    #[test]
+    fn notice_record_converts_to_a_notice_losslessly() {
+        let record = NoticeRecord {
+            notice_id: "n-9".to_string(),
+            tenant_id: "acme".to_string(),
+            api_key_id: Some("svc-a".to_string()),
+            warning: AllowanceWarning {
+                scope_kind: AllowanceScopeKind::ApiKey,
+                limit_kind: AllowanceLimitKind::Window,
+                balance: Cost::new(80, usd()),
+                ceiling: Cost::new(100, usd()),
+                window_start: Some(at(3, 0, 0, 0)),
+                window_end: Some(at(4, 0, 0, 0)),
+                warn_at: 80,
+            },
+            run_id: Some(RunId::new_v7()),
+            recorded_at: at(3, 12, 0, 0),
+        };
+        let notice = AllowanceNotice::from(&record);
+        assert_eq!(notice.notice_id, record.notice_id);
+        assert_eq!(notice.tenant_id, record.tenant_id);
+        assert_eq!(notice.api_key_id, record.api_key_id);
+        assert_eq!(notice.warning, record.warning);
+        assert_eq!(notice.run_id, record.run_id);
+        assert_eq!(notice.recorded_at, record.recorded_at);
+        let json = serde_json::to_string(&record).unwrap();
+        let back: NoticeRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, record);
     }
 }

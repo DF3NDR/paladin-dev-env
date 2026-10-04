@@ -1,7 +1,7 @@
 //! # The authoritative trace model (OBS-01; PRD 07 §2.1, D-01/D-02)
 //!
 //! [`TraceEvent`](crate::platform::container::trace::TraceEvent) is the
-//! twelve-variant, `#[non_exhaustive]` set of observability events the
+//! thirteen-variant, `#[non_exhaustive]` set of observability events the
 //! superstep engine and its below-the-engine producers (`FallbackLlmAdapter`,
 //! the facade's middleware chain, `PaladinExecutionService`) emit.
 //! [`TraceRecord`](crate::platform::container::trace::TraceRecord) is the
@@ -57,12 +57,15 @@
 //! variants carry is unchanged from the PRD's intent, only the JSON key
 //! avoids the collision. A round-trip test
 //! (`record_serializes_as_one_flat_object` and
-//! `all_twelve_event_variants_construct`'s serialization proves) would have
+//! `all_thirteen_event_variants_construct`'s serialization proves) would have
 //! caught this at once had it gone unfixed.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::platform::container::allowance::{
+    AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+};
 use crate::platform::container::battlefield::FieldName;
 use crate::platform::container::cost::Cost;
 use crate::platform::container::parley::{ParleyId, ParleyKind};
@@ -166,7 +169,7 @@ pub enum RunFinishStatus {
     AwaitingInput,
 }
 
-/// One typed observability event (OBS-01, PRD 07 §2.1): the twelve-variant
+/// One typed observability event (OBS-01, PRD 07 §2.1): the thirteen-variant
 /// authoritative list every sink, the OTel exporter, the SSE bridge, the
 /// `run_traces` persistence layer, the graph inspector and the
 /// `paladin-eval` harness read.
@@ -352,6 +355,45 @@ pub enum TraceEvent {
         /// The action taken.
         action: MiddlewareAction,
     },
+    /// A Treasurer allowance warn threshold was crossed at admission (D-18, ALLOW-04) --
+    /// emitted once per won notice on the admitted run's own stream, before `RunStarted`.
+    ///
+    /// Carries the D-13 figures, the window and the threshold only -- never a tenant id, an
+    /// API key name or an API key value.
+    AllowanceWarning {
+        /// Which identity the ceiling is held against.
+        scope_kind: AllowanceScopeKind,
+        /// Which kind of limit the ceiling is.
+        limit_kind: AllowanceLimitKind,
+        /// The balance read when the warning fired.
+        balance: Cost,
+        /// The ceiling the balance is approaching.
+        ceiling: Cost,
+        /// The window's start (inclusive); `None` for a lifetime ceiling.
+        #[serde(default)]
+        window_start: Option<DateTime<Utc>>,
+        /// The window's end (exclusive); `None` for a lifetime ceiling.
+        #[serde(default)]
+        window_end: Option<DateTime<Utc>>,
+        /// The configured warn threshold, in whole percent of the ceiling.
+        warn_at: u8,
+    },
+}
+
+impl From<AllowanceWarning> for TraceEvent {
+    /// Lift a won allowance warning into the trace model (D-18); the inverse is
+    /// [`AllowanceWarning::from_trace_event`].
+    fn from(warning: AllowanceWarning) -> Self {
+        TraceEvent::AllowanceWarning {
+            scope_kind: warning.scope_kind,
+            limit_kind: warning.limit_kind,
+            balance: warning.balance,
+            ceiling: warning.ceiling,
+            window_start: warning.window_start,
+            window_end: warning.window_end,
+            warn_at: warning.warn_at,
+        }
+    }
 }
 
 /// The envelope every [`TraceSink`](crate) actually receives (D-02): wraps
@@ -391,11 +433,70 @@ mod tests {
         ThreadId::new("t1").unwrap()
     }
 
-    /// D-02: `TraceEvent` has exactly twelve variants; this test builds one
+    fn sample_warning() -> AllowanceWarning {
+        use crate::platform::container::cost::CurrencyCode;
+        use chrono::TimeZone;
+        let usd = CurrencyCode::new("USD").unwrap();
+        AllowanceWarning {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Window,
+            balance: Cost::new(20_500_000_000, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window_start: Utc.with_ymd_and_hms(2026, 10, 2, 0, 0, 0).single(),
+            window_end: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single(),
+            warn_at: 80,
+        }
+    }
+
+    /// D-18: the allowance event serializes with `kind = "allowance_warning"`, carries no
+    /// tenant or key field, and round-trips through its flattened record envelope.
+    #[test]
+    fn allowance_warning_event_round_trips_with_kind_allowance_warning() {
+        let record = TraceRecord {
+            thread_id: thread(),
+            run_id: Some(RunId::new_v7()),
+            seq: 1,
+            at: Utc::now(),
+            event: TraceEvent::from(sample_warning()),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains("\"kind\":\"allowance_warning\""), "{json}");
+        assert!(
+            !json.contains("tenant_id") && !json.contains("api_key_id"),
+            "{json}"
+        );
+        let back: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, record);
+        assert_eq!(
+            AllowanceWarning::from_trace_event(&back.event),
+            Some(sample_warning())
+        );
+    }
+
+    /// A lifetime warning (no window bounds) round-trips with the bounds absent.
+    #[test]
+    fn allowance_warning_event_without_window_bounds_defaults_to_none() {
+        let json = r#"{"kind":"allowance_warning","scope_kind":"tenant","limit_kind":"lifetime",
+            "balance":{"nanos":80,"currency":"USD"},"ceiling":{"nanos":100,"currency":"USD"},
+            "warn_at":80}"#;
+        let event: TraceEvent = serde_json::from_str(json).unwrap();
+        match event {
+            TraceEvent::AllowanceWarning {
+                window_start,
+                window_end,
+                ..
+            } => {
+                assert!(window_start.is_none() && window_end.is_none());
+            }
+            other => panic!("unexpected variant: {other:?}"),
+        }
+    }
+
+    /// D-02 / D-18: `TraceEvent` has exactly thirteen variants; this test builds one
     /// of each and the `match` below (with its wildcard arm) must compile,
     /// proving `#[non_exhaustive]` discipline holds.
     #[test]
-    fn all_twelve_event_variants_construct() {
+    fn all_thirteen_event_variants_construct() {
         let events = vec![
             TraceEvent::RunStarted {
                 run_id: Some(RunId::new_v7()),
@@ -468,13 +569,14 @@ mod tests {
                 name: "limit".to_string(),
                 action: MiddlewareAction::Finish,
             },
+            TraceEvent::from(sample_warning()),
         ];
-        assert_eq!(events.len(), 12);
+        assert_eq!(events.len(), 13);
         for event in &events {
             // Every match over `TraceEvent` anywhere in the WORKSPACE must
             // carry a wildcard arm (`#[non_exhaustive]` only enforces this
             // for downstream crates; within this defining crate the match
-            // below is already exhaustive over the twelve known variants,
+            // below is already exhaustive over the thirteen known variants,
             // so no wildcard arm is added here — adding one would be an
             // unreachable-pattern warning under `-D warnings`).
             let _name = match event {
@@ -490,6 +592,7 @@ mod tests {
                 TraceEvent::RunFinished { .. } => "run_finished",
                 TraceEvent::FallbackHop { .. } => "fallback_hop",
                 TraceEvent::MiddlewareEvent { .. } => "middleware_event",
+                TraceEvent::AllowanceWarning { .. } => "allowance_warning",
             };
         }
     }

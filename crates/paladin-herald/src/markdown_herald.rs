@@ -422,6 +422,10 @@ impl Herald for MarkdownHerald {
         if let Some(display) = metadata.cost_display() {
             output.push_str(&self.format_field("Cost", &display));
         }
+        // D-18: one allowance line, from the one shared helper, only when a warning was won.
+        if let Some(line) = metadata.allowance_warning_display() {
+            output.push_str(&self.format_field("Allowance", &line));
+        }
 
         Ok(output)
     }
@@ -879,6 +883,60 @@ mod tests {
             !formatted.contains('$'),
             "no dollar sign once a currency is configured: {formatted}"
         );
+    }
+
+    fn allowance_metadata(with_warning: bool) -> ExecutionMetadata {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let cost = Cost::new(45_000_000, usd.clone());
+        let mut metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::nil())
+            .start_time(chrono::DateTime::UNIX_EPOCH)
+            .model_used("gpt-4".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .duration_ms(1234)
+            .cost(&cost)
+            .build()
+            .unwrap();
+        if with_warning {
+            metadata.with_allowance_warnings(&[AllowanceWarning {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(20_500_000_000, usd.clone()),
+                ceiling: Cost::new(25_000_000_000, usd),
+                window_start: None,
+                window_end: None,
+                warn_at: 80,
+            }]);
+        }
+        metadata
+    }
+
+    #[test]
+    fn finalize_stream_renders_exactly_one_allowance_line_when_present() {
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+        let with = herald.finalize_stream(&allowance_metadata(true)).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        assert_eq!(with.matches("allowance:").count(), 1, "{with}");
+        assert!(with.contains("(tenant, lifetime cap)"), "{with}");
+        // Removing the one added field returns the pre-change rendering byte for byte.
+        let line = herald.format_field(
+            "Allowance",
+            &allowance_metadata(true)
+                .allowance_warning_display()
+                .unwrap(),
+        );
+        assert_eq!(with.replace(&line, ""), without);
+        assert!(!without.contains("allowance"), "{without}");
     }
 
     #[test]

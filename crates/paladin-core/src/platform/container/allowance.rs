@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::platform::container::cost::Cost;
 use crate::platform::container::run::RunId;
+use crate::platform::container::trace::TraceEvent;
 use crate::platform::container::treasury_ledger::format_cost;
 
 /// Which identity an allowance ceiling is held against.
@@ -178,6 +179,127 @@ pub struct AllowanceWarning {
     pub window_end: Option<DateTime<Utc>>,
     /// The configured warn threshold, in whole percent of the ceiling.
     pub warn_at: u8,
+}
+
+impl AllowanceWarning {
+    /// The warning carried by a [`TraceEvent::AllowanceWarning`], or `None` for any other
+    /// event (the inverse of `TraceEvent::from(warning)`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::allowance::AllowanceWarning;
+    /// use paladin_core::platform::container::trace::TraceEvent;
+    ///
+    /// let event = TraceEvent::RunStarted { run_id: None, graph_fingerprint: "fp".into() };
+    /// assert_eq!(AllowanceWarning::from_trace_event(&event), None);
+    /// ```
+    pub fn from_trace_event(event: &TraceEvent) -> Option<AllowanceWarning> {
+        match event {
+            TraceEvent::AllowanceWarning {
+                scope_kind,
+                limit_kind,
+                balance,
+                ceiling,
+                window_start,
+                window_end,
+                warn_at,
+            } => Some(AllowanceWarning {
+                scope_kind: *scope_kind,
+                limit_kind: *limit_kind,
+                balance: balance.clone(),
+                ceiling: ceiling.clone(),
+                window_start: *window_start,
+                window_end: *window_end,
+                warn_at: *warn_at,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The whole percent of the ceiling the balance has reached: the floor of
+    /// `balance * 100 / ceiling` in integer arithmetic (never rounded up), `0` when the ceiling
+    /// is not positive or the balance is negative.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::allowance::{
+    ///     AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+    /// };
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let warning = AllowanceWarning {
+    ///     scope_kind: AllowanceScopeKind::Tenant,
+    ///     limit_kind: AllowanceLimitKind::Lifetime,
+    ///     balance: Cost::new(829_999_999, usd.clone()),
+    ///     ceiling: Cost::new(1_000_000_000, usd),
+    ///     window_start: None,
+    ///     window_end: None,
+    ///     warn_at: 80,
+    /// };
+    /// assert_eq!(warning.percent_of_ceiling(), 82);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn percent_of_ceiling(&self) -> u64 {
+        let ceiling = i128::from(self.ceiling.nanos());
+        let balance = i128::from(self.balance.nanos());
+        if ceiling <= 0 || balance < 0 {
+            return 0;
+        }
+        u64::try_from(balance * 100 / ceiling).unwrap_or(u64::MAX)
+    }
+
+    /// The one-line operator rendering shared by the markdown, JSON and table heralds (D-18):
+    /// `⚠ allowance: 82% of 25.0000 USD (api_key, window resets 2026-10-03T00:00:00Z)` for a
+    /// window ceiling and `... (tenant, lifetime cap)` for a lifetime one.
+    ///
+    /// The line names the scope kind, never the tenant id or the key name, and never a key value
+    /// (D-00g). The ceiling is rendered through [`format_cost`], the display edge (D-00h).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::{TimeZone, Utc};
+    /// use paladin_core::platform::container::allowance::{
+    ///     AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+    /// };
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let warning = AllowanceWarning {
+    ///     scope_kind: AllowanceScopeKind::ApiKey,
+    ///     limit_kind: AllowanceLimitKind::Window,
+    ///     balance: Cost::new(20_500_000_000, usd.clone()),
+    ///     ceiling: Cost::new(25_000_000_000, usd),
+    ///     window_start: Utc.with_ymd_and_hms(2026, 10, 2, 0, 0, 0).single(),
+    ///     window_end: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single(),
+    ///     warn_at: 80,
+    /// };
+    /// assert_eq!(
+    ///     warning.herald_line(),
+    ///     "⚠ allowance: 82% of 25.0000 USD (api_key, window resets 2026-10-03T00:00:00Z)"
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn herald_line(&self) -> String {
+        let scope = self.scope_kind.as_str();
+        let horizon = match (self.limit_kind, self.window_end) {
+            (AllowanceLimitKind::Window, Some(end)) => {
+                format!(
+                    "window resets {}",
+                    end.to_rfc3339_opts(SecondsFormat::Secs, true)
+                )
+            }
+            _ => "lifetime cap".to_string(),
+        };
+        format!(
+            "\u{26A0} allowance: {}% of {} ({scope}, {horizon})",
+            self.percent_of_ceiling(),
+            format_cost(&self.ceiling),
+        )
+    }
 }
 
 /// A once-per-window notice this admission won the right to emit (41-06).
@@ -511,6 +633,124 @@ mod tests {
         });
         assert!(!admission.is_empty());
         assert_eq!(admission.warnings().next(), Some(&warning));
+    }
+
+    fn warning(
+        balance: i64,
+        ceiling: i64,
+        scope: AllowanceScopeKind,
+        limit: AllowanceLimitKind,
+    ) -> AllowanceWarning {
+        let windowed = limit == AllowanceLimitKind::Window;
+        AllowanceWarning {
+            scope_kind: scope,
+            limit_kind: limit,
+            balance: Cost::new(balance, usd()),
+            ceiling: Cost::new(ceiling, usd()),
+            window_start: windowed.then(|| at(2, 0, 0, 0)),
+            window_end: windowed.then(|| at(3, 0, 0, 0)),
+            warn_at: 80,
+        }
+    }
+
+    #[test]
+    fn herald_line_for_a_window_ceiling() {
+        let w = warning(
+            20_500_000_000,
+            25_000_000_000,
+            AllowanceScopeKind::ApiKey,
+            AllowanceLimitKind::Window,
+        );
+        assert_eq!(
+            w.herald_line(),
+            "\u{26A0} allowance: 82% of 25.0000 USD (api_key, window resets 2026-10-03T00:00:00Z)"
+        );
+    }
+
+    #[test]
+    fn herald_line_for_a_lifetime_ceiling() {
+        let w = warning(
+            20_500_000_000,
+            25_000_000_000,
+            AllowanceScopeKind::Tenant,
+            AllowanceLimitKind::Lifetime,
+        );
+        assert_eq!(
+            w.herald_line(),
+            "\u{26A0} allowance: 82% of 25.0000 USD (tenant, lifetime cap)"
+        );
+    }
+
+    #[test]
+    fn percent_floors_and_never_rounds_up() {
+        let w = warning(
+            829_999_999,
+            1_000_000_000,
+            AllowanceScopeKind::ApiKey,
+            AllowanceLimitKind::Window,
+        );
+        assert_eq!(w.percent_of_ceiling(), 82);
+        let w = warning(
+            830_000_000,
+            1_000_000_000,
+            AllowanceScopeKind::ApiKey,
+            AllowanceLimitKind::Window,
+        );
+        assert_eq!(w.percent_of_ceiling(), 83);
+    }
+
+    #[test]
+    fn percent_is_zero_for_a_non_positive_ceiling_or_negative_balance_and_exact_at_the_extremes() {
+        let w = warning(
+            5,
+            0,
+            AllowanceScopeKind::Tenant,
+            AllowanceLimitKind::Lifetime,
+        );
+        assert_eq!(w.percent_of_ceiling(), 0);
+        let w = warning(
+            -5,
+            100,
+            AllowanceScopeKind::Tenant,
+            AllowanceLimitKind::Lifetime,
+        );
+        assert_eq!(w.percent_of_ceiling(), 0);
+        let w = warning(
+            i64::MAX,
+            i64::MAX,
+            AllowanceScopeKind::Tenant,
+            AllowanceLimitKind::Lifetime,
+        );
+        assert_eq!(w.percent_of_ceiling(), 100);
+    }
+
+    #[test]
+    fn herald_line_names_no_tenant_or_key() {
+        let w = warning(
+            80,
+            100,
+            AllowanceScopeKind::ApiKey,
+            AllowanceLimitKind::Window,
+        );
+        let line = w.herald_line();
+        assert!(!line.contains("acme") && !line.contains("svc-a"), "{line}");
+    }
+
+    #[test]
+    fn from_trace_event_inverts_the_conversion_and_ignores_other_variants() {
+        let w = warning(
+            80,
+            100,
+            AllowanceScopeKind::ApiKey,
+            AllowanceLimitKind::Window,
+        );
+        let event = TraceEvent::from(w.clone());
+        assert_eq!(AllowanceWarning::from_trace_event(&event), Some(w));
+        let other = TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        };
+        assert_eq!(AllowanceWarning::from_trace_event(&other), None);
     }
 
     #[test]

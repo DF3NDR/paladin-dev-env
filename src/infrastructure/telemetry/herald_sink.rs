@@ -15,14 +15,22 @@
 //! (`PaladinExecutionService::stream_execution_metadata`, 38-02): together they close
 //! D-12 on both run paths.
 //!
-//! Renders metadata only — model, usage, duration, cost, run status — never prompt or
-//! response content (T-38-26). A herald error is diagnostics-only
+//! The sink is stateful in one narrow way (Phase 41 D-18): it records every
+//! [`AllowanceWarning`] event it sees and folds them into the metadata it hands the herald at
+//! `RunFinished` ([`ExecutionMetadata::with_allowance_warnings`]), so each herald renders one
+//! allowance line through the shared [`ExecutionMetadata::allowance_warning_display`] helper.
+//! The worker builds one sink per run dispatch (never shared across runs), so the recorded
+//! warnings are always the run's own.
+//!
+//! Renders metadata only — model, usage, duration, cost, allowance figures, run status —
+//! never prompt or response content (T-38-26). A herald error is diagnostics-only
 //! ([`TraceSinkError::Failed`]), per [`TraceSink`]'s own contract: it never fails the run
 //! (T-38-27).
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
+use paladin_core::platform::container::allowance::AllowanceWarning;
 use paladin_core::platform::container::herald::{ExecutionMetadata, Herald};
 use paladin_ports::output::trace_sink_port::{TraceRecord, TraceSink, TraceSinkError};
 
@@ -33,11 +41,14 @@ pub const HERALD_LOG_TARGET: &str = "paladin::herald";
 /// record it sees to a [`Herald`] (D-12): builds an [`ExecutionMetadata`] via
 /// [`ExecutionMetadata::from_run_finished`], calls
 /// [`Herald::finalize_stream`], and logs the result under [`HERALD_LOG_TARGET`] at
-/// `info`. Every other event is a no-op — see the module docs for the "one summary per
-/// engine dispatch" cardinality this relies on.
+/// `info`. A [`TraceEvent::AllowanceWarning`](paladin_core::platform::container::trace::TraceEvent::AllowanceWarning)
+/// is recorded and folded into that metadata (D-18); every other event is a no-op — see the
+/// module docs for the "one summary per engine dispatch" cardinality this relies on.
 pub struct HeraldTraceSink {
     herald: Arc<dyn Herald>,
     model_used: String,
+    /// Allowance warnings seen on this run's stream, drained at `RunFinished` (D-18).
+    warnings: Mutex<Vec<AllowanceWarning>>,
 }
 
 impl HeraldTraceSink {
@@ -49,7 +60,16 @@ impl HeraldTraceSink {
         Self {
             herald,
             model_used: model_used.into(),
+            warnings: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Lock the warning list, recovering a poisoned lock: a panic elsewhere must not stop a
+    /// herald summary (the list is only ever pushed to or drained).
+    fn recorded_warnings(&self) -> MutexGuard<'_, Vec<AllowanceWarning>> {
+        self.warnings
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -65,11 +85,18 @@ impl std::fmt::Debug for HeraldTraceSink {
 #[async_trait]
 impl TraceSink for HeraldTraceSink {
     async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
-        let Some(metadata) =
+        if let Some(warning) = AllowanceWarning::from_trace_event(&record.event) {
+            self.recorded_warnings().push(warning);
+            return Ok(());
+        }
+
+        let Some(mut metadata) =
             ExecutionMetadata::from_run_finished(&record, self.model_used.as_str())
         else {
             return Ok(());
         };
+        let drained = std::mem::take(&mut *self.recorded_warnings());
+        metadata.with_allowance_warnings(&drained);
 
         match self.herald.finalize_stream(&metadata) {
             Ok(text) => {
@@ -89,7 +116,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Duration;
 
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use paladin_battalion::engine::{
         EngineLimits, InputMapping, NodeSpec, RunOutcome, WarEngine, WarGraph,
     };
@@ -195,6 +222,79 @@ mod tests {
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].cost_estimate, Some(0.0225));
         assert_eq!(captured[0].cost_currency(), Some("USD"));
+    }
+
+    fn allowance_warning_record(seq: u64) -> TraceRecord {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind,
+        };
+        let usd = CurrencyCode::new("USD").unwrap();
+        TraceRecord {
+            thread_id: ThreadId::new("herald-sink-unit").unwrap(),
+            run_id: Some(RunId::new_v7()),
+            seq,
+            at: Utc::now(),
+            event: TraceEvent::from(AllowanceWarning {
+                scope_kind: AllowanceScopeKind::ApiKey,
+                limit_kind: AllowanceLimitKind::Window,
+                balance: Cost::new(20_500_000_000, usd.clone()),
+                ceiling: Cost::new(25_000_000_000, usd),
+                window_start: Utc.with_ymd_and_hms(2026, 10, 2, 0, 0, 0).single(),
+                window_end: Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single(),
+                warn_at: 80,
+            }),
+        }
+    }
+
+    /// D-18: an allowance warning seen before `RunFinished` is folded into the metadata the
+    /// herald receives, and only into that one summary.
+    #[tokio::test]
+    async fn herald_sink_folds_allowance_warnings_into_run_finished_metadata() {
+        let herald = Arc::new(RecordingHerald::default());
+        let sink = HeraldTraceSink::new(Arc::clone(&herald) as Arc<dyn Herald>, "gpt-4");
+
+        sink.on_event(allowance_warning_record(1))
+            .await
+            .expect("recording a warning succeeds");
+        assert!(
+            herald.captured().is_empty(),
+            "a warning alone renders nothing"
+        );
+        sink.on_event(run_finished_record(None))
+            .await
+            .expect("herald sink succeeds");
+
+        let captured = herald.captured();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(
+            captured[0].allowance_warning_display().as_deref(),
+            Some(
+                "\u{26A0} allowance: 82% of 25.0000 USD (api_key, window resets 2026-10-03T00:00:00Z)"
+            )
+        );
+
+        // Drained: a second dispatch's summary through the same sink carries no stale line.
+        sink.on_event(run_finished_record(None))
+            .await
+            .expect("herald sink succeeds");
+        assert_eq!(herald.captured()[1].allowance_warning_display(), None);
+    }
+
+    #[tokio::test]
+    async fn herald_sink_without_warnings_renders_as_before() {
+        let herald = Arc::new(RecordingHerald::default());
+        let sink = HeraldTraceSink::new(Arc::clone(&herald) as Arc<dyn Herald>, "gpt-4");
+
+        sink.on_event(run_finished_record(None))
+            .await
+            .expect("herald sink succeeds");
+
+        let captured = herald.captured();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].allowance_warning_display(), None);
+        assert!(!captured[0].metadata.contains_key(
+            paladin_core::platform::container::herald::ALLOWANCE_WARNING_METADATA_KEY
+        ));
     }
 
     /// 45-02 (D-14): a legacy agent run has no graph, so `RunWorkerPool::run_agent`

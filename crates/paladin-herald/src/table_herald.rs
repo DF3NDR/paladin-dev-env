@@ -327,6 +327,10 @@ impl Herald for TableHerald {
         if let Some(cost_display) = metadata.cost_display() {
             table.add_row(vec![Cell::new("Cost"), Cell::new(cost_display)]);
         }
+        // D-18: one allowance row, from the one shared helper, only when a warning was won.
+        if let Some(line) = metadata.allowance_warning_display() {
+            table.add_row(vec![Cell::new("Allowance"), Cell::new(line)]);
+        }
 
         let mut output = String::from("\n--- Execution Metadata ---\n");
         writeln!(&mut output, "{}", table).map_err(|e| {
@@ -1044,5 +1048,49 @@ mod tests {
         let formatted = herald.finalize_stream(&metadata).unwrap();
 
         assert!(!formatted.contains("Cost"));
+    }
+
+    fn allowance_metadata(with_warning: bool) -> ExecutionMetadata {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let cost = Cost::new(45_000_000, usd.clone());
+        let mut metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::nil())
+            .start_time(chrono::DateTime::UNIX_EPOCH)
+            .model_used("test-model".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .duration_ms(1000)
+            .cost(&cost)
+            .build()
+            .unwrap();
+        if with_warning {
+            metadata.with_allowance_warnings(&[AllowanceWarning {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(20_500_000_000, usd.clone()),
+                ceiling: Cost::new(25_000_000_000, usd),
+                window_start: None,
+                window_end: None,
+                warn_at: 80,
+            }]);
+        }
+        metadata
+    }
+
+    #[test]
+    fn finalize_stream_renders_exactly_one_allowance_row_when_present() {
+        let herald = TableHerald::default();
+        let with = herald.finalize_stream(&allowance_metadata(true)).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        assert_eq!(with.matches("allowance:").count(), 1, "{with}");
+        assert!(with.contains("(tenant, lifetime cap)"), "{with}");
+        assert!(!without.contains("llowance"), "{without}");
+        assert!(without.contains("0.0450 USD"), "{without}");
     }
 }

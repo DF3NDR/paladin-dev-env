@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+use crate::platform::container::allowance::AllowanceWarning;
 use crate::platform::container::cost::Cost;
 
 // Re-export actual domain types for Herald consumers
@@ -377,6 +378,11 @@ impl StreamChunkBuilder {
 /// [`ExecutionMetadata::cost_currency`] and [`ExecutionMetadata::cost_display`].
 pub const COST_CURRENCY_METADATA_KEY: &str = "cost_currency";
 
+/// The [`ExecutionMetadata::metadata`] key under which the Treasurer's allowance warnings for a
+/// run are recorded (D-18): a JSON array of [`AllowanceWarning`], present only when at least one
+/// warning was won. Read back through [`ExecutionMetadata::allowance_warning_display`].
+pub const ALLOWANCE_WARNING_METADATA_KEY: &str = "treasurer.allowance_warning";
+
 /// Execution metadata for streaming with complete telemetry
 ///
 /// Tracks comprehensive execution metrics including timing, token usage,
@@ -571,6 +577,93 @@ impl ExecutionMetadata {
             Some(code) => format!("{cost:.4} {code}"),
             None => format!("{cost:.4}"),
         })
+    }
+
+    /// Record the run's won allowance warnings under [`ALLOWANCE_WARNING_METADATA_KEY`] as a
+    /// JSON array (D-18). Does nothing for an empty slice, so a run without a warning keeps
+    /// byte-identical metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use uuid::Uuid;
+    ///
+    /// let mut metadata = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1, 1))
+    ///     .build()?;
+    /// metadata.with_allowance_warnings(&[]);
+    /// assert_eq!(metadata.allowance_warning_display(), None);
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_allowance_warnings(&mut self, warnings: &[AllowanceWarning]) {
+        if warnings.is_empty() {
+            return;
+        }
+        if let Ok(value) = serde_json::to_value(warnings) {
+            self.metadata
+                .insert(ALLOWANCE_WARNING_METADATA_KEY.to_string(), value);
+        }
+    }
+
+    /// Render the run's allowance warnings for display (D-18): one
+    /// [`AllowanceWarning::herald_line`] per warning, joined with `"; "`. `None` when the key is
+    /// absent, the array is empty or it does not deserialize -- a herald never fails because of
+    /// this line.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::allowance::{
+    ///     AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+    /// };
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use uuid::Uuid;
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let warning = AllowanceWarning {
+    ///     scope_kind: AllowanceScopeKind::Tenant,
+    ///     limit_kind: AllowanceLimitKind::Lifetime,
+    ///     balance: Cost::new(20_500_000_000, usd.clone()),
+    ///     ceiling: Cost::new(25_000_000_000, usd),
+    ///     window_start: None,
+    ///     window_end: None,
+    ///     warn_at: 80,
+    /// };
+    /// let mut metadata = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1, 1))
+    ///     .build()?;
+    /// metadata.with_allowance_warnings(&[warning]);
+    /// assert_eq!(
+    ///     metadata.allowance_warning_display().as_deref(),
+    ///     Some("\u{26A0} allowance: 82% of 25.0000 USD (tenant, lifetime cap)")
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn allowance_warning_display(&self) -> Option<String> {
+        let value = self.metadata.get(ALLOWANCE_WARNING_METADATA_KEY)?;
+        let warnings: Vec<AllowanceWarning> = serde_json::from_value(value.clone()).ok()?;
+        if warnings.is_empty() {
+            return None;
+        }
+        Some(
+            warnings
+                .iter()
+                .map(AllowanceWarning::herald_line)
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
     }
 
     /// Build [`ExecutionMetadata`] from a completed run's
@@ -835,6 +928,96 @@ impl ExecutionMetadataBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_allowance_warning(
+        balance: i64,
+        scope: crate::platform::container::allowance::AllowanceScopeKind,
+        limit: crate::platform::container::allowance::AllowanceLimitKind,
+    ) -> AllowanceWarning {
+        use chrono::TimeZone;
+        let usd = crate::platform::container::cost::CurrencyCode::new("USD").unwrap();
+        let windowed = limit == crate::platform::container::allowance::AllowanceLimitKind::Window;
+        AllowanceWarning {
+            scope_kind: scope,
+            limit_kind: limit,
+            balance: Cost::new(balance, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window_start: windowed
+                .then(|| Utc.with_ymd_and_hms(2026, 10, 2, 0, 0, 0).single())
+                .flatten(),
+            window_end: windowed
+                .then(|| Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single())
+                .flatten(),
+            warn_at: 80,
+        }
+    }
+
+    fn bare_metadata() -> ExecutionMetadata {
+        ExecutionMetadata::builder()
+            .execution_id(Uuid::new_v4())
+            .start_time(Utc::now())
+            .model_used("gpt-4".to_string())
+            .token_usage(crate::platform::container::token_usage::TokenUsage::new(
+                1, 1,
+            ))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn allowance_warning_display_is_none_without_the_key() {
+        assert_eq!(bare_metadata().allowance_warning_display(), None);
+    }
+
+    #[test]
+    fn with_allowance_warnings_ignores_an_empty_slice() {
+        let mut metadata = bare_metadata();
+        metadata.with_allowance_warnings(&[]);
+        assert!(
+            !metadata
+                .metadata
+                .contains_key(ALLOWANCE_WARNING_METADATA_KEY)
+        );
+    }
+
+    #[test]
+    fn allowance_warning_display_joins_two_lines() {
+        use crate::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+        let mut metadata = bare_metadata();
+        metadata.with_allowance_warnings(&[
+            sample_allowance_warning(
+                20_500_000_000,
+                AllowanceScopeKind::ApiKey,
+                AllowanceLimitKind::Window,
+            ),
+            sample_allowance_warning(
+                21_000_000_000,
+                AllowanceScopeKind::Tenant,
+                AllowanceLimitKind::Lifetime,
+            ),
+        ]);
+        let display = metadata.allowance_warning_display().unwrap();
+        assert_eq!(
+            display,
+            "\u{26A0} allowance: 82% of 25.0000 USD (api_key, window resets 2026-10-03T00:00:00Z); \
+             \u{26A0} allowance: 84% of 25.0000 USD (tenant, lifetime cap)"
+        );
+    }
+
+    #[test]
+    fn allowance_warning_display_is_none_for_an_undeserializable_value() {
+        let mut metadata = bare_metadata();
+        metadata.metadata.insert(
+            ALLOWANCE_WARNING_METADATA_KEY.to_string(),
+            serde_json::json!("not an array"),
+        );
+        assert_eq!(metadata.allowance_warning_display(), None);
+        metadata.metadata.insert(
+            ALLOWANCE_WARNING_METADATA_KEY.to_string(),
+            serde_json::json!([]),
+        );
+        assert_eq!(metadata.allowance_warning_display(), None);
+    }
 
     // Mock Herald implementation for testing
     struct MockHerald;

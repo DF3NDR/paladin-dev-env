@@ -232,7 +232,8 @@ pub fn map_trace_event(
         | TraceEvent::EdgeEvaluated { .. }
         | TraceEvent::WaypointSaved { .. }
         | TraceEvent::FallbackHop { .. }
-        | TraceEvent::MiddlewareEvent { .. } => None,
+        | TraceEvent::MiddlewareEvent { .. }
+        | TraceEvent::AllowanceWarning { .. } => None,
         // `TraceEvent` is `#[non_exhaustive]` (a future variant this bus
         // does not yet understand is dropped, never a compile break or a
         // panic).

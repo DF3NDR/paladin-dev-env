@@ -202,7 +202,7 @@ impl Herald for JsonHerald {
         // "usage" carries the full TokenUsage split (D-21); "total_tokens" is
         // kept beside it as a derived convenience for existing consumers
         // (D-08 permits coexistence as long as it is never the sole carrier).
-        let json = json!({
+        let mut json = json!({
             "type": "metadata",
             "execution_id": metadata.execution_id,
             "duration_ms": metadata.duration_ms,
@@ -213,6 +213,11 @@ impl Herald for JsonHerald {
             "currency": metadata.cost_currency(),
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
+        // D-18: the allowance line is added only when a warning was won, so a run without one
+        // renders the exact same object as before.
+        if let Some(line) = metadata.allowance_warning_display() {
+            json["allowance_warning"] = Value::String(line);
+        }
 
         let serialized = serde_json::to_string(&json).map_err(|e| {
             HeraldError::SerializationError(format!("Metadata serialization failed: {}", e))
@@ -912,5 +917,61 @@ mod tests {
 
         let roundtripped: TokenUsage = serde_json::from_value(parsed["usage"].clone()).unwrap();
         assert_eq!(roundtripped, original_usage);
+    }
+
+    fn allowance_metadata(with_warning: bool) -> ExecutionMetadata {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let cost = Cost::new(45_000_000, usd.clone());
+        let mut metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::nil())
+            .start_time(chrono::DateTime::UNIX_EPOCH)
+            .model_used("gpt-4".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .cost(&cost)
+            .build()
+            .unwrap();
+        if with_warning {
+            metadata.with_allowance_warnings(&[AllowanceWarning {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(20_500_000_000, usd.clone()),
+                ceiling: Cost::new(25_000_000_000, usd),
+                window_start: None,
+                window_end: None,
+                warn_at: 80,
+            }]);
+        }
+        metadata
+    }
+
+    #[test]
+    fn finalize_stream_adds_the_allowance_key_only_when_present() {
+        let herald = JsonHerald::new();
+        let with = herald.finalize_stream(&allowance_metadata(true)).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        let with: Value = serde_json::from_str(with.trim_end()).unwrap();
+        let without: Value = serde_json::from_str(without.trim_end()).unwrap();
+        assert_eq!(
+            with["allowance_warning"],
+            "\u{26A0} allowance: 82% of 25.0000 USD (tenant, lifetime cap)"
+        );
+        assert_eq!(
+            with.to_string().matches("allowance:").count(),
+            1,
+            "exactly one allowance line"
+        );
+        assert!(without.get("allowance_warning").is_none());
+        // Same key set as before the change, plus the one new key.
+        let mut with_keys: Vec<_> = with.as_object().unwrap().keys().cloned().collect();
+        with_keys.retain(|k| k != "allowance_warning");
+        let without_keys: Vec<_> = without.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(with_keys, without_keys);
     }
 }

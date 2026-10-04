@@ -370,6 +370,62 @@ milestone. Naming this gap plainly is the point: PRD 06's own functional require
 permits documenting it rather than closing it, and claiming coverage that does not exist would be
 worse than the gap itself.
 
+### Operator allowance notices
+
+When the operator configures `treasurer.allowance.webhook` (see the
+[configuration guide](../getting-started/configuration.md#treasurer-allowances)), the Treasurer
+posts one **operator notice** the first time a balance reaches `warn_at` percent of an allowance
+ceiling, before callers start receiving `429 allowance_exhausted`. It rides the same durable queue
+as the run webhooks above -- the same no-redirect client, SSRF guard (at boot and at send time),
+retry schedule and dead-lettering -- but it is the **operator's**, not the caller's: it never
+appears in `GET /v1/runs/{run_id}/webhook-deliveries` for the admitting run, and a caller cannot
+subscribe a run or schedule `webhook.events` to `allowance_warning` (that answers `400`).
+
+**Payload** (exactly these twelve keys; no run input, no API key value and no signing secret ever
+appears):
+
+```json
+{
+  "event": "allowance_warning",
+  "scope": "api_key",
+  "kind": "window",
+  "balance": "0.8000 USD",
+  "ceiling": "1.0000 USD",
+  "window_start": "2026-10-03T00:00:00Z",
+  "window_end": "2026-10-04T00:00:00Z",
+  "warn_at": 80,
+  "run_id": "...",
+  "timestamp": "2026-10-03T09:15:00Z",
+  "tenant_id": "acme",
+  "api_key_id": "ci-runner"
+}
+```
+
+`scope` is `api_key` or `tenant`; `kind` is `window` or `lifetime`; `balance` and `ceiling` are
+display strings; `window_start` and `window_end` are RFC 3339 and `null` for a lifetime ceiling.
+`run_id` is the run whose admission won the notice, or `null` on the HTTP agent routes (no run row
+exists there). `api_key_id` is the API key's configured **name**, never its value, and is `null`
+for a tenant-scope notice. `timestamp` is the ledger store's clock when the notice was recorded.
+
+**Headers and signature.** The request carries `X-Paladin-Event: allowance_warning` and
+`X-Paladin-Delivery: <delivery id>`. If a `secret` is configured it is signed exactly like a run
+webhook -- `X-Paladin-Signature: sha256=<hex>`, HMAC-SHA256 over the raw request body bytes -- with
+`treasurer.allowance.webhook.secret` (or `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`). Verify it over
+the raw bytes you received, as above. Without a secret the body is signed with the empty key.
+
+**Delivery semantics.** At most one notice is recorded per scope, limit kind, window and ceiling
+(raising a ceiling re-arms it), so at most one delivery is enqueued for each; the delivery itself is
+at-least-once. Omitting `treasurer.allowance.webhook` disables only this leg -- the durable notice
+row, the trace event and the herald allowance line still occur. If the operator notice cannot be
+enqueued the failure is logged and not retried, and the run is unaffected. A private or loopback
+target needs `webhooks.allow_private: true`; the cloud metadata address is always rejected, and
+`paladin-server` refuses to start on a rejected target.
+
+On the HTTP agent routes (`/v1/agents/{id}/execute`, `/execute/stream`, `/jobs`) the durable notice
+row and this operator webhook always fire. The `allowance_warning` trace event is emitted there only
+when an agent-path trace emitter is wired, and the herald allowance line appears only on the
+streamed final chunk (`/execute/stream`).
+
 ## Pagination
 
 Every list endpoint (`/runs`, `/threads`, `/assistants`, `/assistants/{id}/versions`,

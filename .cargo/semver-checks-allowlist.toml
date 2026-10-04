@@ -279,3 +279,10 @@ lint = "constructible_struct_adds_field"
 migration_row = "paladin-ports | CreateRunSchedule"
 requirement_id = "ALLOW-02"
 justification = "CreateRunSchedule gained the created_by: Option<RunAttribution> field (D-08) -- the creating principal's tenant id and API key name, set by POST /v1/schedules from the authenticated principal and None for embedders. The in-tree literals were migrated in the same commit; suppressed by the crate-wide allow line in crates/paladin-ports/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_marked_non_exhaustive"
+migration_row = "paladin-ai-core | RunEventKind"
+requirement_id = "ALLOW-04"
+justification = "RunEventKind gained the operator-level AllowanceWarning variant (Phase 41, D-17, C3 Option A) because webhook_deliveries.event is this enum, and is marked #[non_exhaustive] so the next event kind is not a semver-major bump. Every in-tree exhaustive match was replaced by the new RunEventKind::as_str() in the same commit; the caller-facing parsers still reject allowance_warning."

@@ -25,10 +25,14 @@ use paladin_battalion::engine::{
 use paladin_core::platform::container::battlefield::{BattlefieldSchema, StateDelta};
 use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::execution_result::PaladinResult;
+use paladin_core::platform::container::herald::{
+    BattalionResult, ExecutionMetadata, Herald, HeraldError, StreamChunk,
+};
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::principal::{PrincipalRef, RunAttribution, TenantId};
 use paladin_core::platform::container::run::{RunId, RunStatus};
+use paladin_core::platform::container::trace::TraceEvent;
 use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
 use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::NodeId;
@@ -36,21 +40,28 @@ use paladin_ports::input::run_submission_port::{ForkRun, RunSubmissionPort, Subm
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::run_queue_port::RunQueuePort;
 use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryPort};
+use paladin_ports::output::run_trace_port::RunTracePort;
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
 use paladin_ports::output::waypoint_port::WaypointPort;
+use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 use paladin_storage::run::in_memory::InMemoryRunRepository;
 use paladin_storage::run::sqlite::SqliteRunRepository;
 use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+use paladin_storage::run_trace::in_memory::InMemoryRunTraceStore;
 use paladin_storage::treasury::contract_tests::{settle_request, usd};
 use paladin_storage::treasury::sqlite::SqliteTreasuryLedger;
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+use paladin_storage::webhook::sqlite::SqliteWebhookDeliveryRepository;
 use paladin_web::agent_auth::{AgentAuthConfig, Principal};
 use paladin_web::run_controller::{RunApiState, run_router};
 
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
 use super::submission::RunSubmissionService;
+use super::webhook::{SsrfGuard, WebhookDeliveryOptions, WebhookDeliveryService};
 use super::worker::RunWorkerPool;
-use crate::application::services::treasurer::{Treasurer, window_for};
+use crate::application::services::treasurer::{OperatorNoticeTarget, Treasurer, window_for};
+use crate::config::trace::TraceConfig;
 use crate::config::treasurer::TreasurerConfig;
 
 /// A [`PaladinPort`] that must never be called -- every graph in this
@@ -325,6 +336,481 @@ async fn run_allowance_tracer_once() -> bool {
     // (g) Another key of the same tenant has no allowance entry and is admitted (D-03).
     let admitted = post("tracer-key-b").await;
     assert_eq!(admitted.status(), StatusCode::ACCEPTED);
+
+    cleanup(&path);
+    true
+}
+
+/// A recording [`Herald`] double: captures every [`ExecutionMetadata`] handed to
+/// `finalize_stream`, so the warn-path tracer can inspect the herald leg (the house
+/// one-double-per-module precedent, mirroring `herald_sink.rs`'s own `RecordingHerald`).
+#[derive(Default)]
+struct RecordingHerald {
+    captured: std::sync::Mutex<Vec<ExecutionMetadata>>,
+}
+
+impl RecordingHerald {
+    fn captured(&self) -> Vec<ExecutionMetadata> {
+        self.captured.lock().unwrap().clone()
+    }
+}
+
+impl Herald for RecordingHerald {
+    fn format_paladin_result(&self, _result: &PaladinResult) -> Result<String, HeraldError> {
+        Ok(String::new())
+    }
+
+    fn format_battalion_result(&self, _result: &BattalionResult) -> Result<String, HeraldError> {
+        Ok(String::new())
+    }
+
+    fn format_stream_chunk(&self, _chunk: &StreamChunk) -> Result<Option<String>, HeraldError> {
+        Ok(None)
+    }
+
+    fn finalize_stream(&self, metadata: &ExecutionMetadata) -> Result<String, HeraldError> {
+        self.captured.lock().unwrap().push(metadata.clone());
+        Ok(String::new())
+    }
+
+    fn format_error(&self, error: &PaladinError) -> String {
+        error.to_string()
+    }
+
+    fn name(&self) -> &str {
+        "recording"
+    }
+
+    fn mime_type(&self) -> &str {
+        "text/plain"
+    }
+}
+
+/// `sha256=<hex>` HMAC of `body` under `key` -- a receiver's own recomputation.
+fn recompute_signature(key: &[u8], body: &[u8]) -> String {
+    use hmac::{Hmac, Mac};
+    let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("any key length");
+    mac.update(body);
+    format!(
+        "sha256={}",
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    )
+}
+
+/// The Phase 41 warn-path tracer (ALLOW-04, D-15, D-16, D-17, D-18; roadmap success
+/// criterion 3): ONE admission at exactly the 80% warn threshold is observed exactly once in
+/// each of three legs -- the durable notice row, the signed operator webhook and the run's
+/// own trace stream (plus the herald line) -- without blocking the run, and a second
+/// admission in the same window adds nothing to any of them.
+///
+/// 41-06, 41-07 and the earlier 41-08 tasks proved each leg separately; this test drives all
+/// three from one admission over ONE on-disk SQLite file (production shares one run-store
+/// file), through the real `run_router`, `Treasurer` (config-built), `RunSubmissionService`,
+/// `WebhookDeliveryService` and `RunWorkerPool`. `build_run_api` spawns its own worker and
+/// drain loop whose trace output is not observable, so this test assembles the same pieces
+/// the builder does; `build_run_api_wires_the_allowance_warn_path` covers the builder itself.
+///
+/// Pitfall 10: windows are epoch-aligned, so a UTC boundary crossed mid-scenario re-runs it
+/// once on a fresh store.
+#[tokio::test(flavor = "multi_thread")]
+async fn allowance_warn_path_tracer() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for attempt in 1..=2 {
+            if run_warn_path_tracer_once().await {
+                return;
+            }
+            eprintln!(
+                "allowance_warn_path_tracer: a window boundary was crossed (attempt {attempt}); re-running"
+            );
+        }
+        panic!("the allowance window boundary was crossed on both attempts");
+    })
+    .await
+    .expect("allowance_warn_path_tracer timed out");
+}
+
+/// One full run of the warn-path scenario. Returns `false` when the allowance window rolled
+/// over while it ran (nothing further asserted).
+async fn run_warn_path_tracer_once() -> bool {
+    let (path, url) = temp_sqlite_url("allowance-warn");
+    let repository: Arc<dyn RunRepositoryPort> =
+        Arc::new(SqliteRunRepository::new(&url).await.unwrap());
+    let ledger = Arc::new(SqliteTreasuryLedger::new(&url).await.unwrap());
+    let ledger_port: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+    let notices: Arc<dyn TreasuryNoticePort> = ledger.clone();
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(SqliteWebhookDeliveryRepository::new(&url).await.unwrap());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("allowance-wf", build_chain_graph(1)));
+
+    // The operator receiver: captures raw body, signature and event header of every POST.
+    type Captured = Arc<std::sync::Mutex<Vec<(Vec<u8>, String, String)>>>;
+    let mut receiver = mockito::Server::new_async().await;
+    let captured: Captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    {
+        let sink = Arc::clone(&captured);
+        receiver
+            .mock("POST", "/hook")
+            .with_status_code_from_request(move |req| {
+                let header = |name: &str| {
+                    req.header(name)
+                        .first()
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                sink.lock().unwrap().push((
+                    req.body().cloned().unwrap_or_default(),
+                    header("x-paladin-signature"),
+                    header("x-paladin-event"),
+                ));
+                200
+            })
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+
+    // The Treasurer is built from config, never by hand (D-02, D-17).
+    let hook_url = format!("{}/hook", receiver.url());
+    let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+        "currency": "USD",
+        "allowance": {
+            "warn_at": 80,
+            "api_keys": { "svc-w": { "period": "1d", "amount": "1.00" } },
+            "webhook": { "url": hook_url, "secret": "op-secret" }
+        }
+    }))
+    .unwrap();
+    let treasurer = Treasurer::new(config.allowance_policy().unwrap(), ledger_port)
+        .with_notices(Arc::clone(&notices))
+        .with_operator_webhook(OperatorNoticeTarget::new(
+            hook_url.clone(),
+            Arc::clone(&deliveries),
+        ));
+    let submission: Arc<dyn RunSubmissionPort> = Arc::new(
+        RunSubmissionService::new(repository.clone(), queue.clone(), resolver.clone())
+            .with_treasurer(Arc::new(treasurer)),
+    );
+
+    let mut api_keys = HashMap::new();
+    api_keys.insert(
+        "warn-key".to_string(),
+        Principal::new("svc-w", UserRole::User, TenantId::new("acme").unwrap()),
+    );
+    let auth = AgentAuthConfig {
+        enabled: true,
+        api_keys,
+        token_verifier: None,
+        bearer_tenant: None,
+    };
+    let app = run_router(
+        RunApiState::new()
+            .with_submission(submission)
+            .with_repository(repository.clone())
+            .with_webhook_deliveries(Arc::clone(&deliveries))
+            .with_auth(auth),
+    );
+
+    // Seed exactly 80% of the 1.00 USD ceiling (800_000_000 nano-units).
+    let window_before = window_for(ledger.store_now().await.unwrap(), 86_400).unwrap();
+    ledger
+        .settle(settle_request(
+            LedgerScope::new("acme", "svc-w"),
+            SettlementKey::new(RunId::new_v7(), 0, 0),
+            800_000_000,
+            usd(),
+            "gpt-4",
+        ))
+        .await
+        .unwrap();
+
+    let post = || {
+        let app = app.clone();
+        async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/runs")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "warn-key")
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "assistant_id": "allowance-wf",
+                            "input": {}
+                        }))
+                        .unwrap(),
+                    ))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds")
+        }
+    };
+    let read_json = |response: axum::response::Response| async move {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        serde_json::from_slice::<serde_json::Value>(&bytes).expect("JSON body")
+    };
+
+    // (a) The warning never blocks the run: 202 Accepted (D-15).
+    let first = post().await;
+    let window_after = window_for(ledger.store_now().await.unwrap(), 86_400).unwrap();
+    if window_before != window_after {
+        cleanup(&path);
+        return false;
+    }
+    assert_eq!(first.status(), StatusCode::ACCEPTED);
+    let first_body = read_json(first).await;
+    let run_id = RunId::parse(first_body["run_id"].as_str().unwrap()).unwrap();
+    let thread_id = paladin_core::platform::container::waypoint::ThreadId::new(
+        first_body["thread_id"].as_str().unwrap(),
+    )
+    .unwrap();
+
+    // (b) Exactly one notice row, carrying the admitted run id and the D-14 figures.
+    let rows = notices.notices_for_run(&run_id).await.unwrap();
+    assert_eq!(rows.len(), 1, "exactly one notice row: {rows:?}");
+    let warning = &rows[0].warning;
+    assert_eq!(
+        warning.scope_kind,
+        paladin_core::platform::container::allowance::AllowanceScopeKind::ApiKey
+    );
+    assert_eq!(
+        warning.limit_kind,
+        paladin_core::platform::container::allowance::AllowanceLimitKind::Window
+    );
+    assert_eq!(
+        paladin_core::platform::container::treasury_ledger::format_cost(&warning.balance),
+        "0.8000 USD"
+    );
+    assert_eq!(
+        paladin_core::platform::container::treasury_ledger::format_cost(&warning.ceiling),
+        "1.0000 USD"
+    );
+    assert_eq!(warning.warn_at, 80);
+    assert_eq!(rows[0].run_id.as_ref(), Some(&run_id));
+    let recorded_at = rows[0].recorded_at;
+
+    // (c) The operator notice is never listed under the admitting run (C3, D-17).
+    let listing = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/runs/{run_id}/webhook-deliveries"))
+                .header("x-api-key", "warn-key")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(listing.status(), StatusCode::OK);
+    let listing = read_json(listing).await;
+    assert_eq!(
+        listing["items"].as_array().map(Vec::len),
+        Some(0),
+        "the admitting run's delivery list never shows the operator notice: {listing}"
+    );
+
+    // (d) One delivery pass sends exactly one signed operator POST.
+    let delivery_service = WebhookDeliveryService::new(
+        Arc::clone(&deliveries),
+        repository.clone(),
+        WebhookDeliveryOptions::default(),
+    )
+    .unwrap()
+    .with_guard(SsrfGuard::new(true))
+    .with_operator_notice_secret(Some("op-secret".to_string()));
+    let pass_at = recorded_at + chrono::Duration::seconds(1);
+    assert_eq!(delivery_service.run_once(pass_at).await, 1);
+    {
+        let seen = captured.lock().unwrap();
+        assert_eq!(seen.len(), 1, "exactly one operator POST");
+        let (raw, signature, event) = &seen[0];
+        assert_eq!(event, "allowance_warning");
+        assert_eq!(
+            signature,
+            &recompute_signature(b"op-secret", raw),
+            "the HMAC verifies over the captured raw bytes with the operator secret"
+        );
+        let payload: serde_json::Value = serde_json::from_slice(raw).unwrap();
+        assert_eq!(payload["run_id"], serde_json::json!(run_id));
+        // The twelve documented keys (D-17 amended at the 41-01 checkpoint, option-b).
+        let mut keys: Vec<&str> = payload
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "api_key_id",
+                "balance",
+                "ceiling",
+                "event",
+                "kind",
+                "run_id",
+                "scope",
+                "tenant_id",
+                "timestamp",
+                "warn_at",
+                "window_end",
+                "window_start",
+            ]
+        );
+        assert_eq!(payload["tenant_id"], "acme");
+        assert_eq!(payload["api_key_id"], "svc-w");
+        let raw_text = String::from_utf8_lossy(raw);
+        assert!(
+            !raw_text.contains("warn-key") && !raw_text.contains("op-secret"),
+            "the payload carries no key value and no secret: {raw_text}"
+        );
+    }
+
+    // (e) One worker dispatch of the admitted run: exactly one trace record before
+    // `RunStarted` and exactly one herald allowance line. The pool is built on the
+    // `with_engine_factory` path, the only path the trace config, run-trace port and herald
+    // attach on (the builder's own composition, `build_run_api`).
+    let waypoints = Arc::new(InMemoryWaypointStore::new());
+    let factory_store = waypoints.clone();
+    let engine_factory: Arc<
+        dyn Fn(tokio_util::sync::CancellationToken) -> WarEngine<InMemoryWaypointStore>
+            + Send
+            + Sync,
+    > = Arc::new(move |token| {
+        WarEngine::new(Arc::new(UnusedPaladinPort), factory_store.clone())
+            .with_cancellation_token(token)
+    });
+    let traces = Arc::new(InMemoryRunTraceStore::new());
+    let herald = Arc::new(RecordingHerald::default());
+    let pool = RunWorkerPool::new(
+        Arc::new(WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            waypoints.clone(),
+        )),
+        waypoints.clone(),
+        repository.clone(),
+        queue.clone(),
+        resolver.clone(),
+        Duration::from_secs(30),
+    )
+    .with_engine_factory(engine_factory)
+    .with_trace_config(TraceConfig {
+        log_sink: false,
+        persist: true,
+        ..TraceConfig::default()
+    })
+    .with_run_trace_port(traces.clone())
+    .with_herald(herald.clone() as Arc<dyn Herald>)
+    .with_treasury_notices(Arc::clone(&notices));
+
+    assert!(pool.run_once().await.unwrap());
+    assert_eq!(
+        repository.get(&run_id).await.unwrap().unwrap().status,
+        RunStatus::Completed,
+        "the warned run still completes"
+    );
+    let read_traces = |thread: paladin_core::platform::container::waypoint::ThreadId| {
+        let traces = traces.clone();
+        async move {
+            let mut rows = Vec::new();
+            for _ in 0..100 {
+                rows = traces.read(&thread, 0, 100).await.unwrap();
+                if rows
+                    .iter()
+                    .any(|r| matches!(r.event, TraceEvent::RunFinished { .. }))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            rows
+        }
+    };
+    let rows = read_traces(thread_id.clone()).await;
+    let warnings: Vec<_> = rows
+        .iter()
+        .filter(|r| matches!(r.event, TraceEvent::AllowanceWarning { .. }))
+        .collect();
+    assert_eq!(warnings.len(), 1, "exactly one allowance_warning: {rows:?}");
+    let started = rows
+        .iter()
+        .find(|r| matches!(r.event, TraceEvent::RunStarted { .. }))
+        .expect("the run has a RunStarted row");
+    assert!(
+        warnings[0].seq < started.seq,
+        "the warning ({}) precedes RunStarted ({})",
+        warnings[0].seq,
+        started.seq
+    );
+    let metadata = herald.captured();
+    assert_eq!(metadata.len(), 1, "one herald summary for the run");
+    let display = metadata[0]
+        .allowance_warning_display()
+        .expect("the herald metadata carries the allowance warning");
+    assert_eq!(
+        display.matches("allowance:").count(),
+        1,
+        "exactly one allowance line: {display}"
+    );
+
+    // (f) A second admission in the same window adds nothing to any leg.
+    let second = post().await;
+    let window_after = window_for(ledger.store_now().await.unwrap(), 86_400).unwrap();
+    if window_before != window_after {
+        cleanup(&path);
+        return false;
+    }
+    assert_eq!(second.status(), StatusCode::ACCEPTED);
+    let second_body = read_json(second).await;
+    let second_run = RunId::parse(second_body["run_id"].as_str().unwrap()).unwrap();
+    let second_thread = paladin_core::platform::container::waypoint::ThreadId::new(
+        second_body["thread_id"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert_ne!(second_run, run_id);
+    assert!(
+        notices
+            .notices_for_run(&second_run)
+            .await
+            .unwrap()
+            .is_empty(),
+        "no notice row for the second run"
+    );
+    assert_eq!(
+        delivery_service
+            .run_once(pass_at + chrono::Duration::seconds(1))
+            .await,
+        0,
+        "no further operator delivery is due"
+    );
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "the receiver count stays 1"
+    );
+    assert!(pool.run_once().await.unwrap());
+    let second_rows = read_traces(second_thread).await;
+    assert!(
+        !second_rows
+            .iter()
+            .any(|r| matches!(r.event, TraceEvent::AllowanceWarning { .. })),
+        "no allowance_warning in the second run's trace: {second_rows:?}"
+    );
+    let metadata = herald.captured();
+    assert_eq!(metadata.len(), 2);
+    assert!(
+        metadata[1].allowance_warning_display().is_none(),
+        "the second run's herald metadata carries no allowance line"
+    );
 
     cleanup(&path);
     true

@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-04 00:50:21 UTC
+# Public API Surface - Generated 2026-10-04 01:21:06 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -3409,6 +3409,7 @@ pub fn paladin::application::services::run::webhook::service::WebhookDeliverySer
 pub async fn paladin::application::services::run::webhook::service::WebhookDeliveryService::run_once(&self, chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> usize
 pub fn paladin::application::services::run::webhook::service::WebhookDeliveryService::spawn(alloc::sync::Arc<Self>, &paladin_battalion::engine::shutdown::ShutdownCoordinator) -> tokio::runtime::task::join::JoinHandle<()>
 pub fn paladin::application::services::run::webhook::service::WebhookDeliveryService::with_guard(self, paladin::application::services::run::webhook::ssrf::SsrfGuard) -> Self
+pub fn paladin::application::services::run::webhook::service::WebhookDeliveryService::with_operator_notice_secret(self, core::option::Option<alloc::string::String>) -> Self
 impl core::marker::Freeze for paladin::application::services::run::webhook::service::WebhookDeliveryService
 impl core::marker::Send for paladin::application::services::run::webhook::service::WebhookDeliveryService
 impl core::marker::Sync for paladin::application::services::run::webhook::service::WebhookDeliveryService
@@ -3503,6 +3504,36 @@ impl core::marker::Unpin for paladin::application::services::run::webhook::ssrf:
 impl core::marker::UnsafeUnpin for paladin::application::services::run::webhook::ssrf::SsrfRejection
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::run::webhook::ssrf::SsrfRejection
 impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::run::webhook::ssrf::SsrfRejection
+pub struct paladin::application::services::run::webhook::AllowanceWarningPayload
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::api_key_id: core::option::Option<alloc::string::String>
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::balance: alloc::string::String
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::ceiling: alloc::string::String
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::event: paladin_core::platform::container::run::RunEventKind
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::kind: paladin_core::platform::container::allowance::AllowanceLimitKind
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::run_id: core::option::Option<paladin_core::platform::container::run::RunId>
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::scope: paladin_core::platform::container::allowance::AllowanceScopeKind
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::tenant_id: alloc::string::String
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::timestamp: chrono::datetime::DateTime<chrono::offset::utc::Utc>
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::warn_at: u8
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::window_end: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+pub paladin::application::services::run::webhook::AllowanceWarningPayload::window_start: core::option::Option<chrono::datetime::DateTime<chrono::offset::utc::Utc>>
+impl paladin::application::services::run::webhook::AllowanceWarningPayload
+pub fn paladin::application::services::run::webhook::AllowanceWarningPayload::from_notice(&paladin_core::platform::container::allowance::AllowanceNotice) -> Self
+impl core::clone::Clone for paladin::application::services::run::webhook::AllowanceWarningPayload
+pub fn paladin::application::services::run::webhook::AllowanceWarningPayload::clone(&self) -> paladin::application::services::run::webhook::AllowanceWarningPayload
+impl core::fmt::Debug for paladin::application::services::run::webhook::AllowanceWarningPayload
+pub fn paladin::application::services::run::webhook::AllowanceWarningPayload::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for paladin::application::services::run::webhook::AllowanceWarningPayload
+pub fn paladin::application::services::run::webhook::AllowanceWarningPayload::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::application::services::run::webhook::AllowanceWarningPayload
+pub fn paladin::application::services::run::webhook::AllowanceWarningPayload::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::application::services::run::webhook::AllowanceWarningPayload
+impl core::marker::Send for paladin::application::services::run::webhook::AllowanceWarningPayload
+impl core::marker::Sync for paladin::application::services::run::webhook::AllowanceWarningPayload
+impl core::marker::Unpin for paladin::application::services::run::webhook::AllowanceWarningPayload
+impl core::marker::UnsafeUnpin for paladin::application::services::run::webhook::AllowanceWarningPayload
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::run::webhook::AllowanceWarningPayload
+impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::run::webhook::AllowanceWarningPayload
 pub struct paladin::application::services::run::webhook::SsrfGuard
 impl paladin::application::services::run::webhook::ssrf::SsrfGuard
 pub fn paladin::application::services::run::webhook::ssrf::SsrfGuard::allow_private(&self) -> bool
@@ -3543,6 +3574,7 @@ pub fn paladin::application::services::run::webhook::service::WebhookDeliverySer
 pub async fn paladin::application::services::run::webhook::service::WebhookDeliveryService::run_once(&self, chrono::datetime::DateTime<chrono::offset::utc::Utc>) -> usize
 pub fn paladin::application::services::run::webhook::service::WebhookDeliveryService::spawn(alloc::sync::Arc<Self>, &paladin_battalion::engine::shutdown::ShutdownCoordinator) -> tokio::runtime::task::join::JoinHandle<()>
 pub fn paladin::application::services::run::webhook::service::WebhookDeliveryService::with_guard(self, paladin::application::services::run::webhook::ssrf::SsrfGuard) -> Self
+pub fn paladin::application::services::run::webhook::service::WebhookDeliveryService::with_operator_notice_secret(self, core::option::Option<alloc::string::String>) -> Self
 impl core::marker::Freeze for paladin::application::services::run::webhook::service::WebhookDeliveryService
 impl core::marker::Send for paladin::application::services::run::webhook::service::WebhookDeliveryService
 impl core::marker::Sync for paladin::application::services::run::webhook::service::WebhookDeliveryService
@@ -4061,6 +4093,20 @@ impl core::marker::Unpin for paladin::application::services::treasurer::Ceiling
 impl core::marker::UnsafeUnpin for paladin::application::services::treasurer::Ceiling
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::treasurer::Ceiling
 impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::treasurer::Ceiling
+pub struct paladin::application::services::treasurer::OperatorNoticeTarget
+impl paladin::application::services::treasurer::OperatorNoticeTarget
+pub fn paladin::application::services::treasurer::OperatorNoticeTarget::new(impl core::convert::Into<alloc::string::String>, alloc::sync::Arc<dyn paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort>) -> Self
+impl core::clone::Clone for paladin::application::services::treasurer::OperatorNoticeTarget
+pub fn paladin::application::services::treasurer::OperatorNoticeTarget::clone(&self) -> paladin::application::services::treasurer::OperatorNoticeTarget
+impl core::fmt::Debug for paladin::application::services::treasurer::OperatorNoticeTarget
+pub fn paladin::application::services::treasurer::OperatorNoticeTarget::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for paladin::application::services::treasurer::OperatorNoticeTarget
+impl core::marker::Send for paladin::application::services::treasurer::OperatorNoticeTarget
+impl core::marker::Sync for paladin::application::services::treasurer::OperatorNoticeTarget
+impl core::marker::Unpin for paladin::application::services::treasurer::OperatorNoticeTarget
+impl core::marker::UnsafeUnpin for paladin::application::services::treasurer::OperatorNoticeTarget
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::treasurer::OperatorNoticeTarget
+impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::treasurer::OperatorNoticeTarget
 pub struct paladin::application::services::treasurer::ScopeAllowance
 impl paladin::application::services::treasurer::ScopeAllowance
 pub fn paladin::application::services::treasurer::ScopeAllowance::amount_nanos(&self) -> i64
@@ -4089,6 +4135,7 @@ pub struct paladin::application::services::treasurer::Treasurer
 impl paladin::application::services::treasurer::Treasurer
 pub fn paladin::application::services::treasurer::Treasurer::new(paladin::application::services::treasurer::AllowancePolicy, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
 pub fn paladin::application::services::treasurer::Treasurer::with_notices(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_notice_port::TreasuryNoticePort>) -> Self
+pub fn paladin::application::services::treasurer::Treasurer::with_operator_webhook(self, paladin::application::services::treasurer::OperatorNoticeTarget) -> Self
 impl core::fmt::Debug for paladin::application::services::treasurer::Treasurer
 pub fn paladin::application::services::treasurer::Treasurer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort for paladin::application::services::treasurer::Treasurer
@@ -4102,6 +4149,7 @@ impl core::marker::Unpin for paladin::application::services::treasurer::Treasure
 impl core::marker::UnsafeUnpin for paladin::application::services::treasurer::Treasurer
 impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::treasurer::Treasurer
 impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::treasurer::Treasurer
+pub const paladin::application::services::treasurer::OPERATOR_NOTICE_THREAD_ID: &str
 pub fn paladin::application::services::treasurer::window_for(chrono::datetime::DateTime<chrono::offset::utc::Utc>, u64) -> core::option::Option<(chrono::datetime::DateTime<chrono::offset::utc::Utc>, chrono::datetime::DateTime<chrono::offset::utc::Utc>)>
 pub mod paladin::application::services::waypoint_retention
 pub struct paladin::application::services::waypoint_retention::WaypointRetentionService
@@ -8347,4 +8395,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4161
+Total public items: 4187

@@ -74,6 +74,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setting `warn_at`: an older build reads the new `run_traces` record kind as unknown.
   Migration `012` adds a tenant-wide `treasury_ledger (tenant_id, attributed_at)` index for the
   admission balance read.
+  **Plan 41-08 adds the operator webhook:** with `treasurer.allowance.webhook` configured, every
+  notice an admission wins is delivered once to the operator URL through the existing durable
+  webhook queue -- a `webhook_deliveries` row with the new `RunEventKind::AllowanceWarning`
+  (`RunEventKind` is now `#[non_exhaustive]` and gains `as_str`), signed
+  `X-Paladin-Signature: sha256=<hex>` with the operator secret (held on the delivery service,
+  never on the row) and carrying `X-Paladin-Event: allowance_warning`. The twelve-key payload
+  (`AllowanceWarningPayload`: `event`, `scope`, `kind`, `balance`, `ceiling`, `window_start`,
+  `window_end`, `warn_at`, `run_id`, `timestamp`, `tenant_id`, `api_key_id`) never carries run
+  input, a key value or a secret. The row is not listed under the admitting run's
+  `GET /v1/runs/{id}/webhook-deliveries`, and a caller still cannot subscribe a webhook to
+  `allowance_warning`. `paladin-server` SSRF-checks the URL at boot (a private target needs
+  `webhooks.allow_private: true`). New public items: `OperatorNoticeTarget`,
+  `OPERATOR_NOTICE_THREAD_ID`, `Treasurer::with_operator_webhook`,
+  `WebhookDeliveryService::with_operator_notice_secret`, `AllowanceWarningPayload`. **Enable the
+  webhook only after every replica runs this build:** an older replica rejects the unknown
+  `allowance_warning` row for its whole delivery batch. Omitting `webhook` disables only this leg.
 
 - **Operator-configured treasurer price table, wired into both production run paths (PRICE-01,
   PRICE-03; Phase 38 plan 38-03).** A new `treasurer:` config section (`Settings.treasurer:

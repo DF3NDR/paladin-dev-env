@@ -153,6 +153,27 @@ kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/server/secret.yaml -f k8s/server/
 ```
 
+## Treasurer allowances
+
+`treasurer.allowance` (see the [configuration guide](../getting-started/configuration.md#treasurer-allowances))
+adds a durable notice store (`treasury_notices`, applied by the embedded migrator) and, optionally,
+an operator webhook. Roll it out in this order:
+
+1. **Upgrade every replica before setting `allowance.webhook`.** The operator notice is a
+   `webhook_deliveries` row whose `event` is `allowance_warning`. A replica running an older build
+   cannot decode that value: its delivery claim rejects the unknown row and fails the whole batch,
+   stalling run-webhook delivery on that replica until it is upgraded. Setting `warn_at` has a
+   smaller version of the same hazard: an older reader of `run_traces` meets an unknown record kind,
+   but only for runs that carry a notice.
+2. **Reach internal targets with `webhooks.allow_private: true`.** The operator URL passes the same
+   SSRF guard as run webhooks, at boot and at send time. A private or loopback target is rejected
+   unless `allow_private` is set, in which case the server starts and delivers; the cloud metadata
+   address is always rejected. A rejected target stops `paladin-server` from starting, naming
+   `treasurer.allowance.webhook.url`.
+3. **Supply the secret through the environment.** Set `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`
+   rather than writing the secret in YAML (a `${VAR}` placeholder is not expanded). It signs the
+   notice with HMAC-SHA256 and is never stored on a delivery row or printed.
+
 ## Versioning
 
 The agent API is versioned under `/v1`: only additive, backward-compatible changes are made

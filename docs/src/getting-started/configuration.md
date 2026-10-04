@@ -484,7 +484,13 @@ With `http.auth.enabled: false` the open-access principal is the key `anonymous`
 Changing `treasurer.currency` while allowances are in force makes every allowanced principal's
 admission fail closed until the ledger is migrated: its history is in the old currency. The
 operator webhook target must pass the same address guard as run webhooks, so a private address
-needs `webhooks.allow_private: true` (delivery lands later in this phase).
+needs `webhooks.allow_private: true`; `paladin-server` checks it at boot and refuses to start,
+naming `treasurer.allowance.webhook.url`, when it is rejected. Each warn-threshold notice is then
+delivered once to that URL as a signed `allowance_warning` webhook through the same durable queue
+the run webhooks use (payload, headers and signature: [Operator allowance
+notices](../api-reference/platform-api.md#operator-allowance-notices)). Enable `webhook` only after
+every replica runs the release that understands `allowance_warning` (see the [HTTP service
+host](../deployment-topologies/http-service-host.md#treasurer-allowances) rollout note).
 
 ## Token Budget Terminology
 

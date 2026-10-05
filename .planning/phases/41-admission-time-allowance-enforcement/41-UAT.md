@@ -61,7 +61,7 @@ blocked: 0
 ## Gaps
 
 - truth: "`trace.persist: true` in the operator config persists run traces from paladin-server"
-  status: fixed, uncommitted
+  status: fixed (commit 6e0bbc58)
   test: 1
   detail: |
     `build_run_api` never handed `settings.trace` or a trace store to the run worker pool, so the
@@ -70,7 +70,7 @@ blocked: 0
     when `trace.persist` is set) with two wiring tests; CHANGELOG entry added. The walkthrough
     below ran on a binary built with this fix.
 - truth: "a persisted trace record can be read back through `RunTracePort::read`"
-  status: open, needs a decision
+  status: fixed
   test: 1
   detail: |
     Not a Phase 41 defect, found during this UAT. A `run_started` record of a Platform API run
@@ -79,6 +79,9 @@ blocked: 0
     The row is written and readable with `sqlite3`; `RunTracePort::read` (used by
     `paladin-cli run` trace reads) errors on such a thread. Latent since Phase 28 because the
     server never persisted traces before the fix above.
+    Fixed 2026-10-05 in `crates/paladin-core/src/platform/container/trace.rs`: the record writes
+    one `run_id` key and reads rows with the doubled key; a contract test covers every trace
+    store backend.
 
 ## Observations (2026-10-05)
 

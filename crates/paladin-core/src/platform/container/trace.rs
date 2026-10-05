@@ -190,6 +190,11 @@ pub enum TraceEvent {
     RunStarted {
         /// The run this start belongs to, when known (a bare engine with no
         /// Platform API run wrapping it has no run identity).
+        ///
+        /// Never serialized from here: a [`TraceRecord`] writes the run
+        /// identity once, as its own `run_id` key, and this field is read
+        /// back from that same key.
+        #[serde(default, skip_serializing)]
         run_id: Option<RunId>,
         /// The starting graph's fingerprint (`WarGraph::fingerprint`).
         graph_fingerprint: String,
@@ -406,12 +411,18 @@ impl From<AllowanceWarning> for TraceEvent {
 /// SINGLE flat JSON object (never a nested `{"envelope": …, "event": {…}}`
 /// shape) — OBS-FR-04's "one line per event", with `thread_id`/`seq`/`kind`
 /// among the first keys so a log line is grep-able by any of the three.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// The run identity is written under exactly one `run_id` key. The envelope
+/// and [`TraceEvent::RunStarted`] both carry one, and a flat object naming the
+/// key twice cannot be read back, so the record writes the envelope's value
+/// (falling back to the event's when only the event knows it) and both fields
+/// are read from that one key. A record whose two sides named different runs
+/// therefore reads back naming the written one on both.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TraceRecord {
     /// The thread (run) this record belongs to.
     pub thread_id: ThreadId,
     /// The Platform API run this record belongs to, when known.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_id: Option<RunId>,
     /// This record's 1-based position within its dispatcher's own sequence.
     /// Strictly increasing and gapless within one run when nothing was
@@ -421,8 +432,100 @@ pub struct TraceRecord {
     /// when a sink observed it).
     pub at: DateTime<Utc>,
     /// The event itself.
-    #[serde(flatten)]
     pub event: TraceEvent,
+}
+
+/// The borrowed wire shape of a [`TraceRecord`]: the key order every sink and
+/// persisted row has always had, with the run identity under one key.
+#[derive(Serialize)]
+struct TraceRecordWire<'a> {
+    thread_id: &'a ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_id: Option<&'a RunId>,
+    seq: u64,
+    at: &'a DateTime<Utc>,
+    #[serde(flatten)]
+    event: &'a TraceEvent,
+}
+
+impl Serialize for TraceRecord {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let event_run_id = match &self.event {
+            TraceEvent::RunStarted { run_id, .. } => run_id.as_ref(),
+            _ => None,
+        };
+        TraceRecordWire {
+            thread_id: &self.thread_id,
+            run_id: self.run_id.as_ref().or(event_run_id),
+            seq: self.seq,
+            at: &self.at,
+            event: &self.event,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TraceRecord {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+
+        /// Collects one flat record object, tolerating the doubled `run_id`
+        /// key rows written before the single-key shape carry: the first
+        /// non-null value is kept.
+        struct FlatRecord;
+
+        impl<'de> serde::de::Visitor<'de> for FlatRecord {
+            type Value = serde_json::Map<String, serde_json::Value>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a flat trace record object")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut fields = serde_json::Map::new();
+                while let Some((key, value)) = access.next_entry::<String, serde_json::Value>()? {
+                    let keeps_earlier = key == "run_id"
+                        && fields
+                            .get("run_id")
+                            .is_some_and(|earlier| !earlier.is_null());
+                    if !keeps_earlier {
+                        fields.insert(key, value);
+                    }
+                }
+                Ok(fields)
+            }
+        }
+
+        fn take<T: serde::de::DeserializeOwned, E: Error>(
+            fields: &mut serde_json::Map<String, serde_json::Value>,
+            key: &'static str,
+        ) -> Result<T, E> {
+            let value = fields.remove(key).ok_or_else(|| E::missing_field(key))?;
+            serde_json::from_value(value).map_err(E::custom)
+        }
+
+        let mut fields = deserializer.deserialize_map(FlatRecord)?;
+        let thread_id = take(&mut fields, "thread_id")?;
+        let seq = take(&mut fields, "seq")?;
+        let at = take(&mut fields, "at")?;
+        // Left in `fields`: `RunStarted` reads its own `run_id` from this key too.
+        let run_id = match fields.get("run_id") {
+            Some(value) => serde_json::from_value(value.clone()).map_err(D::Error::custom)?,
+            None => None,
+        };
+        let event =
+            serde_json::from_value(serde_json::Value::Object(fields)).map_err(D::Error::custom)?;
+        Ok(Self {
+            thread_id,
+            run_id,
+            seq,
+            at,
+            event,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -672,6 +775,86 @@ mod tests {
             }
             _ => panic!("expected DeltaMerged on both sides"),
         }
+    }
+
+    /// A `run_started` record of a Platform API run names its run on both the
+    /// envelope and the event. It serializes that run under ONE `run_id` key
+    /// (a JSON object with the key twice cannot be read back) and round-trips
+    /// with both fields intact.
+    #[test]
+    fn run_started_record_serializes_one_run_id_key_and_round_trips() {
+        let run_id = RunId::new_v7();
+        let record = TraceRecord {
+            thread_id: thread(),
+            run_id: Some(run_id.clone()),
+            seq: 2,
+            at: Utc::now(),
+            event: TraceEvent::RunStarted {
+                run_id: Some(run_id),
+                graph_fingerprint: "agent".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert_eq!(json.matches("\"run_id\"").count(), 1, "{json}");
+        let restored: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, record);
+    }
+
+    /// A run identity known only to the event still reaches the wire, and a
+    /// `run_started` with no run identity at all emits no `run_id` key.
+    #[test]
+    fn run_started_run_id_is_written_once_from_whichever_side_knows_it() {
+        let run_id = RunId::new_v7();
+        let mut record = TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq: 1,
+            at: Utc::now(),
+            event: TraceEvent::RunStarted {
+                run_id: Some(run_id.clone()),
+                graph_fingerprint: "fp".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert_eq!(json.matches("\"run_id\"").count(), 1, "{json}");
+        let restored: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.run_id, Some(run_id.clone()));
+        assert!(matches!(
+            restored.event,
+            TraceEvent::RunStarted { run_id: Some(ref id), .. } if *id == run_id
+        ));
+
+        record.event = TraceEvent::RunStarted {
+            run_id: None,
+            graph_fingerprint: "fp".to_string(),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(!json.contains("\"run_id\""), "{json}");
+        let restored: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, record);
+    }
+
+    /// A `run_traces` row written before the single-key fix carries `run_id`
+    /// twice (envelope, then event). It still reads back, the non-null value
+    /// winning over a `null` twin.
+    #[test]
+    fn run_started_row_with_a_duplicate_run_id_key_still_deserializes() {
+        let run = "01a10c98-708f-70c1-bedf-6e3af0f44996";
+        let both = format!(
+            r#"{{"thread_id":"t1","run_id":"{run}","seq":2,"at":"2026-10-05T15:04:39.458831748Z","kind":"run_started","run_id":"{run}","graph_fingerprint":"agent"}}"#
+        );
+        let record: TraceRecord = serde_json::from_str(&both).unwrap();
+        assert_eq!(record.run_id.as_ref().map(RunId::as_str), Some(run));
+        assert!(matches!(
+            record.event,
+            TraceEvent::RunStarted { run_id: Some(ref id), .. } if id.as_str() == run
+        ));
+
+        let null_twin = format!(
+            r#"{{"thread_id":"t1","run_id":"{run}","seq":2,"at":"2026-10-05T15:04:39Z","kind":"run_started","run_id":null,"graph_fingerprint":"agent"}}"#
+        );
+        let record: TraceRecord = serde_json::from_str(&null_twin).unwrap();
+        assert_eq!(record.run_id.as_ref().map(RunId::as_str), Some(run));
     }
 
     #[test]

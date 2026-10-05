@@ -22,6 +22,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 
+use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::trace::{TraceEvent, TraceRecord};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 use paladin_ports::output::run_trace_port::{RunTraceError, RunTracePort};
@@ -66,6 +67,27 @@ pub async fn append_then_read_round_trips(port: &dyn RunTracePort) {
     }
     let seqs: Vec<u64> = read_back.iter().map(|r| r.seq).collect();
     assert_eq!(seqs, vec![1, 2, 3, 4, 5]);
+}
+
+/// A `RunStarted` record naming its run on both the envelope and the event --
+/// the shape every Platform API run persists first -- reads back intact.
+pub async fn run_started_with_a_run_id_round_trips(port: &dyn RunTracePort) {
+    let thread = ThreadId::new("contract-run-started-run-id").unwrap();
+    let run_id = RunId::new_v7();
+    let record = TraceRecord {
+        thread_id: thread.clone(),
+        run_id: Some(run_id.clone()),
+        seq: 1,
+        at: Utc::now(),
+        event: TraceEvent::RunStarted {
+            run_id: Some(run_id),
+            graph_fingerprint: "agent".to_string(),
+        },
+    };
+    port.append(std::slice::from_ref(&record)).await.unwrap();
+
+    let read_back = port.read(&thread, 0, 100).await.unwrap();
+    assert_eq!(read_back, vec![record]);
 }
 
 /// `read(thread, 0, 2)` then `read(thread, last_seq, 2)` then again walks
@@ -184,6 +206,7 @@ where
 /// backend's own test module instead).
 pub async fn run_all(store: Arc<dyn RunTracePort>) {
     append_then_read_round_trips(store.as_ref()).await;
+    run_started_with_a_run_id_round_trips(store.as_ref()).await;
     read_paginates_by_after_seq(store.as_ref()).await;
     read_of_unknown_thread_is_empty_not_error(store.as_ref()).await;
     append_is_idempotent_on_same_seq(store.as_ref()).await;

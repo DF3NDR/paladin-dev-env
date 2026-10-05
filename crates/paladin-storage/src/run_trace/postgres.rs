@@ -294,6 +294,14 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_started_with_a_run_id_round_trips() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::run_started_with_a_run_id_round_trips(&store).await;
+    }
+
+    #[tokio::test]
     async fn read_paginates_by_after_seq() {
         let Some(store) = store_or_skip().await else {
             return;

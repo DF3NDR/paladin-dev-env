@@ -380,6 +380,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the run store's own backend, so run traces reach `run_traces`. Previously the pool ran on
   `TraceConfig::default()` whatever was configured and `trace.persist: true` wrote nothing (found
   by the Phase 41 operator UAT). Public API unchanged.
+- A `run_started` trace record of a Platform API run is written with one `run_id` key. It used to
+  carry the key twice (the record envelope and the event), so the row was stored but
+  `RunTracePort::read` failed on it with "duplicate field `run_id`" on SQLite. Rows already
+  written with the doubled key still read back. `TraceEvent::RunStarted` no longer serializes
+  `run_id` on its own; inside a `TraceRecord` the value is unchanged. Public API unchanged.
 
 ### Breaking Changes
 

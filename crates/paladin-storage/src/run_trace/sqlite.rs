@@ -237,6 +237,11 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_started_with_a_run_id_round_trips() {
+        contract_tests::run_started_with_a_run_id_round_trips(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
     async fn read_paginates_by_after_seq() {
         contract_tests::read_paginates_by_after_seq(&fresh_store().await).await;
     }

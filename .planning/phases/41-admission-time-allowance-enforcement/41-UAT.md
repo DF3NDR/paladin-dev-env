@@ -35,11 +35,13 @@ observed: |
 expected: Both jobs green on the pushed branch `claude/laughing-dirac-e0h2ax`. The PostgreSQL legs for balance, treasury_notices (migrations 011/012), run_schedules.created_by (010) and the operator webhook delivery row execute rather than skip. Why human: PostgreSQL is not running in the verifier's environment, so env-gated tests skip there; the SUMMARYs of 41-02, 41-05, 41-06 and 41-08 record real runs on a throwaway cluster (32, 14, 147 and 11 passed, 0 SKIP). The coverage figure is only computed in CI.
 result: [pending]
 observed: |
-  Recorded 2026-10-05 by Claude Code for operator review. CI run 37202056513 on `b7f934e3` (the
-  pushed branch head): `Coverage` job succeeded, "Lines: 124226/136525 = 90.99%" (floor 82%);
-  `Postgres Storage Contract Suites (live server)` succeeded, 157 passed, 0 failed, 0 ignored, and
-  its own "no SKIP: line" guard step passed. This run predates the trace wiring fix below, which is
-  not yet committed or pushed.
+  Recorded 2026-10-05 by Claude Code for operator review. CI run 37363204486 on `bc9cdf00` (the
+  last code commit: both fixes under Gaps are in it): `Coverage` job succeeded, "Lines:
+  124458/136781 = 90.99%" (floor 82%); `Postgres Storage Contract Suites (live server)`
+  succeeded, 158 passed, 0 failed, 0 ignored, no SKIP: line, and the new
+  `run_started_with_a_run_id_round_trips` test ran against the live server. The run as a whole is
+  marked failed only because GitHub never assigned a runner to 9 other jobs ("The job was not
+  acquired by Runner of type hosted"); no job reported a test failure.
 
 ### 3. Accepted over-admission race between two admissions in the same instant (41-02 backstop truth)
 expected: Confirm ADR-0056 records the race and its closure by Phase 42's reservation at the superstep boundary, and accept it as a known property of check-only admission (D-05). Why human: cannot be proven or prevented mechanically under D-05; the Treasurer proofs show admission is read-only and concurrency-safe, but two simultaneous admissions can both pass.

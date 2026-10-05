@@ -375,6 +375,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on RustFS, and on MinIO without domain configuration. `copy_file` no longer double-prefixes the
   bucket, and the integration harness no longer panics on a hostname endpoint or on a second
   logger initialisation (STORE-01, STORE-02; Phase 45 plan 45-01).
+- `paladin-server` now honours the `trace:` config section for Platform API runs: `build_run_api`
+  hands `trace` to the run worker pool and, when `trace.persist` is `true`, opens the trace store
+  on the run store's own backend, so run traces reach `run_traces`. Previously the pool ran on
+  `TraceConfig::default()` whatever was configured and `trace.persist: true` wrote nothing (found
+  by the Phase 41 operator UAT). Public API unchanged.
 
 ### Breaking Changes
 

@@ -50,6 +50,7 @@ use paladin_ports::output::assistant_repository_port::AssistantRepositoryPort;
 use paladin_ports::output::run_queue_port::RunQueuePort;
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::run_schedule_repository_port::RunScheduleRepositoryPort;
+use paladin_ports::output::run_trace_port::RunTracePort;
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
 use paladin_ports::output::waypoint_port::{
@@ -490,6 +491,63 @@ async fn build_postgres_treasury_notices(
     .into())
 }
 
+/// Build the durable trace store (OBS-02, D-17) from the SAME [`RunStoreBackend`] selection
+/// [`build_treasury_ledger`] reads, arm for arm: `Disabled` -> `Ok(None)`; `Sqlite { path }` ->
+/// a [`SqliteRunTraceStore`](paladin_storage::run_trace::sqlite::SqliteRunTraceStore) on that
+/// exact database file (its construction applies the `run_traces` migration); `Postgres {
+/// url_env }` -> a
+/// [`PostgresRunTraceStore`](paladin_storage::run_trace::postgres::PostgresRunTraceStore) on
+/// that exact database, on a build with `storage-postgres` (a named-feature error otherwise).
+///
+/// # Errors
+///
+/// Returns an error naming the sqlite path, the postgres env var, or (without
+/// `storage-postgres`) the missing cargo feature -- never the database URL's own value
+/// (T-39-04).
+async fn build_run_trace_store(
+    config: &RunStoreConfig,
+) -> Result<Option<Arc<dyn RunTracePort>>, Box<dyn std::error::Error>> {
+    match &config.backend {
+        RunStoreBackend::Disabled => Ok(None),
+        RunStoreBackend::Sqlite { path } => {
+            let store = paladin_storage::run_trace::sqlite::SqliteRunTraceStore::new(path)
+                .await
+                .map_err(|e| format!("failed to open sqlite trace store at '{path}': {e}"))?;
+            Ok(Some(Arc::new(store) as Arc<dyn RunTracePort>))
+        }
+        RunStoreBackend::Postgres { url_env } => build_postgres_run_trace_store(url_env).await,
+    }
+}
+
+#[cfg(feature = "storage-postgres")]
+async fn build_postgres_run_trace_store(
+    url_env: &str,
+) -> Result<Option<Arc<dyn RunTracePort>>, Box<dyn std::error::Error>> {
+    let url = std::env::var(url_env).map_err(|_| {
+        format!("run store postgres backend names env var '{url_env}', which is not set")
+    })?;
+    let store = paladin_storage::run_trace::postgres::PostgresRunTraceStore::new(&url)
+        .await
+        .map_err(|e| format!("failed to open postgres trace store: {e}"))?;
+    Ok(Some(Arc::new(store) as Arc<dyn RunTracePort>))
+}
+
+/// Without `storage-postgres` a configured `Postgres` run store backend is a startup error
+/// naming the missing feature, never a silent fallback -- mirrors
+/// [`build_postgres_treasury_ledger`]'s own twin.
+#[cfg(not(feature = "storage-postgres"))]
+async fn build_postgres_run_trace_store(
+    url_env: &str,
+) -> Result<Option<Arc<dyn RunTracePort>>, Box<dyn std::error::Error>> {
+    Err(format!(
+        "run_store.backend is configured as 'postgres' (env var '{url_env}') but this binary \
+         was built without the 'storage-postgres' feature; rebuild with \
+         --features storage-postgres,web-server, or set APP_RUN_STORE_BACKEND=disabled or \
+         =sqlite"
+    )
+    .into())
+}
+
 #[cfg(feature = "redis-queue")]
 async fn build_redis_run_queue(
     url_env: &str,
@@ -708,7 +766,17 @@ pub async fn build_run_api(
         configs.run_worker.min_probe_interval_ms,
     ))
     .with_event_bus(Arc::clone(&event_bus))
-    .with_webhook_deliveries(Arc::clone(&webhook_repository));
+    .with_webhook_deliveries(Arc::clone(&webhook_repository))
+    // OBS-02, D-11: the operator's `trace:` section reaches every per-run sink this pool
+    // builds; without it the pool would run on `TraceConfig::default()` whatever was configured.
+    .with_trace_config(settings.trace.clone());
+    // OBS-02, D-17: the durable trace store, opened only when `trace.persist` asks for it --
+    // with the flag off the port would be a no-op, so no connection is spent on it.
+    if settings.trace.persist
+        && let Some(traces) = build_run_trace_store(&configs.run_store).await?
+    {
+        pool = pool.with_run_trace_port(traces);
+    }
     if let Some(herald) = herald {
         pool = pool.with_herald(herald);
     }
@@ -1972,6 +2040,154 @@ mod tests {
         }
         cleanup(&run_path);
         cleanup(&wp_path);
+    }
+
+    /// Submits one agent-kind run through the real run router of a `build_run_api` wired with
+    /// `trace`, waits for it to end, and returns how many records `run_traces` holds for its
+    /// thread -- counted straight from the SQLite file, exactly as an operator's `sqlite3`
+    /// would.
+    async fn persisted_trace_records(label: &str, trace: crate::config::trace::TraceConfig) -> i64 {
+        use paladin_core::platform::container::paladin::PaladinData;
+        use paladin_core::platform::container::run::RunId;
+
+        struct FailingExecutor;
+        #[async_trait]
+        impl paladin_ports::output::paladin_executor_port::PaladinExecutorPort for FailingExecutor {
+            async fn execute(
+                &self,
+                _paladin: &paladin_core::platform::container::paladin::Paladin,
+                _input: &str,
+            ) -> Result<
+                paladin_ports::output::paladin_port::PaladinResult,
+                paladin_core::platform::container::paladin_error::PaladinError,
+            > {
+                Err(
+                    paladin_core::platform::container::paladin_error::PaladinError::ExecutionError(
+                        "the trace wiring test needs no model answer".to_string(),
+                    ),
+                )
+            }
+        }
+
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let (run_path, run_url) = temp_sqlite_url(label);
+        let (wp_path, wp_url) = temp_sqlite_url(&format!("{label}_wp"));
+
+        let registry = Arc::new(AgentRegistry::new());
+        let paladin = Arc::new(paladin_core::base::entity::node::Node::new(
+            PaladinData {
+                system_prompt: "hi".to_string(),
+                name: "TracedAgent".to_string(),
+                ..Default::default()
+            },
+            Some("TracedAgent".to_string()),
+        ));
+        registry.insert("traced-agent", paladin, Arc::new(FailingExecutor));
+
+        let settings = Settings {
+            trace,
+            ..Settings::default()
+        };
+        let coordinator = ShutdownCoordinator::new();
+        let handles = build_run_api(
+            sqlite_configs(&run_url),
+            &settings,
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            AgentAuthConfig::default(),
+            registry,
+        )
+        .await
+        .expect("sqlite run store wires");
+        let repository = handles.run_repository.clone().expect("a run repository");
+        let app = paladin_web::run_router(handles.run_state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/runs")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"assistant_id":"traced-agent","input":{}}"#))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON body");
+        let run_id =
+            RunId::parse(body["run_id"].as_str().expect("run_id in the body")).expect("run id");
+        let thread_id = ThreadId::new(body["thread_id"].as_str().expect("thread_id in the body"))
+            .expect("thread id");
+
+        // The spawned worker picks the run up: poll every 100 ms for at most 10 s.
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let run = repository.get(&run_id).await.expect("read the run");
+            if run.is_some_and(|run| run.status.is_terminal()) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the run never reached a terminal status"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        // Stopping the pool lets every per-run trace dispatcher drain before the read-back.
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+
+        let pool = sqlx::SqlitePool::connect(&run_url)
+            .await
+            .expect("run store file opens");
+        let records: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM run_traces WHERE thread_id = ?")
+                .bind(thread_id.as_str())
+                .fetch_one(&pool)
+                .await
+                .expect("count the persisted trace rows");
+        pool.close().await;
+        cleanup(&run_path);
+        cleanup(&wp_path);
+        records
+    }
+
+    /// `trace.persist: true` in the operator's config reaches the production worker pool: a run
+    /// dispatched by a `build_run_api`-built server leaves its trace records in `run_traces`.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_persists_run_traces_when_trace_persist_is_set() {
+        let records = persisted_trace_records(
+            "trace_persist_on",
+            crate::config::trace::TraceConfig {
+                persist: true,
+                ..Default::default()
+            },
+        )
+        .await;
+        assert!(
+            records > 0,
+            "trace.persist: true must leave the run's trace records in run_traces"
+        );
+    }
+
+    /// The default (`trace.persist: false`) stays off: the same run persists no trace record.
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_persists_no_run_traces_by_default() {
+        let records = persisted_trace_records(
+            "trace_persist_off",
+            crate::config::trace::TraceConfig::default(),
+        )
+        .await;
+        assert_eq!(records, 0, "trace.persist defaults to off");
     }
 
     #[tokio::test]

@@ -6,7 +6,7 @@ current_phase: 42
 current_phase_name: mid-run-halt-sse-terminal-status
 status: executing
 stopped_at: Completed 42-02-PLAN.md
-last_updated: "2026-10-06T18:06:15.866Z"
+last_updated: "2026-10-06T18:07:10.682Z"
 last_activity: 2026-10-06
 last_activity_desc: Phase 42 execution started
 progress:
@@ -349,6 +349,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 41]: build_run_api SSRF-checks treasurer.allowance.webhook.url at boot before spawning anything; enable the webhook only after every replica runs this build (Pitfall 12)
 - [Phase ?]: ADR-0056 (allowance admission model) accepted: tumbling UTC windows, check-only admission, every-limit composition, no role bypass, fail-closed, store-deduped notices; over-admission race closed by Phase 42
 - [Phase ?]: Phase 42-01: option-b design gate; ADR-0057 records check-only boundary, typed HaltCause, fork-as-resume, derived agent budget; true streamed done carries informational halt_reason on crossing
+- [Phase 42]: Plan 42-02: the superstep-boundary spend check is a check-only balance read through the one shared Treasurer::evaluate that admission also calls; no reserve row, settlement and the ledger schema untouched — ADR-0057 D-01/D-17: one function per rule keeps admission and the boundary from drifting; the same-instant over-admission race stays accepted and bounded to one superstep per run
+- [Phase 42]: Plan 42-02: RunOutcome::Halted carries a typed HaltCause; a spend halt maps to Halted with error None whatever the cancel and shutdown flags say, CancelRequested maps to Cancelled, and the in-process Token cause keeps today's precedence — ADR-0057 D-05: the cause is typed at the source so the worker, the persisted reason (42-03) and the SSE done (42-05) all read one value instead of re-querying flags
 
 ### Pending Todos
 

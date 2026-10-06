@@ -24,6 +24,7 @@ use paladin_web::{AgentProvisioner, AgentSpec, ProvisionError, ProvisionedAgent}
 use crate::application::services::paladin::paladin_execution_service::{
     AgentLoopSettlement, PaladinExecutionService,
 };
+use crate::config::agent_runtime::TokenBudgetConfig;
 use crate::config::agents::AgentDefinition;
 use crate::config::settings::Settings;
 use crate::config::treasurer::TreasurerConfig;
@@ -40,6 +41,7 @@ pub struct FacadeProvisioner {
     breaker: Arc<CircuitBreaker>,
     treasurer: TreasurerConfig,
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    token_budget: TokenBudgetConfig,
 }
 
 impl FacadeProvisioner {
@@ -56,6 +58,7 @@ impl FacadeProvisioner {
             breaker,
             treasurer: TreasurerConfig::default(),
             treasury_ledger: None,
+            token_budget: TokenBudgetConfig::default(),
         }
     }
 
@@ -64,6 +67,18 @@ impl FacadeProvisioner {
     pub fn from_settings(settings: &Settings) -> Self {
         Self::new(default_provider_name(settings), default_circuit_breaker())
             .with_treasurer(settings.get_treasurer_config())
+            .with_token_budget(settings.agent_runtime.token_budget.clone())
+    }
+
+    /// Set the operator's `agent_runtime.token_budget` that the one
+    /// [`TokenBudget`](crate::application::services::paladin::middleware::limits::TokenBudget)
+    /// installed on every runtime-provisioned agent's service enforces (D-11, G12) -- the same
+    /// figure a config-defined agent carries. The default is the disabled budget, so a
+    /// provisioner built with [`FacadeProvisioner::new`] is unchanged until a derived figure
+    /// arrives with a call.
+    pub fn with_token_budget(mut self, token_budget: TokenBudgetConfig) -> Self {
+        self.token_budget = token_budget;
+        self
     }
 
     /// Set the treasurer (pricing) configuration this provisioner's runtime-provisioned
@@ -236,6 +251,7 @@ impl AgentProvisioner for FacadeProvisioner {
             Arc::clone(&self.breaker),
             &price_table,
             self.treasury_ledger.clone(),
+            self.token_budget.clone(),
         )
         .await
         .map_err(|err| match &err {

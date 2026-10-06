@@ -26,10 +26,12 @@ use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_web::{AgentEntry, AgentRegistry};
 
+use crate::application::services::paladin::middleware::limits::TokenBudget;
 use crate::application::services::paladin::paladin_builder::PaladinBuilder;
 use crate::application::services::paladin::paladin_execution_service::{
     AgentLoopSettlement, PaladinExecutionService,
 };
+use crate::config::agent_runtime::TokenBudgetConfig;
 use crate::config::agents::AgentDefinition;
 use crate::config::settings::Settings;
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
@@ -123,11 +125,21 @@ pub(crate) fn default_provider_name(settings: &Settings) -> String {
 /// on the ONE shared [`PaladinExecutionService`] BEFORE it is split into the buffered and
 /// streaming handles below -- so every priced call this agent makes, buffered or streamed,
 /// settles under this same ledger, regardless of which handle a caller reaches it through.
+///
+/// `token_budget` is the operator's `agent_runtime.token_budget` (D-11, G12, ALLOW-05). It
+/// installs the ONE [`TokenBudget`] on the same shared service, so the agent loop of every
+/// config-defined and runtime-provisioned agent enforces the tighter of the operator's figure
+/// and the Treasurer's per-run derived figure (tightest wins, a tie goes to the allowance). The
+/// middleware is inert unless the operator enabled it or a call carries a derived figure, so a
+/// deployment with neither is unchanged. The operator's figure therefore now takes effect on
+/// the HTTP agent routes -- before Phase 42 only the preset path honoured it. The shared run
+/// engine's service is built elsewhere and runs Treasurer-only (plan 42-09).
 pub(crate) async fn build_agent_with_llm(
     def: &AgentDefinition,
     llm: Arc<dyn LlmPort>,
     breaker: Arc<CircuitBreaker>,
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    token_budget: TokenBudgetConfig,
 ) -> Result<BuiltAgent, HostBuildError> {
     // One execution service backs both the buffered and streaming handles
     // (`PaladinExecutionService` implements both `PaladinExecutorPort` and
@@ -136,6 +148,9 @@ pub(crate) async fn build_agent_with_llm(
     if let Some(ledger) = treasury_ledger {
         service = service.with_treasury_ledger(ledger, AgentLoopSettlement::EveryCall);
     }
+    // The one cutoff, installed before the service is split into its two handles so the
+    // buffered and streaming paths share it (inert without an operator or derived figure).
+    service = service.with_middleware(Arc::new(TokenBudget::new(token_budget)));
     let service = Arc::new(service);
     let executor: Arc<dyn PaladinExecutorPort> = service.clone();
     let streamer: Arc<dyn StreamingExecutorPort> = service;
@@ -171,7 +186,9 @@ pub(crate) async fn build_agent_with_llm(
 /// `price_table` wraps the resolved provider with [`with_pricing`] (D-09, ADR-0052) BEFORE
 /// `build_agent_with_llm` composes the execution service, outside any fallback composition --
 /// an empty table installs no extra layer at all. `treasury_ledger` is threaded straight
-/// through to `build_agent_with_llm` (D-08, 39-05).
+/// through to `build_agent_with_llm` (D-08, 39-05), as is `token_budget` -- the operator's
+/// `agent_runtime.token_budget`, from which the one [`TokenBudget`] is installed on the agent's
+/// service (D-11, G12).
 pub(crate) async fn build_agent(
     def: &AgentDefinition,
     factory: &LlmProviderFactory,
@@ -179,6 +196,7 @@ pub(crate) async fn build_agent(
     breaker: Arc<CircuitBreaker>,
     price_table: &Arc<PriceTable>,
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    token_budget: TokenBudgetConfig,
 ) -> Result<BuiltAgent, HostBuildError> {
     let provider = resolve_provider(def, default_provider);
     let llm = factory
@@ -189,7 +207,7 @@ pub(crate) async fn build_agent(
             source,
         })?;
     let llm = with_pricing(llm, price_table);
-    build_agent_with_llm(def, llm, breaker, treasury_ledger).await
+    build_agent_with_llm(def, llm, breaker, treasury_ledger, token_budget).await
 }
 
 /// Insert a built agent into the registry, rejecting a duplicate id.
@@ -344,6 +362,7 @@ pub async fn build_agent_registry_with_ledger(
             Arc::clone(&breaker),
             &price_table,
             treasury_ledger.clone(),
+            settings.agent_runtime.token_budget.clone(),
         )
         .await?;
         register_built(
@@ -406,10 +425,15 @@ mod tests {
         def.temperature = Some(0.5);
         def.max_loops = Some(2);
 
-        let (paladin, _executor, streamer) =
-            build_agent_with_llm(&def, mock_llm(), default_circuit_breaker(), None)
-                .await
-                .expect("builds");
+        let (paladin, _executor, streamer) = build_agent_with_llm(
+            &def,
+            mock_llm(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
 
         assert_eq!(paladin.node.name, "researcher");
         assert_eq!(paladin.node.model, "gpt-4o");
@@ -431,6 +455,7 @@ mod tests {
             default_circuit_breaker(),
             &empty_price_table(),
             None,
+            TokenBudgetConfig::default(),
         )
         .await;
         assert!(
@@ -477,10 +502,15 @@ mod tests {
         );
         let priced = with_pricing(mock, &table);
 
-        let (paladin, _executor, streamer) =
-            build_agent_with_llm(&base("gpt-4"), priced, default_circuit_breaker(), None)
-                .await
-                .expect("builds");
+        let (paladin, _executor, streamer) = build_agent_with_llm(
+            &base("gpt-4"),
+            priced,
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
         let streamer = streamer.expect("execution service is streaming-capable");
 
         let mut stream = streamer
@@ -509,16 +539,26 @@ mod tests {
     async fn register_built_rejects_duplicate_id() {
         let registry = AgentRegistry::new();
 
-        let (p1, e1, s1) =
-            build_agent_with_llm(&base("dup"), mock_llm(), default_circuit_breaker(), None)
-                .await
-                .unwrap();
+        let (p1, e1, s1) = build_agent_with_llm(
+            &base("dup"),
+            mock_llm(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .unwrap();
         register_built(&registry, "dup", p1, e1, s1, None, Vec::new()).expect("first insert ok");
 
-        let (p2, e2, s2) =
-            build_agent_with_llm(&base("dup"), mock_llm(), default_circuit_breaker(), None)
-                .await
-                .unwrap();
+        let (p2, e2, s2) = build_agent_with_llm(
+            &base("dup"),
+            mock_llm(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .unwrap();
         let err = register_built(&registry, "dup", p2, e2, s2, None, Vec::new())
             .expect_err("duplicate must error");
         assert!(matches!(err, HostBuildError::DuplicateId(_)), "got {err:?}");
@@ -601,6 +641,7 @@ mod tests {
             priced,
             default_circuit_breaker(),
             Some(ledger.clone()),
+            TokenBudgetConfig::default(),
         )
         .await
         .expect("builds");
@@ -632,10 +673,15 @@ mod tests {
         );
         let priced = with_pricing(mock, &table);
 
-        let (paladin, executor, _streamer) =
-            build_agent_with_llm(&base("gpt-4"), priced, default_circuit_breaker(), None)
-                .await
-                .expect("builds");
+        let (paladin, executor, _streamer) = build_agent_with_llm(
+            &base("gpt-4"),
+            priced,
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
 
         let result = executor
             .execute(&paladin, "hi")
@@ -647,5 +693,133 @@ mod tests {
         );
         // No ledger was installed at all -- nothing to assert against a store; this test's
         // purpose is documented by its name and the absence of any ledger construction here.
+    }
+
+    // -- The one cutoff on every per-agent service (D-11, G12, ALLOW-05) ----------------------
+
+    /// A looping agent over a mock that reports 100 tokens per response, so cumulative usage
+    /// is 100, 200, 300 ... and nothing but a budget or `max_loops` ends the run.
+    fn looping_agent_def(id: &str) -> AgentDefinition {
+        AgentDefinition {
+            max_loops: Some(10),
+            ..base(id)
+        }
+    }
+
+    fn hundred_token_llm() -> Arc<MockLlmAdapter> {
+        Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        )
+    }
+
+    fn derived_scope(max_tokens: u32) -> paladin_core::platform::container::run_scope::RunScope {
+        use chrono::{TimeZone, Utc};
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+        };
+        use paladin_core::platform::container::cost::Cost;
+        let usd = CurrencyCode::new("USD").expect("USD is valid");
+        let figures = AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(5_000, usd.clone()),
+            ceiling: Cost::new(5_000, usd),
+            window: None,
+            evaluated_at: Utc
+                .with_ymd_and_hms(2026, 10, 6, 12, 0, 0)
+                .single()
+                .expect("valid instant"),
+        };
+        paladin_core::platform::container::run_scope::RunScope::default()
+            .with_derived_token_budget(DerivedTokenBudget::new(max_tokens, figures))
+    }
+
+    /// With the default (disabled) operator budget and no derived figure on the call, the
+    /// installed middleware never cuts: the run goes past any token count.
+    #[tokio::test]
+    async fn built_agent_without_any_budget_runs_as_before() {
+        use paladin_core::platform::container::execution_result::StopReason;
+        let llm = hundred_token_llm();
+        let (paladin, executor, _streamer) = build_agent_with_llm(
+            &looping_agent_def("plain"),
+            llm.clone(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
+
+        let result = executor
+            .execute(&paladin, "hi")
+            .await
+            .expect("execution succeeds");
+
+        assert_eq!(llm.call_count(), 10, "only max_loops ends the run");
+        assert_eq!(result.usage.total_tokens, 1_000);
+        assert!(!matches!(
+            result.stop_reason,
+            StopReason::TokenBudget | StopReason::AllowanceHalted(_)
+        ));
+    }
+
+    /// A call carrying a derived figure is cut after the crossing response by the one
+    /// middleware `build_agent_with_llm` installed -- with the operator budget disabled.
+    #[tokio::test]
+    async fn built_agent_cuts_a_derived_budget() {
+        use paladin_core::platform::container::execution_result::StopReason;
+        let llm = hundred_token_llm();
+        let (paladin, executor, _streamer) = build_agent_with_llm(
+            &looping_agent_def("derived"),
+            llm.clone(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
+
+        let result = executor
+            .execute_scoped(&paladin, "hi", &derived_scope(150))
+            .await
+            .expect("execution succeeds");
+
+        assert_eq!(
+            llm.call_count(),
+            2,
+            "cumulative 100 continues, 200 crosses 150"
+        );
+        assert!(matches!(result.stop_reason, StopReason::AllowanceHalted(_)));
+        assert!(!result.stop_reason.is_successful());
+    }
+
+    /// The operator's `agent_runtime.token_budget` now takes effect on a built agent: below the
+    /// scripted usage, with no derived figure on the call, the run ends with `TokenBudget`.
+    #[tokio::test]
+    async fn built_agent_honours_the_operator_budget() {
+        use paladin_core::platform::container::execution_result::StopReason;
+        let llm = hundred_token_llm();
+        let (paladin, executor, _streamer) = build_agent_with_llm(
+            &looping_agent_def("operator"),
+            llm.clone(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig {
+                enabled: true,
+                max_tokens: 150,
+            },
+        )
+        .await
+        .expect("builds");
+
+        let result = executor
+            .execute(&paladin, "hi")
+            .await
+            .expect("execution succeeds");
+
+        assert_eq!(llm.call_count(), 2);
+        assert_eq!(result.stop_reason, StopReason::TokenBudget);
     }
 }

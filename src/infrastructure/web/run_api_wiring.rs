@@ -777,8 +777,16 @@ pub async fn build_run_api(
         let notices = treasury_notices.as_ref().ok_or(
             "treasurer.allowance has entries but no treasury notice store was built from run_store.backend",
         )?;
-        let mut treasurer =
-            Treasurer::new(policy, Arc::clone(ledger)).with_notices(Arc::clone(notices));
+        // D-09 (Phase 42): the price table the agent routes' admission derives a per-run token
+        // budget from. A malformed `treasurer.pricing` row fails boot exactly like the
+        // allowance errors above; an empty table is fine (every ceilinged model is then
+        // refused as unpriced at admission, D-10).
+        let price_table = treasurer_config
+            .price_table()
+            .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
+        let mut treasurer = Treasurer::new(policy, Arc::clone(ledger))
+            .with_notices(Arc::clone(notices))
+            .with_pricing(Arc::new(price_table));
         // ALLOW-04, D-17: the operator webhook rides the SAME durable delivery queue the run
         // webhooks use (never a second HTTP client). The URL was SSRF-checked above; the
         // signing secret is attached to the delivery service below, never to this target.
@@ -1422,6 +1430,118 @@ mod tests {
         unsafe {
             std::env::remove_var("OPENAI_API_KEY");
         }
+    }
+
+    /// D-09 (Phase 42): the Treasurer the agent state admits through carries the operator's
+    /// `treasurer.pricing` table, so `admit_for_model` derives a budget for a priced model
+    /// and refuses an unpriced one (D-10) instead of silently admitting it.
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_prices_the_treasurer() {
+        use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+        use paladin_ports::input::allowance_admission_port::AdmissionError;
+
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let (run_path, run_url) = temp_sqlite_url("prices_treasurer");
+        let (wp_path, wp_url) = temp_sqlite_url("prices_treasurer_wp");
+        let mut settings = allowance_settings(&[("svc-a", "1d", "2.50")], &[]);
+        settings.treasurer.pricing.insert(
+            "gpt-4".to_string(),
+            crate::config::PriceRowConfig {
+                prompt: "10.00".to_string(),
+                completion: "30.00".to_string(),
+                cache_read: None,
+                cache_write: None,
+                reasoning: None,
+            },
+        );
+        let coordinator = ShutdownCoordinator::new();
+        let handles = build_run_api(
+            sqlite_configs(&run_url),
+            &settings,
+            coordinator.clone(),
+            Some(sqlite_waypoints(&wp_url).await),
+            principal_auth(&[("key-a", "svc-a", "acme")]),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .expect("sqlite run store with an allowance and a price table wires");
+        let treasurer = handles.treasurer.expect("an allowance builds a Treasurer");
+        let subject = RunAttribution::new(TenantId::new("acme").expect("tenant"), "svc-a");
+
+        let admission = treasurer
+            .admit_for_model(&subject, None, "gpt-4")
+            .await
+            .expect("a priced model under a fresh allowance is admitted");
+        let derived = admission
+            .derived_budget()
+            .expect("a priced model derives a token budget");
+        assert!(
+            derived.max_tokens > 0,
+            "a fresh $2.50 allowance buys tokens"
+        );
+
+        let err = treasurer
+            .admit_for_model(&subject, None, "unpriced-model")
+            .await
+            .expect_err("an unpriced model under a ceiling is refused");
+        assert!(
+            matches!(&err, AdmissionError::ModelUnpriced { model } if model == "unpriced-model"),
+            "got {err:?}"
+        );
+
+        coordinator.cancel_and_wait(Duration::from_secs(1)).await;
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        cleanup(&run_path);
+        cleanup(&wp_path);
+    }
+
+    /// D-09: an invalid `treasurer.pricing` row aborts `build_run_api`, naming the offending
+    /// config path. The run engine's LLM port is built (and its price table checked) before the
+    /// Treasurer, so that earlier existing error is the one reported; the Treasurer's own
+    /// `price_table()` mapping is the same defensive error for any ordering change.
+    #[tokio::test]
+    #[serial_test::serial(paladin_run_api_wiring_openai_api_key)]
+    async fn build_run_api_rejects_an_invalid_price_row() {
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test-run-api-wiring-hermetic");
+        }
+        let (run_path, run_url) = temp_sqlite_url("bad_price");
+        let (wp_path, wp_url) = temp_sqlite_url("bad_price_wp");
+        let mut settings = allowance_settings(&[("svc-a", "1d", "2.50")], &[]);
+        settings.treasurer.pricing.insert(
+            "gpt-4".to_string(),
+            crate::config::PriceRowConfig {
+                prompt: "-1".to_string(),
+                completion: "30.00".to_string(),
+                cache_read: None,
+                cache_write: None,
+                reasoning: None,
+            },
+        );
+        let err = match build_run_api(
+            sqlite_configs(&run_url),
+            &settings,
+            ShutdownCoordinator::new(),
+            Some(sqlite_waypoints(&wp_url).await),
+            principal_auth(&[("key-a", "svc-a", "acme")]),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        {
+            Ok(_) => panic!("an invalid price row must abort build_run_api"),
+            Err(err) => err.to_string(),
+        };
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        cleanup(&wp_path);
+        assert!(err.contains("treasurer.pricing.gpt-4.prompt"), "{err}");
+        cleanup(&run_path);
     }
 
     /// The production wiring, end to end: an exhausted key is refused through the real run

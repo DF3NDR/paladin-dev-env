@@ -508,7 +508,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 42-06-PLAN.md — RunFinishStatus::Cancelled, PerRunCancelProbe for same-instance cancels, drain emits no done, the cause-to-status invariant test (wave 6)
+- [x] 42-06-PLAN.md — RunFinishStatus::Cancelled, PerRunCancelProbe for same-instance cancels, drain emits no done, the cause-to-status invariant test (wave 6)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

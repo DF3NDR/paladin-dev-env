@@ -26,6 +26,7 @@ use crate::core::platform::container::arsenal::ArmamentCall;
 use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
 use crate::core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::aegis::RetryPolicy;
+use paladin_core::platform::container::allowance::DerivedTokenBudget;
 use paladin_ports::output::llm_port::{
     FinishReason, FunctionCall, LlmPort, ResponseFormat, TokenUsage,
 };
@@ -289,6 +290,10 @@ pub struct ModelCallContext<'p> {
     /// `PaladinExecutionService::confined_vault(scope)`, and never mutated
     /// by a hook thereafter.
     pub vault: Option<ConfinedVault>,
+    /// The Treasurer-derived per-run token budget (ALLOW-05, Phase 42 D-11), copied once from
+    /// the call's `RunScope` by the service. Private: read through
+    /// [`Self::derived_token_budget`], set only by the service.
+    derived_token_budget: Option<DerivedTokenBudget>,
     typed_state: HashMap<(String, TypeId), Box<dyn Any + Send + Sync>>,
     /// An explicit per-run [`TraceEmitter`] handle (28-06, D-03), wired via
     /// [`PaladinExecutionService::with_trace_emitter`](crate::application::services::paladin::paladin_execution_service::PaladinExecutionService::with_trace_emitter)
@@ -330,10 +335,42 @@ impl<'p> ModelCallContext<'p> {
             retry_policy: None,
             response_format: None,
             vault: None,
+            derived_token_budget: None,
             typed_state: HashMap::new(),
             trace_emitter: None,
             middleware_action_hint: None,
         }
+    }
+
+    /// The Treasurer-derived per-run token budget this run carries, if any (ALLOW-05, Phase 42
+    /// D-11).
+    ///
+    /// Per-run scratch, set once from the call's `RunScope` before the loop starts and read by
+    /// `TokenBudget::after_model`; it is never stored on a middleware (limits.rs D-03), so
+    /// concurrent runs through one shared service each see their own figure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::application::services::paladin::middleware::{ModelCallContext, PromptAssembly};
+    /// # use paladin::core::base::entity::node::Node;
+    /// # use paladin::core::platform::container::paladin::PaladinData;
+    ///
+    /// let paladin = Node::new(PaladinData::default(), None);
+    /// let assembly = PromptAssembly::new("system", "input", "", vec![], None);
+    /// let cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+    ///
+    /// // A fresh context carries no derived budget.
+    /// assert!(cx.derived_token_budget().is_none());
+    /// ```
+    pub fn derived_token_budget(&self) -> Option<&DerivedTokenBudget> {
+        self.derived_token_budget.as_ref()
+    }
+
+    /// Set the run's derived token budget. Called once by the service right after the context
+    /// is constructed, from the call's `RunScope`; never by a middleware hook.
+    pub(crate) fn set_derived_token_budget(&mut self, budget: Option<DerivedTokenBudget>) {
+        self.derived_token_budget = budget;
     }
 
     /// The Paladin being executed.

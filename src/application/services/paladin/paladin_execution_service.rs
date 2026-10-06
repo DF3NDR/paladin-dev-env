@@ -79,7 +79,7 @@ use crate::infrastructure::adapters::arsenal::tool_result_formatter::ToolResultF
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
 use paladin_battalion::llm_failure::to_paladin_error;
-use paladin_core::platform::container::allowance::AllowanceWarning;
+use paladin_core::platform::container::allowance::{AllowanceWarning, DerivedTokenBudget};
 use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::run_scope::RunScope;
@@ -1310,6 +1310,8 @@ impl PaladinExecutionService {
                 .map(|v| v.granted().to_string())
                 .unwrap_or_else(|| "none".to_string())
         );
+        // ALLOW-05 (Phase 42 D-11): the Treasurer-derived budget this call's scope carries rides
+        // down to the run's `ModelCallContext`, where the one `TokenBudget` reads it.
         self.execute_bounded(
             paladin,
             input,
@@ -1317,6 +1319,7 @@ impl PaladinExecutionService {
             heartbeat,
             confined_vault,
             ledger_target,
+            scope.derived_token_budget.clone(),
         )
         .await
     }
@@ -1325,6 +1328,7 @@ impl PaladinExecutionService {
     /// the same per-execution timeout wrapper around
     /// [`Self::execute_internal`], differing only in whether a heartbeat is
     /// threaded through.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_bounded(
         &self,
         paladin: &Paladin,
@@ -1333,6 +1337,7 @@ impl PaladinExecutionService {
         heartbeat: Option<&HeartbeatHandle>,
         confined_vault: Option<ConfinedVault>,
         ledger_target: Option<AgentLoopLedgerTarget>,
+        derived_token_budget: Option<DerivedTokenBudget>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let timeout_duration = Duration::from_secs(paladin.node.max_loops.as_u32() as u64 * 60);
@@ -1345,6 +1350,7 @@ impl PaladinExecutionService {
             heartbeat,
             confined_vault,
             ledger_target,
+            derived_token_budget,
         );
 
         match timeout(timeout_duration, execution_future).await {
@@ -1521,6 +1527,7 @@ impl PaladinExecutionService {
     /// it is beaten after every completed LLM call and after every
     /// Armament invocation, and never consulted otherwise, so the
     /// unobserved `execute` path is byte-identical to before plan 25-09.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_internal(
         &self,
         paladin: &Paladin,
@@ -1529,6 +1536,7 @@ impl PaladinExecutionService {
         heartbeat: Option<&HeartbeatHandle>,
         confined_vault: Option<ConfinedVault>,
         ledger_target: Option<AgentLoopLedgerTarget>,
+        derived_token_budget: Option<DerivedTokenBudget>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let mut usage = paladin_core::platform::container::token_usage::TokenUsage::default();
@@ -1677,6 +1685,11 @@ impl PaladinExecutionService {
         // `execute_scoped` before dispatch, is set once here and read (never
         // mutated) by `VaultRecallMiddleware` on loop 0.
         middleware_cx.vault = confined_vault;
+        // ALLOW-05 (Phase 42 D-11): the Treasurer-derived budget for THIS run, set once from the
+        // call's `RunScope` and read (never mutated) by `TokenBudget::after_model`. Per-run
+        // scratch on the context, so concurrent runs through this shared service never see each
+        // other's figure.
+        middleware_cx.set_derived_token_budget(derived_token_budget);
 
         // Execute reasoning loop
         for loop_num in 1..=paladin.node.max_loops.as_u32() {
@@ -8054,6 +8067,255 @@ mod agent_loop_cost_tests {
 /// Phase 41 D-18: the allowance warnings an HTTP agent-route admission won travel in
 /// `RunScope::allowance_warnings`; the execution service emits them once through its trace
 /// emitter and the streamed final chunk's `ExecutionMetadata` carries the herald line.
+/// ALLOW-05 "works alongside, replaces none" (ROADMAP success criterion 3), proven on a real
+/// service: the Treasurer's derived budget composes with the Commissary's input-side rationing
+/// instead of replacing it (Phase 42 D-11).
+#[cfg(test)]
+mod derived_budget_tests {
+    use super::*;
+    use crate::application::services::paladin::middleware::TokenBudget;
+    use crate::application::services::sanctum::RagConfig;
+    use crate::config::agent_runtime::TokenBudgetConfig;
+    use crate::core::base::entity::node::Node;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use crate::core::platform::container::sanctum::{MemoryBuilder, MemoryType, SanctumEntry};
+    use crate::infrastructure::adapters::sanctum::InMemorySanctum;
+    use async_trait::async_trait;
+    use chrono::{TimeZone, Utc};
+    use paladin_core::platform::container::allowance::{
+        AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+    };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::embedding_port::{Embedding, EmbeddingError, EmbeddingPort};
+    use paladin_ports::output::paladin_port::StopReason;
+    use paladin_ports::output::sanctum_port::SanctumPort;
+
+    /// The query used for every run: it starts with none of `A`/`B`/`C`, so the deterministic
+    /// embedding gives it the highest-scoring memory's own vector.
+    const QUERY: &str = "find the relevant memories";
+
+    /// A deterministic, reproducible embedding port (a test-local copy of the one in
+    /// `tests/integration/rag_commissary_test.rs`): content starting with `A`/`B`/`C` maps to a
+    /// fixed vector at decreasing cosine similarity to the query vector.
+    struct DeterministicEmbeddingPort;
+
+    #[async_trait]
+    impl EmbeddingPort for DeterministicEmbeddingPort {
+        async fn embed_text(&self, text: &str) -> Result<Embedding, EmbeddingError> {
+            let vector = if text.starts_with('A') {
+                vec![1.0, 0.0, 0.0]
+            } else if text.starts_with('B') {
+                vec![0.8, 0.6, 0.0]
+            } else if text.starts_with('C') {
+                vec![0.6, 0.8, 0.0]
+            } else {
+                vec![1.0, 0.0, 0.0]
+            };
+            Ok(Embedding {
+                vector,
+                model: "deterministic-mock".to_string(),
+                dimension: 3,
+                token_count: Some(10),
+            })
+        }
+
+        async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError> {
+            let mut out = Vec::with_capacity(texts.len());
+            for text in texts {
+                out.push(self.embed_text(text).await?);
+            }
+            Ok(out)
+        }
+
+        fn dimension(&self) -> usize {
+            3
+        }
+
+        fn model_name(&self) -> &str {
+            "deterministic-mock"
+        }
+    }
+
+    /// Embed `content` and store it in `sanctum` as one of `paladin_id`'s memories.
+    async fn store_memory(
+        sanctum: &Arc<dyn SanctumPort>,
+        embedding: &Arc<dyn EmbeddingPort>,
+        paladin_id: &str,
+        content: &str,
+    ) {
+        let memory = MemoryBuilder::new(paladin_id.to_string(), content.to_string())
+            .memory_type(MemoryType::Semantic)
+            .importance(0.8)
+            .build()
+            .expect("a test memory builds");
+        let embedded = embedding
+            .embed_text(content)
+            .await
+            .expect("the deterministic embedding never fails");
+        let entry = SanctumEntry::new(memory, embedded.vector).expect("a sanctum entry builds");
+        sanctum.store(entry).await.expect("the entry is stored");
+    }
+
+    /// The Commissary's shed-forcing fixture: three memories of 987 / 654 / 321 bytes under a
+    /// 233-token RAG budget (the figures `rag_commissary_test.rs` proves force a shed).
+    async fn rag_service(paladin_id: &str) -> Arc<RagRetrievalService> {
+        let sanctum: Arc<dyn SanctumPort> = Arc::new(InMemorySanctum::new(100));
+        let embedding: Arc<dyn EmbeddingPort> = Arc::new(DeterministicEmbeddingPort);
+        store_memory(&sanctum, &embedding, paladin_id, &"A".repeat(987)).await;
+        store_memory(&sanctum, &embedding, paladin_id, &"B".repeat(654)).await;
+        store_memory(&sanctum, &embedding, paladin_id, &"C".repeat(321)).await;
+        let config = RagConfig {
+            max_tokens: 233,
+            min_similarity: 0.0,
+            top_k: 10,
+            ..RagConfig::default()
+        };
+        Arc::new(RagRetrievalService::new(sanctum, embedding, config))
+    }
+
+    fn paladin(max_loops: u32) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "You are a helpful assistant".to_string(),
+            max_loops: MaxLoops::Fixed(max_loops),
+            ..Default::default()
+        };
+        Node::new(data, Some("BudgetPaladin".to_string()))
+    }
+
+    fn derived(max_tokens: u32) -> DerivedTokenBudget {
+        let usd = CurrencyCode::new("USD").expect("USD is valid");
+        DerivedTokenBudget::new(
+            max_tokens,
+            AllowanceRefusal {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(1_000, usd.clone()),
+                ceiling: Cost::new(1_000, usd),
+                window: None,
+                evaluated_at: Utc
+                    .with_ymd_and_hms(2026, 10, 6, 12, 0, 0)
+                    .single()
+                    .expect("valid instant"),
+            },
+        )
+    }
+
+    /// One service with RAG retrieval attached and the one `TokenBudget` installed (operator
+    /// figure off, so only the Treasurer's derived figure can bind).
+    async fn service_with_rag(
+        llm: Arc<MockLlmAdapter>,
+        paladin_id: &str,
+    ) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_rag_retrieval(rag_service(paladin_id).await)
+        .with_middleware(Arc::new(TokenBudget::new(TokenBudgetConfig {
+            enabled: false,
+            max_tokens: 1,
+        })))
+    }
+
+    /// One run through the real service. A run carrying a derived figure is cut by the one
+    /// `TokenBudget` on the OUTPUT side after the crossing response, while the SAME run's INPUT
+    /// side was already rationed by the Commissary: the RAG context that reached the prompt the
+    /// model received was shed to its budget and carries the Commissary's own shared omission
+    /// marker. Neither limit replaced the other; and the same run without a derived figure sees
+    /// the identical first prompt and is not halted.
+    #[tokio::test]
+    async fn derived_budget_composes_with_the_commissary_rationed_rag_context() {
+        let agent = paladin(3);
+        let paladin_id = agent.uuid.to_string();
+
+        // What the Commissary alone does for this fixture: the shed count and allotted budget
+        // the shared omission marker is built from.
+        let retrieval = rag_service(&paladin_id)
+            .await
+            .retrieve_context(&paladin_id, QUERY)
+            .await
+            .expect("retrieval succeeds");
+        assert!(
+            !retrieval.shed.is_empty(),
+            "the fixture's small budget must force the Commissary to shed"
+        );
+        let marker = rag_omission_marker(retrieval.shed.len(), retrieval.allotted_tokens);
+
+        // Run 1: a derived figure of 50 against a model that reports 100 tokens per response.
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let service = service_with_rag(llm.clone(), &paladin_id).await;
+        let scope = RunScope::default().with_derived_token_budget(derived(50));
+        let halted = service
+            .execute_scoped(&agent, QUERY, None, &scope)
+            .await
+            .expect("the run ends gracefully");
+
+        // Output side: the derived budget cut the run after the crossing response.
+        assert_eq!(
+            llm.call_count(),
+            1,
+            "cut after the first, crossing response"
+        );
+        assert!(
+            matches!(halted.stop_reason, StopReason::AllowanceHalted(_)),
+            "got {:?}",
+            halted.stop_reason
+        );
+        assert!(!halted.stop_reason.is_successful());
+        assert!(
+            halted.output.contains("chunk"),
+            "the crossing response is kept"
+        );
+
+        // Input side: the prompt the model received carries the rationed RAG context.
+        let first_prompt = llm.last_prompt().expect("one model call was made");
+        assert!(
+            first_prompt.contains("## Relevant Context from Memory"),
+            "the RAG section reached the prompt: {first_prompt}"
+        );
+        assert!(
+            first_prompt.contains(&marker),
+            "the Commissary's shared omission marker {marker:?} reached the prompt: {first_prompt}"
+        );
+
+        // The same run without a derived figure: identical first prompt, not halted.
+        let llm_plain = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let plain_agent = paladin(1);
+        // Same paladin identity so the memories (keyed by it) retrieve identically.
+        let plain_agent = Node {
+            uuid: agent.uuid,
+            ..plain_agent
+        };
+        let plain_service = service_with_rag(llm_plain.clone(), &paladin_id).await;
+        let plain = plain_service
+            .execute_scoped(&plain_agent, QUERY, None, &RunScope::default())
+            .await
+            .expect("the run completes");
+
+        assert!(
+            !matches!(plain.stop_reason, StopReason::AllowanceHalted(_)),
+            "no derived figure, so the allowance never halts: {:?}",
+            plain.stop_reason
+        );
+        assert_eq!(
+            llm_plain.last_prompt().expect("one model call was made"),
+            first_prompt,
+            "a derived figure never changes what the Commissary dispenses"
+        );
+    }
+}
+
 #[cfg(test)]
 mod allowance_warning_tests {
     use super::*;

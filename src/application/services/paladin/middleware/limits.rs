@@ -9,6 +9,10 @@
 //! call through [`ToolFlow::Deny`] and lets the run continue. None of the
 //! three ever returns [`MiddlewareFlow::Fail`].
 //!
+//! `TokenBudget` also enforces the Treasurer's per-run derived figure (ALLOW-05, Phase 42):
+//! when that figure is the binding limit the stop is [`StopReason::AllowanceHalted`], which is
+//! neither successful nor a failure (ADR-0057 D-12).
+//!
 //! Every one of the three is constructed from its own `AgentRuntimeConfig`
 //! sub-struct (`ModelCallLimitConfig`, `TokenBudgetConfig`,
 //! `ToolCallLimitConfig`, D-10) and is **inert by default**: each config
@@ -29,7 +33,9 @@
 //! dispatch (see that field's doc comment). The SAME `Arc<dyn
 //! ExecutionMiddleware>` therefore backs many concurrent runs through one
 //! `PaladinExecutionService` with fully independent per-run counts and no
-//! `MiddlewareFactory`.
+//! `MiddlewareFactory`. The same holds for `TokenBudget`'s Treasurer-derived
+//! figure: it rides on [`ModelCallContext::derived_token_budget`], set once
+//! per run from its `RunScope`, and is never a field of the middleware.
 
 use std::collections::HashMap;
 
@@ -120,17 +126,36 @@ impl ExecutionMiddleware for ModelCallLimit {
     }
 }
 
-/// Caps the accumulated `total_tokens` a run may spend (D-08, RT-FR-06).
+/// Caps the accumulated `total_tokens` a run may spend (D-08, RT-FR-06) -- the ONE token cutoff
+/// of the agent loop, enforcing the tighter of two limits.
 ///
 /// Reads [`ModelCallContext::cumulative_tokens`] in `after_model` -- the
 /// existing running sum the service updates immediately after every model
 /// call returns and before `after_model` fires, so this middleware keeps
-/// no separate counter of its own. Once the total crosses `max_tokens`,
-/// `after_model` finishes the run with [`StopReason::TokenBudget`], keeping
-/// the crossing response's content (plus a truncation notice) as the run's
-/// output. Because the budget is only checked AFTER a response has already
-/// arrived, the documented overshoot is at most one response's worth of
-/// tokens.
+/// no separate counter of its own. The limit it compares against is the
+/// smaller of:
+///
+/// - the operator's own `agent_runtime.token_budget.max_tokens`, when
+///   `enabled`; and
+/// - the Treasurer-derived per-run figure (ALLOW-05, Phase 42 D-11) read
+///   from [`ModelCallContext::derived_token_budget`]. It arrives per run on
+///   the context, set once from the call's `RunScope`; it is **never**
+///   stored on this struct (D-03), so one shared middleware serves many
+///   concurrent runs, each with its own figure.
+///
+/// Once the total crosses the binding limit (strictly `>`), `after_model`
+/// finishes the run keeping the crossing response's content plus a
+/// truncation notice. The stop reason names who bound: a derived-figure win
+/// -- including a **tie**, which goes to the Treasurer -- is
+/// [`StopReason::AllowanceHalted`] carrying the budget's figures; an
+/// operator win keeps [`StopReason::TokenBudget`]. A derived figure can only
+/// ever tighten the cutoff: an operator figure above it never loosens it.
+///
+/// Because the budget is only checked AFTER a response has already arrived,
+/// the documented overshoot is at most one response's worth of tokens -- the
+/// same one rule for both limits. This is not a second budget mechanism,
+/// loop check or mid-stream cut (D-00a, D-00j); `ModelCallLimit`,
+/// `ToolCallLimit` and the Commissary are untouched.
 pub struct TokenBudget {
     config: TokenBudgetConfig,
 }
@@ -149,19 +174,33 @@ impl ExecutionMiddleware for TokenBudget {
         cx: &mut ModelCallContext<'_>,
         resp: &mut LlmResponseView,
     ) -> Result<MiddlewareFlow, PaladinError> {
-        if !self.config.enabled {
-            return Ok(MiddlewareFlow::Continue);
-        }
+        let operator_limit = self.config.enabled.then_some(self.config.max_tokens);
+        let derived = cx.derived_token_budget();
 
-        if cx.cumulative_tokens > self.config.max_tokens {
+        // Tightest wins; a tie goes to the Treasurer so the stop is the allowance halt (D-11).
+        let (limit, allowance_figures) = match (operator_limit, derived) {
+            (None, None) => return Ok(MiddlewareFlow::Continue),
+            (Some(operator), None) => (operator, None),
+            (None, Some(budget)) => (budget.max_tokens, Some(budget.halt_figures.clone())),
+            (Some(operator), Some(budget)) if budget.max_tokens <= operator => {
+                (budget.max_tokens, Some(budget.halt_figures.clone()))
+            }
+            (Some(operator), Some(_)) => (operator, None),
+        };
+
+        if cx.cumulative_tokens > limit {
             // The service's `run_after` call site reads the FINAL output
             // from `resp.content` (the mutable response view), not from
             // `FinalResult::output` -- so the notice must land on `resp`
             // itself to reach the returned `PaladinResult`.
             resp.content.push_str(TOKEN_BUDGET_NOTICE);
+            let stop_reason = match allowance_figures {
+                Some(figures) => StopReason::AllowanceHalted(figures),
+                None => StopReason::TokenBudget,
+            };
             return Ok(MiddlewareFlow::Finish(FinalResult::new(
                 resp.content.clone(),
-                StopReason::TokenBudget,
+                stop_reason,
             )));
         }
 
@@ -573,6 +612,375 @@ mod tests {
         let service2 = make_service(llm2).with_middleware(middleware2);
         let result2 = service2.execute(&paladin, "hi").await;
         assert!(result2.is_ok());
+    }
+
+    // ── TokenBudget: the Treasurer's derived figure (ALLOW-05, D-11, D-12) ──
+
+    use chrono::{TimeZone, Utc};
+    use paladin_core::platform::container::allowance::{
+        AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+    };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_core::platform::container::run_scope::RunScope;
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_ports::output::llm_port::FinishReason;
+
+    /// The figures a derived budget reports when it ends a run.
+    fn halt_figures() -> AllowanceRefusal {
+        let usd = CurrencyCode::new("USD").expect("USD is valid");
+        AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(5_000, usd.clone()),
+            ceiling: Cost::new(5_000, usd),
+            window: None,
+            evaluated_at: Utc
+                .with_ymd_and_hms(2026, 10, 6, 12, 0, 0)
+                .single()
+                .expect("valid instant"),
+        }
+    }
+
+    fn derived(max_tokens: u32) -> DerivedTokenBudget {
+        DerivedTokenBudget::new(max_tokens, halt_figures())
+    }
+
+    fn scope_with(max_tokens: u32) -> RunScope {
+        RunScope::default().with_derived_token_budget(derived(max_tokens))
+    }
+
+    fn operator(enabled: bool, max_tokens: u32) -> TokenBudget {
+        TokenBudget::new(TokenBudgetConfig {
+            enabled,
+            max_tokens,
+        })
+    }
+
+    /// Drive `TokenBudget::after_model` once at `cumulative` tokens, with `budget` as the
+    /// context's derived figure.
+    async fn after_model_at(
+        middleware: &TokenBudget,
+        budget: Option<DerivedTokenBudget>,
+        cumulative: u32,
+    ) -> (MiddlewareFlow, String) {
+        let paladin = make_paladin(5);
+        let assembly = super::super::PromptAssembly::new("system", "input", "", vec![], None);
+        let mut cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+        cx.set_derived_token_budget(budget);
+        cx.cumulative_tokens = cumulative;
+        let mut view = LlmResponseView {
+            content: "partial answer".to_string(),
+            usage: TokenUsage::default(),
+            finish_reason: FinishReason::Stop,
+            function_call: None,
+        };
+        let flow = middleware
+            .after_model(&mut cx, &mut view)
+            .await
+            .expect("after_model never fails");
+        (flow, view.content)
+    }
+
+    fn finished(flow: MiddlewareFlow) -> FinalResult {
+        match flow {
+            MiddlewareFlow::Finish(result) => result,
+            other => panic!(
+                "expected Finish, got a different flow: {}",
+                flow_name(&other)
+            ),
+        }
+    }
+
+    fn flow_name(flow: &MiddlewareFlow) -> &'static str {
+        match flow {
+            MiddlewareFlow::Continue => "Continue",
+            MiddlewareFlow::Finish(_) => "Finish",
+            MiddlewareFlow::Fail(_) => "Fail",
+        }
+    }
+
+    /// With the operator figure off, a derived figure alone ends the run once the cumulative
+    /// count passes it: the crossing response is kept, with the truncation notice, and the stop
+    /// is the allowance halt (neither successful nor a failure).
+    #[tokio::test]
+    async fn derived_budget_alone_ends_the_run_with_allowance_halted() {
+        let (flow, content) = after_model_at(&operator(false, 1), Some(derived(100)), 101).await;
+
+        let result = finished(flow);
+        assert_eq!(
+            result.stop_reason,
+            StopReason::AllowanceHalted(halt_figures())
+        );
+        assert!(!result.stop_reason.is_successful());
+        assert!(result.stop_reason.is_limit());
+        assert_eq!(
+            result.output,
+            format!("partial answer{TOKEN_BUDGET_NOTICE}")
+        );
+        assert_eq!(
+            content, result.output,
+            "the notice lands on the response view"
+        );
+    }
+
+    /// Strict comparison (D-09): a cumulative count exactly at the figure continues; one more
+    /// token stops.
+    #[tokio::test]
+    async fn cumulative_at_the_derived_figure_continues_and_one_more_stops() {
+        let at_figure = after_model_at(&operator(false, 1), Some(derived(100)), 100).await;
+        assert!(matches!(at_figure.0, MiddlewareFlow::Continue));
+        assert_eq!(
+            at_figure.1, "partial answer",
+            "no notice below the crossing"
+        );
+
+        let past_figure = after_model_at(&operator(false, 1), Some(derived(100)), 101).await;
+        assert!(matches!(past_figure.0, MiddlewareFlow::Finish(_)));
+    }
+
+    /// Tightest wins: an enabled operator figure BELOW the derived one binds, so the stop keeps
+    /// today's `TokenBudget` reason.
+    #[tokio::test]
+    async fn operator_figure_below_the_derived_one_wins_and_keeps_token_budget() {
+        let (flow, _) = after_model_at(&operator(true, 50), Some(derived(100)), 60).await;
+
+        assert_eq!(finished(flow).stop_reason, StopReason::TokenBudget);
+    }
+
+    /// A tie goes to the Treasurer (D-11): the allowance is the reason the run stopped.
+    #[tokio::test]
+    async fn a_tie_goes_to_the_treasurer() {
+        let (flow, _) = after_model_at(&operator(true, 100), Some(derived(100)), 101).await;
+
+        assert_eq!(
+            finished(flow).stop_reason,
+            StopReason::AllowanceHalted(halt_figures())
+        );
+    }
+
+    /// An operator figure ABOVE the derived one never loosens it: the derived figure binds.
+    #[tokio::test]
+    async fn operator_figure_above_the_derived_one_never_loosens_it() {
+        let (flow, _) = after_model_at(&operator(true, 1_000), Some(derived(100)), 101).await;
+
+        assert_eq!(
+            finished(flow).stop_reason,
+            StopReason::AllowanceHalted(halt_figures())
+        );
+    }
+
+    /// No derived figure and the operator budget off is exactly today's behaviour: no cutoff.
+    #[tokio::test]
+    async fn no_derived_figure_and_a_disabled_operator_budget_never_cuts() {
+        let (flow, content) = after_model_at(&operator(false, 1), None, u32::MAX).await;
+
+        assert!(matches!(flow, MiddlewareFlow::Continue));
+        assert_eq!(content, "partial answer");
+    }
+
+    /// No derived figure: the operator budget behaves exactly as before.
+    #[tokio::test]
+    async fn the_operator_budget_alone_still_ends_the_run_with_token_budget() {
+        let (flow, _) = after_model_at(&operator(true, 100), None, 101).await;
+
+        assert_eq!(finished(flow).stop_reason, StopReason::TokenBudget);
+    }
+
+    /// Through a real service: usage 100 per response, derived figure 150. The first response
+    /// (cumulative 100) continues; the second (cumulative 200) crosses and ends the run with
+    /// the allowance halt, keeping the crossing response and the notice.
+    #[tokio::test]
+    async fn a_run_with_a_derived_figure_halts_on_the_crossing_response() {
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let service = make_service(llm.clone()).with_middleware(Arc::new(operator(false, 1)));
+        let paladin = make_paladin(10);
+
+        let result = service
+            .execute_scoped(&paladin, "hi", None, &scope_with(150))
+            .await
+            .unwrap();
+
+        assert_eq!(llm.call_count(), 2);
+        assert_eq!(result.usage.total_tokens, 200);
+        assert_eq!(
+            result.stop_reason,
+            StopReason::AllowanceHalted(halt_figures())
+        );
+        assert!(!result.stop_reason.is_successful());
+        assert!(result.output.contains("chunk"));
+        assert!(result.output.contains(TOKEN_BUDGET_NOTICE));
+    }
+
+    /// Boundary through a real service: a figure of exactly 200 lets the run reach
+    /// `cumulative_tokens == 200` and continue; the next response (300) stops it.
+    #[tokio::test]
+    async fn a_run_continues_at_exactly_the_figure_and_stops_one_response_later() {
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let service = make_service(llm.clone()).with_middleware(Arc::new(operator(false, 1)));
+        let paladin = make_paladin(10);
+
+        let result = service
+            .execute_scoped(&paladin, "hi", None, &scope_with(200))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            llm.call_count(),
+            3,
+            "continues at 200, stops after the call taking it to 300"
+        );
+        assert_eq!(result.usage.total_tokens, 300);
+        assert!(matches!(result.stop_reason, StopReason::AllowanceHalted(_)));
+    }
+
+    /// A scope with no derived figure and a disabled operator budget leaves a run untouched.
+    #[tokio::test]
+    async fn a_run_without_a_derived_figure_is_not_cut() {
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let service = make_service(llm.clone()).with_middleware(Arc::new(operator(false, 1)));
+        let paladin = make_paladin(4);
+
+        let result = service
+            .execute_scoped(&paladin, "hi", None, &RunScope::default())
+            .await
+            .unwrap();
+
+        assert_eq!(llm.call_count(), 4, "runs to max_loops, never cut");
+        assert!(!matches!(
+            result.stop_reason,
+            StopReason::AllowanceHalted(_)
+        ));
+    }
+
+    /// ALLOW-05 "works alongside, replaces none": a run carrying a derived figure still stops on
+    /// `ModelCallLimit` exactly as before when the call limit binds first.
+    #[tokio::test]
+    async fn model_call_limit_still_binds_first_under_a_derived_figure() {
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 10, 10),
+        );
+        let service = make_service(llm.clone())
+            .with_middleware(Arc::new(ModelCallLimit::new(ModelCallLimitConfig {
+                enabled: true,
+                max_calls: 3,
+            })))
+            .with_middleware(Arc::new(operator(false, 1)));
+        let paladin = make_paladin(10);
+
+        let result = service
+            .execute_scoped(&paladin, "hi", None, &scope_with(1_000_000))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            llm.call_count(),
+            3,
+            "exactly max_calls model calls, as before"
+        );
+        assert_eq!(result.stop_reason, StopReason::CallLimit);
+    }
+
+    /// ... and a `ToolCallLimit` still denies the call past its budget while a (distant)
+    /// derived figure rides along.
+    #[tokio::test]
+    async fn tool_call_limit_still_denies_under_a_derived_figure() {
+        let llm = Arc::new(MockLlmAdapter::new().with_script(vec![
+            MockScriptEntry::ToolCall {
+                name: "search".to_string(),
+                arguments: "{}".to_string(),
+            },
+            MockScriptEntry::ToolCall {
+                name: "search".to_string(),
+                arguments: "{}".to_string(),
+            },
+            MockScriptEntry::ToolCall {
+                name: "search".to_string(),
+                arguments: "{}".to_string(),
+            },
+            MockScriptEntry::Text("done".to_string()),
+        ]));
+        let arsenal = Arc::new(RecordingArsenal::default());
+        let service = make_service_with_arsenal(llm, arsenal.clone() as Arc<dyn ArsenalPort>)
+            .with_middleware(Arc::new(ToolCallLimit::new(ToolCallLimitConfig {
+                enabled: true,
+                max_calls: 2,
+                per_tool: HashMap::new(),
+            })))
+            .with_middleware(Arc::new(operator(false, 1)));
+        let paladin = make_paladin(4);
+
+        let result = service
+            .execute_scoped(&paladin, "hi", None, &scope_with(1_000_000))
+            .await;
+
+        assert!(result.is_ok(), "the run reaches a normal completion");
+        assert_eq!(
+            arsenal.calls.lock().unwrap().len(),
+            2,
+            "the third call is denied exactly as without a derived figure"
+        );
+    }
+
+    /// The figure lives on each run's own context, never on the shared middleware: one run with
+    /// a figure and one without, concurrently through ONE service, do not affect each other.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_runs_keep_their_own_derived_figure() {
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let service = Arc::new(make_service(llm).with_middleware(Arc::new(operator(false, 1))));
+        let paladin = Arc::new(make_paladin(3));
+
+        let mut handles = Vec::new();
+        for index in 0..8 {
+            let service = service.clone();
+            let paladin = paladin.clone();
+            handles.push(tokio::spawn(async move {
+                let scope = if index % 2 == 0 {
+                    scope_with(150)
+                } else {
+                    RunScope::default()
+                };
+                (
+                    index,
+                    service.execute_scoped(&paladin, "hi", None, &scope).await,
+                )
+            }));
+        }
+
+        for handle in handles {
+            let (index, result) = handle.await.expect("run task must not panic");
+            let result = result.unwrap();
+            if index % 2 == 0 {
+                assert!(
+                    matches!(result.stop_reason, StopReason::AllowanceHalted(_)),
+                    "run {index} carried a figure and must halt"
+                );
+                assert_eq!(result.usage.total_tokens, 200);
+            } else {
+                assert!(
+                    !matches!(result.stop_reason, StopReason::AllowanceHalted(_)),
+                    "run {index} carried no figure and must not halt"
+                );
+                assert_eq!(result.usage.total_tokens, 300, "ran all three loops");
+            }
+        }
     }
 
     // ── ToolCallLimit ────────────────────────────────────────────────────

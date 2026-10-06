@@ -26,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (battalion), `RunWorkerPool::with_treasurer`, `Treasurer::spend_guard` and `TreasurerSpendGuard`
   (facade); see `MIGRATION.md` §9.2. Later Phase 42 plans extend this entry.
 
+  **Persisted halt reason (plan 42-03).** Migration `013_add_run_halt_reason.sql` (both
+  backends) adds one nullable `runs.halt_reason` column (`TEXT` on SQLite, `JSONB` on PostgreSQL;
+  `NULL` for every legacy row), carried by `Run.halt_reason` and `RunOutcomeRecord.halt_reason`
+  on the in-memory, SQLite and PostgreSQL run adapters. A spend-halted run's `GET /v1/runs/{id}`
+  and `GET /v1/runs` rows now carry `halt_reason` (an object tagged by `reason`: the halted
+  ceiling's figures, the same keys as the `429 allowance_exhausted` `details`, or
+  `{"reason":"ledger_unavailable"}`) and `final_waypoint_id` (the Halted Waypoint, the fork
+  point), with `error` still `null`. The worker writes the outcome before flipping a halting
+  run's status, so no reader sees `halted` without its reason, and the caller's `halted` run
+  webhook gains the same optional `halt_reason` key (other events and the signature are
+  unchanged). `ApiError::allowance_exhausted` and `halt_reason` share one builder,
+  `AllowanceRefusal::details_json`.
+
 - **Facade re-export of the allowance module (Phase 41 plan 41-09, D-20).** The `paladin` facade now
   re-exports `paladin::core::platform::container::allowance` (`AllowanceRefusal`, `AllowanceWarning`,
   `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `crosses_warn_threshold`, ...), beside

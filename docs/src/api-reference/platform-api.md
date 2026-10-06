@@ -71,7 +71,9 @@ repository insert and one queue enqueue, with no engine work on the request path
 p99 ≤ 250ms budget is an architectural property of that fact, not a number to tune).
 
 `GET /v1/runs/{run_id}` returns the full `Run`: `run_id`, `thread_id`, `assistant_id`, `version`,
-`status`, `submitted_at`/`started_at`/`finished_at`, `error` (the engine's error, when `Failed`).
+`status`, `submitted_at`/`started_at`/`finished_at`, `error` (the engine's error, when `Failed`),
+`final_waypoint_id` (the final Waypoint the run reached; `null` until it records one) and
+`halt_reason` (why a run halted on spend; `null` otherwise) -- see [Halted runs](#halted-runs).
 
 `GET /v1/runs?thread_id=&assistant_id=&status=&limit=&cursor=` lists runs
 `(submitted_at DESC, run_id DESC)`, paginated per [Pagination](#pagination); a run's `webhook`
@@ -104,6 +106,48 @@ the **Waypoint** halted (`RunOutcome::Halted`), while the **run** is recorded `C
 graceful-shutdown drain (no cancel requested) also produces a `Halted` Waypoint, but the run stays
 `Running` for immediate redelivery rather than moving to `Cancelled` — only an explicit
 `POST .../cancel` produces the `Cancelled` run status.
+
+### Halted runs
+
+A run whose spend allowance is exhausted while it is in flight halts at its next superstep
+boundary: its `status` is `halted`, its `error` is `null` (a halt is a resume point, not a failure)
+and its last checkpoint is kept. `GET /v1/runs/{run_id}` and every row of `GET /v1/runs` say why
+and where to resume with two fields, both always present (`null` when they do not apply):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `final_waypoint_id` | string or `null` | The final Waypoint the run reached. For a halted run it is the Halted Waypoint -- the fork point to resume from. |
+| `halt_reason` | object or `null` | Why the run halted. `null` for every run that did not halt on spend. |
+
+`halt_reason` is an object tagged by `reason`. For an exhausted allowance it carries the halted
+ceiling's own figures -- the same keys, built by the same function, as the `details` of
+[`429 allowance_exhausted`](#allowance-refusals):
+
+```json
+{
+  "status": "halted",
+  "error": null,
+  "final_waypoint_id": "01926f3e-...",
+  "halt_reason": {
+    "reason": "allowance_exhausted",
+    "scope": "api_key",
+    "kind": "window",
+    "balance": "1.0000 USD",
+    "ceiling": "1.0000 USD",
+    "window_start": "2026-10-06T00:00:00Z",
+    "window_end": "2026-10-07T00:00:00Z"
+  }
+}
+```
+
+`balance` and `ceiling` are display strings rendered at the edge from exact integer nano-units;
+`window_start`/`window_end` are RFC 3339 and `null` for a lifetime ceiling. When the spend ledger
+could not be read at the boundary the run halts fail-closed and `halt_reason` is exactly
+`{ "reason": "ledger_unavailable" }`. The object never carries another scope's figures, a tenant
+id, or an API key name or value.
+
+The reason is written to the run row before the status flips to `halted`, so a reader never sees
+a `halted` run without its `halt_reason`.
 
 ### Streaming
 
@@ -306,6 +350,23 @@ appears):
   "timestamp": "2026-09-08T12:00:00Z",
   "attempt": 1,
   "parleys": null
+}
+```
+
+A `halted` event whose run halted on spend additionally carries an optional `halt_reason` key,
+equal to the [`halt_reason` object on the run](#halted-runs); no other event carries it, and the
+payloads of every other event are unchanged:
+
+```json
+{
+  "run_id": "...",
+  "thread_id": "...",
+  "assistant": { "assistant_id": "researcher", "version": 3 },
+  "status": "halted",
+  "event": "halted",
+  "timestamp": "2026-10-06T12:00:00Z",
+  "attempt": 1,
+  "halt_reason": { "reason": "ledger_unavailable" }
 }
 ```
 

@@ -133,8 +133,11 @@ not re-opened).
   `halt_reason` (D-06) and the webhook/trace/herald legs (D-19) all come from this one value.
   Additive under `#[non_exhaustive]` where the enum is, `#[serde(default)]` for stored
   `run_traces` rows; the in-process `CancellationToken` halt keeps today's plain `Halted` cause
-  (the worker still distinguishes a drain by `shutting_down`, D-15). — **Reversibility:** costly —
-  `RunFinishStatus` is persisted in `run_traces` and read by `paladin-eval`.
+  (the worker still distinguishes a drain by `shutting_down`, D-15). Note that `TraceRecord` has a
+  hand-written `Serialize`/`Deserialize` since commit `bc9cdf0` (Phase 41 UAT fix: one `run_id`
+  key), so the new payload must round-trip through that impl and its `run_trace` contract tests,
+  not only through derived serde. — **Reversibility:** costly — `RunFinishStatus` is persisted in
+  `run_traces` and read by `paladin-eval`.
 - **D-06:** **A typed `halt_reason` column on the run row.** Migration pair
   `013_add_run_halt_reason.sql` (both backends) adds a nullable column holding the serialized
   reason (`kind` plus the `AllowanceRefusal` figures: scope, limit kind, balance, ceiling,

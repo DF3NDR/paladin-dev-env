@@ -1570,6 +1570,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     usage: dispatcher.total_usage(),
                     cost: dispatcher.total_cost(),
                     duration_ms,
+                    halt_reason: None,
                     trace_dropped_total: 0,
                 });
                 async {
@@ -1625,6 +1626,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     usage: dispatcher.total_usage(),
                     cost: dispatcher.total_cost(),
                     duration_ms,
+                    halt_reason: None,
                     trace_dropped_total: 0,
                 });
                 self.persist_failure(leased, run, error.to_string()).await

@@ -64,7 +64,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::platform::container::allowance::{
-    AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+    AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, HaltReason,
 };
 use crate::platform::container::battlefield::FieldName;
 use crate::platform::container::cost::Cost;
@@ -329,6 +329,20 @@ pub enum TraceEvent {
         /// pre-field JSON shape (the `served_by`/D-25 precedent).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cost: Option<Cost>,
+        /// Why the run halted, when the engine's spend guard halted it on a
+        /// Treasurer reason (`allowance_exhausted` or `ledger_unavailable`,
+        /// D-05, D-19): the reason is named at the source, by the engine's
+        /// own terminal event. `None` for every other finish (completed,
+        /// failed, awaiting input, a caller cancel, a token halt) and for
+        /// every row persisted before this field existed.
+        /// `#[serde(default)]` so a `run_traces` row persisted before this
+        /// field existed deserializes with `halt_reason == None`, and
+        /// `skip_serializing_if` keeps a reason-less event byte-identical to
+        /// the pre-field JSON shape (the `cost` precedent). The reason
+        /// serializes as a nested object under its own key: its `reason`
+        /// tag never collides with the record's `kind` tag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        halt_reason: Option<HaltReason>,
         /// Total wall-clock duration of this run, in milliseconds.
         duration_ms: u64,
         /// The dispatching `TraceDispatcher`'s own drop count at the moment
@@ -660,6 +674,7 @@ mod tests {
                 total_supersteps: 1,
                 usage: TokenUsage::default(),
                 cost: None,
+                halt_reason: None,
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },
@@ -902,6 +917,7 @@ mod tests {
                 total_supersteps: 1,
                 usage: TokenUsage::default(),
                 cost: Some(Cost::new(42_500, usd)),
+                halt_reason: None,
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },
@@ -922,6 +938,7 @@ mod tests {
                 total_supersteps: 1,
                 usage: TokenUsage::default(),
                 cost: None,
+                halt_reason: None,
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },
@@ -931,5 +948,99 @@ mod tests {
             !unpriced_json.contains("\"cost\""),
             "a None cost must emit no cost key: {unpriced_json}"
         );
+    }
+
+    /// A `RunFinished` carrying no halt reason.
+    fn run_finished(halt_reason: Option<HaltReason>) -> TraceEvent {
+        TraceEvent::RunFinished {
+            status: RunFinishStatus::Halted,
+            total_supersteps: 2,
+            usage: TokenUsage::default(),
+            cost: None,
+            halt_reason,
+            duration_ms: 5,
+            trace_dropped_total: 0,
+        }
+    }
+
+    fn sample_halt_reason() -> HaltReason {
+        use crate::platform::container::allowance::AllowanceRefusal;
+        use crate::platform::container::cost::CurrencyCode;
+        use chrono::TimeZone;
+        let usd = CurrencyCode::new("USD").unwrap();
+        HaltReason::AllowanceExhausted(AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Window,
+            balance: Cost::new(25_000_000_000, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window: Utc
+                .with_ymd_and_hms(2026, 10, 2, 0, 0, 0)
+                .single()
+                .zip(Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single()),
+            evaluated_at: Utc.with_ymd_and_hms(2026, 10, 2, 12, 0, 0).unwrap(),
+        })
+    }
+
+    /// D-05: a `RunFinished` with no halt reason serializes with no
+    /// `halt_reason` key at all -- the same bytes as before the field existed.
+    #[test]
+    fn run_finished_without_halt_reason_serializes_byte_identically() {
+        let record = TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq: 3,
+            at: Utc::now(),
+            event: run_finished(None),
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(!json.contains("halt_reason"), "{json}");
+        assert!(json.contains(r#""kind":"run_finished""#), "{json}");
+    }
+
+    /// D-05: a literal pre-phase `run_finished` row (no `halt_reason` key)
+    /// reads back with `halt_reason == None`.
+    #[test]
+    fn legacy_run_finished_json_reads_back_with_no_halt_reason() {
+        let legacy = r#"{"thread_id":"t1","seq":2,"at":"2026-01-01T00:00:00Z","kind":"run_finished","status":"halted","total_supersteps":1,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"duration_ms":5,"trace_dropped_total":0}"#;
+        let record: TraceRecord = serde_json::from_str(legacy).unwrap();
+        match record.event {
+            TraceEvent::RunFinished {
+                status,
+                halt_reason,
+                ..
+            } => {
+                assert_eq!(status, RunFinishStatus::Halted);
+                assert_eq!(halt_reason, None);
+            }
+            other => panic!("expected RunFinished, got {other:?}"),
+        }
+    }
+
+    /// D-05 (commit bc9cdf0): a reason round-trips through the hand-written
+    /// record serde, nested under its own key -- its `reason` tag never
+    /// collides with the record's `kind` tag.
+    #[test]
+    fn trace_record_round_trips_a_halt_reason() {
+        for reason in [sample_halt_reason(), HaltReason::LedgerUnavailable] {
+            let record = TraceRecord {
+                thread_id: thread(),
+                run_id: Some(RunId::new_v7()),
+                seq: 9,
+                at: Utc::now(),
+                event: run_finished(Some(reason.clone())),
+            };
+            let json = serde_json::to_string(&record).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(value["kind"], "run_finished", "{json}");
+            assert_eq!(value["halt_reason"]["reason"], reason.as_str(), "{json}");
+            assert!(value.get("reason").is_none(), "never flattened: {json}");
+            let back: TraceRecord = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, record);
+            assert_eq!(
+                serde_json::to_string(&back).unwrap(),
+                json,
+                "byte-identical round trip"
+            );
+        }
     }
 }

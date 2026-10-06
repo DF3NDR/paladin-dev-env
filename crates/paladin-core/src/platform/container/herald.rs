@@ -716,6 +716,7 @@ impl ExecutionMetadata {
     ///         total_supersteps: 3,
     ///         usage: TokenUsage::new(1_000, 2_000),
     ///         cost: Some(cost),
+    ///         halt_reason: None,
     ///         duration_ms: 1_500,
     ///         trace_dropped_total: 0,
     ///     },
@@ -1200,6 +1201,7 @@ mod tests {
                     usage,
                     cost,
                     duration_ms,
+                    halt_reason: None,
                     trace_dropped_total: 0,
                 },
             }

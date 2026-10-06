@@ -176,6 +176,7 @@ mod tests {
                 total_supersteps: 1,
                 usage: TokenUsage::default(),
                 cost: None,
+                halt_reason: None,
                 duration_ms: 5,
                 trace_dropped_total: 0,
             },

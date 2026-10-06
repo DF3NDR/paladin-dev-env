@@ -22,8 +22,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 
+use chrono::TimeZone;
+use paladin_core::platform::container::allowance::{
+    AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, HaltReason,
+};
+use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::run::RunId;
-use paladin_core::platform::container::trace::{TraceEvent, TraceRecord};
+use paladin_core::platform::container::token_usage::TokenUsage;
+use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent, TraceRecord};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 use paladin_ports::output::run_trace_port::{RunTraceError, RunTracePort};
 
@@ -169,6 +175,85 @@ pub async fn prune_thread_removes_only_older_supersteps(port: &dyn RunTracePort)
     assert_eq!(supersteps, vec![3, 4, 5]);
 }
 
+/// A `RunFinished` record carrying a Treasurer `halt_reason` (Phase 42 D-05,
+/// D-19) reads back equal, the reason nested under its own key and intact:
+/// both reason kinds survive the store round trip.
+pub async fn run_finished_halt_reason_round_trips(port: &dyn RunTracePort) {
+    let thread = ThreadId::new("contract-run-finished-halt-reason").unwrap();
+    let usd = CurrencyCode::new("USD").unwrap();
+    let exhausted = HaltReason::AllowanceExhausted(AllowanceRefusal {
+        scope_kind: AllowanceScopeKind::ApiKey,
+        limit_kind: AllowanceLimitKind::Window,
+        balance: Cost::new(25_000_000_000, usd.clone()),
+        ceiling: Cost::new(25_000_000_000, usd),
+        window: Utc
+            .with_ymd_and_hms(2026, 10, 2, 0, 0, 0)
+            .single()
+            .zip(Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single()),
+        evaluated_at: Utc.with_ymd_and_hms(2026, 10, 2, 12, 0, 0).unwrap(),
+    });
+    let records: Vec<TraceRecord> = [exhausted.clone(), HaltReason::LedgerUnavailable]
+        .into_iter()
+        .enumerate()
+        .map(|(index, reason)| TraceRecord {
+            thread_id: thread.clone(),
+            run_id: Some(RunId::new_v7()),
+            seq: index as u64 + 1,
+            at: Utc::now(),
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Halted,
+                total_supersteps: 2,
+                usage: TokenUsage::default(),
+                cost: None,
+                halt_reason: Some(reason),
+                duration_ms: 7,
+                trace_dropped_total: 0,
+            },
+        })
+        .collect();
+    port.append(&records).await.unwrap();
+
+    let read_back = port.read(&thread, 0, 100).await.unwrap();
+    assert_eq!(read_back, records);
+    match &read_back[0].event {
+        TraceEvent::RunFinished { halt_reason, .. } => {
+            assert_eq!(halt_reason, &Some(exhausted));
+        }
+        other => panic!("expected RunFinished, got {other:?}"),
+    }
+}
+
+/// A `run_finished` record persisted before `halt_reason` existed -- a
+/// literal JSON line with no `halt_reason` key -- is accepted and reads back
+/// with `halt_reason == None` (D-05, T-42-21). The legacy line is parsed with
+/// the same `serde_json` call every SQL adapter's `read` applies to its
+/// stored `record` text, then stored through the port.
+pub async fn legacy_run_finished_row_reads_back_without_a_halt_reason(port: &dyn RunTracePort) {
+    let thread = ThreadId::new("contract-legacy-run-finished").unwrap();
+    let legacy_json = r#"{"thread_id":"contract-legacy-run-finished","seq":1,"at":"2026-01-01T00:00:00Z","kind":"run_finished","status":"halted","total_supersteps":1,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"duration_ms":5,"trace_dropped_total":0}"#;
+    let legacy: TraceRecord = serde_json::from_str(legacy_json).unwrap();
+    port.append(std::slice::from_ref(&legacy)).await.unwrap();
+
+    let read_back = port.read(&thread, 0, 100).await.unwrap();
+    assert_eq!(read_back.len(), 1);
+    match &read_back[0].event {
+        TraceEvent::RunFinished {
+            status,
+            halt_reason,
+            ..
+        } => {
+            assert_eq!(*status, RunFinishStatus::Halted);
+            assert_eq!(halt_reason, &None);
+        }
+        other => panic!("expected RunFinished, got {other:?}"),
+    }
+    let rewritten = serde_json::to_string(&read_back[0]).unwrap();
+    assert!(
+        !rewritten.contains("halt_reason"),
+        "a reason-less record writes no halt_reason key: {rewritten}"
+    );
+}
+
 /// An extra capability the schema-version clause below needs: writing a
 /// row with an arbitrary `schema_version`, bypassing the normal
 /// [`RunTracePort::append`] path (which always stamps the CURRENT schema
@@ -200,8 +285,8 @@ where
     }
 }
 
-/// Run every clause expressible purely over `&dyn RunTracePort` (six of the
-/// seven `<behavior>` clauses -- `unsupported_schema_version_is_typed`
+/// Run every clause expressible purely over `&dyn RunTracePort` (every
+/// clause except `unsupported_schema_version_is_typed`, which
 /// needs [`RawSchemaVersionWriter`] too and is called directly by each
 /// backend's own test module instead).
 pub async fn run_all(store: Arc<dyn RunTracePort>) {
@@ -212,4 +297,6 @@ pub async fn run_all(store: Arc<dyn RunTracePort>) {
     append_is_idempotent_on_same_seq(store.as_ref()).await;
     records_are_scoped_by_thread(store.as_ref()).await;
     prune_thread_removes_only_older_supersteps(store.as_ref()).await;
+    run_finished_halt_reason_round_trips(store.as_ref()).await;
+    legacy_run_finished_row_reads_back_without_a_halt_reason(store.as_ref()).await;
 }

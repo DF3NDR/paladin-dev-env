@@ -400,18 +400,31 @@ impl RunOutcome {
 
 /// The [`RunFinishStatus`] a `superstep::run`/`run_with_namespace` call's own
 /// `Result<RunOutcome, EngineError>` maps onto (D-02, D-04; closes
-/// 27-CONTEXT D-25's correction, T-28-03-04). An engine-limit failure (e.g.
-/// `RecursionLimitExceeded`) is returned as a bare `Err` via `?`, never
-/// wrapped in `Ok(RunOutcome::Failed { .. })` -- so both paths map to
-/// `Failed` here, or `RunFinished.status` could never be trusted to
-/// distinguish success from failure for exactly the run shapes most likely
-/// to fail.
-fn run_finish_status(outcome: &Result<RunOutcome, EngineError>) -> RunFinishStatus {
+/// 27-CONTEXT D-25's correction, T-28-03-04), paired with the Treasurer
+/// [`HaltReason`] the run halted on, if any (Phase 42 D-05, D-19, G4).
+///
+/// An engine-limit failure (e.g. `RecursionLimitExceeded`) is returned as a
+/// bare `Err` via `?`, never wrapped in `Ok(RunOutcome::Failed { .. })` --
+/// so both paths map to `Failed` here, or `RunFinished.status` could never be
+/// trusted to distinguish success from failure for exactly the run shapes
+/// most likely to fail.
+///
+/// The reason is `Some` only for a halt whose [`HaltCause`] is
+/// `Spend(reason)`: a cancel or token halt, and every non-halt outcome, name
+/// no reason, so the engine's own terminal trace event states the Treasurer
+/// reason at the source and nowhere else.
+fn run_finish_status(
+    outcome: &Result<RunOutcome, EngineError>,
+) -> (RunFinishStatus, Option<HaltReason>) {
     match outcome {
-        Ok(RunOutcome::Completed { .. }) => RunFinishStatus::Completed,
-        Ok(RunOutcome::Failed { .. }) | Err(_) => RunFinishStatus::Failed,
-        Ok(RunOutcome::Halted { .. }) => RunFinishStatus::Halted,
-        Ok(RunOutcome::AwaitingInput { .. }) => RunFinishStatus::AwaitingInput,
+        Ok(RunOutcome::Completed { .. }) => (RunFinishStatus::Completed, None),
+        Ok(RunOutcome::Failed { .. }) | Err(_) => (RunFinishStatus::Failed, None),
+        Ok(RunOutcome::Halted {
+            cause: HaltCause::Spend(reason),
+            ..
+        }) => (RunFinishStatus::Halted, Some(reason.clone())),
+        Ok(RunOutcome::Halted { .. }) => (RunFinishStatus::Halted, None),
+        Ok(RunOutcome::AwaitingInput { .. }) => (RunFinishStatus::AwaitingInput, None),
     }
 }
 
@@ -2292,11 +2305,13 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         // consumer, `TraceDispatcher::superstep_count`/`total_usage`'s own
         // doc comments); `trace_dropped_total` is stamped by
         // `TraceDispatcher::emit` itself at enqueue time (D-07).
+        let (status, halt_reason) = run_finish_status(&outcome);
         trace.emit(TraceEvent::RunFinished {
-            status: run_finish_status(&outcome),
+            status,
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
             cost: trace.total_cost(),
+            halt_reason,
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2412,6 +2427,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
                 total_supersteps: trace.superstep_count(),
                 usage: trace.total_usage(),
                 cost: trace.total_cost(),
+                halt_reason: None,
                 duration_ms: run_started_at.elapsed().as_millis() as u64,
                 trace_dropped_total: 0,
             });
@@ -2533,11 +2549,13 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.spend_hook(),
         )
         .await;
+        let (status, halt_reason) = run_finish_status(&outcome);
         trace.emit(TraceEvent::RunFinished {
-            status: run_finish_status(&outcome),
+            status,
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
             cost: trace.total_cost(),
+            halt_reason,
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -2894,11 +2912,13 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.spend_hook(),
         )
         .await;
+        let (status, halt_reason) = run_finish_status(&outcome);
         trace.emit(TraceEvent::RunFinished {
-            status: run_finish_status(&outcome),
+            status,
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
             cost: trace.total_cost(),
+            halt_reason,
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -3071,11 +3091,13 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             self.spend_hook(),
         )
         .await;
+        let (status, halt_reason) = run_finish_status(&outcome);
         trace.emit(TraceEvent::RunFinished {
-            status: run_finish_status(&outcome),
+            status,
             total_supersteps: trace.superstep_count(),
             usage: trace.total_usage(),
             cost: trace.total_cost(),
+            halt_reason,
             duration_ms: run_started_at.elapsed().as_millis() as u64,
             trace_dropped_total: 0,
         });
@@ -7082,6 +7104,131 @@ mod tests {
             assert!(
                 completed_node_ids(&store, &thread).await.is_empty(),
                 "a first-boundary halt dispatches nothing"
+            );
+        }
+
+        /// Every `RunFinished` the recording sink saw, after the dispatcher's
+        /// asynchronous consumer has drained.
+        async fn run_finished_events(
+            sink: &Arc<RecordingTraceSink>,
+        ) -> Vec<(RunFinishStatus, Option<HaltReason>)> {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            sink.events()
+                .await
+                .iter()
+                .filter_map(|record| match &record.event {
+                    TraceEvent::RunFinished {
+                        status,
+                        halt_reason,
+                        ..
+                    } => Some((*status, halt_reason.clone())),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        /// D-05, D-19, G4: the engine's own terminal trace event names the
+        /// guard's reason at the source.
+        #[tokio::test]
+        async fn spend_halted_run_finished_carries_the_guards_reason() {
+            let (graph, _ids) = four_node_chain_graph();
+            let guard = HaltFromCall::new(2);
+            let sink = RecordingTraceSink::new();
+            let engine = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_trace_sink(sink.clone())
+            .with_spend_guard(guard);
+            let thread = ThreadId::new("run-finished-spend-reason").unwrap();
+
+            let outcome = engine
+                .start(&graph, thread, StateDelta::new())
+                .await
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                RunOutcome::Halted {
+                    cause: HaltCause::Spend(_),
+                    ..
+                }
+            ));
+
+            assert_eq!(
+                run_finished_events(&sink).await,
+                vec![(RunFinishStatus::Halted, Some(HaltReason::LedgerUnavailable))],
+                "exactly one RunFinished, naming the spend guard's reason"
+            );
+        }
+
+        /// A cancel halt and a completed run name no Treasurer reason.
+        #[tokio::test]
+        async fn non_spend_run_finished_carries_no_halt_reason() {
+            struct CancelProbe;
+
+            #[async_trait]
+            impl CancellationProbe for CancelProbe {
+                async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+                    true
+                }
+            }
+
+            let (graph, _ids) = four_node_chain_graph();
+            let cancelled_sink = RecordingTraceSink::new();
+            let cancelled = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_trace_sink(cancelled_sink.clone())
+            .with_cancellation_probe(Arc::new(CancelProbe));
+            let outcome = cancelled
+                .start(
+                    &graph,
+                    ThreadId::new("run-finished-cancel").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+            assert!(matches!(
+                outcome,
+                RunOutcome::Halted {
+                    cause: HaltCause::CancelRequested,
+                    ..
+                }
+            ));
+            assert_eq!(
+                run_finished_events(&cancelled_sink).await,
+                vec![(RunFinishStatus::Halted, None)]
+            );
+        }
+
+        /// D-05: `run_finish_status` pairs the status with the reason only for
+        /// a spend halt.
+        #[test]
+        fn run_finish_status_names_a_reason_only_for_a_spend_halt() {
+            let halted = |cause| {
+                Ok(RunOutcome::Halted {
+                    waypoint: WaypointId::generate(),
+                    cause,
+                })
+            };
+            assert_eq!(
+                run_finish_status(&halted(HaltCause::Spend(HaltReason::LedgerUnavailable))),
+                (RunFinishStatus::Halted, Some(HaltReason::LedgerUnavailable))
+            );
+            assert_eq!(
+                run_finish_status(&halted(HaltCause::Token)),
+                (RunFinishStatus::Halted, None)
+            );
+            assert_eq!(
+                run_finish_status(&halted(HaltCause::CancelRequested)),
+                (RunFinishStatus::Halted, None)
+            );
+            assert_eq!(
+                run_finish_status(&Err(EngineError::InvalidLimits {
+                    reason: "x".to_owned()
+                })),
+                (RunFinishStatus::Failed, None)
             );
         }
 

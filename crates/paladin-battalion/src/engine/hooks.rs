@@ -671,6 +671,7 @@ mod tests {
             total_supersteps: 0,
             usage: TokenUsage::default(),
             cost: None,
+            halt_reason: None,
             duration_ms: 0,
             trace_dropped_total: 0,
         }
@@ -809,6 +810,7 @@ mod tests {
             total_supersteps: 1,
             usage: dispatcher.total_usage(),
             cost: dispatcher.total_cost(),
+            halt_reason: None,
             duration_ms: 1,
             trace_dropped_total: 0,
         });

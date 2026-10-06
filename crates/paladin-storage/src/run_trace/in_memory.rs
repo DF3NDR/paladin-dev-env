@@ -169,6 +169,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_finished_halt_reason_round_trips() {
+        contract_tests::run_finished_halt_reason_round_trips(&InMemoryRunTraceStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_run_finished_row_reads_back_without_a_halt_reason() {
+        contract_tests::legacy_run_finished_row_reads_back_without_a_halt_reason(
+            &InMemoryRunTraceStore::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn unsupported_schema_version_is_typed() {
         contract_tests::unsupported_schema_version_is_typed(&InMemoryRunTraceStore::new()).await;
     }

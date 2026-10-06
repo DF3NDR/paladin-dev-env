@@ -225,6 +225,7 @@ fn repeat_divergence_exits_nonzero_and_names_the_seq_range() {
                 total_supersteps: 1,
                 usage: TokenUsage::default(),
                 cost: None,
+                halt_reason: None,
                 duration_ms: 1,
                 trace_dropped_total: 0,
             },

@@ -179,6 +179,7 @@ async fn export_one_fixture_run(sink: &OtelTraceSink) {
             total_supersteps: 1,
             usage: paladin_ports::output::llm_port::TokenUsage::new(0, 0),
             cost: None,
+            halt_reason: None,
             duration_ms: 1,
             trace_dropped_total: 0,
         },

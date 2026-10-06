@@ -342,6 +342,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_finished_halt_reason_round_trips() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::run_finished_halt_reason_round_trips(&store).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_run_finished_row_reads_back_without_a_halt_reason() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::legacy_run_finished_row_reads_back_without_a_halt_reason(&store).await;
+    }
+
+    #[tokio::test]
     async fn unsupported_schema_version_is_typed() {
         let Some(store) = store_or_skip().await else {
             return;

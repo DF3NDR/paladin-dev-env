@@ -1315,6 +1315,7 @@ mod tests {
                 total_supersteps: 4,
                 usage: TokenUsage::new(5, 0),
                 cost: None,
+                halt_reason: None,
                 duration_ms: 1,
                 trace_dropped_total: 0,
             },

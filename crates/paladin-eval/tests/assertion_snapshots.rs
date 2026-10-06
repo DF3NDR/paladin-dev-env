@@ -165,6 +165,7 @@ fn fixture_records() -> Vec<TraceRecord> {
                 total_supersteps: 2,
                 usage: TokenUsage::new(22, 0),
                 cost: None,
+                halt_reason: None,
                 duration_ms: 20,
                 trace_dropped_total: 0,
             },

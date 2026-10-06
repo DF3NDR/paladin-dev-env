@@ -3904,6 +3904,13 @@
             ],
             "description": "The engine's error, if this run is `Failed`."
           },
+          "final_waypoint_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The final Waypoint id this run reached, if any -- for a `halted` run the Halted Waypoint,\ni.e. the fork point to resume from (`POST /threads/{thread_id}/fork` with\n`from_waypoint_id`). Always serialised: `null` while the run has recorded no Waypoint."
+          },
           "finished_at": {
             "type": [
               "string",
@@ -3911,6 +3918,13 @@
             ],
             "format": "date-time",
             "description": "When this run reached a terminal status, if it has."
+          },
+          "halt_reason": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Why this run halted, when it halted on spend (ALLOW-03, Phase 42 D-06): a JSON object\ntagged by `reason` -- `\"allowance_exhausted\"` with the halted ceiling's own `scope`,\n`kind`, `balance`, `ceiling`, `window_start` and `window_end` (identical to the `details`\nof the Phase 41 `429 allowance_exhausted`), or `\"ledger_unavailable\"` with no other key\nwhen the ledger could not be read and the run halted fail-closed. `null` for every run\nthat did not halt on spend. A halt is a resume point, not a failure: `error` stays\n`null` beside it. Built only by `HaltReason::wire_json`; never carries another scope's\nfigures, a tenant id or an API key name or value. Always serialised, mirroring `cost`."
           },
           "pending_responses": {
             "type": "integer",

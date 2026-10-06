@@ -22,6 +22,7 @@ use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_battalion::engine::{
     EdgeSpec, EngineLimits, NodeContext, NodeSpec, StateNode, StateNodeError, WarEngine, WarGraph,
 };
+use paladin_core::platform::container::allowance::HaltReason;
 use paladin_core::platform::container::battlefield::{Battlefield, BattlefieldSchema, StateDelta};
 use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::execution_result::PaladinResult;
@@ -42,8 +43,11 @@ use paladin_core::platform::container::webhook::{
 };
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::run_queue_port::{QueuedRun, RunQueuePort};
-use paladin_ports::output::run_repository_port::RunRepositoryPort;
+use paladin_ports::output::run_repository_port::{
+    RunOutcomeRecord, RunPage, RunQuery, RunRepositoryError, RunRepositoryPort,
+};
 use paladin_ports::output::run_trace_port::RunTracePort;
+use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
 };
@@ -376,6 +380,198 @@ async fn worker_pool_lease_expiry_exactly_once() {
     })
     .await
     .expect("worker_pool_lease_expiry_exactly_once must finish within 30s");
+}
+
+// --- halting transitions write the outcome before the status (G14) ------
+
+/// A [`RunRepositoryPort`] double that delegates to an [`InMemoryRunRepository`] and logs the
+/// order of the two writes a terminal transition makes: `record_outcome` and `update_status`
+/// (with its target status). Every other method is a straight delegation.
+struct OrderRecordingRepository {
+    inner: InMemoryRunRepository,
+    log: std::sync::Mutex<Vec<String>>,
+}
+
+impl OrderRecordingRepository {
+    fn new() -> Self {
+        Self {
+            inner: InMemoryRunRepository::new(),
+            log: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn log(&self) -> Vec<String> {
+        self.log.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl RunRepositoryPort for OrderRecordingRepository {
+    async fn insert(&self, run: &Run) -> Result<(), RunRepositoryError> {
+        self.inner.insert(run).await
+    }
+
+    async fn get(&self, run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
+        self.inner.get(run_id).await
+    }
+
+    async fn update_status(
+        &self,
+        run_id: &RunId,
+        from: RunStatus,
+        to: RunStatus,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), RunRepositoryError> {
+        // Record the row's halt reason as seen at the instant the status flips, so the test can
+        // prove a reader of the new status already finds the reason.
+        let reason_present = self
+            .inner
+            .get(run_id)
+            .await?
+            .is_some_and(|run| run.halt_reason.is_some());
+        self.log.lock().unwrap().push(format!(
+            "update_status:{to}:reason_present={reason_present}"
+        ));
+        self.inner.update_status(run_id, from, to, at).await
+    }
+
+    async fn record_outcome(
+        &self,
+        run_id: &RunId,
+        outcome: RunOutcomeRecord,
+    ) -> Result<(), RunRepositoryError> {
+        self.log.lock().unwrap().push("record_outcome".to_string());
+        self.inner.record_outcome(run_id, outcome).await
+    }
+
+    async fn list(&self, query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+        self.inner.list(query).await
+    }
+
+    async fn active_run_for_thread(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Option<Run>, RunRepositoryError> {
+        self.inner.active_run_for_thread(thread_id).await
+    }
+
+    async fn request_cancel(&self, run_id: &RunId) -> Result<RunStatus, RunRepositoryError> {
+        self.inner.request_cancel(run_id).await
+    }
+
+    async fn is_cancel_requested(&self, thread_id: &ThreadId) -> Result<bool, RunRepositoryError> {
+        self.inner.is_cancel_requested(thread_id).await
+    }
+
+    async fn bump_attempt(&self, run_id: &RunId) -> Result<u32, RunRepositoryError> {
+        self.inner.bump_attempt(run_id).await
+    }
+
+    async fn record_resume(
+        &self,
+        run_id: &RunId,
+        responses: Vec<ParleyResponse>,
+    ) -> Result<u32, RunRepositoryError> {
+        self.inner.record_resume(run_id, responses).await
+    }
+
+    async fn clear_pending_responses(&self, run_id: &RunId) -> Result<(), RunRepositoryError> {
+        self.inner.clear_pending_responses(run_id).await
+    }
+}
+
+/// A [`SpendGuard`] that halts at its first consultation with a fixed reason.
+struct AlwaysHalts(HaltReason);
+
+#[async_trait]
+impl SpendGuard for AlwaysHalts {
+    async fn check(&self, _thread: &ThreadId) -> SpendDecision {
+        SpendDecision::Halt(self.0.clone())
+    }
+}
+
+/// G14 / PLAT-09 / T-42-13: a spend-halted run's worker write puts `record_outcome` (carrying
+/// the reason) BEFORE the `Running -> Halted` flip, so the status flip already finds the reason
+/// on the row; and a `Completed` transition keeps today's order (status first, outcome second).
+#[tokio::test]
+async fn halting_transition_records_the_outcome_before_the_status_flip() {
+    let reason = HaltReason::LedgerUnavailable;
+
+    // Halted: record_outcome first.
+    let repository = Arc::new(OrderRecordingRepository::new());
+    let repo_port: Arc<dyn RunRepositoryPort> = repository.clone();
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let (graph, counters) = build_chain_graph(2, Duration::ZERO);
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("chain", graph));
+    let engine = Arc::new(
+        WarEngine::new(Arc::new(UnusedPaladinPort), store.clone())
+            .with_spend_guard(Arc::new(AlwaysHalts(reason.clone()))),
+    );
+    let pool = RunWorkerPool::new(
+        engine,
+        store,
+        repo_port.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    );
+    let (run_id, _thread) = submit(&repo_port, &queue, "chain").await;
+
+    assert!(pool.run_once().await.unwrap());
+
+    let run = repo_port.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Halted);
+    assert_eq!(run.halt_reason, Some(reason));
+    assert_eq!(run.error, None, "a halt is a resume point, not a failure");
+    assert!(
+        run.final_waypoint_id.is_some(),
+        "the fork point is recorded"
+    );
+    assert_eq!(counters[0].load(Ordering::SeqCst), 0, "no node ran");
+    assert_eq!(
+        repository.log(),
+        vec![
+            "update_status:running:reason_present=false".to_string(),
+            "record_outcome".to_string(),
+            "update_status:halted:reason_present=true".to_string(),
+        ],
+        "the reason must be on the row before the status flips to halted"
+    );
+
+    // Completed: today's order is unchanged.
+    let repository = Arc::new(OrderRecordingRepository::new());
+    let repo_port: Arc<dyn RunRepositoryPort> = repository.clone();
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let (graph, _counters) = build_chain_graph(1, Duration::ZERO);
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("chain", graph));
+    let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let pool = RunWorkerPool::new(
+        engine,
+        store,
+        repo_port.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    );
+    let (run_id, _thread) = submit(&repo_port, &queue, "chain").await;
+    assert!(pool.run_once().await.unwrap());
+    let run = repo_port.get(&run_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+    assert_eq!(run.halt_reason, None);
+    let log = repository.log();
+    assert_eq!(
+        log,
+        vec![
+            "update_status:running:reason_present=false".to_string(),
+            "update_status:completed:reason_present=false".to_string(),
+            "record_outcome".to_string(),
+        ],
+        "completed keeps status-then-outcome order"
+    );
 }
 
 // --- awaiting_input_acks_queue -------------------------------------------

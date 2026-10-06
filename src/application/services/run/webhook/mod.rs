@@ -45,12 +45,16 @@ pub struct WebhookPayloadAssistant {
 
 /// The webhook wire payload (PRD 06 PLAT-FR-14; this phase adds `attempt`,
 /// D-23, and freezes the set): `{ run_id, thread_id, assistant, status,
-/// event, timestamp, attempt, parleys? }`. Serialized ONCE per delivery,
-/// stored verbatim on the `WebhookDelivery` row, and signed/sent from that
-/// SAME buffer -- never re-serialized (D-41).
+/// event, timestamp, attempt, parleys?, halt_reason? }`. Serialized ONCE per
+/// delivery, stored verbatim on the `WebhookDelivery` row, and signed/sent
+/// from that SAME buffer -- never re-serialized (D-41).
 ///
 /// This exact key set is a prohibition boundary (T-27-13-03): no run
 /// input, no Battlefield state, and no HMAC signing value ever appear here.
+/// `halt_reason` (Phase 42, D-19) is an additive optional key under that
+/// discipline: it is omitted from every event but a `halted` one whose run
+/// halted with a typed reason, so every other payload is byte-identical to
+/// what it was before the key existed.
 ///
 /// The payload is produced for stored-workflow and code-registered-agent
 /// runs alike (PLAT-08).
@@ -74,6 +78,15 @@ pub struct WebhookPayload {
     /// event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parleys: Option<Vec<ParleyRequest>>,
+    /// Why the run halted, present only on a `halted` event whose run halted with a typed
+    /// reason (Phase 42, D-19, ALLOW-03). Equal to `HaltReason::wire_json()` -- the same
+    /// object `GET /v1/runs/{id}` serves and, for an exhausted allowance, the figures of the
+    /// `429 allowance_exhausted` `details` -- so the reason (`reason`, plus the halted
+    /// ceiling's own `scope`, `kind`, `balance`, `ceiling`, `window_start`, `window_end`) can
+    /// never drift between surfaces. Carries no run input, no API key value and no signing
+    /// value; signing is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub halt_reason: Option<serde_json::Value>,
 }
 
 /// The operator-level allowance notice wire payload (Phase 41, D-17, amended at the
@@ -200,6 +213,7 @@ mod webhook_payload_tests {
             timestamp: Utc::now(),
             attempt: 1,
             parleys: None,
+            halt_reason: None,
         };
         let value = serde_json::to_value(&payload).unwrap();
         let object = value.as_object().unwrap();
@@ -220,6 +234,36 @@ mod webhook_payload_tests {
     }
 
     #[test]
+    fn webhook_payload_includes_halt_reason_only_when_present() {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let mut payload = WebhookPayload {
+            run_id: RunId::new_v7(),
+            thread_id: ThreadId::new("t1").unwrap(),
+            assistant: WebhookPayloadAssistant {
+                assistant_id: "a1".to_string(),
+                version: 1,
+            },
+            status: RunStatus::Halted,
+            event: RunEventKind::Halted,
+            timestamp: Utc::now(),
+            attempt: 1,
+            parleys: None,
+            halt_reason: Some(HaltReason::LedgerUnavailable.wire_json()),
+        };
+        let value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(
+            value["halt_reason"],
+            serde_json::json!({"reason": "ledger_unavailable"})
+        );
+
+        // Absent, the key is omitted entirely: every other event's bytes are unchanged.
+        payload.halt_reason = None;
+        let value = serde_json::to_value(&payload).unwrap();
+        assert!(!value.as_object().unwrap().contains_key("halt_reason"));
+    }
+
+    #[test]
     fn webhook_payload_includes_parleys_only_when_present() {
         let mut payload = WebhookPayload {
             run_id: RunId::new_v7(),
@@ -233,6 +277,7 @@ mod webhook_payload_tests {
             timestamp: Utc::now(),
             attempt: 1,
             parleys: Some(vec![]),
+            halt_reason: None,
         };
         let value = serde_json::to_value(&payload).unwrap();
         assert!(value.as_object().unwrap().contains_key("parleys"));

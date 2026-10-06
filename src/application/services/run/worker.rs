@@ -40,6 +40,7 @@ use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_battalion::engine::{
     EngineError, HaltCause, NodeSpec, RunOutcome, TraceDispatcher, WarEngine, WarGraph,
 };
+use paladin_core::platform::container::allowance::HaltReason;
 use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
 use paladin_core::platform::container::heartbeat::HeartbeatHandle;
 use paladin_core::platform::container::herald::Herald;
@@ -420,6 +421,7 @@ fn webhook_delivery_for_outcome(
     kind: RunEventKind,
     status: RunStatus,
     parleys: Option<&[ParleyRequest]>,
+    halt_reason: Option<&HaltReason>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Option<WebhookDelivery> {
     let webhook = run.webhook.as_ref()?;
@@ -439,6 +441,12 @@ fn webhook_delivery_for_outcome(
         timestamp: now,
         attempt: run.attempt,
         parleys: parleys.map(|p| p.to_vec()),
+        // D-19: the typed reason rides only a `halted` event, through the one wire builder, so
+        // it is byte-identical to `GET /runs` and the 429 details. Every other event omits the
+        // key entirely (its payload bytes are unchanged).
+        halt_reason: halt_reason
+            .filter(|_| status == RunStatus::Halted)
+            .map(HaltReason::wire_json),
     };
     let payload_json = serde_json::to_string(&payload).ok()?;
 
@@ -492,18 +500,19 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
         // residual in-process token halt still consults the side flags (defence in depth, G1a).
         RunOutcome::Halted {
             waypoint,
-            cause: HaltCause::Spend(_),
+            cause: HaltCause::Spend(reason),
         } => OutcomeAction::Transition {
             // ALLOW-03: an exhausted allowance halts the run at its next boundary. The run is
             // recorded Halted with NO error -- a halt is a resume point, not a failure -- whether
             // or not the pool is draining or a cancel flag is set (a drain must not requeue a run
-            // the Treasurer has already stopped).
+            // the Treasurer has already stopped). The typed reason is recorded on the run row
+            // (D-06) so `GET /runs`, the webhook and the SSE fallback can say why it halted.
             to: RunStatus::Halted,
             outcome: RunOutcomeRecord {
                 error: None,
                 output: None,
                 final_waypoint_id: Some(waypoint.to_string()),
-                halt_reason: None,
+                halt_reason: Some(reason.clone()),
             },
         },
         RunOutcome::Halted {
@@ -1331,34 +1340,38 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         let cancel_requested = self.repository.is_cancel_requested(&run.thread_id).await?;
         let shutting_down = self.coordinator.token().is_cancelled();
 
-        // D-14: this worker no longer publishes the terminal/suspension
-        // event directly. The engine's own `ParleyRaised` (raised
-        // mid-superstep, on `RunOutcome::AwaitingInput`) and `RunFinished`
-        // (emitted at the end of every `start`/`resume`/`resume_with`/
-        // `fork` call, whatever `outcome` turns out to be -- `Completed`,
-        // `Halted`, `AwaitingInput` or `Failed`) already reached the bus
-        // through `RunEventBusSink`/`map_trace_event` above, inside the
-        // `with_run_trace_scope` call this dispatch just returned from.
-        // `RunFinishStatus` carries no `cancelled` variant distinct from
-        // `halted` (it is a property of the ENGINE's own outcome, not this
-        // worker's repository-level cancel-request flag), so the WIRE
-        // `done` payload for a cancelled run's dispatch now reports
-        // `"halted"` rather than `"cancelled"` -- a deliberate, documented
-        // simplification of D-14's collapse; the run's own persisted
-        // `RunStatus` (queried via `GET /runs/{id}`) still resolves to
-        // `Cancelled` correctly, this is only the SSE `done` event's status
-        // string. `unbind` itself is deferred past the repository/queue
-        // write below -- see the comment there for why.
+        // D-14: this worker does not publish the terminal/suspension event itself. The engine's
+        // own `ParleyRaised` and `RunFinished` (emitted at the end of every `start`/`resume`/
+        // `resume_with`/`fork` call) already reached the bus through `RunEventBusSink`/
+        // `map_trace_event`, inside the `with_run_trace_scope` call this dispatch just returned
+        // from. Which status string the SSE `done` carries is owned by 42-05 (the halt reason)
+        // and 42-06 (`cancelled`); this worker only guarantees below that a halting run's reason
+        // is on the row BEFORE its status flips. `unbind` itself is deferred past the
+        // repository/queue write below -- see the comment there for why.
 
         match map_outcome(&outcome, cancel_requested, shutting_down) {
             OutcomeAction::Transition {
                 to,
                 outcome: record,
             } => {
-                self.repository
-                    .update_status(&run.run_id, RunStatus::Running, to, chrono::Utc::now())
-                    .await?;
-                self.repository.record_outcome(&run.run_id, record).await?;
+                // G14 / PLAT-09: for a halting transition the outcome (carrying the typed
+                // reason and the fork-point Waypoint id) is written BEFORE the status flips, so
+                // no reader -- the degraded SSE poller included -- can observe `halted` or
+                // `cancelled` without them. `record_outcome` has no status guard on any adapter
+                // (the contract clause `record_outcome_before_status_flip_is_accepted`), so the
+                // reversed order is legal. Every other transition keeps its original order.
+                let halt_reason = record.halt_reason.clone();
+                if matches!(to, RunStatus::Halted | RunStatus::Cancelled) {
+                    self.repository.record_outcome(&run.run_id, record).await?;
+                    self.repository
+                        .update_status(&run.run_id, RunStatus::Running, to, chrono::Utc::now())
+                        .await?;
+                } else {
+                    self.repository
+                        .update_status(&run.run_id, RunStatus::Running, to, chrono::Utc::now())
+                        .await?;
+                    self.repository.record_outcome(&run.run_id, record).await?;
+                }
                 self.queue.ack(&leased.token).await?;
 
                 // D-40, PLAT-FR-14: enqueue a webhook delivery for this
@@ -1370,7 +1383,8 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     RunOutcome::AwaitingInput { parleys, .. } => Some(parleys.as_slice()),
                     _ => None,
                 };
-                self.enqueue_webhook_delivery(&run, to, parleys).await;
+                self.enqueue_webhook_delivery(&run, to, parleys, halt_reason.as_ref())
+                    .await;
             }
             OutcomeAction::LeaveRunningAndRequeue => {
                 self.queue.nack(&leased.token, Duration::ZERO).await?;
@@ -1581,7 +1595,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     self.queue.ack(&leased.token).await?;
                     // D-40, D-15: strictly AFTER the status write and ack;
                     // logged and never propagated (P2).
-                    self.enqueue_webhook_delivery(run, RunStatus::Completed, None)
+                    self.enqueue_webhook_delivery(run, RunStatus::Completed, None, None)
                         .await;
                     Ok(true)
                 }
@@ -1715,7 +1729,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         match record_result {
             Ok(()) => {
                 self.queue.ack(&leased.token).await?;
-                self.enqueue_webhook_delivery(run, RunStatus::Failed, None)
+                self.enqueue_webhook_delivery(run, RunStatus::Failed, None, None)
                     .await;
             }
             Err(repo_err) => {
@@ -1748,6 +1762,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         run: &Run,
         status: RunStatus,
         parleys: Option<&[ParleyRequest]>,
+        halt_reason: Option<&HaltReason>,
     ) {
         let Some(deliveries) = &self.webhook_deliveries else {
             return;
@@ -1755,9 +1770,14 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         let Some(kind) = run_status_to_event_kind(status) else {
             return;
         };
-        if let Some(delivery) =
-            webhook_delivery_for_outcome(run, kind, status, parleys, chrono::Utc::now())
-            && let Err(error) = deliveries.enqueue(delivery).await
+        if let Some(delivery) = webhook_delivery_for_outcome(
+            run,
+            kind,
+            status,
+            parleys,
+            halt_reason,
+            chrono::Utc::now(),
+        ) && let Err(error) = deliveries.enqueue(delivery).await
         {
             log::warn!(
                 "run worker: failed to enqueue webhook delivery for run {}: {error}",
@@ -2110,6 +2130,7 @@ mod tests {
     fn halted_transition(
         waypoint: paladin_core::platform::container::waypoint::WaypointId,
         to: RunStatus,
+        halt_reason: Option<HaltReason>,
     ) -> OutcomeAction {
         OutcomeAction::Transition {
             to,
@@ -2117,7 +2138,7 @@ mod tests {
                 error: None,
                 output: None,
                 final_waypoint_id: Some(waypoint.to_string()),
-                halt_reason: None,
+                halt_reason,
             },
         }
     }
@@ -2127,7 +2148,11 @@ mod tests {
         let (waypoint, outcome) = spend_halt_outcome();
         assert_eq!(
             map_outcome(&outcome, false, true),
-            halted_transition(waypoint, RunStatus::Halted),
+            halted_transition(
+                waypoint,
+                RunStatus::Halted,
+                Some(HaltReason::LedgerUnavailable)
+            ),
             "a spend halt is recorded Halted, never requeued by a drain"
         );
     }
@@ -2137,12 +2162,53 @@ mod tests {
         let (waypoint, outcome) = spend_halt_outcome();
         assert_eq!(
             map_outcome(&outcome, true, false),
-            halted_transition(waypoint, RunStatus::Halted)
+            halted_transition(
+                waypoint,
+                RunStatus::Halted,
+                Some(HaltReason::LedgerUnavailable)
+            )
         );
         assert_eq!(
             map_outcome(&outcome, true, true),
-            halted_transition(waypoint, RunStatus::Halted)
+            halted_transition(
+                waypoint,
+                RunStatus::Halted,
+                Some(HaltReason::LedgerUnavailable)
+            )
         );
+    }
+
+    #[test]
+    fn map_outcome_spend_halt_records_the_reason() {
+        // An exhausted-allowance reason (figures and all) is carried to the record verbatim,
+        // and the record's `error` stays None: a halt is a resume point, not a failure (D-06).
+        let usd = paladin_core::platform::container::cost::CurrencyCode::new("USD").unwrap();
+        let reason = HaltReason::AllowanceExhausted(
+            paladin_core::platform::container::allowance::AllowanceRefusal {
+                scope_kind:
+                    paladin_core::platform::container::allowance::AllowanceScopeKind::ApiKey,
+                limit_kind:
+                    paladin_core::platform::container::allowance::AllowanceLimitKind::Window,
+                balance: Cost::new(1_000_000_001, usd.clone()),
+                ceiling: Cost::new(1_000_000_001, usd),
+                window: None,
+                evaluated_at: chrono::Utc::now(),
+            },
+        );
+        let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: HaltCause::Spend(reason.clone()),
+        };
+        match map_outcome(&outcome, false, false) {
+            OutcomeAction::Transition { to, outcome } => {
+                assert_eq!(to, RunStatus::Halted);
+                assert_eq!(outcome.halt_reason, Some(reason));
+                assert_eq!(outcome.error, None);
+                assert_eq!(outcome.final_waypoint_id, Some(waypoint.to_string()));
+            }
+            other => panic!("expected a Halted transition, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2155,11 +2221,11 @@ mod tests {
         // The cause alone decides: no side flag is needed.
         assert_eq!(
             map_outcome(&outcome, false, false),
-            halted_transition(waypoint, RunStatus::Cancelled)
+            halted_transition(waypoint, RunStatus::Cancelled, None)
         );
         assert_eq!(
             map_outcome(&outcome, false, true),
-            halted_transition(waypoint, RunStatus::Cancelled)
+            halted_transition(waypoint, RunStatus::Cancelled, None)
         );
     }
 
@@ -2225,6 +2291,7 @@ mod tests {
             RunEventKind::Completed,
             RunStatus::Completed,
             None,
+            None,
             chrono::Utc::now(),
         );
         assert!(delivery.is_none());
@@ -2237,6 +2304,7 @@ mod tests {
             &run,
             RunEventKind::Completed,
             RunStatus::Completed,
+            None,
             None,
             chrono::Utc::now(),
         );
@@ -2251,6 +2319,7 @@ mod tests {
             RunEventKind::Completed,
             RunStatus::Completed,
             None,
+            None,
             chrono::Utc::now(),
         )
         .unwrap();
@@ -2262,6 +2331,84 @@ mod tests {
         ));
         assert!(delivery.payload.contains(run.run_id.as_str()));
         assert!(!delivery.payload.to_lowercase().contains("secret"));
+    }
+
+    #[test]
+    fn halted_webhook_payload_carries_the_halt_reason_object() {
+        let run = sample_run_with_webhook(vec![RunEventKind::Halted]);
+        let reason = HaltReason::LedgerUnavailable;
+        let delivery = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Halted,
+            RunStatus::Halted,
+            None,
+            Some(&reason),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&delivery.payload).unwrap();
+        assert_eq!(payload["status"], "halted");
+        assert_eq!(payload["event"], "halted");
+        assert_eq!(payload["halt_reason"], reason.wire_json());
+    }
+
+    #[test]
+    fn halted_webhook_without_a_reason_omits_the_key() {
+        let run = sample_run_with_webhook(vec![RunEventKind::Halted]);
+        let delivery = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Halted,
+            RunStatus::Halted,
+            None,
+            None,
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&delivery.payload).unwrap();
+        assert!(payload.get("halt_reason").is_none());
+    }
+
+    #[test]
+    fn non_halted_webhook_payload_never_carries_a_halt_reason_and_is_byte_identical() {
+        // Even if a reason were (wrongly) offered, only a `halted` event carries it. The bytes of
+        // a completed payload are exactly the pre-change serialization of the same inputs: the
+        // fixed key order below is the struct's field order, with no `halt_reason` key.
+        let run = sample_run_with_webhook(vec![RunEventKind::Completed]);
+        let now = chrono::Utc::now();
+        let offered = HaltReason::LedgerUnavailable;
+        let with_offer = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Completed,
+            RunStatus::Completed,
+            None,
+            Some(&offered),
+            now,
+        )
+        .unwrap();
+        let without = webhook_delivery_for_outcome(
+            &run,
+            RunEventKind::Completed,
+            RunStatus::Completed,
+            None,
+            None,
+            now,
+        )
+        .unwrap();
+        assert_eq!(with_offer.payload, without.payload);
+
+        let expected = format!(
+            concat!(
+                r#"{{"run_id":"{run_id}","thread_id":"{thread_id}","#,
+                r#""assistant":{{"assistant_id":"a1","version":1}},"#,
+                r#""status":"completed","event":"completed","#,
+                r#""timestamp":{timestamp},"attempt":{attempt}}}"#,
+            ),
+            run_id = run.run_id,
+            thread_id = run.thread_id,
+            timestamp = serde_json::to_string(&now).unwrap(),
+            attempt = run.attempt,
+        );
+        assert_eq!(without.payload, expected);
     }
 
     // --- LeaseHeartbeat --------------------------------------------------

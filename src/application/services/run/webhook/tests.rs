@@ -94,6 +94,7 @@ fn sample_payload_json(run: &Run, event: RunEventKind, attempt: u32) -> String {
         timestamp: Utc::now(),
         attempt,
         parleys: None,
+        halt_reason: None,
     };
     serde_json::to_string(&payload).unwrap()
 }
@@ -568,6 +569,95 @@ async fn webhook_signature_verifies_on_receiver() {
     assert_eq!(header_signature, expected);
 }
 
+// ── halted_webhook_signature_covers_the_halt_reason (D-19, T-42-12) ────────
+
+/// A `halted` delivery whose stored payload carries the typed `halt_reason` object is sent
+/// verbatim (the receiver's captured bytes equal the stored bytes) and its
+/// `X-Paladin-Signature` is the HMAC over those exact bytes -- adding the optional key changed
+/// nothing about how the payload is signed.
+#[tokio::test]
+async fn halted_webhook_signature_covers_the_halt_reason() {
+    use paladin_core::platform::container::allowance::HaltReason;
+    use paladin_core::platform::container::run::RunStatus;
+
+    let mut server = mockito::Server::new_async().await;
+    type Captured = Arc<Mutex<Option<(Vec<u8>, String)>>>;
+    let captured: Captured = Arc::new(Mutex::new(None));
+
+    {
+        let captured = Arc::clone(&captured);
+        server
+            .mock("POST", "/hook")
+            .with_status_code_from_request(move |req| {
+                let body = req.body().cloned().unwrap_or_default();
+                let signature = req
+                    .header(WEBHOOK_SIGNATURE_HEADER)
+                    .first()
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                *captured.lock().unwrap() = Some((body, signature));
+                200
+            })
+            .create_async()
+            .await;
+    }
+
+    let key = "webhook-signing-value-0123456789";
+    let run = sample_run(Some(WebhookSpec {
+        url: format!("{}/hook", server.url()),
+        secret: Some(key.to_string()),
+        events: vec![RunEventKind::Halted],
+    }));
+    let runs: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    runs.insert(&run).await.unwrap();
+
+    let payload = serde_json::to_string(&WebhookPayload {
+        run_id: run.run_id.clone(),
+        thread_id: run.thread_id.clone(),
+        assistant: WebhookPayloadAssistant {
+            assistant_id: run.assistant.assistant_id.clone(),
+            version: run.assistant.version,
+        },
+        status: RunStatus::Halted,
+        event: RunEventKind::Halted,
+        timestamp: Utc::now(),
+        attempt: 1,
+        parleys: None,
+        halt_reason: Some(HaltReason::LedgerUnavailable.wire_json()),
+    })
+    .unwrap();
+    assert!(payload.contains(r#""halt_reason":{"reason":"ledger_unavailable"}"#));
+
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let url = format!("{}/hook", server.url());
+    let now = Utc::now();
+    deliveries
+        .enqueue(delivery_for(&run, &url, &payload, now))
+        .await
+        .unwrap();
+
+    let clock = AtomicClock::new(now);
+    let service = service_with(Arc::clone(&deliveries), Arc::clone(&runs), &clock).await;
+    assert_eq!(service.run_once(now).await, 1);
+
+    let (raw_body, header_signature) = captured.lock().unwrap().clone().expect("receiver was hit");
+    assert_eq!(raw_body, payload.as_bytes());
+
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key.as_bytes()).unwrap();
+    mac.update(&raw_body);
+    let expected = format!(
+        "sha256={}",
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    assert_eq!(header_signature, expected);
+}
+
 // ── webhook_payload_has_no_secret_or_input (T-27-13-03) ───────────────────
 
 /// The wire body's JSON has EXACTLY the documented payload keys -- no
@@ -741,6 +831,7 @@ async fn webhook_signing_key_load_failure_reschedules_without_sending() {
         timestamp: Utc::now(),
         attempt: 0,
         parleys: None,
+        halt_reason: None,
     })
     .unwrap();
 
@@ -814,6 +905,7 @@ async fn webhook_signing_key_missing_run_reschedules_without_sending() {
         timestamp: Utc::now(),
         attempt: 0,
         parleys: None,
+        halt_reason: None,
     })
     .unwrap();
 

@@ -106,6 +106,7 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use paladin_core::platform::container::allowance::HaltReason;
 use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::principal::{PrincipalRef, RunAttribution};
 use paladin_core::platform::container::run::{
@@ -432,6 +433,20 @@ pub struct RunResponse {
     /// recorded principal -- schedule-fired, submitted from the same process, or
     /// submitted before v0.11 (D-10). Always serialised, mirroring `cost`.
     pub submitted_by: Option<RunAttributionDto>,
+    /// The final Waypoint id this run reached, if any -- for a `halted` run the Halted Waypoint,
+    /// i.e. the fork point to resume from (`POST /threads/{thread_id}/fork` with
+    /// `from_waypoint_id`). Always serialised: `null` while the run has recorded no Waypoint.
+    pub final_waypoint_id: Option<String>,
+    /// Why this run halted, when it halted on spend (ALLOW-03, Phase 42 D-06): a JSON object
+    /// tagged by `reason` -- `"allowance_exhausted"` with the halted ceiling's own `scope`,
+    /// `kind`, `balance`, `ceiling`, `window_start` and `window_end` (identical to the `details`
+    /// of the Phase 41 `429 allowance_exhausted`), or `"ledger_unavailable"` with no other key
+    /// when the ledger could not be read and the run halted fail-closed. `null` for every run
+    /// that did not halt on spend. A halt is a resume point, not a failure: `error` stays
+    /// `null` beside it. Built only by `HaltReason::wire_json`; never carries another scope's
+    /// figures, a tenant id or an API key name or value. Always serialised, mirroring `cost`.
+    #[schema(value_type = Option<Object>)]
+    pub halt_reason: Option<serde_json::Value>,
 }
 
 impl From<&Run> for RunResponse {
@@ -450,6 +465,8 @@ impl From<&Run> for RunResponse {
             pending_responses: run.pending_responses.len(),
             cost: None,
             submitted_by: run.submitted_by.as_ref().map(RunAttributionDto::from),
+            final_waypoint_id: run.final_waypoint_id.clone(),
+            halt_reason: run.halt_reason.as_ref().map(HaltReason::wire_json),
         }
     }
 }
@@ -3359,6 +3376,91 @@ mod tests {
                 "submitted_by must always be serialised: {body}"
             );
             assert!(body["submitted_by"].is_null(), "{body}");
+        }
+    }
+
+    // --- RunResponse.halt_reason / final_waypoint_id (Phase 42, 42-03, D-06, G7) ---
+
+    mod halt_reason_dto {
+        use super::*;
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+        };
+        use paladin_core::platform::container::cost::CurrencyCode;
+
+        fn exhausted_reason() -> HaltReason {
+            use chrono::TimeZone;
+            let usd = CurrencyCode::new("USD").expect("USD");
+            let at = |hour| {
+                Utc.with_ymd_and_hms(2026, 10, 6, hour, 0, 0)
+                    .single()
+                    .expect("instant")
+            };
+            HaltReason::AllowanceExhausted(AllowanceRefusal {
+                scope_kind: AllowanceScopeKind::ApiKey,
+                limit_kind: AllowanceLimitKind::Window,
+                balance: Cost::new(1_000_000_000, usd.clone()),
+                ceiling: Cost::new(1_000_000_000, usd),
+                window: Some((at(0), at(23))),
+                evaluated_at: at(12),
+            })
+        }
+
+        #[test]
+        fn run_response_serializes_halt_reason_and_final_waypoint_id() {
+            let mut run = sample_run("t-halt").with_status(RunStatus::Halted);
+            run.final_waypoint_id = Some("wp-halted".to_string());
+            let reason = exhausted_reason();
+            run.halt_reason = Some(reason.clone());
+
+            let body = serde_json::to_value(RunResponse::from(&run)).expect("json");
+            assert_eq!(body["status"], "halted");
+            assert!(body["error"].is_null(), "a halt is not a failure: {body}");
+            assert_eq!(body["final_waypoint_id"], "wp-halted");
+            assert_eq!(body["halt_reason"], reason.wire_json());
+
+            let object = body["halt_reason"].as_object().expect("halt_reason object");
+            let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                [
+                    "balance",
+                    "ceiling",
+                    "kind",
+                    "reason",
+                    "scope",
+                    "window_end",
+                    "window_start"
+                ]
+            );
+            assert_eq!(object["reason"], "allowance_exhausted");
+            assert_eq!(object["balance"], "1.0000 USD");
+        }
+
+        #[test]
+        fn run_response_without_a_halt_reason_serializes_nulls() {
+            let run = sample_run("t-no-halt");
+            let body = serde_json::to_value(RunResponse::from(&run)).expect("json");
+            let object = body.as_object().expect("object");
+            assert!(object.contains_key("halt_reason"), "always serialised");
+            assert!(
+                object.contains_key("final_waypoint_id"),
+                "always serialised"
+            );
+            assert!(body["halt_reason"].is_null());
+            assert!(body["final_waypoint_id"].is_null());
+        }
+
+        #[test]
+        fn ledger_unavailable_halt_reason_is_the_reason_key_alone() {
+            let mut run = sample_run("t-ledger").with_status(RunStatus::Halted);
+            run.halt_reason = Some(HaltReason::LedgerUnavailable);
+            let body = serde_json::to_value(RunResponse::from(&run)).expect("json");
+            assert_eq!(
+                body["halt_reason"],
+                serde_json::json!({"reason": "ledger_unavailable"})
+            );
         }
     }
 

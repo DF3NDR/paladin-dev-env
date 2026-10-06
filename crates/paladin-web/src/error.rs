@@ -14,9 +14,7 @@
 use axum::Json;
 use axum::http::{HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::response::{IntoResponse, Response};
-use chrono::{DateTime, SecondsFormat, Utc};
 use paladin_core::platform::container::allowance::AllowanceRefusal;
-use paladin_core::platform::container::treasury_ledger::format_cost;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::ToSchema;
@@ -171,24 +169,15 @@ impl ApiError {
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn allowance_exhausted(refusal: &AllowanceRefusal) -> Self {
-        let rfc3339 = |instant: DateTime<Utc>| instant.to_rfc3339_opts(SecondsFormat::Secs, true);
-        let (window_start, window_end) = match refusal.window {
-            Some((start, end)) => (Some(rfc3339(start)), Some(rfc3339(end))),
-            None => (None, None),
-        };
+        // D-14: the figures come from the ONE builder every wire surface shares
+        // (`AllowanceRefusal::details_json`), so this object and a halted run's `halt_reason`
+        // (`GET /runs`, the SSE `done`, the webhook) are byte-identical for the same refusal.
         let error = Self::new(
             StatusCode::TOO_MANY_REQUESTS,
             "allowance_exhausted",
             refusal.to_string(),
         )
-        .with_details(json!({
-            "scope": refusal.scope_kind.as_str(),
-            "kind": refusal.limit_kind.as_str(),
-            "balance": format_cost(&refusal.balance),
-            "ceiling": format_cost(&refusal.ceiling),
-            "window_start": window_start,
-            "window_end": window_end,
-        }));
+        .with_details(refusal.details_json());
         match refusal.retry_after_secs() {
             Some(secs) => error.with_retry_after(secs),
             None => error,
@@ -243,6 +232,7 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
 
     #[test]
     fn body_has_nested_envelope_with_null_details() {
@@ -407,6 +397,27 @@ mod tests {
         assert_eq!(body["error"]["details"]["kind"], "lifetime");
         assert!(body["error"]["details"]["window_start"].is_null());
         assert!(body["error"]["details"]["window_end"].is_null());
+    }
+
+    #[test]
+    fn allowance_exhausted_details_equal_details_json() {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind,
+        };
+        // Both a window and a lifetime refusal: the 429 `details` object IS the shared builder's
+        // object, so it can never drift from a halted run's `halt_reason` figures (D-06, D-14).
+        for (scope, limit, window) in [
+            (AllowanceScopeKind::ApiKey, AllowanceLimitKind::Window, true),
+            (
+                AllowanceScopeKind::Tenant,
+                AllowanceLimitKind::Lifetime,
+                false,
+            ),
+        ] {
+            let refusal = refusal(scope, limit, window);
+            let body = ApiError::allowance_exhausted(&refusal).to_body();
+            assert_eq!(body["error"]["details"], refusal.details_json());
+        }
     }
 
     #[test]

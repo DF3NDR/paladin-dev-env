@@ -1879,6 +1879,34 @@ async fn run_spend_halt_tracer_once(attach_treasurer: bool) -> bool {
         "a halt is a resume point, not a failure: {body}"
     );
 
+    // (c2) D-06, G6, G7: the row carries the typed reason and the fork point. The reason is the
+    // Phase 41 `429` figures plus `reason`, rendered from integer nano-units by the one wire
+    // builder (D-00h).
+    let halt_reason = body["halt_reason"]
+        .as_object()
+        .unwrap_or_else(|| panic!("a spend-halted run carries a halt_reason object: {body}"));
+    let mut reason_keys: Vec<&str> = halt_reason.keys().map(String::as_str).collect();
+    reason_keys.sort_unstable();
+    assert_eq!(
+        reason_keys,
+        [
+            "balance",
+            "ceiling",
+            "kind",
+            "reason",
+            "scope",
+            "window_end",
+            "window_start"
+        ]
+    );
+    assert_eq!(halt_reason["reason"], "allowance_exhausted");
+    assert_eq!(halt_reason["scope"], "api_key");
+    assert_eq!(halt_reason["kind"], "window");
+    assert_eq!(halt_reason["balance"], "1.0000 USD");
+    assert_eq!(halt_reason["ceiling"], "1.0000 USD");
+    assert!(halt_reason["window_start"].is_string());
+    assert!(halt_reason["window_end"].is_string());
+
     // (d) The thread's latest Waypoint is the Halted restart point, vanguard [n1].
     let latest = waypoints
         .latest(&thread_id)
@@ -1890,6 +1918,47 @@ async fn run_spend_halt_tracer_once(attach_treasurer: bool) -> bool {
         paladin_core::platform::container::waypoint::WaypointStatus::Halted
     );
     assert_eq!(latest.vanguard, vec![ids[1].clone()]);
+    // G7: `final_waypoint_id` IS the Halted Waypoint, the fork point to resume from.
+    assert_eq!(
+        body["final_waypoint_id"],
+        latest.waypoint_id.to_string(),
+        "final_waypoint_id must be the Halted Waypoint's id: {body}"
+    );
+
+    // (d2) The tenant-scoped list serves the identical reason and fork point for the same run.
+    let listed = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/v1/runs?thread_id={thread_id}"))
+                .header("x-api-key", "halt-key")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(listed.status(), StatusCode::OK);
+    let list_raw = axum::body::to_bytes(listed.into_body(), usize::MAX)
+        .await
+        .expect("read list body");
+    let list_body: serde_json::Value =
+        serde_json::from_slice(&list_raw).expect("list body is JSON");
+    let items = list_body["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the run list has an items array: {list_body}"));
+    let row = items
+        .iter()
+        .find(|item| item["run_id"] == run_id.as_str())
+        .unwrap_or_else(|| panic!("the halted run is listed: {list_body}"));
+    assert_eq!(row["status"], "halted");
+    assert_eq!(row["halt_reason"], body["halt_reason"]);
+    assert_eq!(row["final_waypoint_id"], body["final_waypoint_id"]);
+    let list_text = String::from_utf8_lossy(&list_raw);
+    assert!(
+        !list_text.contains("halt-key"),
+        "the run list must not contain a key value: {list_text}"
+    );
 
     // (e) n0 ran once; n1 and n2 never ran.
     let ran: Vec<usize> = counters.iter().map(|c| c.load(Ordering::SeqCst)).collect();

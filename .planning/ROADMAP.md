@@ -504,7 +504,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 42-05-PLAN.md — RunFinished.halt_reason from the engine, SSE done halt_reason identical on the live, degraded and replay paths (wave 5)
+- [x] 42-05-PLAN.md — RunFinished.halt_reason from the engine, SSE done halt_reason identical on the live, degraded and replay paths (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

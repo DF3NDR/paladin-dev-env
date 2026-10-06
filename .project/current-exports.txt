@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-04 02:35:28 UTC
+# Public API Surface - Generated 2026-10-06 17:54:37 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -3723,6 +3723,7 @@ pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_palad
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_run_trace_port(self, alloc::sync::Arc<dyn paladin_ports::output::run_trace_port::RunTracePort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_shutdown_coordinator(self, paladin_battalion::engine::shutdown::ShutdownCoordinator) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_trace_config(self, paladin::config::trace::TraceConfig) -> Self
+pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasurer(self, alloc::sync::Arc<paladin::application::services::treasurer::Treasurer>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasury_ledger(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasury_notices(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_notice_port::TreasuryNoticePort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_webhook_deliveries(self, alloc::sync::Arc<dyn paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort>) -> Self
@@ -4000,6 +4001,7 @@ pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_palad
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_run_trace_port(self, alloc::sync::Arc<dyn paladin_ports::output::run_trace_port::RunTracePort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_shutdown_coordinator(self, paladin_battalion::engine::shutdown::ShutdownCoordinator) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_trace_config(self, paladin::config::trace::TraceConfig) -> Self
+pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasurer(self, alloc::sync::Arc<paladin::application::services::treasurer::Treasurer>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasury_ledger(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_treasury_notices(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_notice_port::TreasuryNoticePort>) -> Self
 pub fn paladin::application::services::run::worker::RunWorkerPool<W>::with_webhook_deliveries(self, alloc::sync::Arc<dyn paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort>) -> Self
@@ -4136,6 +4138,8 @@ impl paladin::application::services::treasurer::Treasurer
 pub fn paladin::application::services::treasurer::Treasurer::new(paladin::application::services::treasurer::AllowancePolicy, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
 pub fn paladin::application::services::treasurer::Treasurer::with_notices(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_notice_port::TreasuryNoticePort>) -> Self
 pub fn paladin::application::services::treasurer::Treasurer::with_operator_webhook(self, paladin::application::services::treasurer::OperatorNoticeTarget) -> Self
+impl paladin::application::services::treasurer::Treasurer
+pub fn paladin::application::services::treasurer::Treasurer::spend_guard(&alloc::sync::Arc<Self>, paladin_core::platform::container::principal::RunAttribution, paladin_core::platform::container::run::RunId) -> alloc::sync::Arc<dyn paladin_ports::output::spend_guard::SpendGuard>
 impl core::fmt::Debug for paladin::application::services::treasurer::Treasurer
 pub fn paladin::application::services::treasurer::Treasurer::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort for paladin::application::services::treasurer::Treasurer
@@ -4149,6 +4153,18 @@ impl core::marker::Unpin for paladin::application::services::treasurer::Treasure
 impl core::marker::UnsafeUnpin for paladin::application::services::treasurer::Treasurer
 impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::treasurer::Treasurer
 impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::treasurer::Treasurer
+pub struct paladin::application::services::treasurer::TreasurerSpendGuard
+impl core::fmt::Debug for paladin::application::services::treasurer::TreasurerSpendGuard
+pub fn paladin::application::services::treasurer::TreasurerSpendGuard::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl paladin_ports::output::spend_guard::SpendGuard for paladin::application::services::treasurer::TreasurerSpendGuard
+pub fn paladin::application::services::treasurer::TreasurerSpendGuard::check<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::waypoint::ThreadId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = paladin_ports::output::spend_guard::SpendDecision> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl core::marker::Freeze for paladin::application::services::treasurer::TreasurerSpendGuard
+impl core::marker::Send for paladin::application::services::treasurer::TreasurerSpendGuard
+impl core::marker::Sync for paladin::application::services::treasurer::TreasurerSpendGuard
+impl core::marker::Unpin for paladin::application::services::treasurer::TreasurerSpendGuard
+impl core::marker::UnsafeUnpin for paladin::application::services::treasurer::TreasurerSpendGuard
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::treasurer::TreasurerSpendGuard
+impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::treasurer::TreasurerSpendGuard
 pub const paladin::application::services::treasurer::OPERATOR_NOTICE_THREAD_ID: &str
 pub fn paladin::application::services::treasurer::window_for(chrono::datetime::DateTime<chrono::offset::utc::Utc>, u64) -> core::option::Option<(chrono::datetime::DateTime<chrono::offset::utc::Utc>, chrono::datetime::DateTime<chrono::offset::utc::Utc>)>
 pub mod paladin::application::services::waypoint_retention
@@ -8396,4 +8412,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4188
+Total public items: 4194

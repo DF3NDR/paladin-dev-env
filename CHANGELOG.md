@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Mid-run allowance halts on the engine path (ALLOW-03; Phase 42 plan 42-02, ADR-0057).** The
+  `WarEngine` now consults a new `SpendGuard` output port (`paladin-ports`) at every superstep
+  boundary, beside the existing cancellation token and probe. The `Treasurer` answers it through
+  the same ceiling evaluation admission uses, so an allowance exhausted while a run is in flight
+  halts the run at its next boundary with its last checkpoint kept: the run is recorded `halted`
+  with no error and a `WaypointStatus::Halted` Waypoint whose vanguard is the boundary's, and no
+  node of that superstep runs. Overshoot is at most one superstep's spend. `RunOutcome::Halted`
+  carries a typed `HaltCause` (caller cancel, in-process token, or `Spend(HaltReason)`), the
+  worker maps a spend halt to `halted` whatever its cancel and shutdown flags say, and
+  `RunWorkerPool::with_treasurer` attaches the guard per run for every run that records a
+  submitter -- a run with no submitter gets no guard and no ledger read. `build_run_api` builds
+  the Treasurer before the worker pool and shares one instance with the submission service. New
+  public surface: `SpendGuard`, `SpendDecision`, `NeverHalts` (ports), `HaltReason` and
+  `AllowanceRefusal::details_json` (core), `HaltCause` and `WarEngine::with_spend_guard`
+  (battalion), `RunWorkerPool::with_treasurer`, `Treasurer::spend_guard` and `TreasurerSpendGuard`
+  (facade); see `MIGRATION.md` §9.2. Later Phase 42 plans extend this entry.
+
 - **Facade re-export of the allowance module (Phase 41 plan 41-09, D-20).** The `paladin` facade now
   re-exports `paladin::core::platform::container::allowance` (`AllowanceRefusal`, `AllowanceWarning`,
   `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `crosses_warn_threshold`, ...), beside

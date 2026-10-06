@@ -9509,6 +9509,34 @@ mod tests {
         registries: &EngineRegistries,
         cancellation: &Option<CancellationToken>,
     ) -> Result<RunOutcome, EngineError> {
+        run_with_children_and_guard(
+            graph,
+            thread,
+            initial,
+            store,
+            port,
+            registry,
+            registries,
+            cancellation,
+            &None,
+        )
+        .await
+    }
+
+    /// [`run_with_children`] with a `SpendGuard` attached (ALLOW-03, Phase 42): the guard's
+    /// `Arc` is the one the loop shares into every child run's `ChildEngineResources`.
+    #[allow(clippy::too_many_arguments)]
+    async fn run_with_children_and_guard(
+        graph: &WarGraph,
+        thread: ThreadId,
+        initial: StateDelta,
+        store: &Arc<RecordingWaypointStore>,
+        port: &Arc<dyn PaladinPort>,
+        registry: &CustomDispatchResolver,
+        registries: &EngineRegistries,
+        cancellation: &Option<CancellationToken>,
+        spend_guard: &Option<Arc<dyn SpendGuard>>,
+    ) -> Result<RunOutcome, EngineError> {
         run(
             store.as_ref(),
             WaypointDurability::Strict,
@@ -9529,7 +9557,7 @@ mod tests {
             &no_interceptors(),
             cancellation,
             &None,
-            &None,
+            spend_guard,
             Some(Arc::clone(store)),
             default_shutdown_grace(),
             None,
@@ -10228,6 +10256,149 @@ mod tests {
             matches!(last.status, WaypointStatus::Halted),
             "expected the child's own latest waypoint to be Halted, got {:?}",
             last.status
+        );
+    }
+
+    /// A test-local guard that mirrors `TreasurerSpendGuard`'s contract (G11): it answers
+    /// `Halt` on exactly one underlying evaluation (the `halt_on`-th) and, once it has halted,
+    /// memoises that reason for every later call -- even though a fresh evaluation would now
+    /// `Continue` (the window rolled, the balance dropped).
+    struct StickyOnceGuard {
+        evaluations: std::sync::atomic::AtomicUsize,
+        halt_on: usize,
+        halted: std::sync::OnceLock<paladin_core::platform::container::allowance::HaltReason>,
+    }
+
+    #[async_trait::async_trait]
+    impl SpendGuard for StickyOnceGuard {
+        async fn check(&self, _thread: &ThreadId) -> SpendDecision {
+            if let Some(reason) = self.halted.get() {
+                return SpendDecision::Halt(reason.clone());
+            }
+            let call = self
+                .evaluations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            if call == self.halt_on {
+                let reason =
+                    paladin_core::platform::container::allowance::HaltReason::LedgerUnavailable;
+                SpendDecision::Halt(self.halted.get_or_init(|| reason).clone())
+            } else {
+                SpendDecision::Continue
+            }
+        }
+    }
+
+    /// ALLOW-03, Phase 42 G11 (T-42-16): the SAME guard `Arc` is shared into a `Battalion`
+    /// node's child run. The guard continues at the parent's first boundary, halts at the
+    /// child's first boundary and is sticky afterwards, so the child halts, contributes an empty
+    /// delta, and the parent halts at its own next boundary with the child's reason -- the
+    /// parent's post-Battalion node never runs.
+    #[tokio::test]
+    async fn child_battalion_halt_on_spend_halts_the_parent() {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let child_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let after_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let mut child = WarGraph::new(schema(vec![]), EngineLimits::default());
+        let c1 = NodeId::new("c1");
+        {
+            let flag = Arc::clone(&child_ran);
+            child.add_node(
+                c1.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    StateDelta::new()
+                })),
+            );
+        }
+        child.add_entry(c1);
+
+        let sub = NodeId::new("sub");
+        let after = NodeId::new("after");
+        let mut parent = WarGraph::new(schema(vec![]), EngineLimits::default());
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        {
+            let flag = Arc::clone(&after_ran);
+            parent.add_node(
+                after.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                    StateDelta::new()
+                })),
+            );
+        }
+        parent.add_edge(EdgeSpec {
+            from: sub.clone(),
+            to: after,
+            condition: Some(EdgeCondition::Always),
+        });
+        parent.add_entry(sub);
+
+        // Evaluation 1 = the parent's boundary 1 (Continue), 2 = the child's boundary 1 (Halt).
+        let guard = Arc::new(StickyOnceGuard {
+            evaluations: std::sync::atomic::AtomicUsize::new(0),
+            halt_on: 2,
+            halted: std::sync::OnceLock::new(),
+        });
+        let shared: Option<Arc<dyn SpendGuard>> = Some(guard.clone());
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-spend-halt").unwrap();
+        let outcome = run_with_children_and_guard(
+            &parent,
+            thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::default(),
+            &None,
+            &shared,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Halted { cause, .. } => assert_eq!(
+                cause,
+                HaltCause::Spend(HaltReason::LedgerUnavailable),
+                "the parent halts with the child's own reason"
+            ),
+            other => panic!("expected the parent to halt on spend, got {other:?}"),
+        }
+        assert!(
+            !child_ran.load(std::sync::atomic::Ordering::SeqCst),
+            "the child halted at its first boundary, before dispatching c1"
+        );
+        assert!(
+            !after_ran.load(std::sync::atomic::Ordering::SeqCst),
+            "no parent node after the Battalion node may run"
+        );
+        assert_eq!(
+            guard.evaluations.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the parent's second boundary was answered by the memoised halt, not a re-read"
+        );
+
+        let child_waypoints = store
+            .saved_waypoints(&child_thread_id(&thread, "sub"))
+            .await;
+        let latest = child_waypoints
+            .first()
+            .expect("the child must have persisted its Halted Waypoint");
+        assert!(
+            matches!(latest.status, WaypointStatus::Halted),
+            "the child run saw the shared guard and halted, got {:?}",
+            latest.status
+        );
+        assert!(
+            latest.completed.is_empty(),
+            "the child dispatched no node of the halted superstep"
         );
     }
 

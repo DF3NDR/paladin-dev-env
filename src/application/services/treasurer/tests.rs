@@ -1396,3 +1396,248 @@ async fn agent_path_operator_payload_has_a_null_run_id() {
         "the key NAME identifies the scope"
     );
 }
+
+// -- the mid-run boundary guard (ALLOW-03, Phase 42 D-01..D-03, G11, 42-04) --------------------
+
+use paladin_core::platform::container::allowance::HaltReason;
+use paladin_core::platform::container::run::RunId;
+use paladin_core::platform::container::waypoint::ThreadId;
+use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
+
+/// The ceiling (in nano-units) the boundary-edge guard tests use.
+const GUARD_CEILING: i64 = 1_000;
+
+impl FakeLedger {
+    /// Drop every scripted row, so every later balance reads zero.
+    fn clear_rows(&self) {
+        self.state().rows.clear();
+    }
+
+    /// How many `balance` reads have been made.
+    fn balance_call_count(&self) -> usize {
+        self.state().balance_calls.len()
+    }
+}
+
+/// One API-key window ceiling of [`GUARD_CEILING`] nano-units per [`P`] seconds for `svc-a`.
+fn guard_policy() -> AllowancePolicy {
+    AllowancePolicy::new(usd(), 80).with_api_key("svc-a", ScopeAllowance::new(P, GUARD_CEILING))
+}
+
+/// A per-run guard for `acme` / `svc-a` over `ledger`.
+fn guard_for(policy: AllowancePolicy, ledger: &Arc<FakeLedger>) -> Arc<dyn SpendGuard> {
+    Arc::new(treasurer(policy, ledger)).spend_guard(subject("acme", "svc-a"), RunId::new_v7())
+}
+
+fn guard_thread() -> ThreadId {
+    ThreadId::new("11111111-1111-7111-8111-111111111111").expect("a valid thread id")
+}
+
+/// The refusal inside a `Halt(AllowanceExhausted(..))` answer, panicking with the actual one.
+fn exhausted_of(decision: SpendDecision) -> AllowanceRefusal {
+    match decision {
+        SpendDecision::Halt(HaltReason::AllowanceExhausted(refusal)) => refusal,
+        other => panic!("expected Halt(AllowanceExhausted), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn guard_halts_at_exactly_the_ceiling_and_continues_one_nano_below() {
+    // One nano below: Continue.
+    let below = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), GUARD_CEILING - 1);
+    assert_eq!(
+        guard_for(guard_policy(), &below)
+            .check(&guard_thread())
+            .await,
+        SpendDecision::Continue,
+        "999 of 1000 has headroom"
+    );
+
+    // Exactly at the ceiling: Halt, carrying the exact figures (D-01: `>=` exhausts).
+    let exact = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), GUARD_CEILING);
+    let refusal = exhausted_of(
+        guard_for(guard_policy(), &exact)
+            .check(&guard_thread())
+            .await,
+    );
+    assert_eq!(refusal.balance.nanos(), GUARD_CEILING);
+    assert_eq!(refusal.ceiling.nanos(), GUARD_CEILING);
+
+    // One nano above: Halt.
+    let above = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), GUARD_CEILING + 1);
+    let refusal = exhausted_of(
+        guard_for(guard_policy(), &above)
+            .check(&guard_thread())
+            .await,
+    );
+    assert_eq!(refusal.balance.nanos(), GUARD_CEILING + 1);
+}
+
+#[tokio::test]
+async fn guard_reads_every_applicable_ceiling_on_every_check_without_caching() {
+    // Two ceilings (key window + key lifetime), both with headroom.
+    let policy = AllowancePolicy::new(usd(), 80)
+        .with_api_key("svc-a", ScopeAllowance::new(P, 100).with_lifetime(1_000));
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 10);
+    let guard = guard_for(policy, &ledger);
+
+    for _ in 0..3 {
+        assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+    }
+
+    assert_eq!(
+        ledger.store_now_calls(),
+        3,
+        "one store-clock read per boundary, none served from a cache"
+    );
+    assert_eq!(
+        ledger.balance_call_count(),
+        6,
+        "both ceilings are read at every boundary"
+    );
+}
+
+#[tokio::test]
+async fn guard_for_a_principal_without_a_ceiling_never_reads_the_ledger_even_when_the_ledger_fails()
+{
+    let ledger = FakeLedger::new(at(NOW));
+    ledger.set_failure(Some(FakeFailure::Backend));
+    // The policy only names `svc-a`; `svc-b` has no entry.
+    let guard = Arc::new(treasurer(key_policy(), &ledger))
+        .spend_guard(subject("acme", "svc-b"), RunId::new_v7());
+
+    for _ in 0..3 {
+        assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+    }
+
+    assert_eq!(ledger.store_now_calls(), 0);
+    assert_eq!(ledger.balance_call_count(), 0);
+}
+
+#[tokio::test]
+async fn guard_fails_closed_with_ledger_unavailable_when_balance_errs() {
+    let ledger = FakeLedger::new(at(NOW));
+    ledger.set_failure(Some(FakeFailure::Backend));
+
+    assert_eq!(
+        guard_for(guard_policy(), &ledger)
+            .check(&guard_thread())
+            .await,
+        SpendDecision::Halt(HaltReason::LedgerUnavailable)
+    );
+}
+
+#[tokio::test]
+async fn guard_fails_closed_with_ledger_unavailable_when_the_store_clock_errs() {
+    let ledger = FakeLedger::new(at(NOW));
+    ledger.set_failure(Some(FakeFailure::StoreNow));
+
+    assert_eq!(
+        guard_for(guard_policy(), &ledger)
+            .check(&guard_thread())
+            .await,
+        SpendDecision::Halt(HaltReason::LedgerUnavailable)
+    );
+    assert_eq!(
+        ledger.balance_call_count(),
+        0,
+        "no balance is read once the clock failed"
+    );
+}
+
+#[tokio::test]
+async fn guard_fails_closed_with_ledger_unavailable_on_a_currency_mismatch() {
+    let ledger = FakeLedger::new(at(NOW));
+    ledger.set_failure(Some(FakeFailure::CurrencyMismatch));
+
+    assert_eq!(
+        guard_for(guard_policy(), &ledger)
+            .check(&guard_thread())
+            .await,
+        SpendDecision::Halt(HaltReason::LedgerUnavailable)
+    );
+}
+
+#[tokio::test]
+async fn guard_memoises_its_first_halt() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), GUARD_CEILING);
+    let guard = guard_for(guard_policy(), &ledger);
+
+    let first = guard.check(&guard_thread()).await;
+    exhausted_of(first.clone());
+    let (clock_reads, balance_reads) = (ledger.store_now_calls(), ledger.balance_call_count());
+
+    // The balance drops to zero and the window rolls: a fresh read would now Continue.
+    ledger.clear_rows();
+    ledger.set_now(at(WE + 1));
+
+    for _ in 0..3 {
+        assert_eq!(
+            guard.check(&guard_thread()).await,
+            first,
+            "a halted run's guard answers the identical reason"
+        );
+    }
+    assert_eq!(
+        ledger.store_now_calls(),
+        clock_reads,
+        "no further clock read"
+    );
+    assert_eq!(
+        ledger.balance_call_count(),
+        balance_reads,
+        "no further balance read"
+    );
+}
+
+#[tokio::test]
+async fn guard_memoises_a_ledger_unavailable_halt_too() {
+    let ledger = FakeLedger::new(at(NOW));
+    ledger.set_failure(Some(FakeFailure::Backend));
+    let guard = guard_for(guard_policy(), &ledger);
+    assert_eq!(
+        guard.check(&guard_thread()).await,
+        SpendDecision::Halt(HaltReason::LedgerUnavailable)
+    );
+
+    // The ledger recovers, but this run's halt is final (G11); a fork re-runs admission.
+    ledger.set_failure(None);
+    assert_eq!(
+        guard.check(&guard_thread()).await,
+        SpendDecision::Halt(HaltReason::LedgerUnavailable)
+    );
+}
+
+#[tokio::test]
+async fn two_guards_on_one_scope_both_halt_once_the_shared_balance_crosses() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), GUARD_CEILING - 1);
+    let treasurer = Arc::new(treasurer(guard_policy(), &ledger));
+    let run_a = treasurer.spend_guard(subject("acme", "svc-a"), RunId::new_v7());
+    let run_b = treasurer.spend_guard(subject("acme", "svc-a"), RunId::new_v7());
+
+    assert_eq!(run_a.check(&guard_thread()).await, SpendDecision::Continue);
+    assert_eq!(run_b.check(&guard_thread()).await, SpendDecision::Continue);
+
+    // One more nano of spend, from either run, crosses the shared ceiling.
+    let _ = ledger.clone().with_row("acme", "svc-a", at(WS), 1);
+
+    exhausted_of(run_a.check(&guard_thread()).await);
+    exhausted_of(run_b.check(&guard_thread()).await);
+}
+
+#[test]
+fn fail_closed_log_line_names_run_scope_tenant_and_error_only() {
+    let run_id = RunId::new_v7();
+    let tenant = TenantId::new("acme").expect("valid tenant");
+    let line = super::guard::fail_closed_message(
+        &run_id,
+        ["api_key", "api_key", "tenant"],
+        &tenant,
+        &"balance unavailable: scripted balance failure",
+    );
+
+    assert!(line.contains(&format!("run={run_id}")), "{line}");
+    assert!(line.contains("scope=api_key,tenant"), "{line}");
+    assert!(line.contains("tenant=acme"), "{line}");
+    assert!(line.contains("scripted balance failure"), "{line}");
+}

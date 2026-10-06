@@ -2,10 +2,17 @@
 //! LEDGR-04, D-07, D-08, ADR-0052, ADR-0053 §4).
 //!
 //! ADR-0052 names the superstep boundary as the one place the engine both
-//! settles spend today (this plan, observational) and, in Phase 42, will
-//! reserve and halt (authoritative) -- so [`SpendHook`] is deliberately
-//! shaped as the one hook both concerns attach to, at the same call site,
-//! sharing the same ledger and [`SettlementContext`].
+//! settles spend (this module, observational) and decides whether to halt --
+//! so [`SpendHook`] is deliberately shaped as the one hook settlement
+//! attaches to, at the same boundary, sharing the same ledger and
+//! [`SettlementContext`].
+//!
+//! Phase 42 (ALLOW-03, ADR-0057 D-00b) kept settlement exactly as it is and
+//! put the authoritative read beside it: a check-only
+//! [`SpendGuard`](paladin_ports::output::spend_guard::SpendGuard), consulted
+//! at the top of the same superstep loop, answers whether the run may start
+//! the next superstep. [`SpendHook::settle_boundary`] itself is unchanged: it
+//! writes spend and never decides anything.
 //!
 //! Settlement is synchronous and awaited at the superstep boundary, never
 //! routed through a [`crate::engine::hooks::TraceDispatcher`]/`TraceSink`:
@@ -16,8 +23,8 @@
 //! Crate-private: `paladin-battalion` never re-exports these types outside
 //! `engine::mod`/`engine::superstep`. A ledger failure or duplicate-key
 //! outcome (D-08, LEDGR-03) is logged and never changes a run's outcome,
-//! retries a node, or halts a run -- the ledger stays purely observational
-//! until Phase 41/42 make it authoritative through this same boundary hook.
+//! retries a node, or halts a run -- settlement stays purely observational;
+//! the authoritative halt decision belongs to the `SpendGuard` above.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};

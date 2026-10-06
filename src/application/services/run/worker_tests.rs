@@ -2077,3 +2077,159 @@ mod allowance_warnings {
         );
     }
 }
+
+// --- ALLOW-03, Phase 42 D-00e, D-04: no guard for an unattributed run (42-04) --------------
+
+/// A [`TreasuryLedgerPort`] over an in-memory ledger that counts every read the boundary guard
+/// makes (`store_now` and `balance`), so a test can assert a run made none.
+#[derive(Debug, Default)]
+struct ReadCountingLedger {
+    inner: paladin_storage::treasury::in_memory::InMemoryTreasuryLedger,
+    reads: AtomicUsize,
+}
+
+#[async_trait]
+impl paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort for ReadCountingLedger {
+    async fn reserve(
+        &self,
+        request: paladin_core::platform::container::treasury_ledger::ReserveRequest,
+    ) -> Result<
+        paladin_core::platform::container::treasury_ledger::ReservationId,
+        paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
+    > {
+        self.inner.reserve(request).await
+    }
+
+    async fn release(
+        &self,
+        reservation: paladin_core::platform::container::treasury_ledger::ReservationId,
+    ) -> Result<(), paladin_ports::output::treasury_ledger_port::TreasuryLedgerError> {
+        self.inner.release(reservation).await
+    }
+
+    async fn settle(
+        &self,
+        request: paladin_core::platform::container::treasury_ledger::SettleRequest,
+    ) -> Result<
+        paladin_core::platform::container::treasury_ledger::SettleOutcome,
+        paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
+    > {
+        self.inner.settle(request).await
+    }
+
+    async fn spend(
+        &self,
+        query: paladin_core::platform::container::treasury_ledger::SpendQuery,
+    ) -> Result<
+        Vec<paladin_core::platform::container::treasury_ledger::SpendRow>,
+        paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
+    > {
+        self.inner.spend(query).await
+    }
+
+    async fn store_now(
+        &self,
+    ) -> Result<
+        chrono::DateTime<chrono::Utc>,
+        paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
+    > {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.store_now().await
+    }
+
+    async fn balance(
+        &self,
+        query: paladin_core::platform::container::treasury_ledger::BalanceQuery,
+    ) -> Result<
+        paladin_core::platform::container::cost::Cost,
+        paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
+    > {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        self.inner.balance(query).await
+    }
+}
+
+/// A run whose row records no submitter gets no guard, so it completes with zero ledger reads
+/// even when a Treasurer with a ceiling for another principal is attached to the pool; the same
+/// pool DOES guard an attributed run (the control that keeps the zero from being vacuous).
+#[tokio::test]
+async fn unattributed_run_gets_no_guard_and_reads_no_ledger() {
+    use crate::application::services::treasurer::{AllowancePolicy, ScopeAllowance, Treasurer};
+    use paladin_core::platform::container::cost::CurrencyCode;
+    use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+
+    let ledger = Arc::new(ReadCountingLedger::default());
+    let policy = AllowancePolicy::new(CurrencyCode::new("USD").unwrap(), 80)
+        .with_api_key("svc-a", ScopeAllowance::new(3_600, 1_000_000_000));
+    let treasurer = Arc::new(Treasurer::new(policy, ledger.clone()));
+
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let store = Arc::new(InMemoryWaypointStore::new());
+    let (graph, _counters) = build_chain_graph(2, Duration::ZERO);
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("chain", graph));
+    let base_engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+    let factory_store = store.clone();
+    let engine_factory: Arc<
+        dyn Fn(tokio_util::sync::CancellationToken) -> WarEngine<InMemoryWaypointStore>
+            + Send
+            + Sync,
+    > = Arc::new(move |token| {
+        WarEngine::new(Arc::new(UnusedPaladinPort), factory_store.clone())
+            .with_cancellation_token(token)
+    });
+    let pool = RunWorkerPool::new(
+        base_engine,
+        store.clone(),
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_engine_factory(engine_factory)
+    .with_treasurer(treasurer);
+
+    // An unattributed run: `submit` never records a submitter.
+    let (unattributed, _) = submit(&repository, &queue, "chain").await;
+    assert!(pool.run_once().await.unwrap());
+    let run = repository.get(&unattributed).await.unwrap().unwrap();
+    assert!(run.submitted_by.is_none());
+    assert_eq!(run.status, RunStatus::Completed);
+    assert_eq!(
+        ledger.reads.load(Ordering::SeqCst),
+        0,
+        "an unattributed run has no allowance identity: no guard, no ledger read"
+    );
+
+    // Control: an attributed run on the same pool is guarded and reads the ledger.
+    let attributed_id = RunId::new_v7();
+    let attributed_thread = ThreadId::new(format!("thread-{attributed_id}")).unwrap();
+    let attributed = Run::new(
+        attributed_id.clone(),
+        attributed_thread.clone(),
+        AssistantRef {
+            assistant_id: "chain".to_string(),
+            version: 1,
+        },
+        serde_json::json!({}),
+    )
+    .with_submitted_by(RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a"));
+    repository.insert(&attributed).await.unwrap();
+    queue
+        .enqueue(QueuedRun {
+            run_id: attributed_id.clone(),
+            thread_id: attributed_thread,
+            attempt: 1,
+            enqueued_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    assert!(pool.run_once().await.unwrap());
+    let run = repository.get(&attributed_id).await.unwrap().unwrap();
+    assert_eq!(run.status, RunStatus::Completed);
+    assert!(
+        ledger.reads.load(Ordering::SeqCst) > 0,
+        "the attributed run's guard reads the ledger at its boundaries"
+    );
+}

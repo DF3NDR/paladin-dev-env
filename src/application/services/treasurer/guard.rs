@@ -115,15 +115,44 @@ impl SpendGuard for TreasurerSpendGuard {
             // D-03: fail closed. The error text names no key value (the ledger's own
             // `wrap` already redacts connection URLs).
             Err(error) => {
+                let scopes = self.treasurer.policy.ceilings_for(&self.subject);
                 log::error!(
-                    "allowance boundary check failed closed: run={} tenant={} error={error}",
-                    self.run_id,
-                    self.subject.tenant_id,
+                    "{}",
+                    fail_closed_message(
+                        &self.run_id,
+                        scopes.iter().map(|ceiling| ceiling.scope_kind.as_str()),
+                        &self.subject.tenant_id,
+                        &error,
+                    )
                 );
                 SpendDecision::Halt(self.memoise(HaltReason::LedgerUnavailable))
             }
         }
     }
+}
+
+/// The one `error`-level line a fail-closed boundary check writes (D-03, T-42-18).
+///
+/// Names the run, the scope kinds of the ceilings that could not be evaluated (a scope kind is a
+/// label such as `api_key`, never a key value), the tenant id and the backend error. It takes no
+/// key value, so none can reach the log.
+pub(super) fn fail_closed_message<'a>(
+    run_id: &RunId,
+    scope_kinds: impl IntoIterator<Item = &'a str>,
+    tenant_id: &impl std::fmt::Display,
+    error: &impl std::fmt::Display,
+) -> String {
+    let mut kinds: Vec<&str> = Vec::new();
+    for kind in scope_kinds {
+        if !kinds.contains(&kind) {
+            kinds.push(kind);
+        }
+    }
+    format!(
+        "allowance boundary check failed closed: run={run_id} scope={} tenant={tenant_id} \
+         error={error}",
+        kinds.join(","),
+    )
 }
 
 impl Treasurer {

@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 42
 current_phase_name: mid-run-halt-sse-terminal-status
 status: executing
-stopped_at: Completed 42-06-PLAN.md
-last_updated: "2026-10-06T20:49:22.486Z"
+stopped_at: Completed 42-07-PLAN.md
+last_updated: "2026-10-06T23:16:16.605Z"
 last_activity: 2026-10-06
 last_activity_desc: Phase 42 execution started
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 51
-  completed_plans: 45
+  completed_plans: 46
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 88%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([█████████░] 90%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 42 (mid-run-halt-sse-terminal-status) — EXECUTING
-Plan: 7 of 12
+Plan: 8 of 12
 Status: Ready to execute
 Last activity: 2026-10-06 — Phase 42 execution started
 
@@ -234,6 +234,7 @@ Last activity: 2026-10-06 — Phase 42 execution started
 | Phase 42 P04 | 25min | 2 tasks | 9 files |
 | Phase 42 P05 | 40min | 3 tasks | 23 files |
 | Phase 42 P06 | 45min | 2 tasks | 14 files |
+| Phase 42 P07 | 1h | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -360,6 +361,10 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 42-04: A halted run resumes only by a forked run that re-runs admission (429 + Retry-After while exhausted; 500 while the ledger is unreadable); the halted run stays terminal
 - [Phase ?]: 42-06: PerRunCancelProbe attached on every factory-built engine: a same-instance caller cancel reaches the engine as CancelRequested; RunFinishStatus::Cancelled (non_exhaustive) drives done/cancelled
 - [Phase ?]: 42-06: A worker drain emits no done: RunEventBusSink drops a reasonless Halted while the shutdown token is cancelled; a spend halt during shutdown is still emitted
+- [Phase ?]: [Phase 42-07]: Admission::is_empty still answers only whether notices were won; a derived budget does not make an admission non-empty
+- [Phase ?]: [Phase 42-07]: derive_budget refuses an exhausted ceiling before any pricing lookup; a foreign-currency price table is a Backend error naming both codes, never converted
+- [Phase ?]: [Phase 42-07]: TokenBudget tightest-wins: a tie goes to the Treasurer (AllowanceHalted), an operator win keeps TokenBudget; the derived figure lives on ModelCallContext, never the middleware
+- [Phase ?]: [Phase 42-07]: halt figures report the binding ceiling at balance equal to ceiling (A5); a zero-figure refusal carries the real balance
 
 ### Pending Todos
 
@@ -574,8 +579,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-06T20:49:17.770Z
-**Stopped at:** Completed 42-06-PLAN.md
+**Last session:** 2026-10-06T23:16:16.562Z
+**Stopped at:** Completed 42-07-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

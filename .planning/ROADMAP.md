@@ -512,7 +512,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 42-07-PLAN.md — Derived agent budget (dearest axis, i128), admit_for_model and the unpriced refusal, StopReason::AllowanceHalted, the one Treasurer-aware TokenBudget (tightest wins) proven to compose with ModelCallLimit, ToolCallLimit and the Commissary; register the surface (wave 7)
+- [x] 42-07-PLAN.md — Derived agent budget (dearest axis, i128), admit_for_model and the unpriced refusal, StopReason::AllowanceHalted, the one Treasurer-aware TokenBudget (tightest wins) proven to compose with ModelCallLimit, ToolCallLimit and the Commissary; register the surface (wave 7)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

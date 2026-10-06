@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-06 20:40:19 UTC
+# Public API Surface - Generated 2026-10-06 23:09:29 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -1832,6 +1832,7 @@ pub paladin::application::services::paladin::middleware::context::ModelCallConte
 pub paladin::application::services::paladin::middleware::context::ModelCallContext::trace_emitter: core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::trace_sink_port::TraceEmitter>>
 pub paladin::application::services::paladin::middleware::context::ModelCallContext::vault: core::option::Option<paladin_ports::output::vault_confined::ConfinedVault>
 impl<'p> paladin::application::services::paladin::middleware::context::ModelCallContext<'p>
+pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::derived_token_budget(&self) -> core::option::Option<&paladin_core::platform::container::allowance::DerivedTokenBudget>
 pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::effective_llm(&self, &alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>) -> alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>
 pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::emit_middleware_event(&self, &str, paladin_core::platform::container::trace::MiddlewareAction)
 pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::new(uuid::Uuid, &'p paladin_core::platform::container::paladin::Paladin, paladin::application::services::paladin::middleware::context::PromptAssembly) -> Self
@@ -2434,6 +2435,7 @@ pub paladin::application::services::paladin::middleware::ModelCallContext::scrat
 pub paladin::application::services::paladin::middleware::ModelCallContext::trace_emitter: core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::trace_sink_port::TraceEmitter>>
 pub paladin::application::services::paladin::middleware::ModelCallContext::vault: core::option::Option<paladin_ports::output::vault_confined::ConfinedVault>
 impl<'p> paladin::application::services::paladin::middleware::context::ModelCallContext<'p>
+pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::derived_token_budget(&self) -> core::option::Option<&paladin_core::platform::container::allowance::DerivedTokenBudget>
 pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::effective_llm(&self, &alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>) -> alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>
 pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::emit_middleware_event(&self, &str, paladin_core::platform::container::trace::MiddlewareAction)
 pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::new(uuid::Uuid, &'p paladin_core::platform::container::paladin::Paladin, paladin::application::services::paladin::middleware::context::PromptAssembly) -> Self
@@ -4162,9 +4164,12 @@ impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services:
 impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::treasurer::ScopeAllowance
 pub struct paladin::application::services::treasurer::Treasurer
 impl paladin::application::services::treasurer::Treasurer
+pub async fn paladin::application::services::treasurer::Treasurer::derive_budget(&self, &paladin_core::platform::container::principal::RunAttribution, &str) -> core::result::Result<core::option::Option<paladin_core::platform::container::allowance::DerivedTokenBudget>, paladin_ports::input::allowance_admission_port::AdmissionError>
+impl paladin::application::services::treasurer::Treasurer
 pub fn paladin::application::services::treasurer::Treasurer::new(paladin::application::services::treasurer::AllowancePolicy, alloc::sync::Arc<dyn paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort>) -> Self
 pub fn paladin::application::services::treasurer::Treasurer::with_notices(self, alloc::sync::Arc<dyn paladin_ports::output::treasury_notice_port::TreasuryNoticePort>) -> Self
 pub fn paladin::application::services::treasurer::Treasurer::with_operator_webhook(self, paladin::application::services::treasurer::OperatorNoticeTarget) -> Self
+pub fn paladin::application::services::treasurer::Treasurer::with_pricing(self, alloc::sync::Arc<paladin_core::platform::container::cost::PriceTable>) -> Self
 impl paladin::application::services::treasurer::Treasurer
 pub fn paladin::application::services::treasurer::Treasurer::spend_guard(&alloc::sync::Arc<Self>, paladin_core::platform::container::principal::RunAttribution, paladin_core::platform::container::run::RunId) -> alloc::sync::Arc<dyn paladin_ports::output::spend_guard::SpendGuard>
 impl core::fmt::Debug for paladin::application::services::treasurer::Treasurer
@@ -4172,6 +4177,7 @@ pub fn paladin::application::services::treasurer::Treasurer::fmt(&self, &mut cor
 impl paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort for paladin::application::services::treasurer::Treasurer
 pub fn paladin::application::services::treasurer::Treasurer::abandon<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::allowance::Admission) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 pub fn paladin::application::services::treasurer::Treasurer::admit<'life0, 'life1, 'life2, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::principal::RunAttribution, core::option::Option<&'life2 paladin_core::platform::container::run::RunId>) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::allowance::Admission, paladin_ports::input::allowance_admission_port::AdmissionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait
+pub fn paladin::application::services::treasurer::Treasurer::admit_for_model<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::principal::RunAttribution, core::option::Option<&'life2 paladin_core::platform::container::run::RunId>, &'life3 str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::allowance::Admission, paladin_ports::input::allowance_admission_port::AdmissionError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn paladin::application::services::treasurer::Treasurer::confirm<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::allowance::Admission) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = ()> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
 impl core::marker::Freeze for paladin::application::services::treasurer::Treasurer
 impl core::marker::Send for paladin::application::services::treasurer::Treasurer
@@ -8184,6 +8190,7 @@ pub paladin::prelude::ModelCallContext::scratch: std::collections::hash::map::Ha
 pub paladin::prelude::ModelCallContext::trace_emitter: core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::trace_sink_port::TraceEmitter>>
 pub paladin::prelude::ModelCallContext::vault: core::option::Option<paladin_ports::output::vault_confined::ConfinedVault>
 impl<'p> paladin::application::services::paladin::middleware::context::ModelCallContext<'p>
+pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::derived_token_budget(&self) -> core::option::Option<&paladin_core::platform::container::allowance::DerivedTokenBudget>
 pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::effective_llm(&self, &alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>) -> alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>
 pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::emit_middleware_event(&self, &str, paladin_core::platform::container::trace::MiddlewareAction)
 pub fn paladin::application::services::paladin::middleware::context::ModelCallContext<'p>::new(uuid::Uuid, &'p paladin_core::platform::container::paladin::Paladin, paladin::application::services::paladin::middleware::context::PromptAssembly) -> Self
@@ -8439,4 +8446,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4203
+Total public items: 4209

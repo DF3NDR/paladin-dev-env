@@ -57,6 +57,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public API. The fail-closed boundary log line now also names the scope kinds that could not be
   evaluated.
 
+- **A per-run token budget derived from the remaining allowance (ALLOW-05; Phase 42 plan 42-07,
+  ADR-0057).** The `Treasurer` can now turn what is left of a principal's tightest allowance
+  ceiling into a token count for the agent loop: `floor(remaining * 1_000_000 / dearest price)`,
+  where the dearest price is the largest of the model's five `treasurer.pricing` axes, computed
+  in `i128` and saturated to `u32` (`Treasurer::with_pricing`, `Treasurer::derive_budget`, and the
+  new defaulted `AllowanceAdmissionPort::admit_for_model`). A free model gets no budget, a zero
+  figure is refused like an exhausted allowance, and a principal with a ceiling calling a model
+  with no price row is refused with the new `AdmissionError::ModelUnpriced`. The one existing
+  `TokenBudget` cutoff now enforces the tighter of the operator's figure and the per-run derived
+  one, read from the call's `RunScope` (`derived_token_budget`) through `ModelCallContext`; when
+  the allowance binds, including a tie, the run ends with the new
+  `StopReason::AllowanceHalted` (stop reason `allowance_halted`; neither successful nor a
+  failure) after the response that crossed it, keeping that response and the truncation notice.
+  `ModelCallLimit`, `ToolCallLimit` and the Commissary are unchanged. Installing the cutoff on
+  every per-agent service and the HTTP and worker wiring land in plans 42-08 and 42-09; see
+  `MIGRATION.md` §9.2.
+
 - **Facade re-export of the allowance module (Phase 41 plan 41-09, D-20).** The `paladin` facade now
   re-exports `paladin::core::platform::container::allowance` (`AllowanceRefusal`, `AllowanceWarning`,
   `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `crosses_warn_threshold`, ...), beside

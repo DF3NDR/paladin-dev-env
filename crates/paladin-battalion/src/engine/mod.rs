@@ -324,9 +324,11 @@ pub enum HaltCause {
     /// A durable caller cancel was observed through the attached
     /// `CancellationProbe`.
     CancelRequested,
-    /// The in-process `CancellationToken` was observed cancelled -- a caller
-    /// cancel on this instance or a shutdown drain; the engine cannot tell
-    /// those apart (the worker re-derives which, plan 42-06).
+    /// The in-process `CancellationToken` was observed cancelled -- a worker
+    /// shutdown drain, or a residual caller cancel the probe did not report;
+    /// the worker re-derives which (plan 42-06). With a `PerRunCancelProbe`
+    /// attached, a same-instance caller cancel arrives as
+    /// [`HaltCause::CancelRequested`] instead.
     Token,
     /// The attached [`SpendGuard`] answered `Halt`; the reason is the guard's
     /// own, passed through untouched.
@@ -412,7 +414,10 @@ impl RunOutcome {
 /// The reason is `Some` only for a halt whose [`HaltCause`] is
 /// `Spend(reason)`: a cancel or token halt, and every non-halt outcome, name
 /// no reason, so the engine's own terminal trace event states the Treasurer
-/// reason at the source and nowhere else.
+/// reason at the source and nowhere else. A [`HaltCause::CancelRequested`]
+/// halt finishes as [`RunFinishStatus::Cancelled`] (D-05, D-14); a bare
+/// [`HaltCause::Token`] halt stays `Halted` -- the worker decides whether it
+/// was a drain.
 fn run_finish_status(
     outcome: &Result<RunOutcome, EngineError>,
 ) -> (RunFinishStatus, Option<HaltReason>) {
@@ -423,6 +428,10 @@ fn run_finish_status(
             cause: HaltCause::Spend(reason),
             ..
         }) => (RunFinishStatus::Halted, Some(reason.clone())),
+        Ok(RunOutcome::Halted {
+            cause: HaltCause::CancelRequested,
+            ..
+        }) => (RunFinishStatus::Cancelled, None),
         Ok(RunOutcome::Halted { .. }) => (RunFinishStatus::Halted, None),
         Ok(RunOutcome::AwaitingInput { .. }) => (RunFinishStatus::AwaitingInput, None),
     }
@@ -7198,7 +7207,7 @@ mod tests {
             ));
             assert_eq!(
                 run_finished_events(&cancelled_sink).await,
-                vec![(RunFinishStatus::Halted, None)]
+                vec![(RunFinishStatus::Cancelled, None)]
             );
         }
 
@@ -7222,7 +7231,7 @@ mod tests {
             );
             assert_eq!(
                 run_finish_status(&halted(HaltCause::CancelRequested)),
-                (RunFinishStatus::Halted, None)
+                (RunFinishStatus::Cancelled, None)
             );
             assert_eq!(
                 run_finish_status(&Err(EngineError::InvalidLimits {

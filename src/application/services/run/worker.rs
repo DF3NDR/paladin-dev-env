@@ -74,7 +74,7 @@ use crate::application::services::treasurer::Treasurer;
 use crate::config::trace::TraceConfig;
 use crate::infrastructure::telemetry::{HeraldTraceSink, build_run_sink};
 
-use super::cancel::{DbCancellationProbe, LocalRunTokens};
+use super::cancel::{DbCancellationProbe, LocalRunTokens, PerRunCancelProbe};
 use super::events::{RunEventBus, RunEventBusSink};
 use super::resolver::{AssistantResolver, ResolveError, Runnable};
 use super::webhook::{WebhookPayload, WebhookPayloadAssistant};
@@ -1160,10 +1160,19 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     self.local_tokens
                         .register(run.run_id.clone(), child_token.clone())
                         .await;
-                    let mut engine = factory(child_token);
-                    if let Some(probe) = &self.cancellation_probe {
-                        engine = engine.with_cancellation_probe(Arc::clone(probe));
-                    }
+                    // --- Phase 42 D-14, G1: a per-run probe on EVERY factory-built
+                    // engine, so a same-instance caller cancel (which fires only
+                    // the child token, a child of the shutdown token) reaches the
+                    // engine as a caller cancel instead of an indistinguishable
+                    // token halt. It ORs the pool's debounced durable-flag probe
+                    // (when `with_cancellation_probing` was called) with the run's
+                    // own token while the shutdown token is not cancelled.
+                    let mut engine = factory(child_token.clone());
+                    engine = engine.with_cancellation_probe(Arc::new(PerRunCancelProbe::new(
+                        self.cancellation_probe.clone(),
+                        child_token,
+                        self.coordinator.token(),
+                    )));
                     if let Some(ledger) = &self.treasury_ledger {
                         engine = engine.with_treasury_ledger(
                             Arc::clone(ledger),

@@ -34,7 +34,7 @@ pub mod webhook;
 /// transition (D-11, D-13).
 pub mod worker;
 
-pub use cancel::{DbCancellationProbe, LocalRunTokens};
+pub use cancel::{DbCancellationProbe, LocalRunTokens, PerRunCancelProbe};
 pub use events::{RunEventBus, RunEventBusSink, RunEventStreamService, map_trace_event};
 pub use inspector::RunInspectorService;
 pub use resolver::{

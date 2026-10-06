@@ -3868,11 +3868,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
-            // The in-process token aborted this superstep mid-flight; the
-            // finer cause split (probe vs shutdown) lands with plan 42-06.
+            // The in-process token aborted this superstep mid-flight. Consult
+            // the probe once more to split a caller cancel from a drain (D-14,
+            // G1): a probe that reports a cancel makes this a
+            // `CancelRequested`; otherwise the bare token is all there is.
+            let mid_flight_cause = match probe {
+                Some(p) if p.is_cancelled(&thread).await => HaltCause::CancelRequested,
+                _ => HaltCause::Token,
+            };
             return Ok(RunOutcome::Halted {
                 waypoint: waypoint.waypoint_id,
-                cause: HaltCause::Token,
+                cause: mid_flight_cause,
             });
         }
 
@@ -11081,6 +11087,21 @@ mod tests {
         cancellation: &Option<CancellationToken>,
         shutdown_grace: std::time::Duration,
     ) -> RunOutcome {
+        run_with_shutdown_grace_and_probe(graph, thread, store, cancellation, &None, shutdown_grace)
+            .await
+    }
+
+    /// As [`run_with_shutdown_grace`], with a cancellation `probe` attached
+    /// (Phase 42 D-14, G1: the mid-superstep halt consults it to split a
+    /// caller cancel from a drain).
+    async fn run_with_shutdown_grace_and_probe(
+        graph: &WarGraph,
+        thread: ThreadId,
+        store: &RecordingWaypointStore,
+        cancellation: &Option<CancellationToken>,
+        probe: &Option<Arc<dyn CancellationProbe>>,
+        shutdown_grace: std::time::Duration,
+    ) -> RunOutcome {
         run(
             store,
             WaypointDurability::Strict,
@@ -11104,7 +11125,7 @@ mod tests {
             &no_trace(),
             &no_interceptors(),
             cancellation,
-            &None,
+            probe,
             &None,
             None,
             shutdown_grace,
@@ -11310,6 +11331,90 @@ mod tests {
             first.vanguard.contains(&id),
             "the aborted node's id must be re-listed in the Halted Waypoint's vanguard, got {:?}",
             first.vanguard
+        );
+    }
+
+    /// A probe answering a fixed value, for the mid-flight cause split.
+    struct FixedProbe(bool);
+
+    #[async_trait::async_trait]
+    impl CancellationProbe for FixedProbe {
+        async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+            self.0
+        }
+    }
+
+    /// Phase 42 D-14, G1: a node aborted mid-superstep with a probe that
+    /// reports a caller cancel halts as `CancelRequested`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mid_flight_abort_with_a_cancelling_probe_halts_as_cancel_requested() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, _id, _f) =
+            single_slow_entry_graph(std::time::Duration::from_secs(2), run_count, token.clone());
+        let store = RecordingWaypointStore::new();
+        // The probe is consulted at the top of the first boundary too; answer
+        // `false` there by cancelling only once the node is aborted: a probe
+        // that is `true` from the start would halt before any node ran, so the
+        // answer here flips on the second consultation.
+        struct FlipProbe(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl CancellationProbe for FlipProbe {
+            async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) >= 1
+            }
+        }
+        let probe: Option<Arc<dyn CancellationProbe>> =
+            Some(Arc::new(FlipProbe(std::sync::atomic::AtomicUsize::new(0))));
+        let outcome = run_with_shutdown_grace_and_probe(
+            &graph,
+            ThreadId::new("mid-flight-cancel-requested").unwrap(),
+            &store,
+            &Some(token),
+            &probe,
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Halted {
+                    cause: HaltCause::CancelRequested,
+                    ..
+                }
+            ),
+            "got {outcome:?}"
+        );
+    }
+
+    /// Phase 42 D-14: with a probe that does not report a cancel, the
+    /// mid-flight abort stays a bare `Token` halt (a drain).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn mid_flight_abort_with_a_quiet_probe_halts_as_token() {
+        let run_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let token = CancellationToken::new();
+        let (graph, _id, _f) =
+            single_slow_entry_graph(std::time::Duration::from_secs(2), run_count, token.clone());
+        let store = RecordingWaypointStore::new();
+        let probe: Option<Arc<dyn CancellationProbe>> = Some(Arc::new(FixedProbe(false)));
+        let outcome = run_with_shutdown_grace_and_probe(
+            &graph,
+            ThreadId::new("mid-flight-token").unwrap(),
+            &store,
+            &Some(token),
+            &probe,
+            std::time::Duration::from_millis(50),
+        )
+        .await;
+        assert!(
+            matches!(
+                outcome,
+                RunOutcome::Halted {
+                    cause: HaltCause::Token,
+                    ..
+                }
+            ),
+            "got {outcome:?}"
         );
     }
 

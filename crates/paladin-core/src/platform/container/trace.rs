@@ -156,15 +156,22 @@ pub enum MiddlewareAction {
 
 /// The terminal status a run finished under (D-04), reported on
 /// [`TraceEvent::RunFinished`].
+///
+/// `#[non_exhaustive]` (Phase 42 D-05, ADR-0057): this set can grow, so every
+/// `match` over it outside this crate must carry a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RunFinishStatus {
     /// The run completed normally.
     Completed,
     /// The run failed.
     Failed,
-    /// The run was halted (e.g. a graceful-shutdown grace deadline).
+    /// The run was halted (e.g. a graceful-shutdown grace deadline, or a
+    /// Treasurer spend halt carrying a `halt_reason`).
     Halted,
+    /// A caller asked for the run to stop; recorded `Cancelled` on the run row.
+    Cancelled,
     /// The run suspended awaiting external (Parley) input.
     AwaitingInput,
 }
@@ -1014,6 +1021,31 @@ mod tests {
             }
             other => panic!("expected RunFinished, got {other:?}"),
         }
+    }
+
+    /// D-05, G4: a `RunFinished` with status `cancelled` round-trips, and the
+    /// wire name is the snake_case `cancelled`.
+    #[test]
+    fn run_finished_cancelled_round_trips() {
+        let record = TraceRecord {
+            thread_id: thread(),
+            run_id: None,
+            seq: 4,
+            at: Utc::now(),
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Cancelled,
+                total_supersteps: 1,
+                usage: TokenUsage::default(),
+                cost: None,
+                halt_reason: None,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        };
+        let json = serde_json::to_string(&record).unwrap();
+        assert!(json.contains(r#""status":"cancelled""#), "{json}");
+        let back: TraceRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, record);
     }
 
     /// D-05 (commit bc9cdf0): a reason round-trips through the hand-written

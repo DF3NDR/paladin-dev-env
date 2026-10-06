@@ -220,7 +220,15 @@ pub fn map_trace_event(
                 RunFinishStatus::Completed => (RunStreamEventKind::Done, "completed"),
                 RunFinishStatus::Halted => (RunStreamEventKind::Done, "halted"),
                 RunFinishStatus::AwaitingInput => (RunStreamEventKind::Done, "awaiting_input"),
+                // D-14: a caller-cancelled run's `done` says `cancelled`, equal to
+                // the persisted `Cancelled` status; it carries no `halt_reason`.
+                RunFinishStatus::Cancelled => (RunStreamEventKind::Done, "cancelled"),
                 RunFinishStatus::Failed => (RunStreamEventKind::Error, "failed"),
+                // `RunFinishStatus` is `#[non_exhaustive]`: a status this bus
+                // does not understand is dropped, mirroring the `TraceEvent`
+                // wildcard below; the run row stays the truth and a degraded
+                // reconnect resolves it.
+                _ => return None,
             };
             let payload = match kind {
                 RunStreamEventKind::Error => serde_json::json!({
@@ -1195,7 +1203,7 @@ mod tests {
     }
 
     /// `RunFinished` alone produces two of the seven wire names, split on
-    /// its own `status` field: `completed`/`halted`/`awaiting_input` all
+    /// its own `status` field: `completed`/`halted`/`cancelled`/`awaiting_input` all
     /// become `done`, `failed` becomes `error` (D-14).
     #[test]
     fn run_finished_status_splits_done_and_error() {
@@ -1203,6 +1211,7 @@ mod tests {
         let cases = [
             (RunFinishStatus::Completed, RunStreamEventKind::Done),
             (RunFinishStatus::Halted, RunStreamEventKind::Done),
+            (RunFinishStatus::Cancelled, RunStreamEventKind::Done),
             (RunFinishStatus::AwaitingInput, RunStreamEventKind::Done),
             (RunFinishStatus::Failed, RunStreamEventKind::Error),
         ];
@@ -1556,6 +1565,37 @@ mod tests {
         );
         let (_, _, payload) = map_trace_event(record).expect("SuperstepStarted must map");
         assert_eq!(payload.get("trace_seq").and_then(|v| v.as_u64()), Some(42));
+    }
+
+    fn run_finished_record(
+        thread_id: ThreadId,
+        status: RunFinishStatus,
+        halt_reason: Option<HaltReason>,
+    ) -> TraceRecord {
+        wrap(
+            thread_id,
+            1,
+            TraceEvent::RunFinished {
+                status,
+                total_supersteps: 1,
+                usage: TokenUsage::new(1, 0),
+                cost: None,
+                halt_reason,
+                duration_ms: 5,
+                trace_dropped_total: 0,
+            },
+        )
+    }
+
+    /// D-14: a cancelled finish maps to `done` with status `cancelled` and no
+    /// `halt_reason` key.
+    #[test]
+    fn cancelled_run_finished_maps_to_done_cancelled_without_a_reason() {
+        let record = run_finished_record(sample_thread(), RunFinishStatus::Cancelled, None);
+        let (_, kind, payload) = map_trace_event(record).expect("Cancelled must map");
+        assert_eq!(kind, RunStreamEventKind::Done);
+        assert_eq!(payload["status"], "cancelled");
+        assert!(payload.get("halt_reason").is_none(), "{payload}");
     }
 
     #[tokio::test]

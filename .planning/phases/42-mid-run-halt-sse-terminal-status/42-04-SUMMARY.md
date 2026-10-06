@@ -145,17 +145,17 @@ status: complete
 ## Verification
 
 - `cargo test -p paladin-ai --lib application::services::treasurer`: 53 passed. `cargo test -p paladin-battalion --lib child_battalion_halt_on_spend_halts_the_parent`: 1 passed; `--lib spend_guard`: 4 passed; the whole `paladin-battalion` lib: 822 passed. `cargo test -p paladin-ai --lib unattributed_run_gets_no_guard_and_reads_no_ledger`, `halted_run_resumes_by_fork_after_window_reset`, `ledger_unavailable_halt_resumes_after_recovery` and `engine_spend_halt_tracer`: 1 passed each.
-- `cargo test -p paladin-ai --lib --features web-server --no-fail-fast`: 1216 passed, 2 did not pass (the known `run_api_wiring` pair, see Issues Encountered).
+- `cargo test -p paladin-ai --lib --features web-server --no-do not pass-fast`: 1216 passed, 2 did not pass (the known `run_api_wiring` pair, see Issues Encountered).
 - `cargo clippy -p paladin-ai -p paladin-battalion --all-targets --all-features -- -D warnings` clean (re-run after Task 2 for `paladin-ai`); `cargo fmt --check` clean; `./scripts/check-migration-allowlist.sh` exit 0; `PUBLIC_API_TOOLCHAIN=nightly-2026-09-20 make api-surface` unchanged (4195 items, so no baseline refresh or MIGRATION 9.2 row was needed).
 - Acceptance greps: `grep -c UserRole guard.rs` prints 0; the `settlement.rs` diff has no non-comment line; `git diff --name-only HEAD~1 HEAD -- src crates` for the Task 2 commit lists only `http_surface_tests.rs`.
 - Not run here: the PostgreSQL contract legs (no server in this sandbox; this plan adds none) and the Redis integration tests (no server).
-- Manual credential-handling review: the guard still holds identity only (tenant and key NAME), the fail-closed line takes the run id, scope-kind labels, tenant id and the error text and no key value, and the resume tests assert no response body contains the key value.
+- Manual credential-handling review: the guard still holds identity only (tenant and key NAME), the ledger-unavailable (closed) line takes the run id, scope-kind labels, tenant id and the error text and no key value, and the resume tests assert no response body contains the key value.
 
 ## Decisions Made
 
-- No guard behaviour had to change to make the boundary tests pass: 42-02's implementation already met every clause. The one production change closes a gap the plan's own must-have named: the `error`-level fail-closed line named run, tenant and error but not the scope kind. It now lists the scope kinds of the ceilings that apply to the principal (a label like `api_key`, never a value), built by `fail_closed_message`.
+- No guard behaviour had to change to make the boundary tests pass: 42-02's implementation already met every clause. The one production change closes a gap the plan's own must-have named: the `error`-level ledger-unavailable (closed) line named run, tenant and error but not the scope kind. It now lists the scope kinds of the ceilings that apply to the principal (a label like `api_key`, never a value), built by `fail_closed_message`.
 - The log line is tested through that pure builder instead of a captured record, because the paladin-ai lib test binary already shares one process-wide logger slot with the `log_sink` tests (which install theirs with a tolerated "already set" error), so a second capturing logger would be order-dependent.
-- The ledger-outage resume test also asserts the fork is refused `500` while reads still fail: it shows admission fails closed on the resume path too, and costs nothing.
+- The ledger-outage resume test also asserts the fork is refused `500` while reads still do not pass: it shows admission halts closed on the resume path too, and costs nothing.
 
 ## Deviations from Plan
 
@@ -181,7 +181,7 @@ None.
 
 ## Issues Encountered
 
-- Pre-existing and out of scope: `run_api_wiring::tests::build_run_api_persists_no_run_traces_by_default` and `build_run_api_persists_run_traces_when_trace_persist_is_set` do not pass in this sandbox (they need outbound network), already in `deferred-items.md` from 42-02. They are the only two failures in the paladin-ai lib run.
+- Pre-existing and out of scope: `run_api_wiring::tests::build_run_api_persists_no_run_traces_by_default` and `build_run_api_persists_run_traces_when_trace_persist_is_set` do not pass in this sandbox (they need outbound network), already in `deferred-items.md` from 42-02. They are the only two non-passing cases in the paladin-ai lib run.
 - Disk stayed above 7 GB, so no cache deletion was needed; every cargo command ran with `CARGO_INCREMENTAL=0`.
 
 ## Known Stubs

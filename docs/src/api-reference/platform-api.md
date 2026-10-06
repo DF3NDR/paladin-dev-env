@@ -149,6 +149,29 @@ id, or an API key name or value.
 The reason is written to the run row before the status flips to `halted`, so a reader never sees
 a `halted` run without its `halt_reason`.
 
+### Resuming a halted run
+
+A halted run is terminal: it never returns to `queued` or `running`, and re-enqueueing its run id
+is not a way to resume it. Resume is a **new run forked from the Halted Waypoint**, which
+re-runs the allowance check at submission:
+
+1. Read the halted run: `GET /v1/runs/{run_id}` answers `status: halted`, the `halt_reason` and
+   the `final_waypoint_id`.
+2. Fork from that Waypoint: `POST /v1/threads/{thread_id}/fork` with
+   `{ "from_waypoint_id": "<final_waypoint_id>" }`, using the run's `thread_id`.
+3. While the allowance is still exhausted the fork is refused `429 allowance_exhausted` with a
+   `Retry-After` header naming the seconds until the window resets. A lifetime cap carries no
+   `Retry-After` (the cap does not reset): raise the cap instead. If the spend ledger cannot be
+   read the fork is refused `500` and nothing runs (fail closed); retry once it reads again.
+4. Once admitted, the fork answers `202 { run_id, thread_id }` and the new run continues from the
+   Halted Waypoint: no superstep the halted run already completed is run again. The new run's
+   own `GET /v1/runs/{run_id}` reports its progress and, if the allowance is exhausted again, its
+   own `halt_reason`. The original run stays `halted`.
+
+A run halted with `halt_reason: { "reason": "ledger_unavailable" }` resumes the same way once the
+ledger reads again. An agent-kind run has no checkpoint, so it has no Halted Waypoint to fork
+from: resume it with a fresh `POST /v1/runs`.
+
 ### Streaming
 
 ```
@@ -191,7 +214,7 @@ A 15-second heartbeat comment line is emitted on **both** paths to defeat idle-p
 | `GET /v1/threads/{thread_id}/history` | Paginated Chronicle history: `?limit=20&cursor=...` (limit ≤ 100), `{ items, next_cursor }` |
 | `GET /v1/threads/{thread_id}/state` | The thread's latest status, plus outstanding `parleys`/`responses` when suspended |
 | `POST /v1/threads/{thread_id}/resume` | `{ "responses": [{ "parley_id", "value", "responded_by" }] }` → `202 { thread_id, state_url, run_id }` |
-| `POST /v1/threads/{thread_id}/fork` | `{ "from_waypoint_id", "edit"? }` → submits a **new** run on the same thread from an earlier Waypoint, with `edit` applied → `202 { run_id, thread_id }`; `409 thread_busy` while a run is active |
+| `POST /v1/threads/{thread_id}/fork` | `{ "from_waypoint_id", "edit"? }` → submits a **new** run on the same thread from an earlier Waypoint, with `edit` applied → `202 { run_id, thread_id }`; `409 thread_busy` while a run is active; `429 allowance_exhausted` (with `Retry-After`) while the caller's allowance is exhausted -- see [Resuming a halted run](#resuming-a-halted-run) |
 | `DELETE /v1/threads/{thread_id}` | Admin-only; `204`; `409 thread_busy` while a run is active |
 
 A resumed run re-enqueues under the **same `run_id`** (`attempt` incremented, D-23) rather than

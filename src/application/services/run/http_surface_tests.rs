@@ -1974,3 +1974,533 @@ async fn run_spend_halt_tracer_once(attach_treasurer: bool) -> bool {
     cleanup(&path);
     true
 }
+
+// --- Resume of a halted run by fork (ALLOW-03, Phase 42 D-03, D-07, 42-04) --------------------
+
+/// A [`TreasuryLedgerPort`] over the real SQLite ledger whose store clock a test can move and
+/// whose reads a test can break. `store_now` is the inner clock plus `clock_offset_secs`
+/// (and fails while `fail_reads`), `balance` fails while `fail_reads`; every other method
+/// delegates untouched. The Treasurer, the submission service and the worker pool all share
+/// one instance, so admission and the superstep boundary see the same scripted clock.
+struct ScriptedLedger {
+    inner: Arc<SqliteTreasuryLedger>,
+    clock_offset_secs: std::sync::atomic::AtomicI64,
+    fail_reads: std::sync::atomic::AtomicBool,
+}
+
+impl ScriptedLedger {
+    fn failing(&self) -> bool {
+        self.fail_reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl TreasuryLedgerPort for ScriptedLedger {
+    async fn reserve(
+        &self,
+        request: paladin_core::platform::container::treasury_ledger::ReserveRequest,
+    ) -> Result<
+        paladin_core::platform::container::treasury_ledger::ReservationId,
+        paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
+    > {
+        self.inner.reserve(request).await
+    }
+
+    async fn release(
+        &self,
+        reservation: paladin_core::platform::container::treasury_ledger::ReservationId,
+    ) -> Result<(), paladin_ports::output::treasury_ledger_port::TreasuryLedgerError> {
+        self.inner.release(reservation).await
+    }
+
+    async fn settle(
+        &self,
+        request: paladin_core::platform::container::treasury_ledger::SettleRequest,
+    ) -> Result<
+        paladin_core::platform::container::treasury_ledger::SettleOutcome,
+        paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
+    > {
+        self.inner.settle(request).await
+    }
+
+    async fn spend(
+        &self,
+        query: paladin_core::platform::container::treasury_ledger::SpendQuery,
+    ) -> Result<
+        Vec<paladin_core::platform::container::treasury_ledger::SpendRow>,
+        paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
+    > {
+        self.inner.spend(query).await
+    }
+
+    async fn store_now(
+        &self,
+    ) -> Result<
+        chrono::DateTime<chrono::Utc>,
+        paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
+    > {
+        if self.failing() {
+            return Err(
+                paladin_ports::output::treasury_ledger_port::TreasuryLedgerError::Backend {
+                    source: "scripted store clock outage".into(),
+                },
+            );
+        }
+        let now = self.inner.store_now().await?;
+        let offset = self
+            .clock_offset_secs
+            .load(std::sync::atomic::Ordering::SeqCst);
+        Ok(now + chrono::Duration::seconds(offset))
+    }
+
+    async fn balance(
+        &self,
+        query: paladin_core::platform::container::treasury_ledger::BalanceQuery,
+    ) -> Result<
+        paladin_core::platform::container::cost::Cost,
+        paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
+    > {
+        if self.failing() {
+            return Err(
+                paladin_ports::output::treasury_ledger_port::TreasuryLedgerError::Backend {
+                    source: "scripted balance outage".into(),
+                },
+            );
+        }
+        self.inner.balance(query).await
+    }
+}
+
+/// Everything the resume tests drive: the run and thread routers merged over one auth map, a
+/// worker pool with the Treasurer attached, and the scripted ledger.
+struct ResumeRig {
+    app: axum::Router,
+    pool: RunWorkerPool<InMemoryWaypointStore>,
+    repository: Arc<dyn RunRepositoryPort>,
+    ledger: Arc<ScriptedLedger>,
+    counters: Vec<Arc<std::sync::atomic::AtomicUsize>>,
+    api_key: String,
+    path: std::path::PathBuf,
+}
+
+/// Build a [`ResumeRig`] for a three-node chain whose node `i` settles `spend_nanos[i]` under
+/// the submitter's own API-key scope. The allowance is 1.00 USD per `period` for the key
+/// `svc-r{suffix}` of tenant `acme{suffix}` -- a distinct tenant and key per attempt, so a
+/// re-run after a real window roll never meets the first attempt's spend.
+async fn build_resume_rig(
+    label: &str,
+    suffix: usize,
+    period: &str,
+    spend_nanos: [i64; 3],
+) -> ResumeRig {
+    use paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort;
+    use paladin_web::thread_controller::{ThreadApiState, thread_router};
+    use std::sync::atomic::AtomicUsize;
+
+    let (path, url) = temp_sqlite_url(label);
+    let repository: Arc<dyn RunRepositoryPort> =
+        Arc::new(SqliteRunRepository::new(&url).await.unwrap());
+    let inner = Arc::new(SqliteTreasuryLedger::new(&url).await.unwrap());
+    let ledger = Arc::new(ScriptedLedger {
+        inner: Arc::clone(&inner),
+        clock_offset_secs: std::sync::atomic::AtomicI64::new(0),
+        fail_reads: std::sync::atomic::AtomicBool::new(false),
+    });
+    let ledger_port: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+    let spend_port: Arc<dyn TreasuryLedgerPort> = inner;
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+
+    let tenant = format!("acme{suffix}");
+    let key_name = format!("svc-r{suffix}");
+    let counters: Vec<Arc<AtomicUsize>> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+    let mut graph = WarGraph::new(BattlefieldSchema::new(vec![]), EngineLimits::default());
+    let ids: Vec<NodeId> = (0..3).map(|i| NodeId::new(format!("n{i}"))).collect();
+    for (i, id) in ids.iter().enumerate() {
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(Arc::new(SpendingNode {
+                // Spend lands in the real ledger (attributed at the real instant); only the
+                // boundary's reads go through the scripted clock.
+                ledger: Arc::clone(&spend_port),
+                scope: LedgerScope::new(tenant.as_str(), key_name.as_str()),
+                amount_nanos: spend_nanos[i],
+                runs: Arc::clone(&counters[i]),
+            })),
+        );
+    }
+    for pair in ids.windows(2) {
+        graph.add_edge(EdgeSpec {
+            from: pair[0].clone(),
+            to: pair[1].clone(),
+            condition: None,
+        });
+    }
+    graph.add_entry(ids[0].clone());
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("resume-wf", Arc::new(graph)));
+
+    let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+        "currency": "USD",
+        "allowance": { "api_keys": { key_name.as_str(): { "period": period, "amount": "1.00" } } }
+    }))
+    .unwrap();
+    let treasurer = Arc::new(Treasurer::new(
+        config.allowance_policy().unwrap(),
+        Arc::clone(&ledger_port),
+    ));
+
+    let waypoints = Arc::new(InMemoryWaypointStore::new());
+    let waypoints_port: Arc<dyn WaypointPort> = waypoints.clone();
+    // The fork route re-runs admission through this very service (D-07): the Treasurer is
+    // attached here and the waypoint store is what `fork` validates the fork point against.
+    let submission: Arc<dyn RunSubmissionPort> = Arc::new(
+        RunSubmissionService::new(repository.clone(), queue.clone(), resolver.clone())
+            .with_waypoints(waypoints_port.clone())
+            .with_treasurer(Arc::clone(&treasurer) as Arc<dyn AllowanceAdmissionPort>),
+    );
+
+    let api_key = format!("resume-key-{suffix}");
+    let mut api_keys = HashMap::new();
+    api_keys.insert(
+        api_key.clone(),
+        Principal::new(
+            key_name.as_str(),
+            UserRole::User,
+            TenantId::new(tenant.as_str()).unwrap(),
+        ),
+    );
+    let auth = AgentAuthConfig {
+        enabled: true,
+        api_keys,
+        token_verifier: None,
+        bearer_tenant: None,
+    };
+    let app = run_router(
+        RunApiState::new()
+            .with_submission(Arc::clone(&submission))
+            .with_repository(repository.clone())
+            .with_auth(auth.clone()),
+    )
+    .merge(thread_router(
+        ThreadApiState::new()
+            .with_waypoints(waypoints_port)
+            .with_runs(repository.clone())
+            .with_run_submission(submission)
+            .with_auth(auth),
+    ));
+
+    let factory_store = waypoints.clone();
+    let engine_factory: Arc<
+        dyn Fn(tokio_util::sync::CancellationToken) -> WarEngine<InMemoryWaypointStore>
+            + Send
+            + Sync,
+    > = Arc::new(move |token| {
+        WarEngine::new(Arc::new(UnusedPaladinPort), factory_store.clone())
+            .with_cancellation_token(token)
+    });
+    let pool = RunWorkerPool::new(
+        Arc::new(WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            waypoints.clone(),
+        )),
+        waypoints,
+        repository.clone(),
+        queue,
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_engine_factory(engine_factory)
+    .with_treasurer(treasurer);
+
+    ResumeRig {
+        app,
+        pool,
+        repository,
+        ledger,
+        counters,
+        api_key,
+        path,
+    }
+}
+
+impl ResumeRig {
+    /// One authenticated request through the merged routers; the JSON body (or `Null`) with
+    /// the status and headers.
+    async fn call(
+        &self,
+        method: &str,
+        uri: &str,
+        body: Option<serde_json::Value>,
+    ) -> (StatusCode, axum::http::HeaderMap, serde_json::Value) {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("x-api-key", self.api_key.as_str());
+        let request = match body {
+            Some(json) => builder
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json).unwrap())),
+            None => {
+                builder = builder.header("accept", "application/json");
+                builder.body(Body::empty())
+            }
+        }
+        .expect("request builds");
+        let response = self
+            .app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router responds");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let raw = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let text = String::from_utf8_lossy(&raw);
+        assert!(
+            !text.contains(self.api_key.as_str()),
+            "no response may carry the key value: {text}"
+        );
+        let json = serde_json::from_slice(&raw).unwrap_or(serde_json::Value::Null);
+        (status, headers, json)
+    }
+
+    /// `POST /v1/runs` for the resume workflow; the accepted `(run_id, thread_id)`.
+    async fn submit_run(&self) -> (String, String) {
+        let (status, _, body) = self
+            .call(
+                "POST",
+                "/v1/runs",
+                Some(serde_json::json!({ "assistant_id": "resume-wf", "input": {} })),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::ACCEPTED,
+            "submission is admitted: {body}"
+        );
+        (
+            body["run_id"].as_str().expect("run_id").to_string(),
+            body["thread_id"].as_str().expect("thread_id").to_string(),
+        )
+    }
+
+    /// `POST /v1/threads/{thread}/fork` from `from_waypoint_id`.
+    async fn fork(
+        &self,
+        thread_id: &str,
+        from_waypoint_id: &str,
+    ) -> (StatusCode, axum::http::HeaderMap, serde_json::Value) {
+        self.call(
+            "POST",
+            &format!("/v1/threads/{thread_id}/fork"),
+            Some(serde_json::json!({ "from_waypoint_id": from_waypoint_id })),
+        )
+        .await
+    }
+
+    fn runs_per_node(&self) -> Vec<usize> {
+        self.counters
+            .iter()
+            .map(|c| c.load(std::sync::atomic::Ordering::SeqCst))
+            .collect()
+    }
+}
+
+/// The 1h-window resume proof: a run halts on its own spend, the fork is refused `429` while
+/// the window is exhausted, and once the store clock passes the window end the same fork is
+/// admitted and completes from the Halted Waypoint without re-running a completed superstep
+/// (ROADMAP success criterion 2; D-07, G13).
+///
+/// A 1h window rolls every real hour on the hour (Pitfall 10), which would make the halt vanish
+/// and the test lie; the body re-runs once on a fresh tenant and key when that happens. The
+/// retry never fires because of the scripted move, which is applied only after the second read.
+#[tokio::test(flavor = "multi_thread")]
+async fn halted_run_resumes_by_fork_after_window_reset() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for attempt in 1..=2 {
+            if run_resume_after_window_reset_once(attempt).await {
+                return;
+            }
+            eprintln!(
+                "halted_run_resumes_by_fork_after_window_reset: a window boundary was crossed \
+                 (attempt {attempt}); re-running"
+            );
+        }
+        panic!("the allowance window boundary was crossed on both attempts");
+    })
+    .await
+    .expect("halted_run_resumes_by_fork_after_window_reset timed out");
+}
+
+/// One attempt of the window-reset resume. Returns `false` (having asserted nothing about the
+/// halt) when a real hour boundary passed between submitting and halting.
+async fn run_resume_after_window_reset_once(attempt: usize) -> bool {
+    // n0 settles exactly the 1.00 USD ceiling; n1 and n2 settle nothing.
+    let rig = build_resume_rig("resume_window", attempt, "1h", [1_000_000_000, 0, 0]).await;
+    let window_before = window_for(rig.ledger.inner.store_now().await.unwrap(), 3_600).unwrap();
+
+    let (run_id, thread_id) = rig.submit_run().await;
+    assert!(rig.pool.run_once().await.unwrap());
+
+    let (status, _, halted) = rig.call("GET", &format!("/v1/runs/{run_id}"), None).await;
+    let window_after = window_for(rig.ledger.inner.store_now().await.unwrap(), 3_600).unwrap();
+    if window_before != window_after {
+        cleanup(&rig.path);
+        return false;
+    }
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(halted["status"], "halted", "{halted}");
+    assert!(halted["error"].is_null(), "{halted}");
+    assert_eq!(halted["halt_reason"]["reason"], "allowance_exhausted");
+    let final_waypoint_id = halted["final_waypoint_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a halted run names its fork point: {halted}"))
+        .to_string();
+    assert_eq!(
+        rig.runs_per_node(),
+        [1, 0, 0],
+        "only n0's superstep completed before the halt"
+    );
+
+    // (1) While the window is still exhausted, the fork is refused: 429 + Retry-After.
+    let (status, headers, refused) = rig.fork(&thread_id, &final_waypoint_id).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{refused}");
+    assert_eq!(refused["error"]["code"], "allowance_exhausted");
+    let retry_after: u64 = headers
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("a window refusal carries an integer Retry-After: {headers:?}"));
+    assert!(
+        (1..=86_400).contains(&retry_after),
+        "Retry-After must lie inside one window, got {retry_after}"
+    );
+
+    // (2) Move the store clock one second past the halted window's end.
+    let window_end = chrono::DateTime::parse_from_rfc3339(
+        halted["halt_reason"]["window_end"]
+            .as_str()
+            .expect("the halt reason names the window end"),
+    )
+    .expect("window_end is RFC 3339")
+    .with_timezone(&chrono::Utc);
+    let now = rig.ledger.inner.store_now().await.unwrap();
+    rig.ledger.clock_offset_secs.store(
+        (window_end - now).num_seconds() + 1,
+        std::sync::atomic::Ordering::SeqCst,
+    );
+
+    // (3) The same fork is now admitted; the original run stays halted (terminal, D-00d).
+    let (status, _, accepted) = rig.fork(&thread_id, &final_waypoint_id).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+    let forked_id = accepted["run_id"]
+        .as_str()
+        .expect("forked run_id")
+        .to_string();
+    assert_ne!(forked_id, run_id, "resume is a NEW run, never a re-enqueue");
+
+    assert!(rig.pool.run_once().await.unwrap());
+
+    let forked_run = rig
+        .repository
+        .get(&RunId::parse(forked_id.as_str()).expect("run id parses"))
+        .await
+        .unwrap()
+        .expect("the forked run exists");
+    assert_eq!(forked_run.status, RunStatus::Completed);
+    assert_eq!(
+        forked_run
+            .fork_from
+            .as_ref()
+            .map(|fork| fork.from_waypoint_id.as_str()),
+        Some(final_waypoint_id.as_str()),
+        "the forked run records the Halted Waypoint it continued from"
+    );
+    // G13: counters, not absolute superstep numbers. n0 already ran in the halted run and is
+    // not dispatched again; the Halted Waypoint's vanguard (n1) and the rest ran exactly once.
+    assert_eq!(rig.runs_per_node(), [1, 1, 1]);
+
+    let (_, _, original) = rig.call("GET", &format!("/v1/runs/{run_id}"), None).await;
+    assert_eq!(
+        original["status"], "halted",
+        "the original run stays halted"
+    );
+
+    cleanup(&rig.path);
+    true
+}
+
+/// A `ledger_unavailable` halt resumes the same way once the ledger reads again (D-03, D-07):
+/// the run halts at its first boundary with `{"reason":"ledger_unavailable"}` and no error, a
+/// fork is itself refused fail closed while reads still fail, and after recovery the fork is
+/// admitted and the forked run completes from the Halted Waypoint.
+#[tokio::test(flavor = "multi_thread")]
+async fn ledger_unavailable_halt_resumes_after_recovery() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        // No node spends: the allowance is never reached, only the ledger's reads fail.
+        let rig = build_resume_rig("resume_ledger", 1, "1h", [0, 0, 0]).await;
+
+        // Admission reads work (balance 0): the submission is accepted.
+        let (run_id, thread_id) = rig.submit_run().await;
+
+        // The ledger goes away before the worker's first superstep boundary.
+        rig.ledger
+            .fail_reads
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(rig.pool.run_once().await.unwrap());
+
+        let (status, _, halted) = rig.call("GET", &format!("/v1/runs/{run_id}"), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(halted["status"], "halted", "{halted}");
+        assert!(
+            halted["error"].is_null(),
+            "a halt is not a failure: {halted}"
+        );
+        assert_eq!(
+            halted["halt_reason"],
+            serde_json::json!({ "reason": "ledger_unavailable" })
+        );
+        assert_eq!(
+            rig.runs_per_node(),
+            [0, 0, 0],
+            "the first boundary failed closed before any node ran"
+        );
+        let final_waypoint_id = halted["final_waypoint_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a halted run names its fork point: {halted}"))
+            .to_string();
+
+        // While reads still fail the fork's own admission fails closed (500), never a
+        // swallowed admit.
+        let (status, _, refused) = rig.fork(&thread_id, &final_waypoint_id).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{refused}");
+
+        // The ledger recovers: the fork is admitted and completes from the Halted Waypoint.
+        rig.ledger
+            .fail_reads
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let (status, _, accepted) = rig.fork(&thread_id, &final_waypoint_id).await;
+        assert_eq!(status, StatusCode::ACCEPTED, "{accepted}");
+        let forked_id = accepted["run_id"]
+            .as_str()
+            .expect("forked run_id")
+            .to_string();
+        assert_ne!(forked_id, run_id);
+
+        assert!(rig.pool.run_once().await.unwrap());
+        let forked_run = rig
+            .repository
+            .get(&RunId::parse(forked_id.as_str()).expect("run id parses"))
+            .await
+            .unwrap()
+            .expect("the forked run exists");
+        assert_eq!(forked_run.status, RunStatus::Completed);
+        assert_eq!(rig.runs_per_node(), [1, 1, 1]);
+
+        cleanup(&rig.path);
+    })
+    .await
+    .expect("ledger_unavailable_halt_resumes_after_recovery timed out");
+}

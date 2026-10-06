@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged). `ApiError::allowance_exhausted` and `halt_reason` share one builder,
   `AllowanceRefusal::details_json`.
 
+  **Resumable by fork (plan 42-04).** A halted run resumes by forking from its
+  `final_waypoint_id` (`POST /v1/threads/{id}/fork`): the fork re-runs admission, so it is refused
+  `429 allowance_exhausted` with `Retry-After` while the window is exhausted and, once the window
+  resets (or the ledger reads again after a `ledger_unavailable` halt), continues from the Halted
+  Waypoint without re-running a completed superstep. Documented in `platform-api.md`; no new
+  public API. The fail-closed boundary log line now also names the scope kinds that could not be
+  evaluated.
+
 - **Facade re-export of the allowance module (Phase 41 plan 41-09, D-20).** The `paladin` facade now
   re-exports `paladin::core::platform::container::allowance` (`AllowanceRefusal`, `AllowanceWarning`,
   `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `crosses_warn_threshold`, ...), beside

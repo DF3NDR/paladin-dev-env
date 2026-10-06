@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 41
-current_phase_name: Admission-Time Allowance Enforcement
+current_phase: 42
+current_phase_name: mid-run-halt-sse-terminal-status
 status: executing
-stopped_at: Phase 42 context gathered
-last_updated: "2026-10-06T16:37:34.714Z"
-last_activity: 2026-10-03
-last_activity_desc: Phase 41 execution resumed (wave continue)
+stopped_at: Completed 42-01-PLAN.md
+last_updated: "2026-10-06T16:59:11.706Z"
+last_activity: 2026-10-06
+last_activity_desc: Phase 42 execution started
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 51
-  completed_plans: 39
+  completed_plans: 40
 ---
 
 # Project State
@@ -25,13 +25,13 @@ See: .planning/PROJECT.md (updated 2026-09-30 after Phase 40)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 41 — Admission-Time Allowance Enforcement
+**Current focus:** Phase 42 — mid-run-halt-sse-terminal-status
 Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 10 phases (38-47), 35/35
 requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-30 once Phase 45's
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([██████████] 100%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([████████░░] 78%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -50,10 +50,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 41 (Admission-Time Allowance Enforcement) — EXECUTING
-Plan: 9 of 9
+Phase: 42 (mid-run-halt-sse-terminal-status) — EXECUTING
+Plan: 2 of 12
 Status: Ready to execute
-Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
+Last activity: 2026-10-06 — Phase 42 execution started
 
 ## Performance Metrics
 
@@ -228,6 +228,7 @@ Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 | Phase 41 P07 | 65min | 2 tasks | 17 files |
 | Phase 41 P08 | ~2h | 3 tasks | 21 files |
 | Phase 41 P09 | 40min | 2 tasks | 12 files |
+| Phase 42 P01 | 10min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -346,6 +347,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 41]: Operator webhook secret is held only on WebhookDeliveryService and signs allowance_warning deliveries before any run lookup; never on the row
 - [Phase 41]: build_run_api SSRF-checks treasurer.allowance.webhook.url at boot before spawning anything; enable the webhook only after every replica runs this build (Pitfall 12)
 - [Phase ?]: ADR-0056 (allowance admission model) accepted: tumbling UTC windows, check-only admission, every-limit composition, no role bypass, fail-closed, store-deduped notices; over-admission race closed by Phase 42
+- [Phase ?]: Phase 42-01: option-b design gate; ADR-0057 records check-only boundary, typed HaltCause, fork-as-resume, derived agent budget; true streamed done carries informational halt_reason on crossing
 
 ### Pending Todos
 
@@ -560,9 +562,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-06T14:13:57.968Z
-**Stopped at:** Phase 42 context gathered
-**Resume file:** .planning/phases/42-mid-run-halt-sse-terminal-status/42-CONTEXT.md
+**Last session:** 2026-10-06T16:59:11.672Z
+**Stopped at:** Completed 42-01-PLAN.md
+**Resume file:** None
 
 ## Operator Next Steps
 

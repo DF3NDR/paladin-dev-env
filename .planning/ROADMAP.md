@@ -488,7 +488,7 @@ handling by reusing `TokenBudget`'s existing cutoff mechanism rather than invent
 Plans:
 **Wave 1**
 
-- [ ] 42-01-PLAN.md — Design gate on the consolidated mid-run halt design (G1..G17 against D-05/D-06/D-10/D-12/D-13/D-14/D-18), then ADR-0057, the ADR-0056 dated note and PROMOTION.md to 0058 (wave 1)
+- [x] 42-01-PLAN.md — Design gate on the consolidated mid-run halt design (G1..G17 against D-05/D-06/D-10/D-12/D-13/D-14/D-18), then ADR-0057, the ADR-0056 dated note and PROMOTION.md to 0058 (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

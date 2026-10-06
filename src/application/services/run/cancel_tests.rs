@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use paladin_battalion::engine::{
@@ -25,7 +26,9 @@ use paladin_core::platform::container::directive::Directive;
 use paladin_core::platform::container::execution_result::PaladinResult;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
-use paladin_core::platform::container::run::{AssistantRef, Run, RunId, RunStatus};
+use paladin_core::platform::container::run::{
+    AssistantRef, Run, RunId, RunStatus, RunStreamEventKind,
+};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId, WaypointStatus};
 use paladin_ports::input::run_submission_port::RunSubmissionPort;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
@@ -36,6 +39,7 @@ use paladin_storage::run::sqlite::SqliteRunRepository;
 use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
 use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
 
+use super::events::RunEventBus;
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
 use super::submission::RunSubmissionService;
 use super::worker::RunWorkerPool;
@@ -407,4 +411,137 @@ async fn cancel_is_idempotent_on_a_non_terminal_run() {
         first.status, second.status,
         "calling cancel twice on a non-terminal run must be Ok both times with the same status"
     );
+}
+
+// --- The live `done` for a caller cancel (PLAT-09, D-14, G1a, G1b) ---------------------------
+
+/// Which route a caller's cancel takes to the run.
+#[derive(Clone, Copy)]
+enum CancelRoute {
+    /// Through the instance that dispatches the run: only its child token fires, and the pool has
+    /// NO durable-flag probing wired -- the per-run probe alone must report a caller cancel.
+    SameInstance,
+    /// Through another instance: only the durable flag is written, and the debounced probe must
+    /// observe it.
+    CrossInstance,
+}
+
+/// Run a slow chain through a real pool wired to a live bus, cancel it once it is visibly going
+/// by `route`, and return the live terminal event's payload with the run row's final status.
+async fn cancel_and_capture_done(route: CancelRoute) -> (serde_json::Value, RunStatus) {
+    let (repo_path, repo_url) = temp_sqlite_url("repo-live-done");
+    let (wp_path, wp_url) = temp_sqlite_url("waypoint-live-done");
+
+    let repository: Arc<dyn RunRepositoryPort> =
+        Arc::new(SqliteRunRepository::new(&repo_url).await.unwrap());
+    let waypoint_store = Arc::new(SqliteWaypointStore::new(&wp_url).await.unwrap());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+
+    let graph = build_slow_chain_graph(6, Duration::from_millis(100));
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("slow-chain", graph));
+
+    let bus = Arc::new(RunEventBus::new());
+    let base_engine = Arc::new(WarEngine::new(
+        Arc::new(UnusedPaladinPort),
+        waypoint_store.clone(),
+    ));
+    let mut pool = RunWorkerPool::new(
+        base_engine,
+        waypoint_store.clone(),
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_engine_factory(engine_factory(waypoint_store.clone()))
+    .with_event_bus(bus.clone());
+    if matches!(route, CancelRoute::CrossInstance) {
+        pool = pool.with_cancellation_probing(Duration::from_millis(50));
+    }
+
+    let mut service = RunSubmissionService::new(
+        repository.clone(),
+        queue.clone(),
+        Arc::new(CodeWorkflowResolver::new()),
+    );
+    if matches!(route, CancelRoute::SameInstance) {
+        service = service.with_local_tokens(pool.local_tokens());
+    }
+
+    let (run_id, thread_id) = submit(&repository, &queue, "slow-chain").await;
+    // Subscribe BEFORE dispatch: a broadcast never buffers for a late subscriber.
+    bus.bind(thread_id, run_id.clone()).await;
+    let mut rx = bus.subscribe(&run_id).await.expect("bus must be bound");
+    let run_task = tokio::spawn(async move { pool.run_once().await });
+
+    let mut cancelled = false;
+    let mut terminal = None;
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                if !cancelled && event.kind == RunStreamEventKind::Superstep {
+                    cancelled = true;
+                    let outcome = service.cancel(&run_id, None).await.unwrap();
+                    assert_eq!(
+                        outcome.was_local,
+                        matches!(route, CancelRoute::SameInstance),
+                        "was_local must follow the route"
+                    );
+                }
+                if matches!(
+                    event.kind,
+                    RunStreamEventKind::Done | RunStreamEventKind::Error
+                ) {
+                    terminal = Some(event.payload);
+                    break;
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+    assert!(run_task.await.unwrap().unwrap());
+    let terminal = terminal.expect("the live stream must end with a terminal event");
+
+    // The engine's `done` can precede the row's status write: poll the row to terminal.
+    let status = loop {
+        let run = repository.get(&run_id).await.unwrap().unwrap();
+        if run.status.is_terminal() {
+            break run.status;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    cleanup(&repo_path);
+    cleanup(&wp_path);
+    (terminal, status)
+}
+
+/// D-14, G1b: a caller cancel through the dispatching instance streams `done` with status
+/// `cancelled` (it said `halted` before the per-run probe), names no halt reason, and the row is
+/// `Cancelled` -- even with no durable-flag probing wired.
+#[tokio::test(flavor = "multi_thread")]
+async fn same_instance_cancel_streams_done_cancelled() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (done, status) = cancel_and_capture_done(CancelRoute::SameInstance).await;
+        assert_eq!(done["status"], "cancelled", "live done: {done}");
+        assert!(done.get("halt_reason").is_none(), "{done}");
+        assert_eq!(status, RunStatus::Cancelled);
+    })
+    .await
+    .expect("same_instance_cancel_streams_done_cancelled must finish within 30s");
+}
+
+/// D-14, G1a: a cancel written through another instance streams `done` with status `cancelled`
+/// once the debounced probe observes the flag, and the row is `Cancelled`.
+#[tokio::test(flavor = "multi_thread")]
+async fn cross_instance_cancel_streams_done_cancelled() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (done, status) = cancel_and_capture_done(CancelRoute::CrossInstance).await;
+        assert_eq!(done["status"], "cancelled", "live done: {done}");
+        assert!(done.get("halt_reason").is_none(), "{done}");
+        assert_eq!(status, RunStatus::Cancelled);
+    })
+    .await
+    .expect("cross_instance_cancel_streams_done_cancelled must finish within 30s");
 }

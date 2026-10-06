@@ -72,6 +72,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::{RwLock, broadcast};
+use tokio_util::sync::CancellationToken;
 
 use paladin_core::platform::container::run::{
     Run, RunId, RunStatus, RunStreamEvent, RunStreamEventKind, RunStreamMode,
@@ -391,18 +392,69 @@ impl Default for RunEventBus {
 /// [`map_trace_event`].
 pub struct RunEventBusSink {
     bus: Arc<RunEventBus>,
+    shutdown: Option<CancellationToken>,
 }
 
 impl RunEventBusSink {
     /// Wrap `bus` as a `TraceSink`.
     pub fn new(bus: Arc<RunEventBus>) -> Self {
-        Self { bus }
+        Self {
+            bus,
+            shutdown: None,
+        }
+    }
+
+    /// Attach the worker coordinator's shutdown token (Phase 42 D-15): while
+    /// it is cancelled, a `RunFinished { status: Halted }` that carries no
+    /// `halt_reason` is dropped instead of published.
+    ///
+    /// A worker drain halts the run at a boundary, but the run row stays
+    /// `Running` and the message is requeued -- a drain is not a finish, so no
+    /// subscriber may see a terminal `done` for it. A halt that names a spend
+    /// reason is a genuine finish (the row is recorded `Halted`) and is still
+    /// published during shutdown.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::run::events::{RunEventBus, RunEventBusSink};
+    /// use tokio_util::sync::CancellationToken;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let bus = Arc::new(RunEventBus::new());
+    /// let shutdown = CancellationToken::new();
+    /// let _sink = RunEventBusSink::new(bus).with_shutdown_token(shutdown);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_shutdown_token(mut self, token: CancellationToken) -> Self {
+        self.shutdown = Some(token);
+        self
     }
 }
 
 #[async_trait]
 impl TraceSink for RunEventBusSink {
     async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+        // D-15, G1c: a worker drain is not a finish. While shutting down, the
+        // engine's reasonless `Halted` is the drain's own terminal event; the
+        // run row stays `Running` and is requeued, so nothing terminal is
+        // published. A spend halt (it names a reason) still goes out.
+        if let Some(shutdown) = &self.shutdown
+            && shutdown.is_cancelled()
+            && matches!(
+                record.event,
+                TraceEvent::RunFinished {
+                    status: RunFinishStatus::Halted,
+                    halt_reason: None,
+                    ..
+                }
+            )
+        {
+            return Ok(());
+        }
         let Some((thread_id, kind, payload)) = map_trace_event(record) else {
             return Ok(());
         };
@@ -1596,6 +1648,79 @@ mod tests {
         assert_eq!(kind, RunStreamEventKind::Done);
         assert_eq!(payload["status"], "cancelled");
         assert!(payload.get("halt_reason").is_none(), "{payload}");
+    }
+
+    /// Bind `thread_id` on a fresh bus and return it with a subscriber.
+    async fn bound_bus(
+        thread_id: &ThreadId,
+    ) -> (Arc<RunEventBus>, broadcast::Receiver<RunStreamEvent>) {
+        let bus = Arc::new(RunEventBus::new());
+        let run_id = RunId::new_v7();
+        bus.bind(thread_id.clone(), run_id.clone()).await;
+        let rx = bus
+            .subscribe(&run_id)
+            .await
+            .expect("bound run has a channel");
+        (bus, rx)
+    }
+
+    /// D-15, G1c: while the shutdown token is cancelled, a reasonless halt is
+    /// dropped; a halt that names a reason is published; and with the token
+    /// not cancelled a reasonless halt is published as before.
+    #[tokio::test]
+    async fn bus_sink_drops_a_reasonless_halt_while_shutting_down() {
+        let thread_id = sample_thread();
+
+        // Shutting down + reasonless halt -> nothing published.
+        let (bus, mut rx) = bound_bus(&thread_id).await;
+        let shutdown = CancellationToken::new();
+        let sink = RunEventBusSink::new(Arc::clone(&bus)).with_shutdown_token(shutdown.clone());
+        shutdown.cancel();
+        sink.on_event(run_finished_record(
+            thread_id.clone(),
+            RunFinishStatus::Halted,
+            None,
+        ))
+        .await
+        .unwrap();
+        assert!(
+            matches!(rx.try_recv(), Err(broadcast::error::TryRecvError::Empty)),
+            "a drain must publish no terminal event"
+        );
+
+        // Shutting down + spend halt -> published.
+        sink.on_event(run_finished_record(
+            thread_id.clone(),
+            RunFinishStatus::Halted,
+            Some(HaltReason::LedgerUnavailable),
+        ))
+        .await
+        .unwrap();
+        let event = rx.try_recv().expect("a spend halt is a genuine finish");
+        assert_eq!(event.kind, RunStreamEventKind::Done);
+        assert_eq!(event.payload["status"], "halted");
+
+        // Not shutting down + reasonless halt -> published as today.
+        let (bus2, mut rx2) = bound_bus(&thread_id).await;
+        let live = RunEventBusSink::new(bus2).with_shutdown_token(CancellationToken::new());
+        live.on_event(run_finished_record(
+            thread_id.clone(),
+            RunFinishStatus::Halted,
+            None,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(rx2.try_recv().unwrap().payload["status"], "halted");
+
+        // A cancelled finish is never suppressed, even while shutting down.
+        sink.on_event(run_finished_record(
+            thread_id.clone(),
+            RunFinishStatus::Cancelled,
+            None,
+        ))
+        .await
+        .unwrap();
+        assert_eq!(rx.try_recv().unwrap().payload["status"], "cancelled");
     }
 
     #[tokio::test]

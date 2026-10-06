@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use tokio::sync::broadcast;
 
+use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_battalion::engine::{
     EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, StateNode, StateNodeError,
     WarEngine, WarGraph, graph::GateRequestTemplate,
@@ -35,6 +36,7 @@ use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 use paladin_ports::input::run_event_stream_port::RunEventStreamPort;
+use paladin_ports::input::run_submission_port::RunSubmissionPort;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::run_queue_port::{QueuedRun, RunQueuePort};
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
@@ -59,6 +61,7 @@ use crate::infrastructure::telemetry::PersistingTraceSink;
 
 use super::events::{RunEventBus, RunEventBusSink, RunEventStreamService, map_trace_event};
 use super::resolver::{AssistantResolver, CodeWorkflowResolver};
+use super::submission::RunSubmissionService;
 use super::worker::RunWorkerPool;
 
 /// A [`PaladinPort`] that must never be called -- every graph in this module
@@ -1186,6 +1189,19 @@ enum HaltScript {
     /// A stub guard that halts at the first boundary with the given reason (used for
     /// `ledger_unavailable`, which needs no ledger at all).
     Guard(HaltReason),
+    /// A caller cancel through the instance that dispatches the run (the in-process route: only
+    /// the run's own child token fires; no durable-flag probing is wired, D-14, G1b).
+    CancelSameInstance,
+    /// A caller cancel through another instance (the durable flag only, observed by the
+    /// debounced probe, G1a).
+    CancelCrossInstance,
+}
+
+impl HaltScript {
+    /// Whether this script ends with a caller cancel rather than a halt.
+    fn is_cancel(&self) -> bool {
+        matches!(self, Self::CancelSameInstance | Self::CancelCrossInstance)
+    }
 }
 
 /// One halted run's persisted artefacts plus the `done` its live subscriber saw.
@@ -1242,6 +1258,10 @@ async fn drive_halted_run(script: &HaltScript) -> Option<HaltedRun> {
     let mut ledger_for_window = None;
     let graph = match script {
         HaltScript::Guard(_) => build_chain_graph(3, Duration::from_millis(2)),
+        // Slow enough that the cancel lands while the run is still going.
+        HaltScript::CancelSameInstance | HaltScript::CancelCrossInstance => {
+            build_chain_graph(6, Duration::from_millis(100))
+        }
         HaltScript::Spend => {
             let (path, url) = temp_sqlite_url("halted_done");
             let ledger = Arc::new(SqliteTreasuryLedger::new(&url).await.unwrap());
@@ -1314,7 +1334,9 @@ async fn drive_halted_run(script: &HaltScript) -> Option<HaltedRun> {
 
     let stub_reason = match script {
         HaltScript::Guard(reason) => Some(reason.clone()),
-        HaltScript::Spend => None,
+        HaltScript::Spend | HaltScript::CancelSameInstance | HaltScript::CancelCrossInstance => {
+            None
+        }
     };
     let factory_store = waypoints.clone();
     let engine_factory: Arc<
@@ -1351,6 +1373,22 @@ async fn drive_halted_run(script: &HaltScript) -> Option<HaltedRun> {
     if let Some(treasurer) = treasurer {
         pool = pool.with_treasurer(treasurer);
     }
+    // The cross-instance route needs the debounced durable-flag probe; the same-instance route
+    // deliberately has none, so it proves the per-run probe alone reports a local cancel.
+    if matches!(script, HaltScript::CancelCrossInstance) {
+        pool = pool.with_cancellation_probing(Duration::from_millis(50));
+    }
+    // The submission service a cancelling caller talks to: wired to this pool's local-token
+    // registry for the same-instance route, and to nothing (another instance) otherwise.
+    let mut cancel_service = RunSubmissionService::new(
+        repository.clone(),
+        queue.clone(),
+        Arc::new(CodeWorkflowResolver::new()),
+    );
+    if matches!(script, HaltScript::CancelSameInstance) {
+        cancel_service = cancel_service.with_local_tokens(pool.local_tokens());
+    }
+    let mut cancel_pending = script.is_cancel();
 
     // Subscribe BEFORE dispatch: a broadcast never buffers for a late subscriber.
     bus.bind(thread_id.clone(), run_id.clone()).await;
@@ -1361,6 +1399,11 @@ async fn drive_halted_run(script: &HaltScript) -> Option<HaltedRun> {
     loop {
         match rx.recv().await {
             Ok(event) => {
+                // A cancel scenario cancels once, as soon as the run is visibly going.
+                if cancel_pending && event.kind == RunStreamEventKind::Superstep {
+                    cancel_pending = false;
+                    cancel_service.cancel(&run_id, None).await.unwrap();
+                }
                 if matches!(
                     event.kind,
                     RunStreamEventKind::Done | RunStreamEventKind::Error
@@ -1742,4 +1785,158 @@ async fn replay_trusts_the_row_over_the_recorded_status() {
     })
     .await
     .expect("replay_trusts_the_row_over_the_recorded_status timed out");
+}
+
+// --- Cancel and drain: the terminal event says what the row says (PLAT-09, D-05, D-14, D-15) ----
+
+/// D-05 assumption-delta invariant: every halt cause -- an allowance-exhausted halt, a
+/// ledger-unavailable halt, a caller cancel through the dispatching instance and a caller cancel
+/// through another instance -- is driven through a real worker pool, and for each one the run
+/// row's status, the live `done` status, the degraded `done` status and the replay `done` status
+/// are the same string. A spend halt reads `halted`; a caller cancel reads `cancelled`.
+#[tokio::test(flavor = "multi_thread")]
+async fn every_halt_cause_maps_to_one_status_on_every_leg() {
+    tokio::time::timeout(Duration::from_secs(90), async {
+        let scripts = [
+            ("allowance_exhausted", HaltScript::Spend, "halted"),
+            (
+                "ledger_unavailable",
+                HaltScript::Guard(HaltReason::LedgerUnavailable),
+                "halted",
+            ),
+            (
+                "same_instance_cancel",
+                HaltScript::CancelSameInstance,
+                "cancelled",
+            ),
+            (
+                "cross_instance_cancel",
+                HaltScript::CancelCrossInstance,
+                "cancelled",
+            ),
+        ];
+        for (label, script, expected) in scripts {
+            let rig = halted_run(script).await;
+            let row = rig.repository.get(&rig.run_id).await.unwrap().unwrap();
+            assert_eq!(row.status.as_str(), expected, "{label}: the row status");
+
+            let (live_kind, live) = rig.live_terminal.clone();
+            let (degraded_kind, degraded) = degraded_terminal(&rig).await;
+            let (replay_kind, replay) = replay_terminal(&rig).await;
+            for (leg, kind, payload) in [
+                ("live", live_kind, &live),
+                ("degraded", degraded_kind, &degraded),
+                ("replay", replay_kind, &replay),
+            ] {
+                assert_eq!(
+                    kind,
+                    RunStreamEventKind::Done,
+                    "{label}/{leg}: a halt or a cancel is a done, never an error"
+                );
+                assert_eq!(
+                    payload["status"],
+                    row.status.as_str(),
+                    "{label}/{leg}: the done status must equal the row status: {payload}"
+                );
+            }
+            if expected == "cancelled" {
+                assert!(
+                    live.get("halt_reason").is_none(),
+                    "{label}: a caller cancel names no Treasurer reason: {live}"
+                );
+            }
+            rig.release();
+        }
+    })
+    .await
+    .expect("every_halt_cause_maps_to_one_status_on_every_leg timed out");
+}
+
+/// D-15, G1c: a worker drain streams no terminal event. The shutdown halts the run at a
+/// boundary; the row stays `Running`, the message is requeued, and no subscriber sees a `done`
+/// (or `error`) for a run that is still running.
+#[tokio::test(flavor = "multi_thread")]
+async fn drain_streams_no_done_and_leaves_the_run_running() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let bus = Arc::new(RunEventBus::new());
+        let graph = build_chain_graph(6, Duration::from_millis(200));
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("drain-chain", graph));
+
+        let coordinator = ShutdownCoordinator::new();
+        let factory_store = store.clone();
+        let engine_factory: Arc<
+            dyn Fn(tokio_util::sync::CancellationToken) -> WarEngine<InMemoryWaypointStore>
+                + Send
+                + Sync,
+        > = Arc::new(move |token| {
+            WarEngine::new(Arc::new(UnusedPaladinPort), factory_store.clone())
+                .with_cancellation_token(token)
+        });
+        let pool = RunWorkerPool::new(
+            Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone())),
+            store.clone(),
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_engine_factory(engine_factory)
+        .with_event_bus(bus.clone())
+        .with_shutdown_coordinator(coordinator.clone());
+
+        let (run_id, thread_id) = submit(&repository, &queue, "drain-chain").await;
+        bus.bind(thread_id, run_id.clone()).await;
+        let mut rx = bus.subscribe(&run_id).await.expect("bus must be bound");
+        let run_task = tokio::spawn(async move { pool.run_once().await });
+
+        // Wait until the run is visibly going, then drain the worker mid-run.
+        loop {
+            match rx.recv().await {
+                Ok(event) if event.kind == RunStreamEventKind::Superstep => break,
+                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => {
+                    panic!("the run ended before the drain started")
+                }
+            }
+        }
+        let outcome = coordinator.cancel_and_wait(Duration::from_secs(10)).await;
+        assert!(outcome.drained(), "the in-flight run must drain in grace");
+        assert!(run_task.await.unwrap().unwrap());
+
+        // Everything the run published is already on the channel (or the channel closed on
+        // unbind); read it out under a bounded wait and assert nothing terminal is there.
+        let mut terminal = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
+                Ok(Ok(event)) => {
+                    if matches!(
+                        event.kind,
+                        RunStreamEventKind::Done | RunStreamEventKind::Error
+                    ) {
+                        terminal.push(event.payload);
+                    }
+                }
+                Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+                Ok(Err(broadcast::error::RecvError::Closed)) | Err(_) => break,
+            }
+        }
+        assert!(
+            terminal.is_empty(),
+            "a drain is not a finish: no terminal event may reach a subscriber, got {terminal:?}"
+        );
+
+        let row = repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(
+            row.status,
+            RunStatus::Running,
+            "a drained run stays Running -- it is a redelivery point, not a finish"
+        );
+        assert_eq!(queue.depth().await.unwrap(), 1, "the message is requeued");
+    })
+    .await
+    .expect("drain_streams_no_done_and_leaves_the_run_running timed out");
 }

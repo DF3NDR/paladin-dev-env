@@ -16,3 +16,13 @@ Out-of-scope discoveries logged during execution (not fixed by the plan that fou
   Downstream Consumers line, already carrying the 42-01 dated note) still says Phase 42 closes the
   over-admission race with a reservation at the superstep boundary; ADR-0057 supersedes that
   (check-only boundary, race accepted). Plan 42-12's closeout is the natural place to reword it.
+
+## Found during 42-06 (2026-10-06)
+
+- `paladin-eval`'s `RunStatusValue` (`crates/paladin-eval/src/scenario.rs`) mirrors
+  `RunFinishStatus` field for field and has no `Cancelled` value, so an eval scenario cannot assert
+  `run_status: cancelled` now that the engine reports a caller cancel as `Cancelled`
+  (`run_status_matches` uses `matches!`, so a cancelled finish simply matches no expected value).
+  Adding the value changes the generated scenario JSON schema and `paladin-eval`'s public surface,
+  neither in 42-06's file scope; no shipped scenario cancels a run. A later plan or phase can add
+  `RunStatusValue::Cancelled` with its schema snapshot.

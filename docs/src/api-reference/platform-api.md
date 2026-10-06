@@ -105,7 +105,9 @@ The engine's own vocabulary and the run's status vocabulary deliberately differ 
 the **Waypoint** halted (`RunOutcome::Halted`), while the **run** is recorded `Cancelled`. A plain
 graceful-shutdown drain (no cancel requested) also produces a `Halted` Waypoint, but the run stays
 `Running` for immediate redelivery rather than moving to `Cancelled` — only an explicit
-`POST .../cancel` produces the `Cancelled` run status.
+`POST .../cancel` produces the `Cancelled` run status. The live stream follows the same split: a
+caller-cancelled run's `done` says `cancelled` (see [Streaming](#streaming) below), and a
+worker drain emits no terminal event at all.
 
 ### Halted runs
 
@@ -188,7 +190,7 @@ Seven wire event names are frozen for this milestone (D-25); every event also ca
 | `node_finished` | `{ superstep, node_id, outcome }` |
 | `state_delta` | `{ superstep, fields, bytes }` — changed field **names** and a byte-size count only, **never a value** |
 | `parley` | `{ waypoint_id, parleys }` |
-| `done` | `{ status, waypoint_id, halt_reason? }` — `halt_reason` is present only for a run that halted on spend (see below) |
+| `done` | `{ status, waypoint_id, halt_reason? }` — `status` is `completed`, `halted`, `cancelled` or `awaiting_input`; `halt_reason` is present only for a run that halted on spend (see below) |
 | `error` | `{ status, message, waypoint_id }` |
 
 If the run is executing on **this** instance, live progress bridges from a `TraceSink` adapter
@@ -215,6 +217,19 @@ payload without a `halt_reason` key. The live, degraded and replay paths agree o
 run stopped; a replayed stream takes both from the run row once the row is terminal, and
 `waypoint_id` follows each path's own rule (`null` on the live and replay paths, the row's final
 Waypoint id on the degraded path).
+
+**`done` and a caller cancel.** A run a caller cancelled with `POST /v1/runs/{run_id}/cancel`
+streams `done` with `status: "cancelled"` and no `halt_reason` key, equal to the `cancelled` status
+`GET /v1/runs/{run_id}` reports -- whether the cancel reached the instance that is running the run
+(the in-process route) or only the durable flag through another instance (observed at the next
+superstep boundary). It said `halted` before; a client that matched on `halted` to detect a cancel
+must now match `cancelled`. Spend halts are unchanged: `status: "halted"` plus the reason.
+
+**A worker drain is not a finish.** When a worker shuts down mid-run, the run row stays `running`
+and its queue message is redelivered, so no `done` (and no `error`) is emitted for it: a subscriber
+sees the stream end without a terminal event. Reconnect to follow the redelivered run, which
+streams on whichever instance picks it up. A halt that carries a spend reason is a genuine finish
+and is still emitted during shutdown.
 
 A 15-second heartbeat comment line is emitted on **both** paths to defeat idle-proxy timeouts.
 

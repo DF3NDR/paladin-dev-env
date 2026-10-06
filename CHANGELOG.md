@@ -332,6 +332,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The SSE `done` says `cancelled` for a caller cancel, and a worker drain emits no terminal
+  event (PLAT-09; Phase 42 plan 42-06).** A run a caller cancelled streamed `done` with
+  `status: "halted"` while `GET /v1/runs/{id}` said `cancelled`; the stream now agrees with the
+  row on both the same-instance and the cross-instance route, through a new
+  `RunFinishStatus::Cancelled` (the enum is now `#[non_exhaustive]`) and a per-run
+  `PerRunCancelProbe` the worker attaches to every engine. A graceful worker shutdown no longer
+  emits a `halted` `done` for a run that is still `running` and requeued
+  (`RunEventBusSink::with_shutdown_token`). A client that matched `halted` to detect a cancel must
+  also match `cancelled`. See `MIGRATION.md` §9.2 and §9.6.
+
 - **`SubmitRun.attributed_to` and `CreateRunSchedule.created_by` (Phase 41 plan 41-05).** Both
   are new `Option<RunAttribution>` fields on plain public structs, so a caller that builds
   `SubmitRun { .. }` or `CreateRunSchedule { .. }` with a struct literal must add the field

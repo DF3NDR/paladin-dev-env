@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-06 19:57:05 UTC
+# Public API Surface - Generated 2026-10-06 20:40:19 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -3068,6 +3068,18 @@ impl core::marker::Unpin for paladin::application::services::run::cancel::LocalR
 impl core::marker::UnsafeUnpin for paladin::application::services::run::cancel::LocalRunTokens
 impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::run::cancel::LocalRunTokens
 impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::run::cancel::LocalRunTokens
+pub struct paladin::application::services::run::cancel::PerRunCancelProbe
+impl paladin::application::services::run::cancel::PerRunCancelProbe
+pub fn paladin::application::services::run::cancel::PerRunCancelProbe::new(core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::cancellation_probe::CancellationProbe>>, tokio_util::sync::cancellation_token::CancellationToken, tokio_util::sync::cancellation_token::CancellationToken) -> Self
+impl paladin_ports::output::cancellation_probe::CancellationProbe for paladin::application::services::run::cancel::PerRunCancelProbe
+pub fn paladin::application::services::run::cancel::PerRunCancelProbe::is_cancelled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::waypoint::ThreadId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl core::marker::Freeze for paladin::application::services::run::cancel::PerRunCancelProbe
+impl core::marker::Send for paladin::application::services::run::cancel::PerRunCancelProbe
+impl core::marker::Sync for paladin::application::services::run::cancel::PerRunCancelProbe
+impl core::marker::Unpin for paladin::application::services::run::cancel::PerRunCancelProbe
+impl core::marker::UnsafeUnpin for paladin::application::services::run::cancel::PerRunCancelProbe
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::run::cancel::PerRunCancelProbe
+impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::run::cancel::PerRunCancelProbe
 pub mod paladin::application::services::run::events
 pub struct paladin::application::services::run::events::RunEventBus
 impl paladin::application::services::run::events::RunEventBus
@@ -3089,6 +3101,7 @@ impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::r
 pub struct paladin::application::services::run::events::RunEventBusSink
 impl paladin::application::services::run::events::RunEventBusSink
 pub fn paladin::application::services::run::events::RunEventBusSink::new(alloc::sync::Arc<paladin::application::services::run::events::RunEventBus>) -> Self
+pub fn paladin::application::services::run::events::RunEventBusSink::with_shutdown_token(self, tokio_util::sync::cancellation_token::CancellationToken) -> Self
 impl paladin_ports::output::trace_sink_port::TraceSink for paladin::application::services::run::events::RunEventBusSink
 pub fn paladin::application::services::run::events::RunEventBusSink::on_event<'life0, 'async_trait>(&'life0 self, paladin_core::platform::container::trace::TraceRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), paladin_ports::output::trace_sink_port::TraceSinkError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 impl core::marker::Freeze for paladin::application::services::run::events::RunEventBusSink
@@ -3883,6 +3896,18 @@ impl core::marker::Unpin for paladin::application::services::run::cancel::LocalR
 impl core::marker::UnsafeUnpin for paladin::application::services::run::cancel::LocalRunTokens
 impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::run::cancel::LocalRunTokens
 impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::run::cancel::LocalRunTokens
+pub struct paladin::application::services::run::PerRunCancelProbe
+impl paladin::application::services::run::cancel::PerRunCancelProbe
+pub fn paladin::application::services::run::cancel::PerRunCancelProbe::new(core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::cancellation_probe::CancellationProbe>>, tokio_util::sync::cancellation_token::CancellationToken, tokio_util::sync::cancellation_token::CancellationToken) -> Self
+impl paladin_ports::output::cancellation_probe::CancellationProbe for paladin::application::services::run::cancel::PerRunCancelProbe
+pub fn paladin::application::services::run::cancel::PerRunCancelProbe::is_cancelled<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::waypoint::ThreadId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = bool> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+impl core::marker::Freeze for paladin::application::services::run::cancel::PerRunCancelProbe
+impl core::marker::Send for paladin::application::services::run::cancel::PerRunCancelProbe
+impl core::marker::Sync for paladin::application::services::run::cancel::PerRunCancelProbe
+impl core::marker::Unpin for paladin::application::services::run::cancel::PerRunCancelProbe
+impl core::marker::UnsafeUnpin for paladin::application::services::run::cancel::PerRunCancelProbe
+impl !core::panic::unwind_safe::RefUnwindSafe for paladin::application::services::run::cancel::PerRunCancelProbe
+impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::run::cancel::PerRunCancelProbe
 pub struct paladin::application::services::run::ResolvedAssistant
 pub paladin::application::services::run::ResolvedAssistant::allowed_roles: alloc::vec::Vec<paladin_core::platform::container::user::UserRole>
 pub paladin::application::services::run::ResolvedAssistant::reference: paladin_core::platform::container::run::AssistantRef
@@ -3919,6 +3944,7 @@ impl !core::panic::unwind_safe::UnwindSafe for paladin::application::services::r
 pub struct paladin::application::services::run::RunEventBusSink
 impl paladin::application::services::run::events::RunEventBusSink
 pub fn paladin::application::services::run::events::RunEventBusSink::new(alloc::sync::Arc<paladin::application::services::run::events::RunEventBus>) -> Self
+pub fn paladin::application::services::run::events::RunEventBusSink::with_shutdown_token(self, tokio_util::sync::cancellation_token::CancellationToken) -> Self
 impl paladin_ports::output::trace_sink_port::TraceSink for paladin::application::services::run::events::RunEventBusSink
 pub fn paladin::application::services::run::events::RunEventBusSink::on_event<'life0, 'async_trait>(&'life0 self, paladin_core::platform::container::trace::TraceRecord) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), paladin_ports::output::trace_sink_port::TraceSinkError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 impl core::marker::Freeze for paladin::application::services::run::events::RunEventBusSink
@@ -8413,4 +8439,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4195
+Total public items: 4203

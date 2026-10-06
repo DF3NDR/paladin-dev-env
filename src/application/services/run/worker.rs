@@ -1209,8 +1209,13 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     // then hands this exact instance to the engine too, so
                     // every record in this run comes from the ONE counter
                     // (D-03), never two independent dispatchers racing.
+                    // D-15: a drain is not a finish -- the sink drops a reasonless
+                    // `Halted` once the shutdown token is cancelled.
                     let bus_sink = self.event_bus.as_ref().map(|bus| {
-                        Arc::new(RunEventBusSink::new(Arc::clone(bus))) as Arc<dyn TraceSink>
+                        Arc::new(
+                            RunEventBusSink::new(Arc::clone(bus))
+                                .with_shutdown_token(self.coordinator.token()),
+                        ) as Arc<dyn TraceSink>
                     });
                     let base_sink =
                         build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone());
@@ -1487,10 +1492,11 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // 45-02 (D-14): the graph path's per-run trace assembly. No engine
         // hosts this run, so the dispatcher is a standalone one built from
         // the SAME sink composition `run_once` uses.
-        let bus_sink = self
-            .event_bus
-            .as_ref()
-            .map(|bus| Arc::new(RunEventBusSink::new(Arc::clone(bus))) as Arc<dyn TraceSink>);
+        let bus_sink = self.event_bus.as_ref().map(|bus| {
+            Arc::new(
+                RunEventBusSink::new(Arc::clone(bus)).with_shutdown_token(self.coordinator.token()),
+            ) as Arc<dyn TraceSink>
+        });
         let base_sink = build_run_sink(&self.trace_config, bus_sink, self.run_trace_port.clone());
         let herald_sink = self.herald.as_ref().map(|herald| {
             Arc::new(HeraldTraceSink::new(

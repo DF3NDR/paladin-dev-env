@@ -751,6 +751,46 @@ pub async fn build_run_api(
         None => None,
     };
 
+    // ALLOW-04, D-18, C6: the once-per-window notice store, opened once whenever a run store is
+    // configured -- independent of whether any allowance exists (reading an empty table is
+    // cheap, and it keeps the worker correct across a config change). The worker reads a
+    // run's notices on its first dispatch and emits one allowance trace event per row; the
+    // Treasurer below claims through the same store.
+    let treasury_notices = build_treasury_notices(&configs.run_store).await?;
+    // D-06, C14: one Treasurer over the run store's own ledger, built only when an allowance
+    // entry exists (no entries => admission is a no-op and nothing is built). Phase 42 G3: it
+    // is built BEFORE the worker pool so the pool and the submission service share the one
+    // instance (the pool attaches its per-run spend guard, the service admits through it).
+    let treasurer: Option<Arc<Treasurer>> = if treasurer_config.allowance.is_empty() {
+        None
+    } else {
+        let policy = treasurer_config
+            .allowance_policy()
+            .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
+        // Enforcement must never be skipped: a configured run store always yields a ledger, so
+        // `None` here is an error, not a reason to run unguarded.
+        let ledger = treasury_ledger.as_ref().ok_or(
+            "treasurer.allowance has entries but no treasury ledger was built from run_store.backend",
+        )?;
+        // ALLOW-04, D-16: the once-per-window notice store beside the ledger. A configured run
+        // store always yields one, exactly like the ledger.
+        let notices = treasury_notices.as_ref().ok_or(
+            "treasurer.allowance has entries but no treasury notice store was built from run_store.backend",
+        )?;
+        let mut treasurer =
+            Treasurer::new(policy, Arc::clone(ledger)).with_notices(Arc::clone(notices));
+        // ALLOW-04, D-17: the operator webhook rides the SAME durable delivery queue the run
+        // webhooks use (never a second HTTP client). The URL was SSRF-checked above; the
+        // signing secret is attached to the delivery service below, never to this target.
+        if let Some(webhook) = &treasurer_config.allowance.webhook {
+            treasurer = treasurer.with_operator_webhook(OperatorNoticeTarget::new(
+                webhook.url.clone(),
+                Arc::clone(&webhook_repository),
+            ));
+        }
+        Some(Arc::new(treasurer))
+    };
+
     let mut pool = RunWorkerPool::new(
         base_engine,
         Arc::clone(&erased_store),
@@ -783,53 +823,17 @@ pub async fn build_run_api(
     if let Some(ledger) = &treasury_ledger {
         pool = pool.with_treasury_ledger(Arc::clone(ledger));
     }
-    // ALLOW-04, D-18, C6: the once-per-window notice store, opened once whenever a run store is
-    // configured -- independent of whether any allowance exists (reading an empty table is
-    // cheap, and it keeps the worker correct across a config change). The worker reads a
-    // run's notices on its first dispatch and emits one allowance trace event per row; the
-    // Treasurer below claims through the same store.
-    let treasury_notices = build_treasury_notices(&configs.run_store).await?;
     if let Some(notices) = &treasury_notices {
         pool = pool.with_treasury_notices(Arc::clone(notices));
+    }
+    // ALLOW-03, Phase 42 D-04, G3: the SAME Treasurer the submission service admits through
+    // also reaches the pool, which attaches a per-run spend guard to every engine it builds.
+    if let Some(treasurer) = &treasurer {
+        pool = pool.with_treasurer(Arc::clone(treasurer));
     }
     let pool = Arc::new(pool);
 
     let mut tasks = Arc::clone(&pool).spawn(RunWorkerOptions::from(&configs.run_worker));
-
-    // D-06, C14: one Treasurer over the run store's own ledger, built only when an allowance
-    // entry exists (no entries => admission is a no-op and nothing is built).
-    let treasurer: Option<Arc<dyn AllowanceAdmissionPort>> = if treasurer_config
-        .allowance
-        .is_empty()
-    {
-        None
-    } else {
-        let policy = treasurer_config
-            .allowance_policy()
-            .map_err(|e| format!("invalid treasurer configuration: {e}"))?;
-        // Enforcement must never be skipped: a configured run store always yields a ledger, so
-        // `None` here is an error, not a reason to run unguarded.
-        let ledger = treasury_ledger.as_ref().ok_or(
-            "treasurer.allowance has entries but no treasury ledger was built from run_store.backend",
-        )?;
-        // ALLOW-04, D-16: the once-per-window notice store beside the ledger. A configured run
-        // store always yields one, exactly like the ledger.
-        let notices = treasury_notices.as_ref().ok_or(
-            "treasurer.allowance has entries but no treasury notice store was built from run_store.backend",
-        )?;
-        let mut treasurer =
-            Treasurer::new(policy, Arc::clone(ledger)).with_notices(Arc::clone(notices));
-        // ALLOW-04, D-17: the operator webhook rides the SAME durable delivery queue the run
-        // webhooks use (never a second HTTP client). The URL was SSRF-checked above; the
-        // signing secret is attached to the delivery service below, never to this target.
-        if let Some(webhook) = &treasurer_config.allowance.webhook {
-            treasurer = treasurer.with_operator_webhook(OperatorNoticeTarget::new(
-                webhook.url.clone(),
-                Arc::clone(&webhook_repository),
-            ));
-        }
-        Some(Arc::new(treasurer) as Arc<dyn AllowanceAdmissionPort>)
-    };
 
     let mut submission_service = RunSubmissionService::new(
         Arc::clone(&run_repository),
@@ -839,6 +843,8 @@ pub async fn build_run_api(
     .with_local_tokens(pool.local_tokens())
     .with_waypoints(Arc::clone(&waypoint_store))
     .with_ssrf_guard(SsrfGuard::new(configs.webhooks.allow_private));
+    let treasurer: Option<Arc<dyn AllowanceAdmissionPort>> =
+        treasurer.map(|treasurer| treasurer as Arc<dyn AllowanceAdmissionPort>);
     if let Some(treasurer) = &treasurer {
         submission_service = submission_service.with_treasurer(Arc::clone(treasurer));
     }

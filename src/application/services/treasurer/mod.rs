@@ -26,9 +26,17 @@
 //!   `WebhookDeliveryService`. This module never builds an HTTP client and never holds the
 //!   signing secret -- the delivery service does (C3).
 //!
+//! - **One evaluation, two callers** (ALLOW-03, Phase 42 D-17): admission and the per-boundary
+//!   [`TreasurerSpendGuard`] share one ceiling evaluation (`Treasurer::evaluate`): the same
+//!   ceiling order, the same single truncated store-clock read, the same `balance >= ceiling`
+//!   predicate, and the same stop at the first exhausted ceiling. The guard is how an allowance
+//!   exhausted mid-run halts the run at its next superstep boundary.
+//!
 //! This module imports `paladin_core` and `paladin_ports` only, never a storage adapter
 //! (hexagonal, D-06).
 
+mod evaluate;
+mod guard;
 mod policy;
 mod window;
 
@@ -38,13 +46,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::allowance::{
-    Admission, AllowanceNotice, AllowanceRefusal, AllowanceWarning, NoticeOutcome, NoticeRecord,
+    Admission, AllowanceNotice, AllowanceWarning, NoticeOutcome, NoticeRecord,
     crosses_warn_threshold,
 };
 use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::principal::RunAttribution;
 use paladin_core::platform::container::run::{RunEventKind, RunId};
-use paladin_core::platform::container::treasury_ledger::{BalanceQuery, format_cost};
+use paladin_core::platform::container::treasury_ledger::format_cost;
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_core::platform::container::webhook::{WebhookDelivery, WebhookDeliveryId};
 use paladin_ports::input::allowance_admission_port::{AdmissionError, AllowanceAdmissionPort};
@@ -54,6 +62,7 @@ use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
 use crate::application::services::run::webhook::AllowanceWarningPayload;
 
+pub use guard::TreasurerSpendGuard;
 pub use policy::{AllowancePolicy, Ceiling, ScopeAllowance};
 pub use window::window_for;
 
@@ -296,79 +305,46 @@ impl AllowanceAdmissionPort for Treasurer {
         subject: &RunAttribution,
         run_id: Option<&RunId>,
     ) -> Result<Admission, AdmissionError> {
-        let ceilings = self.policy.ceilings_for(subject);
-        if ceilings.is_empty() {
+        // The one shared evaluation (Phase 42 D-17): the same ceiling order, one truncated
+        // store-clock read and `balance >= ceiling` predicate the mid-run boundary guard uses.
+        let Some(evaluation) = self.evaluate(subject).await? else {
             // D-03, D-10: no entry means no ledger read and no way to fail closed.
             return Ok(Admission::none());
+        };
+        let evaluated_at = evaluation.evaluated_at;
+
+        if let Some(refusal) = evaluation.exhausted {
+            log::warn!(
+                "allowance refused: scope={} limit={} tenant={} balance={} ceiling={}",
+                refusal.scope_kind.as_str(),
+                refusal.limit_kind.as_str(),
+                subject.tenant_id,
+                format_cost(&refusal.balance),
+                format_cost(&refusal.ceiling),
+            );
+            return Err(AdmissionError::Refused(refusal));
         }
 
-        // One store-clock read per admission, truncated to whole seconds, shared by every
-        // ceiling and by Retry-After (ALLOW-01, C8).
-        let now = self
-            .ledger
-            .store_now()
-            .await
-            .map_err(|e| backend(format!("store clock unavailable: {e}")))?;
-        let evaluated_at = DateTime::<Utc>::from_timestamp(now.timestamp(), 0)
-            .ok_or_else(|| backend("store clock is outside the representable range"))?;
-
-        // Ceilings whose balance has reached its warn threshold; claimed only if every ceiling
-        // admits (a refused request notifies nothing -- the refusal is its own signal).
-        let mut crossings: Vec<Crossing<'_>> = Vec::new();
-
-        for ceiling in &ceilings {
-            let window = match ceiling.period_secs {
-                Some(period) => Some(window_for(evaluated_at, period).ok_or_else(|| {
-                    backend(format!(
-                        "allowance period of {period}s has no representable window"
-                    ))
-                })?),
-                None => None,
-            };
-            let query = BalanceQuery {
-                tenant_id: ceiling.tenant_id.clone(),
-                api_key_id: ceiling.api_key_id.clone(),
-                currency: self.policy.currency().clone(),
-                since: window.map(|(start, _)| start),
-                until: window.map(|(_, end)| end),
-            };
-            let balance = self
-                .ledger
-                .balance(query)
-                .await
-                .map_err(|e| backend(format!("balance unavailable: {e}")))?;
-
-            // D-05: a balance exactly at the ceiling is exhausted. Integer comparison only.
-            if balance.nanos() >= ceiling.ceiling_nanos {
-                let refusal = AllowanceRefusal {
-                    scope_kind: ceiling.scope_kind,
-                    limit_kind: ceiling.limit_kind,
-                    ceiling: Cost::new(ceiling.ceiling_nanos, self.policy.currency().clone()),
-                    balance,
-                    window,
-                    evaluated_at,
-                };
-                log::warn!(
-                    "allowance refused: scope={} limit={} tenant={} balance={} ceiling={}",
-                    refusal.scope_kind.as_str(),
-                    refusal.limit_kind.as_str(),
-                    subject.tenant_id,
-                    format_cost(&refusal.balance),
-                    format_cost(&refusal.ceiling),
-                );
-                return Err(AdmissionError::Refused(refusal));
-            }
-
-            // D-15: integer-only crossing test on the PRE-admission balance. A balance at the
-            // ceiling was refused above, so `warn_at: 100` can never reach here.
-            if crosses_warn_threshold(balance.nanos(), ceiling.ceiling_nanos, ceiling.warn_at) {
-                crossings.push(Crossing {
-                    ceiling,
-                    balance,
-                    window,
-                });
-            }
-        }
+        // Ceilings whose balance has reached its warn threshold; claimed only because every
+        // ceiling admits (a refused request notifies nothing -- the refusal is its own signal).
+        // D-15: integer-only crossing test on the PRE-admission balance. A balance at the
+        // ceiling was refused above, so `warn_at: 100` can never reach here.
+        let crossings: Vec<Crossing<'_>> = evaluation
+            .readings
+            .iter()
+            .filter(|reading| {
+                crosses_warn_threshold(
+                    reading.balance.nanos(),
+                    reading.ceiling.ceiling_nanos,
+                    reading.ceiling.warn_at,
+                )
+            })
+            .map(|reading| Crossing {
+                ceiling: &reading.ceiling,
+                balance: reading.balance.clone(),
+                window: reading.window,
+            })
+            .collect();
 
         // The admitted path: claim every crossing's once-per-window notice (D-16). With no
         // notice store attached the warn leg is off.

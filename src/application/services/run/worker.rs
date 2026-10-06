@@ -38,7 +38,7 @@ use tokio_util::sync::CancellationToken;
 
 use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_battalion::engine::{
-    EngineError, NodeSpec, RunOutcome, TraceDispatcher, WarEngine, WarGraph,
+    EngineError, HaltCause, NodeSpec, RunOutcome, TraceDispatcher, WarEngine, WarGraph,
 };
 use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
 use paladin_core::platform::container::heartbeat::HeartbeatHandle;
@@ -69,6 +69,7 @@ use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
 use paladin_ports::output::waypoint_port::{WaypointError, WaypointPort};
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
+use crate::application::services::treasurer::Treasurer;
 use crate::config::trace::TraceConfig;
 use crate::infrastructure::telemetry::{HeraldTraceSink, build_run_sink};
 
@@ -483,7 +484,39 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                 final_waypoint_id: Some(waypoint.to_string()),
             },
         },
-        RunOutcome::Halted { waypoint, cause: _ } => {
+        // D-05 (Phase 42): the engine's typed cause decides how a halt is recorded.
+        // A spend halt and a probe-observed cancel are decided by the cause alone; only the
+        // residual in-process token halt still consults the side flags (defence in depth, G1a).
+        RunOutcome::Halted {
+            waypoint,
+            cause: HaltCause::Spend(_),
+        } => OutcomeAction::Transition {
+            // ALLOW-03: an exhausted allowance halts the run at its next boundary. The run is
+            // recorded Halted with NO error -- a halt is a resume point, not a failure -- whether
+            // or not the pool is draining or a cancel flag is set (a drain must not requeue a run
+            // the Treasurer has already stopped).
+            to: RunStatus::Halted,
+            outcome: RunOutcomeRecord {
+                error: None,
+                output: None,
+                final_waypoint_id: Some(waypoint.to_string()),
+            },
+        },
+        RunOutcome::Halted {
+            waypoint,
+            cause: HaltCause::CancelRequested,
+        } => OutcomeAction::Transition {
+            // The durable cancel probe observed the caller's request: the *waypoint* halted,
+            // the *run* is recorded Cancelled (D-16).
+            to: RunStatus::Cancelled,
+            outcome: RunOutcomeRecord {
+                error: None,
+                output: None,
+                final_waypoint_id: Some(waypoint.to_string()),
+            },
+        },
+        // `HaltCause::Token` and any future cause: today's three-way logic, unchanged.
+        RunOutcome::Halted { waypoint, .. } => {
             if cancel_requested {
                 // D-16: the caller asked for this. The *waypoint* halted;
                 // the *run* is recorded Cancelled.
@@ -649,6 +682,14 @@ pub struct RunWorkerPool<W: WaypointPort> {
     /// [`TraceEvent::AllowanceWarning`] per row through the run's own dispatcher, before
     /// `RunStarted`. `None` (the default) means no notice is ever read.
     treasury_notices: Option<Arc<dyn TreasuryNoticePort>>,
+    /// The Treasurer facade service (ALLOW-03, Phase 42 D-04), wired via
+    /// [`RunWorkerPool::with_treasurer`]: on the [`Self::engine_factory`] path, every per-run
+    /// engine for a run whose row records a submitter gets a per-run
+    /// [`Treasurer::spend_guard`] attached via [`WarEngine::with_spend_guard`], so an allowance
+    /// exhausted mid-run halts the run at its next superstep boundary. `None` (the default)
+    /// attaches no guard and makes no ledger read, matching every other optional field's "a
+    /// pool that never calls the builder is unaffected" contract.
+    treasurer: Option<Arc<Treasurer>>,
 }
 
 impl<W: WaypointPort + 'static> RunWorkerPool<W> {
@@ -691,6 +732,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
             herald: None,
             treasury_ledger: None,
             treasury_notices: None,
+            treasurer: None,
         }
     }
 
@@ -868,6 +910,39 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// ```
     pub fn with_treasury_notices(mut self, notices: Arc<dyn TreasuryNoticePort>) -> Self {
         self.treasury_notices = Some(notices);
+        self
+    }
+
+    /// Attach the [`Treasurer`] (ALLOW-03, Phase 42 D-04): `run_once` attaches a per-run
+    /// [`Treasurer::spend_guard`] to every per-run engine [`Self::with_engine_factory`]
+    /// produces, beside `with_cancellation_probe` and `with_treasury_ledger`, whenever the run
+    /// row records a submitter. The engine then consults the guard once per superstep boundary
+    /// and halts the run (status `halted`, no error, its last Waypoint kept as the restart
+    /// point) when an allowance has been exhausted mid-run -- overshoot is at most one
+    /// superstep's spend, never absolute.
+    ///
+    /// A run whose row records no submitter (`submitted_by: None`, a schedule-fired or internal
+    /// run) gets no guard and no ledger read (D-00e). Only takes effect on the
+    /// [`Self::with_engine_factory`] path, exactly like [`Self::with_treasury_ledger`]. A pool
+    /// that never calls this builder is unaffected.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// use paladin::application::services::run::RunWorkerPool;
+    /// use paladin::application::services::treasurer::Treasurer;
+    /// use paladin_ports::output::waypoint_port::WaypointPort;
+    ///
+    /// fn attach<W: WaypointPort + 'static>(
+    ///     pool: RunWorkerPool<W>,
+    ///     treasurer: Arc<Treasurer>,
+    /// ) -> RunWorkerPool<W> {
+    ///     pool.with_treasurer(treasurer)
+    /// }
+    /// ```
+    pub fn with_treasurer(mut self, treasurer: Arc<Treasurer>) -> Self {
+        self.treasurer = Some(treasurer);
         self
     }
 
@@ -1083,6 +1158,19 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                                 run_id: run.run_id.clone(),
                                 attempt,
                             },
+                        );
+                    }
+                    // --- ALLOW-03, Phase 42 D-04, D-00e: the per-run spend guard,
+                    // attached beside the probe and the ledger. Only a run whose
+                    // row records a submitter gets one -- an unattributed run has
+                    // no allowance identity, so it makes no guard and no ledger
+                    // read. The guard takes the recorded identity (tenant and key
+                    // NAME), never a role.
+                    if let (Some(treasurer), Some(attribution)) =
+                        (&self.treasurer, run.submitted_by.as_ref())
+                    {
+                        engine = engine.with_spend_guard(
+                            treasurer.spend_guard(attribution.clone(), run.run_id.clone()),
                         );
                     }
                     // --- 28-06 (OBS-02, D-03, D-11): one CompositeSink, one
@@ -1988,6 +2076,75 @@ mod tests {
                     final_waypoint_id: Some(waypoint.to_string()),
                 },
             }
+        );
+    }
+
+    fn spend_halt_outcome() -> (
+        paladin_core::platform::container::waypoint::WaypointId,
+        RunOutcome,
+    ) {
+        let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: HaltCause::Spend(
+                paladin_core::platform::container::allowance::HaltReason::LedgerUnavailable,
+            ),
+        };
+        (waypoint, outcome)
+    }
+
+    fn halted_transition(
+        waypoint: paladin_core::platform::container::waypoint::WaypointId,
+        to: RunStatus,
+    ) -> OutcomeAction {
+        OutcomeAction::Transition {
+            to,
+            outcome: RunOutcomeRecord {
+                error: None,
+                output: None,
+                final_waypoint_id: Some(waypoint.to_string()),
+            },
+        }
+    }
+
+    #[test]
+    fn map_outcome_spend_halt_transitions_to_halted_even_while_shutting_down() {
+        let (waypoint, outcome) = spend_halt_outcome();
+        assert_eq!(
+            map_outcome(&outcome, false, true),
+            halted_transition(waypoint, RunStatus::Halted),
+            "a spend halt is recorded Halted, never requeued by a drain"
+        );
+    }
+
+    #[test]
+    fn map_outcome_spend_halt_ignores_a_cancel_flag() {
+        let (waypoint, outcome) = spend_halt_outcome();
+        assert_eq!(
+            map_outcome(&outcome, true, false),
+            halted_transition(waypoint, RunStatus::Halted)
+        );
+        assert_eq!(
+            map_outcome(&outcome, true, true),
+            halted_transition(waypoint, RunStatus::Halted)
+        );
+    }
+
+    #[test]
+    fn map_outcome_cancel_requested_cause_transitions_to_cancelled() {
+        let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: HaltCause::CancelRequested,
+        };
+        // The cause alone decides: no side flag is needed.
+        assert_eq!(
+            map_outcome(&outcome, false, false),
+            halted_transition(waypoint, RunStatus::Cancelled)
+        );
+        assert_eq!(
+            map_outcome(&outcome, false, true),
+            halted_transition(waypoint, RunStatus::Cancelled)
         );
     }
 

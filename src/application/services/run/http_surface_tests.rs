@@ -1643,3 +1643,265 @@ async fn cross_tenant_cancel_is_a_404_and_writes_no_cancel_flag() {
     .await
     .expect("cross_tenant_cancel_is_a_404_and_writes_no_cancel_flag did not hang");
 }
+
+/// A test node standing in for a priced superstep (ALLOW-03, Phase 42): it counts its own runs
+/// and, when `amount_nanos` is positive, settles that many nano-units against `scope` through
+/// the real ledger -- exactly what the engine's settlement does after a metered model call.
+struct SpendingNode {
+    ledger: Arc<dyn TreasuryLedgerPort>,
+    scope: LedgerScope,
+    amount_nanos: i64,
+    runs: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl StateNode for SpendingNode {
+    async fn run(
+        &self,
+        _state: &paladin_core::platform::container::battlefield::Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.amount_nanos > 0 {
+            self.ledger
+                .settle(settle_request(
+                    self.scope.clone(),
+                    SettlementKey::new(RunId::new_v7(), 0, 0),
+                    self.amount_nanos,
+                    usd(),
+                    "gpt-4",
+                ))
+                .await
+                .map_err(|e| StateNodeError(format!("test settlement failed: {e}")))?;
+        }
+        Ok(StateDelta::new().into())
+    }
+}
+
+/// The Phase 42 engine-path halt tracer (ALLOW-03, D-00a, D-01, D-04, D-05): an allowance
+/// exhausted by a run's own first superstep halts that run at its next superstep boundary,
+/// end to end through every layer the halt touches -- `TreasurerConfig` -> `AllowancePolicy` ->
+/// `Treasurer` (the shared ceiling evaluation and `TreasurerSpendGuard`) -> the `SpendGuard`
+/// port -> the `WarEngine` boundary check writing a `Halted` Waypoint -> `RunOutcome::Halted
+/// { cause: Spend }` -> the worker's `map_outcome` -> the run row in the real SQLite run
+/// repository -> `GET /v1/runs/{id}` answering `halted` with no error.
+///
+/// Pitfall 10: windows are epoch-aligned, so a UTC boundary crossed mid-scenario would make the
+/// halt vanish and the test lie; the scenario re-runs once on a fresh store when it happens.
+#[tokio::test(flavor = "multi_thread")]
+async fn engine_spend_halt_tracer() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        for attempt in 1..=2 {
+            if run_spend_halt_tracer_once(true).await {
+                return;
+            }
+            eprintln!(
+                "engine_spend_halt_tracer: a window boundary was crossed (attempt {attempt}); \
+                 re-running"
+            );
+        }
+        panic!("the allowance window boundary was crossed on both attempts");
+    })
+    .await
+    .expect("engine_spend_halt_tracer timed out");
+}
+
+/// One full run of the halt tracer. `attach_treasurer` is `false` only for the red check of
+/// the plan (the pool built without `with_treasurer` must NOT halt). Returns `false` (having
+/// asserted nothing about the halt) when the allowance window rolled over mid-scenario.
+async fn run_spend_halt_tracer_once(attach_treasurer: bool) -> bool {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let (path, url) = temp_sqlite_url("spend_halt");
+    let repository: Arc<dyn RunRepositoryPort> =
+        Arc::new(SqliteRunRepository::new(&url).await.unwrap());
+    let ledger = Arc::new(SqliteTreasuryLedger::new(&url).await.unwrap());
+    let ledger_port: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+
+    // Three-node chain: n0 settles exactly 1.00 USD under the submitter's own scope; n1 and n2
+    // settle nothing and must never run once the allowance is exhausted.
+    let counters: Vec<Arc<AtomicUsize>> = (0..3).map(|_| Arc::new(AtomicUsize::new(0))).collect();
+    let mut graph = WarGraph::new(BattlefieldSchema::new(vec![]), EngineLimits::default());
+    let ids: Vec<NodeId> = (0..3).map(|i| NodeId::new(format!("n{i}"))).collect();
+    for (i, id) in ids.iter().enumerate() {
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(Arc::new(SpendingNode {
+                ledger: Arc::clone(&ledger_port),
+                scope: LedgerScope::new("acme", "svc-h"),
+                amount_nanos: if i == 0 { 1_000_000_000 } else { 0 },
+                runs: Arc::clone(&counters[i]),
+            })),
+        );
+    }
+    for pair in ids.windows(2) {
+        graph.add_edge(EdgeSpec {
+            from: pair[0].clone(),
+            to: pair[1].clone(),
+            condition: None,
+        });
+    }
+    graph.add_entry(ids[0].clone());
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("halt-wf", Arc::new(graph)));
+
+    // D-02: the allowance grammar, deserialized exactly as an operator would write it.
+    let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+        "currency": "USD",
+        "allowance": { "api_keys": { "svc-h": { "period": "1d", "amount": "1.00" } } }
+    }))
+    .unwrap();
+    let treasurer = Arc::new(Treasurer::new(
+        config.allowance_policy().unwrap(),
+        Arc::clone(&ledger_port),
+    ));
+    let submission: Arc<dyn RunSubmissionPort> = Arc::new(
+        RunSubmissionService::new(repository.clone(), queue.clone(), resolver.clone())
+            .with_treasurer(Arc::clone(&treasurer)
+                as Arc<
+                    dyn paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort,
+                >),
+    );
+
+    let mut api_keys = HashMap::new();
+    api_keys.insert(
+        "halt-key".to_string(),
+        Principal::new("svc-h", UserRole::User, TenantId::new("acme").unwrap()),
+    );
+    let auth = AgentAuthConfig {
+        enabled: true,
+        api_keys,
+        token_verifier: None,
+        bearer_tenant: None,
+    };
+    let app = run_router(
+        RunApiState::new()
+            .with_submission(submission)
+            .with_repository(repository.clone())
+            .with_auth(auth),
+    );
+
+    // The pool, built the way the warn-path tracer builds it (an engine factory carrying the
+    // per-run cancellation token) plus the Treasurer, which attaches the per-run spend guard.
+    let waypoints = Arc::new(InMemoryWaypointStore::new());
+    let factory_store = waypoints.clone();
+    let engine_factory: Arc<
+        dyn Fn(tokio_util::sync::CancellationToken) -> WarEngine<InMemoryWaypointStore>
+            + Send
+            + Sync,
+    > = Arc::new(move |token| {
+        WarEngine::new(Arc::new(UnusedPaladinPort), factory_store.clone())
+            .with_cancellation_token(token)
+    });
+    let mut pool = RunWorkerPool::new(
+        Arc::new(WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            waypoints.clone(),
+        )),
+        waypoints.clone(),
+        repository.clone(),
+        queue.clone(),
+        resolver.clone(),
+        Duration::from_secs(30),
+    )
+    .with_engine_factory(engine_factory);
+    if attach_treasurer {
+        pool = pool.with_treasurer(Arc::clone(&treasurer));
+    }
+
+    let window_before = window_for(ledger.store_now().await.unwrap(), 86_400).unwrap();
+
+    // (a) The submission is admitted: nothing has been spent yet.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/runs")
+                .header("content-type", "application/json")
+                .header("x-api-key", "halt-key")
+                .body(Body::from(
+                    serde_json::to_vec(&serde_json::json!({
+                        "assistant_id": "halt-wf",
+                        "input": {}
+                    }))
+                    .unwrap(),
+                ))
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read submit body");
+    let submitted: serde_json::Value = serde_json::from_slice(&bytes).expect("submit body is JSON");
+    let run_id = submitted["run_id"].as_str().expect("run_id").to_string();
+    let thread_id = paladin_core::platform::container::waypoint::ThreadId::new(
+        submitted["thread_id"].as_str().expect("thread_id"),
+    )
+    .unwrap();
+
+    // (b) One worker dispatch runs the graph: n0 spends the whole allowance, the guard halts
+    // the run at the second boundary.
+    assert!(pool.run_once().await.unwrap());
+
+    // (c) The run row reads halted with no error, through the real router.
+    let got = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/v1/runs/{run_id}"))
+                .header("x-api-key", "halt-key")
+                .body(Body::empty())
+                .expect("request builds"),
+        )
+        .await
+        .expect("router responds");
+    let window_after = window_for(ledger.store_now().await.unwrap(), 86_400).unwrap();
+    if window_before != window_after {
+        cleanup(&path);
+        return false;
+    }
+    assert_eq!(got.status(), StatusCode::OK);
+    let raw = axum::body::to_bytes(got.into_body(), usize::MAX)
+        .await
+        .expect("read run body");
+    let body: serde_json::Value = serde_json::from_slice(&raw).expect("run body is JSON");
+    assert_eq!(
+        body["status"], "halted",
+        "an exhausted allowance halts the run at its next boundary: {body}"
+    );
+    assert!(
+        body["error"].is_null(),
+        "a halt is a resume point, not a failure: {body}"
+    );
+
+    // (d) The thread's latest Waypoint is the Halted restart point, vanguard [n1].
+    let latest = waypoints
+        .latest(&thread_id)
+        .await
+        .unwrap()
+        .expect("the halted run left a Waypoint");
+    assert_eq!(
+        latest.status,
+        paladin_core::platform::container::waypoint::WaypointStatus::Halted
+    );
+    assert_eq!(latest.vanguard, vec![ids[1].clone()]);
+
+    // (e) n0 ran once; n1 and n2 never ran.
+    let ran: Vec<usize> = counters.iter().map(|c| c.load(Ordering::SeqCst)).collect();
+    assert_eq!(ran, [1, 0, 0], "no node of the halted superstep may run");
+
+    // (f) D-00g: the response carries no key value.
+    let raw_text = String::from_utf8_lossy(&raw);
+    assert!(
+        !raw_text.contains("halt-key"),
+        "the run body must not contain a key value: {raw_text}"
+    );
+
+    cleanup(&path);
+    true
+}

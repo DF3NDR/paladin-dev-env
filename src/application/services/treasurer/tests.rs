@@ -20,12 +20,14 @@
 use super::*;
 use std::sync::Mutex;
 
-use paladin_core::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+use paladin_core::platform::container::allowance::{
+    AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+};
 use paladin_core::platform::container::cost::CurrencyCode;
 use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::treasury_ledger::{
-    LedgerScope, ReservationId, ReserveRequest, SettleOutcome, SettleRequest, SettlementKey,
-    SpendGroupBy, SpendQuery, SpendRow,
+    BalanceQuery, LedgerScope, ReservationId, ReserveRequest, SettleOutcome, SettleRequest,
+    SettlementKey, SpendGroupBy, SpendQuery, SpendRow,
 };
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
 use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;

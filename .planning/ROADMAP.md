@@ -496,7 +496,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 42-03-PLAN.md — Migration 013 runs.halt_reason on three adapters, reason written before the status flips, GET /runs halt_reason + final_waypoint_id from one wire builder, caller halted-webhook key (wave 3)
+- [x] 42-03-PLAN.md — Migration 013 runs.halt_reason on three adapters, reason written before the status flips, GET /runs halt_reason + final_waypoint_id from one wire builder, caller halted-webhook key (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

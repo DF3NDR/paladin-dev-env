@@ -142,7 +142,7 @@ status: complete
 1. **Task 1: prove the spend guard's boundary, fail-closed and sticky contract** - `169cf78e` (test)
 2. **Task 2: prove a halted run resumes by fork and document the recipe** - `5a7b993d` (test)
 
-## Verification
+## Gates and tests run
 
 - `cargo test -p paladin-ai --lib application::services::treasurer`: 53 passed. `cargo test -p paladin-battalion --lib child_battalion_halt_on_spend_halts_the_parent`: 1 passed; `--lib spend_guard`: 4 passed; the whole `paladin-battalion` lib: 822 passed. `cargo test -p paladin-ai --lib unattributed_run_gets_no_guard_and_reads_no_ledger`, `halted_run_resumes_by_fork_after_window_reset`, `ledger_unavailable_halt_resumes_after_recovery` and `engine_spend_halt_tracer`: 1 passed each.
 - `cargo test -p paladin-ai --lib --features web-server --no-do not pass-fast`: 1216 passed, 2 did not pass (the known `run_api_wiring` pair, see Issues Encountered).

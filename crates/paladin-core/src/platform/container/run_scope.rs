@@ -30,7 +30,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::platform::container::allowance::AllowanceWarning;
+use crate::platform::container::allowance::{AllowanceWarning, DerivedTokenBudget};
 use crate::platform::container::run::RunId;
 use crate::platform::container::treasury_ledger::LedgerScope;
 use crate::platform::container::vault::Namespace;
@@ -98,6 +98,15 @@ pub struct RunScope {
     /// emitted exactly once. Omitted from the serialized form when empty (additive).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowance_warnings: Vec<AllowanceWarning>,
+
+    /// The per-run token budget the Treasurer derived from the principal's remaining allowance
+    /// (ALLOW-05, Phase 42 D-11). Read by the agent loop's one `TokenBudget` middleware through
+    /// the per-call context -- never stored on the shared middleware -- so two concurrent runs
+    /// each carry their own figure. `None` means no Treasurer budget applies (no ceiling, a free
+    /// model, or no Treasurer attached). Omitted from the serialized form when `None`
+    /// (additive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derived_token_budget: Option<DerivedTokenBudget>,
 }
 
 impl RunScope {
@@ -194,6 +203,41 @@ impl RunScope {
         self.allowance_warnings = warnings;
         self
     }
+
+    /// Builds a [`RunScope`] carrying the Treasurer-derived per-run token `budget` (ALLOW-05,
+    /// Phase 42 D-11). The only way to set `derived_token_budget` on a `#[non_exhaustive]`
+    /// struct from outside this crate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::{TimeZone, Utc};
+    /// use paladin_core::platform::container::allowance::{
+    ///     AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+    /// };
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    /// use paladin_core::platform::container::run_scope::RunScope;
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let evaluated_at = Utc.with_ymd_and_hms(2026, 10, 3, 23, 0, 0).single().ok_or("bad instant")?;
+    /// let figures = AllowanceRefusal {
+    ///     scope_kind: AllowanceScopeKind::Tenant,
+    ///     limit_kind: AllowanceLimitKind::Lifetime,
+    ///     balance: Cost::new(100, usd.clone()),
+    ///     ceiling: Cost::new(100, usd),
+    ///     window: None,
+    ///     evaluated_at,
+    /// };
+    /// let budget = DerivedTokenBudget::new(1_000, figures);
+    /// let scope = RunScope::default().with_derived_token_budget(budget.clone());
+    /// assert_eq!(scope.derived_token_budget, Some(budget));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    #[must_use]
+    pub fn with_derived_token_budget(mut self, budget: DerivedTokenBudget) -> Self {
+        self.derived_token_budget = Some(budget);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -243,6 +287,40 @@ mod tests {
         // A scope serialized before this field existed still deserializes.
         let old: RunScope = serde_json::from_str("{}").unwrap();
         assert!(old.allowance_warnings.is_empty());
+    }
+
+    #[test]
+    fn run_scope_derived_token_budget_default_none_omitted_and_round_trips() {
+        use crate::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+        use crate::platform::container::cost::{Cost, CurrencyCode};
+        use chrono::{TimeZone, Utc};
+
+        let empty = RunScope::default();
+        assert!(empty.derived_token_budget.is_none());
+        assert!(
+            !serde_json::to_string(&empty)
+                .unwrap()
+                .contains("derived_token_budget")
+        );
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let figures = crate::platform::container::allowance::AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(100, usd.clone()),
+            ceiling: Cost::new(100, usd),
+            window: None,
+            evaluated_at: Utc.with_ymd_and_hms(2026, 10, 3, 23, 0, 0).unwrap(),
+        };
+        let scope =
+            RunScope::default().with_derived_token_budget(DerivedTokenBudget::new(5, figures));
+        let json = serde_json::to_string(&scope).unwrap();
+        assert!(json.contains("derived_token_budget"), "{json}");
+        let back: RunScope = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, scope);
+        // A scope serialized before this field existed still deserializes.
+        let old: RunScope = serde_json::from_str("{}").unwrap();
+        assert!(old.derived_token_budget.is_none());
     }
 
     #[test]

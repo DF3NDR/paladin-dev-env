@@ -569,26 +569,100 @@ pub struct NoticeRecord {
     pub recorded_at: DateTime<Utc>,
 }
 
-/// The outcome of a successful admission: the notices (if any) it won.
+/// The per-run token budget the Treasurer derives from a principal's remaining allowance
+/// (ALLOW-05, Phase 42 D-09).
 ///
-/// An admission that crossed no warn threshold is [`Admission::none`].
+/// `max_tokens` is the largest total token count the run may accumulate before the one
+/// `TokenBudget` cutoff ends it (`floor(remaining * 1_000_000 / dearest price)`, integer
+/// arithmetic only). `halt_figures` is what the cutoff reports when this budget is the binding
+/// limit: the binding ceiling with its `balance` set to the ceiling itself -- a conservative
+/// bound, because the agent loop cannot know the exact post-spend balance (ADR-0057 A5).
 ///
 /// # Examples
 ///
 /// ```
-/// use paladin_core::platform::container::allowance::Admission;
+/// use chrono::{TimeZone, Utc};
+/// use paladin_core::platform::container::allowance::{
+///     AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+/// };
+/// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+///
+/// let usd = CurrencyCode::new("USD")?;
+/// let evaluated_at = Utc.with_ymd_and_hms(2026, 10, 3, 23, 0, 0).single().ok_or("bad instant")?;
+/// let figures = AllowanceRefusal {
+///     scope_kind: AllowanceScopeKind::Tenant,
+///     limit_kind: AllowanceLimitKind::Lifetime,
+///     balance: Cost::new(1_000_000_000, usd.clone()),
+///     ceiling: Cost::new(1_000_000_000, usd),
+///     window: None,
+///     evaluated_at,
+/// };
+/// let budget = DerivedTokenBudget::new(100_000, figures.clone());
+/// assert_eq!(budget.max_tokens, 100_000);
+/// assert_eq!(budget.halt_figures, figures);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct DerivedTokenBudget {
+    /// The most total tokens the run may accumulate before the cutoff ends it.
+    pub max_tokens: u32,
+    /// The figures reported when this budget ends the run (balance equal to the ceiling).
+    pub halt_figures: AllowanceRefusal,
+}
+
+impl DerivedTokenBudget {
+    /// Build a budget of `max_tokens` that reports `halt_figures` when it ends a run.
+    pub fn new(max_tokens: u32, halt_figures: AllowanceRefusal) -> Self {
+        Self {
+            max_tokens,
+            halt_figures,
+        }
+    }
+}
+
+/// The outcome of a successful admission: the notices (if any) it won, and, when the model
+/// is known and the principal has a ceiling, the per-run token budget derived from what remains
+/// of the allowance.
+///
+/// An admission that crossed no warn threshold and derived no budget is [`Admission::none`].
+///
+/// # Examples
+///
+/// ```
+/// use chrono::{TimeZone, Utc};
+/// use paladin_core::platform::container::allowance::{
+///     Admission, AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+/// };
+/// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 ///
 /// let admission = Admission::none();
 /// assert!(admission.is_empty());
 /// assert_eq!(admission.warnings().count(), 0);
+/// assert!(admission.derived_budget().is_none());
+///
+/// let usd = CurrencyCode::new("USD")?;
+/// let evaluated_at = Utc.with_ymd_and_hms(2026, 10, 3, 23, 0, 0).single().ok_or("bad instant")?;
+/// let figures = AllowanceRefusal {
+///     scope_kind: AllowanceScopeKind::ApiKey,
+///     limit_kind: AllowanceLimitKind::Lifetime,
+///     balance: Cost::new(500, usd.clone()),
+///     ceiling: Cost::new(500, usd),
+///     window: None,
+///     evaluated_at,
+/// };
+/// let admission = Admission::none().with_derived_budget(DerivedTokenBudget::new(42, figures));
+/// assert_eq!(admission.derived_budget().map(|b| b.max_tokens), Some(42));
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Admission {
     notices: Vec<AllowanceNotice>,
+    derived_budget: Option<DerivedTokenBudget>,
 }
 
 impl Admission {
-    /// An admission that won no notice.
+    /// An admission that won no notice and derived no budget.
     pub fn none() -> Self {
         Self::default()
     }
@@ -599,9 +673,21 @@ impl Admission {
         self
     }
 
+    /// Attach the per-run token budget derived for this admission (ALLOW-05, D-09).
+    #[must_use]
+    pub fn with_derived_budget(mut self, budget: DerivedTokenBudget) -> Self {
+        self.derived_budget = Some(budget);
+        self
+    }
+
     /// The notices this admission won.
     pub fn notices(&self) -> &[AllowanceNotice] {
         &self.notices
+    }
+
+    /// The per-run token budget derived for this admission, when one was.
+    pub fn derived_budget(&self) -> Option<&DerivedTokenBudget> {
+        self.derived_budget.as_ref()
     }
 
     /// The warnings carried by the won notices.
@@ -609,7 +695,8 @@ impl Admission {
         self.notices.iter().map(|n| &n.warning)
     }
 
-    /// Whether this admission won no notice.
+    /// Whether this admission won no notice. (A derived budget does not make an admission
+    /// non-empty: `is_empty` answers only "are there notices to confirm or abandon".)
     pub fn is_empty(&self) -> bool {
         self.notices.is_empty()
     }
@@ -640,6 +727,28 @@ mod tests {
             window: Some((at(3, 0, 0, 0), at(4, 0, 0, 0))),
             evaluated_at,
         }
+    }
+
+    #[test]
+    fn derived_budget_is_carried_by_an_admission_and_does_not_make_it_non_empty() {
+        let figures = window_refusal(at(3, 12, 0, 0));
+        let budget = DerivedTokenBudget::new(77, figures.clone());
+        assert_eq!(budget.max_tokens, 77);
+        assert_eq!(budget.halt_figures, figures);
+
+        assert!(Admission::none().derived_budget().is_none());
+        let admission = Admission::none().with_derived_budget(budget.clone());
+        assert_eq!(admission.derived_budget(), Some(&budget));
+        // is_empty answers only "no notices to confirm or abandon".
+        assert!(admission.is_empty());
+    }
+
+    #[test]
+    fn derived_budget_round_trips_through_serde() {
+        let budget = DerivedTokenBudget::new(u32::MAX, window_refusal(at(3, 12, 0, 0)));
+        let json = serde_json::to_string(&budget).unwrap();
+        let back: DerivedTokenBudget = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, budget);
     }
 
     #[test]

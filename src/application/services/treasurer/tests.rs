@@ -1641,3 +1641,307 @@ fn fail_closed_log_line_names_run_scope_tenant_and_error_only() {
     assert!(line.contains("tenant=acme"), "{line}");
     assert!(line.contains("scripted balance failure"), "{line}");
 }
+
+// -- the derived agent budget (ALLOW-05, Phase 42 D-09, D-10) -------------------
+
+use paladin_core::platform::container::allowance::DerivedTokenBudget;
+use paladin_core::platform::container::cost::{PriceRow, PriceTable};
+
+/// 10 USD per 1M tokens on its dearest axis (completion).
+const DEAR: i64 = 10_000_000_000;
+
+fn prices() -> Arc<PriceTable> {
+    Arc::new(
+        PriceTable::new(usd())
+            .with_row(
+                "dear",
+                PriceRow::new(1_000_000_000, DEAR).expect("valid row"),
+            )
+            .with_row(
+                "reasoner",
+                PriceRow::new(1_000_000_000, 2_000_000_000)
+                    .expect("valid row")
+                    .with_reasoning(40_000_000_000)
+                    .expect("valid price"),
+            )
+            .with_row("free", PriceRow::new(0, 0).expect("valid row")),
+    )
+}
+
+/// One key-window ceiling of `ceiling` nanos per hour for `svc-a`.
+fn derive_policy(ceiling: i64) -> AllowancePolicy {
+    AllowancePolicy::new(usd(), 80).with_api_key("svc-a", ScopeAllowance::new(P, ceiling))
+}
+
+fn priced(policy: AllowancePolicy, ledger: &Arc<FakeLedger>) -> Treasurer {
+    treasurer(policy, ledger).with_pricing(prices())
+}
+
+async fn admit_model(treasurer: &Treasurer, model: &str) -> Result<Admission, AdmissionError> {
+    treasurer
+        .admit_for_model(&subject("acme", "svc-a"), None, model)
+        .await
+}
+
+#[tokio::test]
+async fn admit_for_model_without_a_ceiling_derives_nothing_and_reads_no_ledger() {
+    let ledger = FakeLedger::new(at(NOW));
+    // svc-b has no entry; the model is unpriced, which must not matter without a ceiling.
+    let treasurer = priced(key_policy(), &ledger);
+
+    let admission = treasurer
+        .admit_for_model(&subject("acme", "svc-b"), None, "no-such-model")
+        .await
+        .expect("no ceiling is admitted");
+
+    assert!(admission.derived_budget().is_none());
+    assert!(admission.is_empty());
+    assert_eq!(ledger.store_now_calls(), 0);
+    assert!(ledger.balance_calls().is_empty());
+}
+
+#[tokio::test]
+async fn admit_for_model_derives_from_the_remaining_allowance_at_the_dearest_price() {
+    // 1 USD ceiling, nothing spent: 1e9 * 1e6 / 1e10 = 100_000 tokens.
+    let ledger = FakeLedger::new(at(NOW));
+    let treasurer = priced(derive_policy(1_000_000_000), &ledger);
+
+    let admission = admit_model(&treasurer, "dear").await.expect("admitted");
+
+    let budget = admission.derived_budget().expect("a budget is derived");
+    assert_eq!(budget.max_tokens, 100_000);
+    // A5: the halt figures report the ceiling as the balance.
+    assert_eq!(budget.halt_figures.ceiling.nanos(), 1_000_000_000);
+    assert_eq!(budget.halt_figures.balance.nanos(), 1_000_000_000);
+    assert_eq!(budget.halt_figures.scope_kind, AllowanceScopeKind::ApiKey);
+    assert_eq!(budget.halt_figures.limit_kind, AllowanceLimitKind::Window);
+    assert_eq!(budget.halt_figures.window, Some((at(WS), at(WE))));
+    assert_eq!(budget.halt_figures.evaluated_at, at(NOW));
+}
+
+#[tokio::test]
+async fn the_dearest_axis_includes_reasoning_above_completion() {
+    // reasoning at 40 USD per 1M beats completion at 2: 1e9 * 1e6 / 4e10 = 25_000 tokens.
+    let ledger = FakeLedger::new(at(NOW));
+    let treasurer = priced(derive_policy(1_000_000_000), &ledger);
+
+    let admission = admit_model(&treasurer, "reasoner").await.expect("admitted");
+
+    assert_eq!(
+        admission.derived_budget().map(|b| b.max_tokens),
+        Some(25_000)
+    );
+}
+
+#[tokio::test]
+async fn a_derived_figure_of_one_is_admitted_and_zero_is_refused_with_the_real_figures() {
+    // remaining 10_000 nanos at 1e10 per 1M -> exactly 1 token: admitted.
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 1_000_000 - 10_000);
+    let one = priced(derive_policy(1_000_000), &ledger);
+    let admission = admit_model(&one, "dear")
+        .await
+        .expect("one token is admitted");
+    assert_eq!(admission.derived_budget().map(|b| b.max_tokens), Some(1));
+
+    // remaining 9_999 nanos -> floor(0.9999) = 0 tokens: refused with the binding ceiling's
+    // REAL balance, not the ceiling.
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 1_000_000 - 9_999);
+    let zero = priced(derive_policy(1_000_000), &ledger);
+    let refusal = refusal_of(admit_model(&zero, "dear").await);
+    assert_eq!(refusal.ceiling.nanos(), 1_000_000);
+    assert_eq!(refusal.balance.nanos(), 1_000_000 - 9_999);
+    assert_eq!(refusal.window, Some((at(WS), at(WE))));
+    assert_eq!(refusal.retry_after_secs(), Some((WE - NOW) as u64));
+}
+
+#[tokio::test]
+async fn a_free_model_gets_no_derived_budget() {
+    let ledger = FakeLedger::new(at(NOW));
+    let treasurer = priced(derive_policy(1_000_000_000), &ledger);
+
+    let admission = admit_model(&treasurer, "free").await.expect("admitted");
+
+    assert!(admission.derived_budget().is_none());
+}
+
+#[tokio::test]
+async fn an_unpriced_model_under_a_ceiling_is_refused_before_any_notice_claim() {
+    // 90 of 100 is past the 80% warn threshold, so a claim WOULD be made if admission got that far.
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 90);
+    let notices = RecordingNotices::new();
+    let treasurer = treasurer_with_notices(key_policy(), &ledger, &notices).with_pricing(prices());
+
+    let result = admit_model(&treasurer, "gpt-unlisted").await;
+
+    match result {
+        Err(AdmissionError::ModelUnpriced { model }) => assert_eq!(model, "gpt-unlisted"),
+        other => panic!("expected ModelUnpriced, got {other:?}"),
+    }
+    assert!(
+        notices.attempts().is_empty(),
+        "a refused derivation claims no notice"
+    );
+}
+
+#[tokio::test]
+async fn no_price_table_at_all_refuses_a_ceilinged_principal_as_unpriced() {
+    let ledger = FakeLedger::new(at(NOW));
+    let treasurer = treasurer(key_policy(), &ledger);
+
+    let result = admit_model(&treasurer, "dear").await;
+
+    assert!(
+        matches!(result, Err(AdmissionError::ModelUnpriced { .. })),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_exhausted_ceiling_is_refused_by_admit_for_model_with_the_exhausted_figures() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), C);
+    let treasurer = priced(key_policy(), &ledger);
+
+    let refusal = refusal_of(admit_model(&treasurer, "dear").await);
+
+    assert_eq!(refusal.balance.nanos(), C);
+    assert_eq!(refusal.ceiling.nanos(), C);
+}
+
+#[tokio::test]
+async fn the_tightest_ceiling_binds_the_derived_budget() {
+    // key window 1e9 (balance 0): headroom 1e9.
+    // key lifetime 8e8 (balance 7e8): headroom 1e8 <- binding.
+    // tenant window 5e9 (balance 7e8): headroom 4.3e9.
+    // tenant lifetime 9e9 (balance 7e8): headroom 8.3e9.
+    let policy = AllowancePolicy::new(usd(), 100)
+        .with_api_key(
+            "svc-a",
+            ScopeAllowance::new(P, 1_000_000_000).with_lifetime(800_000_000),
+        )
+        .with_tenant(
+            "acme",
+            ScopeAllowance::new(86_400, 5_000_000_000).with_lifetime(9_000_000_000),
+        );
+    // The spend is attributed two hours before the store instant: outside the key's hourly
+    // window, so only the lifetime scopes (and the day-wide tenant window) see it.
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(NOW - 7_200), 700_000_000);
+    let treasurer = priced(policy, &ledger);
+
+    let admission = admit_model(&treasurer, "dear").await.expect("admitted");
+
+    let budget = admission.derived_budget().expect("derived");
+    // The key lifetime has the least headroom (1e8): 1e8 * 1e6 / 1e10 = 10_000 tokens.
+    assert_eq!(budget.max_tokens, 10_000);
+    assert_eq!(budget.halt_figures.scope_kind, AllowanceScopeKind::ApiKey);
+    assert_eq!(budget.halt_figures.limit_kind, AllowanceLimitKind::Lifetime);
+    assert_eq!(budget.halt_figures.ceiling.nanos(), 800_000_000);
+    assert_eq!(budget.halt_figures.balance.nanos(), 800_000_000);
+    assert_eq!(budget.halt_figures.window, None);
+}
+
+#[tokio::test]
+async fn a_tie_between_ceilings_goes_to_the_first_in_policy_order() {
+    // The key window and the tenant window have identical headroom; the key window is first in
+    // policy order, so it is the binding one.
+    let policy = AllowancePolicy::new(usd(), 100)
+        .with_api_key("svc-a", ScopeAllowance::new(P, 1_000_000_000))
+        .with_tenant("acme", ScopeAllowance::new(P, 1_000_000_000));
+    let ledger = FakeLedger::new(at(NOW));
+    let treasurer = priced(policy, &ledger);
+
+    let admission = admit_model(&treasurer, "dear").await.expect("admitted");
+
+    let budget = admission.derived_budget().expect("derived");
+    assert_eq!(budget.halt_figures.scope_kind, AllowanceScopeKind::ApiKey);
+}
+
+#[tokio::test]
+async fn a_price_table_in_another_currency_is_a_backend_error_naming_both_codes() {
+    let ledger = FakeLedger::new(at(NOW));
+    let eur = CurrencyCode::new("EUR").expect("EUR is valid");
+    let table = PriceTable::new(eur).with_row("dear", PriceRow::new(1, DEAR).expect("valid row"));
+    let treasurer = treasurer(derive_policy(1_000_000_000), &ledger).with_pricing(Arc::new(table));
+
+    let result = admit_model(&treasurer, "dear").await;
+
+    match result {
+        Err(AdmissionError::Backend { message }) => {
+            assert!(
+                message.contains("EUR") && message.contains("USD"),
+                "{message}"
+            );
+        }
+        other => panic!("expected a backend error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn the_plain_admit_never_derives_a_budget() {
+    let ledger = FakeLedger::new(at(NOW));
+    let treasurer = priced(derive_policy(1_000_000_000), &ledger);
+
+    let admission = treasurer
+        .admit(&subject("acme", "svc-a"), None)
+        .await
+        .expect("admitted");
+
+    assert!(admission.derived_budget().is_none());
+}
+
+#[tokio::test]
+async fn derive_budget_is_idempotent_and_writes_nothing() {
+    let ledger = seeded_ledger().await;
+    let before = spend_view(&ledger).await;
+    let treasurer =
+        Treasurer::new(lifetime_policy(1_000_000_000), ledger.clone()).with_pricing(prices());
+    let who = subject("acme", "svc-a");
+
+    let first = treasurer
+        .derive_budget(&who, "dear")
+        .await
+        .expect("derives");
+    let second = treasurer
+        .derive_budget(&who, "dear")
+        .await
+        .expect("derives");
+
+    let first: Option<DerivedTokenBudget> = first;
+    assert!(first.is_some());
+    // The store clock may tick between the calls; the figures that matter must not.
+    assert_eq!(
+        first.as_ref().map(|b| b.max_tokens),
+        second.as_ref().map(|b| b.max_tokens)
+    );
+    assert_eq!(
+        first
+            .as_ref()
+            .map(|b| (&b.halt_figures.ceiling, &b.halt_figures.balance)),
+        second
+            .as_ref()
+            .map(|b| (&b.halt_figures.ceiling, &b.halt_figures.balance)),
+    );
+    assert_eq!(
+        spend_view(&ledger).await,
+        before,
+        "derivation writes nothing"
+    );
+}
+
+#[tokio::test]
+async fn deriving_twice_over_an_unchanged_ledger_and_clock_yields_equal_budgets() {
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 1_234_567);
+    let treasurer = priced(derive_policy(1_000_000_000), &ledger);
+    let who = subject("acme", "svc-a");
+
+    let first = treasurer
+        .derive_budget(&who, "dear")
+        .await
+        .expect("derives");
+    let second = treasurer
+        .derive_budget(&who, "dear")
+        .await
+        .expect("derives");
+
+    assert!(first.is_some());
+    assert_eq!(first, second);
+}

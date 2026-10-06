@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::platform::container::allowance::AllowanceRefusal;
 use crate::platform::container::cost::Cost;
 use crate::platform::container::handoff::HandoffRecord;
 use crate::platform::container::planning::TaskPlan;
@@ -149,6 +150,15 @@ pub struct PaladinResult {
 /// run, but the model's last response is intact and stands as the answer,
 /// with a truncation notice appended so the caller knows a budget, not the
 /// model, ended the run (D-08).
+///
+/// [`StopReason::AllowanceHalted`] (Phase 42, ADR-0057 D-12) is **neither**
+/// successful nor a failure of the model: the Treasurer's derived token
+/// budget ended the run after the response that crossed it, the partial
+/// output is kept with the same truncation notice, and the caller is told the
+/// allowance (not the model, not an operator limit) was the reason. It is a
+/// limit (`is_limit()`), and it is deliberately excluded from
+/// `is_successful()` so a caller that only checks success never mistakes a
+/// halt for a finished answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StopReason {
@@ -171,6 +181,16 @@ pub enum StopReason {
     /// A `TokenBudget` middleware stopped the run after its configured
     /// accumulated token budget was crossed (new in v0.10.0, RT-FR-06).
     TokenBudget,
+
+    /// The Treasurer's derived per-run token budget ended the run after the
+    /// response that crossed it (new in v0.11.0, Phase 42 D-12).
+    ///
+    /// The carried [`AllowanceRefusal`] reports the binding ceiling with its
+    /// `balance` set to the ceiling -- a conservative bound, because the loop
+    /// cannot know the exact post-spend balance (ADR-0057 A5). Partial output
+    /// is kept with the truncation notice appended, exactly as for
+    /// [`StopReason::TokenBudget`]. Neither successful nor a failure.
+    AllowanceHalted(AllowanceRefusal),
 }
 
 impl StopReason {
@@ -193,6 +213,7 @@ impl StopReason {
                 | StopReason::Timeout
                 | StopReason::CallLimit
                 | StopReason::TokenBudget
+                | StopReason::AllowanceHalted(_)
         )
     }
 }
@@ -451,5 +472,37 @@ mod tests {
             let back: StopReason = serde_json::from_str(&json).unwrap();
             assert_eq!(reason, back);
         }
+    }
+
+    fn sample_refusal() -> AllowanceRefusal {
+        use crate::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+        use crate::platform::container::cost::CurrencyCode;
+        let usd = CurrencyCode::new("USD").unwrap();
+        AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(100, usd.clone()),
+            ceiling: Cost::new(100, usd),
+            window: None,
+            evaluated_at: chrono::DateTime::from_timestamp(1_000_000_000, 0).unwrap(),
+        }
+    }
+
+    /// ADR-0057 D-12: an allowance halt is a limit, and is neither successful nor a failure
+    /// of the model -- the partial output stands, but the allowance, not the model, ended it.
+    #[test]
+    fn allowance_halted_is_a_limit_and_not_successful() {
+        let reason = StopReason::AllowanceHalted(sample_refusal());
+        assert!(reason.is_limit());
+        assert!(!reason.is_successful());
+    }
+
+    /// ADR-0057 D-12: the new variant round-trips through serde with its figures intact.
+    #[test]
+    fn allowance_halted_round_trips_through_serde() {
+        let reason = StopReason::AllowanceHalted(sample_refusal());
+        let json = serde_json::to_string(&reason).unwrap();
+        let back: StopReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(reason, back);
     }
 }

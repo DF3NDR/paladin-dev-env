@@ -32,9 +32,17 @@
 //!   predicate, and the same stop at the first exhausted ceiling. The guard is how an allowance
 //!   exhausted mid-run halts the run at its next superstep boundary.
 //!
+//! - **A derived budget for the agent loop** (ALLOW-05, Phase 42 D-09, D-10): with a price table
+//!   attached ([`Treasurer::with_pricing`]), [`Treasurer::derive_budget`] and the model-aware
+//!   admission ([`AllowanceAdmissionPort::admit_for_model`]) turn the remaining allowance into a
+//!   per-run token budget at the model's dearest price, refuse an unpriced model
+//!   ([`AdmissionError::ModelUnpriced`]) and a zero budget, and read through the same shared
+//!   evaluation. See `derive.rs`.
+//!
 //! This module imports `paladin_core` and `paladin_ports` only, never a storage adapter
 //! (hexagonal, D-06).
 
+mod derive;
 mod evaluate;
 mod guard;
 mod policy;
@@ -49,7 +57,7 @@ use paladin_core::platform::container::allowance::{
     Admission, AllowanceNotice, AllowanceWarning, NoticeOutcome, NoticeRecord,
     crosses_warn_threshold,
 };
-use paladin_core::platform::container::cost::Cost;
+use paladin_core::platform::container::cost::{Cost, PriceTable};
 use paladin_core::platform::container::principal::RunAttribution;
 use paladin_core::platform::container::run::{RunEventKind, RunId};
 use paladin_core::platform::container::treasury_ledger::format_cost;
@@ -144,6 +152,9 @@ pub struct Treasurer {
     notices: Option<Arc<dyn TreasuryNoticePort>>,
     /// The operator webhook target (D-17). `None` disables only the webhook leg.
     operator_webhook: Option<OperatorNoticeTarget>,
+    /// The per-model price table the derived agent budget is computed from (ALLOW-05, D-09).
+    /// `None` means no model-aware derivation can be made.
+    pricing: Option<Arc<PriceTable>>,
 }
 
 impl std::fmt::Debug for Treasurer {
@@ -152,6 +163,7 @@ impl std::fmt::Debug for Treasurer {
             .field("policy_set", &!self.policy.is_empty())
             .field("notices", &self.notices.is_some())
             .field("operator_webhook", &self.operator_webhook)
+            .field("pricing", &self.pricing.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -164,7 +176,50 @@ impl Treasurer {
             ledger,
             notices: None,
             operator_webhook: None,
+            pricing: None,
         }
+    }
+
+    /// Attach the per-model price table the agent loop's derived token budget is computed from
+    /// (ALLOW-05, Phase 42 D-09).
+    ///
+    /// Without a table, a principal that has a configured ceiling is refused with
+    /// [`AdmissionError::ModelUnpriced`] by [`AllowanceAdmissionPort::admit_for_model`] (an
+    /// allowance cannot meter an unpriced model); a principal with no ceiling is unaffected. The
+    /// table's currency must match the allowance policy's, or derivation reports a backend error
+    /// rather than converting.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::treasurer::{AllowancePolicy, Treasurer};
+    /// use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
+    /// use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+    /// use paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort;
+    /// use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let prices = PriceTable::new(usd.clone())
+    ///     .with_row("gpt-4", PriceRow::new(2_500_000_000, 10_000_000_000)?);
+    /// let treasurer = Treasurer::new(
+    ///     AllowancePolicy::new(usd, 80),
+    ///     Arc::new(InMemoryTreasuryLedger::new()),
+    /// )
+    /// .with_pricing(Arc::new(prices));
+    /// let subject = RunAttribution::new(TenantId::new("acme")?, "svc-a");
+    /// // No allowance configured for this principal: admitted with no derived budget.
+    /// let admission = treasurer.admit_for_model(&subject, None, "gpt-4").await?;
+    /// assert!(admission.derived_budget().is_none());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_pricing(mut self, table: Arc<PriceTable>) -> Self {
+        self.pricing = Some(table);
+        self
     }
 
     /// Attach the once-per-window notice store (ALLOW-04, D-16).
@@ -298,12 +353,16 @@ fn backend(message: impl Into<String>) -> AdmissionError {
     }
 }
 
-#[async_trait]
-impl AllowanceAdmissionPort for Treasurer {
-    async fn admit(
+impl Treasurer {
+    /// The one admission body behind both [`AllowanceAdmissionPort::admit`] (`model: None`) and
+    /// [`AllowanceAdmissionPort::admit_for_model`] (`model: Some`). The derivation sits after the
+    /// exhausted check and before any notice claim, so a refused derivation (an unpriced model, a
+    /// zero budget) claims nothing.
+    async fn admit_inner(
         &self,
         subject: &RunAttribution,
         run_id: Option<&RunId>,
+        model: Option<&str>,
     ) -> Result<Admission, AdmissionError> {
         // The one shared evaluation (Phase 42 D-17): the same ceiling order, one truncated
         // store-clock read and `balance >= ceiling` predicate the mid-run boundary guard uses.
@@ -324,6 +383,14 @@ impl AllowanceAdmissionPort for Treasurer {
             );
             return Err(AdmissionError::Refused(refusal));
         }
+
+        // ALLOW-05 (D-09, D-10): with the model known, convert the remaining allowance into the
+        // run's token budget. A refusal here (zero budget, unpriced model) precedes every notice
+        // claim, so nothing needs giving back.
+        let derived = match model {
+            Some(model) => self.derive_from(&evaluation, model)?,
+            None => None,
+        };
 
         // Ceilings whose balance has reached its warn threshold; claimed only because every
         // ceiling admits (a refused request notifies nothing -- the refusal is its own signal).
@@ -349,6 +416,9 @@ impl AllowanceAdmissionPort for Treasurer {
         // The admitted path: claim every crossing's once-per-window notice (D-16). With no
         // notice store attached the warn leg is off.
         let mut admission = Admission::none();
+        if let Some(budget) = derived {
+            admission = admission.with_derived_budget(budget);
+        }
         if let Some(notices) = &self.notices {
             for crossing in crossings {
                 if let Some(notice) = self
@@ -360,6 +430,33 @@ impl AllowanceAdmissionPort for Treasurer {
             }
         }
         Ok(admission)
+    }
+}
+
+#[async_trait]
+impl AllowanceAdmissionPort for Treasurer {
+    async fn admit(
+        &self,
+        subject: &RunAttribution,
+        run_id: Option<&RunId>,
+    ) -> Result<Admission, AdmissionError> {
+        self.admit_inner(subject, run_id, None).await
+    }
+
+    /// The model-aware admission (ALLOW-05, D-09, D-10): [`AllowanceAdmissionPort::admit`] plus
+    /// the derived per-run token budget on the returned [`Admission`].
+    ///
+    /// A principal with no ceiling is admitted with no budget and no ledger read. A principal
+    /// with a ceiling and an unpriced `model` is refused with [`AdmissionError::ModelUnpriced`]
+    /// before any notice claim; a derived budget of zero tokens is refused with
+    /// [`AdmissionError::Refused`] carrying the binding ceiling's figures.
+    async fn admit_for_model(
+        &self,
+        subject: &RunAttribution,
+        run_id: Option<&RunId>,
+        model: &str,
+    ) -> Result<Admission, AdmissionError> {
+        self.admit_inner(subject, run_id, Some(model)).await
     }
 
     /// Deliver the operator notices this admission won (D-17): when an

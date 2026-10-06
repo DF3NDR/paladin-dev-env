@@ -77,6 +77,16 @@ pub enum AdmissionError {
         /// Description of the backend failure.
         message: String,
     },
+    /// The principal has a configured ceiling but the agent's model has no `treasurer.pricing`
+    /// row, so no token budget can be derived and the call cannot be metered (Phase 42 D-10).
+    ///
+    /// A configuration incoherence rather than quota exhaustion: callers map it to a `422`
+    /// without `Retry-After`, never to the pacing-shaped `429`.
+    #[error("model {model} has no treasurer.pricing row, so an allowance cannot meter it")]
+    ModelUnpriced {
+        /// The model name that has no price row.
+        model: String,
+    },
 }
 
 /// The admission-time allowance check (ALLOW-02, C1).
@@ -102,10 +112,118 @@ pub trait AllowanceAdmissionPort: Send + Sync {
         run_id: Option<&RunId>,
     ) -> Result<Admission, AdmissionError>;
 
+    /// Check `subject`'s allowances for an agent call against `model`, deriving the per-run token
+    /// budget the agent loop enforces (ALLOW-05, Phase 42 D-09, D-10).
+    ///
+    /// The default body calls [`AllowanceAdmissionPort::admit`] and ignores `model`, so no
+    /// existing implementor breaks and a port that does not meter derives no budget. An
+    /// implementor that meters (the Treasurer) should override it: for a principal with a
+    /// configured ceiling it derives the budget from the remaining allowance at the model's
+    /// dearest price and returns it on the [`Admission`] ([`Admission::derived_budget`]).
+    ///
+    /// # Errors
+    ///
+    /// Everything [`AllowanceAdmissionPort::admit`] returns, plus
+    /// [`AdmissionError::ModelUnpriced`] when a ceiling applies and `model` has no price row,
+    /// and [`AdmissionError::Refused`] when the derived budget is zero tokens.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use async_trait::async_trait;
+    /// use paladin_core::platform::container::allowance::Admission;
+    /// use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+    /// use paladin_core::platform::container::run::RunId;
+    /// use paladin_ports::input::allowance_admission_port::{AdmissionError, AllowanceAdmissionPort};
+    ///
+    /// // An implementor of only the required methods: it inherits the default `admit_for_model`.
+    /// struct AlwaysAdmits;
+    ///
+    /// #[async_trait]
+    /// impl AllowanceAdmissionPort for AlwaysAdmits {
+    ///     async fn admit(
+    ///         &self,
+    ///         _subject: &RunAttribution,
+    ///         _run_id: Option<&RunId>,
+    ///     ) -> Result<Admission, AdmissionError> {
+    ///         Ok(Admission::none())
+    ///     }
+    ///
+    ///     async fn confirm(&self, _admission: &Admission) {}
+    ///
+    ///     async fn abandon(&self, _admission: &Admission) {}
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ///     let port = AlwaysAdmits;
+    ///     let subject = RunAttribution::new(TenantId::new("acme")?, "svc-a");
+    ///     let admission = port.admit_for_model(&subject, None, "gpt-4").await?;
+    ///     // The default delegates to `admit` and derives no budget.
+    ///     assert!(admission.derived_budget().is_none());
+    ///     Ok(())
+    /// }
+    /// ```
+    async fn admit_for_model(
+        &self,
+        subject: &RunAttribution,
+        run_id: Option<&RunId>,
+        model: &str,
+    ) -> Result<Admission, AdmissionError> {
+        let _ = model;
+        self.admit(subject, run_id).await
+    }
+
     /// Called after the admitted run (or agent call) is durably accepted.
     async fn confirm(&self, admission: &Admission);
 
     /// Called when an admitted run (or agent call) was never accepted, so any notice this
     /// admission won can be released.
     async fn abandon(&self, admission: &Admission);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paladin_core::platform::container::principal::TenantId;
+
+    /// Implements only the required methods and counts `admit` calls.
+    struct CountingPort(std::sync::atomic::AtomicUsize);
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for CountingPort {
+        async fn admit(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Admission::none())
+        }
+        async fn confirm(&self, _admission: &Admission) {}
+        async fn abandon(&self, _admission: &Admission) {}
+    }
+
+    #[tokio::test]
+    async fn the_default_admit_for_model_delegates_to_admit_with_no_budget() {
+        let port = CountingPort(std::sync::atomic::AtomicUsize::new(0));
+        let subject = RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a");
+        let admission = port
+            .admit_for_model(&subject, None, "any-model")
+            .await
+            .unwrap();
+        assert_eq!(port.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(admission.derived_budget().is_none());
+    }
+
+    #[test]
+    fn model_unpriced_names_the_model_in_its_message() {
+        let error = AdmissionError::ModelUnpriced {
+            model: "gpt-9".to_string(),
+        };
+        assert_eq!(
+            error.to_string(),
+            "model gpt-9 has no treasurer.pricing row, so an allowance cannot meter it"
+        );
+    }
 }

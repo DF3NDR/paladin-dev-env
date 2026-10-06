@@ -516,7 +516,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 42-08-PLAN.md — TokenBudget on every per-agent service, priced Treasurer at boot, HTTP agent routes admit with the model and answer allowance_halted + halt_reason (buffered stream done included), 422 model_unpriced, v0.9 golden exception (wave 8)
+- [x] 42-08-PLAN.md — TokenBudget on every per-agent service, priced Treasurer at boot, HTTP agent routes admit with the model and answer allowance_halted + halt_reason (buffered stream done included), 422 model_unpriced, v0.9 golden exception (wave 8)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 42
 current_phase_name: mid-run-halt-sse-terminal-status
 status: executing
-stopped_at: Completed 42-07-PLAN.md
-last_updated: "2026-10-06T23:16:16.605Z"
+stopped_at: Completed 42-08-PLAN.md
+last_updated: "2026-10-06T23:58:26.228Z"
 last_activity: 2026-10-06
 last_activity_desc: Phase 42 execution started
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 51
-  completed_plans: 46
+  completed_plans: 47
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 90%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([█████████░] 92%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 42 (mid-run-halt-sse-terminal-status) — EXECUTING
-Plan: 8 of 12
+Plan: 9 of 12
 Status: Ready to execute
 Last activity: 2026-10-06 — Phase 42 execution started
 
@@ -235,6 +235,7 @@ Last activity: 2026-10-06 — Phase 42 execution started
 | Phase 42 P05 | 40min | 3 tasks | 23 files |
 | Phase 42 P06 | 45min | 2 tasks | 14 files |
 | Phase 42 P07 | 1h | 3 tasks | 12 files |
+| Phase 42 P08 | 45min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -365,6 +366,9 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 42-07]: derive_budget refuses an exhausted ceiling before any pricing lookup; a foreign-currency price table is a Backend error naming both codes, never converted
 - [Phase ?]: [Phase 42-07]: TokenBudget tightest-wins: a tie goes to the Treasurer (AllowanceHalted), an operator win keeps TokenBudget; the derived figure lives on ModelCallContext, never the middleware
 - [Phase ?]: [Phase 42-07]: halt figures report the binding ceiling at balance equal to ceiling (A5); a zero-figure refusal carries the real balance
+- [Phase ?]: 42-08: option-b true-stream done carries an informational halt_reason only on a strict total_tokens crossing of the derived figure; supersedes the byte-identical-in-all-cases reading; no-crossing and no-usage streams stay byte-identical
+- [Phase ?]: 42-08: operator agent_runtime.token_budget now takes effect on HTTP agent routes via the one TokenBudget installed per agent service; tightest wins, a tie goes to the allowance
+- [Phase ?]: 42-08: v0.9 golden Phase 42 exception is one document-level function (strip_known_v0_11_halt_reason) applied at load; unstripped loaders only for the scope test
 
 ### Pending Todos
 
@@ -579,8 +583,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-06T23:16:16.562Z
-**Stopped at:** Completed 42-07-PLAN.md
+**Last session:** 2026-10-06T23:58:26.193Z
+**Stopped at:** Completed 42-08-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

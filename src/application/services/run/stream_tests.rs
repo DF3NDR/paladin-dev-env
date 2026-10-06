@@ -18,6 +18,7 @@ use paladin_battalion::engine::{
     EdgeSpec, EngineLimits, InputMapping, NodeContext, NodeSpec, StateNode, StateNodeError,
     WarEngine, WarGraph, graph::GateRequestTemplate,
 };
+use paladin_core::platform::container::allowance::HaltReason;
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
@@ -26,25 +27,34 @@ use paladin_core::platform::container::execution_result::PaladinResult;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::ParleyKind;
+use paladin_core::platform::container::principal::{RunAttribution, TenantId};
 use paladin_core::platform::container::run::{
     AssistantRef, Run, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
 };
 use paladin_core::platform::container::token_usage::TokenUsage;
+use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 use paladin_ports::input::run_event_stream_port::RunEventStreamPort;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::run_queue_port::{QueuedRun, RunQueuePort};
 use paladin_ports::output::run_repository_port::RunRepositoryPort;
 use paladin_ports::output::run_trace_port::{RunTraceError, RunTracePort};
+use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
 use paladin_ports::output::trace_sink_port::{CompositeSink, TraceEvent, TraceRecord, TraceSink};
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::waypoint_port::WaypointPort;
 use paladin_storage::run::in_memory::InMemoryRunRepository;
 use paladin_storage::run::sqlite::SqliteRunRepository;
 use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
 use paladin_storage::run_trace::in_memory::InMemoryRunTraceStore;
+use paladin_storage::treasury::contract_tests::{settle_request, usd};
+use paladin_storage::treasury::sqlite::SqliteTreasuryLedger;
 use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
 use paladin_storage::waypoint::sqlite::SqliteWaypointStore;
 
+use crate::application::services::treasurer::{Treasurer, window_for};
+use crate::config::trace::TraceConfig;
+use crate::config::treasurer::TreasurerConfig;
 use crate::infrastructure::telemetry::PersistingTraceSink;
 
 use super::events::{RunEventBus, RunEventBusSink, RunEventStreamService, map_trace_event};
@@ -1120,4 +1130,616 @@ async fn replay_paginates_through_the_port() {
         "a page size of 2 over 6 records must take at least 3 read calls, got {}",
         read_calls.load(std::sync::atomic::Ordering::SeqCst)
     );
+}
+
+// --- The halted `done` on the live, degraded and replay paths (PLAT-09, D-14, D-16, G10) ----
+
+/// A node standing in for a priced superstep: when `amount_nanos` is positive it settles that
+/// many nano-units against `scope` through the real ledger, exactly what the engine's
+/// settlement does after a metered model call (a test-local copy of `http_surface_tests`'s
+/// `SpendingNode`, per this module's small-double precedent).
+struct SpendStep {
+    ledger: Arc<dyn TreasuryLedgerPort>,
+    scope: LedgerScope,
+    amount_nanos: i64,
+}
+
+#[async_trait]
+impl StateNode for SpendStep {
+    async fn run(
+        &self,
+        _state: &Battlefield,
+        _ctx: &NodeContext,
+    ) -> Result<Directive, StateNodeError> {
+        if self.amount_nanos > 0 {
+            self.ledger
+                .settle(settle_request(
+                    self.scope.clone(),
+                    SettlementKey::new(RunId::new_v7(), 0, 0),
+                    self.amount_nanos,
+                    usd(),
+                    "gpt-4",
+                ))
+                .await
+                .map_err(|e| StateNodeError(format!("test settlement failed: {e}")))?;
+        }
+        Ok(StateDelta::new().into())
+    }
+}
+
+/// A [`SpendGuard`] that halts every run on its first boundary with a fixed reason.
+struct HaltsWith(HaltReason);
+
+#[async_trait]
+impl SpendGuard for HaltsWith {
+    async fn check(&self, _thread: &ThreadId) -> SpendDecision {
+        SpendDecision::Halt(self.0.clone())
+    }
+}
+
+/// How a test run comes to halt.
+enum HaltScript {
+    /// A real Treasurer over a real SQLite ledger: the run's first superstep spends the whole
+    /// 1.00 USD allowance, so the guard halts it at the second boundary with
+    /// `allowance_exhausted`.
+    Spend,
+    /// A stub guard that halts at the first boundary with the given reason (used for
+    /// `ledger_unavailable`, which needs no ledger at all).
+    Guard(HaltReason),
+}
+
+/// One halted run's persisted artefacts plus the `done` its live subscriber saw.
+struct HaltedRun {
+    repository: Arc<dyn RunRepositoryPort>,
+    waypoints: Arc<InMemoryWaypointStore>,
+    traces: Arc<InMemoryRunTraceStore>,
+    run_id: RunId,
+    live_terminal: (RunStreamEventKind, serde_json::Value),
+    cleanup_path: Option<std::path::PathBuf>,
+}
+
+impl HaltedRun {
+    fn release(self) {
+        if let Some(path) = &self.cleanup_path {
+            cleanup(path);
+        }
+    }
+}
+
+/// Poll the run row until it is terminal (G14: the engine's `done` can precede the row's
+/// status write), panicking after `timeout`.
+async fn wait_for_terminal_row(
+    repository: &Arc<dyn RunRepositoryPort>,
+    run_id: &RunId,
+    timeout: Duration,
+) -> Run {
+    tokio::time::timeout(timeout, async {
+        loop {
+            let run = repository.get(run_id).await.unwrap().unwrap();
+            if run.status.is_terminal() {
+                return run;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the run row must reach a terminal status")
+}
+
+/// Drive one run to a halt through a real worker pool (the live bus, the persisted trace
+/// pipeline and the run row all populated by production code), capturing the live terminal
+/// event. `None` when the allowance window rolled over mid-scenario (Pitfall 10) -- the caller
+/// retries once.
+async fn drive_halted_run(script: &HaltScript) -> Option<HaltedRun> {
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+    let waypoints = Arc::new(InMemoryWaypointStore::new());
+    let traces = Arc::new(InMemoryRunTraceStore::new());
+    let bus = Arc::new(RunEventBus::new());
+
+    let mut cleanup_path = None;
+    let mut treasurer = None;
+    let mut ledger_for_window = None;
+    let graph = match script {
+        HaltScript::Guard(_) => build_chain_graph(3, Duration::from_millis(2)),
+        HaltScript::Spend => {
+            let (path, url) = temp_sqlite_url("halted_done");
+            let ledger = Arc::new(SqliteTreasuryLedger::new(&url).await.unwrap());
+            let ledger_port: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+            let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+                "currency": "USD",
+                "allowance": { "api_keys": { "svc-h": { "period": "1d", "amount": "1.00" } } }
+            }))
+            .unwrap();
+            treasurer = Some(Arc::new(Treasurer::new(
+                config.allowance_policy().unwrap(),
+                Arc::clone(&ledger_port),
+            )));
+            let mut graph = WarGraph::new(BattlefieldSchema::new(vec![]), EngineLimits::default());
+            let ids: Vec<NodeId> = (0..3).map(|i| NodeId::new(format!("n{i}"))).collect();
+            for (i, id) in ids.iter().enumerate() {
+                graph.add_node(
+                    id.clone(),
+                    NodeSpec::Function(Arc::new(SpendStep {
+                        ledger: Arc::clone(&ledger_port),
+                        scope: LedgerScope::new("acme", "svc-h"),
+                        amount_nanos: if i == 0 { 1_000_000_000 } else { 0 },
+                    })),
+                );
+            }
+            for pair in ids.windows(2) {
+                graph.add_edge(EdgeSpec {
+                    from: pair[0].clone(),
+                    to: pair[1].clone(),
+                    condition: None,
+                });
+            }
+            graph.add_entry(ids[0].clone());
+            cleanup_path = Some(path);
+            ledger_for_window = Some(ledger);
+            Arc::new(graph)
+        }
+    };
+    let window_before = match &ledger_for_window {
+        Some(ledger) => window_for(ledger.store_now().await.unwrap(), 86_400),
+        None => None,
+    };
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("halt-wf", graph));
+
+    let run_id = RunId::new_v7();
+    let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+    let mut run = Run::new(
+        run_id.clone(),
+        thread_id.clone(),
+        AssistantRef {
+            assistant_id: "halt-wf".to_string(),
+            version: 1,
+        },
+        serde_json::json!({}),
+    );
+    if matches!(script, HaltScript::Spend) {
+        run = run.with_submitted_by(RunAttribution::new(TenantId::new("acme").unwrap(), "svc-h"));
+    }
+    repository.insert(&run).await.unwrap();
+    queue
+        .enqueue(QueuedRun {
+            run_id: run_id.clone(),
+            thread_id: thread_id.clone(),
+            attempt: 1,
+            enqueued_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    let stub_reason = match script {
+        HaltScript::Guard(reason) => Some(reason.clone()),
+        HaltScript::Spend => None,
+    };
+    let factory_store = waypoints.clone();
+    let engine_factory: Arc<
+        dyn Fn(tokio_util::sync::CancellationToken) -> WarEngine<InMemoryWaypointStore>
+            + Send
+            + Sync,
+    > = Arc::new(move |token| {
+        let engine = WarEngine::new(Arc::new(UnusedPaladinPort), factory_store.clone())
+            .with_cancellation_token(token);
+        match &stub_reason {
+            Some(reason) => engine.with_spend_guard(Arc::new(HaltsWith(reason.clone()))),
+            None => engine,
+        }
+    });
+    let mut pool = RunWorkerPool::new(
+        Arc::new(WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            waypoints.clone(),
+        )),
+        waypoints.clone(),
+        repository.clone(),
+        queue.clone(),
+        resolver,
+        Duration::from_secs(30),
+    )
+    .with_engine_factory(engine_factory)
+    .with_event_bus(bus.clone())
+    .with_trace_config(TraceConfig {
+        log_sink: false,
+        persist: true,
+        ..TraceConfig::default()
+    })
+    .with_run_trace_port(traces.clone() as Arc<dyn RunTracePort>);
+    if let Some(treasurer) = treasurer {
+        pool = pool.with_treasurer(treasurer);
+    }
+
+    // Subscribe BEFORE dispatch: a broadcast never buffers for a late subscriber.
+    bus.bind(thread_id.clone(), run_id.clone()).await;
+    let mut rx = bus.subscribe(&run_id).await.expect("bus must be bound");
+    let run_task = tokio::spawn(async move { pool.run_once().await });
+
+    let mut live_terminal = None;
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                if matches!(
+                    event.kind,
+                    RunStreamEventKind::Done | RunStreamEventKind::Error
+                ) {
+                    live_terminal = Some((event.kind, event.payload));
+                    break;
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+    assert!(run_task.await.unwrap().unwrap());
+    let live_terminal = live_terminal.expect("the live stream must end with a terminal event");
+
+    wait_for_terminal_row(&repository, &run_id, Duration::from_secs(5)).await;
+    wait_for_run_finished_persisted(&traces, &thread_id, Duration::from_secs(5)).await;
+
+    if let Some(ledger) = &ledger_for_window {
+        let window_after = window_for(ledger.store_now().await.unwrap(), 86_400);
+        if window_before != window_after {
+            if let Some(path) = &cleanup_path {
+                cleanup(path);
+            }
+            return None;
+        }
+    }
+    Some(HaltedRun {
+        repository,
+        waypoints,
+        traces,
+        run_id,
+        live_terminal,
+        cleanup_path,
+    })
+}
+
+/// Drive a halted run, retrying once when an allowance window boundary was crossed.
+async fn halted_run(script: HaltScript) -> HaltedRun {
+    for _ in 0..2 {
+        if let Some(rig) = drive_halted_run(&script).await {
+            return rig;
+        }
+    }
+    panic!("the allowance window boundary was crossed on both attempts");
+}
+
+/// The terminal event of the degraded polling path for `rig`'s run (no replay port wired).
+async fn degraded_terminal(rig: &HaltedRun) -> (RunStreamEventKind, serde_json::Value) {
+    let waypoints: Arc<dyn WaypointPort> = rig.waypoints.clone();
+    let service = RunEventStreamService::new(
+        Arc::new(RunEventBus::new()),
+        rig.repository.clone(),
+        waypoints,
+        Duration::from_millis(20),
+    );
+    let mut stream = service.stream(&rig.run_id).await.unwrap();
+    while let Some(event) = stream.next().await {
+        assert_eq!(event.mode, RunStreamMode::Degraded);
+        if matches!(
+            event.kind,
+            RunStreamEventKind::Done | RunStreamEventKind::Error
+        ) {
+            return (event.kind, event.payload);
+        }
+    }
+    panic!("the degraded stream ended without a terminal event");
+}
+
+/// The terminal event of the replay path for `rig`'s run.
+async fn replay_terminal(rig: &HaltedRun) -> (RunStreamEventKind, serde_json::Value) {
+    let waypoints: Arc<dyn WaypointPort> = rig.waypoints.clone();
+    let service = RunEventStreamService::new(
+        Arc::new(RunEventBus::new()),
+        rig.repository.clone(),
+        waypoints,
+        Duration::from_millis(20),
+    )
+    .with_replay(rig.traces.clone() as Arc<dyn RunTracePort>);
+    let mut stream = service.stream(&rig.run_id).await.unwrap();
+    while let Some(event) = stream.next().await {
+        assert_eq!(event.mode, RunStreamMode::Replay);
+        if matches!(
+            event.kind,
+            RunStreamEventKind::Done | RunStreamEventKind::Error
+        ) {
+            return (event.kind, event.payload);
+        }
+    }
+    panic!("the replay stream ended without a terminal event");
+}
+
+/// The two fields every path must agree on byte for byte: `status` and `halt_reason`
+/// (`waypoint_id`, `usage` and `trace_seq` follow each path's own existing rule).
+fn status_and_reason(payload: &serde_json::Value) -> (String, Option<String>) {
+    (
+        serde_json::to_string(&payload["status"]).unwrap(),
+        payload
+            .get("halt_reason")
+            .map(|reason| serde_json::to_string(reason).unwrap()),
+    )
+}
+
+/// PLAT-09, D-14, D-16: one spend-halted run observed live, then degraded, then by replay
+/// emits a `done` with the same `status` and the same `halt_reason` object on all three, and
+/// that object is the run row's own `wire_json`.
+#[tokio::test(flavor = "multi_thread")]
+async fn halted_done_agrees_on_live_degraded_and_replay() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let rig = halted_run(HaltScript::Spend).await;
+
+        let row = rig.repository.get(&rig.run_id).await.unwrap().unwrap();
+        assert_eq!(row.status, RunStatus::Halted);
+        let row_reason = row
+            .halt_reason
+            .as_ref()
+            .expect("a spend-halted row carries its reason")
+            .wire_json();
+
+        let (live_kind, live) = rig.live_terminal.clone();
+        let (degraded_kind, degraded) = degraded_terminal(&rig).await;
+        let (replay_kind, replay) = replay_terminal(&rig).await;
+
+        for kind in [live_kind, degraded_kind, replay_kind] {
+            assert_eq!(
+                kind,
+                RunStreamEventKind::Done,
+                "a halt is a done, never an error"
+            );
+        }
+        assert_eq!(live["status"], "halted");
+        assert_eq!(live["halt_reason"], row_reason, "live done: {live}");
+        assert_eq!(live["halt_reason"]["reason"], "allowance_exhausted");
+        assert_eq!(
+            status_and_reason(&live),
+            status_and_reason(&degraded),
+            "live {live} vs degraded {degraded}"
+        );
+        assert_eq!(
+            status_and_reason(&live),
+            status_and_reason(&replay),
+            "live {live} vs replay {replay}"
+        );
+        rig.release();
+    })
+    .await
+    .expect("halted_done_agrees_on_live_degraded_and_replay timed out");
+}
+
+/// D-16: a ledger-unavailable halt is a `done` carrying `{"reason":"ledger_unavailable"}` on
+/// the live and degraded (and replay) paths -- never an `error` event.
+#[tokio::test(flavor = "multi_thread")]
+async fn ledger_unavailable_done_is_done_not_error_on_live_and_degraded() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let rig = halted_run(HaltScript::Guard(HaltReason::LedgerUnavailable)).await;
+        let expected = serde_json::json!({ "reason": "ledger_unavailable" });
+
+        let (live_kind, live) = rig.live_terminal.clone();
+        let (degraded_kind, degraded) = degraded_terminal(&rig).await;
+        let (replay_kind, replay) = replay_terminal(&rig).await;
+
+        for (path, kind, payload) in [
+            ("live", live_kind, &live),
+            ("degraded", degraded_kind, &degraded),
+            ("replay", replay_kind, &replay),
+        ] {
+            assert_eq!(
+                kind,
+                RunStreamEventKind::Done,
+                "{path} must emit done, not error"
+            );
+            assert_eq!(payload["status"], "halted", "{path}: {payload}");
+            assert_eq!(payload["halt_reason"], expected, "{path}: {payload}");
+        }
+        rig.release();
+    })
+    .await
+    .expect("ledger_unavailable_done_is_done_not_error_on_live_and_degraded timed out");
+}
+
+/// PLAT-09 idempotency: two successive degraded reads and two successive replays of the same
+/// terminal halted run each emit a terminal `done` whose `status` and `halt_reason` are
+/// byte-identical to the first.
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_degraded_and_replay_reads_of_a_halted_run_are_identical() {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let rig = halted_run(HaltScript::Guard(HaltReason::LedgerUnavailable)).await;
+
+        let (_, degraded_first) = degraded_terminal(&rig).await;
+        let (_, degraded_second) = degraded_terminal(&rig).await;
+        assert_eq!(
+            status_and_reason(&degraded_first),
+            status_and_reason(&degraded_second)
+        );
+        assert!(status_and_reason(&degraded_first).1.is_some());
+
+        let (_, replay_first) = replay_terminal(&rig).await;
+        let (_, replay_second) = replay_terminal(&rig).await;
+        assert_eq!(
+            status_and_reason(&replay_first),
+            status_and_reason(&replay_second)
+        );
+        assert_eq!(
+            status_and_reason(&degraded_first),
+            status_and_reason(&replay_first)
+        );
+        rig.release();
+    })
+    .await
+    .expect("repeated_degraded_and_replay_reads_of_a_halted_run_are_identical timed out");
+}
+
+/// A trace store holding a superstep record and a persisted `RunFinished { Halted }` for a
+/// thread (no run id on the records, as a drained worker writes them).
+async fn seed_halted_trace(thread_id: &ThreadId) -> Arc<InMemoryRunTraceStore> {
+    let store = Arc::new(InMemoryRunTraceStore::new());
+    let at = chrono::Utc::now();
+    store
+        .append(&[
+            TraceRecord {
+                thread_id: thread_id.clone(),
+                run_id: None,
+                seq: 1,
+                at,
+                event: TraceEvent::SuperstepStarted {
+                    superstep: 1,
+                    vanguard: vec![NodeId::new("n0")],
+                },
+            },
+            TraceRecord {
+                thread_id: thread_id.clone(),
+                run_id: None,
+                seq: 2,
+                at,
+                event: TraceEvent::RunFinished {
+                    status: paladin_ports::output::trace_sink_port::RunFinishStatus::Halted,
+                    total_supersteps: 1,
+                    usage: TokenUsage::new(3, 4),
+                    cost: None,
+                    halt_reason: None,
+                    duration_ms: 5,
+                    trace_dropped_total: 0,
+                },
+            },
+        ])
+        .await
+        .unwrap();
+    store
+}
+
+/// G10, D-15, T-42-19: a replayed `RunFinished` for a run whose row is not terminal (a drained
+/// worker's persisted halt) never ends the replay; once the row turns terminal the replay ends
+/// on the row's own terminal event.
+#[tokio::test]
+async fn replay_skips_a_run_finished_while_the_row_is_not_terminal() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let waypoints: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+        let run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("t-replay-drained").unwrap(),
+            AssistantRef {
+                assistant_id: "a1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_status(RunStatus::Running);
+        let run_id = run.run_id.clone();
+        repository.insert(&run).await.unwrap();
+        let traces = seed_halted_trace(&run.thread_id).await;
+
+        let service = RunEventStreamService::new(
+            Arc::new(RunEventBus::new()),
+            repository.clone(),
+            waypoints,
+            Duration::from_millis(20),
+        )
+        .with_replay(traces as Arc<dyn RunTracePort>);
+        let mut stream = service.stream(&run_id).await.unwrap();
+
+        let first = stream.next().await.expect("the superstep record replays");
+        assert_eq!(first.kind, RunStreamEventKind::Superstep);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), stream.next())
+                .await
+                .is_err(),
+            "a persisted RunFinished must not end the replay while the row is Running"
+        );
+
+        repository
+            .update_status(
+                &run_id,
+                RunStatus::Running,
+                RunStatus::Cancelled,
+                chrono::Utc::now(),
+            )
+            .await
+            .unwrap();
+        let terminal = stream
+            .next()
+            .await
+            .expect("the replay ends once the row is terminal");
+        assert_eq!(terminal.kind, RunStreamEventKind::Done);
+        assert_eq!(terminal.payload["status"], "cancelled");
+        assert!(
+            stream.next().await.is_none(),
+            "one terminal event ends the stream"
+        );
+    })
+    .await
+    .expect("replay_skips_a_run_finished_while_the_row_is_not_terminal timed out");
+}
+
+/// G10: when a replayed `RunFinished` maps and the row is terminal, the emitted event takes
+/// its `status` and `halt_reason` from the row (a pre-phase trace for a caller-cancelled run,
+/// which stored `halted`, converges on `cancelled`; a row carrying a reason adds it) while the
+/// record's own `usage` and `trace_seq` survive.
+#[tokio::test]
+async fn replay_trusts_the_row_over_the_recorded_status() {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let waypoints: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+        for (row_status, row_reason, want_reason) in [
+            (RunStatus::Cancelled, None, None),
+            (
+                RunStatus::Halted,
+                Some(HaltReason::LedgerUnavailable),
+                Some(serde_json::json!({ "reason": "ledger_unavailable" })),
+            ),
+            (RunStatus::Halted, None, None),
+        ] {
+            let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+            let mut run = Run::new(
+                RunId::new_v7(),
+                ThreadId::new(format!("t-replay-row-{}", RunId::new_v7())).unwrap(),
+                AssistantRef {
+                    assistant_id: "a1".to_string(),
+                    version: 1,
+                },
+                serde_json::json!({}),
+            )
+            .with_status(row_status);
+            run.halt_reason = row_reason;
+            let run_id = run.run_id.clone();
+            repository.insert(&run).await.unwrap();
+            let traces = seed_halted_trace(&run.thread_id).await;
+
+            let service = RunEventStreamService::new(
+                Arc::new(RunEventBus::new()),
+                repository,
+                waypoints.clone(),
+                Duration::from_millis(20),
+            )
+            .with_replay(traces as Arc<dyn RunTracePort>);
+            let mut stream = service.stream(&run_id).await.unwrap();
+            let mut terminal = None;
+            while let Some(event) = stream.next().await {
+                if event.kind == RunStreamEventKind::Done {
+                    terminal = Some(event);
+                    break;
+                }
+            }
+            let terminal = terminal.expect("the replay ends with done");
+            assert_eq!(
+                terminal.payload["status"],
+                serde_json::json!(row_status.to_string()),
+                "status comes from the row"
+            );
+            assert_eq!(terminal.payload.get("halt_reason").cloned(), want_reason);
+            assert_eq!(
+                terminal.payload["trace_seq"], 2,
+                "the record's trace_seq is kept"
+            );
+            assert_eq!(
+                terminal.payload["usage"]["prompt_tokens"], 3,
+                "the record's usage is kept"
+            );
+        }
+    })
+    .await
+    .expect("replay_trusts_the_row_over_the_recorded_status timed out");
 }

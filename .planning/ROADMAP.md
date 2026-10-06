@@ -492,7 +492,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 42-02-PLAN.md — Tracer: HaltReason, the SpendGuard port, the engine boundary check with a typed HaltCause, the shared Treasurer evaluation and guard, worker attachment and map_outcome, reordered build_run_api, engine_spend_halt_tracer through the real router and SQLite; register the surface (wave 2)
+- [x] 42-02-PLAN.md — Tracer: HaltReason, the SpendGuard port, the engine boundary check with a typed HaltCause, the shared Treasurer evaluation and guard, worker attachment and map_outcome, reordered build_run_api, engine_spend_halt_tracer through the real router and SQLite; register the surface (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

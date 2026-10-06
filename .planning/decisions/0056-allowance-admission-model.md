@@ -218,6 +218,10 @@ covered by a prevention test; Phase 42 closes the first.
   (a reservation row counts toward the balance automatically, because it reads `amount_nanos`) and the fixed
   ceiling order, and closes the D-05 over-admission race by reserving at the superstep boundary beside the
   admission check; it cites this ADR with ADR-0052 and ADR-0053 rather than re-opening admission.
+
+  *Dated note, 2026-10-06 (plan 42-01, ADR-0057):* superseded -- Phase 42 halts at the superstep boundary with a
+  check-only balance read and writes no reservation; the over-admission race of 41 D-05 is accepted, bounded to one
+  superstep per run (D-01).
 - **Phase 43 (rate pacing)** - unrelated to allowances; it adds no ceiling and reads none of this model.
 - **Phase 46 (docs currency)** - the Treasurer mdBook page (CURR-23) cites this ADR for the window, composition
   and notice semantics; the `v0.10` to `v0.11` migration guide carries MIGRATION.md 9.2, 9.4, 9.5 and 9.6.

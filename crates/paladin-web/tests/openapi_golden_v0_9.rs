@@ -15,6 +15,8 @@
 //!   reported SHIP-02 failure, never something to normalise away
 //! - drop the ONE sanctioned `ExecuteResponse` field rename below (Phase 31, D-24 / ADR-0051)
 //! - drop the `429` response entries Phase 41 adds to three operations (below)
+//! - drop the `422` response entries and the `ExecuteResponse.halt_reason` field Phase 42 adds
+//!   (below)
 //!
 //! This file has no environment-variable-driven regeneration escape hatch (unlike
 //! `crates/paladin-web/src/openapi.rs::openapi_matches_committed_baseline`, whose committed
@@ -66,6 +68,22 @@
 //! gate's general power: every other response, status, schema and path on all six v0.9 paths is
 //! still compared in full, and
 //! [`allowance_429_exception_is_narrowly_scoped`] fails if the exception ever widens.
+//!
+//! ## Phase 42 exception: `ExecuteResponse.halt_reason` and the `422 model_unpriced` response (D-10, D-12)
+//!
+//! `.planning/decisions/0057-mid-run-halt-contract.md` group (e) lets an agent call stop on the
+//! caller's allowance (plan 42-08, ALLOW-05). Two purely additive changes reach the frozen v0.9
+//! paths, both absent from the `v0.9.0` baseline by construction: `ExecuteResponse` gains a
+//! nullable `halt_reason` object (present only when `stop_reason` is `allowance_halted`; the
+//! same object `GET /runs/{id}` reports, and the `done` data of the buffered fallback of
+//! `execute/stream`, which serializes this DTO), and `POST /v1/agents/{id}/execute`,
+//! `.../execute/stream` and `.../jobs` document a `422` (`model_unpriced`) for a caller with an
+//! allowance ceiling whose agent model has no `treasurer.pricing` row.
+//! [`strip_known_v0_11_halt_reason`] removes exactly the `"422"` key from `responses` on exactly
+//! those three operations and exactly the `halt_reason` key from `ExecuteResponse`'s
+//! `properties`/`required`, from BOTH documents, so this is a fourth sanctioned, narrowly-scoped,
+//! explicitly-documented exception -- no other response, status, field, schema or path on the
+//! six v0.9 paths is touched, and [`phase_42_exception_is_narrowly_scoped`] fails if it widens.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -93,8 +111,18 @@ fn baseline_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/openapi-v0.9.0.json")
 }
 
-/// Load the frozen `v0.9.0` baseline document.
+/// Load the frozen `v0.9.0` baseline document, with the Phase 42 exception
+/// ([`strip_known_v0_11_halt_reason`]) applied (a no-op on the frozen document, which never
+/// carried either entry).
 fn load_baseline() -> Value {
+    let mut doc = load_baseline_unstripped();
+    strip_known_v0_11_halt_reason(&mut doc);
+    doc
+}
+
+/// [`load_baseline`] without the Phase 42 exception -- used only to prove the exception's own
+/// scope.
+fn load_baseline_unstripped() -> Value {
     let path = baseline_path();
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read frozen baseline {}: {e}", path.display()));
@@ -103,8 +131,17 @@ fn load_baseline() -> Value {
 }
 
 /// Generate today's OpenAPI document as a `serde_json::Value`, via the same `openapi_spec()`
-/// the committed-baseline drift guard (`crates/paladin-web/src/openapi.rs`) uses.
+/// the committed-baseline drift guard (`crates/paladin-web/src/openapi.rs`) uses, with the
+/// Phase 42 exception ([`strip_known_v0_11_halt_reason`]) applied.
 fn generated_spec() -> Value {
+    let mut doc = generated_spec_unstripped();
+    strip_known_v0_11_halt_reason(&mut doc);
+    doc
+}
+
+/// [`generated_spec`] without the Phase 42 exception -- used only to prove the exception's own
+/// scope.
+fn generated_spec_unstripped() -> Value {
     serde_json::to_value(paladin_web::openapi::openapi_spec()).expect("serialize generated spec")
 }
 
@@ -112,6 +149,15 @@ fn generated_spec() -> Value {
 /// Phase 41 (D-12, ALLOW-02) -- spelled out here, never derived, so the exception can only ever
 /// remove an entry from exactly these three operations.
 const ALLOWANCE_429_PATHS: &[&str] = &[
+    "/v1/agents/{id}/execute",
+    "/v1/agents/{id}/execute/stream",
+    "/v1/agents/{id}/jobs",
+];
+
+/// The three v0.9 operations (`POST`) that gained a `422 model_unpriced` response in Phase 42
+/// (D-10, plan 42-08) -- spelled out here, never derived, so the exception can only ever remove
+/// an entry from exactly these three operations.
+const MODEL_UNPRICED_422_PATHS: &[&str] = &[
     "/v1/agents/{id}/execute",
     "/v1/agents/{id}/execute/stream",
     "/v1/agents/{id}/jobs",
@@ -157,6 +203,43 @@ fn strip_known_v0_11_allowance_429(restricted_paths: &mut Value) {
             .and_then(Value::as_object_mut)
         {
             responses.remove("429");
+        }
+    }
+}
+
+/// Remove the ONE sanctioned Phase 42 divergence (see this file's module docs) from a whole
+/// OpenAPI document in place:
+///
+/// - the `"422"` entry of `responses` on the `post` operation of the three
+///   [`MODEL_UNPRICED_422_PATHS`] (`code = "model_unpriced"`, plan 42-08, D-10);
+/// - the `halt_reason` key of `components.schemas.ExecuteResponse`'s `properties` and `required`
+///   (D-12).
+///
+/// Nothing else -- not a sibling status, not another operation, not another field or schema --
+/// is touched.
+fn strip_known_v0_11_halt_reason(doc: &mut Value) {
+    for &path in MODEL_UNPRICED_422_PATHS {
+        if let Some(responses) = doc
+            .get_mut("paths")
+            .and_then(|paths| paths.get_mut(path))
+            .and_then(|item| item.get_mut("post"))
+            .and_then(|operation| operation.get_mut("responses"))
+            .and_then(Value::as_object_mut)
+        {
+            responses.remove("422");
+        }
+    }
+    if let Some(object) = doc
+        .get_mut("components")
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(|schemas| schemas.get_mut("ExecuteResponse"))
+        .and_then(Value::as_object_mut)
+    {
+        if let Some(required) = object.get_mut("required").and_then(Value::as_array_mut) {
+            required.retain(|v| v != "halt_reason");
+        }
+        if let Some(properties) = object.get_mut("properties").and_then(Value::as_object_mut) {
+            properties.remove("halt_reason");
         }
     }
 }
@@ -633,4 +716,99 @@ fn info_version_is_the_only_normalisation() {
         diff.is_some(),
         "a non-version info field difference must NOT be normalised away"
     );
+}
+
+/// The Phase 42 exception strips exactly the `"422"` response key from exactly the three agent
+/// operations and exactly `halt_reason` from `ExecuteResponse`: proven against the real
+/// generated and baseline documents, so a future edit that widens it (another status, another
+/// operation, another field or schema) breaks this test.
+#[test]
+fn phase_42_exception_is_narrowly_scoped() {
+    let generated = generated_spec_unstripped();
+    let baseline = load_baseline_unstripped();
+
+    // Before stripping: the generated document documents both additions, the frozen one cannot.
+    for &path in MODEL_UNPRICED_422_PATHS {
+        assert!(
+            generated["paths"][path]["post"]["responses"]
+                .get("422")
+                .is_some_and(|response| !response.is_null()),
+            "{path}: the generated document must carry the Phase 42 422 response"
+        );
+        assert!(
+            baseline["paths"][path]["post"]["responses"]
+                .get("422")
+                .is_none(),
+            "{path}: the frozen v0.9.0 baseline must never carry a 422"
+        );
+    }
+    assert!(
+        generated["components"]["schemas"]["ExecuteResponse"]["properties"]
+            .get("halt_reason")
+            .is_some(),
+        "the generated ExecuteResponse must carry halt_reason before stripping"
+    );
+    assert!(
+        baseline["components"]["schemas"]["ExecuteResponse"]["properties"]
+            .get("halt_reason")
+            .is_none(),
+        "the frozen v0.9.0 baseline must never carry halt_reason"
+    );
+    // `halt_reason` is optional on the wire: it must never become a required property.
+    assert!(
+        !generated["components"]["schemas"]["ExecuteResponse"]["required"]
+            .as_array()
+            .expect("ExecuteResponse has a required array")
+            .iter()
+            .any(|v| v == "halt_reason"),
+        "halt_reason is absent on every non-halt response, so it must not be required"
+    );
+
+    let mut stripped = generated.clone();
+    strip_known_v0_11_halt_reason(&mut stripped);
+
+    // Exactly the three 422 entries are gone; every other response on those operations stays.
+    for &path in MODEL_UNPRICED_422_PATHS {
+        let mut expected = generated["paths"][path].clone();
+        expected["post"]["responses"]
+            .as_object_mut()
+            .expect("responses object")
+            .remove("422");
+        assert_eq!(
+            stripped["paths"][path], expected,
+            "{path}: the exception must remove the 422 entry and nothing else"
+        );
+    }
+    // No other path is touched.
+    for (path, item) in generated["paths"].as_object().expect("paths object") {
+        if MODEL_UNPRICED_422_PATHS.contains(&path.as_str()) {
+            continue;
+        }
+        assert_eq!(
+            &stripped["paths"][path], item,
+            "{path}: the Phase 42 exception must not touch any other path"
+        );
+    }
+    // Exactly `halt_reason` is gone from `ExecuteResponse`; every other schema is untouched.
+    let mut expected_schema = generated["components"]["schemas"]["ExecuteResponse"].clone();
+    expected_schema["properties"]
+        .as_object_mut()
+        .expect("properties object")
+        .remove("halt_reason");
+    assert_eq!(
+        stripped["components"]["schemas"]["ExecuteResponse"], expected_schema,
+        "the exception must remove halt_reason from ExecuteResponse and nothing else"
+    );
+    for (name, schema) in generated["components"]["schemas"]
+        .as_object()
+        .expect("schemas object")
+    {
+        if name == "ExecuteResponse" {
+            continue;
+        }
+        assert_eq!(
+            &stripped["components"]["schemas"][name], schema,
+            "schema `{name}` must not be touched by the Phase 42 exception"
+        );
+    }
 }

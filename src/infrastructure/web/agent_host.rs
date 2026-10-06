@@ -822,4 +822,235 @@ mod tests {
         assert_eq!(llm.call_count(), 2);
         assert_eq!(result.stop_reason, StopReason::TokenBudget);
     }
+    // -- End to end: the real agent router, the real agent service, a priced Treasurer ---------
+
+    /// The mock-priced table the end-to-end test derives from: `gpt-4` costs 30 USD per 1M
+    /// tokens on its dearest (completion) axis; `mystery` has no row.
+    fn e2e_prices() -> Arc<PriceTable> {
+        Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(10_000_000_000, 30_000_000_000).unwrap(),
+        ))
+    }
+
+    /// `x-api-key` map for the principals the end-to-end test calls as.
+    fn e2e_auth(keys: &[(&str, &str)]) -> paladin_web::AgentAuthConfig {
+        let api_keys = keys
+            .iter()
+            .map(|(secret, name)| {
+                (
+                    (*secret).to_string(),
+                    paladin_web::Principal::new(
+                        *name,
+                        paladin_core::platform::container::user::UserRole::User,
+                        paladin_core::platform::container::principal::TenantId::new("acme")
+                            .expect("tenant id"),
+                    ),
+                )
+            })
+            .collect();
+        paladin_web::AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        }
+    }
+
+    async fn post_json(
+        app: &axum::Router,
+        uri: &str,
+        key: &str,
+    ) -> (axum::http::StatusCode, serde_json::Value, String) {
+        use tower::ServiceExt;
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .header("x-api-key", key)
+                    .body(axum::body::Body::from(r#"{"input":"hello"}"#))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let raw = String::from_utf8(bytes.to_vec()).expect("utf8 body");
+        let json = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+        (status, json, raw)
+    }
+
+    /// ALLOW-05 over HTTP, end to end (D-09 to D-13): a real `build_agent_with_llm` agent over a
+    /// scripted model that reports 100 tokens per response, behind the real agent router and a
+    /// real Treasurer with a price table and an in-memory ledger.
+    ///
+    /// - `svc-a` has a 4_500_000-nano ceiling: at 30 USD per 1M tokens that derives 150 tokens,
+    ///   so the run is cut on response 2 (cumulative 200 > 150) with `allowance_halted`, the
+    ///   partial output and the truncation notice;
+    /// - the same allowance with a smaller operator budget stops as `token_budget`, no
+    ///   `halt_reason`;
+    /// - `svc-z`'s 29_999-nano ceiling derives 0 tokens: `429 allowance_exhausted`;
+    /// - an unpriced model under a ceiling is `422 model_unpriced`;
+    /// - `svc-free` has no ceiling and is unaffected;
+    /// - `jobs` records the same halt on the job result.
+    #[tokio::test]
+    async fn agent_execute_halts_on_the_derived_budget() {
+        use crate::application::services::treasurer::{AllowancePolicy, ScopeAllowance, Treasurer};
+        use paladin_web::{AgentApiState, agent_router};
+        use tower::ServiceExt;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let policy = AllowancePolicy::new(usd, 80)
+            .with_api_key("svc-a", ScopeAllowance::new(86_400, 4_500_000))
+            .with_api_key("svc-z", ScopeAllowance::new(86_400, 29_999));
+        let ledger: Arc<dyn TreasuryLedgerPort> = Arc::new(InMemoryTreasuryLedger::new());
+        let treasurer = Arc::new(Treasurer::new(policy, ledger).with_pricing(e2e_prices()));
+
+        let registry = AgentRegistry::new();
+        let agents: [(&str, &str, TokenBudgetConfig); 3] = [
+            ("scripted", "gpt-4", TokenBudgetConfig::default()),
+            (
+                "operator-tight",
+                "gpt-4",
+                TokenBudgetConfig {
+                    enabled: true,
+                    max_tokens: 120,
+                },
+            ),
+            ("unpriced", "mystery", TokenBudgetConfig::default()),
+        ];
+        for (id, model, token_budget) in agents {
+            let def = AgentDefinition {
+                model: model.to_string(),
+                max_loops: Some(10),
+                ..base(id)
+            };
+            let (paladin, executor, streamer) = build_agent_with_llm(
+                &def,
+                hundred_token_llm(),
+                default_circuit_breaker(),
+                None,
+                token_budget,
+            )
+            .await
+            .expect("builds");
+            register_built(&registry, id, paladin, executor, streamer, None, Vec::new())
+                .expect("registers");
+        }
+        let state = AgentApiState::new(Arc::new(registry))
+            .with_auth(e2e_auth(&[
+                ("key-a", "svc-a"),
+                ("key-z", "svc-z"),
+                ("key-free", "svc-free"),
+            ]))
+            .with_treasurer(treasurer);
+        let jobs = Arc::clone(&state.jobs);
+        let app = agent_router(state);
+
+        // 1. The derived budget cuts the loop: 200 tokens > 150, partial output kept.
+        let (status, body, raw) = post_json(&app, "/v1/agents/scripted/execute", "key-a").await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{raw}");
+        assert_eq!(body["stop_reason"], "allowance_halted", "{raw}");
+        assert_eq!(
+            body["halt_reason"]["reason"], "allowance_exhausted",
+            "{raw}"
+        );
+        assert_eq!(body["halt_reason"]["ceiling"], "0.0045 USD", "{raw}");
+        assert_eq!(body["halt_reason"]["scope"], "api_key", "{raw}");
+        assert_eq!(body["usage"]["total_tokens"], 200, "{raw}");
+        let output = body["output"].as_str().expect("output text");
+        assert!(output.contains("chunk"), "partial output is kept: {raw}");
+        assert!(
+            output.contains("[budget] Token budget reached"),
+            "the truncation notice is on the output: {raw}"
+        );
+        assert!(!raw.contains("key-a"), "no key value in the body: {raw}");
+
+        // 2. A smaller operator budget wins: today's label, no halt_reason key at all.
+        let (status, body, raw) =
+            post_json(&app, "/v1/agents/operator-tight/execute", "key-a").await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{raw}");
+        assert_eq!(body["stop_reason"], "token_budget", "{raw}");
+        assert!(body.get("halt_reason").is_none(), "{raw}");
+
+        // 3. A derived budget of zero is refused with the binding ceiling's figures.
+        let (status, body, raw) = post_json(&app, "/v1/agents/scripted/execute", "key-z").await;
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{raw}");
+        assert_eq!(body["error"]["code"], "allowance_exhausted", "{raw}");
+        assert_eq!(body["error"]["details"]["scope"], "api_key", "{raw}");
+        assert_eq!(body["error"]["details"]["kind"], "window", "{raw}");
+        assert!(body["error"]["details"]["window_end"].is_string(), "{raw}");
+
+        // 4. An unpriced model under a ceiling is refused before the agent runs, on all three
+        //    routes, naming the model and carrying no Retry-After.
+        for uri in [
+            "/v1/agents/unpriced/execute",
+            "/v1/agents/unpriced/execute/stream",
+            "/v1/agents/unpriced/jobs",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .header("x-api-key", "key-a")
+                        .body(axum::body::Body::from(r#"{"input":"hello"}"#))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                "{uri}"
+            );
+            assert!(response.headers().get("retry-after").is_none(), "{uri}");
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body reads");
+            let raw = String::from_utf8(bytes.to_vec()).expect("utf8 body");
+            let body: serde_json::Value = serde_json::from_str(&raw).expect("json body");
+            assert_eq!(body["error"]["code"], "model_unpriced", "{uri}: {raw}");
+            assert_eq!(body["error"]["details"]["model"], "mystery", "{uri}: {raw}");
+            assert!(
+                !raw.contains("key-a") && !raw.contains("svc-a"),
+                "{uri}: {raw}"
+            );
+        }
+
+        // 5. A principal with no ceiling is unaffected: nothing is derived, the run is bounded
+        //    only by max_loops, and even the unpriced model runs.
+        let (status, body, raw) = post_json(&app, "/v1/agents/scripted/execute", "key-free").await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{raw}");
+        assert_ne!(body["stop_reason"], "allowance_halted", "{raw}");
+        assert!(body.get("halt_reason").is_none(), "{raw}");
+        assert_eq!(body["usage"]["total_tokens"], 1_000, "{raw}");
+        let (status, _, raw) = post_json(&app, "/v1/agents/unpriced/execute", "key-free").await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{raw}");
+
+        // 6. jobs: the same halt lands on the job result.
+        let (status, body, raw) = post_json(&app, "/v1/agents/scripted/jobs", "key-a").await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED, "{raw}");
+        let job_id = body["job_id"].as_str().expect("job id").to_string();
+        let mut result = None;
+        for _ in 0..200 {
+            let record = serde_json::to_value(jobs.get(&job_id).expect("job exists"))
+                .expect("job serializes");
+            if record["result"].is_object() {
+                result = Some(record["result"].clone());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let result = result.expect("the job completes");
+        assert_eq!(result["stop_reason"], "allowance_halted");
+        assert_eq!(result["halt_reason"]["reason"], "allowance_exhausted");
+    }
 }

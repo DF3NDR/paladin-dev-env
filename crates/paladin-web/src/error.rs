@@ -184,6 +184,39 @@ impl ApiError {
         }
     }
 
+    /// `422 Unprocessable Entity` for an agent whose model has no `treasurer.pricing` row, called
+    /// by a principal that has a configured allowance ceiling (`code = "model_unpriced"`,
+    /// Phase 42 D-10).
+    ///
+    /// Spend that cannot be metered cannot be bounded, so the agent is not run. This is a
+    /// configuration incoherence, not quota exhaustion, so it carries no `Retry-After` header
+    /// (a client must not retry it as pacing). `error.details` is exactly `{ "model": <name> }`
+    /// -- the registered agent's model, never a key value or a tenant id.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_web::error::ApiError;
+    ///
+    /// let err = ApiError::model_unpriced("gpt-4");
+    /// assert_eq!(err.status().as_u16(), 422);
+    /// assert_eq!(err.retry_after(), None);
+    /// let body = err.to_body();
+    /// assert_eq!(body["error"]["code"], "model_unpriced");
+    /// assert_eq!(body["error"]["details"]["model"], "gpt-4");
+    /// ```
+    pub fn model_unpriced(model: &str) -> Self {
+        Self::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "model_unpriced",
+            format!(
+                "model '{model}' has no treasurer.pricing row, so its spend cannot be metered \
+                 under an allowance"
+            ),
+        )
+        .with_details(json!({ "model": model }))
+    }
+
     /// `501 Not Implemented` (`code = "not_implemented"`).
     pub fn not_implemented(message: impl Into<String>) -> Self {
         Self::new(StatusCode::NOT_IMPLEMENTED, "not_implemented", message)

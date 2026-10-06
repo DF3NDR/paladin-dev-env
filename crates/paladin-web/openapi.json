@@ -348,6 +348,16 @@
               }
             }
           },
+          "422": {
+            "description": "Unpriced model under an allowance (code model_unpriced): the caller has a configured allowance ceiling and the agent's model has no `treasurer.pricing` row, so its spend cannot be metered; `details.model` names the model; no Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "429": {
             "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
             "content": {
@@ -457,6 +467,16 @@
           },
           "404": {
             "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unpriced model under an allowance (code model_unpriced): the caller has a configured allowance ceiling and the agent's model has no `treasurer.pricing` row, so its spend cannot be metered; `details.model` names the model; no Retry-After",
             "content": {
               "application/json": {
                 "schema": {
@@ -578,6 +598,16 @@
           },
           "404": {
             "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unpriced model under an allowance (code model_unpriced): the caller has a configured allowance ceiling and the agent's model has no `treasurer.pricing` row, so its spend cannot be metered; `details.model` names the model; no Retry-After",
             "content": {
               "application/json": {
                 "schema": {
@@ -3476,6 +3506,13 @@
             "format": "int64",
             "description": "Wall-clock execution time in milliseconds.",
             "minimum": 0
+          },
+          "halt_reason": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Why the allowance ended this call, present only when `stop_reason` is\n`\"allowance_halted\"` (Phase 42, D-12): the same object `GET /runs/{id}` reports as\n`halt_reason` -- `reason: \"allowance_exhausted\"` plus the binding ceiling's `scope`,\n`kind`, `balance`, `ceiling`, `window_start` and `window_end`. The key is absent for\nevery other stop reason, so a response that was not halted is byte-identical to before."
           },
           "loop_count": {
             "type": "integer",

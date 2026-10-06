@@ -500,7 +500,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 42-04-PLAN.md — Guard hardening (exact-ceiling boundary, every-boundary reads, fail-closed ledger_unavailable, sticky child halts, no guard when unattributed) and resume by fork end to end with the documented recipe (wave 4)
+- [x] 42-04-PLAN.md — Guard hardening (exact-ceiling boundary, every-boundary reads, fail-closed ledger_unavailable, sticky child halts, no guard when unattributed) and resume by fork end to end with the documented recipe (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

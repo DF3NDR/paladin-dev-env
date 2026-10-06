@@ -65,6 +65,7 @@ use paladin_core::platform::container::waypoint::{
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
+use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
 use paladin_ports::output::structured_executor_port::{StructuredExecutorPort, StructuredOptions};
 use paladin_ports::output::trace_sink_port::{NodeProgressKind, TraceEvent};
 use paladin_ports::output::vault_confined::ConfinedVault;
@@ -81,7 +82,7 @@ use crate::engine::node::{NodeContext, StateNode, StateNodeError};
 use crate::engine::registries::EngineRegistries;
 use crate::engine::retry;
 use crate::engine::settlement::SpendHook;
-use crate::engine::{EngineError, RunOutcome, WaypointDurability};
+use crate::engine::{EngineError, HaltCause, RunOutcome, WaypointDurability};
 use crate::llm_failure;
 
 /// Every parent engine resource D-21 requires forwarding into a
@@ -113,6 +114,12 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// a nested `NodeSpec::Battalion` child run wholesale, like the token
     /// above, so a cancelled parent thread's children observe it too.
     cancellation_probe: Option<Arc<dyn CancellationProbe>>,
+    /// THIS run's own spend guard (ALLOW-03, Phase 42 D-04) -- inherited by a
+    /// nested `NodeSpec::Battalion` child run wholesale, like the probe above,
+    /// so a child graph's own boundaries consult the SAME per-run guard (and,
+    /// through its memoised first halt, can never be passed by a later parent
+    /// boundary).
+    spend_guard: Option<Arc<dyn SpendGuard>>,
     /// THIS run's own `checkpoint_ns` (CF-FR-15, D-20) -- captured once
     /// here so a NESTED `NodeSpec::Battalion` dispatch (a grandchild, from
     /// this run's own perspective) can derive the next namespace segment
@@ -1450,6 +1457,7 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                     &resources.interceptors,
                     &resources.cancellation,
                     &resources.cancellation_probe,
+                    &resources.spend_guard,
                     Some(Arc::clone(&resources.waypoint_port)),
                     child_checkpoint_ns,
                     // --- HITL-03, D-14: the child run inherits the SAME
@@ -1804,6 +1812,11 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     // never instead of -- `cancellation` above. `None` behaves identically
     // to a probe that never reports cancellation.
     probe: &Option<Arc<dyn CancellationProbe>>,
+    // --- ALLOW-03, Phase 42 D-04: the optional per-run spend guard,
+    // consulted at every superstep boundary AFTER -- and only when neither
+    // -- `cancellation` nor `probe` already resolved a halt cause. `None`
+    // makes no guard call at all.
+    spend_guard: &Option<Arc<dyn SpendGuard>>,
     waypoint_port_arc: Option<Arc<W>>,
     // --- HITL-04, D-19, D-20: unlike `checkpoint_ns`/`fork_of`/
     // `initial_parley_responses` below (each fixed to a top-level-only
@@ -1871,6 +1884,7 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
         interceptors,
         cancellation,
         probe,
+        spend_guard,
         waypoint_port_arc,
         None,
         // --- HITL-03, D-14: a top-level `start`/`resume_with_options` call
@@ -1937,6 +1951,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     // nested `NodeSpec::Battalion` child run via
     // `ChildEngineResources::cancellation_probe`.
     probe: &Option<Arc<dyn CancellationProbe>>,
+    // --- ALLOW-03, Phase 42 D-04: the optional per-run spend guard,
+    // consulted at every superstep boundary after the two cancel signals.
+    // Inherited wholesale by a nested `NodeSpec::Battalion` child run via
+    // `ChildEngineResources::spend_guard`.
+    spend_guard: &Option<Arc<dyn SpendGuard>>,
     waypoint_port_arc: Option<Arc<W>>,
     // --- CF-FR-15, D-20: the namespace path THIS run's own Waypoints are
     // stamped with (`Waypoint.checkpoint_ns`) -- `None` for a top-level
@@ -2050,6 +2069,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 interceptors: interceptors.to_vec(),
                 cancellation: cancellation.clone(),
                 cancellation_probe: probe.clone(),
+                spend_guard: spend_guard.clone(),
                 checkpoint_ns: checkpoint_ns.clone(),
                 fork_of,
                 shutdown_grace,
@@ -2214,6 +2234,17 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         // `bool`, never a `Result`), so there is nothing here to handle on
         // failure -- an adapter that cannot determine the answer has
         // already decided internally to answer `false`.
+        //
+        // --- ALLOW-03, Phase 42 D-04, D-05: `spend_guard`, if attached, is
+        // consulted here too, exactly once per boundary, but ONLY when
+        // neither cancel signal already resolved a cause -- so a probe cancel
+        // and a spend halt at the same boundary resolve to
+        // `HaltCause::CancelRequested` (cancel wins), and an engine with no
+        // guard makes no guard call at all. The order is probe cancel, then
+        // token, then spend. A guard decision is typed
+        // (`SpendDecision::Halt(HaltReason)`): the engine passes the reason
+        // through to `RunOutcome::Halted { cause }` and learns nothing about
+        // ceilings, ledgers or currencies.
         let token_cancelled = cancellation
             .as_ref()
             .is_some_and(CancellationToken::is_cancelled);
@@ -2221,7 +2252,20 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             Some(p) => p.is_cancelled(&thread).await,
             None => false,
         };
-        if token_cancelled || probe_cancelled {
+        let halt_cause = if probe_cancelled {
+            Some(HaltCause::CancelRequested)
+        } else if token_cancelled {
+            Some(HaltCause::Token)
+        } else if let Some(guard) = spend_guard {
+            match guard.check(&thread).await {
+                SpendDecision::Halt(reason) => Some(HaltCause::Spend(reason)),
+                // `Continue` and any future decision kind: proceed.
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(cause) = halt_cause {
             let waypoint = build_waypoint(
                 &thread,
                 parent_waypoint_id,
@@ -2240,6 +2284,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
             return Ok(RunOutcome::Halted {
                 waypoint: waypoint.waypoint_id,
+                cause,
             });
         }
 
@@ -3823,8 +3868,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 fork_of,
             );
             persist_waypoint(waypoint_port, durability, &waypoint, trace).await?;
+            // The in-process token aborted this superstep mid-flight; the
+            // finer cause split (probe vs shutdown) lands with plan 42-06.
             return Ok(RunOutcome::Halted {
                 waypoint: waypoint.waypoint_id,
+                cause: HaltCause::Token,
             });
         }
 
@@ -4863,6 +4911,7 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
             None,
@@ -4905,6 +4954,7 @@ mod tests {
             port,
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             &None,
             None,
@@ -4955,6 +5005,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             &None,
             None,
@@ -5752,6 +5803,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             &None,
             None,
@@ -7219,6 +7271,7 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
             None,
@@ -7273,6 +7326,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             &None,
             None,
@@ -7862,6 +7916,7 @@ mod tests {
             &no_interceptors(),
             &None,
             &None,
+            &None,
             None,
             default_shutdown_grace(),
             None,
@@ -7899,6 +7954,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             &None,
             None,
@@ -7964,6 +8020,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             &None,
             None,
@@ -9472,6 +9529,7 @@ mod tests {
             &no_interceptors(),
             cancellation,
             &None,
+            &None,
             Some(Arc::clone(store)),
             default_shutdown_grace(),
             None,
@@ -10876,6 +10934,7 @@ mod tests {
             &no_interceptors(),
             cancellation,
             &None,
+            &None,
             None,
             shutdown_grace,
             None,
@@ -10921,6 +10980,7 @@ mod tests {
             &no_paladin_port(),
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             &None,
             None,
@@ -12352,6 +12412,7 @@ mod tests {
             port,
             &no_trace(),
             &no_interceptors(),
+            &None,
             &None,
             &None,
             None,
@@ -14526,6 +14587,7 @@ mod tests {
             &no_paladin_port(),
             trace,
             &no_interceptors(),
+            &None,
             &None,
             &None,
             None,

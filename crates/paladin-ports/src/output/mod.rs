@@ -49,6 +49,10 @@ pub mod sanctum_port;
 pub mod scheduler_port;
 /// Search engine port.
 pub mod search_engine_port;
+/// Spend guard port (ALLOW-03, D-04): the seam a per-run allowance check attaches to
+/// the superstep engine through, consulted at every superstep boundary beside the
+/// cancellation signals.
+pub mod spend_guard;
 /// Streaming counterpart to `paladin_executor_port` (SSE / token streaming).
 pub mod streaming_executor_port;
 /// Structured output executor port: the bounded JSON-schema repair loop

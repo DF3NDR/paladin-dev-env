@@ -483,7 +483,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                 final_waypoint_id: Some(waypoint.to_string()),
             },
         },
-        RunOutcome::Halted { waypoint } => {
+        RunOutcome::Halted { waypoint, cause: _ } => {
             if cancel_requested {
                 // D-16: the caller asked for this. The *waypoint* halted;
                 // the *run* is recorded Cancelled.
@@ -1941,7 +1941,10 @@ mod tests {
     #[test]
     fn map_outcome_halted_with_cancel_requested_transitions_to_cancelled() {
         let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
-        let outcome = RunOutcome::Halted { waypoint };
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: paladin_battalion::engine::HaltCause::Token,
+        };
         let action = map_outcome(&outcome, true, false);
         assert_eq!(
             action,
@@ -1959,7 +1962,10 @@ mod tests {
     #[test]
     fn map_outcome_halted_while_shutting_down_leaves_running_and_requeues() {
         let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
-        let outcome = RunOutcome::Halted { waypoint };
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: paladin_battalion::engine::HaltCause::Token,
+        };
         let action = map_outcome(&outcome, false, true);
         assert_eq!(action, OutcomeAction::LeaveRunningAndRequeue);
     }
@@ -1967,7 +1973,10 @@ mod tests {
     #[test]
     fn map_outcome_halted_otherwise_transitions_to_halted() {
         let waypoint = paladin_core::platform::container::waypoint::WaypointId::generate();
-        let outcome = RunOutcome::Halted { waypoint };
+        let outcome = RunOutcome::Halted {
+            waypoint,
+            cause: paladin_battalion::engine::HaltCause::Token,
+        };
         let action = map_outcome(&outcome, false, false);
         assert_eq!(
             action,

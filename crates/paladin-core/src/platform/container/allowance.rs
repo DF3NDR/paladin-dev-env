@@ -110,7 +110,7 @@ impl AllowanceLimitKind {
 /// assert_eq!(refusal.retry_after_secs(), Some(3600));
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllowanceRefusal {
     /// Which identity the refused ceiling is held against.
     pub scope_kind: AllowanceScopeKind,
@@ -134,6 +134,141 @@ impl AllowanceRefusal {
         let (_, end) = self.window?;
         let secs = (end - self.evaluated_at).num_seconds().max(1);
         Some(u64::try_from(secs).unwrap_or(1))
+    }
+
+    /// The refusal's figures as the one caller-facing JSON object: `scope`, `kind`, `balance`,
+    /// `ceiling`, `window_start` and `window_end`.
+    ///
+    /// This is the single builder of the refusal figures for every wire surface: the Phase 41
+    /// `429 allowance_exhausted` `details` object and the `halt_reason` of a halted run both
+    /// call it, so the figures cannot drift between them. Money is rendered through
+    /// [`format_cost`] (the display edge); instants are RFC 3339 with whole seconds and a `Z`
+    /// suffix; both window bounds are JSON `null` for a lifetime refusal.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::{TimeZone, Utc};
+    /// use paladin_core::platform::container::allowance::{
+    ///     AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+    /// };
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let evaluated_at = Utc.with_ymd_and_hms(2026, 10, 3, 23, 0, 0).single().ok_or("bad instant")?;
+    /// let refusal = AllowanceRefusal {
+    ///     scope_kind: AllowanceScopeKind::Tenant,
+    ///     limit_kind: AllowanceLimitKind::Lifetime,
+    ///     balance: Cost::new(1_000_000_000, usd.clone()),
+    ///     ceiling: Cost::new(1_000_000_000, usd),
+    ///     window: None,
+    ///     evaluated_at,
+    /// };
+    /// let details = refusal.details_json();
+    /// assert_eq!(details["scope"], "tenant");
+    /// assert_eq!(details["kind"], "lifetime");
+    /// assert_eq!(details["ceiling"], "1.0000 USD");
+    /// assert!(details["window_start"].is_null());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn details_json(&self) -> serde_json::Value {
+        let rfc3339 = |instant: DateTime<Utc>| instant.to_rfc3339_opts(SecondsFormat::Secs, true);
+        let (window_start, window_end) = match self.window {
+            Some((start, end)) => (Some(rfc3339(start)), Some(rfc3339(end))),
+            None => (None, None),
+        };
+        serde_json::json!({
+            "scope": self.scope_kind.as_str(),
+            "kind": self.limit_kind.as_str(),
+            "balance": format_cost(&self.balance),
+            "ceiling": format_cost(&self.ceiling),
+            "window_start": window_start,
+            "window_end": window_end,
+        })
+    }
+}
+
+/// Why a run was halted at a superstep boundary or an agent-loop cutoff by the Treasurer
+/// (ALLOW-03, Phase 42 D-04, D-05, ADR-0057).
+///
+/// A halt is a resume point, not a failure: the run keeps its last checkpoint and ends with
+/// status `halted` and no error. The serde form is the persisted form -- an internally tagged
+/// object whose discriminator is named `reason` (never `kind`, which already means the limit
+/// kind inside the `429` details) and whose figures are integer nano-units plus a currency,
+/// never display strings.
+///
+/// [`HaltReason::wire_json`] is the ONE caller-facing builder (`GET /runs`, the SSE `done`, the
+/// webhook key and the agent response all call it); do not serialise this enum straight onto a
+/// caller-facing surface.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::allowance::HaltReason;
+///
+/// let reason = HaltReason::LedgerUnavailable;
+/// assert_eq!(reason.as_str(), "ledger_unavailable");
+/// assert_eq!(serde_json::to_string(&reason)?, r#"{"reason":"ledger_unavailable"}"#);
+/// # Ok::<(), serde_json::Error>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum HaltReason {
+    /// A ceiling was reached; the figures are that ceiling's own.
+    AllowanceExhausted(AllowanceRefusal),
+    /// A ceiling could not be evaluated (a failed balance or store-clock read); the run halts
+    /// fail-closed (D-03) and carries no figures.
+    LedgerUnavailable,
+}
+
+impl HaltReason {
+    /// The snake_case discriminator string: `"allowance_exhausted"` or `"ledger_unavailable"`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::allowance::HaltReason;
+    ///
+    /// assert_eq!(HaltReason::LedgerUnavailable.as_str(), "ledger_unavailable");
+    /// ```
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HaltReason::AllowanceExhausted(_) => "allowance_exhausted",
+            HaltReason::LedgerUnavailable => "ledger_unavailable",
+        }
+    }
+
+    /// The caller-facing JSON object for this reason: the one wire builder (D-06, D-14, D-16).
+    ///
+    /// For [`HaltReason::AllowanceExhausted`] it is the refusal's
+    /// [`AllowanceRefusal::details_json`] object with `"reason": "allowance_exhausted"` added;
+    /// for [`HaltReason::LedgerUnavailable`] it is exactly `{"reason":"ledger_unavailable"}`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::allowance::HaltReason;
+    ///
+    /// let wire = HaltReason::LedgerUnavailable.wire_json();
+    /// assert_eq!(wire, serde_json::json!({"reason": "ledger_unavailable"}));
+    /// ```
+    pub fn wire_json(&self) -> serde_json::Value {
+        match self {
+            HaltReason::AllowanceExhausted(refusal) => {
+                let mut object = refusal.details_json();
+                if let Some(map) = object.as_object_mut() {
+                    map.insert(
+                        "reason".to_owned(),
+                        serde_json::Value::String(self.as_str().to_owned()),
+                    );
+                }
+                object
+            }
+            HaltReason::LedgerUnavailable => {
+                serde_json::json!({ "reason": self.as_str() })
+            }
+        }
     }
 }
 
@@ -820,5 +955,81 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         let back: NoticeRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(back, record);
+    }
+
+    #[test]
+    fn halt_reason_allowance_exhausted_wire_json_equals_reason_plus_the_429_details() {
+        let refusal = window_refusal(at(3, 23, 0, 0));
+        let reason = HaltReason::AllowanceExhausted(refusal.clone());
+        let wire = reason.wire_json();
+        let object = wire.as_object().expect("wire form is an object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "balance",
+                "ceiling",
+                "kind",
+                "reason",
+                "scope",
+                "window_end",
+                "window_start"
+            ]
+        );
+        assert_eq!(object["reason"], "allowance_exhausted");
+        let details = refusal.details_json();
+        let details = details.as_object().expect("details is an object");
+        for (key, value) in details {
+            assert_eq!(&object[key], value, "key {key} must equal the 429 details");
+        }
+        assert_eq!(details.len(), 6);
+    }
+
+    #[test]
+    fn details_json_renders_a_lifetime_refusal_with_null_window_bounds() {
+        let mut refusal = window_refusal(at(3, 23, 0, 0));
+        refusal.limit_kind = AllowanceLimitKind::Lifetime;
+        refusal.window = None;
+        let details = refusal.details_json();
+        assert_eq!(details["kind"], "lifetime");
+        assert!(details["window_start"].is_null());
+        assert!(details["window_end"].is_null());
+        assert_eq!(details["balance"], "2.5000 USD");
+    }
+
+    #[test]
+    fn halt_reason_ledger_unavailable_wire_json_is_reason_only() {
+        assert_eq!(
+            HaltReason::LedgerUnavailable.wire_json(),
+            serde_json::json!({"reason": "ledger_unavailable"})
+        );
+    }
+
+    #[test]
+    fn halt_reason_as_str_names_the_two_tags() {
+        let exhausted = HaltReason::AllowanceExhausted(window_refusal(at(3, 23, 0, 0)));
+        assert_eq!(exhausted.as_str(), "allowance_exhausted");
+        assert_eq!(HaltReason::LedgerUnavailable.as_str(), "ledger_unavailable");
+    }
+
+    #[test]
+    fn halt_reason_round_trips_through_serde_with_a_reason_tag() {
+        let exhausted = HaltReason::AllowanceExhausted(window_refusal(at(3, 23, 0, 0)));
+        let json = serde_json::to_value(&exhausted).unwrap();
+        assert_eq!(json["reason"], "allowance_exhausted");
+        // Integer nanos plus currency: the persisted form never holds a display string.
+        assert_eq!(json["balance"]["nanos"], 2_500_000_000_i64);
+        assert_eq!(json["balance"]["currency"], "USD");
+        let back: HaltReason = serde_json::from_value(json).unwrap();
+        assert_eq!(back, exhausted);
+
+        let unavailable = serde_json::to_value(HaltReason::LedgerUnavailable).unwrap();
+        assert_eq!(
+            unavailable,
+            serde_json::json!({"reason": "ledger_unavailable"})
+        );
+        let back: HaltReason = serde_json::from_value(unavailable).unwrap();
+        assert_eq!(back, HaltReason::LedgerUnavailable);
     }
 }

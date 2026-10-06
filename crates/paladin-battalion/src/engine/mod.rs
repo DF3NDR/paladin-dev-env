@@ -100,6 +100,7 @@ use tokio_util::sync::CancellationToken;
 use crate::edge_evaluator::EdgeConditionEvaluator;
 use crate::error_handler::ErrorHandler;
 use crate::retry_predicate::RetryPredicateEvaluator;
+use paladin_core::platform::container::allowance::HaltReason;
 use paladin_core::platform::container::battalion::BattalionError;
 #[cfg(test)]
 use paladin_core::platform::container::battlefield::CustomDispatchResolver;
@@ -120,6 +121,7 @@ use paladin_core::platform::container::waypoint::{
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::NodeCachePort;
 use paladin_ports::output::paladin_port::PaladinPort;
+use paladin_ports::output::spend_guard::SpendGuard;
 use paladin_ports::output::structured_executor_port::StructuredExecutorPort;
 use paladin_ports::output::trace_sink_port::{
     RunFinishStatus, TraceEmitter, TraceEvent, TraceSink,
@@ -300,6 +302,37 @@ pub enum WaypointDurability {
     BestEffort,
 }
 
+/// Why a run ended as [`RunOutcome::Halted`] (ALLOW-03, Phase 42 D-05, ADR-0057).
+///
+/// Resolved at the top of the superstep loop in a fixed priority: a probe-observed
+/// cancel first, then the in-process token, then the attached [`SpendGuard`]. So a
+/// cancel and a spend halt observed at the same boundary resolve to
+/// [`HaltCause::CancelRequested`] (cancel wins).
+///
+/// # Examples
+///
+/// ```
+/// use paladin_battalion::engine::HaltCause;
+/// use paladin_core::platform::container::allowance::HaltReason;
+///
+/// let cause = HaltCause::Spend(HaltReason::LedgerUnavailable);
+/// assert_ne!(cause, HaltCause::Token);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum HaltCause {
+    /// A durable caller cancel was observed through the attached
+    /// `CancellationProbe`.
+    CancelRequested,
+    /// The in-process `CancellationToken` was observed cancelled -- a caller
+    /// cancel on this instance or a shutdown drain; the engine cannot tell
+    /// those apart (the worker re-derives which, plan 42-06).
+    Token,
+    /// The attached [`SpendGuard`] answered `Halt`; the reason is the guard's
+    /// own, passed through untouched.
+    Spend(HaltReason),
+}
+
 /// The outcome of a `WarEngine::start` or `WarEngine::resume` call.
 #[derive(Debug)]
 pub enum RunOutcome {
@@ -320,16 +353,24 @@ pub enum RunOutcome {
         /// The waypoint recording the pause.
         waypoint: WaypointId,
     },
-    /// The run was gracefully halted: a `CancellationToken` was observed
-    /// cancelled at a superstep boundary (ENG-FR-23). The in-flight
-    /// superstep, if any, was allowed to finish and merge before the
-    /// `Halted` `Waypoint` was persisted, so it is always a consistent
-    /// restart point — `WarEngine::resume`/`resume_with_options` can
-    /// continue from it exactly as from a `Running` waypoint (Doc 03 lands
-    /// the dedicated pause/resume API this shares its plumbing with).
+    /// The run was gracefully halted at a superstep boundary: a cancel
+    /// signal (the in-process `CancellationToken` or an attached
+    /// `CancellationProbe`) or an attached [`SpendGuard`]'s halt decision
+    /// was observed (ENG-FR-23, ALLOW-03). The in-flight superstep, if any,
+    /// was allowed to finish and merge before the `Halted` `Waypoint` was
+    /// persisted, so it is always a consistent restart point —
+    /// `WarEngine::resume`/`resume_with_options` can continue from it
+    /// exactly as from a `Running` waypoint (Doc 03 lands the dedicated
+    /// pause/resume API this shares its plumbing with).
+    ///
+    /// `cause` says WHICH signal halted the run (Phase 42 D-05): the worker,
+    /// the run row and every wire surface read this one typed value instead
+    /// of re-deriving the reason from side flags.
     Halted {
         /// The waypoint recording the halt.
         waypoint: WaypointId,
+        /// Why the run halted.
+        cause: HaltCause,
     },
     /// The run failed — a bounded-iteration limit was hit, or a node's
     /// execution or the merge it fed returned an error. A Waypoint carrying
@@ -1493,6 +1534,13 @@ pub struct WarEngine<W: WaypointPort> {
     /// run, like every other engine resource, so a cancelled parent
     /// thread's children observe it too.
     cancellation_probe: Option<Arc<dyn CancellationProbe>>,
+    /// The optional per-run spend guard consulted at every superstep boundary
+    /// AFTER the two cancel signals above (ALLOW-03, Phase 42 D-04), wired via
+    /// [`WarEngine::with_spend_guard`]. `None` means no check at all -- no
+    /// guard call, behaviour identical to before the port existed. Forwarded
+    /// wholesale into every `NodeSpec::Battalion` child engine run, like the
+    /// probe, so a child run is guarded by the SAME per-run instance.
+    spend_guard: Option<Arc<dyn SpendGuard>>,
     /// The grace window a mid-superstep cancellation races the in-flight
     /// batch of spawned node tasks against (HITL-04, D-19, D-20). A runtime
     /// setting, never part of `EngineLimits` and never hashed into the
@@ -1585,6 +1633,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             interceptors: Vec::new(),
             cancellation_token: None,
             cancellation_probe: None,
+            spend_guard: None,
             shutdown_grace: std::time::Duration::from_secs(30),
             node_cache: None,
             vault: None,
@@ -1842,6 +1891,53 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
     /// configured at all.
     pub fn with_cancellation_probe(mut self, probe: Arc<dyn CancellationProbe>) -> Self {
         self.cancellation_probe = Some(probe);
+        self
+    }
+
+    /// Attach a [`SpendGuard`] this engine consults once per superstep
+    /// boundary, at the top of the loop, BESIDE and AFTER the cancellation
+    /// token and probe (ALLOW-03, Phase 42 D-04, D-05): a `Halt` decision
+    /// writes the same `WaypointStatus::Halted` Waypoint a cancel writes and
+    /// returns [`RunOutcome::Halted`] with [`HaltCause::Spend`], without
+    /// dispatching any node of the superstep that was about to run. A cancel
+    /// observed at the same boundary wins.
+    ///
+    /// `None` -- never calling this builder -- means no check at all: the
+    /// engine makes no guard call and behaves exactly as before. The engine
+    /// learns no allowance concept; policy lives in the guard's adapter.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_battalion::engine::WarEngine;
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    /// use paladin_ports::output::spend_guard::NeverHalts;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    /// use std::sync::Arc;
+    /// use async_trait::async_trait;
+    ///
+    /// struct NoopPort;
+    /// #[async_trait]
+    /// impl PaladinPort for NoopPort {
+    ///     async fn execute(&self, _p: &Paladin, _i: &str) -> Result<PaladinResult, PaladinError> {
+    ///         Err(PaladinError::ExecutionError("unused".into()))
+    ///     }
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         Err(PaladinError::ExecutionError("unused".into()))
+    ///     }
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> { Ok(()) }
+    /// }
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let _engine = WarEngine::new(Arc::new(NoopPort), Arc::new(InMemoryWaypointStore::new()))
+    ///     .with_spend_guard(Arc::new(NeverHalts));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_spend_guard(mut self, guard: Arc<dyn SpendGuard>) -> Self {
+        self.spend_guard = Some(guard);
         self
     }
 
@@ -2176,6 +2272,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
+            &self.spend_guard,
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
             self.node_cache.clone(),
@@ -2423,6 +2520,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
+            &self.spend_guard,
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
             self.node_cache.clone(),
@@ -2773,6 +2871,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
+            &self.spend_guard,
             Some(Arc::clone(&self.waypoint_port)),
             None,
             // --- HITL-03, D-14: the resumed run's own Waypoints stay on the
@@ -2949,6 +3048,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.interceptors,
             &self.cancellation_token,
             &self.cancellation_probe,
+            &self.spend_guard,
             Some(Arc::clone(&self.waypoint_port)),
             waypoint.checkpoint_ns,
             // --- HITL-03, D-14/D-16: `from` becomes the branch ROOT --
@@ -6442,7 +6542,7 @@ mod tests {
         .unwrap();
 
         let waypoint_id = match outcome {
-            RunOutcome::Halted { waypoint } => waypoint,
+            RunOutcome::Halted { waypoint, .. } => waypoint,
             other => panic!("expected Halted, got {other:?}"),
         };
 
@@ -6613,6 +6713,16 @@ mod tests {
             }
         }
 
+        /// A probe that always answers `true` (shared with `spend_guard_tests`).
+        pub(super) struct AlwaysCancelProbe;
+
+        #[async_trait]
+        impl CancellationProbe for AlwaysCancelProbe {
+            async fn is_cancelled(&self, _thread: &ThreadId) -> bool {
+                true
+            }
+        }
+
         /// A probe that always answers `false` -- proves an attached-but-
         /// never-cancelling probe changes nothing about a run's outcome.
         struct NeverCancellingProbe;
@@ -6645,7 +6755,7 @@ mod tests {
             .unwrap();
 
             let waypoint_id = match outcome {
-                RunOutcome::Halted { waypoint } => waypoint,
+                RunOutcome::Halted { waypoint, .. } => waypoint,
                 other => panic!("expected Halted, got {other:?}"),
             };
 
@@ -6807,7 +6917,7 @@ mod tests {
             .unwrap();
 
             let waypoint_id = match outcome {
-                RunOutcome::Halted { waypoint } => waypoint,
+                RunOutcome::Halted { waypoint, .. } => waypoint,
                 other => panic!("expected Halted, got {other:?}"),
             };
             let waypoints = ascending_history(&store, &thread).await;
@@ -6820,6 +6930,241 @@ mod tests {
                 halted.vanguard,
                 vec![ids[1].clone()],
                 "the never-cancelled token coexists with the cancelling probe; either signal halts"
+            );
+        }
+    }
+
+    // --- ALLOW-03, Phase 42 D-04, D-05: SpendGuard -> Halted with a typed
+    // cause, beside and after the cancel signals. Nested in its own `mod` so
+    // `cargo test -p paladin-battalion --lib spend_guard` selects exactly this
+    // group, mirroring `cancellation_probe_tests` above (whose helpers it
+    // reuses).
+    mod spend_guard_tests {
+        use super::*;
+        use paladin_core::platform::container::allowance::HaltReason;
+        use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
+
+        /// Counts every `check` call and answers `Halt(reason)` from the
+        /// configured call number onward.
+        struct HaltFromCall {
+            calls: std::sync::atomic::AtomicUsize,
+            halt_from: usize,
+            reason: HaltReason,
+        }
+
+        impl HaltFromCall {
+            fn new(halt_from: usize) -> Arc<Self> {
+                Arc::new(Self {
+                    calls: std::sync::atomic::AtomicUsize::new(0),
+                    halt_from,
+                    reason: HaltReason::LedgerUnavailable,
+                })
+            }
+        }
+
+        #[async_trait]
+        impl SpendGuard for HaltFromCall {
+            async fn check(&self, _thread: &ThreadId) -> SpendDecision {
+                let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                if call >= self.halt_from {
+                    SpendDecision::Halt(self.reason.clone())
+                } else {
+                    SpendDecision::Continue
+                }
+            }
+        }
+
+        /// A guard that always continues and counts its calls.
+        struct CountingGuard {
+            calls: std::sync::atomic::AtomicUsize,
+        }
+
+        #[async_trait]
+        impl SpendGuard for CountingGuard {
+            async fn check(&self, _thread: &ThreadId) -> SpendDecision {
+                self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                SpendDecision::Continue
+            }
+        }
+
+        /// The ids of every node that completed in any Waypoint of `thread`.
+        async fn completed_node_ids(
+            store: &RecordingWaypointStore,
+            thread: &ThreadId,
+        ) -> std::collections::HashSet<String> {
+            ascending_history(store, thread)
+                .await
+                .iter()
+                .flat_map(|w| w.completed.iter().map(|r| r.node_id.as_str().to_string()))
+                .collect()
+        }
+
+        #[tokio::test]
+        async fn guard_halting_on_the_second_boundary_halts_after_one_completed_superstep() {
+            let (graph, ids) = four_node_chain_graph();
+            let guard = HaltFromCall::new(2);
+            let store = Arc::new(RecordingWaypointStore::new());
+            let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+                .with_spend_guard(guard.clone());
+            let thread = ThreadId::new("guard-halt-second-boundary").unwrap();
+
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                engine.start(&graph, thread.clone(), StateDelta::new()),
+            )
+            .await
+            .expect("a spend halt must not hang the run")
+            .unwrap();
+
+            let (waypoint_id, cause) = match outcome {
+                RunOutcome::Halted { waypoint, cause } => (waypoint, cause),
+                other => panic!("expected Halted, got {other:?}"),
+            };
+            assert_eq!(cause, HaltCause::Spend(HaltReason::LedgerUnavailable));
+
+            let waypoints = ascending_history(&store, &thread).await;
+            let halted = waypoints
+                .iter()
+                .find(|w| w.waypoint_id == waypoint_id)
+                .expect("the returned waypoint id must exist in the thread's history");
+            assert_eq!(halted.status, WaypointStatus::Halted);
+            assert_eq!(
+                halted.vanguard,
+                vec![ids[1].clone()],
+                "the Halted waypoint's vanguard must be boundary 2's: exactly the node that would \
+                 run next, identical to the cancel path"
+            );
+
+            let completed = completed_node_ids(&store, &thread).await;
+            assert!(completed.contains(ids[0].as_str()), "superstep 1 completed");
+            assert!(
+                !completed.contains(ids[1].as_str()),
+                "no node of the halted superstep may be dispatched"
+            );
+            assert_eq!(
+                guard.calls.load(std::sync::atomic::Ordering::SeqCst),
+                2,
+                "the guard is consulted exactly once per boundary and the halt stops the loop"
+            );
+        }
+
+        #[tokio::test]
+        async fn guard_halting_on_the_first_boundary_dispatches_nothing() {
+            let (graph, ids) = four_node_chain_graph();
+            let guard = HaltFromCall::new(1);
+            let store = Arc::new(RecordingWaypointStore::new());
+            let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+                .with_spend_guard(guard);
+            let thread = ThreadId::new("guard-halt-first-boundary").unwrap();
+
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                engine.start(&graph, thread.clone(), StateDelta::new()),
+            )
+            .await
+            .expect("a spend halt must not hang the run")
+            .unwrap();
+
+            let waypoint_id = match outcome {
+                RunOutcome::Halted {
+                    waypoint,
+                    cause: HaltCause::Spend(_),
+                } => waypoint,
+                other => panic!("expected a spend Halted, got {other:?}"),
+            };
+            let waypoints = ascending_history(&store, &thread).await;
+            let halted = waypoints
+                .iter()
+                .find(|w| w.waypoint_id == waypoint_id)
+                .expect("the returned waypoint id must exist in the thread's history");
+            assert_eq!(halted.status, WaypointStatus::Halted);
+            assert_eq!(halted.vanguard, vec![ids[0].clone()]);
+            assert!(
+                completed_node_ids(&store, &thread).await.is_empty(),
+                "a first-boundary halt dispatches nothing"
+            );
+        }
+
+        #[tokio::test]
+        async fn guard_that_never_halts_changes_nothing() {
+            let (graph_a, _ids_a) = four_node_chain_graph();
+            let engine_no_guard = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            );
+            let outcome_a = engine_no_guard
+                .start(
+                    &graph_a,
+                    ThreadId::new("no-guard").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+
+            let (graph_b, _ids_b) = four_node_chain_graph();
+            let guard = Arc::new(CountingGuard {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            });
+            let engine_with_guard = WarEngine::new(
+                Arc::new(UnimplementedPaladinPort),
+                Arc::new(InMemoryWaypointStore::new()),
+            )
+            .with_spend_guard(guard.clone());
+            let outcome_b = engine_with_guard
+                .start(
+                    &graph_b,
+                    ThreadId::new("with-continuing-guard").unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+
+            match (outcome_a, outcome_b) {
+                (
+                    RunOutcome::Completed {
+                        final_state: state_a,
+                        ..
+                    },
+                    RunOutcome::Completed {
+                        final_state: state_b,
+                        ..
+                    },
+                ) => assert_eq!(state_a, state_b),
+                other => panic!("expected both runs to complete, got {other:?}"),
+            }
+            assert!(
+                guard.calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+                "an attached guard is consulted at the boundaries"
+            );
+        }
+
+        #[tokio::test]
+        async fn cancel_wins_over_spend_at_the_same_boundary() {
+            let (graph, _ids) = four_node_chain_graph();
+            let probe = Arc::new(cancellation_probe_tests::AlwaysCancelProbe);
+            let guard = HaltFromCall::new(1);
+            let store = Arc::new(RecordingWaypointStore::new());
+            let engine = WarEngine::new(Arc::new(UnimplementedPaladinPort), store.clone())
+                .with_cancellation_probe(probe)
+                .with_spend_guard(guard.clone());
+            let thread = ThreadId::new("cancel-beats-spend").unwrap();
+
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                engine.start(&graph, thread, StateDelta::new()),
+            )
+            .await
+            .expect("cancellation must not hang the run")
+            .unwrap();
+
+            match outcome {
+                RunOutcome::Halted { cause, .. } => assert_eq!(cause, HaltCause::CancelRequested),
+                other => panic!("expected Halted, got {other:?}"),
+            }
+            assert_eq!(
+                guard.calls.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "the guard is not even consulted once a cancel signal resolved the cause"
             );
         }
     }
@@ -11818,6 +12163,7 @@ mod tests {
             &[],
             &None,
             &None,
+            &None,
             None,
             std::time::Duration::from_secs(30),
             None,
@@ -11873,6 +12219,7 @@ mod tests {
             &port,
             &trace2,
             &[],
+            &None,
             &None,
             &None,
             None,

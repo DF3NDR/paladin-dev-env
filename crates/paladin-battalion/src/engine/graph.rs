@@ -4850,6 +4850,7 @@ mod tests {
             &interceptors,
             &None,
             &None,
+            &None,
             None,
             std::time::Duration::from_secs(30),
             None,

@@ -932,7 +932,7 @@ async fn resolve_battlefield<W: WaypointPort>(
 ) -> Result<Battlefield, RunnerError> {
     match outcome {
         RunOutcome::Completed { final_state, .. } => Ok(final_state.clone()),
-        RunOutcome::Halted { waypoint } | RunOutcome::AwaitingInput { waypoint, .. } => {
+        RunOutcome::Halted { waypoint, .. } | RunOutcome::AwaitingInput { waypoint, .. } => {
             let loaded = store
                 .get(thread, waypoint)
                 .await?

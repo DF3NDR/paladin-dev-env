@@ -479,6 +479,39 @@ rejected, never clamped.
 With `http.auth.enabled: false` the open-access principal is the key `anonymous` in the tenant
 `open-access`, so `api_keys.anonymous` and `tenants.open-access` are accepted.
 
+### The derived token budget on agent routes
+
+On `POST /v1/agents/{id}/execute`, `execute/stream` and `jobs`, a principal with an `allowance`
+ceiling gets a per-run token budget derived at admission: the **tightest** remaining headroom
+across its ceilings, divided by the agent model's price. Every token is billed at the model's
+dearest `treasurer.pricing` axis (prompt, completion, cache read, cache write or reasoning), so a
+prompt-heavy agent stops earlier than its true spend would require. The agent loop ends after the
+model response that crosses the figure -- the overshoot is at most one response -- and the call
+answers `stop_reason: "allowance_halted"` with a `halt_reason` object and the partial output.
+
+One `TokenBudget` enforces both figures. The effective limit is the **tightest** of
+`agent_runtime.token_budget.max_tokens` (when `enabled`) and the derived figure, and a tie goes to
+the allowance. When the operator figure is the tighter one the stop is the familiar
+`stop_reason: "token_budget"`. The middleware is inert without either, so a deployment with the
+operator budget disabled and no `allowance` is unchanged. Note that the operator's
+`agent_runtime.token_budget` now takes effect on the HTTP agent routes: it was not applied to
+agents served over HTTP before, so enabling it now caps each of their runs.
+
+Two limits to know about:
+
+- Every model a metered principal can reach needs a `treasurer.pricing` row. A principal with a
+  ceiling calling an agent whose model has none is refused `422 model_unpriced` (naming the
+  model, with no `Retry-After`) before the agent runs, because spend that cannot be metered
+  cannot be bounded. A principal with no ceiling is unaffected.
+- A single streamed `execute/stream` call is one provider call and is not cut mid-flight. It is
+  admitted or refused up front like any other call. Its terminal `done` event stays
+  `{ "done": true, "usage": ... }` unless the final chunk's usage exceeded the derived figure,
+  in which case it also carries an informational `halt_reason` reporting the crossing. An agent
+  with no streaming backend is buffered, and its `done` carries `stop_reason` and `halt_reason`
+  as `execute` does.
+
+A derived figure of zero tokens is refused `429 allowance_exhausted`, like an exhausted ceiling.
+
 ### Caveats
 
 Changing `treasurer.currency` while allowances are in force makes every allowanced principal's
@@ -503,7 +536,7 @@ Paladin uses `max_tokens` in four independent, non-overlapping senses:
 | Per-request completion cap | `LlmRequest` metadata `"max_tokens"` (OpenAI/DeepSeek fallback-override); `ANTHROPIC_MAX_TOKENS` env var, read by `AnthropicConfig::from_env()` (Anthropic, required, env-only — no YAML key) | provider adapters (`crates/paladin-llm/src/openai/adapter.rs`, `crates/paladin-llm/src/anthropic/adapter.rs`) |
 | Run-level budget cap | `agent_runtime.token_budget.max_tokens` | `src/application/services/paladin/middleware/limits.rs` |
 
-The spend-governance cap is a distinct key, `treasurer.allowance` (operator-currency amounts, never a token count), described in [Treasurer allowances](#treasurer-allowances).
+The spend-governance cap is a distinct key, `treasurer.allowance` (operator-currency amounts, never a token count), described in [Treasurer allowances](#treasurer-allowances). On the HTTP agent routes the run-level budget and the allowance meet: the run is capped at the tightest of `agent_runtime.token_budget.max_tokens` and the token figure derived from the caller's remaining allowance (see [The derived token budget on agent routes](#the-derived-token-budget-on-agent-routes)).
 
 ## Autonomous Features
 

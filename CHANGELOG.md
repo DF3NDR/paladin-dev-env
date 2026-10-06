@@ -74,6 +74,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every per-agent service and the HTTP and worker wiring land in plans 42-08 and 42-09; see
   `MIGRATION.md` §9.2.
 
+  **The HTTP agent routes stop on the allowance (plan 42-08).** Every per-agent service now
+  installs the one `TokenBudget`, `build_run_api` prices the `Treasurer` from `treasurer.pricing`,
+  and `POST /v1/agents/{id}/execute`, `execute/stream` and `jobs` admit with the agent's model and
+  hand the derived budget to the run. A call whose derived budget is crossed answers `200` with
+  `stop_reason: "allowance_halted"` and a `halt_reason` object (`ExecuteResponse.halt_reason`, the
+  same object `GET /v1/runs/{id}` returns, built by `HaltReason::wire_json`), keeping the partial
+  output; the job result and the `done` of a buffered `execute/stream` (an agent with no streaming
+  backend) carry the same. A true streamed `execute/stream` call is one provider call and is not
+  cut mid-flight: its `done` stays `{ "done": true, "usage" }` byte for byte unless the final
+  chunk's `total_tokens` strictly exceeds the derived figure, in which case it also carries an
+  informational `halt_reason` reporting the crossing. A principal with an allowance ceiling
+  calling an agent whose model has no `treasurer.pricing` row is refused `422 model_unpriced`
+  (`ApiError::model_unpriced`, `details.model`, no `Retry-After`) before the agent runs on all
+  three routes; a derived budget of zero is refused `429 allowance_exhausted`. The frozen v0.9
+  golden gate carries a fourth sanctioned exception for the two additive wire changes, and
+  `openapi.json` is regenerated; see `MIGRATION.md` §9.2 and §9.6.
+
 - **Facade re-export of the allowance module (Phase 41 plan 41-09, D-20).** The `paladin` facade now
   re-exports `paladin::core::platform::container::allowance` (`AllowanceRefusal`, `AllowanceWarning`,
   `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `crosses_warn_threshold`, ...), beside
@@ -348,6 +365,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (STORE-02; Phase 45 plan 45-01).
 
 ### Changed
+
+- **The operator `agent_runtime.token_budget` now takes effect on the HTTP agent routes (ALLOW-05;
+  Phase 42 plan 42-08).** Every per-agent `PaladinExecutionService`, config-defined or
+  runtime-provisioned, now installs the one `TokenBudget`, so `agent_runtime.token_budget`
+  (documented but, for agents served over HTTP, never applied before) caps their runs when
+  `enabled`, and the budget derived from a caller's allowance composes with it (the tightest
+  wins, a tie goes to the allowance). A deployment with the operator budget disabled (the
+  default) and no allowance is unchanged. `build_agent_with_llm` and `build_agent` (crate-private)
+  take the operator figure, and `FacadeProvisioner::with_token_budget` carries it for runtime
+  provisioning. See `MIGRATION.md` §9.6 and the configuration guide.
 
 - **The SSE `done` says `cancelled` for a caller cancel, and a worker drain emits no terminal
   event (PLAT-09; Phase 42 plan 42-06).** A run a caller cancelled streamed `done` with

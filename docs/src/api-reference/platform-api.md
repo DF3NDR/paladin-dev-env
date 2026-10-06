@@ -656,6 +656,60 @@ An `admin`-role key is bound by its allowance exactly like any other key: the ro
 the check. The per-IP rate limiter also answers `429`, but with the different code
 `too_many_requests`, so a client can tell quota from pacing by the body code alone.
 
+### Agent routes stop on the allowance
+
+A caller with an allowance ceiling also has its agent *loop* bounded, not just admitted. On
+`POST /v1/agents/{id}/execute`, `execute/stream` and `jobs`, admission derives a per-run token
+budget from the tightest remaining ceiling at the agent model's dearest `treasurer.pricing`
+price, and the loop ends after the model response that crosses it (the overshoot is at most one
+response; see the [configuration guide](../getting-started/configuration.md#the-derived-token-budget-on-agent-routes)).
+
+**`stop_reason: "allowance_halted"` and `halt_reason`.** A call that ends this way answers `200`
+with `stop_reason: "allowance_halted"` and a `halt_reason` object, with the partial output kept
+and the truncation notice appended. `ExecuteResponse.halt_reason` is the same object
+`GET /runs/{run_id}` returns for a halted run, `{ "reason": "allowance_exhausted", "scope",
+"kind", "balance", "ceiling", "window_start", "window_end" }`, built by the same function. The
+figures are the binding ceiling's own, with `balance` equal to `ceiling`: a conservative bound,
+because the loop does not know the true balance after the call. The key is absent for every
+other `stop_reason`, so a response that was not halted is byte-identical to before. A run that
+hit the operator's `agent_runtime.token_budget` first reports `stop_reason: "token_budget"` with
+no `halt_reason`.
+
+**Where `halt_reason` appears.**
+
+| Surface | Behaviour |
+|---|---|
+| `POST /v1/agents/{id}/execute` | the `ExecuteResponse` body carries `stop_reason` and `halt_reason` |
+| `POST /v1/agents/{id}/jobs` | the job's `result` is the same `ExecuteResponse` and records both |
+| `POST /v1/agents/{id}/execute/stream`, agent with no streaming backend (buffered fallback) | the `done` event's data is the serialized `ExecuteResponse` and so carries `stop_reason: "allowance_halted"` and `halt_reason` |
+| `POST /v1/agents/{id}/execute/stream`, true stream | one provider call, never cut mid-flight; see below |
+
+**A true stream is admission-only.** A streamed call is a single provider call, so the server
+cannot halt it part-way: it is admitted or refused up front (the `422` and zero-budget `429`
+below still apply) and its overshoot is that whole call. Its terminal `done` stays
+`{ "done": true, "usage": ... }` byte for byte, except that when the final chunk's reported
+`total_tokens` is strictly greater than the derived figure it also carries an informational
+`halt_reason` (the same object). That reports a crossing; it is not a halt the server performed,
+and a stream whose usage did not cross the figure, or reported no usage, is unchanged.
+
+**`422 model_unpriced`.** A principal with a configured ceiling calling an agent whose model has
+no `treasurer.pricing` row is refused before the agent runs, on all three routes, because spend
+that cannot be metered cannot be bounded:
+
+```json
+{
+  "error": {
+    "code": "model_unpriced",
+    "message": "model 'gpt-4' has no treasurer.pricing row, so its spend cannot be metered under an allowance",
+    "details": { "model": "gpt-4" }
+  }
+}
+```
+
+There is no `Retry-After` header: this is a configuration incoherence, not pacing. A derived
+budget of zero tokens is refused `429 allowance_exhausted` with the binding ceiling's figures,
+and a principal with no ceiling is unaffected.
+
 ## Configuration
 
 Every subsystem below is its own config struct (`Default` + `validate()` + `EnvOverridable`),

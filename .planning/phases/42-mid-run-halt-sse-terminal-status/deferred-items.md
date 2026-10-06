@@ -26,3 +26,14 @@ Out-of-scope discoveries logged during execution (not fixed by the plan that fou
   Adding the value changes the generated scenario JSON schema and `paladin-eval`'s public surface,
   neither in 42-06's file scope; no shipped scenario cancels a run. A later plan or phase can add
   `RunStatusValue::Cancelled` with its schema snapshot.
+
+## Found during the wave 6 post-plan gate (2026-10-06)
+
+- `application::services::run::cancel_tests::local_cancel_signals_token` (pre-existing, phase 45,
+  `6786eec8`; body untouched by Phase 42) did not pass once under the full parallel
+  `cargo test --workspace --lib --bins --no-fail-fast` run immediately after a container restart
+  (`was_local must be true` at line 365), then passed five consecutive isolated runs and a second
+  full parallel run. Its dispatch wait is a fixed 50 ms sleep before `service.cancel`, so a heavily
+  loaded suite can cancel before the run is registered in `local_tokens`. Load-sensitive, not a
+  Phase 42 regression; a dispatch-signal wait (not a sleep) is the robust fix and belongs to a
+  test-hardening pass, not this phase.

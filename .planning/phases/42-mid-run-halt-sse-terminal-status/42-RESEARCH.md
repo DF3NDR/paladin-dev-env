@@ -830,30 +830,43 @@ impl SpendGuard for HaltAtCall {
 | A7 | The shutdown-token check inside `RunEventBusSink` is enough to implement D-15 (no `done` for a drain) | Gap G1 (c) | A halt at the exact instant shutdown begins could be mis-suppressed or mis-emitted; the degraded path still converges on the row |
 | A8 | Worker agent-kind runs that hit a zero derived budget at dispatch should end `Halted` with the refusal figures without calling the LLM (admission-time refusal is impossible once the run is `Running`) | Gap G8 | A different outcome (e.g. `Failed`) would contradict "a halt is a resume point, not a failure" |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All seven questions are resolved by the consolidated design gate, 42-01 Task 1 (a blocking
+`checkpoint:decision`): each recommendation below is a numbered item of that gate's proposed design,
+the operator confirms it (option-a/option-b) or redirects it (option-c), the selection is recorded
+verbatim in `42-01-SUMMARY.md` under "Checkpoint decision", and ADR-0057 (42-01 Task 2) records the
+confirmed answer. The per-question marker names the gate item and the plan that implements it.
 
 1. **How exactly does a same-instance caller cancel reach the engine as `CancelRequested`? (G1)**
    - What we know: the engine sees the child token; the probe is debounced; the shutdown token is the child's parent; today's worker re-queries the flag.
    - What's unclear: whether the operator prefers the per-run probe wrapper (recommended) or a sink-level fix.
    - Recommendation: the wrapper in the worker's per-run engine build, with the residual-Token re-query kept. Record in ADR-0057.
+   - **RESOLVED: 42-01 Task 1 item 5** -- the per-run `PerRunCancelProbe` wrapper with the residual-`Token` re-query kept in `map_outcome`; implemented by 42-06.
 
 2. **Should `execute/stream` carry any derived-budget behaviour? (G2)**
    - What we know: one provider call, no `after_model`; terminal chunk usage is optional (default usage with a warning when absent, `paladin_execution_service.rs:3667-3680`).
    - What's unclear: whether informational `halt_reason` on the stream's `done` is wanted.
    - Recommendation: admission-only for real streams plus one `WINDOWS.md` row; add the informational object only if the SDK smoke tests stay byte-identical for non-halt streams.
+   - **RESOLVED: 42-01 Task 1 item 12** -- a true streamed call is admission-only with a byte-identical `done` (option-a), or additionally carries the informational `halt_reason` when its terminal usage crossed the derived figure (option-b, the gate's flagged alternative); the buffered fallback's `done` carries `halt_reason` either way. Implemented by 42-08; the WINDOWS.md row lands in 42-12.
 
 3. **Operator `agent_runtime.token_budget` on the worker's agent-kind path (G12).**
    - What we know: the shared service must not honour the operator budget (ADR-0052 hazard); D-11 wants tightest-wins.
    - What's unclear: whether worker agent-kind runs should additionally enforce the operator figure.
    - Recommendation: no; Treasurer-only mode on the shared service, documented. Revisit only if an operator asks.
+   - **RESOLVED: 42-01 Task 1 item 10** -- Treasurer-only mode on the shared boot-time service; the operator figure applies on the HTTP agent routes only. Implemented by 42-08 (per-agent services) and 42-09 (shared service).
 
 4. **Allowlist definition for the vocabulary guard (A1).** Needs operator confirmation of which paths count as "downstream" in this repo.
+   - **RESOLVED: 42-01 Task 1 item 16** -- the downstream path set (`examples/`, `benches/`, `fixtures/`, any `tests/fixtures/`, `crates/*/examples/`, `crates/*/benches/`) and the explicit allowlist for the downstream fixture term are confirmed at the gate; implemented by 42-12 Task 2.
 
 5. **Which figures does an agent-loop `halt_reason` report (A5)?** Recommendation: the binding ceiling's figures with `balance = ceiling`, documented as a conservative bound.
+   - **RESOLVED: 42-01 Task 1 item 10** -- the binding ceiling (smallest remaining) with `balance` equal to the ceiling, documented as a conservative bound; implemented by 42-07 (`DerivedTokenBudget.halt_figures`).
 
 6. **Expose `final_waypoint_id` on `GET /runs` rows (G7)?** Recommendation yes (additive). If rejected, the fork recipe must use thread history and the UAT runbook must say so.
+   - **RESOLVED: 42-01 Task 1 item 7** -- yes, additive `final_waypoint_id` (and `halt_reason`) on `RunResponse`; implemented by 42-03, the fork recipe by 42-04.
 
 7. **Which refusal wire shape for an unpriced model (D-10)?** CONTEXT leaves `429`-shaped vs `422` to the planner. Recommendation: `422` with `code: "model_unpriced"` and the model name in `details` — it is a configuration incoherence, not quota exhaustion, so it must not carry `Retry-After` and a client must not retry it as pacing. Reuse `ApiError`'s existing 422 helper if present; otherwise add one beside `allowance_exhausted`.
+   - **RESOLVED: 42-01 Task 1 item 11** -- `422`, code `model_unpriced`, `details: { "model": <name> }`, no `Retry-After`; the Treasurer-level refusal lands in 42-07, the HTTP agent routes in 42-08, `POST /runs` for agent-kind assistants in 42-09.
 
 ## Environment Availability
 

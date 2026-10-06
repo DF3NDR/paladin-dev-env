@@ -4,15 +4,15 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 41
 current_phase_name: Admission-Time Allowance Enforcement
-status: verifying
+status: executing
 stopped_at: Phase 42 context gathered
-last_updated: "2026-10-06T14:13:59.387Z"
+last_updated: "2026-10-06T16:37:34.714Z"
 last_activity: 2026-10-03
 last_activity_desc: Phase 41 execution resumed (wave continue)
 progress:
   total_phases: 6
   completed_phases: 5
-  total_plans: 39
+  total_plans: 51
   completed_plans: 39
 ---
 
@@ -52,7 +52,7 @@ under `milestones/`.
 
 Phase: 41 (Admission-Time Allowance Enforcement) — EXECUTING
 Plan: 9 of 9
-Status: Phase complete — ready for verification
+Status: Ready to execute
 Last activity: 2026-10-03 — Phase 41 execution resumed (wave continue)
 
 ## Performance Metrics

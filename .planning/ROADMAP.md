@@ -480,10 +480,59 @@ unchecked, and the SSE stream reports the run's real terminal status.
 
   4. The SSE `done` event matches the persisted run status — `Cancelled` for a caller-cancelled run,
      `Halted` with the Treasurer reason for a spend halt.
-**Plans**: TBD
+**Plans**: 12 plans
 **Research flag**: yes — mid-run halt has no prior art among surveyed comparable systems (none
 have durable multi-step runs); the streaming settle-on-nonexistent-usage pitfall needs explicit
 handling by reusing `TokenBudget`'s existing cutoff mechanism rather than inventing a second one.
+
+Plans:
+**Wave 1**
+
+- [ ] 42-01-PLAN.md — Design gate on the consolidated mid-run halt design (G1..G17 against D-05/D-06/D-10/D-12/D-13/D-14/D-18), then ADR-0057, the ADR-0056 dated note and PROMOTION.md to 0058 (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 42-02-PLAN.md — Tracer: HaltReason, the SpendGuard port, the engine boundary check with a typed HaltCause, the shared Treasurer evaluation and guard, worker attachment and map_outcome, reordered build_run_api, engine_spend_halt_tracer through the real router and SQLite; register the surface (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 42-03-PLAN.md — Migration 013 runs.halt_reason on three adapters, reason written before the status flips, GET /runs halt_reason + final_waypoint_id from one wire builder, caller halted-webhook key (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 42-04-PLAN.md — Guard hardening (exact-ceiling boundary, every-boundary reads, fail-closed ledger_unavailable, sticky child halts, no guard when unattributed) and resume by fork end to end with the documented recipe (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 42-05-PLAN.md — RunFinished.halt_reason from the engine, SSE done halt_reason identical on the live, degraded and replay paths (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 42-06-PLAN.md — RunFinishStatus::Cancelled, PerRunCancelProbe for same-instance cancels, drain emits no done, the cause-to-status invariant test (wave 6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 42-07-PLAN.md — Derived agent budget (dearest axis, i128), admit_for_model and the unpriced refusal, StopReason::AllowanceHalted, the one Treasurer-aware TokenBudget (tightest wins) proven to compose with ModelCallLimit, ToolCallLimit and the Commissary; register the surface (wave 7)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 42-08-PLAN.md — TokenBudget on every per-agent service, priced Treasurer at boot, HTTP agent routes admit with the model and answer allowance_halted + halt_reason (buffered stream done included), 422 model_unpriced, v0.9 golden exception (wave 8)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 42-09-PLAN.md — Worker agent-kind halt (re-derive at dispatch), Treasurer-only TokenBudget on the shared service, agent-kind admission at POST /runs, WINDOWS.md D-08 row (wave 9)
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [ ] 42-10-PLAN.md — Migration 014 notice_kind (the notice store's halt rung) and the allowance_halted operator webhook event, signing and payload; register the surface (wave 10)
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
+- [ ] 42-11-PLAN.md — The boundary guard's notice legs: mid-run warn on the run's own stream and once-per-window halt notices to the operator, proven end to end (wave 11)
+
+**Wave 12** *(blocked on Wave 11 completion)*
+
+- [ ] 42-12-PLAN.md — Herald halt line, the Treasurer vocabulary guard test, remaining WINDOWS.md rows, crate CHANGELOGs, full phase gate (wave 12)
 
 ### Phase 43: Rate Pacing
 

@@ -188,7 +188,7 @@ Seven wire event names are frozen for this milestone (D-25); every event also ca
 | `node_finished` | `{ superstep, node_id, outcome }` |
 | `state_delta` | `{ superstep, fields, bytes }` — changed field **names** and a byte-size count only, **never a value** |
 | `parley` | `{ waypoint_id, parleys }` |
-| `done` | `{ status, waypoint_id }` |
+| `done` | `{ status, waypoint_id, halt_reason? }` — `halt_reason` is present only for a run that halted on spend (see below) |
 | `error` | `{ status, message, waypoint_id }` |
 
 If the run is executing on **this** instance, live progress bridges from a `TraceSink` adapter
@@ -202,6 +202,19 @@ Waypoints instead. **The degraded path gives no ordering guarantee relative to t
 may coalesce multiple supersteps into a single observed jump** — it is a "catch up to current
 state" view, not a live progress feed. `done`/`error` are still always eventually delivered on the
 degraded path; only their timing and granularity relative to the live path are unspecified.
+
+**`done` and the halt reason.** For a run that halted on spend, `done` carries `status: "halted"`
+and a `halt_reason` object -- the same object `GET /v1/runs/{run_id}` returns (see
+[Halted runs](#halted-runs)), built by one function. For an exhausted allowance it is
+`{ "reason": "allowance_exhausted", "scope", "kind", "balance", "ceiling", "window_start",
+"window_end" }`; for a ledger that could not be read it is exactly
+`{ "reason": "ledger_unavailable" }` and is still a `done`, never an `error` (`error` is reserved
+for a `failed` run). A halt with no spend reason (a caller cancel or a token halt) keeps the
+payload without a `halt_reason` key. The live, degraded and replay paths agree on `status` and
+`halt_reason` for the same run, so a streaming client never needs a follow-up read to learn why a
+run stopped; a replayed stream takes both from the run row once the row is terminal, and
+`waypoint_id` follows each path's own rule (`null` on the live and replay paths, the row's final
+Waypoint id on the degraded path).
 
 A 15-second heartbeat comment line is emitted on **both** paths to defeat idle-proxy timeouts.
 

@@ -39,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged). `ApiError::allowance_exhausted` and `halt_reason` share one builder,
   `AllowanceRefusal::details_json`.
 
+  **SSE terminal status names the halt reason (plan 42-05).** `TraceEvent::RunFinished` gains
+  `halt_reason: Option<HaltReason>` (serde default, skipped when `None`), filled by the engine from
+  `HaltCause::Spend` at every emit site; stored `run_traces` rows without it read back as `None`.
+  The `done` event of `GET /v1/runs/{id}/stream` for a spend-halted run now carries `halt_reason`,
+  the same object `GET /v1/runs/{id}` returns, on the live, degraded and replay paths; a
+  ledger-unavailable halt is a `done` with `{"reason":"ledger_unavailable"}`, never an `error`; a
+  halt with no reason keeps today's payload. A replayed stream takes its terminal status and reason
+  from the run row (skipping a persisted `RunFinished` while the row is not terminal). See
+  `MIGRATION.md` §9.2 and §9.6.
+
   **Resumable by fork (plan 42-04).** A halted run resumes by forking from its
   `final_waypoint_id` (`POST /v1/threads/{id}/fork`): the fork re-runs admission, so it is refused
   `429 allowance_exhausted` with `Retry-After` while the window is exhausted and, once the window

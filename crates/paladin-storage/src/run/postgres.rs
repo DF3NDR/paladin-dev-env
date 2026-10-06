@@ -28,6 +28,7 @@ use chrono::{DateTime, Utc};
 use sqlx::Row;
 use sqlx::postgres::{PgPool, PgPoolOptions, PgRow};
 
+use paladin_core::platform::container::allowance::HaltReason;
 use paladin_core::platform::container::parley::ParleyResponse;
 use paladin_core::platform::container::principal::{RunAttribution, RunReadScope, TenantId};
 use paladin_core::platform::container::run::{
@@ -53,20 +54,22 @@ use crate::waypoint::redact::redact_database_url_password;
 const INSERT_RUN: &str = "INSERT INTO runs \
      (run_id, thread_id, assistant_id, assistant_version, status, input, submitted_at, \
       started_at, finished_at, attempt, cancel_requested, error, webhook, pending_responses, \
-      fork_from, output, final_waypoint_id, schema_version, tenant_id, api_key_id) \
+      fork_from, output, final_waypoint_id, schema_version, tenant_id, api_key_id, \
+      halt_reason) \
      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, \
-             $15::jsonb, $16::jsonb, $17, $18, $19, $20)";
+             $15::jsonb, $16::jsonb, $17, $18, $19, $20, $21::jsonb)";
 
 const SELECT_RUN_BY_ID: &str = "SELECT run_id, thread_id, assistant_id, assistant_version, \
      status, input, submitted_at, started_at, finished_at, attempt, cancel_requested, error, \
      webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version, \
-     tenant_id, api_key_id \
+     tenant_id, api_key_id, halt_reason \
      FROM runs WHERE run_id = $1";
 
 const SELECT_ACTIVE_RUN_FOR_THREAD: &str = "SELECT run_id, thread_id, assistant_id, \
      assistant_version, status, input, submitted_at, started_at, finished_at, attempt, \
      cancel_requested, error, webhook, pending_responses, fork_from, output, \
-     final_waypoint_id, schema_version, tenant_id, api_key_id FROM runs WHERE thread_id = $1 \
+     final_waypoint_id, schema_version, tenant_id, api_key_id, halt_reason FROM runs \
+     WHERE thread_id = $1 \
      AND status IN ('queued','running','awaiting_input') LIMIT 1";
 
 const UPDATE_REQUEST_CANCEL: &str = "UPDATE runs SET cancel_requested = TRUE WHERE run_id = $1 \
@@ -78,7 +81,7 @@ const SELECT_CANCEL_REQUESTED_FOR_ACTIVE_THREAD: &str = "SELECT cancel_requested
 const LIST_SELECT_PREFIX: &str = "SELECT run_id, thread_id, assistant_id, assistant_version, \
      status, input, submitted_at, started_at, finished_at, attempt, cancel_requested, error, \
      webhook, pending_responses, fork_from, output, final_waypoint_id, schema_version, \
-     tenant_id, api_key_id \
+     tenant_id, api_key_id, halt_reason \
      FROM runs WHERE 1 = 1";
 
 /// D-30: resolves and freezes `assistant_version` onto the new row from the
@@ -89,10 +92,11 @@ const LIST_SELECT_PREFIX: &str = "SELECT run_id, thread_id, assistant_id, assist
 const INSERT_RUN_WITH_LATEST: &str = "INSERT INTO runs \
      (run_id, thread_id, assistant_id, assistant_version, status, input, submitted_at, \
       started_at, finished_at, attempt, cancel_requested, error, webhook, pending_responses, \
-      fork_from, output, final_waypoint_id, schema_version, tenant_id, api_key_id) \
+      fork_from, output, final_waypoint_id, schema_version, tenant_id, api_key_id, \
+      halt_reason) \
      SELECT $1, $2, $3, a.latest, $4, $5::jsonb, $6, $7, $8, $9, $10, $11, $12::jsonb, \
-            $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $19 \
-     FROM assistants a WHERE a.assistant_id = $20 AND a.deleted_at IS NULL";
+            $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $19, $20::jsonb \
+     FROM assistants a WHERE a.assistant_id = $21 AND a.deleted_at IS NULL";
 
 const SELECT_RESOLVED_ASSISTANT_VERSION: &str =
     "SELECT assistant_version FROM runs WHERE run_id = $1";
@@ -294,6 +298,16 @@ impl PostgresRunRepository {
             }
         };
 
+        // ALLOW-03 / D-06: NULL (every pre-013 row, every non-spend outcome) reads back as
+        // `None`; a stored value that is not valid `HaltReason` JSON is a typed serialization
+        // error here, never a panic (T-42-11).
+        let halt_reason_value: Option<serde_json::Value> =
+            row.try_get("halt_reason").map_err(backend_err)?;
+        let halt_reason: Option<HaltReason> = halt_reason_value
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(ser_err)?;
+
         let mut run = Run::new(
             run_id,
             thread_id,
@@ -317,6 +331,7 @@ impl PostgresRunRepository {
         run.final_waypoint_id = final_waypoint_id;
         run.schema_version = schema_version;
         run.submitted_by = submitted_by;
+        run.halt_reason = halt_reason;
         Ok(run)
     }
 }
@@ -365,6 +380,20 @@ fn list_query(query: &RunQuery, fetch_limit: i64) -> sqlx::QueryBuilder<'_, sqlx
     builder
 }
 
+/// Serialise a run's typed halt reason to the JSON text bound to the `halt_reason` JSONB column
+/// through a `::jsonb` cast (`None` binds NULL), mirroring how `output` is bound. The stored
+/// form is `HaltReason`'s own serde form -- figures as integer nano-units plus a currency,
+/// never display strings -- and is bound as a parameter, never interpolated into SQL text
+/// (T-42-10).
+fn halt_reason_to_json(reason: Option<&HaltReason>) -> Result<Option<String>, RunRepositoryError> {
+    reason
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| RunRepositoryError::Serialization {
+            message: e.to_string(),
+        })
+}
+
 #[async_trait]
 impl RunRepositoryPort for PostgresRunRepository {
     async fn insert(&self, run: &Run) -> Result<(), RunRepositoryError> {
@@ -401,6 +430,7 @@ impl RunRepositoryPort for PostgresRunRepository {
             .map_err(|e| RunRepositoryError::Serialization {
                 message: e.to_string(),
             })?;
+        let halt_reason = halt_reason_to_json(run.halt_reason.as_ref())?;
 
         sqlx::query(INSERT_RUN)
             .bind(run.run_id.as_str())
@@ -423,6 +453,7 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(&run.schema_version)
             .bind(run.submitted_by.as_ref().map(|a| a.tenant_id.as_str()))
             .bind(run.submitted_by.as_ref().map(|a| a.api_key_id.as_str()))
+            .bind(halt_reason)
             .execute(&self.pool)
             .await
             .map_err(|e| self.map_insert_error(e, &run.thread_id))?;
@@ -505,13 +536,16 @@ impl RunRepositoryPort for PostgresRunRepository {
                 message: e.to_string(),
             })?;
 
+        let halt_reason = halt_reason_to_json(outcome.halt_reason.as_ref())?;
+
         let result = sqlx::query(
-            "UPDATE runs SET error = $1, output = $2::jsonb, final_waypoint_id = $3 \
-             WHERE run_id = $4",
+            "UPDATE runs SET error = $1, output = $2::jsonb, final_waypoint_id = $3, \
+             halt_reason = $4::jsonb WHERE run_id = $5",
         )
         .bind(&outcome.error)
         .bind(output)
         .bind(&outcome.final_waypoint_id)
+        .bind(halt_reason)
         .bind(run_id.as_str())
         .execute(&self.pool)
         .await
@@ -735,6 +769,7 @@ impl RunRepositoryPort for PostgresRunRepository {
             .map_err(|e| RunRepositoryError::Serialization {
                 message: e.to_string(),
             })?;
+        let halt_reason = halt_reason_to_json(run.halt_reason.as_ref())?;
 
         let result = sqlx::query(INSERT_RUN_WITH_LATEST)
             .bind(run.run_id.as_str())
@@ -756,8 +791,9 @@ impl RunRepositoryPort for PostgresRunRepository {
             .bind(&run.schema_version)
             .bind(run.submitted_by.as_ref().map(|a| a.tenant_id.as_str()))
             .bind(run.submitted_by.as_ref().map(|a| a.api_key_id.as_str()))
+            .bind(halt_reason)
             .bind(&run.assistant.assistant_id)
-            // (INSERT_RUN_WITH_LATEST's trailing $20 predicate bind)
+            // (INSERT_RUN_WITH_LATEST's trailing $21 predicate bind)
             .execute(&self.pool)
             .await
             .map_err(|e| self.map_insert_error(e, &run.thread_id))?;
@@ -975,6 +1011,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn halt_reason_round_trips_on_record_outcome() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::halt_reason_round_trips_on_record_outcome(&store).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_row_reads_back_without_a_halt_reason() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::legacy_row_reads_back_without_a_halt_reason(&store).await;
+    }
+
+    #[tokio::test]
+    async fn record_outcome_before_status_flip_is_accepted() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::record_outcome_before_status_flip_is_accepted(&store).await;
+    }
+
+    #[tokio::test]
     async fn get_on_unsupported_schema_version_fails() {
         let Some(store) = store_or_skip().await else {
             return;
@@ -1093,6 +1153,36 @@ mod tests {
     // Docker-gated like everything else in this module.
 
     #[test]
+    fn sql_constants_carry_the_halt_reason_column_as_jsonb() {
+        // Phase 42 D-06: `halt_reason` is the LAST column of both INSERTs (so the attribution
+        // and assistant-predicate placeholder numbers above never shift under it), is cast
+        // `::jsonb` on every write, and is named on every SELECT. DB-free, so it runs without
+        // a server.
+        assert!(
+            INSERT_RUN.contains("halt_reason)"),
+            "INSERT_RUN must name halt_reason as its last column: {INSERT_RUN}"
+        );
+        assert!(
+            INSERT_RUN.contains("$21::jsonb"),
+            "INSERT_RUN must bind halt_reason as $21::jsonb: {INSERT_RUN}"
+        );
+        assert!(
+            INSERT_RUN_WITH_LATEST.contains("$20::jsonb"),
+            "INSERT_RUN_WITH_LATEST must select halt_reason as $20::jsonb: {INSERT_RUN_WITH_LATEST}"
+        );
+        for constant in [
+            SELECT_RUN_BY_ID,
+            SELECT_ACTIVE_RUN_FOR_THREAD,
+            LIST_SELECT_PREFIX,
+        ] {
+            assert!(
+                constant.contains("halt_reason"),
+                "constant missing halt_reason: {constant}"
+            );
+        }
+    }
+
+    #[test]
     fn insert_constants_carry_the_attribution_columns() {
         assert!(
             INSERT_RUN.contains("tenant_id, api_key_id"),
@@ -1112,8 +1202,8 @@ mod tests {
              {INSERT_RUN_WITH_LATEST}"
         );
         assert!(
-            INSERT_RUN_WITH_LATEST.contains("a.assistant_id = $20"),
-            "INSERT_RUN_WITH_LATEST must end with the a.assistant_id = $20 bind: \
+            INSERT_RUN_WITH_LATEST.contains("a.assistant_id = $21"),
+            "INSERT_RUN_WITH_LATEST must end with the a.assistant_id = $21 bind: \
              {INSERT_RUN_WITH_LATEST}"
         );
         for constant in [

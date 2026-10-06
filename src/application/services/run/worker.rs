@@ -464,6 +464,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                 error: None,
                 output: None,
                 final_waypoint_id: Some(waypoint.to_string()),
+                halt_reason: None,
             },
         },
         RunOutcome::Failed { error, waypoint } => OutcomeAction::Transition {
@@ -472,6 +473,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                 error: Some(error.to_string()),
                 output: None,
                 final_waypoint_id: waypoint.map(|w| w.to_string()),
+                halt_reason: None,
             },
         },
         // D-22: AwaitingInput releases the worker by ACKing -- a suspended
@@ -482,6 +484,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                 error: None,
                 output: None,
                 final_waypoint_id: Some(waypoint.to_string()),
+                halt_reason: None,
             },
         },
         // D-05 (Phase 42): the engine's typed cause decides how a halt is recorded.
@@ -500,6 +503,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                 error: None,
                 output: None,
                 final_waypoint_id: Some(waypoint.to_string()),
+                halt_reason: None,
             },
         },
         RunOutcome::Halted {
@@ -513,6 +517,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                 error: None,
                 output: None,
                 final_waypoint_id: Some(waypoint.to_string()),
+                halt_reason: None,
             },
         },
         // `HaltCause::Token` and any future cause: today's three-way logic, unchanged.
@@ -526,6 +531,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                         error: None,
                         output: None,
                         final_waypoint_id: Some(waypoint.to_string()),
+                        halt_reason: None,
                     },
                 }
             } else if shutting_down {
@@ -543,6 +549,7 @@ fn map_outcome(outcome: &RunOutcome, cancel_requested: bool, shutting_down: bool
                         error: None,
                         output: None,
                         final_waypoint_id: Some(waypoint.to_string()),
+                        halt_reason: None,
                     },
                 }
             }
@@ -1567,6 +1574,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                                 error: None,
                                 output: Some(serde_json::Value::String(result.output)),
                                 final_waypoint_id: None,
+                                halt_reason: None,
                             },
                         )
                         .await?;
@@ -1696,6 +1704,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                         error: Some(error_text.clone()),
                         output: None,
                         final_waypoint_id: None,
+                        halt_reason: None,
                     },
                 )
                 .await?;
@@ -1975,6 +1984,7 @@ mod tests {
                     error: None,
                     output: None,
                     final_waypoint_id: Some(waypoint.to_string()),
+                    halt_reason: None,
                 },
             }
         );
@@ -2000,6 +2010,7 @@ mod tests {
                     error: Some(expected_text),
                     output: None,
                     final_waypoint_id: None,
+                    halt_reason: None,
                 },
             }
         );
@@ -2021,6 +2032,7 @@ mod tests {
                     error: None,
                     output: None,
                     final_waypoint_id: Some(waypoint.to_string()),
+                    halt_reason: None,
                 },
             }
         );
@@ -2042,6 +2054,7 @@ mod tests {
                     error: None,
                     output: None,
                     final_waypoint_id: Some(waypoint.to_string()),
+                    halt_reason: None,
                 },
             }
         );
@@ -2074,6 +2087,7 @@ mod tests {
                     error: None,
                     output: None,
                     final_waypoint_id: Some(waypoint.to_string()),
+                    halt_reason: None,
                 },
             }
         );
@@ -2103,6 +2117,7 @@ mod tests {
                 error: None,
                 output: None,
                 final_waypoint_id: Some(waypoint.to_string()),
+                halt_reason: None,
             },
         }
     }

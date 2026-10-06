@@ -145,6 +145,7 @@ impl RunRepositoryPort for InMemoryRunRepository {
         run.error = outcome.error;
         run.output = outcome.output;
         run.final_waypoint_id = outcome.final_waypoint_id;
+        run.halt_reason = outcome.halt_reason;
         Ok(())
     }
 
@@ -407,6 +408,7 @@ mod tests {
                 error: Some("boom".to_string()),
                 output: Some(serde_json::json!({"ok": false})),
                 final_waypoint_id: Some("wp-1".to_string()),
+                halt_reason: None,
             },
         )
         .await
@@ -562,6 +564,23 @@ mod contract_suite {
             &InMemoryRunRepository::new(),
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn halt_reason_round_trips_on_record_outcome() {
+        contract_tests::halt_reason_round_trips_on_record_outcome(&InMemoryRunRepository::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn legacy_row_reads_back_without_a_halt_reason() {
+        contract_tests::legacy_row_reads_back_without_a_halt_reason(&InMemoryRunRepository::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn record_outcome_before_status_flip_is_accepted() {
+        contract_tests::record_outcome_before_status_flip_is_accepted(&InMemoryRunRepository::new()).await;
     }
 
     #[tokio::test]

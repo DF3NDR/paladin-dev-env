@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::platform::container::allowance::HaltReason;
 use crate::platform::container::parley::ParleyResponse;
 use crate::platform::container::principal::RunAttribution;
 use crate::platform::container::waypoint::ThreadId;
@@ -458,6 +459,17 @@ pub struct Run {
     /// every v1 row and document reads back unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submitted_by: Option<RunAttribution>,
+    /// Why this run halted, when it halted on spend (ALLOW-03, Phase 42 D-06, ADR-0057).
+    ///
+    /// Set only for a [`RunStatus::Halted`] run whose halt carried a typed reason (an exhausted
+    /// allowance, or a ledger that could not be read); `None` for every other run, for a halt
+    /// with no spend cause, and for every row written before the `halt_reason` column existed.
+    /// A halt is a resume point, not a failure, so [`Run::error`] stays `None` beside it. The
+    /// stored form keeps the figures as integer nano-units; render it for a caller only through
+    /// `HaltReason::wire_json`. Additive and serde-defaulted, so [`RUN_SCHEMA_VERSION`] stays
+    /// `v1` (X-04).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub halt_reason: Option<HaltReason>,
     /// Schema version this row was persisted under (X-04).
     #[serde(default = "default_run_schema_version")]
     pub schema_version: String,
@@ -490,6 +502,7 @@ impl Run {
             output: None,
             final_waypoint_id: None,
             submitted_by: None,
+            halt_reason: None,
             schema_version: RUN_SCHEMA_VERSION.to_string(),
         }
     }
@@ -937,6 +950,43 @@ mod tests {
         );
         let json = serde_json::to_value(&run).unwrap();
         assert!(json.get("submitted_by").is_none());
+    }
+
+    #[test]
+    fn run_halt_reason_defaults_to_none_and_is_omitted_from_serialization() {
+        let run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("thread-1").unwrap(),
+            AssistantRef {
+                assistant_id: "assistant-1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        assert!(run.halt_reason.is_none());
+        let json = serde_json::to_value(&run).unwrap();
+        assert!(json.get("halt_reason").is_none());
+
+        // A document persisted before the field existed deserialises with `None`.
+        let restored: Run = serde_json::from_value(json).unwrap();
+        assert!(restored.halt_reason.is_none());
+    }
+
+    #[test]
+    fn run_halt_reason_round_trips_through_serde() {
+        let mut run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("thread-1").unwrap(),
+            AssistantRef {
+                assistant_id: "assistant-1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        );
+        run.halt_reason = Some(HaltReason::LedgerUnavailable);
+        let json = serde_json::to_string(&run).unwrap();
+        let restored: Run = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.halt_reason, Some(HaltReason::LedgerUnavailable));
     }
 
     #[test]

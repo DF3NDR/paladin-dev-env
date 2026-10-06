@@ -42,6 +42,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+use paladin_core::platform::container::allowance::HaltReason;
 use paladin_core::platform::container::parley::ParleyResponse;
 use paladin_core::platform::container::principal::RunReadScope;
 use paladin_core::platform::container::run::{Run, RunCursor, RunId, RunStatus};
@@ -81,6 +82,30 @@ pub struct RunQuery {
 
 /// The terminal outcome fields [`RunRepositoryPort::record_outcome`]
 /// persists alongside a status transition.
+///
+/// # Examples
+///
+/// A spend halt records the typed reason beside the Waypoint to resume from; `error` stays
+/// `None` because a halt is a resume point, not a failure:
+///
+/// ```
+/// use paladin_core::platform::container::allowance::HaltReason;
+/// use paladin_ports::output::run_repository_port::RunOutcomeRecord;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let outcome = RunOutcomeRecord {
+///     final_waypoint_id: Some("wp-halted".to_string()),
+///     halt_reason: Some(HaltReason::LedgerUnavailable),
+///     ..Default::default()
+/// };
+/// assert!(outcome.error.is_none());
+/// assert_eq!(
+///     outcome.halt_reason.as_ref().map(HaltReason::as_str),
+///     Some("ledger_unavailable"),
+/// );
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunOutcomeRecord {
     /// The engine's error, for a `Failed` outcome.
@@ -89,6 +114,11 @@ pub struct RunOutcomeRecord {
     pub output: Option<serde_json::Value>,
     /// The final Waypoint id reached, if any.
     pub final_waypoint_id: Option<String>,
+    /// Why the run halted, for a spend halt (ALLOW-03, Phase 42 D-06). `None` for every outcome
+    /// that is not a spend halt. Persisted as the typed [`HaltReason`] (figures as integer
+    /// nano-units); an adapter rejects a stored value that is not valid `HaltReason` JSON with
+    /// a serialization error on read, never a panic.
+    pub halt_reason: Option<HaltReason>,
 }
 
 /// Errors returned by [`RunRepositoryPort`] methods (X-06 — structured,

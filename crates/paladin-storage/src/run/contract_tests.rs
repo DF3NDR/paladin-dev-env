@@ -15,7 +15,11 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 
+use paladin_core::platform::container::allowance::{
+    AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, HaltReason,
+};
 use paladin_core::platform::container::assistant::AssistantId;
+use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::parley::{ParleyId, ParleyKind, ParleyResponse};
 use paladin_core::platform::container::principal::{RunAttribution, RunReadScope, TenantId};
 use paladin_core::platform::container::run::{
@@ -556,6 +560,7 @@ pub async fn record_outcome_persists_fields_without_touching_status(port: &dyn R
             error: Some("boom".to_string()),
             output: Some(serde_json::json!({ "ok": false })),
             final_waypoint_id: Some("wp-1".to_string()),
+            halt_reason: None,
         },
     )
     .await
@@ -566,6 +571,196 @@ pub async fn record_outcome_persists_fields_without_touching_status(port: &dyn R
     assert_eq!(loaded.error.as_deref(), Some("boom"));
     assert_eq!(loaded.output, Some(serde_json::json!({ "ok": false })));
     assert_eq!(loaded.final_waypoint_id.as_deref(), Some("wp-1"));
+    assert_eq!(loaded.halt_reason, None);
+}
+
+// ── Halt reason (ALLOW-03, Phase 42 D-06, G14) ─────────────────────────────
+
+/// The whole-second instant used by the halt-reason fixtures. Whole seconds are what the
+/// Treasurer stamps (`AllowanceRefusal::evaluated_at` is truncated to the second), and they
+/// round-trip exactly through every backend's JSON encoding.
+fn halt_instant(hour: u32) -> DateTime<Utc> {
+    use chrono::TimeZone;
+    Utc.with_ymd_and_hms(2026, 10, 6, hour, 0, 0)
+        .single()
+        .expect("a valid UTC instant")
+}
+
+/// A window-ceiling refusal whose ceiling is one nano-unit past a round figure, so a
+/// floating-point or display-string round trip would visibly lose it (D-00h).
+fn sample_exhausted_reason() -> HaltReason {
+    let usd = CurrencyCode::new("USD").expect("USD is a valid currency code");
+    HaltReason::AllowanceExhausted(AllowanceRefusal {
+        scope_kind: AllowanceScopeKind::ApiKey,
+        limit_kind: AllowanceLimitKind::Window,
+        balance: Cost::new(1_000_000_001, usd.clone()),
+        ceiling: Cost::new(1_000_000_001, usd),
+        window: Some((halt_instant(0), halt_instant(23))),
+        evaluated_at: halt_instant(12),
+    })
+}
+
+/// Insert a fresh `Running` run on `thread` and return it.
+async fn insert_running_run(port: &dyn RunRepositoryPort, thread: &str) -> Run {
+    let thread = ThreadId::new(thread).unwrap();
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
+    port.insert(&run).await.unwrap();
+    port.update_status(
+        &run.run_id,
+        RunStatus::Queued,
+        RunStatus::Running,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    run
+}
+
+/// `record_outcome` persists a typed `halt_reason` and `get` reads the identical value back:
+/// an `AllowanceExhausted` reason round-trips its balance and ceiling as exact integer
+/// nano-units (a ceiling of `1_000_000_001` reads back as `1_000_000_001`), and a
+/// `LedgerUnavailable` reason round-trips too. `status` is untouched and `error` stays `None`
+/// (a halt is a resume point, not a failure).
+pub async fn halt_reason_round_trips_on_record_outcome(port: &dyn RunRepositoryPort) {
+    let exhausted = sample_exhausted_reason();
+    let run = insert_running_run(port, "contract-run-halt-reason-exhausted").await;
+    port.record_outcome(
+        &run.run_id,
+        RunOutcomeRecord {
+            final_waypoint_id: Some("wp-halted".to_string()),
+            halt_reason: Some(exhausted.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.halt_reason, Some(exhausted.clone()));
+    assert_eq!(loaded.error, None, "a halt never populates error");
+    assert_eq!(loaded.final_waypoint_id.as_deref(), Some("wp-halted"));
+    assert_eq!(
+        loaded.status,
+        RunStatus::Running,
+        "record_outcome never moves status"
+    );
+    match loaded.halt_reason {
+        Some(HaltReason::AllowanceExhausted(refusal)) => {
+            assert_eq!(refusal.ceiling.nanos(), 1_000_000_001);
+            assert_eq!(refusal.balance.nanos(), 1_000_000_001);
+        }
+        other => panic!("expected AllowanceExhausted, got {other:?}"),
+    }
+
+    let unavailable = insert_running_run(port, "contract-run-halt-reason-unavailable").await;
+    port.record_outcome(
+        &unavailable.run_id,
+        RunOutcomeRecord {
+            halt_reason: Some(HaltReason::LedgerUnavailable),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let loaded = port.get(&unavailable.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.halt_reason, Some(HaltReason::LedgerUnavailable));
+}
+
+/// A run that never recorded a reason (the shape of every row written before the
+/// `halt_reason` column existed) reads back `halt_reason == None` through `get`, and through
+/// `list`, both before and after an outcome without a reason is recorded.
+pub async fn legacy_row_reads_back_without_a_halt_reason(port: &dyn RunRepositoryPort) {
+    let thread = ThreadId::new("contract-run-halt-reason-legacy").unwrap();
+    let run = sample_run(&thread, "assistant-a", contract_timestamp());
+    port.insert(&run).await.unwrap();
+
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.halt_reason, None);
+
+    port.record_outcome(
+        &run.run_id,
+        RunOutcomeRecord {
+            output: Some(serde_json::json!({ "ok": true })),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.halt_reason, None);
+
+    let page = port
+        .list(RunQuery {
+            thread_id: Some(thread),
+            limit: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.items.len(), 1);
+    assert_eq!(page.items[0].halt_reason, None);
+}
+
+/// Writing the outcome (with its reason) BEFORE flipping the status is accepted by every
+/// adapter: `record_outcome` has no status guard, so a `Running` run takes the reason first and
+/// the `Running -> Halted` flip second, and no reader can observe `halted` without the reason
+/// (G14, PLAT-09). The same order holds for `Cancelled`.
+pub async fn record_outcome_before_status_flip_is_accepted(port: &dyn RunRepositoryPort) {
+    let reason = sample_exhausted_reason();
+    let run = insert_running_run(port, "contract-run-outcome-before-flip").await;
+
+    port.record_outcome(
+        &run.run_id,
+        RunOutcomeRecord {
+            final_waypoint_id: Some("wp-halted".to_string()),
+            halt_reason: Some(reason.clone()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    // Between the two writes the run is still `Running` and already carries its reason.
+    let mid = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(mid.status, RunStatus::Running);
+    assert_eq!(mid.halt_reason, Some(reason.clone()));
+
+    port.update_status(
+        &run.run_id,
+        RunStatus::Running,
+        RunStatus::Halted,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+
+    let loaded = port.get(&run.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.status, RunStatus::Halted);
+    assert_eq!(loaded.halt_reason, Some(reason));
+    assert_eq!(loaded.final_waypoint_id.as_deref(), Some("wp-halted"));
+    assert_eq!(loaded.error, None);
+
+    let cancelled = insert_running_run(port, "contract-run-outcome-before-cancel").await;
+    port.record_outcome(
+        &cancelled.run_id,
+        RunOutcomeRecord {
+            final_waypoint_id: Some("wp-cancelled".to_string()),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    port.update_status(
+        &cancelled.run_id,
+        RunStatus::Running,
+        RunStatus::Cancelled,
+        contract_timestamp(),
+    )
+    .await
+    .unwrap();
+    let loaded = port.get(&cancelled.run_id).await.unwrap().unwrap();
+    assert_eq!(loaded.status, RunStatus::Cancelled);
+    assert_eq!(loaded.final_waypoint_id.as_deref(), Some("wp-cancelled"));
 }
 
 // ── Schema versioning (X-04) ────────────────────────────────────────────
@@ -962,6 +1157,7 @@ pub async fn attribution_survives_every_status_and_attempt_update(port: &dyn Run
             error: None,
             output: Some(serde_json::json!({ "ok": true })),
             final_waypoint_id: Some("wp-final".to_string()),
+            ..Default::default()
         },
     )
     .await

@@ -518,7 +518,10 @@ trace stream as an `allowance_warning` event when run traces are enabled, exactl
 admission warning does.
 `allowance_halted` fires once per scope, limit, window and ceiling when a run is halted at a
 superstep boundary because that ceiling is exhausted, so twenty runs halting in one window send
-the operator one `allowance_halted`, not twenty. The overshoot bound is one **top-level**
+the operator one `allowance_halted`, not twenty. Only a halt at an engine superstep boundary
+sends it: an agent-kind run that halts at dispatch, or on its derived token budget, is recorded
+`halted` and notifies the run's own webhook subscribers, but sends the operator no
+`allowance_halted`. The overshoot bound is one **top-level**
 superstep, including any nested sub-workflow (`Battalion` node) run it contains: a sub-workflow's
 spend is settled only when its hosting superstep ends, so a long sub-workflow can spend past a
 ceiling by its whole length before the run halts. A halt caused by an unreadable ledger

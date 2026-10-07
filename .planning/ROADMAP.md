@@ -532,7 +532,7 @@ Plans:
 
 **Wave 12** *(blocked on Wave 11 completion)*
 
-- [ ] 42-12-PLAN.md — Herald halt line, the Treasurer vocabulary guard test, remaining WINDOWS.md rows, crate CHANGELOGs, full phase gate (wave 12)
+- [x] 42-12-PLAN.md — Herald halt line, the Treasurer vocabulary guard test, remaining WINDOWS.md rows, crate CHANGELOGs, full phase gate (wave 12)
 
 ### Phase 43: Rate Pacing
 

@@ -2080,6 +2080,54 @@ async fn guard_claims_a_mid_run_warning_once() {
     assert!(harness.queued().await.is_empty(), "nothing further queued");
 }
 
+/// WR-3 (42-REVIEW): a notice-store write that FAILS must not be memoised as "tried". The memo
+/// only skips writes the store would answer `AlreadyRecorded` to, so a transient failure leaves
+/// the claim retryable at the next boundary, and the operator is still warned once the store
+/// recovers.
+#[tokio::test]
+async fn a_failed_mid_run_warning_claim_is_retried_at_the_next_boundary() {
+    let harness = NoticeHarness::new(50);
+    let emitter = RecordingEmitter::new();
+    let (guard, _run) = harness.guard(Some(emitter.clone()));
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+
+    // The run crosses warn_at (85 of 100) while the notice store is down.
+    harness.spend(35);
+    harness.notices.fail_record.store(true, Ordering::SeqCst);
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+    assert_eq!(harness.notices.attempts().len(), 1, "the write was tried");
+    assert!(
+        emitter.events().is_empty(),
+        "nothing was won, nothing emitted"
+    );
+    assert!(harness.queued().await.is_empty());
+
+    // The store recovers: the very next boundary retries and wins the claim.
+    harness.notices.fail_record.store(false, Ordering::SeqCst);
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+    assert_eq!(
+        harness.notices.attempts().len(),
+        2,
+        "a failed write is not memoised, so it is retried"
+    );
+    assert_eq!(
+        warnings_in(&emitter.events()),
+        1,
+        "the warning is delivered"
+    );
+    let queued = harness.queued().await;
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].event, RunEventKind::AllowanceWarning);
+
+    // Once recorded, the memo applies again: no further write.
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+    assert_eq!(
+        harness.notices.attempts().len(),
+        2,
+        "the memo skips repeats"
+    );
+}
+
 #[tokio::test]
 async fn a_lost_warning_claim_emits_and_enqueues_nothing() {
     let harness = NoticeHarness::new(85);

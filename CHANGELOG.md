@@ -522,6 +522,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The mid-run boundary guard no longer drops a run's `allowance_warning` after one transient
+  notice-store error: a claim enters the in-run memo only once the store has answered `Recorded`
+  or `AlreadyRecorded`, so a failed write is retried at the next boundary (Phase 42 review WR-3).
+  A halt notice lost to a store error is still not retried by the same run, which ends at once.
 - SSE replay of a run on a thread that already hosts another run (the documented fork recovery
   path) no longer ends on the prior run's `RunFinished`: replayed records stamped with a different
   run's id are skipped, and a persisted `RunFinished { Halted }` is skipped when the run row is

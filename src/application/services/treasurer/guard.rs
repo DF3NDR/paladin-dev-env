@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
-use paladin_core::platform::container::allowance::{HaltReason, NoticeKind};
+use paladin_core::platform::container::allowance::{AllowanceNotice, HaltReason, NoticeKind};
 use paladin_core::platform::container::principal::RunAttribution;
 use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::trace::TraceEvent;
@@ -38,11 +38,12 @@ use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
 use paladin_ports::output::trace_sink_port::TraceEmitter;
 
-use super::{Ceiling, Treasurer, collect_crossings};
+use super::{Ceiling, NoticeClaim, Treasurer, collect_crossings};
 
 /// What one notice claim is keyed on in the in-run memo: the ceiling's identity, the window it
 /// was read over, the ceiling's size and the notice kind. It mirrors the store's own dedup
-/// identity, so the memo skips exactly the writes the store would answer `AlreadyRecorded` to.
+/// identity, so the memo skips exactly the writes the store would answer `AlreadyRecorded` to
+/// (a key enters the memo only once the store has answered).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ClaimKey {
     scope_kind: &'static str,
@@ -106,9 +107,11 @@ pub struct TreasurerSpendGuard {
     /// The run's own trace emitter: a mid-run warning this guard wins is emitted here, so it
     /// lands on that run's stream. `None` leaves only the trace leg off (D-17).
     emitter: Option<Arc<dyn TraceEmitter>>,
-    /// Every notice claim this guard has already tried (Pitfall 9, T-42-39): a repeat boundary
-    /// does not write again. Only skips writes -- the store stays the truth, and a claim never
-    /// changes the guard's decision. The lock is held only to test-and-insert, never across an
+    /// Every notice claim this guard has a FINAL answer for (Pitfall 9, T-42-39): a repeat
+    /// boundary does not write again. A claim is inserted only after the store answers `Recorded`
+    /// or `AlreadyRecorded`, never before the write and never after a store error, so a
+    /// transient failure is retried at the next boundary (WR-3). Only skips writes -- the store
+    /// stays the truth, and a claim never changes the guard's decision. The lock is held only to test-and-insert, never across an
     /// `.await`. Held behind an `Arc` so the struct keeps the `Freeze` auto trait it published
     /// with (an inline `Mutex` would change the public API surface).
     claimed: Arc<Mutex<HashSet<ClaimKey>>>,
@@ -132,13 +135,33 @@ impl TreasurerSpendGuard {
         self.halted.get_or_init(|| reason).clone()
     }
 
-    /// `true` the first time this guard sees `key`, `false` for every repeat. A poisoned lock
-    /// is recovered: the memo only skips writes, so a stale set is harmless.
-    fn first_attempt(&self, key: ClaimKey) -> bool {
+    /// `true` when this guard already holds a final answer for `key` (it won the claim, or the
+    /// store said `AlreadyRecorded`). A poisoned lock is recovered: the memo only skips writes,
+    /// so a stale set is harmless.
+    fn already_claimed(&self, key: &ClaimKey) -> bool {
         self.claimed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(key)
+            .contains(key)
+    }
+
+    /// Record the outcome of a claim attempt in the memo (Phase 42 review WR-3): a `Won` or
+    /// `AlreadyRecorded` answer is final and is memoised, so a repeat boundary does not write
+    /// again; a `Failed` answer is NOT, so the next boundary retries the write. The memo is set
+    /// only AFTER the store answers -- never before -- so it skips exactly the writes the store
+    /// would answer `AlreadyRecorded` to. Returns the won notice, if any.
+    fn settle_claim(&self, key: ClaimKey, claim: NoticeClaim) -> Option<AllowanceNotice> {
+        if matches!(claim, NoticeClaim::Failed) {
+            return None;
+        }
+        self.claimed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key);
+        match claim {
+            NoticeClaim::Won(notice) => Some(*notice),
+            _ => None,
+        }
     }
 
     /// Claim the once-per-window warning for every ceiling this boundary read found at or past
@@ -155,10 +178,10 @@ impl TreasurerSpendGuard {
                 crossing.window.map(|(start, _)| start),
                 NoticeKind::Warning,
             );
-            if !self.first_attempt(key) {
+            if self.already_claimed(&key) {
                 continue;
             }
-            let Some(notice) = self
+            let claim = self
                 .treasurer
                 .claim_notice(
                     notices,
@@ -166,8 +189,8 @@ impl TreasurerSpendGuard {
                     Some(&self.run_id),
                     evaluation.evaluated_at,
                 )
-                .await
-            else {
+                .await;
+            let Some(notice) = self.settle_claim(key, claim) else {
                 continue;
             };
             if let Some(emitter) = &self.emitter {
@@ -185,14 +208,14 @@ impl TreasurerSpendGuard {
             exhausted.refusal.window.map(|(start, _)| start),
             NoticeKind::Halt,
         );
-        if !self.first_attempt(key) {
+        if self.already_claimed(&key) {
             return;
         }
-        if let Some(notice) = self
+        let claim = self
             .treasurer
             .claim_halt_notice(&exhausted.ceiling, &exhausted.refusal, &self.run_id)
-            .await
-        {
+            .await;
+        if let Some(notice) = self.settle_claim(key, claim) {
             self.treasurer.notify_operator(&notice).await;
         }
     }

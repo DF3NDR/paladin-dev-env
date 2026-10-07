@@ -307,7 +307,7 @@ impl Treasurer {
         crossing: Crossing<'_>,
         run_id: Option<&RunId>,
         recorded_at: DateTime<Utc>,
-    ) -> Option<AllowanceNotice> {
+    ) -> NoticeClaim {
         let ceiling = crossing.ceiling;
         let record = NoticeRecord {
             notice_id: uuid::Uuid::now_v7().to_string(),
@@ -343,8 +343,11 @@ impl Treasurer {
         ceiling: &Ceiling,
         refusal: &AllowanceRefusal,
         run_id: &RunId,
-    ) -> Option<AllowanceNotice> {
-        let notices = self.notices.as_deref()?;
+    ) -> NoticeClaim {
+        let Some(notices) = self.notices.as_deref() else {
+            // No notice store attached: the leg is off, which is not a failure to retry.
+            return NoticeClaim::AlreadyRecorded;
+        };
         let record = NoticeRecord {
             notice_id: uuid::Uuid::now_v7().to_string(),
             tenant_id: ceiling.tenant_id.clone(),
@@ -366,16 +369,18 @@ impl Treasurer {
     }
 
     /// Record one notice row and report whether this caller won it. The one claim step behind
-    /// the admission warning, the mid-run warning and the halt notice: `Recorded` yields the
-    /// notice, `AlreadyRecorded` yields `None`, and a store error is logged (scope kind and
-    /// tenant id only, never a key value) and yields `None` (D-15).
-    async fn claim_record(
-        notices: &dyn TreasuryNoticePort,
-        record: &NoticeRecord,
-    ) -> Option<AllowanceNotice> {
+    /// the admission warning, the mid-run warning and the halt notice: `Recorded` yields
+    /// [`NoticeClaim::Won`], `AlreadyRecorded` yields [`NoticeClaim::AlreadyRecorded`], and a
+    /// store error is logged (scope kind and tenant id only, never a key value) and yields
+    /// [`NoticeClaim::Failed`] (D-15). The last two are kept apart because only
+    /// `AlreadyRecorded` is final: a failed write leaves the claim open, so a caller that
+    /// memoises "tried" must not memoise a `Failed` (Phase 42 review WR-3).
+    async fn claim_record(notices: &dyn TreasuryNoticePort, record: &NoticeRecord) -> NoticeClaim {
         match notices.record(record).await {
-            Ok(NoticeOutcome::Recorded) => Some(AllowanceNotice::from(record)),
-            Ok(NoticeOutcome::AlreadyRecorded) => None,
+            Ok(NoticeOutcome::Recorded) => {
+                NoticeClaim::Won(Box::new(AllowanceNotice::from(record)))
+            }
+            Ok(NoticeOutcome::AlreadyRecorded) => NoticeClaim::AlreadyRecorded,
             Err(error) => {
                 log::error!(
                     "allowance notice claim failed (the run is unaffected): kind={} scope={} \
@@ -384,7 +389,7 @@ impl Treasurer {
                     record.warning.scope_kind.as_str(),
                     record.tenant_id,
                 );
-                None
+                NoticeClaim::Failed
             }
         }
     }
@@ -398,6 +403,21 @@ impl Treasurer {
             self.enqueue_operator_delivery(target, notice).await;
         }
     }
+}
+
+/// The outcome of one attempt to claim a once-per-window notice (Phase 42 review WR-3).
+///
+/// A tri-state rather than an `Option`, so a store failure is distinguishable from losing the
+/// claim: only `Won` and `AlreadyRecorded` are final answers, and a caller memoising "this claim
+/// was tried" must not memoise `Failed`.
+pub(crate) enum NoticeClaim {
+    /// This caller recorded the notice and owns the window's delivery.
+    Won(Box<AllowanceNotice>),
+    /// The store already holds the notice (another run or admission won it), or no notice store
+    /// is attached: nothing to retry.
+    AlreadyRecorded,
+    /// The store errored (logged, never propagated): the claim is still open.
+    Failed,
 }
 
 /// One ceiling whose pre-admission balance reached its warn threshold on an admitted request.
@@ -490,11 +510,11 @@ impl Treasurer {
         }
         if let Some(notices) = &self.notices {
             for crossing in crossings {
-                if let Some(notice) = self
+                if let NoticeClaim::Won(notice) = self
                     .claim_notice(notices.as_ref(), crossing, run_id, evaluated_at)
                     .await
                 {
-                    admission = admission.with_notice(notice);
+                    admission = admission.with_notice(*notice);
                 }
             }
         }

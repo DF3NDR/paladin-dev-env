@@ -71,6 +71,24 @@ pub enum AllowanceLimitKind {
     Lifetime,
 }
 
+/// The horizon clause of a herald line: when a window ceiling resets, or that a lifetime ceiling
+/// never does (Phase 42 review IN-4).
+///
+/// A window ceiling with no recorded end (a malformed or deserialised refusal or warning) names
+/// itself `window` rather than `lifetime cap`: stating a lifetime cap would be the wrong fact.
+fn horizon_phrase(kind: AllowanceLimitKind, window_end: Option<DateTime<Utc>>) -> String {
+    match (kind, window_end) {
+        (AllowanceLimitKind::Window, Some(end)) => {
+            format!(
+                "window resets {}",
+                end.to_rfc3339_opts(SecondsFormat::Secs, true)
+            )
+        }
+        (AllowanceLimitKind::Window, None) => "window".to_string(),
+        (AllowanceLimitKind::Lifetime, _) => "lifetime cap".to_string(),
+    }
+}
+
 impl AllowanceLimitKind {
     /// The snake_case wire string for this kind (`"window"`, `"lifetime"`).
     pub fn as_str(self) -> &'static str {
@@ -284,15 +302,8 @@ impl HaltReason {
     pub fn herald_line(&self) -> String {
         match self {
             HaltReason::AllowanceExhausted(refusal) => {
-                let horizon = match (refusal.limit_kind, refusal.window) {
-                    (AllowanceLimitKind::Window, Some((_, end))) => {
-                        format!(
-                            "window resets {}",
-                            end.to_rfc3339_opts(SecondsFormat::Secs, true)
-                        )
-                    }
-                    _ => "lifetime cap".to_string(),
-                };
+                let horizon =
+                    horizon_phrase(refusal.limit_kind, refusal.window.map(|(_, end)| end));
                 // The currency is stated once, after the ceiling ("25.0000 of 25.0000 USD"); a
                 // balance in a different currency keeps its own code so nothing is misread.
                 let balance = format_cost(&refusal.balance);
@@ -495,15 +506,7 @@ impl AllowanceWarning {
     /// ```
     pub fn herald_line(&self) -> String {
         let scope = self.scope_kind.as_str();
-        let horizon = match (self.limit_kind, self.window_end) {
-            (AllowanceLimitKind::Window, Some(end)) => {
-                format!(
-                    "window resets {}",
-                    end.to_rfc3339_opts(SecondsFormat::Secs, true)
-                )
-            }
-            _ => "lifetime cap".to_string(),
-        };
+        let horizon = horizon_phrase(self.limit_kind, self.window_end);
         format!(
             "\u{26A0} allowance: {}% of {} ({scope}, {horizon})",
             self.percent_of_ceiling(),
@@ -1044,6 +1047,22 @@ mod tests {
         );
     }
 
+    /// IN-4: a window warning with no window end must not claim a lifetime cap.
+    #[test]
+    fn herald_line_for_a_window_ceiling_without_a_window_end() {
+        let mut w = warning(
+            20_500_000_000,
+            25_000_000_000,
+            AllowanceScopeKind::ApiKey,
+            AllowanceLimitKind::Window,
+        );
+        w.window_end = None;
+        assert_eq!(
+            w.herald_line(),
+            "\u{26A0} allowance: 82% of 25.0000 USD (api_key, window)"
+        );
+    }
+
     #[test]
     fn herald_line_for_a_lifetime_ceiling() {
         let w = warning(
@@ -1297,6 +1316,16 @@ mod tests {
             "\u{26D4} halted: allowance exhausted \u{2014} 2.5000 of 2.5000 USD \
              (api_key, window resets 2026-10-04T00:00:00Z)"
         );
+    }
+
+    /// IN-4: a window refusal with no window must not claim a lifetime cap.
+    #[test]
+    fn halt_reason_herald_line_for_a_window_ceiling_without_a_window() {
+        let mut refusal = window_refusal(at(3, 23, 0, 0));
+        refusal.window = None;
+        let line = HaltReason::AllowanceExhausted(refusal).herald_line();
+        assert!(line.ends_with("(api_key, window)"), "{line}");
+        assert!(!line.contains("lifetime"), "{line}");
     }
 
     #[test]

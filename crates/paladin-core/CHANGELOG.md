@@ -7,6 +7,12 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- `HaltReason::herald_line` and `AllowanceWarning::herald_line` no longer render a window ceiling
+  that has no recorded window end as a `lifetime cap`; it now reads `window` (Phase 42 review
+  IN-4). Lifetime and dated window lines are unchanged.
+
 ### Added
 
 - Phase 42 (mid-run halt and terminal status, ALLOW-03, ALLOW-05, PLAT-09; ADR-0057):

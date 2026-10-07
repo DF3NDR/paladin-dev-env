@@ -21,6 +21,7 @@ use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_web::{AgentProvisioner, AgentSpec, ProvisionError, ProvisionedAgent};
 
+use crate::application::services::paladin::middleware::limits::TokenBudget;
 use crate::application::services::paladin::paladin_execution_service::{
     AgentLoopSettlement, PaladinExecutionService,
 };
@@ -106,7 +107,31 @@ impl FacadeProvisioner {
 /// `src/application/services/run/tracer_e2e.rs`'s own `PaladinPortAdapter` establishes for
 /// tests, promoted here as the production adapter since none existed outside that test
 /// module before this phase.
-struct EngineExecutionPort(Arc<PaladinExecutionService>);
+pub(crate) struct EngineExecutionPort(Arc<PaladinExecutionService>);
+
+/// Wrap the ONE shared run-engine service as the engine-facing [`PaladinPort`], installing the
+/// [`TokenBudget`] in **Treasurer-only mode** (Phase 42, D-11, G12, ADR-0052).
+///
+/// The shared service backs the worker's agent-kind path *and* every engine node. The operator's
+/// `agent_runtime.token_budget` is therefore forced off here (`enabled: false`): the middleware
+/// then acts only when a call's [`RunScope`] carries a derived figure, and only the worker's
+/// agent-kind dispatch ever sets one. An enabled operator budget on this service would be the
+/// hazard ADR-0052 rejected -- it would cap an engine node mid-flight and hand the successful
+/// partial result to the Battlefield as if it were a finished answer. An engine node's scope
+/// never carries a derived figure, so it is never capped.
+///
+/// The remaining `token_budget` fields are carried through unchanged so a reader of the
+/// installed config sees the operator's own values with only the switch forced off.
+pub(crate) fn shared_engine_execution_port(
+    service: PaladinExecutionService,
+    token_budget: &TokenBudgetConfig,
+) -> Arc<dyn PaladinPort> {
+    let service = service.with_middleware(Arc::new(TokenBudget::new(TokenBudgetConfig {
+        enabled: false,
+        ..token_budget.clone()
+    })));
+    Arc::new(EngineExecutionPort(Arc::new(service)))
+}
 
 #[async_trait]
 impl PaladinPort for EngineExecutionPort {
@@ -211,7 +236,10 @@ pub fn paladin_port_from_settings_with_ledger(
     if let Some(ledger) = treasury_ledger {
         service = service.with_treasury_ledger(ledger, AgentLoopSettlement::PlatformRunsOnly);
     }
-    Ok(Arc::new(EngineExecutionPort(Arc::new(service))))
+    Ok(shared_engine_execution_port(
+        service,
+        &settings.agent_runtime.token_budget,
+    ))
 }
 
 /// Map a runtime [`AgentSpec`] onto the config-shaped [`AgentDefinition`] so both paths
@@ -466,5 +494,105 @@ mod tests {
             1,
             "the scoped call must settle under its run id"
         );
+    }
+    fn looping_engine_paladin() -> Paladin {
+        use paladin_core::base::entity::node::Node;
+        use paladin_core::platform::container::paladin::{MaxLoops, PaladinData};
+
+        Node::new(
+            PaladinData {
+                system_prompt: "system".to_string(),
+                model: "gpt-4".to_string(),
+                max_loops: MaxLoops::Fixed(10),
+                ..Default::default()
+            },
+            None,
+        )
+    }
+
+    /// A derived budget of `max_tokens` over a fixed binding ceiling.
+    fn derived_scope(max_tokens: u32) -> RunScope {
+        use chrono::{TimeZone, Utc};
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        let usd = CurrencyCode::new("USD").expect("USD is valid");
+        let figures = AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(5_000, usd.clone()),
+            ceiling: Cost::new(5_000, usd),
+            window: None,
+            evaluated_at: Utc
+                .with_ymd_and_hms(2026, 10, 6, 12, 0, 0)
+                .single()
+                .expect("valid instant"),
+        };
+        RunScope::default().with_derived_token_budget(DerivedTokenBudget::new(max_tokens, figures))
+    }
+
+    /// G12 (ADR-0052): the shared service built as production builds it never caps an engine
+    /// node. The operator's budget is enabled with a tiny figure, yet a call whose scope carries
+    /// no derived figure runs to `max_loops` (a cut would hand a partial result to a
+    /// Battlefield); the control shows the same installed middleware does cut a scope that
+    /// carries a derived figure, so the zero effect is not a missing installation.
+    #[tokio::test]
+    async fn shared_service_never_caps_an_engine_node() {
+        use paladin_core::platform::container::execution_result::StopReason;
+        use paladin_llm::mock::MockLlmAdapter;
+
+        let operator = TokenBudgetConfig {
+            enabled: true,
+            max_tokens: 1,
+        };
+        let build = |llm: Arc<MockLlmAdapter>| {
+            let service = PaladinExecutionService::new(llm, default_circuit_breaker(), None, None);
+            shared_engine_execution_port(service, &operator)
+        };
+        let scripted = || {
+            Arc::new(
+                MockLlmAdapter::new()
+                    .with_response("chunk")
+                    .with_token_usage(0, 100, 100),
+            )
+        };
+        let paladin = looping_engine_paladin();
+
+        // An engine node: no derived figure on its scope, operator figure enabled at 1 token.
+        let llm = scripted();
+        let port = build(llm.clone());
+        let result = port
+            .execute_scoped(
+                &paladin,
+                "hi",
+                &HeartbeatHandle::new(),
+                &RunScope::default(),
+            )
+            .await
+            .expect("an engine node's call succeeds");
+        assert_eq!(llm.call_count(), 10, "only max_loops ends an engine node");
+        assert!(
+            !matches!(
+                result.stop_reason,
+                StopReason::TokenBudget | StopReason::AllowanceHalted(_)
+            ),
+            "an engine node is never capped: {:?}",
+            result.stop_reason
+        );
+        assert!(
+            !result.output.contains("budget"),
+            "no truncation notice reaches an engine node's output"
+        );
+
+        // Control: the same installed middleware cuts a scope carrying a derived figure.
+        let llm = scripted();
+        let port = build(llm.clone());
+        let result = port
+            .execute_scoped(&paladin, "hi", &HeartbeatHandle::new(), &derived_scope(150))
+            .await
+            .expect("an agent-kind call succeeds");
+        assert_eq!(llm.call_count(), 2);
+        assert!(matches!(result.stop_reason, StopReason::AllowanceHalted(_)));
     }
 }

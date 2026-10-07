@@ -2086,6 +2086,22 @@ mod allowance_warnings {
 struct ReadCountingLedger {
     inner: paladin_storage::treasury::in_memory::InMemoryTreasuryLedger,
     reads: AtomicUsize,
+    /// When set, every `store_now` and `balance` read fails with a backend error (42-09: an
+    /// unreadable ledger at dispatch).
+    fail_reads: std::sync::atomic::AtomicBool,
+}
+
+impl ReadCountingLedger {
+    /// The backend error a failing read returns, once [`Self::fail_reads`] is set.
+    fn read_failure(
+        &self,
+    ) -> Option<paladin_ports::output::treasury_ledger_port::TreasuryLedgerError> {
+        self.fail_reads.load(Ordering::SeqCst).then(|| {
+            paladin_ports::output::treasury_ledger_port::TreasuryLedgerError::Backend {
+                source: "scripted ledger outage".into(),
+            }
+        })
+    }
 }
 
 #[async_trait]
@@ -2134,6 +2150,9 @@ impl paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort for ReadCou
         paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
     > {
         self.reads.fetch_add(1, Ordering::SeqCst);
+        if let Some(error) = self.read_failure() {
+            return Err(error);
+        }
         self.inner.store_now().await
     }
 
@@ -2145,6 +2164,9 @@ impl paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort for ReadCou
         paladin_ports::output::treasury_ledger_port::TreasuryLedgerError,
     > {
         self.reads.fetch_add(1, Ordering::SeqCst);
+        if let Some(error) = self.read_failure() {
+            return Err(error);
+        }
         self.inner.balance(query).await
     }
 }
@@ -2232,4 +2254,495 @@ async fn unattributed_run_gets_no_guard_and_reads_no_ledger() {
         ledger.reads.load(Ordering::SeqCst) > 0,
         "the attributed run's guard reads the ledger at its boundaries"
     );
+}
+
+// --- ALLOW-03, ALLOW-05, Phase 42 D-12, D-13, G8, A8: the agent-kind halt (42-09) ----------
+
+/// The shared run-engine service as the worker's `with_paladin_port` receives it in production:
+/// the `TokenBudget` installed in Treasurer-only mode (G12), so only a scope carrying a derived
+/// figure is ever cut. With the `web-server` feature this IS the production constructor
+/// (`shared_engine_execution_port`); without it, which the facade module's feature gate forces,
+/// a local adapter installs the same middleware over the same service, so the worker's behaviour
+/// is proven on both builds.
+pub(super) fn shared_agent_port(
+    service: crate::application::services::paladin::paladin_execution_service::PaladinExecutionService,
+) -> Arc<dyn PaladinPort> {
+    #[cfg(feature = "web-server")]
+    {
+        crate::infrastructure::web::facade_provisioner::shared_engine_execution_port(
+            service,
+            &crate::config::agent_runtime::TokenBudgetConfig::default(),
+        )
+    }
+    #[cfg(not(feature = "web-server"))]
+    {
+        use crate::application::services::paladin::middleware::limits::TokenBudget;
+        use crate::config::agent_runtime::TokenBudgetConfig;
+        use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
+
+        struct ScopedServicePort(
+            Arc<
+                crate::application::services::paladin::paladin_execution_service::PaladinExecutionService,
+            >,
+        );
+
+        #[async_trait]
+        impl PaladinPort for ScopedServicePort {
+            async fn execute(
+                &self,
+                paladin: &Paladin,
+                input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                self.0.execute(paladin, input).await
+            }
+
+            async fn execute_stream(
+                &self,
+                paladin: &Paladin,
+                input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                self.0.execute_stream(paladin, input).await
+            }
+
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+
+            async fn execute_scoped(
+                &self,
+                paladin: &Paladin,
+                input: &str,
+                _heartbeat: &paladin_core::platform::container::heartbeat::HeartbeatHandle,
+                scope: &paladin_core::platform::container::run_scope::RunScope,
+            ) -> Result<PaladinResult, PaladinError> {
+                self.0.execute_scoped(paladin, input, None, scope).await
+            }
+        }
+
+        let service = service.with_middleware(Arc::new(TokenBudget::new(TokenBudgetConfig {
+            enabled: false,
+            ..TokenBudgetConfig::default()
+        })));
+        Arc::new(ScopedServicePort(Arc::new(service)))
+    }
+}
+
+mod agent_budget {
+    use super::*;
+
+    use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+    use crate::application::services::treasurer::{AllowancePolicy, ScopeAllowance, Treasurer};
+    use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
+    use paladin_core::base::entity::node::Node;
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode, PriceRow, PriceTable};
+    use paladin_core::platform::container::paladin::{MaxLoops, PaladinData};
+    use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+    use paladin_core::platform::container::treasury_ledger::{
+        LedgerScope, SettleRequest, SettlementKey,
+    };
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+
+    /// 10 USD per 1M tokens on the dearest axis: one token is 10_000 nanos, so a lifetime
+    /// ceiling of 1_500_000 nanos derives exactly 150 tokens.
+    const PRICE_PER_MILLION: i64 = 10_000_000_000;
+    const CEILING_NANOS: i64 = 1_500_000;
+
+    /// Resolves every assistant id to a looping `Runnable::Agent` on `model`: with a scripted
+    /// model reporting 100 tokens per response, only a budget or `max_loops` ends it.
+    struct LoopingAgentResolver {
+        model: String,
+    }
+
+    #[async_trait]
+    impl AssistantResolver for LoopingAgentResolver {
+        async fn resolve(
+            &self,
+            assistant_id: &str,
+            version: Option<u32>,
+        ) -> Result<super::super::resolver::ResolvedAssistant, super::super::resolver::ResolveError>
+        {
+            Ok(super::super::resolver::ResolvedAssistant {
+                reference: AssistantRef {
+                    assistant_id: assistant_id.to_string(),
+                    version: version.unwrap_or(1),
+                },
+                runnable: super::super::resolver::Runnable::Agent(Arc::new(Node::new(
+                    PaladinData {
+                        system_prompt: "system".to_string(),
+                        model: self.model.clone(),
+                        max_loops: MaxLoops::Fixed(10),
+                        ..Default::default()
+                    },
+                    Some(assistant_id.to_string()),
+                ))),
+                allowed_roles: vec![],
+                source: paladin_core::platform::container::assistant::AssistantSource::Code,
+            })
+        }
+    }
+
+    fn usd() -> CurrencyCode {
+        CurrencyCode::new("USD").expect("USD is valid")
+    }
+
+    struct Harness {
+        pool: RunWorkerPool<InMemoryWaypointStore>,
+        repository: Arc<dyn RunRepositoryPort>,
+        queue: Arc<dyn RunQueuePort>,
+        ledger: Arc<ReadCountingLedger>,
+        llm: Arc<MockLlmAdapter>,
+        deliveries: Arc<dyn WebhookDeliveryRepositoryPort>,
+        bus: Arc<super::super::events::RunEventBus>,
+    }
+
+    /// A worker over a looping agent on `model`, a real `PaladinExecutionService` over a mock
+    /// reporting 100 tokens per response, the shared-service wrapper, and a Treasurer with a
+    /// lifetime ceiling of `ceiling` nanos for `svc-a` (`None`: no ceiling for anyone) priced
+    /// only for `priced_model`.
+    fn harness(model: &str, priced_model: &str, ceiling: Option<i64>) -> Harness {
+        let ledger = Arc::new(ReadCountingLedger::default());
+        let mut policy = AllowancePolicy::new(usd(), 80);
+        if let Some(cap) = ceiling {
+            policy = policy.with_api_key(
+                "svc-a",
+                ScopeAllowance::new(86_400, i64::MAX).with_lifetime(cap),
+            );
+        }
+        let prices = Arc::new(PriceTable::new(usd()).with_row(
+            priced_model,
+            PriceRow::new(PRICE_PER_MILLION, PRICE_PER_MILLION).unwrap(),
+        ));
+        let ledger_port: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let treasurer = Arc::new(Treasurer::new(policy, ledger_port).with_pricing(prices));
+
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let service = PaladinExecutionService::new(
+            llm.clone(),
+            Arc::new(CircuitBreaker::new(5, 2, Duration::from_secs(30))),
+            None,
+            None,
+        );
+
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let resolver: Arc<dyn AssistantResolver> = Arc::new(LoopingAgentResolver {
+            model: model.to_string(),
+        });
+        let engine = Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone()));
+        let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+            Arc::new(InMemoryWebhookDeliveryRepository::new());
+        let bus = Arc::new(super::super::events::RunEventBus::new());
+        let pool = RunWorkerPool::new(
+            engine,
+            store,
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_paladin_port(shared_agent_port(service))
+        .with_treasurer(treasurer)
+        .with_event_bus(bus.clone())
+        .with_webhook_deliveries(Arc::clone(&deliveries))
+        .with_trace_config(crate::config::trace::TraceConfig {
+            log_sink: false,
+            ..crate::config::trace::TraceConfig::default()
+        });
+        Harness {
+            pool,
+            repository,
+            queue,
+            ledger,
+            llm,
+            deliveries,
+            bus,
+        }
+    }
+
+    /// Insert a queued agent-kind run submitted by `acme` / `svc-a` (or by nobody) subscribed
+    /// to every terminal webhook event, and return its ids with a subscribed event receiver.
+    async fn submit_agent_run(
+        h: &Harness,
+        submitter: bool,
+    ) -> (
+        RunId,
+        tokio::sync::broadcast::Receiver<paladin_core::platform::container::run::RunStreamEvent>,
+    ) {
+        let run_id = RunId::new_v7();
+        let thread_id = ThreadId::new(format!("thread-{run_id}")).unwrap();
+        let mut run = Run::new(
+            run_id.clone(),
+            thread_id.clone(),
+            AssistantRef {
+                assistant_id: "code-agent".to_string(),
+                version: 1,
+            },
+            serde_json::json!({ "input": "hi" }),
+        )
+        .with_webhook(WebhookSpec {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            events: vec![
+                RunEventKind::Completed,
+                RunEventKind::Halted,
+                RunEventKind::Failed,
+            ],
+        });
+        if submitter {
+            run =
+                run.with_submitted_by(RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a"));
+        }
+        h.repository.insert(&run).await.unwrap();
+        h.queue
+            .enqueue(QueuedRun {
+                run_id: run_id.clone(),
+                thread_id: thread_id.clone(),
+                attempt: 1,
+                enqueued_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+        h.bus.bind(thread_id, run_id.clone()).await;
+        let rx = h.bus.subscribe(&run_id).await.expect("bound");
+        (run_id, rx)
+    }
+
+    /// Settle `nanos` for `acme` / `svc-a` -- the allowance spent while a run sat in the queue.
+    async fn spend(h: &Harness, nanos: i64) {
+        h.ledger
+            .settle(SettleRequest::unreserved(
+                LedgerScope::new("acme", "svc-a"),
+                SettlementKey::new(RunId::new_v7(), 1, 1),
+                Cost::new(nanos, usd()),
+                std::collections::BTreeMap::from([("gpt-4".to_string(), nanos)]),
+            ))
+            .await
+            .expect("the settlement is accepted");
+    }
+
+    async fn only_delivery(h: &Harness, run_id: &RunId) -> (RunEventKind, serde_json::Value) {
+        let page = h.deliveries.list_for_run(run_id, 10, None).await.unwrap();
+        assert_eq!(
+            page.items.len(),
+            1,
+            "exactly one delivery: {:?}",
+            page.items
+        );
+        let delivery = &page.items[0];
+        (
+            delivery.event,
+            serde_json::from_str(&delivery.payload).unwrap(),
+        )
+    }
+
+    /// D-12, D-13, G8: a worker-dispatched agent-kind run whose derived budget is crossed is
+    /// recorded `Halted` with the `allowance_exhausted` object, `error` null, the partial output
+    /// kept, and its single terminal event and `halted` webhook both carry the reason.
+    #[tokio::test]
+    async fn agent_kind_run_crossing_its_derived_budget_is_halted_with_the_reason() {
+        let h = harness("gpt-4", "gpt-4", Some(CEILING_NANOS));
+        let (run_id, mut rx) = submit_agent_run(&h, true).await;
+
+        assert!(h.pool.run_once().await.unwrap());
+
+        // 150 tokens derived, 100 per response: the second response crosses it.
+        assert_eq!(h.llm.call_count(), 2, "cut after the crossing response");
+        let run = h.repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Halted);
+        assert!(run.error.is_none(), "a halt is not a failure");
+        let reason = run.halt_reason.clone().expect("the reason is on the row");
+        let HaltReason::AllowanceExhausted(refusal) = &reason else {
+            panic!("expected allowance_exhausted, got {reason:?}");
+        };
+        assert_eq!(refusal.ceiling.nanos(), CEILING_NANOS);
+        let output = run
+            .output
+            .as_ref()
+            .and_then(|v| v.as_str())
+            .expect("partial output kept");
+        assert!(output.contains("chunk"), "partial output kept: {output}");
+        assert!(
+            output.contains("Token budget reached"),
+            "truncation notice kept: {output}"
+        );
+        assert!(
+            run.final_waypoint_id.is_none(),
+            "an agent-kind run has no checkpoint (D-08)"
+        );
+
+        // One terminal wire event, `done` with status halted and the reason (D-12, D-14).
+        let events = drain_events(&mut rx);
+        assert_eq!(terminal_count(&events), 1, "got {events:?}");
+        let terminal = events.last().unwrap();
+        assert_eq!(terminal.kind, RunStreamEventKind::Done);
+        assert_eq!(terminal.payload["status"], "halted");
+        assert_eq!(terminal.payload["halt_reason"], reason.wire_json());
+
+        // The halted webhook carries the reason (D-19).
+        let (event, payload) = only_delivery(&h, &run_id).await;
+        assert_eq!(event, RunEventKind::Halted);
+        assert_eq!(payload["status"], "halted");
+        assert_eq!(payload["halt_reason"], reason.wire_json());
+    }
+
+    /// G8: the allowance was spent while the run was queued. Dispatch re-derives, finds the
+    /// ceiling exhausted and records the halt with the binding figures WITHOUT calling the LLM.
+    /// A derived figure of zero tokens (headroom below one token's price) is the same.
+    #[tokio::test]
+    async fn agent_kind_run_with_zero_budget_at_dispatch_halts_without_calling_the_llm() {
+        // Spent to the ceiling while queued.
+        let h = harness("gpt-4", "gpt-4", Some(CEILING_NANOS));
+        let (run_id, mut rx) = submit_agent_run(&h, true).await;
+        spend(&h, CEILING_NANOS).await;
+
+        assert!(h.pool.run_once().await.unwrap());
+
+        assert_eq!(
+            h.llm.call_count(),
+            0,
+            "no LLM call once the allowance is spent"
+        );
+        let run = h.repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Halted);
+        assert!(run.error.is_none());
+        assert!(
+            run.output.is_none(),
+            "nothing ran, so there is no partial output"
+        );
+        let Some(HaltReason::AllowanceExhausted(refusal)) = run.halt_reason.clone() else {
+            panic!("expected allowance_exhausted, got {:?}", run.halt_reason);
+        };
+        assert_eq!(refusal.ceiling.nanos(), CEILING_NANOS);
+        assert_eq!(
+            refusal.balance.nanos(),
+            CEILING_NANOS,
+            "the binding ceiling's real balance"
+        );
+        let events = drain_events(&mut rx);
+        assert_eq!(terminal_count(&events), 1, "got {events:?}");
+        assert_eq!(events.last().unwrap().payload["status"], "halted");
+        assert_eq!(
+            events.last().unwrap().payload["halt_reason"],
+            run.halt_reason.as_ref().unwrap().wire_json()
+        );
+        let (event, payload) = only_delivery(&h, &run_id).await;
+        assert_eq!(event, RunEventKind::Halted);
+        assert_eq!(payload["halt_reason"], run.halt_reason.unwrap().wire_json());
+
+        // Headroom of 5_000 nanos is half a token at 10_000 nanos per token: derived zero.
+        let h = harness("gpt-4", "gpt-4", Some(CEILING_NANOS));
+        let (run_id, _rx) = submit_agent_run(&h, true).await;
+        spend(&h, CEILING_NANOS - 5_000).await;
+        assert!(h.pool.run_once().await.unwrap());
+        assert_eq!(
+            h.llm.call_count(),
+            0,
+            "a zero derived figure is a refusal, not a run"
+        );
+        let run = h.repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Halted);
+        assert!(matches!(
+            run.halt_reason,
+            Some(HaltReason::AllowanceExhausted(_))
+        ));
+    }
+
+    /// A8, D-03: an unreadable ledger at dispatch fails closed -- `Halted` with
+    /// `ledger_unavailable`, no LLM call, no figures.
+    #[tokio::test]
+    async fn agent_kind_run_with_an_unreadable_ledger_at_dispatch_halts_ledger_unavailable_without_calling_the_llm()
+     {
+        let h = harness("gpt-4", "gpt-4", Some(CEILING_NANOS));
+        let (run_id, mut rx) = submit_agent_run(&h, true).await;
+        h.ledger.fail_reads.store(true, Ordering::SeqCst);
+
+        assert!(h.pool.run_once().await.unwrap());
+
+        assert_eq!(h.llm.call_count(), 0);
+        let run = h.repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Halted);
+        assert!(run.error.is_none());
+        assert_eq!(run.halt_reason, Some(HaltReason::LedgerUnavailable));
+        let events = drain_events(&mut rx);
+        assert_eq!(terminal_count(&events), 1, "got {events:?}");
+        assert_eq!(
+            events.last().unwrap().payload["halt_reason"],
+            HaltReason::LedgerUnavailable.wire_json()
+        );
+        let (event, payload) = only_delivery(&h, &run_id).await;
+        assert_eq!(event, RunEventKind::Halted);
+        assert_eq!(
+            payload["halt_reason"],
+            HaltReason::LedgerUnavailable.wire_json()
+        );
+    }
+
+    /// D-10: a model that lost its price row between admission and dispatch is `Failed` with a
+    /// typed error naming the model -- not a halt, and never a run of unmetered spend.
+    #[tokio::test]
+    async fn agent_kind_run_whose_model_became_unpriced_fails_without_calling_the_llm() {
+        let h = harness("gpt-4", "some-other-model", Some(CEILING_NANOS));
+        let (run_id, mut rx) = submit_agent_run(&h, true).await;
+
+        assert!(h.pool.run_once().await.unwrap());
+
+        assert_eq!(h.llm.call_count(), 0);
+        let run = h.repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Failed);
+        assert!(run.halt_reason.is_none());
+        let error = run.error.as_deref().expect("the typed error is on the row");
+        assert!(error.contains("gpt-4"), "names the model: {error}");
+        assert!(
+            error.contains("treasurer.pricing"),
+            "names the missing row: {error}"
+        );
+        let events = drain_events(&mut rx);
+        assert_eq!(terminal_count(&events), 1, "got {events:?}");
+        assert_eq!(events.last().unwrap().kind, RunStreamEventKind::Error);
+        let (event, _payload) = only_delivery(&h, &run_id).await;
+        assert_eq!(event, RunEventKind::Failed);
+    }
+
+    /// A principal with no configured ceiling, and a run that records no submitter, complete as
+    /// before: no budget, every loop runs, no allowance ledger read is made for the former.
+    #[tokio::test]
+    async fn agent_kind_run_without_a_ceiling_completes_as_before() {
+        // No ceiling for anyone: `evaluate` short-circuits with no ledger read.
+        let h = harness("gpt-4", "gpt-4", None);
+        let (run_id, mut rx) = submit_agent_run(&h, true).await;
+        assert!(h.pool.run_once().await.unwrap());
+        assert_eq!(h.llm.call_count(), 10, "only max_loops ends the run");
+        assert_eq!(
+            h.ledger.reads.load(Ordering::SeqCst),
+            0,
+            "no ledger read without a ceiling"
+        );
+        let run = h.repository.get(&run_id).await.unwrap().unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+        assert!(run.halt_reason.is_none());
+        let events = drain_events(&mut rx);
+        assert_eq!(events.last().unwrap().kind, RunStreamEventKind::Done);
+        assert_eq!(events.last().unwrap().payload["status"], "completed");
+        assert!(events.last().unwrap().payload.get("halt_reason").is_none());
+        let (event, payload) = only_delivery(&h, &run_id).await;
+        assert_eq!(event, RunEventKind::Completed);
+        assert!(payload.get("halt_reason").is_none());
+
+        // A run whose row records no submitter is never derived, even under a ceiling.
+        let h = harness("gpt-4", "gpt-4", Some(CEILING_NANOS));
+        let (run_id, _rx) = submit_agent_run(&h, false).await;
+        assert!(h.pool.run_once().await.unwrap());
+        assert_eq!(h.llm.call_count(), 10);
+        assert_eq!(h.ledger.reads.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            h.repository.get(&run_id).await.unwrap().unwrap().status,
+            RunStatus::Completed
+        );
+    }
 }

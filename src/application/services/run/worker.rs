@@ -40,8 +40,9 @@ use paladin_battalion::engine::shutdown::ShutdownCoordinator;
 use paladin_battalion::engine::{
     EngineError, HaltCause, NodeSpec, RunOutcome, TraceDispatcher, WarEngine, WarGraph,
 };
-use paladin_core::platform::container::allowance::HaltReason;
+use paladin_core::platform::container::allowance::{DerivedTokenBudget, HaltReason};
 use paladin_core::platform::container::battlefield::{FieldName, StateDelta};
+use paladin_core::platform::container::execution_result::StopReason;
 use paladin_core::platform::container::heartbeat::HeartbeatHandle;
 use paladin_core::platform::container::herald::Herald;
 use paladin_core::platform::container::paladin::Paladin;
@@ -55,6 +56,7 @@ use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent};
 use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
 use paladin_core::platform::container::waypoint::{NodeId, NodeOutcomeKind, Waypoint, WaypointId};
 use paladin_core::platform::container::webhook::{WebhookDelivery, WebhookDeliveryId};
+use paladin_ports::input::allowance_admission_port::AdmissionError;
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::run_queue_port::{LeaseToken, LeasedRun, RunQueuePort};
@@ -396,6 +398,23 @@ enum OutcomeAction {
     /// finished, it is a valid restart point another worker should pick
     /// straight back up.
     LeaveRunningAndRequeue,
+}
+
+/// What dispatch-time budget derivation decided for a worker-dispatched agent-kind run
+/// (Phase 42, D-12/D-13, G8, A8, ADR-0057 group e).
+#[derive(Debug)]
+enum DispatchBudget {
+    /// No budget applies: no Treasurer is wired, the run records no submitter, the principal has
+    /// no configured ceiling, or the model is free. The run is bounded only by its own limits.
+    Unbounded,
+    /// The run executes under this budget, carried on its `RunScope`.
+    Derived(DerivedTokenBudget),
+    /// The allowance cannot cover a call: the run is recorded `Halted` with this reason and the
+    /// LLM is never called.
+    Halt(HaltReason),
+    /// The model lost its `treasurer.pricing` row between admission and dispatch: the run is
+    /// recorded `Failed` with a typed error naming the model and the LLM is never called.
+    Unpriced(String),
 }
 
 /// Map a terminal/suspension [`RunStatus`] to the [`RunEventKind`] a
@@ -1467,8 +1486,18 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     ///
     /// The `RunScope` (run id + ledger scope) and the `execute_scoped`
     /// arguments are unchanged from 39-07/40-04 (D-00g): nothing here changes
-    /// what the Treasurer ledger settles for an agent run. The SSE `done`
-    /// status for a cancelled or halted agent run is out of scope (PLAT-09).
+    /// what the Treasurer ledger settles for an agent run.
+    ///
+    /// **Phase 42 (D-12, D-13, G8, A8): the derived budget.** When the pool has a Treasurer and
+    /// the run row records a submitter, the budget is re-derived HERE, at dispatch, from the
+    /// ledger (never from a figure persisted at submit time) and added to the `RunScope`, so the
+    /// shared service's `TokenBudget` -- installed in Treasurer-only mode, G12 -- cuts the run
+    /// when it crosses. A crossed budget is recorded `Halted` with the `allowance_exhausted`
+    /// object, `error: null` and the partial output kept, and the one terminal event carries the
+    /// reason. A zero or exhausted figure at dispatch records the same halt, and an unreadable
+    /// ledger records `ledger_unavailable`, both without calling the LLM; a model that lost its
+    /// price row records `Failed` naming the model, also without calling the LLM. An agent-kind
+    /// run writes no Waypoint (D-08), so a halted one is resumed by resubmission.
     async fn run_agent(
         &self,
         leased: &LeasedRun,
@@ -1529,10 +1558,54 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         {
             self.emit_allowance_warnings(run, emitter).await;
         }
+        // Phase 42 (D-12, D-13, G8, A8): re-derive the budget from the ledger NOW, at dispatch,
+        // never from a figure persisted at submit time -- the allowance may have been spent while
+        // the run sat in the queue. The three no-call outcomes (a zero or exhausted figure, an
+        // unreadable ledger, a model that lost its price row) are decided before the LLM is
+        // reached, and each is recorded through the same one-terminal-event path as a call.
+        let derived_budget = self.derive_dispatch_budget(run, &paladin.node.model).await;
         dispatcher.emit(TraceEvent::RunStarted {
             run_id: Some(run.run_id.clone()),
             graph_fingerprint: AGENT_RUN_FINGERPRINT.to_string(),
         });
+        let derived_budget = match derived_budget {
+            DispatchBudget::Halt(reason) => {
+                dispatcher.emit(TraceEvent::RunFinished {
+                    status: RunFinishStatus::Halted,
+                    total_supersteps: 0,
+                    usage: dispatcher.total_usage(),
+                    cost: dispatcher.total_cost(),
+                    duration_ms: 0,
+                    halt_reason: Some(reason.clone()),
+                    trace_dropped_total: 0,
+                });
+                let persisted = self.persist_agent_halt(leased, run, None, reason).await;
+                self.unbind_after_drain(run).await;
+                return persisted;
+            }
+            DispatchBudget::Unpriced(model) => {
+                dispatcher.emit(TraceEvent::RunFinished {
+                    status: RunFinishStatus::Failed,
+                    total_supersteps: 0,
+                    usage: dispatcher.total_usage(),
+                    cost: dispatcher.total_cost(),
+                    duration_ms: 0,
+                    halt_reason: None,
+                    trace_dropped_total: 0,
+                });
+                let persisted = self
+                    .persist_failure(
+                        leased,
+                        run,
+                        format!("model {model} has no treasurer.pricing row"),
+                    )
+                    .await;
+                self.unbind_after_drain(run).await;
+                return persisted;
+            }
+            DispatchBudget::Derived(budget) => Some(budget),
+            DispatchBudget::Unbounded => None,
+        };
         dispatcher.emit(TraceEvent::NodeStarted {
             superstep: 0,
             node_id: node_id.clone(),
@@ -1552,9 +1625,15 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // row's recorded submitter as the ledger scope, so that writer
         // settles under the submitting principal's tenant and API key id
         // (the sentinel only when the row records no principal, D-10).
-        let run_scope = RunScope::default()
+        let mut run_scope = RunScope::default()
             .with_run_id(run.run_id.clone())
             .with_ledger_scope(LedgerScope::from_attribution(run.submitted_by.as_ref()));
+        // The derived figure rides the scope to the ONE `TokenBudget` on the shared service
+        // (Treasurer-only mode, G12): only a scope carrying it is ever cut, so an engine node
+        // sharing that service never is.
+        if let Some(budget) = derived_budget {
+            run_scope = run_scope.with_derived_token_budget(budget);
+        }
         let call = with_run_trace_scope(
             &emitter,
             paladin_port.execute_scoped(
@@ -1579,6 +1658,26 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     cost: result.cost.clone(),
                     cache_hit: false,
                 });
+                // D-12: a crossed derived budget is a halt, not a completion. The partial output
+                // (with the loop's truncation notice) is kept on the row, `error` stays null, and
+                // the one terminal event carries the reason (SSE `done`, the `halted` webhook).
+                if let StopReason::AllowanceHalted(refusal) = &result.stop_reason {
+                    let reason = HaltReason::AllowanceExhausted(refusal.clone());
+                    dispatcher.emit(TraceEvent::RunFinished {
+                        status: RunFinishStatus::Halted,
+                        total_supersteps: 0,
+                        usage: dispatcher.total_usage(),
+                        cost: dispatcher.total_cost(),
+                        duration_ms,
+                        halt_reason: Some(reason.clone()),
+                        trace_dropped_total: 0,
+                    });
+                    let persisted = self
+                        .persist_agent_halt(leased, run, Some(result.output), reason)
+                        .await;
+                    self.unbind_after_drain(run).await;
+                    return persisted;
+                }
                 dispatcher.emit(TraceEvent::RunFinished {
                     status: RunFinishStatus::Completed,
                     total_supersteps: 0,
@@ -1650,11 +1749,105 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
 
         // Best-effort drain window, then unbind -- captured-then-returned so
         // a repository error never leaves the channel bound (T-45-11).
+        self.unbind_after_drain(run).await;
+        persisted
+    }
+
+    /// Best-effort drain window, then unbind the run's event channel (T-45-11). Shared by every
+    /// exit of [`Self::run_agent`] that has bound the bus, so a repository error never leaves
+    /// the channel bound.
+    async fn unbind_after_drain(&self, run: &Run) {
         if let Some(bus) = &self.event_bus {
             tokio::time::sleep(TRACE_DRAIN_GRACE_PERIOD).await;
             bus.unbind(&run.thread_id).await;
         }
-        persisted
+    }
+
+    /// Re-derive `run`'s token budget at dispatch (Phase 42, D-12/D-13, G8, A8).
+    ///
+    /// Acts only when the pool has a Treasurer AND the run row records a submitter; otherwise
+    /// the run is [`DispatchBudget::Unbounded`] with no ledger read. The derivation is
+    /// [`Treasurer::derive_budget`], read through the same evaluation admission uses, so it can
+    /// never disagree with admission about ceiling order or the exhausted predicate:
+    ///
+    /// - `Ok(Some(budget))` runs the call under `budget`; `Ok(None)` (no ceiling, or a free
+    ///   model) runs it unbounded.
+    /// - A refusal (the allowance was spent while the run was queued, or the derived figure is
+    ///   zero tokens) halts with the binding ceiling's figures.
+    /// - A backend error, or any error this code does not name (`AdmissionError` is
+    ///   `#[non_exhaustive]`), halts `ledger_unavailable` -- fail closed (D-03). Logged at
+    ///   `error` with the run id only, never a key value.
+    /// - `ModelUnpriced` records `Failed` naming the model: a deployment incoherence (the model
+    ///   lost its price row since admission), not quota exhaustion.
+    async fn derive_dispatch_budget(&self, run: &Run, model: &str) -> DispatchBudget {
+        let (Some(treasurer), Some(attribution)) = (&self.treasurer, run.submitted_by.as_ref())
+        else {
+            return DispatchBudget::Unbounded;
+        };
+        match treasurer.derive_budget(attribution, model).await {
+            Ok(Some(budget)) => DispatchBudget::Derived(budget),
+            Ok(None) => DispatchBudget::Unbounded,
+            Err(AdmissionError::Refused(refusal)) => {
+                DispatchBudget::Halt(HaltReason::AllowanceExhausted(refusal))
+            }
+            Err(AdmissionError::ModelUnpriced { model }) => DispatchBudget::Unpriced(model),
+            Err(AdmissionError::Backend { message }) => {
+                log::error!(
+                    "run worker: allowance derivation failed at dispatch for run {}: {message}; \
+                     halting fail-closed",
+                    run.run_id
+                );
+                DispatchBudget::Halt(HaltReason::LedgerUnavailable)
+            }
+            Err(other) => {
+                log::error!(
+                    "run worker: unrecognised allowance derivation error at dispatch for run {}: \
+                     {other}; halting fail-closed",
+                    run.run_id
+                );
+                DispatchBudget::Halt(HaltReason::LedgerUnavailable)
+            }
+        }
+    }
+
+    /// Record an agent-kind run's halt: the outcome (the typed `reason`, the kept partial
+    /// `output` or `None` for a halt before any call, `error: null`, no Waypoint) is written
+    /// BEFORE the status flips `Running -> Halted`, so no reader -- the degraded SSE poller
+    /// included -- can observe `halted` without the reason (G14, the same order
+    /// `run_once`'s halting transition uses). Then ack, and strictly after both, the subscribed
+    /// `halted` webhook delivery carrying the reason (D-19; an enqueue error is logged and never
+    /// changes the run's status, P2). An agent-kind run writes no Waypoint (D-08), so there is
+    /// no `final_waypoint_id`; it is resumed by resubmission.
+    async fn persist_agent_halt(
+        &self,
+        leased: &LeasedRun,
+        run: &Run,
+        output: Option<String>,
+        reason: HaltReason,
+    ) -> Result<bool, WorkerError> {
+        self.repository
+            .record_outcome(
+                &run.run_id,
+                RunOutcomeRecord {
+                    error: None,
+                    output: output.map(serde_json::Value::String),
+                    final_waypoint_id: None,
+                    halt_reason: Some(reason.clone()),
+                },
+            )
+            .await?;
+        self.repository
+            .update_status(
+                &run.run_id,
+                RunStatus::Running,
+                RunStatus::Halted,
+                chrono::Utc::now(),
+            )
+            .await?;
+        self.queue.ack(&leased.token).await?;
+        self.enqueue_webhook_delivery(run, RunStatus::Halted, None, Some(&reason))
+            .await;
+        Ok(true)
     }
 
     /// Record an `EngineError` returned outside normal `RunOutcome`

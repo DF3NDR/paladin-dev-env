@@ -1436,6 +1436,11 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 // `cancelled` without them. `record_outcome` has no status guard on any adapter
                 // (the contract clause `record_outcome_before_status_flip_is_accepted`), so the
                 // reversed order is legal. Every other transition keeps its original order.
+                // Accepted window (Phase 42 review IN-8): if `update_status` then fails, the
+                // message is redelivered, but until the next attempt rewrites the outcome a
+                // still-`Running` row reports its `halt_reason` and `final_waypoint_id`. The
+                // window is narrow and self-healing, and the alternative order would let a
+                // reader see `halted` or `cancelled` without them, which is the worse outcome.
                 let halt_reason = record.halt_reason.clone();
                 if matches!(to, RunStatus::Halted | RunStatus::Cancelled) {
                     self.repository.record_outcome(&run.run_id, record).await?;

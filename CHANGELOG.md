@@ -57,6 +57,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public API. The fail-closed boundary log line now also names the scope kinds that could not be
   evaluated.
 
+  **A halt rung for the operator notice path (plan 42-10).** Migration
+  `014_add_treasury_notice_kind.sql` (both backends) adds `treasury_notices.notice_kind`
+  (`'warning'` or `'halt'`, default `'warning'`, so every legacy row stays a warning) and rebuilds
+  the once-per-window index with the kind appended: a warning and a halt notice for one scope,
+  limit, window and ceiling are both recordable, a second halt notice for that identity is
+  `AlreadyRecorded`, and raising the ceiling re-arms both. `TreasuryNoticePort::notices_for_run`
+  still returns warnings only. `NoticeKind` is new, and `NoticeRecord` and `AllowanceNotice` gain a
+  `kind` field (a struct literal must add `kind: NoticeKind::Warning`). `RunEventKind` gains
+  `AllowanceHalted` (`allowance_halted`), an operator-only event: the durable webhook path stores
+  and reads it back, signs it with the operator notice secret exactly like `allowance_warning`,
+  and shapes its payload with the same twelve keys; callers still cannot subscribe to it. Nothing
+  enqueues the event yet. See `MIGRATION.md` §9.2 and §9.4.
+
 - **A per-run token budget derived from the remaining allowance (ALLOW-05; Phase 42 plan 42-07,
   ADR-0057).** The `Treasurer` can now turn what is left of a principal's tightest allowance
   ceiling into a token count for the agent loop: `floor(remaining * 1_000_000 / dearest price)`,

@@ -67,8 +67,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `kind` field (a struct literal must add `kind: NoticeKind::Warning`). `RunEventKind` gains
   `AllowanceHalted` (`allowance_halted`), an operator-only event: the durable webhook path stores
   and reads it back, signs it with the operator notice secret exactly like `allowance_warning`,
-  and shapes its payload with the same twelve keys; callers still cannot subscribe to it. Nothing
-  enqueues the event yet. See `MIGRATION.md` §9.2 and §9.4.
+  and shapes its payload with the same twelve keys; callers still cannot subscribe to it. See
+  `MIGRATION.md` §9.2 and §9.4.
+
+  **Mid-run allowance notices (plan 42-11).** The boundary guard now tells the operator about
+  allowance pressure as it happens. A run that crosses `warn_at` while running warns at its first
+  superstep boundary past the threshold (one `allowance_warning` trace event on that run's own
+  stream and one operator `allowance_warning` delivery, once per window), and a spend halt sends
+  the operator one `allowance_halted` delivery per scope, limit, window and ceiling, with the
+  warning's twelve keys and `event` set to `allowance_halted`. A `ledger_unavailable` halt
+  notifies nobody. Claims go through the Phase 41 notice store and webhook queue, never a second
+  channel, and never change the guard's decision. Enable on every replica before relying on it:
+  an older build cannot parse `allowance_halted`. No public Rust item is added. See `MIGRATION.md`
+  §9.6.
 
 - **A per-run token budget derived from the remaining allowance (ALLOW-05; Phase 42 plan 42-07,
   ADR-0057).** The `Treasurer` can now turn what is left of a principal's tightest allowance

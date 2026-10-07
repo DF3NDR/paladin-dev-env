@@ -495,11 +495,26 @@ worse than the gap itself.
 When the operator configures `treasurer.allowance.webhook` (see the
 [configuration guide](../getting-started/configuration.md#treasurer-allowances)), the Treasurer
 posts one **operator notice** the first time a balance reaches `warn_at` percent of an allowance
-ceiling, before callers start receiving `429 allowance_exhausted`. It rides the same durable queue
+ceiling, before callers start receiving `429 allowance_exhausted`, and a second kind when a run
+is halted because its allowance ran out mid-run. There are two events, `allowance_warning` and
+`allowance_halted`, described below. Both ride the same durable queue
 as the run webhooks above -- the same no-redirect client, SSRF guard (at boot and at send time),
-retry schedule and dead-lettering -- but it is the **operator's**, not the caller's: it never
-appears in `GET /v1/runs/{run_id}/webhook-deliveries` for the admitting run, and a caller cannot
-subscribe a run or schedule `webhook.events` to `allowance_warning` (that answers `400`).
+retry schedule and dead-lettering -- but they are the **operator's**, not the caller's: neither
+appears in `GET /v1/runs/{run_id}/webhook-deliveries` for the run it concerns, and a caller cannot
+subscribe a run or schedule `webhook.events` to `allowance_warning` or `allowance_halted` (that
+answers `400`).
+
+**When each fires.** `allowance_warning` fires once per scope, limit, window and ceiling, at the
+first moment the balance is at or past `warn_at` percent: at admission when the run is admitted
+already past the threshold, or **mid-run**, at the run's first superstep boundary past the
+threshold when it crossed while running. A mid-run warning also appears once on that run's own
+trace stream as an `allowance_warning` event when run traces are enabled, exactly as an
+admission warning does.
+`allowance_halted` fires once per scope, limit, window and ceiling when a run is halted at a
+superstep boundary because that ceiling is exhausted, so twenty runs halting in one window send
+the operator one `allowance_halted`, not twenty. A halt caused by an unreadable ledger
+(`halt_reason.reason` of `ledger_unavailable`) sends the operator **no** notice: nothing was
+measured, so there is no balance to report, and the failure is in the server log at `error`.
 
 **Payload** (exactly these twelve keys; no run input, no API key value and no signing secret ever
 appears):
@@ -521,21 +536,26 @@ appears):
 }
 ```
 
+An `allowance_halted` notice carries the **same twelve keys**, with `event` set to
+`allowance_halted`, `run_id` the run that was halted, `balance` and `ceiling` the exhausted
+figures and `warn_at` the ceiling's configured threshold; it has no thirteenth key.
+
 `scope` is `api_key` or `tenant`; `kind` is `window` or `lifetime`; `balance` and `ceiling` are
 display strings; `window_start` and `window_end` are RFC 3339 and `null` for a lifetime ceiling.
 `run_id` is the run whose admission won the notice, or `null` on the HTTP agent routes (no run row
 exists there). `api_key_id` is the API key's configured **name**, never its value, and is `null`
 for a tenant-scope notice. `timestamp` is the ledger store's clock when the notice was recorded.
 
-**Headers and signature.** The request carries `X-Paladin-Event: allowance_warning` and
-`X-Paladin-Delivery: <delivery id>`. If a `secret` is configured it is signed exactly like a run
+**Headers and signature.** The request carries `X-Paladin-Event: allowance_warning` (or
+`allowance_halted`) and `X-Paladin-Delivery: <delivery id>`. If a `secret` is configured it is signed exactly like a run
 webhook -- `X-Paladin-Signature: sha256=<hex>`, HMAC-SHA256 over the raw request body bytes -- with
 `treasurer.allowance.webhook.secret` (or `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`). Verify it over
 the raw bytes you received, as above. Without a secret the body is signed with the empty key.
 
-**Delivery semantics.** At most one notice is recorded per scope, limit kind, window and ceiling
-(raising a ceiling re-arms it), so at most one delivery is enqueued for each; the delivery itself is
-at-least-once. Omitting `treasurer.allowance.webhook` disables only this leg -- the durable notice
+**Delivery semantics.** At most one notice of each kind is recorded per scope, limit kind, window
+and ceiling (raising a ceiling re-arms it), so at most one delivery is enqueued for each; the
+delivery itself is at-least-once. A replica running an older build cannot parse the
+`allowance_halted` event, so enable this on every replica before relying on it. Omitting `treasurer.allowance.webhook` disables only this leg -- the durable notice
 row, the trace event and the herald allowance line still occur. If the operator notice cannot be
 enqueued the failure is logged and not retried, and the run is unaffected. A private or loopback
 target needs `webhooks.allow_private: true`; the cloud metadata address is always rejected, and
@@ -653,6 +673,10 @@ The body is the standard error envelope with the dedicated code `allowance_exhau
   }
 }
 ```
+
+An `allowance_halted` notice carries the **same twelve keys**, with `event` set to
+`allowance_halted`, `run_id` the run that was halted, `balance` and `ceiling` the exhausted
+figures and `warn_at` the ceiling's configured threshold; it has no thirteenth key.
 
 `scope` is `api_key` or `tenant`; `kind` is `window` or `lifetime`; `balance` and `ceiling` are
 display strings; `window_start`/`window_end` are RFC 3339 and `null` for a lifetime ceiling.

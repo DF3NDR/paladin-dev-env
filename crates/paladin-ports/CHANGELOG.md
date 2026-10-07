@@ -9,6 +9,12 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 42 (mid-run halt and terminal status, ALLOW-03, ALLOW-05, PLAT-09; ADR-0057): the
+  `SpendGuard` output port with `SpendDecision` and `NeverHalts`; the defaulted
+  `AllowanceAdmissionPort::admit_for_model` with `AdmissionError::ModelUnpriced`;
+  `RunSubmissionError::ModelUnpriced`; `RunOutcomeRecord.halt_reason`; the notice kind carried
+  through `TreasuryNoticePort` (see `MIGRATION.md` §9.2).
+
 - Phase 41 (allowance admission, ALLOW-01/02/04): `AllowanceAdmissionPort` and `AdmissionError`
   (input), `TreasuryNoticePort` (output), and the defaulted `TreasuryLedgerPort::balance`
   (`BalanceQuery`).

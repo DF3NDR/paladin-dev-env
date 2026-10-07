@@ -9,6 +9,13 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 42 (halt line, ALLOW-03; ADR-0057 D-19): the markdown, JSON and table heralds each render
+  one halt line beside the allowance line from `ExecutionMetadata::halt_reason_display()`, for
+  example `⛔ halted: allowance exhausted — 25.0000 of 25.0000 USD (api_key, window resets ...)` or
+  `⛔ halted: allowance could not be evaluated (ledger unavailable)`; the JSON herald adds one
+  `halt_reason` key. The line names the scope kind, figures and window end, never a tenant, key
+  name or key value, and a run without a halt reason renders byte-identically.
+
 - Phase 41 (allowance warnings, ALLOW-04): the markdown, JSON and table heralds each render one
   `allowance:` line (for example `⚠ allowance: 82% of 25.0000 USD (api_key, window resets ...)`) from
   `ExecutionMetadata::allowance_warning_display()`; a run without a warning renders byte-identically.

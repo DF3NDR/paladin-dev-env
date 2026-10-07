@@ -24,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public surface: `SpendGuard`, `SpendDecision`, `NeverHalts` (ports), `HaltReason` and
   `AllowanceRefusal::details_json` (core), `HaltCause` and `WarEngine::with_spend_guard`
   (battalion), `RunWorkerPool::with_treasurer`, `Treasurer::spend_guard` and `TreasurerSpendGuard`
-  (facade); see `MIGRATION.md` §9.2. Later Phase 42 plans extend this entry.
+  (facade); see `MIGRATION.md` §9.2. The paragraphs that follow are the rest of the Phase 42
+  entry, one per plan; the three known windows it leaves open are under *Known limitations*.
 
   **Persisted halt reason (plan 42-03).** Migration `013_add_run_halt_reason.sql` (both
   backends) adds one nullable `runs.halt_reason` column (`TEXT` on SQLite, `JSONB` on PostgreSQL;
@@ -80,6 +81,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   channel, and never change the guard's decision. Enable on every replica before relying on it:
   an older build cannot parse `allowance_halted`. No public Rust item is added. See `MIGRATION.md`
   §9.6.
+
+  **The halt reason in the heralds, and a vocabulary guard (plan 42-12).** A run the Treasurer
+  halted now renders one halt line in the markdown, JSON and table heralds, beside the allowance
+  line: `⛔ halted: allowance exhausted — 25.0000 of 25.0000 USD (api_key, window resets
+  2026-10-06T00:00:00Z)` for a window ceiling, `(tenant, lifetime cap)` for a lifetime one, and
+  `⛔ halted: allowance could not be evaluated (ledger unavailable)` for a ledger outage. The line
+  names the scope kind, the figures and the window end, never a tenant id, a key name or a key
+  value; a run without a halt reason renders exactly as before. New public surface:
+  `HaltReason::herald_line`, `HALT_REASON_METADATA_KEY`, `ExecutionMetadata::with_halt_reason` and
+  `ExecutionMetadata::halt_reason_display` (core); the engine-path herald sink folds the reason in
+  from the run's own `RunFinished`. `tests/treasurer_vocabulary_guard.rs` keeps `Treasurer` a
+  framework-only word (ALLOW-05, ADR-0050): it fails on the word under `examples/`, `benches/`
+  or any fixture tree, and on the downstream fixture term outside its guardrail-documenting files,
+  and it proves it can fail by scanning a planted temporary tree first. See `MIGRATION.md` §9.2.
 
 - **A per-run token budget derived from the remaining allowance (ALLOW-05; Phase 42 plan 42-07,
   ADR-0057).** The `Treasurer` can now turn what is left of a principal's tightest allowance
@@ -558,6 +573,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `MIGRATION.md` §9.6).
 
 ### Known limitations
+
+- **Phase 42 allowance halts are bounded, not exact (ALLOW-03, ALLOW-05; `WINDOWS.md` rows 65-67,
+  ADR-0057).** Three limits are accepted and recorded. (1) The mid-run boundary check is a
+  check-only read with no reservation, so runs admitted in the same instant can all start and each
+  halts at its first boundary after the allowance is exhausted: overshoot is at most one
+  superstep's spend per run, and a per-superstep reservation hold is the deferred mitigation.
+  (2) A true streamed `execute/stream` call is one provider call and is not cut mid-flight: its
+  overshoot is that one call, and its terminal `done` carries an informational `halt_reason` only
+  when the final usage crossed the derived figure, so it is not byte-identical to a pre-Phase-42
+  `done` in every case. (3) A graph Paladin node on a model with no `treasurer.pricing` row settles
+  nothing, so no allowance can bound it; price every model a metered principal can reach.
 
 - **Tracing overhead still exceeds the ≤3% bar after the Phase 45 fixes (OBS-05).** Re-measured
   on the maintainer's machine on 2026-09-30 with the `paladin::trace` target enabled:

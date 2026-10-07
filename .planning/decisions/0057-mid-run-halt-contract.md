@@ -455,36 +455,64 @@ Owning plans are named; the files are from 42-PATTERNS.md's classification table
 
 ## Code Conformance
 
-must change
+conforms
 
-This ADR is written first, before any Phase 42 code exists, so every decision above is to be built by plans 42-02
-through 42-12 and none is yet true of the tree. The table names the test that holds each decision once it lands;
-plan 42-12's closeout re-reads this section against the tree and flips it to conforms.
+Re-read against the tree at the close of Phase 42 (plan 42-12): every decision above is built, and each
+test named below was found in the tree by `grep` (the first line is the file that holds it). The section was
+written as `must change` by plan 42-01, before any Phase 42 code existed, and flipped by this closeout.
 
-- **D-01, D-02, D-03, D-04:** engine `spend_guard_tests` and `engine_spend_halt_tracer` (halt at boundary N with no
+- **D-01, D-02, D-03, D-04:** the engine's `spend_guard_tests` module (`crates/paladin-battalion/src/engine/mod.rs`),
+  `engine_spend_halt_tracer` (`src/application/services/run/http_surface_tests.rs`: halt at boundary N with no
   node of superstep N dispatched, and no halt without a ceiling),
-  `guard_halts_at_exactly_the_ceiling_and_continues_one_nano_below`,
-  `unattributed_run_gets_no_guard_and_reads_no_ledger`, `ledger_unavailable_halt_resumes_after_recovery`.
-- **G11:** `guard_memoises_its_first_halt`, `child_battalion_halt_on_spend_halts_the_parent`.
-- **D-05, G1, G4, D-15, G10:** the worker's `map_outcome` enumeration rows (one `OutcomeAction` per cause), the
-  `map_trace_event` enumeration rows (`RunFinished { Cancelled }` maps to `done`/`"cancelled"`), the `run_trace`
-  contract clauses (a pre-phase JSON row still reads back, a round trip keeps `halt_reason`), and
-  `every_halt_cause_maps_to_one_status_on_every_leg`.
+  `guard_halts_at_exactly_the_ceiling_and_continues_one_nano_below`
+  (`src/application/services/treasurer/tests.rs`), `unattributed_run_gets_no_guard_and_reads_no_ledger`
+  (`src/application/services/run/worker_tests.rs`), `ledger_unavailable_halt_resumes_after_recovery`
+  (`src/application/services/run/http_surface_tests.rs`).
+- **G11:** `guard_memoises_its_first_halt` (`src/application/services/treasurer/tests.rs`) and
+  `child_battalion_halt_on_spend_halts_the_parent` (`crates/paladin-battalion/src/engine/superstep.rs`).
+- **D-05, G1, G4, D-15, G10:** the worker's `map_outcome_*` enumeration rows, one per cause
+  (`map_outcome_spend_halt_records_the_reason`, `map_outcome_spend_halt_ignores_a_cancel_flag`,
+  `map_outcome_cancel_requested_cause_transitions_to_cancelled`, ... in `src/application/services/run/worker.rs`);
+  the `map_trace_event` rows (`map_trace_event_renders_the_halt_reason_on_done`,
+  `cancelled_run_finished_maps_to_done_cancelled_without_a_reason` in `src/application/services/run/events.rs`);
+  the `run_trace` contract clauses `run_finished_halt_reason_round_trips` and
+  `legacy_run_finished_row_reads_back_without_a_halt_reason`
+  (`crates/paladin-storage/src/run_trace/contract_tests.rs`, run on all three adapters); and
+  `every_halt_cause_maps_to_one_status_on_every_leg` (`src/application/services/run/stream_tests.rs`).
 - **D-06, G6, G7, G14:** the run-store contract clauses `halt_reason_round_trips_on_record_outcome`,
-  `legacy_row_reads_back_without_a_halt_reason` and `record_outcome_before_status_flip_is_accepted` on all three
-  adapters.
-- **D-07, D-08, G13:** `halted_run_resumes_by_fork_after_window_reset`, and the agent-kind WINDOWS.md row.
-- **D-09 through D-12, G2, G8, G12, G16, G17:** `derived_budget_composes_with_the_commissary_rationed_rag_context`,
-  `agent_execute_halts_on_the_derived_budget`, `agent_kind_run_halts_on_the_derived_budget`,
-  `execute_stream_buffered_fallback_done_carries_the_halt_reason`, the unit tests of `derive_max_tokens` and
-  `dearest_price_per_million`, and `stop_reason_labels_are_stable`.
-- **D-17, D-18, G5:** `mid_run_warn_and_halt_notices_reach_the_operator_once`,
-  `warning_and_halt_notices_for_one_identity_are_both_recorded`, `notices_for_run_returns_warning_rows_only`,
-  `allowance_halted_operator_row_round_trips`.
-- **ALLOW-05 vocabulary:** `tests/treasurer_vocabulary_guard.rs`, including its planted-tree failing case.
+  `legacy_row_reads_back_without_a_halt_reason` and `record_outcome_before_status_flip_is_accepted`
+  (`crates/paladin-storage/src/run/contract_tests.rs`, on all three adapters).
+- **D-07, D-08, G13:** `halted_run_resumes_by_fork_after_window_reset`
+  (`src/application/services/run/http_surface_tests.rs`), and the agent-kind row of `.planning/WINDOWS.md`
+  (row 64).
+- **D-09 through D-12, G2, G8, G12, G16, G17:**
+  `derived_budget_composes_with_the_commissary_rationed_rag_context`
+  (`src/application/services/paladin/paladin_execution_service.rs`), `agent_execute_halts_on_the_derived_budget`
+  (`src/infrastructure/web/agent_host.rs`), `agent_kind_run_halts_on_the_derived_budget`
+  (`src/application/services/run/http_surface_tests.rs`),
+  `execute_stream_buffered_fallback_done_carries_the_halt_reason` and `stop_reason_labels_are_stable`
+  (`crates/paladin-web/src/agent_controller.rs`), and the unit tests of `derive_max_tokens` and
+  `dearest_price_per_million` (`src/application/services/treasurer/derive.rs`). The option-b clause of item 12
+  (a true stream's `done` carries an informational `halt_reason` only when its terminal usage crossed the
+  derived figure) is held by `execute_stream_true_stream_done_is_byte_identical_without_a_crossing` and
+  `execute_stream_true_stream_done_carries_halt_reason_when_usage_crossed` in the same file.
+- **D-17, D-18, G5:** `mid_run_warn_and_halt_notices_reach_the_operator_once`
+  (`src/application/services/run/http_surface_tests.rs`),
+  `warning_and_halt_notices_for_one_identity_are_both_recorded` and `notices_for_run_returns_warning_rows_only`
+  (`crates/paladin-storage/src/treasury/notice_contract_tests.rs`, on all three adapters) and
+  `allowance_halted_operator_row_round_trips` (`crates/paladin-storage/src/webhook/contract_tests.rs`).
+- **D-19 (the herald line):** `halt_reason_herald_line_for_a_window_ceiling`,
+  `halt_reason_herald_line_for_a_lifetime_ceiling`, `halt_reason_herald_line_for_a_ledger_outage` and
+  `halt_reason_herald_line_names_no_tenant_or_key` (`crates/paladin-core/src/platform/container/allowance.rs`),
+  `herald_sink_folds_a_halt_reason_into_one_line` (`src/infrastructure/telemetry/herald_sink.rs`), and one
+  present-and-absent test per herald in `crates/paladin-herald/src/`.
+- **ALLOW-05 vocabulary:** `tests/treasurer_vocabulary_guard.rs`: `treasurer_is_a_framework_only_word` over the
+  tree, with the planted-tree control `scanner_reports_a_planted_downstream_use` and the clean-tree control
+  `scanner_accepts_a_clean_tree`.
 
 The accepted over-admission race (D-01) and the accepted whole-call overshoot of a true streamed call are
-deliberately covered by WINDOWS.md rows (plan 42-12) and not by a prevention test.
+deliberately covered by `.planning/WINDOWS.md` rows (65 and 66) and not by a prevention test; the unpriced
+engine node (G15) is row 67.
 
 ## Downstream Consumers
 

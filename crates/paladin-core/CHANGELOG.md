@@ -9,6 +9,16 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 42 (mid-run halt and terminal status, ALLOW-03, ALLOW-05, PLAT-09; ADR-0057):
+  `HaltReason` (`AllowanceExhausted`, `LedgerUnavailable`; `as_str`, `wire_json`, `herald_line`) and
+  `AllowanceRefusal::details_json`; `RunFinishStatus::Cancelled` (the enum is now
+  `#[non_exhaustive]`) and `TraceEvent::RunFinished.halt_reason`; `StopReason::AllowanceHalted`;
+  `DerivedTokenBudget`, `RunScope.derived_token_budget` and `with_derived_token_budget`, and
+  `Admission::with_derived_budget` / `derived_budget`; `Run.halt_reason`; `NoticeKind` (a `kind`
+  field on `NoticeRecord` and `AllowanceNotice`) and `RunEventKind::AllowanceHalted`; the herald
+  helpers `HALT_REASON_METADATA_KEY`, `ExecutionMetadata::with_halt_reason` and
+  `halt_reason_display` (see `MIGRATION.md` §9.2).
+
 - Phase 41 (allowance admission, ALLOW-01/02/04): `platform::container::allowance` module with
   `AllowanceScopeKind`, `AllowanceLimitKind`, `AllowanceRefusal`, `AllowanceWarning`,
   `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `LIFETIME_WINDOW_START` and the

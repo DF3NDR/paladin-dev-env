@@ -17,6 +17,13 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 42 (mid-run halt and terminal status, ALLOW-03, PLAT-09; ADR-0057): migration `013`
+  (`runs.halt_reason`, nullable, `NULL` for every legacy row) and migration `014`
+  (`treasury_notices.notice_kind`, default `'warning'`, with the once-per-window index rebuilt to
+  include it), on the SQLite and PostgreSQL backends, with the in-memory, SQLite and PostgreSQL
+  run and notice adapters carrying `halt_reason` and the notice kind behind the shared contract
+  suites; the webhook adapters accept the `allowance_halted` event kind.
+
 - Phase 41 (allowance admission, ALLOW-01/02/04): `TreasuryLedgerPort::balance` on the in-memory,
   SQLite and PostgreSQL ledgers behind one shared contract suite; the once-per-window
   `TreasuryNoticePort` store (`treasury_notices`, migration `011`) on all three adapters; migration

@@ -9,6 +9,12 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 42 (mid-run halt, ALLOW-03; ADR-0057): `HaltCause` (`CancelRequested`, `Token`,
+  `Spend(HaltReason)`) on `RunOutcome::Halted`, and `WarEngine::with_spend_guard`, which consults
+  the attached `SpendGuard` at every superstep boundary (a check-only read: a halt keeps the
+  Halted Waypoint, runs no node of that superstep, and a child battalion run halts its parent).
+  `RunOutcome::Halted` gains a `cause` field (see `MIGRATION.md` §9.2).
+
 - `TraceDispatcher::total_cost()`, the synchronous twin of `total_usage()`, folding every priced
   `TraceEvent::NodeFinished` via `CostTally::record_node` inside `emit()` itself (PRICE-03).
 - `WarEngine::with_treasury_ledger(ledger, SettlementContext)` — settles exactly one aggregated

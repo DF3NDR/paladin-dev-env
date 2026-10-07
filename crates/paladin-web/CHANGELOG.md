@@ -9,6 +9,15 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 42 (mid-run halt and terminal status, ALLOW-03, ALLOW-05, PLAT-09; ADR-0057):
+  `halt_reason` and `final_waypoint_id` on `RunResponse` (`GET /v1/runs/{id}`, `GET /v1/runs`) and
+  `halt_reason` on the `halted` run webhook; the SSE `done` event names `halt_reason` for a spend
+  halt and `status: "cancelled"` for a caller cancel on the live, degraded and replay paths;
+  `stop_reason: "allowance_halted"` and `ExecuteResponse.halt_reason` on the agent `execute`,
+  `execute/stream` and `jobs` routes; `422 model_unpriced` (`ApiError::model_unpriced`) on the
+  agent routes and `POST /v1/runs`; `RunEventKind::AllowanceHalted` as an operator-only
+  `allowance_halted` event (see `MIGRATION.md` §9.2 and §9.6).
+
 - Phase 41 (allowance admission, ALLOW-02): `429 allowance_exhausted` with a store-clock `Retry-After`
   on `POST /v1/runs`, `POST /v1/threads/{id}/fork` and the agent `execute`, `execute/stream` and
   `jobs` routes; `ApiError::with_retry_after` / `retry_after` / `allowance_exhausted`;

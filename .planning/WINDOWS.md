@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 5
+open_count: 8
 waived_count: 37
 fixed_count: 22
-total_count: 64
-last_updated: 2026-10-07T00:52:04.918Z
+total_count: 67
+last_updated: 2026-10-07T02:02:08.278Z
 ---
 
 # Broken Windows Ledger
@@ -79,6 +79,9 @@ last_updated: 2026-10-07T00:52:04.918Z
 | 62 | 41 | deviation | config.example.yml |  | The config loader performs no ${VAR} expansion (pinned by src/config/treasurer.rs::yaml_env_placeholder_is_not_expanded; no expansion code exists under src/ or crates/), so the http.auth.api_keys[].key: "${PALADIN_API_KEY_CI}" examples in config.example.yml (lines 161, 165) and k8s/server/configmap.yaml (lines 36, 40; its header also claims the server expands them at load time) would load the literal placeholder as the key value unless the deployment substitutes it before the file is read. Closing condition: document the substitution step or replace the examples with env-override guidance. Owner: Phase 46 docs currency. | open |  | 2026-10-03T22:52:46.178Z |  |
 | 63 | 41 | deviation | crates/paladin-storage/migrations/sqlite/010_add_run_schedule_created_by.sql |  | Schedules created before Phase 41 have a NULL created_by (run_schedules.tenant_id and api_key_id both NULL) and keep firing unattributed and ungated by any allowance (D-08). Closing condition: an operator re-creates them through POST /v1/schedules so the creator is stamped; a backfill and PATCH re-assignment of created_by are deferred ideas in 41-CONTEXT. | open |  | 2026-10-03T23:46:40.147Z |  |
 | 64 | 42 | deviation | src/application/services/run/worker.rs |  | D-08: worker-dispatched Runnable::Agent runs write no Waypoint, so a Treasurer-halted agent-kind run cannot be forked from a checkpoint; it is resumed by a fresh POST /v1/runs that re-executes from the start, and the HTTP agent routes have no run row at all. ALLOW-03 continue-from-checkpoint is met on the engine path and not applicable by construction on the agent loop. | open |  | 2026-10-07T00:52:04.918Z |  |
+| 65 | 42 | deviation | src/application/services/treasurer/guard.rs |  | D-01 (ADR-0057): the mid-run boundary check is a check-only balance read with no reservation, so runs admitted in the same instant can all start and each one halts at its first boundary after the allowance is exhausted; overshoot is bounded to one superstep's spend per run (not per principal). Owner: the Treasurer maintainers; rationale: a reservation hold per superstep would need an estimate rule ADR-0057 records as missing, so the race is accepted and bounded rather than prevented. Closing condition: the deferred per-superstep reservation hold ships, or an operator sizes each ceiling with headroom for concurrent runs times one superstep. | open |  | 2026-10-07T02:02:07.590Z |  |
+| 66 | 42 | deviation | src/application/services/paladin/paladin_execution_service.rs |  | G2 (ADR-0057 group e, D-12, 42-01 option-b gate): a true streamed execute/stream call is one provider call with no after_model, so the derived budget cannot cut it mid-flight; admission (including the model_unpriced and zero-budget refusals) is its only gate and its overshoot is that one streamed call. Under the recorded option-b its terminal done carries an informational halt_reason when the terminal usage crossed the derived figure (a crossing report, not a halt: the call had already finished; implemented in 42-08), and is otherwise unchanged, so the done is NOT byte-identical in all cases; D-12's 'the agent stream's terminal done carries the same object' holds for the buffered fallback always and for a true stream when its terminal usage crossed the figure. Owner: the Treasurer maintainers; closing condition: mid-stream usage accounting that can cut a single streamed call. | open |  | 2026-10-07T02:02:07.736Z |  |
+| 67 | 42 | deviation | crates/paladin-battalion/src/engine/settlement.rs |  | G15: a graph Paladin node on a model with no treasurer.pricing row settles nothing (an unpriced call has no cost and nothing is fabricated, D-00c), so the superstep-boundary check cannot see that node's spend and an allowance cannot bound it; workflow assistants are not refused at admission for an unpriced model (only agent routes and agent-kind runs are, 422 model_unpriced). Owner: the operator; rationale: pricing is operator-supplied configuration and the engine has no source for a price it was not given. Operators must price every model a metered principal can reach; closing condition: a pricing-coverage check at graph registration, deferred. | open |  | 2026-10-07T02:02:08.278Z |  |
 
 ````json
 [
@@ -848,6 +851,42 @@ last_updated: 2026-10-07T00:52:04.918Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-07T00:52:04.918Z",
+    "resolved_at": null
+  },
+  {
+    "id": 65,
+    "kind": "deviation",
+    "phase": "42",
+    "file": "src/application/services/treasurer/guard.rs",
+    "line": null,
+    "description": "D-01 (ADR-0057): the mid-run boundary check is a check-only balance read with no reservation, so runs admitted in the same instant can all start and each one halts at its first boundary after the allowance is exhausted; overshoot is bounded to one superstep's spend per run (not per principal). Owner: the Treasurer maintainers; rationale: a reservation hold per superstep would need an estimate rule ADR-0057 records as missing, so the race is accepted and bounded rather than prevented. Closing condition: the deferred per-superstep reservation hold ships, or an operator sizes each ceiling with headroom for concurrent runs times one superstep.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-07T02:02:07.590Z",
+    "resolved_at": null
+  },
+  {
+    "id": 66,
+    "kind": "deviation",
+    "phase": "42",
+    "file": "src/application/services/paladin/paladin_execution_service.rs",
+    "line": null,
+    "description": "G2 (ADR-0057 group e, D-12, 42-01 option-b gate): a true streamed execute/stream call is one provider call with no after_model, so the derived budget cannot cut it mid-flight; admission (including the model_unpriced and zero-budget refusals) is its only gate and its overshoot is that one streamed call. Under the recorded option-b its terminal done carries an informational halt_reason when the terminal usage crossed the derived figure (a crossing report, not a halt: the call had already finished; implemented in 42-08), and is otherwise unchanged, so the done is NOT byte-identical in all cases; D-12's 'the agent stream's terminal done carries the same object' holds for the buffered fallback always and for a true stream when its terminal usage crossed the figure. Owner: the Treasurer maintainers; closing condition: mid-stream usage accounting that can cut a single streamed call.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-07T02:02:07.736Z",
+    "resolved_at": null
+  },
+  {
+    "id": 67,
+    "kind": "deviation",
+    "phase": "42",
+    "file": "crates/paladin-battalion/src/engine/settlement.rs",
+    "line": null,
+    "description": "G15: a graph Paladin node on a model with no treasurer.pricing row settles nothing (an unpriced call has no cost and nothing is fabricated, D-00c), so the superstep-boundary check cannot see that node's spend and an allowance cannot bound it; workflow assistants are not refused at admission for an unpriced model (only agent routes and agent-kind runs are, 422 model_unpriced). Owner: the operator; rationale: pricing is operator-supplied configuration and the engine has no source for a price it was not given. Operators must price every model a metered principal can reach; closing condition: a pricing-coverage check at graph registration, deferred.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-07T02:02:08.278Z",
     "resolved_at": null
   }
 ]

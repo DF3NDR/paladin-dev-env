@@ -13,9 +13,12 @@
 //!
 //! Two admissions for one principal at the same instant may both be admitted even when together
 //! they over-spend an allowance: admission is check-only (D-05, no hold and no reserve row), so
-//! nothing here can serialize them. Phase 42's reservation at the superstep boundary (ADR-0052)
-//! closes the race and ADR-0056 (plan 41-09) records it -- that record is the backstop; no
-//! mechanical check in this file can prevent it, by design.
+//! nothing here can serialize them. Phase 42 does not close the race: its superstep-boundary
+//! check is check-only too (ADR-0057 supersedes ADR-0056's earlier plan to reserve at the
+//! boundary), so runs admitted in the same instant can each overshoot by at most one superstep.
+//! ADR-0056 (plan 41-09) and ADR-0057 record the race and `.planning/WINDOWS.md` row 65 holds
+//! it open -- those records are the backstop; no mechanical check in this file can prevent it, by
+//! design. A per-superstep reservation hold is the deferred mitigation.
 
 use super::*;
 use std::sync::Mutex;

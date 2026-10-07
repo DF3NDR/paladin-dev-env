@@ -109,8 +109,9 @@ pub struct TreasurerSpendGuard {
     /// Every notice claim this guard has already tried (Pitfall 9, T-42-39): a repeat boundary
     /// does not write again. Only skips writes -- the store stays the truth, and a claim never
     /// changes the guard's decision. The lock is held only to test-and-insert, never across an
-    /// `.await`.
-    claimed: Mutex<HashSet<ClaimKey>>,
+    /// `.await`. Held behind an `Arc` so the struct keeps the `Freeze` auto trait it published
+    /// with (an inline `Mutex` would change the public API surface).
+    claimed: Arc<Mutex<HashSet<ClaimKey>>>,
 }
 
 impl std::fmt::Debug for TreasurerSpendGuard {
@@ -334,7 +335,7 @@ impl Treasurer {
             run_id,
             halted: Arc::new(OnceLock::new()),
             emitter,
-            claimed: Mutex::new(HashSet::new()),
+            claimed: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 }

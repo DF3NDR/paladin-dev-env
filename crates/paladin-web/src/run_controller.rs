@@ -739,6 +739,10 @@ pub(crate) fn map_submission_error(err: RunSubmissionError) -> ApiError {
         // Phase 41 D-12: an exhausted allowance is a 429 with its own code, never the per-IP
         // limiter's. Explicit arm so the trailing catch-all never turns it into a 500.
         RunSubmissionError::AllowanceExhausted(refusal) => ApiError::allowance_exhausted(&refusal),
+        // Phase 42 D-10: an agent-kind assistant whose model has no `treasurer.pricing` row,
+        // submitted by a principal with a ceiling, is a `422 model_unpriced` -- a configuration
+        // incoherence with no `Retry-After`, never the pacing-shaped 429 and never a 500.
+        RunSubmissionError::ModelUnpriced { model } => ApiError::model_unpriced(&model),
         other => internal_repo_error("run submission", other),
     }
 }
@@ -753,6 +757,12 @@ pub(crate) fn map_submission_error(err: RunSubmissionError) -> ApiError {
 /// - `404 Not Found` for an unknown assistant or version;
 /// - `409 Conflict` (`code = "thread_busy"`) if the target thread already
 ///   has an active run;
+/// - `422 Unprocessable Entity` (`code = "model_unpriced"`) if the assistant is
+///   agent-kind and the caller has an allowance ceiling but the agent's model
+///   has no `treasurer.pricing` row;
+/// - `429 Too Many Requests` (`code = "allowance_exhausted"`) if the caller's
+///   allowance is spent, or too small to buy a single token of an agent-kind
+///   assistant's model;
 /// - `501 Not Implemented` if no run submission backend is configured.
 #[utoipa::path(
     post,
@@ -766,6 +776,7 @@ pub(crate) fn map_submission_error(err: RunSubmissionError) -> ApiError {
         (status = 403, description = "Role not permitted for this assistant (allowed_roles, D-46)", body = ApiErrorBody),
         (status = 404, description = "Unknown assistant or version", body = ApiErrorBody),
         (status = 409, description = "Thread busy -- the remedy is POST /threads/{id}/resume", body = ApiErrorBody),
+        (status = 422, description = "model_unpriced: the assistant is agent-kind, the caller has an allowance ceiling and the agent's model has no treasurer.pricing row, so its spend cannot be metered; no Retry-After, nothing runs", body = ApiErrorBody),
         (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
         (status = 500, description = "The allowance check itself failed; the request is refused and nothing runs (fail closed)", body = ApiErrorBody),
         (status = 501, description = "No run submission backend configured", body = ApiErrorBody),
@@ -3539,5 +3550,26 @@ mod tests {
         }));
         assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(err.to_body()["error"]["code"], "allowance_exhausted");
+    }
+
+    /// 42-09, D-10: an unpriced agent-kind model is a `422 model_unpriced` naming the model, with
+    /// no `Retry-After` and no tenant or key in the body -- never the 429 and never a 500.
+    #[test]
+    fn map_submission_error_maps_model_unpriced_to_422() {
+        let err = map_submission_error(RunSubmissionError::ModelUnpriced {
+            model: "mystery-model".to_string(),
+        });
+        assert_eq!(err.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            err.retry_after(),
+            None,
+            "a configuration fault is never pacing"
+        );
+        let body = err.to_body();
+        assert_eq!(body["error"]["code"], "model_unpriced");
+        assert_eq!(
+            body["error"]["details"],
+            serde_json::json!({ "model": "mystery-model" })
+        );
     }
 }

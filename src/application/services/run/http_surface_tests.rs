@@ -2504,3 +2504,226 @@ async fn ledger_unavailable_halt_resumes_after_recovery() {
     .await
     .expect("ledger_unavailable_halt_resumes_after_recovery timed out");
 }
+
+// --- ALLOW-03, ALLOW-05, Phase 42 D-12, D-13, G8: the agent-kind halt end to end (42-09) -------
+
+/// The agent-kind tracer: `POST /v1/runs` for a code-registered looping agent by a principal with
+/// a lifetime ceiling -> admission with the agent's model (`admit_for_model`) -> the worker
+/// re-derives the budget at dispatch and puts it on the `RunScope` -> the shared service's
+/// Treasurer-only `TokenBudget` cuts the run after the crossing response -> the run is recorded
+/// `Halted` -> `GET /v1/runs/{id}` answers `halted`, `error: null`, the `allowance_exhausted`
+/// `halt_reason`, the partial output and no checkpoint. Driven through the real `run_router`
+/// over an on-disk SQLite run store and ledger, a real `PaladinExecutionService` over a scripted
+/// mock reporting 100 tokens per response, and a Treasurer priced from config.
+///
+/// A second leg proves the front door: an agent whose model has no price row is refused `422
+/// model_unpriced` by the same router before any run row is written.
+#[tokio::test(flavor = "multi_thread")]
+async fn agent_kind_run_halts_on_the_derived_budget() {
+    use super::worker_tests::agent_budget::LoopingAgentResolver;
+    use super::worker_tests::shared_agent_port;
+    use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+    use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
+    use paladin_llm::mock::MockLlmAdapter;
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (path, url) = temp_sqlite_url("agent_halt");
+        let repository: Arc<dyn RunRepositoryPort> =
+            Arc::new(SqliteRunRepository::new(&url).await.unwrap());
+        let ledger_port: Arc<dyn TreasuryLedgerPort> =
+            Arc::new(SqliteTreasuryLedger::new(&url).await.unwrap());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+
+        // The operator's grammar, deserialized exactly as written: gpt-4 costs 10 USD per 1M
+        // tokens on both axes (10_000 nanos per token) and `svc-h` has a lifetime ceiling of
+        // 0.0015 USD = 1_500_000 nanos, which derives exactly 150 tokens.
+        let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+            "currency": "USD",
+            "pricing": { "gpt-4": { "prompt": "10.00", "completion": "10.00" } },
+            "allowance": { "api_keys": { "svc-h": {
+                "period": "1d", "amount": "1000.00", "lifetime": "0.0015"
+            } } }
+        }))
+        .unwrap();
+        let treasurer = Arc::new(
+            Treasurer::new(config.allowance_policy().unwrap(), Arc::clone(&ledger_port))
+                .with_pricing(Arc::new(config.price_table().unwrap())),
+        );
+        let admission: Arc<
+            dyn paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort,
+        > = treasurer.clone();
+
+        // A looping agent on a priced model, and one on a model with no price row.
+        let resolver: Arc<dyn AssistantResolver> = Arc::new(LoopingAgentResolver {
+            model: "gpt-4".to_string(),
+        });
+        let unpriced_resolver: Arc<dyn AssistantResolver> = Arc::new(LoopingAgentResolver {
+            model: "mystery-model".to_string(),
+        });
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "halt-key".to_string(),
+            Principal::new("svc-h", UserRole::User, TenantId::new("acme").unwrap()),
+        );
+        let auth = AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        };
+        let router_over = |resolver: Arc<dyn AssistantResolver>| {
+            let submission: Arc<dyn RunSubmissionPort> = Arc::new(
+                RunSubmissionService::new(repository.clone(), queue.clone(), resolver)
+                    .with_treasurer(Arc::clone(&admission)),
+            );
+            run_router(
+                RunApiState::new()
+                    .with_submission(submission)
+                    .with_repository(repository.clone())
+                    .with_auth(auth.clone()),
+            )
+        };
+        let app = router_over(resolver.clone());
+        let unpriced_app = router_over(unpriced_resolver);
+
+        // The shared run-engine service as production wires it: a real service over a scripted
+        // model reporting 100 tokens per response, behind the Treasurer-only budget wrapper.
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let service = PaladinExecutionService::new(
+            llm.clone(),
+            Arc::new(CircuitBreaker::new(5, 2, Duration::from_secs(30))),
+            None,
+            None,
+        );
+        let waypoints = Arc::new(InMemoryWaypointStore::new());
+        let pool = RunWorkerPool::new(
+            Arc::new(WarEngine::new(
+                Arc::new(UnusedPaladinPort),
+                waypoints.clone(),
+            )),
+            waypoints.clone(),
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_paladin_port(shared_agent_port(service))
+        .with_treasurer(Arc::clone(&treasurer));
+
+        let post = |app: axum::Router| async move {
+            app.oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/runs")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "halt-key")
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "assistant_id": "code-agent",
+                            "input": { "input": "hi" }
+                        }))
+                        .unwrap(),
+                    ))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds")
+        };
+
+        // (a) Front door: the unpriced agent is refused 422 before any row is written.
+        let refused = post(unpriced_app).await;
+        assert_eq!(refused.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(refused.headers().get("retry-after").is_none());
+        let refused_raw = axum::body::to_bytes(refused.into_body(), usize::MAX)
+            .await
+            .expect("read refusal body");
+        let refused_body: serde_json::Value = serde_json::from_slice(&refused_raw).unwrap();
+        assert_eq!(refused_body["error"]["code"], "model_unpriced");
+        assert_eq!(refused_body["error"]["details"]["model"], "mystery-model");
+        let refused_text = String::from_utf8_lossy(&refused_raw);
+        assert!(!refused_text.contains("halt-key"), "{refused_text}");
+        assert!(!refused_text.contains("acme"), "{refused_text}");
+        assert!(
+            repository
+                .list(RunQuery::default())
+                .await
+                .unwrap()
+                .items
+                .is_empty(),
+            "a refused submission writes no run row"
+        );
+        assert_eq!(queue.depth().await.unwrap(), 0);
+
+        // (b) The priced agent is accepted.
+        let accepted = post(app.clone()).await;
+        assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+        let bytes = axum::body::to_bytes(accepted.into_body(), usize::MAX)
+            .await
+            .expect("read submit body");
+        let submitted: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let run_id = submitted["run_id"].as_str().expect("run_id").to_string();
+
+        // (c) One dispatch: the worker re-derives 150 tokens, the second response crosses it.
+        assert!(pool.run_once().await.unwrap());
+        assert_eq!(llm.call_count(), 2, "cut after the crossing response");
+
+        // (d) The row reads halted, with the reason, the partial output and no checkpoint.
+        let got = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!("/v1/runs/{run_id}"))
+                    .header("x-api-key", "halt-key")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(got.status(), StatusCode::OK);
+        let raw = axum::body::to_bytes(got.into_body(), usize::MAX)
+            .await
+            .expect("read run body");
+        let body: serde_json::Value = serde_json::from_slice(&raw).expect("run body is JSON");
+        assert_eq!(body["status"], "halted", "{body}");
+        assert!(body["error"].is_null(), "a halt is not a failure: {body}");
+        assert_eq!(
+            body["halt_reason"]["reason"], "allowance_exhausted",
+            "{body}"
+        );
+        assert_eq!(body["halt_reason"]["scope"], "api_key");
+        assert_eq!(body["halt_reason"]["kind"], "lifetime");
+        assert_eq!(body["halt_reason"]["ceiling"], "0.0015 USD");
+        // `RunResponse` carries no output field; the partial output is kept on the stored row.
+        let stored = repository
+            .get(&paladin_core::platform::container::run::RunId::parse(&run_id).unwrap())
+            .await
+            .unwrap()
+            .expect("the run row exists");
+        let output = stored
+            .output
+            .as_ref()
+            .and_then(|value| value.as_str())
+            .expect("the partial output is kept");
+        assert!(output.contains("chunk"), "{output}");
+        assert!(output.contains("Token budget reached"), "{output}");
+        assert!(
+            body["final_waypoint_id"].is_null(),
+            "an agent-kind run has no checkpoint (D-08): {body}"
+        );
+        let raw_text = String::from_utf8_lossy(&raw);
+        assert!(
+            !raw_text.contains("halt-key"),
+            "the run body must not contain a key value: {raw_text}"
+        );
+
+        cleanup(&path);
+    })
+    .await
+    .expect("agent_kind_run_halts_on_the_derived_budget timed out");
+}

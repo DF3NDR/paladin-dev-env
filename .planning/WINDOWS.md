@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 4
+open_count: 5
 waived_count: 37
 fixed_count: 22
-total_count: 63
-last_updated: 2026-10-03T23:46:40.147Z
+total_count: 64
+last_updated: 2026-10-07T00:52:04.918Z
 ---
 
 # Broken Windows Ledger
@@ -78,6 +78,7 @@ last_updated: 2026-10-03T23:46:40.147Z
 | 61 | 45 | deviation | .planning/phases/45-rustfs-swap-platform-observability-deviations/45-BENCH-EVIDENCE.md |  | Amends row 35 (Phase 28 tracing-overhead deviation): OBS-05 re-measure at Phase 45 point C, paladin::trace target enabled, after the D-17 fixes (enablement guard, per-thread buffer reuse, CompositeSink last-child move) did NOT meet the <=3% bar: log_sink +19.36%, composite +16.19% against a 120.00us untraced baseline (maintainer's machine, 2026-09-30, 45-BENCH-EVIDENCE.md; Verdict: AMEND). Serialisation-skipped _target_off rows still cost +16.24%/+18.57%, so the remaining cost is not serialisation. Amended closing condition: accepted-pending at +19.36%/+16.19% after the D-17 fixes, 2026-09-30, 45-BENCH-EVIDENCE.md; the maintainer accepts this figure at Phase 45 UAT, then gsd-tools windows waive <id> with the acceptance text. The I/O-bound re-scope stays deferred (no I/O-bound bench added in Phase 45, D-19). Row 35 itself stays waived. | waived | Maintainer accepted at Phase 45 UAT (test 4, 2026-09-30): +19.36% (log_sink) / +16.19% (composite) tracing overhead at point C recorded as the new figure in place of the <=3% PRD 07 bar; remaining cost sits in the dispatcher/sink path, not serialisation; I/O-bound re-scope stays deferred per D-19. | 2026-09-30T16:44:57.003Z | 2026-09-30T19:52:30.554Z |
 | 62 | 41 | deviation | config.example.yml |  | The config loader performs no ${VAR} expansion (pinned by src/config/treasurer.rs::yaml_env_placeholder_is_not_expanded; no expansion code exists under src/ or crates/), so the http.auth.api_keys[].key: "${PALADIN_API_KEY_CI}" examples in config.example.yml (lines 161, 165) and k8s/server/configmap.yaml (lines 36, 40; its header also claims the server expands them at load time) would load the literal placeholder as the key value unless the deployment substitutes it before the file is read. Closing condition: document the substitution step or replace the examples with env-override guidance. Owner: Phase 46 docs currency. | open |  | 2026-10-03T22:52:46.178Z |  |
 | 63 | 41 | deviation | crates/paladin-storage/migrations/sqlite/010_add_run_schedule_created_by.sql |  | Schedules created before Phase 41 have a NULL created_by (run_schedules.tenant_id and api_key_id both NULL) and keep firing unattributed and ungated by any allowance (D-08). Closing condition: an operator re-creates them through POST /v1/schedules so the creator is stamped; a backfill and PATCH re-assignment of created_by are deferred ideas in 41-CONTEXT. | open |  | 2026-10-03T23:46:40.147Z |  |
+| 64 | 42 | deviation | src/application/services/run/worker.rs |  | D-08: worker-dispatched Runnable::Agent runs write no Waypoint, so a Treasurer-halted agent-kind run cannot be forked from a checkpoint; it is resumed by a fresh POST /v1/runs that re-executes from the start, and the HTTP agent routes have no run row at all. ALLOW-03 continue-from-checkpoint is met on the engine path and not applicable by construction on the agent loop. | open |  | 2026-10-07T00:52:04.918Z |  |
 
 ````json
 [
@@ -835,6 +836,18 @@ last_updated: 2026-10-03T23:46:40.147Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-03T23:46:40.147Z",
+    "resolved_at": null
+  },
+  {
+    "id": 64,
+    "kind": "deviation",
+    "phase": "42",
+    "file": "src/application/services/run/worker.rs",
+    "line": null,
+    "description": "D-08: worker-dispatched Runnable::Agent runs write no Waypoint, so a Treasurer-halted agent-kind run cannot be forked from a checkpoint; it is resumed by a fresh POST /v1/runs that re-executes from the start, and the HTTP agent routes have no run row at all. ALLOW-03 continue-from-checkpoint is met on the engine path and not applicable by construction on the agent loop.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-07T00:52:04.918Z",
     "resolved_at": null
   }
 ]

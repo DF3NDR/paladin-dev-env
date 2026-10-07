@@ -91,6 +91,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   golden gate carries a fourth sanctioned exception for the two additive wire changes, and
   `openapi.json` is regenerated; see `MIGRATION.md` §9.2 and §9.6.
 
+  **Agent-kind runs stop on the allowance (plan 42-09).** A run of an agent-kind assistant
+  (`Runnable::Agent`) is now bounded by the caller's allowance. `POST /v1/runs` admits it with the
+  agent's model, so an unpriced model under a ceiling answers `422 model_unpriced` (the new
+  `RunSubmissionError::ModelUnpriced { model }`, mapped by `map_submission_error`) and an
+  allowance too small for one token answers `429 allowance_exhausted`, before any run row. The
+  worker re-derives the budget at dispatch and the run ends after the response that crosses it,
+  recorded `halted` (it was `completed`, unbounded, before) with the `allowance_exhausted`
+  `halt_reason`, `error: null` and the partial output kept; the SSE `done` and the `halted`
+  webhook carry the reason. A zero or exhausted figure at dispatch, or an unreadable ledger
+  (`ledger_unavailable`), records the same halt without calling the model; a model that lost its
+  price row records `failed` naming the model. The shared run-engine service installs the
+  `TokenBudget` in Treasurer-only mode, so no engine node is ever capped. Agent-kind runs have no
+  checkpoint: resume by a fresh `POST /v1/runs` (recorded in `.planning/WINDOWS.md`). A
+  schedule-fired run refused as unpriced is logged and counted as a submission error, never an
+  allowance skip. `openapi.json` is regenerated (the `422` on `POST /runs`); see `MIGRATION.md`
+  §9.2 and §9.6.
+
 - **Facade re-export of the allowance module (Phase 41 plan 41-09, D-20).** The `paladin` facade now
   re-exports `paladin::core::platform::container::allowance` (`AllowanceRefusal`, `AllowanceWarning`,
   `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `crosses_warn_threshold`, ...), beside

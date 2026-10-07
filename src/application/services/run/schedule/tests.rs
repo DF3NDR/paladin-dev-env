@@ -901,12 +901,17 @@ mod allowance {
             let resolver: Arc<dyn AssistantResolver> = Arc::new(MockResolver {
                 known: vec![("assistant-1".to_string(), 3)],
             });
+            // The scheduled assistant is agent-kind (`MockResolver`), and an agent-kind
+            // submission under a ceiling is admitted WITH its model (Phase 42 D-10): the
+            // model must carry a `treasurer.pricing` row or the tick is refused.
             let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
                 "currency": "USD",
+                "pricing": { "gpt-4": { "prompt": "10.00", "completion": "10.00" } },
                 "allowance": allowance,
             }))
             .unwrap();
-            let treasurer = Treasurer::new(config.allowance_policy().unwrap(), Arc::clone(&ledger));
+            let treasurer = Treasurer::new(config.allowance_policy().unwrap(), Arc::clone(&ledger))
+                .with_pricing(Arc::new(config.price_table().unwrap()));
             let submission: Arc<dyn RunSubmissionPort> = Arc::new(
                 RunSubmissionService::new(Arc::clone(&runs), Arc::clone(&queue), resolver)
                     .with_treasurer(Arc::new(treasurer)),
@@ -1096,4 +1101,68 @@ mod allowance {
             "the run is attributed by the persisted names"
         );
     }
+}
+
+/// A [`RunSubmissionPort`] whose `submit` always refuses with `ModelUnpriced` (Phase 42 D-10):
+/// the scheduled assistant is agent-kind, its creator has a ceiling and its model lost its row.
+struct UnpricedModelSubmission;
+
+#[async_trait]
+impl RunSubmissionPort for UnpricedModelSubmission {
+    async fn submit(&self, _request: SubmitRun) -> Result<RunAccepted, RunSubmissionError> {
+        Err(RunSubmissionError::ModelUnpriced {
+            model: "mystery-model".to_string(),
+        })
+    }
+
+    async fn cancel(
+        &self,
+        _run_id: &RunId,
+        _requested_by: Option<PrincipalRef>,
+    ) -> Result<CancelOutcome, RunSubmissionError> {
+        Err(RunSubmissionError::NotWired)
+    }
+
+    async fn fork(&self, _request: ForkRun) -> Result<RunAccepted, RunSubmissionError> {
+        Err(RunSubmissionError::NotWired)
+    }
+}
+
+/// 42-09: a schedule-fired agent-kind run refused as `ModelUnpriced` is a submission error --
+/// logged and left claimed like the schedule's other non-allowance failures -- and is never
+/// reported or counted as an allowance skip.
+#[tokio::test]
+async fn tick_with_an_unpriced_agent_model_is_a_submission_error_not_an_allowance_skip() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let t0 = base_time();
+    let schedule =
+        RunSchedule::new(RunScheduleId::new_v7(), "assistant-1", "*/1 * * * *").with_next_tick(t0);
+    let schedule_id = schedule.schedule_id.clone();
+    repo.insert(schedule).await.unwrap();
+
+    let clock = AtomicClock::new(t0);
+    let service = ScheduleService::new(
+        Arc::clone(&repo),
+        Arc::new(UnpricedModelSubmission) as Arc<dyn RunSubmissionPort>,
+        options_with(&clock, 60),
+    );
+    let outcomes = service.tick_once().await;
+
+    assert_eq!(
+        outcomes,
+        vec![ScheduleTickOutcome::Skipped {
+            schedule_id: schedule_id.clone(),
+            reason: SkipReason::SubmissionError,
+        }],
+        "never SkipReason::AllowanceExhausted"
+    );
+    let reloaded = repo.get(&schedule_id).await.unwrap().unwrap();
+    assert_eq!(
+        reloaded.skipped_ticks, 0,
+        "counted like every other non-allowance submission failure, not as an allowance skip"
+    );
+    assert!(
+        reloaded.next_tick.is_some_and(|next| next > t0),
+        "the tick stays claimed: the schedule is next tried at its next natural due time"
+    );
 }

@@ -88,6 +88,13 @@ it would race a concurrent execution over the same Waypoint chain. The `409` bod
 **`429 allowance_exhausted`.** A caller whose API-key or tenant allowance is spent is refused
 before anything is persisted -- see [Allowance refusals](#allowance-refusals).
 
+**`422 model_unpriced`.** When the assistant is agent-kind, the caller has an allowance ceiling
+and the agent's model has no `treasurer.pricing` row, the submission is refused before anything is
+persisted, with `code` `model_unpriced`, `details.model` naming the model and no `Retry-After`. An
+agent-kind submission is also refused `429 allowance_exhausted` when the allowance is too small to
+buy a single token of the agent's model. See [Agent-kind runs stop on the
+allowance](#agent-kind-runs-stop-on-the-allowance).
+
 ### Cancelling a run
 
 ```
@@ -171,8 +178,9 @@ re-runs the allowance check at submission:
    own `halt_reason`. The original run stays `halted`.
 
 A run halted with `halt_reason: { "reason": "ledger_unavailable" }` resumes the same way once the
-ledger reads again. An agent-kind run has no checkpoint, so it has no Halted Waypoint to fork
-from: resume it with a fresh `POST /v1/runs`.
+ledger reads again. An agent-kind run has no checkpoint (the agent loop writes no Waypoint), so it
+has no Halted Waypoint to fork from and its `final_waypoint_id` is `null`: resume it with a fresh
+`POST /v1/runs`, which re-executes from the start.
 
 ### Streaming
 
@@ -709,6 +717,35 @@ that cannot be metered cannot be bounded:
 There is no `Retry-After` header: this is a configuration incoherence, not pacing. A derived
 budget of zero tokens is refused `429 allowance_exhausted` with the binding ceiling's figures,
 and a principal with no ceiling is unaffected.
+
+### Agent-kind runs stop on the allowance
+
+A run of an agent-kind assistant is bounded the same way the HTTP agent routes are, with the run
+machinery around it. At `POST /v1/runs` the submission is admitted with the agent's model (the
+resolved assistant's, never one named in the request), so an unpriced model is refused
+[`422 model_unpriced`](#submitting-a-run) and an allowance too small for one token is refused
+`429 allowance_exhausted`, both before any run row is written. Workflow assistants keep the
+model-less admission.
+
+The worker then **re-derives the budget at dispatch** from the ledger, not from anything stored at
+submission, so an allowance spent while the run sat in the queue is honoured. The run ends after
+the model response that crosses the figure and is recorded `halted`, not `completed`:
+
+- `status` is `halted`, `error` is `null` and `halt_reason` is the `allowance_exhausted` object
+  ([Halted runs](#halted-runs)); the partial output is kept on the run, with the truncation notice
+  appended.
+- The SSE `done` event carries `status: "halted"` and the same `halt_reason`, live and on replay,
+  and a subscribed `halted` webhook carries it too.
+- A zero or exhausted figure at dispatch records the same halt, and an unreadable ledger records
+  `halt_reason: { "reason": "ledger_unavailable" }` (fail closed); in both cases the model is not
+  called.
+- A model that lost its `treasurer.pricing` row between admission and dispatch records `failed`
+  with an error naming the model; the model is not called.
+
+**Agent-kind runs have no checkpoint.** The agent loop writes no Waypoint, so a halted agent-kind
+run has `final_waypoint_id: null` and cannot be forked from a checkpoint. Resume it by submitting a
+fresh `POST /v1/runs`; the new run re-executes from the start. (Engine runs resume from their
+Halted Waypoint as described in [Resuming a halted run](#resuming-a-halted-run).)
 
 ## Configuration
 

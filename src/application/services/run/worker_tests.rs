@@ -2327,7 +2327,8 @@ pub(super) fn shared_agent_port(
     }
 }
 
-mod agent_budget {
+/// `pub(super)` so the end-to-end proof in `http_surface_tests.rs` reuses the looping agent.
+pub(super) mod agent_budget {
     use super::*;
 
     use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
@@ -2350,8 +2351,8 @@ mod agent_budget {
 
     /// Resolves every assistant id to a looping `Runnable::Agent` on `model`: with a scripted
     /// model reporting 100 tokens per response, only a budget or `max_loops` ends it.
-    struct LoopingAgentResolver {
-        model: String,
+    pub(in crate::application::services::run) struct LoopingAgentResolver {
+        pub(in crate::application::services::run) model: String,
     }
 
     #[async_trait]

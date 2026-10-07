@@ -389,6 +389,21 @@ impl ScheduleService {
                                 reason: SkipReason::AllowanceExhausted,
                             }
                         }
+                        Err(RunSubmissionError::ModelUnpriced { model }) => {
+                            // Phase 42 D-10: a deployment incoherence (the agent's model has no
+                            // `treasurer.pricing` row under a ceiling), not quota exhaustion, so
+                            // it is counted and logged like any other non-allowance submission
+                            // failure and never as `SkipReason::AllowanceExhausted`. Names the
+                            // schedule and the model only -- no tenant, key name or key value.
+                            log::warn!(
+                                "schedule {schedule_id}: run submission refused, model {model} \
+                                 has no treasurer.pricing row"
+                            );
+                            ScheduleTickOutcome::Skipped {
+                                schedule_id,
+                                reason: SkipReason::SubmissionError,
+                            }
+                        }
                         Err(error) => {
                             log::warn!("schedule {schedule_id}: run submission failed: {error}");
                             ScheduleTickOutcome::Skipped {

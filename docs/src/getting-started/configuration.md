@@ -497,6 +497,14 @@ operator budget disabled and no `allowance` is unchanged. Note that the operator
 `agent_runtime.token_budget` now takes effect on the HTTP agent routes: it was not applied to
 agents served over HTTP before, so enabling it now caps each of their runs.
 
+**Worker-dispatched agent-kind runs honour only the derived figure.** A run of an agent-kind
+assistant submitted through `POST /v1/runs` is executed by the run engine's shared service, which
+also executes every engine node. That service installs the budget in a Treasurer-only mode: the
+operator's `agent_runtime.token_budget` is forced off there, so it applies to the HTTP agent routes
+above and never to a worker-dispatched run. The worker re-derives the allowance figure at dispatch
+and only a run carrying one is ever cut; an engine node never is (an operator budget on the shared
+service would cap a node mid-flight and hand a successful partial result to a Battlefield).
+
 Two limits to know about:
 
 - Every model a metered principal can reach needs a `treasurer.pricing` row. A principal with a

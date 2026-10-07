@@ -97,7 +97,7 @@ pub struct CancelOutcome {
 ///
 /// `#[non_exhaustive]`: 27-07 adds `cancel`-shaped variants, 27-13 adds
 /// `WebhookRejected`, 27-15 adds fork-shaped variants, 41-01 adds
-/// `AllowanceExhausted`.
+/// `AllowanceExhausted`, 42-09 adds `ModelUnpriced`.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RunSubmissionError {
@@ -188,6 +188,17 @@ pub enum RunSubmissionError {
     /// entry. `paladin-web` renders this as `429 allowance_exhausted` (D-12, D-14).
     #[error("{0}")]
     AllowanceExhausted(AllowanceRefusal),
+    /// The principal has a configured allowance ceiling but the agent-kind assistant's model has
+    /// no `treasurer.pricing` row, so no token budget can be derived and the run cannot be
+    /// metered (Phase 42, D-10). Nothing was persisted -- no run row, no queue entry.
+    ///
+    /// A configuration incoherence rather than quota exhaustion: `paladin-web` renders it as
+    /// `422 model_unpriced` without `Retry-After`, never as the pacing-shaped `429`.
+    #[error("model {model} has no treasurer.pricing row, so an allowance cannot meter it")]
+    ModelUnpriced {
+        /// The model name that has no price row.
+        model: String,
+    },
 }
 
 /// Port trait for submitting a run (D-12).

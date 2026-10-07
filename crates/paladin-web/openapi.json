@@ -1456,7 +1456,7 @@
           "runs"
         ],
         "summary": "`POST /runs` -- submit a run for execution.",
-        "description": "Returns:\n- `202 Accepted` with [`SubmitRunResponse`] on success;\n- `400 Bad Request` for an invalid `thread_id`;\n- `404 Not Found` for an unknown assistant or version;\n- `409 Conflict` (`code = \"thread_busy\"`) if the target thread already\n  has an active run;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "description": "Returns:\n- `202 Accepted` with [`SubmitRunResponse`] on success;\n- `400 Bad Request` for an invalid `thread_id`;\n- `404 Not Found` for an unknown assistant or version;\n- `409 Conflict` (`code = \"thread_busy\"`) if the target thread already\n  has an active run;\n- `422 Unprocessable Entity` (`code = \"model_unpriced\"`) if the assistant is\n  agent-kind and the caller has an allowance ceiling but the agent's model\n  has no `treasurer.pricing` row;\n- `429 Too Many Requests` (`code = \"allowance_exhausted\"`) if the caller's\n  allowance is spent, or too small to buy a single token of an agent-kind\n  assistant's model;\n- `501 Not Implemented` if no run submission backend is configured.",
         "operationId": "submit_run",
         "requestBody": {
           "content": {
@@ -1521,6 +1521,16 @@
           },
           "409": {
             "description": "Thread busy -- the remedy is POST /threads/{id}/resume",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "model_unpriced: the assistant is agent-kind, the caller has an allowance ceiling and the agent's model has no treasurer.pricing row, so its spend cannot be metered; no Retry-After, nothing runs",
             "content": {
               "application/json": {
                 "schema": {

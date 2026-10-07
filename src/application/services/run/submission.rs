@@ -26,7 +26,7 @@ use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryError, R
 use paladin_ports::output::waypoint_port::WaypointPort;
 
 use super::cancel::LocalRunTokens;
-use super::resolver::{AssistantResolver, ResolveError};
+use super::resolver::{AssistantResolver, ResolveError, Runnable};
 use super::webhook::SsrfGuard;
 
 /// Generate a fresh [`ThreadId`] from a UUIDv7 string.
@@ -88,11 +88,13 @@ fn map_queue_error(err: QueueError) -> RunSubmissionError {
 
 /// Map an [`AllowanceAdmissionPort::admit`] failure (Phase 41): a refusal is the typed
 /// [`RunSubmissionError::AllowanceExhausted`]; a backend failure stays a `Backend` error (the
-/// request is not admitted -- fail closed, D-10). `AdmissionError` is a foreign
+/// request is not admitted -- fail closed, D-10). An unpriced model under a ceiling (Phase 42,
+/// D-10) is the typed [`RunSubmissionError::ModelUnpriced`]. `AdmissionError` is a foreign
 /// `#[non_exhaustive]` enum, so any future variant falls back to its display text.
 fn map_admission_error(err: AdmissionError) -> RunSubmissionError {
     match err {
         AdmissionError::Refused(refusal) => RunSubmissionError::AllowanceExhausted(refusal),
+        AdmissionError::ModelUnpriced { model } => RunSubmissionError::ModelUnpriced { model },
         AdmissionError::Backend { message } => RunSubmissionError::Backend { message },
         other => RunSubmissionError::Backend {
             message: other.to_string(),
@@ -359,17 +361,30 @@ impl RunSubmissionService {
     /// returns [`RunSubmissionError::Backend`] (fail closed) -- in both cases nothing is
     /// persisted. Admission is a check only (D-05): the role never reaches the Treasurer, so an
     /// `Admin` principal is bound exactly like a `User` (D-09).
+    ///
+    /// `model` is the resolved agent-kind assistant's model (Phase 42, D-09/D-10): when `Some`,
+    /// admission goes through `admit_for_model`, so an unpriced model under a ceiling is
+    /// [`RunSubmissionError::ModelUnpriced`] and a derived budget of zero is
+    /// `AllowanceExhausted`, both before any row is written. A workflow assistant passes `None`
+    /// and keeps today's `admit` (engine nodes are guarded per superstep, not by a derived
+    /// budget). The model comes from the resolved assistant, never from the request.
     async fn admit_and_persist(
         &self,
         run: &mut Run,
         use_latest: bool,
+        model: Option<&str>,
     ) -> Result<(), RunSubmissionError> {
         let admission = match (&self.treasurer, &run.submitted_by) {
             (Some(treasurer), Some(subject)) => Some(
-                treasurer
-                    .admit(subject, Some(&run.run_id))
-                    .await
-                    .map_err(map_admission_error)?,
+                match model {
+                    Some(model) => {
+                        treasurer
+                            .admit_for_model(subject, Some(&run.run_id), model)
+                            .await
+                    }
+                    None => treasurer.admit(subject, Some(&run.run_id)).await,
+                }
+                .map_err(map_admission_error)?,
             ),
             _ => None,
         };
@@ -454,7 +469,16 @@ impl RunSubmissionPort for RunSubmissionService {
 
         // Phase 41 D-06/D-07: the allowance check, BEFORE any row is written, with confirm /
         // abandon on the persistence result -- the lifecycle `fork` shares.
-        self.admit_and_persist(&mut run, use_latest).await?;
+        //
+        // Phase 42 D-09/D-10: an agent-kind assistant is admitted WITH its model, so an
+        // unpriced model under a ceiling is refused here (422) and a zero derived budget is a
+        // 429, instead of surfacing later as a run that cannot be metered.
+        let agent_model = match &resolved.runnable {
+            Runnable::Agent(paladin) => Some(paladin.node.model.as_str()),
+            _ => None,
+        };
+        self.admit_and_persist(&mut run, use_latest, agent_model)
+            .await?;
 
         Ok(RunAccepted {
             run_id: run.run_id,
@@ -627,7 +651,7 @@ impl RunSubmissionPort for RunSubmissionService {
         // Phase 41 D-06/D-07: a fork starts spend exactly like a submit, so it runs the same
         // admit -> insert -> enqueue -> confirm / abandon lifecycle. The fork's run row pins the
         // assistant version it copied, so `use_latest` is `false` (a plain `insert`).
-        self.admit_and_persist(&mut run, false).await?;
+        self.admit_and_persist(&mut run, false, None).await?;
 
         Ok(RunAccepted {
             run_id: run.run_id,
@@ -1865,7 +1889,7 @@ mod tests {
         )
         .with_submitted_by(acme_admin().attribution());
         let err = service
-            .admit_and_persist(&mut racing, false)
+            .admit_and_persist(&mut racing, false, None)
             .await
             .unwrap_err();
 
@@ -2129,5 +2153,250 @@ mod tests {
         let rows = notices.notices_for_run(&accepted.run_id).await.unwrap();
         assert_eq!(rows.len(), 1, "the next admission re-wins the notice");
         assert_ne!(accepted.run_id, phantom_run);
+    }
+}
+
+/// Phase 42 (42-09, D-09, D-10): `POST /runs` admits an agent-kind assistant WITH its model, so
+/// an unpriced model under a ceiling and a zero derived budget are both refused before any run
+/// row is written; a workflow assistant keeps today's model-less `admit`.
+#[cfg(test)]
+mod agent_model_admission_tests {
+    use super::*;
+    use crate::application::services::run::resolver::{
+        CodeWorkflowResolver, ResolvedAssistant, Runnable,
+    };
+    use crate::application::services::treasurer::{AllowancePolicy, ScopeAllowance, Treasurer};
+    use paladin_battalion::engine::{EngineLimits, WarGraph};
+    use paladin_core::base::entity::node::Node;
+    use paladin_core::platform::container::allowance::Admission;
+    use paladin_core::platform::container::battlefield::BattlefieldSchema;
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode, PriceRow, PriceTable};
+    use paladin_core::platform::container::paladin::PaladinData;
+    use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+    use paladin_core::platform::container::run::AssistantRef;
+    use paladin_core::platform::container::treasury_ledger::{
+        LedgerScope, SettleRequest, SettlementKey,
+    };
+    use paladin_ports::input::run_submission_port::SubmitRun;
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+    use paladin_storage::run::in_memory::InMemoryRunRepository;
+    use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+    use std::sync::Mutex;
+
+    /// 10 USD per 1M tokens: one token is 10_000 nanos.
+    const PRICE_PER_MILLION: i64 = 10_000_000_000;
+    const CEILING_NANOS: i64 = 1_500_000;
+
+    fn usd() -> CurrencyCode {
+        CurrencyCode::new("USD").unwrap()
+    }
+
+    /// Resolves every id to an agent-kind assistant on `model`.
+    struct AgentResolver {
+        model: &'static str,
+    }
+
+    #[async_trait]
+    impl AssistantResolver for AgentResolver {
+        async fn resolve(
+            &self,
+            assistant_id: &str,
+            version: Option<u32>,
+        ) -> Result<ResolvedAssistant, ResolveError> {
+            Ok(ResolvedAssistant {
+                reference: AssistantRef {
+                    assistant_id: assistant_id.to_string(),
+                    version: version.unwrap_or(1),
+                },
+                runnable: Runnable::Agent(Arc::new(Node::new(
+                    PaladinData {
+                        system_prompt: "system".to_string(),
+                        model: self.model.to_string(),
+                        ..Default::default()
+                    },
+                    Some(assistant_id.to_string()),
+                ))),
+                allowed_roles: vec![],
+                source: AssistantSource::Code,
+            })
+        }
+    }
+
+    /// Records which admission entry point was used and with which model.
+    #[derive(Default)]
+    struct RecordingAdmission {
+        plain_admits: Mutex<u32>,
+        model_admits: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for RecordingAdmission {
+        async fn admit(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            *self.plain_admits.lock().unwrap() += 1;
+            Ok(Admission::none())
+        }
+
+        async fn admit_for_model(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+            model: &str,
+        ) -> Result<Admission, AdmissionError> {
+            self.model_admits.lock().unwrap().push(model.to_string());
+            Ok(Admission::none())
+        }
+
+        async fn confirm(&self, _admission: &Admission) {}
+
+        async fn abandon(&self, _admission: &Admission) {}
+    }
+
+    fn principal() -> PrincipalRef {
+        PrincipalRef::new("svc-a", TenantId::new("acme").unwrap(), UserRole::User)
+    }
+
+    fn request() -> SubmitRun {
+        SubmitRun {
+            assistant_id: "agent-1".to_string(),
+            version: None,
+            thread_id: None,
+            input: serde_json::json!({ "input": "hi" }),
+            webhook: None,
+            requested_by: Some(principal()),
+            attributed_to: None,
+        }
+    }
+
+    struct Fixture {
+        service: RunSubmissionService,
+        repository: Arc<dyn RunRepositoryPort>,
+        queue: Arc<dyn RunQueuePort>,
+        ledger: Arc<InMemoryTreasuryLedger>,
+    }
+
+    /// A real `Treasurer` with a lifetime ceiling for `svc-a`, priced only for `gpt-4`, over
+    /// an agent-kind assistant on `model`.
+    fn fixture(model: &'static str) -> Fixture {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let ledger_port: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let policy = AllowancePolicy::new(usd(), 80).with_api_key(
+            "svc-a",
+            ScopeAllowance::new(86_400, i64::MAX).with_lifetime(CEILING_NANOS),
+        );
+        let prices = Arc::new(PriceTable::new(usd()).with_row(
+            "gpt-4",
+            PriceRow::new(PRICE_PER_MILLION, PRICE_PER_MILLION).unwrap(),
+        ));
+        let treasurer = Arc::new(Treasurer::new(policy, ledger_port).with_pricing(prices));
+        let service = RunSubmissionService::new(
+            repository.clone(),
+            queue.clone(),
+            Arc::new(AgentResolver { model }),
+        )
+        .with_treasurer(treasurer);
+        Fixture {
+            service,
+            repository,
+            queue,
+            ledger,
+        }
+    }
+
+    async fn assert_nothing_written(f: &Fixture) {
+        let runs = f.repository.list(RunQuery::default()).await.unwrap();
+        assert!(runs.items.is_empty(), "no run row: {:?}", runs.items);
+        assert_eq!(f.queue.depth().await.unwrap(), 0, "no queue entry");
+    }
+
+    /// D-10: an unpriced agent model under a ceiling is refused `ModelUnpriced` naming the
+    /// model, before any row or queue entry is written.
+    #[tokio::test]
+    async fn submit_agent_kind_with_an_unpriced_model_is_refused_before_any_row() {
+        let f = fixture("mystery-model");
+
+        let err = f.service.submit(request()).await.unwrap_err();
+
+        assert!(
+            matches!(&err, RunSubmissionError::ModelUnpriced { model } if model == "mystery-model"),
+            "{err:?}"
+        );
+        assert_nothing_written(&f).await;
+    }
+
+    /// D-09: a derived budget of zero tokens (headroom below one token's price) is refused
+    /// `AllowanceExhausted` with the binding ceiling's figures, before any row is written; and
+    /// a priced model with real headroom is admitted and persisted (the control).
+    #[tokio::test]
+    async fn submit_agent_kind_with_a_zero_derived_budget_is_refused_allowance_exhausted() {
+        let f = fixture("gpt-4");
+        // 5_000 nanos of headroom is half a token at 10_000 nanos per token.
+        f.ledger
+            .settle(SettleRequest::unreserved(
+                LedgerScope::new("acme", "svc-a"),
+                SettlementKey::new(RunId::new_v7(), 1, 1),
+                Cost::new(CEILING_NANOS - 5_000, usd()),
+                std::collections::BTreeMap::from([("gpt-4".to_string(), CEILING_NANOS - 5_000)]),
+            ))
+            .await
+            .unwrap();
+
+        let err = f.service.submit(request()).await.unwrap_err();
+
+        let RunSubmissionError::AllowanceExhausted(refusal) = &err else {
+            panic!("expected AllowanceExhausted, got {err:?}");
+        };
+        assert_eq!(refusal.ceiling.nanos(), CEILING_NANOS);
+        assert_nothing_written(&f).await;
+
+        // Control: with real headroom the same priced model is admitted and persisted.
+        let f = fixture("gpt-4");
+        f.service.submit(request()).await.expect("admitted");
+        let runs = f.repository.list(RunQuery::default()).await.unwrap();
+        assert_eq!(runs.items.len(), 1);
+        assert_eq!(f.queue.depth().await.unwrap(), 1);
+    }
+
+    /// An agent-kind assistant is admitted with its OWN model (the resolved assistant's, never
+    /// the request's); a workflow assistant keeps the model-less `admit`.
+    #[tokio::test]
+    async fn submit_workflow_assistant_keeps_admit_and_agent_kind_admits_with_its_model() {
+        // Agent-kind: `admit_for_model` with the resolved assistant's model.
+        let admission = Arc::new(RecordingAdmission::default());
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let service = RunSubmissionService::new(
+            repository,
+            queue,
+            Arc::new(AgentResolver { model: "gpt-4" }),
+        )
+        .with_treasurer(admission.clone());
+        service.submit(request()).await.unwrap();
+        assert_eq!(
+            *admission.model_admits.lock().unwrap(),
+            vec!["gpt-4".to_string()]
+        );
+        assert_eq!(*admission.plain_admits.lock().unwrap(), 0);
+
+        // Workflow: the model-less `admit`, no model lookup.
+        let admission = Arc::new(RecordingAdmission::default());
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let graph = Arc::new(WarGraph::new(
+            BattlefieldSchema::new(vec![]),
+            EngineLimits::default(),
+        ));
+        let resolver = CodeWorkflowResolver::new().register("agent-1", graph);
+        let service = RunSubmissionService::new(repository, queue, Arc::new(resolver))
+            .with_treasurer(admission.clone());
+        service.submit(request()).await.unwrap();
+        assert!(admission.model_admits.lock().unwrap().is_empty());
+        assert_eq!(*admission.plain_admits.lock().unwrap(), 1);
     }
 }

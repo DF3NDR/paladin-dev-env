@@ -1224,6 +1224,19 @@ mod tests {
             warn_at: None,
         };
         let mut settings = Settings::default();
+        // An agent-kind assistant submitted under a ceiling is admitted with its model (Phase 42
+        // D-10), so the default `gpt-4` agent the wiring tests register must carry a price row
+        // or the submission is refused `422 model_unpriced`. Workflow assistants never read it.
+        settings.treasurer.pricing.insert(
+            "gpt-4".to_string(),
+            crate::config::treasurer::PriceRowConfig {
+                prompt: "10.00".to_string(),
+                completion: "10.00".to_string(),
+                cache_read: None,
+                cache_write: None,
+                reasoning: None,
+            },
+        );
         for (name, period, amount) in api_keys {
             settings
                 .treasurer

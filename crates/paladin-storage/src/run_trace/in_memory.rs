@@ -103,6 +103,14 @@ impl RunTracePort for InMemoryRunTraceStore {
         rows.retain(|_, stored| stored.superstep >= before_superstep);
         Ok((before_len - rows.len()) as u64)
     }
+
+    async fn max_seq(&self, thread: &ThreadId) -> Result<u64, RunTraceError> {
+        let threads = self.threads.read().await;
+        Ok(threads
+            .get(thread)
+            .and_then(|rows| rows.keys().next_back().copied())
+            .unwrap_or(0))
+    }
 }
 
 #[async_trait]
@@ -160,6 +168,14 @@ mod tests {
     #[tokio::test]
     async fn records_are_scoped_by_thread() {
         contract_tests::records_are_scoped_by_thread(&InMemoryRunTraceStore::new()).await;
+    }
+
+    #[tokio::test]
+    async fn max_seq_lets_a_second_run_on_a_thread_keep_its_records() {
+        contract_tests::max_seq_lets_a_second_run_on_a_thread_keep_its_records(
+            &InMemoryRunTraceStore::new(),
+        )
+        .await;
     }
 
     #[tokio::test]

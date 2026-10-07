@@ -125,7 +125,9 @@ struct TraceQueue {
 /// Constructed with the specific `thread_id` (and optional `run_id`) it
 /// stamps every record for (D-03): production always builds one engine —
 /// and so one dispatcher — per run (the Phase 27 worker's own pattern), so
-/// `seq` starting at 1 per dispatcher IS `seq` starting at 1 per run.
+/// `seq` starting at 1 per dispatcher IS `seq` starting at 1 per run. A run
+/// that shares its thread with an earlier run starts after that run's last
+/// `seq` instead -- see [`TraceDispatcher::with_seq_origin`].
 pub struct TraceDispatcher {
     /// `None` when no sink is configured. `Some` pairs the shared queue with
     /// the lightweight "doorbell" sender that wakes the consumer task —
@@ -443,6 +445,27 @@ impl TraceDispatcher {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .total()
         })
+    }
+
+    /// Start this dispatcher's sequence after `origin` instead of at 1: the
+    /// first record it stamps carries `seq == origin + 1` (Phase 42 review
+    /// WR-6).
+    ///
+    /// A persisted trace is keyed `(thread_id, seq)`, and a second run on one
+    /// thread (a fork, or a drained run that is requeued) builds a fresh
+    /// dispatcher, so without an origin its records would reuse the seq values
+    /// of the first run's and be dropped as conflicts. The caller seeds the
+    /// origin from the thread's largest persisted `seq`
+    /// (`RunTracePort::max_seq`). An `origin` of `0` is the default and changes
+    /// nothing. Call it straight after construction, before the first `emit`:
+    /// a dispatcher that already stamped records keeps the larger of the two
+    /// positions, so the sequence can never move backwards.
+    #[must_use]
+    pub fn with_seq_origin(self, origin: u64) -> Self {
+        if let Some((queue, _)) = &self.inner {
+            queue.seq.fetch_max(origin, Ordering::SeqCst);
+        }
+        self
     }
 
     /// Enable opt-in value inclusion on `TraceEvent::DeltaMerged
@@ -825,6 +848,48 @@ mod tests {
             })
             .expect("a RunFinished record must exist");
         assert_eq!(run_finished_cost, Some(Cost::new(42_500, usd())));
+    }
+
+    /// WR-6: a dispatcher seeded with an origin stamps `origin + 1` first and stays gapless, so a
+    /// second run on a thread numbers its records after the first run's.
+    #[tokio::test]
+    async fn seq_origin_starts_the_sequence_after_the_origin() {
+        let sink = RecordingTraceSink::new();
+        let dispatcher =
+            TraceDispatcher::new(ThreadId::new("t").unwrap(), None, Some(sink.clone()))
+                .with_seq_origin(41);
+
+        dispatcher.emit(run_started());
+        dispatcher.emit(superstep_started(1));
+        dispatcher.emit(run_finished());
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let seqs: Vec<u64> = sink.events().await.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, vec![42, 43, 44]);
+    }
+
+    /// WR-6: an origin of zero is the default sequence, and an origin set after records were
+    /// stamped never moves the sequence backwards.
+    #[tokio::test]
+    async fn seq_origin_zero_changes_nothing_and_never_moves_backwards() {
+        let sink = RecordingTraceSink::new();
+        let dispatcher =
+            TraceDispatcher::new(ThreadId::new("t").unwrap(), None, Some(sink.clone()))
+                .with_seq_origin(0);
+        dispatcher.emit(run_started());
+        dispatcher.emit(superstep_started(1));
+        let dispatcher = dispatcher.with_seq_origin(1);
+        dispatcher.emit(run_finished());
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let seqs: Vec<u64> = sink.events().await.iter().map(|r| r.seq).collect();
+        assert_eq!(seqs, vec![1, 2, 3]);
+
+        // No sink: the call is a no-op and still returns the dispatcher.
+        let untraced =
+            TraceDispatcher::new(ThreadId::new("t").unwrap(), None, None).with_seq_origin(9);
+        untraced.emit(run_started());
+        assert_eq!(untraced.dropped_count(), 0);
     }
 
     #[tokio::test]

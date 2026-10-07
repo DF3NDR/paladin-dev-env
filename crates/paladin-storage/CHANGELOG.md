@@ -17,6 +17,10 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- `RunTracePort::max_seq` on the in-memory, SQLite and PostgreSQL run-trace stores (an index lookup
+  on the `(thread_id, seq)` key), behind a new shared contract clause: a second run that numbers its
+  records after the thread's maximum keeps every one of them (Phase 42 review WR-6). No migration.
+
 - Phase 42 (mid-run halt and terminal status, ALLOW-03, PLAT-09; ADR-0057): migration `013`
   (`runs.halt_reason`, nullable, `NULL` for every legacy row) and migration `014`
   (`treasury_notices.notice_kind`, default `'warning'`, with the once-per-window index rebuilt to

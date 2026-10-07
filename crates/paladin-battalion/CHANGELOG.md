@@ -9,6 +9,11 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- `TraceDispatcher::with_seq_origin(origin)`, which starts the dispatcher's `seq` after `origin`
+  (default `0`, so every existing caller is unchanged). The run worker seeds it from the thread's
+  largest persisted `seq`, so a fork or a requeued drained run on the same thread numbers its trace
+  records after the earlier run's instead of colliding with them (Phase 42 review WR-6).
+
 - Phase 42 (mid-run halt, ALLOW-03; ADR-0057): `HaltCause` (`CancelRequested`, `Token`,
   `Spend(HaltReason)`) on `RunOutcome::Halted`, and `WarEngine::with_spend_guard`, which consults
   the attached `SpendGuard` at every superstep boundary (a check-only read: a halt keeps the

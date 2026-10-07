@@ -9,6 +9,12 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- `RunTracePort::max_seq(&self, &ThreadId)`, the largest persisted `seq` of a thread (`0` when it
+  has none), with a defaulted implementation that pages through `read` so an existing implementor
+  keeps compiling and stays correct. A run seeds its trace dispatcher from it so a second run on
+  one thread no longer loses records to the `(thread_id, seq)` conflict rule (Phase 42 review
+  WR-6).
+
 - `SpendGuard::note_unsettled_spend(&self, &ThreadId)`, a defaulted no-op the engine calls when a
   superstep's priced charge could not be written to the ledger, so a metering guard can fail
   closed instead of reading a balance that no longer holds the run's own spend (Phase 42 review

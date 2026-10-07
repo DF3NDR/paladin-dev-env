@@ -158,6 +158,59 @@ pub async fn records_are_scoped_by_thread(port: &dyn RunTracePort) {
     assert_eq!(b_records[0].thread_id, thread_b);
 }
 
+/// `max_seq` reports the highest persisted `seq` of THAT thread (`0` for a thread with no rows),
+/// and a second run that numbers its records from it keeps every record: two runs on one thread
+/// are both read back (Phase 42 review WR-6).
+pub async fn max_seq_lets_a_second_run_on_a_thread_keep_its_records(port: &dyn RunTracePort) {
+    let thread = ThreadId::new("contract-max-seq-thread").unwrap();
+    let other = ThreadId::new("contract-max-seq-other-thread").unwrap();
+    assert_eq!(
+        port.max_seq(&thread).await.unwrap(),
+        0,
+        "a thread with no rows has no maximum"
+    );
+
+    let first_run = RunId::new_v7();
+    let first: Vec<TraceRecord> = [1u64, 2, 5]
+        .iter()
+        .map(|seq| TraceRecord {
+            run_id: Some(first_run.clone()),
+            ..sample_record(&thread, *seq, 0)
+        })
+        .collect();
+    port.append(&first).await.unwrap();
+    port.append(&[sample_record(&other, 40, 0)]).await.unwrap();
+    assert_eq!(
+        port.max_seq(&thread).await.unwrap(),
+        5,
+        "the maximum is the highest seq of this thread, never another thread's"
+    );
+
+    // A second run seeds its dispatcher from the maximum, so its seq starts after the first run's.
+    let origin = port.max_seq(&thread).await.unwrap();
+    let second_run = RunId::new_v7();
+    let second: Vec<TraceRecord> = (1..=3u64)
+        .map(|n| TraceRecord {
+            run_id: Some(second_run.clone()),
+            ..sample_record(&thread, origin + n, 0)
+        })
+        .collect();
+    port.append(&second).await.unwrap();
+
+    let rows = port.read(&thread, 0, 100).await.unwrap();
+    assert_eq!(rows.len(), 6, "both runs' records are persisted: {rows:?}");
+    let seqs: Vec<u64> = rows.iter().map(|r| r.seq).collect();
+    assert_eq!(seqs, vec![1, 2, 5, 6, 7, 8]);
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r.run_id.as_ref() == Some(&second_run))
+            .count(),
+        3,
+        "none of the second run's records was dropped as a conflict"
+    );
+    assert_eq!(port.max_seq(&thread).await.unwrap(), 8);
+}
+
 /// `prune_thread(thread, 3)` deletes exactly the rows whose `superstep` is
 /// below 3 and returns that count.
 pub async fn prune_thread_removes_only_older_supersteps(port: &dyn RunTracePort) {
@@ -296,6 +349,7 @@ pub async fn run_all(store: Arc<dyn RunTracePort>) {
     read_of_unknown_thread_is_empty_not_error(store.as_ref()).await;
     append_is_idempotent_on_same_seq(store.as_ref()).await;
     records_are_scoped_by_thread(store.as_ref()).await;
+    max_seq_lets_a_second_run_on_a_thread_keep_its_records(store.as_ref()).await;
     prune_thread_removes_only_older_supersteps(store.as_ref()).await;
     run_finished_halt_reason_round_trips(store.as_ref()).await;
     legacy_run_finished_row_reads_back_without_a_halt_reason(store.as_ref()).await;

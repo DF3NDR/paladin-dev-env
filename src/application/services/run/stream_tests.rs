@@ -2237,6 +2237,106 @@ async fn every_halt_cause_maps_to_one_status_on_every_leg() {
     .expect("every_halt_cause_maps_to_one_status_on_every_leg timed out");
 }
 
+/// WR-6 (42-REVIEW): `run_traces` is keyed `(thread_id, seq)` and drops a conflicting record, and
+/// a second run on one thread (a fork, a requeued drained run) builds a fresh dispatcher. The
+/// worker seeds the dispatcher from the thread's largest persisted `seq`, so the new run's whole
+/// trace -- its `RunStarted` through its `RunFinished` -- is kept rather than lost to the first
+/// run's numbering.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_second_run_on_a_thread_keeps_its_trace_records() {
+    use paladin_ports::output::trace_sink_port::RunFinishStatus;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let store = Arc::new(InMemoryWaypointStore::new());
+        let traces = Arc::new(InMemoryRunTraceStore::new());
+        let graph = build_chain_graph(2, Duration::from_millis(1));
+        let resolver: Arc<dyn AssistantResolver> =
+            Arc::new(CodeWorkflowResolver::new().register("seq-origin-chain", graph));
+        let factory_store = store.clone();
+        let engine_factory: Arc<
+            dyn Fn(tokio_util::sync::CancellationToken) -> WarEngine<InMemoryWaypointStore>
+                + Send
+                + Sync,
+        > = Arc::new(move |token| {
+            WarEngine::new(Arc::new(UnusedPaladinPort), factory_store.clone())
+                .with_cancellation_token(token)
+        });
+        let pool = RunWorkerPool::new(
+            Arc::new(WarEngine::new(Arc::new(UnusedPaladinPort), store.clone())),
+            store.clone(),
+            repository.clone(),
+            queue.clone(),
+            resolver,
+            Duration::from_secs(30),
+        )
+        .with_engine_factory(engine_factory)
+        .with_trace_config(TraceConfig {
+            log_sink: false,
+            persist: true,
+            ..TraceConfig::default()
+        })
+        .with_run_trace_port(traces.clone() as Arc<dyn RunTracePort>);
+
+        let (run_id, thread_id) = submit(&repository, &queue, "seq-origin-chain").await;
+        // An earlier run on this thread already persisted 40 records -- more than the new run
+        // writes in total, so every one of its records would collide without an origin.
+        let earlier_run = RunId::new_v7();
+        let earlier: Vec<TraceRecord> = (1..=40)
+            .map(|seq| run_stamped(&thread_id, &earlier_run, seq, superstep_event(seq)))
+            .collect();
+        traces.append(&earlier).await.unwrap();
+
+        assert!(pool.run_once().await.unwrap());
+        assert_eq!(
+            repository.get(&run_id).await.unwrap().unwrap().status,
+            RunStatus::Completed
+        );
+
+        let mut own: Vec<TraceRecord> = Vec::new();
+        for _ in 0..200 {
+            own = traces
+                .read(&thread_id, 0, 1000)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|record| record.run_id.as_ref() == Some(&run_id))
+                .collect();
+            if own.iter().any(|r| {
+                matches!(
+                    r.event,
+                    TraceEvent::RunFinished {
+                        status: RunFinishStatus::Completed,
+                        ..
+                    }
+                )
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            own.iter()
+                .any(|r| matches!(r.event, TraceEvent::RunStarted { .. })),
+            "the second run's RunStarted is persisted: {own:?}"
+        );
+        assert!(
+            own.iter()
+                .any(|r| matches!(r.event, TraceEvent::RunFinished { .. })),
+            "the second run's RunFinished is persisted: {own:?}"
+        );
+        assert!(
+            own.iter().all(|r| r.seq > 40),
+            "the second run numbers its records after the first run's: {own:?}"
+        );
+        let seqs: Vec<u64> = own.iter().map(|r| r.seq).collect();
+        let expected: Vec<u64> = (41..41 + seqs.len() as u64).collect();
+        assert_eq!(seqs, expected, "and its numbering is gapless");
+    })
+    .await
+    .expect("a_second_run_on_a_thread_keeps_its_trace_records timed out");
+}
+
 /// D-15, G1c: a worker drain streams no terminal event. The shutdown halts the run at a
 /// boundary; the row stays `Running`, the message is requeued, and no subscriber sees a `done`
 /// (or `error`) for a run that is still running.

@@ -987,6 +987,34 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         self
     }
 
+    /// The `seq` this run's trace dispatcher starts after (Phase 42 review WR-6).
+    ///
+    /// `run_traces` is keyed `(thread_id, seq)` and drops a conflicting record, so a second run
+    /// on one thread (a fork, or a drained run that is requeued) must number its records after
+    /// the thread's largest persisted `seq` or its early records are silently lost. `0` -- the
+    /// dispatcher's own default -- when the run's records are not persisted (no persisting sink,
+    /// no port) and when the read fails: a trace is a best-effort replay aid and never gates a
+    /// run, so a failed read is logged (run id and error, never a payload) and the run proceeds.
+    async fn trace_seq_origin(&self, run: &Run) -> u64 {
+        if !self.trace_config.persist {
+            return 0;
+        }
+        let Some(port) = &self.run_trace_port else {
+            return 0;
+        };
+        match port.max_seq(&run.thread_id).await {
+            Ok(max) => max,
+            Err(error) => {
+                log::warn!(
+                    "could not read the thread's trace position, so run {} starts its trace \
+                     at seq 1: {error}",
+                    run.run_id
+                );
+                0
+            }
+        }
+    }
+
     /// Emit one [`TraceEvent::AllowanceWarning`] per notice the admission won for `run`
     /// through `emitter`, in recorded order (D-18, C6). Called on a first dispatch only, after
     /// the run's own emitter exists and before `RunStarted`, so the events take the run's own
@@ -1244,12 +1272,16 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     let composed_sink = compose_run_sink(base_sink, herald_sink);
                     let run_trace_emitter = match composed_sink {
                         Some(sink) => {
-                            let dispatcher = Arc::new(TraceDispatcher::with_capacity(
-                                run.thread_id.clone(),
-                                Some(run.run_id.clone()),
-                                Some(sink.clone()),
-                                self.trace_config.channel_capacity,
-                            ));
+                            let dispatcher = Arc::new(
+                                TraceDispatcher::with_capacity(
+                                    run.thread_id.clone(),
+                                    Some(run.run_id.clone()),
+                                    Some(sink.clone()),
+                                    self.trace_config.channel_capacity,
+                                )
+                                // WR-6: number this run's records after the thread's last.
+                                .with_seq_origin(self.trace_seq_origin(&run).await),
+                            );
                             engine = engine
                                 .with_trace_sink(sink)
                                 .with_trace_capacity(self.trace_config.channel_capacity)
@@ -1546,12 +1578,16 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         });
         let composed_sink = compose_run_sink(base_sink, herald_sink);
         let traced = composed_sink.is_some();
-        let dispatcher = Arc::new(TraceDispatcher::with_capacity(
-            run.thread_id.clone(),
-            Some(run.run_id.clone()),
-            composed_sink,
-            self.trace_config.channel_capacity,
-        ));
+        let dispatcher = Arc::new(
+            TraceDispatcher::with_capacity(
+                run.thread_id.clone(),
+                Some(run.run_id.clone()),
+                composed_sink,
+                self.trace_config.channel_capacity,
+            )
+            // WR-6: number this run's records after the thread's last.
+            .with_seq_origin(self.trace_seq_origin(run).await),
+        );
         // `None` for an untraced run, so below-engine producers keep their
         // zero-cost "no emitter" path (D-10) exactly as on the graph path.
         let emitter: Option<Arc<dyn TraceEmitter>> =

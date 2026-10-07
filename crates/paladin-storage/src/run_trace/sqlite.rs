@@ -50,6 +50,10 @@ const READ_QUERY: &str = r#"
 /// than the caller's boundary.
 const PRUNE_QUERY: &str = "DELETE FROM run_traces WHERE thread_id = ? AND superstep < ?";
 
+/// `max_seq`: the thread's highest `seq`, `0` when it has no rows. Served by the
+/// `(thread_id, seq)` primary key, so it is an index lookup, never a scan.
+const MAX_SEQ_QUERY: &str = "SELECT COALESCE(MAX(seq), 0) FROM run_traces WHERE thread_id = ?";
+
 /// Test-only raw upsert (see [`RawSchemaVersionWriter`]): writes `record`
 /// with an ARBITRARY `schema_version`, bypassing [`APPEND_QUERY`]'s
 /// always-current stamping.
@@ -196,6 +200,15 @@ impl RunTracePort for SqliteRunTraceStore {
             .map_err(|e| self.wrap_error(e))?;
         Ok(result.rows_affected())
     }
+
+    async fn max_seq(&self, thread: &ThreadId) -> Result<u64, RunTraceError> {
+        let max: i64 = sqlx::query_scalar(MAX_SEQ_QUERY)
+            .bind(thread.as_str())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+        Ok(u64::try_from(max).unwrap_or(0))
+    }
 }
 
 #[async_trait]
@@ -259,6 +272,14 @@ mod tests {
     #[tokio::test]
     async fn records_are_scoped_by_thread() {
         contract_tests::records_are_scoped_by_thread(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn max_seq_lets_a_second_run_on_a_thread_keep_its_records() {
+        contract_tests::max_seq_lets_a_second_run_on_a_thread_keep_its_records(
+            &fresh_store().await,
+        )
+        .await;
     }
 
     #[tokio::test]

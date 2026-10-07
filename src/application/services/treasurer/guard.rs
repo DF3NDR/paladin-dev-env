@@ -112,9 +112,10 @@ pub struct TreasurerSpendGuard {
     /// boundary does not write again. A claim is inserted only after the store answers `Recorded`
     /// or `AlreadyRecorded`, never before the write and never after a store error, so a
     /// transient failure is retried at the next boundary (WR-3). Only skips writes -- the store
-    /// stays the truth, and a claim never changes the guard's decision. The lock is held only to test-and-insert, never across an
-    /// `.await`. Held behind an `Arc` so the struct keeps the `Freeze` auto trait it published
-    /// with (an inline `Mutex` would change the public API surface).
+    /// stays the truth, and a claim never changes the guard's decision. The lock is held only to
+    /// test-and-insert, never across an `.await`. Held behind an `Arc` so the struct keeps the
+    /// `Freeze` auto trait it published with (an inline `Mutex` would change the public API
+    /// surface).
     claimed: Arc<Mutex<HashSet<ClaimKey>>>,
     /// Set by [`SpendGuard::note_unsettled_spend`] when the engine could not write a
     /// superstep's charge to the ledger (WR-4). From then on this run's balance reads no longer

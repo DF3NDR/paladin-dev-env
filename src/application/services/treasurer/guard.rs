@@ -267,10 +267,17 @@ impl SpendGuard for TreasurerSpendGuard {
                     // unreadable ledger (D-03) -- but only here, where a ceiling applies: a
                     // principal with no allowance (`Ok(None)` above) has nothing to protect.
                     if self.spend_unsettled.load(Ordering::SeqCst) {
+                        // IN-10: through the one fail-closed helper, so the line has the same
+                        // shape, names its scope kinds and can be checked for key values.
+                        let scopes = self.treasurer.policy.ceilings_for(&self.subject);
                         log::error!(
-                            "allowance boundary check failed closed: run={} tenant={}                              error=a superstep's spend could not be written to the ledger, so                              this run's balance can no longer be trusted",
-                            self.run_id,
-                            self.subject.tenant_id,
+                            "{}",
+                            fail_closed_message(
+                                &self.run_id,
+                                scopes.iter().map(|ceiling| ceiling.scope_kind.as_str()),
+                                &self.subject.tenant_id,
+                                &UNSETTLED_SPEND_ERROR,
+                            )
                         );
                         return SpendDecision::Halt(self.memoise(HaltReason::LedgerUnavailable));
                     }
@@ -300,6 +307,12 @@ impl SpendGuard for TreasurerSpendGuard {
         self.spend_unsettled.store(true, Ordering::SeqCst);
     }
 }
+
+/// The error text of a fail-closed halt for a lost charge (WR-4): one of the run's own superstep
+/// charges could not be written to the ledger, so a balance read that shows headroom no longer
+/// proves anything. Names no key value.
+pub(super) const UNSETTLED_SPEND_ERROR: &str = "a superstep's spend could not be written to the \
+     ledger, so this run's balance can no longer be trusted";
 
 /// The one `error`-level line a fail-closed boundary check writes (D-03, T-42-18).
 ///

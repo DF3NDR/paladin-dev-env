@@ -1685,6 +1685,35 @@ fn fail_closed_log_line_names_run_scope_tenant_and_error_only() {
     assert!(line.contains("scripted balance failure"), "{line}");
 }
 
+/// IN-10: the lost-charge fail-closed line is the same one-line shape -- names the run, the scope
+/// kinds and the tenant, carries no run of padding spaces, and names no key value.
+#[test]
+fn fail_closed_log_line_for_a_lost_charge_is_one_greppable_line() {
+    let run_id = RunId::new_v7();
+    let tenant = TenantId::new("acme").expect("valid tenant");
+    let line = super::guard::fail_closed_message(
+        &run_id,
+        ["api_key"],
+        &tenant,
+        &super::guard::UNSETTLED_SPEND_ERROR,
+    );
+
+    assert!(line.contains(&format!("run={run_id}")), "{line}");
+    assert!(line.contains("scope=api_key"), "{line}");
+    assert!(line.contains("tenant=acme"), "{line}");
+    assert!(
+        line.contains("a superstep's spend could not be written to the ledger"),
+        "{line}"
+    );
+    assert!(
+        line.contains("this run's balance can no longer be trusted"),
+        "{line}"
+    );
+    assert!(!line.contains("  "), "no run of padding spaces: {line}");
+    assert!(!line.contains('\n'), "one line: {line}");
+    assert!(!line.contains("svc-"), "no key value in the line: {line}");
+}
+
 // -- the derived agent budget (ALLOW-05, Phase 42 D-09, D-10) -------------------
 
 use paladin_core::platform::container::allowance::DerivedTokenBudget;

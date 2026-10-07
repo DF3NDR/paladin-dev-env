@@ -231,7 +231,7 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 - [x] **Phase 39: Spend Ledger** - A `TreasuryLedgerPort` with in-memory, SQLite and Postgres adapters behind one contract suite, reserve-then-settle draws, idempotent settlement, and queryable spend (completed 2026-09-28)
 - [x] **Phase 40: Tenant Identity & Run-Read Scoping** - Map API keys to tenants on the `Principal`, attribute every run to its submitting principal, and scope every run-read route to the calling principal (completed 2026-09-30)
 - [ ] **Phase 41: Admission-Time Allowance Enforcement** - Rolling-period allowances with an optional lifetime cap, refused at admission when exhausted, with a non-blocking warn-threshold notice
-- [ ] **Phase 42: Mid-Run Halt & SSE Terminal Status** - A resumable, checkpoint-preserving halt when an in-flight run's next draw would overspend, on both the engine and agent-loop paths, plus the SSE `done`/`Cancelled` fix
+- [x] **Phase 42: Mid-Run Halt & SSE Terminal Status** - A resumable, checkpoint-preserving halt when an in-flight run's next draw would overspend, on both the engine and agent-loop paths, plus the SSE `done`/`Cancelled` fix (completed 2026-10-07)
 - [ ] **Phase 43: Rate Pacing** - In-process and Redis-shared 429 back-off with jitter, a distributed cache-stampede lock, and safe degradation when Redis is unavailable
 - [ ] **Phase 44: Legacy Clean-Break Removal** - Remove legacy Battalion `RetryPolicy`/`ErrorStrategy`/`NodeError`/timeouts and `PaladinError::LlmError(String)`, migrating the last string-matching retry check to the typed taxonomy
 - [x] **Phase 45: RustFS Swap & Platform/Observability Deviations** - Replace MinIO with RustFS across dev/test and CI, wire SSE/webhook emission for legacy `Runnable::Agent` runs, and close the tracing-overhead gap (completed 2026-09-30)
@@ -699,7 +699,7 @@ feature work)
 | 39. Spend Ledger | v0.11.0 | 8/8 | Complete    | 2026-09-28 |
 | 40. Tenant Identity & Run-Read Scoping | v0.11.0 | 6/6 | Complete    | 2026-09-30 |
 | 41. Admission-Time Allowance Enforcement | v0.11.0 | 0/TBD | Not started | - |
-| 42. Mid-Run Halt & SSE Terminal Status | v0.11.0 | 0/TBD | Not started | - |
+| 42. Mid-Run Halt & SSE Terminal Status | v0.11.0 | 12/12 | Complete    | 2026-10-07 |
 | 43. Rate Pacing | v0.11.0 | 0/TBD | Not started | - |
 | 44. Legacy Clean-Break Removal | v0.11.0 | 0/TBD | Not started | - |
 | 45. RustFS Swap & Platform/Observability Deviations | v0.11.0 | 7/7 | Complete    | 2026-09-30 |

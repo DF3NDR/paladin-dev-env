@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 42
-current_phase_name: mid-run-halt-sse-terminal-status
-status: executing
+current_phase: 43
+current_phase_name: Rate Pacing
+status: planning
 stopped_at: Completed 42-12-PLAN.md
-last_updated: "2026-10-07T02:17:33.160Z"
-last_activity: 2026-10-06
-last_activity_desc: Phase 42 execution started
+last_updated: "2026-10-07T20:58:33.314Z"
+last_activity: 2026-10-07
+last_activity_desc: Phase 42 complete, transitioned to Phase 45
 progress:
   total_phases: 6
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 51
   completed_plans: 51
 ---
@@ -50,16 +50,16 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 42 (mid-run-halt-sse-terminal-status) — EXECUTING
-Plan: 12 of 12
-Status: All 12 plans executed — awaiting phase verification (phase not yet marked complete)
-Last activity: 2026-10-06 — Phase 42 execution started
+Phase: 43 — Rate Pacing
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-07 — Phase 42 complete (verified, UAT 2/2, D-08 wording override accepted); next in roadmap order is Phase 43 (Phase 45 was sealed 2026-09-30 out of sequence)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 445
+- Total plans completed: 457
 - Average duration: —
 - Total execution time: —
 
@@ -109,6 +109,7 @@ Last activity: 2026-10-06 — Phase 42 execution started
 | 39 | 8 | - | - |
 | 45 | 7 | - | - |
 | 40 | 6 | - | - |
+| 42 | 12 | - | - |
 
 *Updated after each plan completion*
 

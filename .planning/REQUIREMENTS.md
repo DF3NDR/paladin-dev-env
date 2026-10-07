@@ -68,7 +68,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **ALLOW-02**: Submitting a run while the caller's tenant or API-key allowance is exhausted is
   refused at admission with a typed error, and no run is persisted
 
-- [ ] **ALLOW-03**: A run in flight whose next draw would overspend halts cleanly — typed Treasurer
+- [x] **ALLOW-03**: A run in flight whose next draw would overspend halts cleanly — typed Treasurer
   error, status `Halted`, last checkpoint kept — and can be resumed once the allowance is replenished
   or the period resets; this holds on both engine-driven (`WarEngine`) and agent-loop
   (`PaladinExecutionService`) runs, with the enforcement attachment point recorded in an ADR
@@ -76,7 +76,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **ALLOW-04**: A configurable warn threshold (for example 80%) emits one trace event plus a
   herald and webhook notice per window, without blocking the run
 
-- [ ] **ALLOW-05**: The Treasurer derives the per-run `TokenBudget` from the remaining allowance and
+- [x] **ALLOW-05**: The Treasurer derives the per-run `TokenBudget` from the remaining allowance and
   works alongside `TokenBudget`, `ModelCallLimit`, `ToolCallLimit` and the Commissary without
   replacing any of them; a guard keeps `Treasurer` a framework-only word
 
@@ -135,7 +135,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **PLAT-08**: Legacy `Runnable::Agent` runs emit SSE live events and webhook deliveries like
   graph runs (row 31)
 
-- [ ] **PLAT-09**: The SSE `done` event matches the persisted status — `Cancelled` for a
+- [x] **PLAT-09**: The SSE `done` event matches the persisted status — `Cancelled` for a
   caller-cancelled run and `Halted` with the Treasurer reason for a spend halt (D-14)
 
 ### Observability (OBS, continued)
@@ -220,9 +220,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | TENANT-02 | Phase 40 | Complete |
 | ALLOW-01 | Phase 41 | Complete |
 | ALLOW-02 | Phase 41 | Complete |
-| ALLOW-03 | Phase 42 | Pending |
+| ALLOW-03 | Phase 42 | Complete |
 | ALLOW-04 | Phase 41 | Complete |
-| ALLOW-05 | Phase 42 | Pending |
+| ALLOW-05 | Phase 42 | Complete |
 | PACE-01 | Phase 43 | Pending |
 | PACE-02 | Phase 43 | Pending |
 | PACE-03 | Phase 43 | Pending |
@@ -237,7 +237,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | STORE-03 | Phase 45 | Complete |
 | PLAT-07 | Phase 40 | Complete |
 | PLAT-08 | Phase 45 | Complete |
-| PLAT-09 | Phase 42 | Pending |
+| PLAT-09 | Phase 42 | Complete |
 | OBS-05 | Phase 45 | Complete |
 | CURR-22 | Phase 46 | Pending |
 | CURR-23 | Phase 46 | Pending |

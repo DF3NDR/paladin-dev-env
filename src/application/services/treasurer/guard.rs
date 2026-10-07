@@ -24,6 +24,7 @@
 //!   and never a key value, so no role bypasses it and no log line can leak a credential.
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use async_trait::async_trait;
@@ -115,6 +116,12 @@ pub struct TreasurerSpendGuard {
     /// `.await`. Held behind an `Arc` so the struct keeps the `Freeze` auto trait it published
     /// with (an inline `Mutex` would change the public API surface).
     claimed: Arc<Mutex<HashSet<ClaimKey>>>,
+    /// Set by [`SpendGuard::note_unsettled_spend`] when the engine could not write a
+    /// superstep's charge to the ledger (WR-4). From then on this run's balance reads no longer
+    /// include all of its own spend, so a metered run fails closed at its next headroom check.
+    /// Shared by every clone, like `halted`; behind an `Arc` for the same `Freeze` reason as
+    /// `claimed`.
+    spend_unsettled: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for TreasurerSpendGuard {
@@ -255,6 +262,18 @@ impl SpendGuard for TreasurerSpendGuard {
                 // Headroom everywhere: continue, and cache no decision (D-02). A ceiling this
                 // run has crossed `warn_at` on claims its once-per-window warning (D-17).
                 None => {
+                    // WR-4: the ledger cannot be trusted to hold this run's own spend, so a
+                    // read that shows headroom proves nothing. Fail closed, exactly as for an
+                    // unreadable ledger (D-03) -- but only here, where a ceiling applies: a
+                    // principal with no allowance (`Ok(None)` above) has nothing to protect.
+                    if self.spend_unsettled.load(Ordering::SeqCst) {
+                        log::error!(
+                            "allowance boundary check failed closed: run={} tenant={}                              error=a superstep's spend could not be written to the ledger, so                              this run's balance can no longer be trusted",
+                            self.run_id,
+                            self.subject.tenant_id,
+                        );
+                        return SpendDecision::Halt(self.memoise(HaltReason::LedgerUnavailable));
+                    }
                     self.claim_mid_run_warnings(&evaluation).await;
                     SpendDecision::Continue
                 }
@@ -275,6 +294,10 @@ impl SpendGuard for TreasurerSpendGuard {
                 SpendDecision::Halt(self.memoise(HaltReason::LedgerUnavailable))
             }
         }
+    }
+
+    fn note_unsettled_spend(&self, _thread: &ThreadId) {
+        self.spend_unsettled.store(true, Ordering::SeqCst);
     }
 }
 
@@ -359,6 +382,7 @@ impl Treasurer {
             halted: Arc::new(OnceLock::new()),
             emitter,
             claimed: Arc::new(Mutex::new(HashSet::new())),
+            spend_unsettled: Arc::new(AtomicBool::new(false)),
         })
     }
 }

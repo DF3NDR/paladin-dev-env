@@ -24,7 +24,10 @@
 //! `engine::mod`/`engine::superstep`. A ledger failure or duplicate-key
 //! outcome (D-08, LEDGR-03) is logged and never changes a run's outcome,
 //! retries a node, or halts a run -- settlement stays purely observational;
-//! the authoritative halt decision belongs to the `SpendGuard` above.
+//! the authoritative halt decision belongs to the `SpendGuard` above. A charge
+//! that could not be WRITTEN is reported ([`SettleHealth::ChargeLost`]) so the
+//! engine can tell an attached guard its balance reads are no longer fed by
+//! every write (Phase 42 review WR-4); the guard, not settlement, decides.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -127,6 +130,21 @@ pub(crate) enum SuperstepCharge {
     },
 }
 
+/// Whether a boundary's accumulated charge reached the ledger (Phase 42 review WR-4).
+///
+/// [`SpendHook::settle_boundary`] still never fails or halts a run itself; it reports this so
+/// the engine can tell an attached [`SpendGuard`](paladin_ports::output::spend_guard::SpendGuard)
+/// that its balance reads are no longer fed by every write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
+pub(crate) enum SettleHealth {
+    /// Nothing was lost: the charge was written, was already settled, there was nothing to
+    /// charge, or this is a child hook whose parent settles.
+    Healthy,
+    /// A priced charge could not be written (a ledger error, or a currency mismatch).
+    ChargeLost,
+}
+
 /// The per-run hook threaded through the superstep loop (D-08): every
 /// dispatched attempt records its own cost via [`SpendHook::record`], and
 /// exactly one [`SpendHook::settle_boundary`] call per superstep drains and
@@ -192,22 +210,28 @@ impl SpendHook {
     /// logged at `error`, and [`SettleOutcome::AlreadySettled`] is logged at
     /// `warn` -- neither changes this run's outcome, retries a node, or
     /// halts the run (D-08). Log lines never carry `api_key_id`.
-    pub(crate) async fn settle_boundary(&self, superstep: u64) {
+    ///
+    /// Returns [`SettleHealth::ChargeLost`] when a priced charge could not be written (a ledger
+    /// `Err` or a currency mismatch), so the engine can tell an attached spend guard that it is
+    /// now blind to this run's spend (Phase 42 review WR-4). Settlement itself stays
+    /// observational: the decision to halt belongs to the guard.
+    pub(crate) async fn settle_boundary(&self, superstep: u64) -> SettleHealth {
         let Some((ledger, context)) = &self.ledger else {
-            return;
+            return SettleHealth::Healthy;
         };
         let charge = {
             let mut sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);
             sink.take()
         };
         match charge {
-            SuperstepCharge::Nothing => {}
+            SuperstepCharge::Nothing => SettleHealth::Healthy,
             SuperstepCharge::CurrencyMismatch { first, other } => {
                 log::error!(
                     target: "paladin::treasury",
                     "superstep spend currency mismatch: run {} superstep {} attempt {}: {} vs {} -- no settlement written",
                     context.run_id, superstep, context.attempt, first, other
                 );
+                SettleHealth::ChargeLost
             }
             SuperstepCharge::Charge {
                 amount,
@@ -227,6 +251,7 @@ impl SpendHook {
                             "settled superstep spend: run {} superstep {} attempt {} amount_nanos {} currency {}",
                             context.run_id, superstep, context.attempt, amount.nanos(), amount.currency()
                         );
+                        SettleHealth::Healthy
                     }
                     Ok(SettleOutcome::AlreadySettled) => {
                         log::warn!(
@@ -234,6 +259,7 @@ impl SpendHook {
                             "superstep spend already settled: run {} superstep {} attempt {} -- duplicate not charged again",
                             context.run_id, superstep, context.attempt
                         );
+                        SettleHealth::Healthy
                     }
                     Err(e) => {
                         log::error!(
@@ -241,6 +267,7 @@ impl SpendHook {
                             "failed to settle superstep spend: run {} superstep {} attempt {} amount_nanos {} currency {}: {e}",
                             context.run_id, superstep, context.attempt, amount.nanos(), amount.currency()
                         );
+                        SettleHealth::ChargeLost
                     }
                 }
             }
@@ -253,8 +280,9 @@ mod tests {
     use super::*;
     use paladin_core::platform::container::run::RunId;
     use paladin_core::platform::container::treasury_ledger::{
-        LedgerScope, SpendGroupBy, SpendQuery,
+        LedgerScope, ReservationId, ReserveRequest, SpendGroupBy, SpendQuery, SpendRow,
     };
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
     use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
 
     fn usd() -> CurrencyCode {
@@ -326,10 +354,10 @@ mod tests {
 
         child.record(Some("gpt-4"), &Cost::new(10, usd()));
         // A no-op: no ledger, and the shared accumulator is left untouched.
-        child.settle_boundary(1).await;
+        assert_eq!(child.settle_boundary(1).await, SettleHealth::Healthy);
 
         hook.record(Some("gpt-4o-mini"), &Cost::new(5, usd()));
-        hook.settle_boundary(1).await;
+        assert_eq!(hook.settle_boundary(1).await, SettleHealth::Healthy);
 
         let rows = ledger
             .spend(SpendQuery {
@@ -345,5 +373,80 @@ mod tests {
             Cost::new(15, usd()),
             "the child's recorded amount survived its own no-op settle_boundary"
         );
+    }
+
+    /// A ledger whose `settle` always fails: the lost-charge path of WR-4.
+    struct FailingLedger;
+
+    #[async_trait::async_trait]
+    impl TreasuryLedgerPort for FailingLedger {
+        async fn reserve(
+            &self,
+            _request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            unreachable!("settle-only writer")
+        }
+
+        async fn release(&self, _reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            unreachable!("settle-only writer")
+        }
+
+        async fn settle(
+            &self,
+            _request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::Backend {
+                source: Box::new(std::io::Error::other("ledger backend unavailable")),
+            })
+        }
+
+        async fn spend(&self, _query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            Ok(Vec::new())
+        }
+
+        async fn store_now(&self) -> Result<chrono::DateTime<chrono::Utc>, TreasuryLedgerError> {
+            Ok(chrono::Utc::now())
+        }
+    }
+
+    fn context() -> SettlementContext {
+        SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: RunId::new_v7(),
+            attempt: 1,
+        }
+    }
+
+    /// WR-4 (42-REVIEW): a charge that cannot be written is REPORTED, not silently dropped, so
+    /// the engine can tell an attached spend guard it has gone blind to this run's spend.
+    #[tokio::test]
+    async fn a_ledger_error_reports_a_lost_charge() {
+        let hook = SpendHook::top_level(Arc::new(FailingLedger), context());
+        hook.record(Some("gpt-4"), &Cost::new(10, usd()));
+        assert_eq!(hook.settle_boundary(1).await, SettleHealth::ChargeLost);
+    }
+
+    #[tokio::test]
+    async fn a_currency_mismatch_reports_a_lost_charge() {
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let hook = SpendHook::top_level(ledger, context());
+        hook.record(Some("gpt-4"), &Cost::new(10, usd()));
+        hook.record(Some("gpt-4"), &Cost::new(1, eur()));
+        assert_eq!(hook.settle_boundary(1).await, SettleHealth::ChargeLost);
+    }
+
+    /// An empty superstep and a duplicate settlement lose nothing.
+    #[tokio::test]
+    async fn nothing_to_charge_and_a_duplicate_settlement_are_healthy() {
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let ctx = context();
+        let hook = SpendHook::top_level(ledger.clone(), ctx.clone());
+        assert_eq!(hook.settle_boundary(1).await, SettleHealth::Healthy);
+
+        hook.record(Some("gpt-4"), &Cost::new(10, usd()));
+        assert_eq!(hook.settle_boundary(2).await, SettleHealth::Healthy);
+        // The same (run, superstep, attempt) again: `AlreadySettled`, not a loss.
+        hook.record(Some("gpt-4"), &Cost::new(10, usd()));
+        assert_eq!(hook.settle_boundary(2).await, SettleHealth::Healthy);
     }
 }

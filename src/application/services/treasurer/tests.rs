@@ -1612,6 +1612,45 @@ async fn guard_memoises_a_ledger_unavailable_halt_too() {
     );
 }
 
+/// WR-4 (42-REVIEW): once the engine reports that a superstep's charge could not be written, a
+/// metered run's balance reads no longer include all of its own spend, so the guard fails
+/// closed at its next check even though the (stale) read still shows headroom.
+#[tokio::test]
+async fn guard_fails_closed_once_a_superstep_charge_could_not_be_written() {
+    // Plenty of headroom: 10 of 1000.
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), 10);
+    let guard = guard_for(guard_policy(), &ledger);
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+
+    guard.note_unsettled_spend(&guard_thread());
+
+    assert_eq!(
+        guard.check(&guard_thread()).await,
+        SpendDecision::Halt(HaltReason::LedgerUnavailable),
+        "a lost charge makes the allowance unenforceable: fail closed"
+    );
+    // The halt is sticky (G11), like every other guard halt.
+    ledger.clear_rows();
+    assert_eq!(
+        guard.check(&guard_thread()).await,
+        SpendDecision::Halt(HaltReason::LedgerUnavailable)
+    );
+}
+
+/// WR-4: the signal never halts a run the guard would not otherwise meter -- a principal with no
+/// ceiling has no allowance to protect, so a lost charge is only a log line, as before.
+#[tokio::test]
+async fn an_unsettled_charge_does_not_halt_a_principal_without_a_ceiling() {
+    let ledger = FakeLedger::new(at(NOW));
+    // The policy only names `svc-a`; `svc-b` has no entry.
+    let guard = Arc::new(treasurer(key_policy(), &ledger))
+        .spend_guard(subject("acme", "svc-b"), RunId::new_v7());
+
+    guard.note_unsettled_spend(&guard_thread());
+
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+}
+
 #[tokio::test]
 async fn two_guards_on_one_scope_both_halt_once_the_shared_balance_crosses() {
     let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), GUARD_CEILING - 1);

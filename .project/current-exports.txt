@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-07 01:23:31 UTC
+# Public API Surface - Generated 2026-10-07 13:01:02 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -4191,6 +4191,7 @@ impl core::fmt::Debug for paladin::application::services::treasurer::TreasurerSp
 pub fn paladin::application::services::treasurer::TreasurerSpendGuard::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl paladin_ports::output::spend_guard::SpendGuard for paladin::application::services::treasurer::TreasurerSpendGuard
 pub fn paladin::application::services::treasurer::TreasurerSpendGuard::check<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 paladin_core::platform::container::waypoint::ThreadId) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = paladin_ports::output::spend_guard::SpendDecision> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
+pub fn paladin::application::services::treasurer::TreasurerSpendGuard::note_unsettled_spend(&self, &paladin_core::platform::container::waypoint::ThreadId)
 impl core::marker::Freeze for paladin::application::services::treasurer::TreasurerSpendGuard
 impl core::marker::Send for paladin::application::services::treasurer::TreasurerSpendGuard
 impl core::marker::Sync for paladin::application::services::treasurer::TreasurerSpendGuard
@@ -8446,4 +8447,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4209
+Total public items: 4210

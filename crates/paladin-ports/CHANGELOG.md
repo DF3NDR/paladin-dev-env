@@ -9,6 +9,11 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- `SpendGuard::note_unsettled_spend(&self, &ThreadId)`, a defaulted no-op the engine calls when a
+  superstep's priced charge could not be written to the ledger, so a metering guard can fail
+  closed instead of reading a balance that no longer holds the run's own spend (Phase 42 review
+  WR-4). A guard that does not override it keeps its behaviour.
+
 - Phase 42 (mid-run halt and terminal status, ALLOW-03, ALLOW-05, PLAT-09; ADR-0057): the
   `SpendGuard` output port with `SpendDecision` and `NeverHalts`; the defaulted
   `AllowanceAdmissionPort::admit_for_model` with `AdmissionError::ModelUnpriced`;

@@ -25,6 +25,10 @@ and this project follows lockstep workspace versioning.
 
 ### Fixed
 
+- A boundary settlement that cannot be written (a ledger error or a currency mismatch) is now
+  reported to an attached `SpendGuard` through `SpendGuard::note_unsettled_spend`, so a metering
+  guard can halt the run instead of letting it spend unmetered (Phase 42 review WR-4). Settlement
+  itself is unchanged: it still never fails, retries or halts a run.
 - A nested `NodeSpec::Battalion` child that halts (cancel, drain or a spend halt) is no longer
   recorded as a successful node with an empty delta. The parent now halts in the same superstep
   with the child's own `HaltCause`, and its `Halted` Waypoint re-lists the Battalion node so a

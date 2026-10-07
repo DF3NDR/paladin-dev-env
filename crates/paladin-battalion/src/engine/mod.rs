@@ -4610,6 +4610,127 @@ mod tests {
         );
     }
 
+    /// WR-4 (42-REVIEW): a boundary settlement that could not be written (a ledger error)
+    /// is reported to an attached `SpendGuard` through `note_unsettled_spend`, and a guard that
+    /// fails closed on it halts the run at the NEXT boundary -- the run is not left spending
+    /// unmetered. Settlement itself still never fails the run.
+    #[tokio::test]
+    async fn a_lost_settlement_is_reported_to_the_guard_and_halts_the_next_boundary() {
+        use paladin_core::platform::container::allowance::HaltReason;
+        use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
+
+        /// Continues until told a charge was lost, then halts like `TreasurerSpendGuard`.
+        #[derive(Default)]
+        struct FailsClosedWhenBlind {
+            blind: std::sync::atomic::AtomicBool,
+            notified: std::sync::atomic::AtomicUsize,
+        }
+
+        #[async_trait]
+        impl SpendGuard for FailsClosedWhenBlind {
+            async fn check(&self, _thread: &ThreadId) -> SpendDecision {
+                if self.blind.load(std::sync::atomic::Ordering::SeqCst) {
+                    SpendDecision::Halt(HaltReason::LedgerUnavailable)
+                } else {
+                    SpendDecision::Continue
+                }
+            }
+
+            fn note_unsettled_spend(&self, _thread: &ThreadId) {
+                self.notified
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.blind.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let (graph, _n1, _n2, n3) = treasury_ledger_test_graph();
+        let port = Arc::new(RecordingPaladinPort::new());
+        for name in ["first", "second", "third"] {
+            port.set_output_with_usage_and_cost(
+                name,
+                "done",
+                TokenUsage::new(1, 1),
+                Some(Cost::new(1_000, usd.clone())),
+            );
+        }
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: RunId::new_v7(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let guard = Arc::new(FailsClosedWhenBlind::default());
+        let engine = WarEngine::new(port, store.clone())
+            .with_treasury_ledger(Arc::new(FailingTreasuryLedger), context)
+            .with_spend_guard(guard.clone());
+        let thread = ThreadId::new("lost-settlement-halts-next-boundary").unwrap();
+
+        let outcome = engine
+            .start(&graph, thread.clone(), StateDelta::new())
+            .await
+            .unwrap();
+
+        match outcome {
+            RunOutcome::Halted { cause, .. } => assert_eq!(
+                cause,
+                HaltCause::Spend(HaltReason::LedgerUnavailable),
+                "the guard failed closed on the reported lost charge"
+            ),
+            other => panic!("expected a spend Halted, got {other:?}"),
+        }
+        assert_eq!(
+            guard.notified.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "superstep 1's lost charge is reported exactly once before the run halts"
+        );
+        let completed: std::collections::HashSet<String> = ascending_history(&store, &thread)
+            .await
+            .iter()
+            .flat_map(|w| w.completed.iter().map(|r| r.node_id.as_str().to_string()))
+            .collect();
+        assert!(
+            !completed.contains(n3.as_str()),
+            "the superstep after the lost charge never ran"
+        );
+    }
+
+    /// WR-4: with no guard attached, a lost settlement stays purely observational, as before.
+    /// A guard that does not override `note_unsettled_spend` keeps its behaviour too.
+    #[tokio::test]
+    async fn a_lost_settlement_does_not_halt_a_run_whose_guard_ignores_the_signal() {
+        use paladin_ports::output::spend_guard::NeverHalts;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let (graph, _n1, _n2, _n3) = treasury_ledger_test_graph();
+        let port = Arc::new(RecordingPaladinPort::new());
+        for name in ["first", "second", "third"] {
+            port.set_output_with_usage_and_cost(
+                name,
+                "done",
+                TokenUsage::new(1, 1),
+                Some(Cost::new(1_000, usd.clone())),
+            );
+        }
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: RunId::new_v7(),
+            attempt: 1,
+        };
+        let engine = WarEngine::new(port, Arc::new(RecordingWaypointStore::new()))
+            .with_treasury_ledger(Arc::new(FailingTreasuryLedger), context)
+            .with_spend_guard(Arc::new(NeverHalts));
+        let outcome = engine
+            .start(
+                &graph,
+                ThreadId::new("lost-settlement-default-guard").unwrap(),
+                StateDelta::new(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+    }
+
     /// LEDGR-03: pre-settling `(run_id, 1, 1)` before the run starts (a
     /// stand-in for a lease redelivery that re-settles an already-settled
     /// superstep attempt) is not an error -- the pre-settled amount is kept

@@ -522,6 +522,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A run whose superstep charges cannot be written to the treasury ledger no longer spends
+  unmetered while the guard's balance reads keep succeeding (Phase 42 review WR-4). The engine now
+  tells an attached `SpendGuard` when a boundary settlement was lost (a ledger error or a currency
+  mismatch) through the new defaulted `SpendGuard::note_unsettled_spend`, and `TreasurerSpendGuard`
+  answers `Halt(ledger_unavailable)` at its next check for a principal with an applicable ceiling.
+  A principal with no allowance, a run with no guard and a guard that does not override the method
+  are unchanged: settlement itself still never fails, retries or halts a run. New public surface:
+  `SpendGuard::note_unsettled_spend` (`paladin-ports`; defaulted, so not breaking).
 - The mid-run boundary guard no longer drops a run's `allowance_warning` after one transient
   notice-store error: a claim enters the in-run memo only once the store has answered `Recorded`
   or `AlreadyRecorded`, so a failed write is retried at the next boundary (Phase 42 review WR-3).

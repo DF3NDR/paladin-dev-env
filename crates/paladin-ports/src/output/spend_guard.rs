@@ -96,6 +96,21 @@ pub trait SpendGuard: Send + Sync {
     /// signals have already been checked. A [`SpendDecision::Halt`] answer produces the same
     /// halted-Waypoint path a cancel does, with the reason attached to the outcome.
     async fn check(&self, thread: &ThreadId) -> SpendDecision;
+
+    /// Tell the guard that a superstep's priced spend could NOT be written to the ledger for
+    /// `thread`'s run (a ledger write error, or a charge whose currencies disagreed).
+    ///
+    /// The guard's balance reads are only as good as the writes that feed them, so a run whose
+    /// settlements keep failing would otherwise spend unmetered while every read still
+    /// succeeds. The engine calls this after a boundary settlement it could not write, and an
+    /// implementation that meters the run should treat the ledger as unreliable from here on:
+    /// answer [`SpendDecision::Halt`] with [`HaltReason::LedgerUnavailable`] at its next
+    /// `check` (fail closed, the same posture as an unreadable ledger, D-03). It must not
+    /// halt a run it would not otherwise meter.
+    ///
+    /// The default is a no-op, so an existing guard keeps its behaviour. Synchronous and
+    /// infallible: it records a fact and never blocks the superstep loop.
+    fn note_unsettled_spend(&self, _thread: &ThreadId) {}
 }
 
 /// A [`SpendGuard`] that never halts.

@@ -81,7 +81,7 @@ use crate::engine::input_mapping::InputMapping;
 use crate::engine::node::{NodeContext, StateNode, StateNodeError};
 use crate::engine::registries::EngineRegistries;
 use crate::engine::retry;
-use crate::engine::settlement::SpendHook;
+use crate::engine::settlement::{SettleHealth, SpendHook};
 use crate::engine::{EngineError, HaltCause, RunOutcome, WaypointDurability};
 use crate::llm_failure;
 
@@ -3578,8 +3578,18 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         // (`ChildEngineResources::spend`) is a no-op here too (its own
         // `settle_boundary` always returns at once) -- only the top-level
         // hook this run was given ever actually settles.
-        if let Some(hook) = &spend {
-            hook.settle_boundary(superstep_number).await;
+        //
+        // --- WR-4 (42-REVIEW): a charge that could not be WRITTEN (a
+        // ledger error, a currency mismatch) leaves the attached guard's
+        // balance reads blind to this run's own spend. Settlement stays
+        // observational -- it never halts anything itself -- but the guard
+        // is told, and decides (a metered run fails closed at its next
+        // boundary check; see `SpendGuard::note_unsettled_spend`).
+        if let Some(hook) = &spend
+            && hook.settle_boundary(superstep_number).await == SettleHealth::ChargeLost
+            && let Some(guard) = spend_guard
+        {
+            guard.note_unsettled_spend(&thread);
         }
 
         // --- FT-FR-10, D-20, ENG-FR-03: the engine budget expired

@@ -728,6 +728,13 @@ enum NodeFailure {
     /// so this divergence from the general classification is visible at
     /// the type level, not buried inside a conditional.
     StructuredOutputInvalid(PaladinError),
+    /// A `NodeSpec::Battalion` node's child run halted at one of its own
+    /// superstep boundaries (cancel, drain or an attached [`SpendGuard`]'s
+    /// halt; 42-REVIEW CR-1). NOT a failure and never retried -- it is the
+    /// child's unfinished work, carried to the dispatch task's boundary where
+    /// it becomes [`NodeRunOutcome::ChildHalted`] and so ends the PARENT's run
+    /// `Halted` with the CHILD's own cause, never a node that "succeeded".
+    ChildHalted(HaltCause),
 }
 
 impl NodeFailure {
@@ -751,6 +758,8 @@ impl NodeFailure {
     /// - `DirectiveParse`/`Battalion` -> `None`: neither is a node-execution
     ///   failure the Aegis governs (each has its own typed `EngineError`
     ///   and is never retried, D-14).
+    /// - `ChildHalted` -> `None`: a halted child is unfinished work, not a
+    ///   node-execution failure, and is never retried.
     fn node_error(&self, node_id: &NodeId, attempt: u32) -> Option<NodeError> {
         let (transience, source) = match self {
             NodeFailure::Node(err) => (Transience::Unknown, NodeErrorSource::from(err.clone())),
@@ -761,7 +770,9 @@ impl NodeFailure {
             NodeFailure::StructuredOutputInvalid(err) => {
                 (Transience::Unknown, llm_failure::to_node_error_source(err))
             }
-            NodeFailure::DirectiveParse(_) | NodeFailure::Battalion(_) => return None,
+            NodeFailure::DirectiveParse(_)
+            | NodeFailure::Battalion(_)
+            | NodeFailure::ChildHalted(_) => return None,
         };
         Some(NodeError {
             node_id: node_id.clone(),
@@ -1516,19 +1527,23 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         }
                         (None, TokenUsage::default(), None, Ok(delta.into()))
                     }
-                    Ok(RunOutcome::Halted { .. }) => {
-                        // --- D-21: the child observed the shared
-                        // `CancellationToken` at its own superstep boundary
-                        // and persisted `Halted`. This node contributes an
-                        // empty delta (never coerced into a failure); the
-                        // PARENT's own top-of-loop cancellation check -- the
-                        // SAME token -- halts the parent at its own next
-                        // boundary.
+                    Ok(RunOutcome::Halted { cause, .. }) => {
+                        // --- D-21, 42-REVIEW CR-1: the child halted at its
+                        // own superstep boundary (cancel, drain or a spend
+                        // halt) and persisted `Halted`. This node did NOT
+                        // finish, so it is never reported as a successful
+                        // node with an empty delta -- that let a TERMINAL
+                        // Battalion node fall through "vanguard empty ->
+                        // Completed", and a non-terminal one be resumed
+                        // past the child's unfinished work. The cause is
+                        // carried to the bookkeeping loop, which halts the
+                        // parent in this same superstep and re-lists this
+                        // node on the Halted Waypoint's vanguard.
                         (
                             None,
                             TokenUsage::default(),
                             None,
-                            Ok(StateDelta::new().into()),
+                            Err(NodeFailure::ChildHalted(cause)),
                         )
                     }
                     Ok(RunOutcome::AwaitingInput { .. }) => (
@@ -1598,6 +1613,14 @@ enum NodeRunOutcome {
     /// so `resume` re-executes the node from attempt 1 rather than
     /// silently dropping it as an ordinary skip would.
     Interrupted,
+    /// A `NodeSpec::Battalion` node's CHILD run halted at its own superstep
+    /// boundary with this cause (42-REVIEW CR-1). Recorded and re-listed
+    /// exactly like [`NodeRunOutcome::Interrupted`] -- the child's own
+    /// `Halted` Waypoint is the restart point `resume` re-enters through the
+    /// resume-mid-child path -- and additionally carries the CHILD's cause so
+    /// the parent's `RunOutcome::Halted` keeps a spend reason instead of
+    /// collapsing to `Token`.
+    ChildHalted(HaltCause),
 }
 
 /// Map one attempt's [`NodeRunOutcome`] onto the [`NodeOutcomeKind`]
@@ -1619,7 +1642,7 @@ fn node_outcome_kind(outcome: &NodeRunOutcome) -> NodeOutcomeKind {
             reason: reason.clone(),
         },
         NodeRunOutcome::Failed(_) => NodeOutcomeKind::Failed,
-        NodeRunOutcome::Interrupted => NodeOutcomeKind::Skipped {
+        NodeRunOutcome::Interrupted | NodeRunOutcome::ChildHalted(_) => NodeOutcomeKind::Skipped {
             reason: "shutdown".to_string(),
         },
     }
@@ -2862,6 +2885,14 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                                 NodeRunOutcome::Succeeded(directive),
                                             )
                                         }
+                                        // --- 42-REVIEW CR-1: a halted child is
+                                        // unfinished work, not a failure.
+                                        Err(NodeFailure::ChildHalted(cause)) => (
+                                            paladin_id,
+                                            usage,
+                                            cost,
+                                            NodeRunOutcome::ChildHalted(cause),
+                                        ),
                                         Err(e) => {
                                             (paladin_id, usage, cost, NodeRunOutcome::Failed(e))
                                         }
@@ -3064,6 +3095,9 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
         let handle_count = dispatch_entries.len();
         let mut results: Vec<Option<NodeTaskOutput>> = (0..handle_count).map(|_| None).collect();
         let mut aborted_node_ids: Vec<NodeId> = Vec::new();
+        // --- 42-REVIEW CR-1: the cause a halted nested `Battalion` child
+        // reported this superstep, if any (see `NodeRunOutcome::ChildHalted`).
+        let mut child_halt_cause: Option<HaltCause> = None;
         // --- CR-02 (24-REVIEW.md): a Muster worker task aborted at the
         // grace deadline must NOT re-enter as an ordinary vanguard node on
         // resume (it would lose its `task_key`/`payload` `MusterContext`,
@@ -3473,6 +3507,42 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         aborted_node_ids.push(node_id);
                     }
                 }
+                NodeRunOutcome::ChildHalted(cause) => {
+                    // --- 42-REVIEW CR-1: the child run halted. Recorded and
+                    // re-listed exactly like `Interrupted` (never merged,
+                    // edges left `Pending`, node back on the Halted
+                    // Waypoint's vanguard so a resume re-enters the child
+                    // through its own `Halted` Waypoint) -- plus the child's
+                    // cause is kept so a spend halt survives to the parent's
+                    // `RunOutcome::Halted`. The first cause in dispatch
+                    // order wins; a cancel cause outranks a spend one below.
+                    completed_records.push(NodeExecutionRecord {
+                        node_id: node_id.clone(),
+                        paladin_id,
+                        started_at,
+                        duration_ms,
+                        usage,
+                        outcome: NodeOutcomeKind::Skipped {
+                            reason: "shutdown".to_string(),
+                        },
+                        attempt,
+                        attempts: failed_attempts,
+                        cache_hit: false,
+                    });
+                    child_halt_cause = match (child_halt_cause.take(), cause) {
+                        (None, cause) => Some(cause),
+                        // Cancel wins over spend, mirroring the boundary order.
+                        (Some(HaltCause::Spend(_)), cause @ HaltCause::CancelRequested) => {
+                            Some(cause)
+                        }
+                        (Some(kept), _) => Some(kept),
+                    };
+                    if is_muster_task {
+                        muster_task_aborted = true;
+                    } else {
+                        aborted_node_ids.push(node_id);
+                    }
+                }
                 NodeRunOutcome::Failed(e) => {
                     completed_records.push(NodeExecutionRecord {
                         node_id: node_id.clone(),
@@ -3596,6 +3666,14 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 // `execute_vanguard_node`, where the child thread id was
                 // in scope -- passed through unchanged.
                 (NodeFailure::Battalion(e), _) => e,
+                // --- 42-REVIEW CR-1: unreachable in practice -- the dispatch
+                // task converts a halted child into
+                // `NodeRunOutcome::ChildHalted` before it can be recorded as
+                // a failure -- but library code must not `unreachable!()` an
+                // invariant it cannot enforce.
+                (NodeFailure::ChildHalted(cause), _) => EngineError::Node(StateNodeError(format!(
+                    "internal error: a halted child ({cause:?}) was recorded as a failure"
+                ))),
             };
             let node_error = error.node_error().cloned();
             let waypoint = build_waypoint(
@@ -3872,9 +3950,22 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             // the probe once more to split a caller cancel from a drain (D-14,
             // G1): a probe that reports a cancel makes this a
             // `CancelRequested`; otherwise the bare token is all there is.
+            //
+            // --- 42-REVIEW CR-1: a halted nested child's own cause is kept
+            // (so a spend halt reaches the parent's `RunOutcome::Halted`)
+            // unless a cancel signal is observable at this level: the order
+            // stays probe cancel, then token, then the child's cause.
+            let token_cancelled = cancellation
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled);
             let mid_flight_cause = match probe {
                 Some(p) if p.is_cancelled(&thread).await => HaltCause::CancelRequested,
-                _ => HaltCause::Token,
+                _ => match child_halt_cause {
+                    Some(HaltCause::CancelRequested) => HaltCause::CancelRequested,
+                    _ if token_cancelled => HaltCause::Token,
+                    Some(cause) => cause,
+                    None => HaltCause::Token,
+                },
             };
             return Ok(RunOutcome::Halted {
                 waypoint: waypoint.waypoint_id,
@@ -10297,9 +10388,9 @@ mod tests {
 
     /// ALLOW-03, Phase 42 G11 (T-42-16): the SAME guard `Arc` is shared into a `Battalion`
     /// node's child run. The guard continues at the parent's first boundary, halts at the
-    /// child's first boundary and is sticky afterwards, so the child halts, contributes an empty
-    /// delta, and the parent halts at its own next boundary with the child's reason -- the
-    /// parent's post-Battalion node never runs.
+    /// child's first boundary and is sticky afterwards, so the child halts and the parent halts
+    /// in the same superstep with the child's reason (CR-1: the Battalion node is not recorded as
+    /// a successful node) -- the parent's post-Battalion node never runs.
     #[tokio::test]
     async fn child_battalion_halt_on_spend_halts_the_parent() {
         use paladin_core::platform::container::allowance::HaltReason;
@@ -10406,6 +10497,179 @@ mod tests {
             latest.completed.is_empty(),
             "the child dispatched no node of the halted superstep"
         );
+    }
+
+    /// Build the CR-1 (42-REVIEW) parent graph: a single entry `Battalion` node `sub` whose
+    /// one-node child (`c1`) bumps `c1_calls`, optionally followed by a parent node `after`
+    /// that bumps `after_calls`. With `with_successor == false` the Battalion node is TERMINAL
+    /// -- the shape that used to short-circuit through "vanguard empty -> Completed".
+    fn build_spend_halt_parent(
+        with_successor: bool,
+        c1_calls: &Arc<std::sync::atomic::AtomicUsize>,
+        after_calls: &Arc<std::sync::atomic::AtomicUsize>,
+    ) -> WarGraph {
+        let mut child = WarGraph::new(schema(vec![]), EngineLimits::default());
+        let c1 = NodeId::new("c1");
+        {
+            let counter = Arc::clone(c1_calls);
+            child.add_node(
+                c1.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    StateDelta::new()
+                })),
+            );
+        }
+        child.add_entry(c1);
+
+        let sub = NodeId::new("sub");
+        let mut parent = WarGraph::new(schema(vec![]), EngineLimits::default());
+        parent.add_node(
+            sub.clone(),
+            NodeSpec::battalion(Arc::new(child), StateMap::new()),
+        );
+        if with_successor {
+            let after = NodeId::new("after");
+            let counter = Arc::clone(after_calls);
+            parent.add_node(
+                after.clone(),
+                NodeSpec::Function(CountingFunctionNode::new(move |_run, _state| {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    StateDelta::new()
+                })),
+            );
+            parent.add_edge(EdgeSpec {
+                from: sub.clone(),
+                to: after,
+                condition: Some(EdgeCondition::Always),
+            });
+        }
+        parent.add_entry(sub);
+        parent
+    }
+
+    /// CR-1 (42-REVIEW): a nested `Battalion` child that halts on spend must NOT be recorded as
+    /// a successful node. Whether the Battalion node is terminal or has a successor, the parent
+    /// halts in the SAME superstep with the CHILD's cause, its `Halted` Waypoint re-lists the
+    /// Battalion node on the vanguard, and a resume re-enters the child exactly once.
+    async fn assert_child_spend_halt_is_resumable(with_successor: bool) {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let c1_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let after_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let parent = build_spend_halt_parent(with_successor, &c1_calls, &after_calls);
+
+        // Evaluation 1 = the parent's boundary 1 (Continue), 2 = the child's boundary 1 (Halt).
+        let guard = Arc::new(StickyOnceGuard {
+            evaluations: std::sync::atomic::AtomicUsize::new(0),
+            halt_on: 2,
+            halted: std::sync::OnceLock::new(),
+        });
+        let shared: Option<Arc<dyn SpendGuard>> = Some(guard);
+
+        let store = Arc::new(RecordingWaypointStore::new());
+        let thread = ThreadId::new("battalion-spend-halt-resumable").unwrap();
+        let outcome = run_with_children_and_guard(
+            &parent,
+            thread.clone(),
+            StateDelta::new(),
+            &store,
+            &no_paladin_port(),
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::default(),
+            &None,
+            &shared,
+        )
+        .await
+        .unwrap();
+
+        match outcome {
+            RunOutcome::Halted { cause, .. } => assert_eq!(
+                cause,
+                HaltCause::Spend(HaltReason::LedgerUnavailable),
+                "the parent halts with the child's own spend reason"
+            ),
+            other => panic!(
+                "a spend-halted child must halt the parent, not {other:?} \
+                 (with_successor = {with_successor})"
+            ),
+        }
+
+        let parent_waypoints = store.saved_waypoints(&thread).await;
+        let halted = parent_waypoints
+            .first()
+            .expect("the parent must have persisted a Halted Waypoint");
+        assert!(
+            matches!(halted.status, WaypointStatus::Halted),
+            "the parent's latest Waypoint must be Halted, got {:?}",
+            halted.status
+        );
+        assert!(
+            halted.vanguard.contains(&NodeId::new("sub")),
+            "the Halted Waypoint must re-list the Battalion node so a resume re-enters the \
+             child, got vanguard {:?}",
+            halted.vanguard
+        );
+        assert_eq!(c1_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(after_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+        // --- Resume the parent from its Halted Waypoint with no guard: the Battalion node
+        // re-dispatches, finds the child's own Halted Waypoint and resumes it exactly once.
+        let latest = halted.clone();
+        let resumed = run(
+            store.as_ref(),
+            WaypointDurability::Strict,
+            None,
+            &CustomDispatchResolver::new(),
+            &EngineRegistries::default(),
+            &parent,
+            thread.clone(),
+            latest.battlefield,
+            latest.vanguard,
+            latest.visit_counts,
+            Some(latest.frontier),
+            None,
+            Some(latest.waypoint_id),
+            latest.superstep + 1,
+            &no_paladin_port(),
+            &no_trace(),
+            &no_interceptors(),
+            &None,
+            &None,
+            &None,
+            Some(Arc::clone(&store)),
+            default_shutdown_grace(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(resumed, RunOutcome::Completed { .. }),
+            "the resumed run must complete, got {resumed:?}"
+        );
+        assert_eq!(
+            c1_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the child's unfinished node must run exactly once after the resume"
+        );
+        assert_eq!(
+            after_calls.load(std::sync::atomic::Ordering::SeqCst),
+            usize::from(with_successor),
+            "the parent's successor runs once after the resume (when there is one)"
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_child_battalion_spend_halt_halts_the_parent_and_is_resumable() {
+        assert_child_spend_halt_is_resumable(false).await;
+    }
+
+    #[tokio::test]
+    async fn child_battalion_spend_halt_with_successor_is_resumable_through_the_child() {
+        assert_child_spend_halt_is_resumable(true).await;
     }
 
     // --- Plan 23-09: child ThreadId identity, checkpoint_ns, resume-mid-child ---

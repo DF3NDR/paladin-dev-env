@@ -23,6 +23,15 @@ and this project follows lockstep workspace versioning.
   Aegis-retried nodes (only the eventual successful attempt contributes); a ledger failure is
   logged and never fails, retries or halts the run (LEDGR-03, LEDGR-04).
 
+### Fixed
+
+- A nested `NodeSpec::Battalion` child that halts (cancel, drain or a spend halt) is no longer
+  recorded as a successful node with an empty delta. The parent now halts in the same superstep
+  with the child's own `HaltCause`, and its `Halted` Waypoint re-lists the Battalion node so a
+  resume re-enters the child's own `Halted` Waypoint. Previously a TERMINAL Battalion node let the
+  parent finish `Completed`, and a non-terminal one was resumed past the child's unfinished work
+  (Phase 42 review CR-1).
+
 ### Changed
 
 - All five `WarEngine` `RunFinished` emission sites now populate `cost: trace.total_cost()`

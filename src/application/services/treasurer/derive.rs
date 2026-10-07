@@ -107,8 +107,8 @@ impl Treasurer {
         let Some(evaluation) = self.evaluate(subject).await? else {
             return Ok(None);
         };
-        if let Some(refusal) = evaluation.exhausted {
-            return Err(AdmissionError::Refused(refusal));
+        if let Some(exhausted) = evaluation.exhausted {
+            return Err(AdmissionError::Refused(exhausted.refusal));
         }
         self.derive_from(&evaluation, model)
     }

@@ -38,6 +38,16 @@ pub(crate) struct CeilingReading {
     pub(crate) window: Option<(DateTime<Utc>, DateTime<Utc>)>,
 }
 
+/// The first exhausted ceiling of an evaluation: the ceiling itself (its identity and `warn_at`
+/// key the halt notice) and the refusal carrying the figures read for it.
+#[derive(Debug, Clone)]
+pub(crate) struct Exhausted {
+    /// The ceiling whose balance has reached it.
+    pub(crate) ceiling: Ceiling,
+    /// The refusal figures: balance, ceiling, window and the evaluation instant.
+    pub(crate) refusal: AllowanceRefusal,
+}
+
 /// The outcome of evaluating every applicable ceiling for one principal.
 #[derive(Debug, Clone)]
 pub(crate) struct Evaluation {
@@ -45,8 +55,8 @@ pub(crate) struct Evaluation {
     pub(crate) evaluated_at: DateTime<Utc>,
     /// Every ceiling read, in policy order, up to and including the first exhausted one.
     pub(crate) readings: Vec<CeilingReading>,
-    /// The first exhausted ceiling's refusal; `None` when every ceiling has headroom.
-    pub(crate) exhausted: Option<AllowanceRefusal>,
+    /// The first exhausted ceiling and its refusal; `None` when every ceiling has headroom.
+    pub(crate) exhausted: Option<Exhausted>,
 }
 
 impl Treasurer {
@@ -114,14 +124,14 @@ impl Treasurer {
                     evaluated_at,
                 };
                 readings.push(CeilingReading {
-                    ceiling,
+                    ceiling: ceiling.clone(),
                     balance,
                     window,
                 });
                 return Ok(Some(Evaluation {
                     evaluated_at,
                     readings,
-                    exhausted: Some(refusal),
+                    exhausted: Some(Exhausted { ceiling, refusal }),
                 }));
             }
             readings.push(CeilingReading {

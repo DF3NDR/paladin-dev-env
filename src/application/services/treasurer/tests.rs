@@ -1946,3 +1946,307 @@ async fn deriving_twice_over_an_unchanged_ledger_and_clock_yields_equal_budgets(
     assert!(first.is_some());
     assert_eq!(first, second);
 }
+
+// -- the guard's notice legs (ALLOW-03, Phase 42 D-17, D-18, Pitfall 9, 42-11) --------------------
+
+use paladin_core::platform::container::allowance::NoticeKind;
+use paladin_core::platform::container::trace::TraceEvent;
+use paladin_ports::output::trace_sink_port::TraceEmitter;
+
+/// A [`TraceEmitter`] that records every event it is handed.
+#[derive(Default)]
+struct RecordingEmitter {
+    events: Mutex<Vec<TraceEvent>>,
+}
+
+impl RecordingEmitter {
+    fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    fn events(&self) -> Vec<TraceEvent> {
+        self.events.lock().expect("not poisoned").clone()
+    }
+}
+
+impl TraceEmitter for RecordingEmitter {
+    fn emit(&self, event: TraceEvent) {
+        self.events.lock().expect("not poisoned").push(event);
+    }
+}
+
+/// The whole notice harness a guard test needs: a scripted ledger, a recording notice store, an
+/// in-memory operator queue and a Treasurer wired to all three over [`key_policy`] (ceiling
+/// [`C`], warn at 80).
+struct NoticeHarness {
+    ledger: Arc<FakeLedger>,
+    notices: Arc<RecordingNotices>,
+    deliveries: Arc<InMemoryWebhookDeliveryRepository>,
+    treasurer: Arc<Treasurer>,
+}
+
+impl NoticeHarness {
+    /// A harness whose key window starts at `spent` nano-units.
+    fn new(spent: i64) -> Self {
+        let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), spent);
+        let notices = RecordingNotices::new();
+        let deliveries = Arc::new(InMemoryWebhookDeliveryRepository::new());
+        let treasurer = Arc::new(treasurer_with_operator_webhook(
+            key_policy(),
+            &ledger,
+            &notices,
+            deliveries.clone(),
+        ));
+        Self {
+            ledger,
+            notices,
+            deliveries,
+            treasurer,
+        }
+    }
+
+    /// Spend `more` further nano-units in the current window.
+    fn spend(&self, more: i64) {
+        let _ = self.ledger.clone().with_row("acme", "svc-a", at(WS), more);
+    }
+
+    /// A guard for a fresh run, with `emitter` attached.
+    fn guard(&self, emitter: Option<Arc<RecordingEmitter>>) -> (Arc<dyn SpendGuard>, RunId) {
+        let run = RunId::new_v7();
+        let emitter = emitter.map(|e| e as Arc<dyn TraceEmitter>);
+        let guard =
+            self.treasurer
+                .spend_guard_with_emitter(subject("acme", "svc-a"), run.clone(), emitter);
+        (guard, run)
+    }
+
+    /// Every operator delivery queued so far.
+    async fn queued(&self) -> Vec<OperatorDelivery> {
+        self.deliveries
+            .claim_due(at(NOW), 100)
+            .await
+            .expect("claim")
+    }
+}
+
+fn warnings_in(events: &[TraceEvent]) -> usize {
+    events
+        .iter()
+        .filter(|event| matches!(event, TraceEvent::AllowanceWarning { .. }))
+        .count()
+}
+
+#[tokio::test]
+async fn guard_claims_a_mid_run_warning_once() {
+    // Admitted below warn_at (50 of 100, threshold 80).
+    let harness = NoticeHarness::new(50);
+    let emitter = RecordingEmitter::new();
+    let (guard, run) = harness.guard(Some(emitter.clone()));
+
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+    assert!(harness.notices.attempts().is_empty(), "no crossing yet");
+
+    // The run spends past the threshold (85 of 100): the first boundary claims the warning.
+    harness.spend(35);
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+
+    let attempts = harness.notices.attempts();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].kind, NoticeKind::Warning);
+    assert_eq!(attempts[0].run_id.as_ref(), Some(&run));
+    assert_eq!(attempts[0].warning.balance.nanos(), 85);
+    assert_eq!(attempts[0].warning.warn_at, 80);
+    assert_eq!(attempts[0].recorded_at, at(NOW));
+    let events = emitter.events();
+    assert_eq!(warnings_in(&events), 1, "exactly one AllowanceWarning");
+    assert_eq!(events.len(), 1);
+    let queued = harness.queued().await;
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].event, RunEventKind::AllowanceWarning);
+
+    // Later boundaries make no further notice write and emit nothing (Pitfall 9).
+    for _ in 0..3 {
+        assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+    }
+    assert_eq!(
+        harness.notices.attempts().len(),
+        1,
+        "the memo skips repeats"
+    );
+    assert_eq!(warnings_in(&emitter.events()), 1);
+    assert!(harness.queued().await.is_empty(), "nothing further queued");
+}
+
+#[tokio::test]
+async fn a_lost_warning_claim_emits_and_enqueues_nothing() {
+    let harness = NoticeHarness::new(85);
+    let first_emitter = RecordingEmitter::new();
+    let second_emitter = RecordingEmitter::new();
+    let (first, _) = harness.guard(Some(first_emitter.clone()));
+    let (second, _) = harness.guard(Some(second_emitter.clone()));
+
+    assert_eq!(first.check(&guard_thread()).await, SpendDecision::Continue);
+    assert_eq!(second.check(&guard_thread()).await, SpendDecision::Continue);
+
+    assert_eq!(harness.notices.attempts().len(), 2, "each run tried once");
+    assert_eq!(warnings_in(&first_emitter.events()), 1, "the winner emits");
+    assert!(
+        second_emitter.events().is_empty(),
+        "a lost claim emits nothing"
+    );
+    assert_eq!(harness.queued().await.len(), 1, "one delivery per window");
+}
+
+#[tokio::test]
+async fn a_warning_the_admission_already_claimed_is_not_claimed_again_mid_run() {
+    let harness = NoticeHarness::new(85);
+    let admission = harness
+        .treasurer
+        .admit(&subject("acme", "svc-a"), Some(&RunId::new_v7()))
+        .await
+        .expect("admitted");
+    assert_eq!(admission.notices().len(), 1, "admission won the window");
+    let emitter = RecordingEmitter::new();
+    let (guard, _) = harness.guard(Some(emitter.clone()));
+
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+
+    assert!(
+        emitter.events().is_empty(),
+        "the store says already claimed"
+    );
+    assert!(harness.queued().await.is_empty());
+}
+
+#[tokio::test]
+async fn guard_halt_claims_one_halt_notice_and_one_operator_delivery() {
+    let harness = NoticeHarness::new(C);
+    let emitter = RecordingEmitter::new();
+    let (guard, run) = harness.guard(Some(emitter.clone()));
+
+    exhausted_of(guard.check(&guard_thread()).await);
+
+    let attempts = harness.notices.attempts();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].kind, NoticeKind::Halt);
+    assert_eq!(attempts[0].run_id.as_ref(), Some(&run));
+    assert_eq!(attempts[0].warning.balance.nanos(), C);
+    assert_eq!(attempts[0].warning.ceiling.nanos(), C);
+    assert_eq!(attempts[0].warning.warn_at, 80, "the configured threshold");
+    assert_eq!(attempts[0].warning.window_start, Some(at(WS)));
+    assert_eq!(attempts[0].warning.window_end, Some(at(WE)));
+    assert_eq!(attempts[0].recorded_at, at(NOW));
+
+    let queued = harness.queued().await;
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].event, RunEventKind::AllowanceHalted);
+    assert_eq!(queued[0].thread_id.as_str(), OPERATOR_NOTICE_THREAD_ID);
+    let payload: serde_json::Value = serde_json::from_str(&queued[0].payload).expect("json");
+    assert_eq!(payload["event"], "allowance_halted");
+    assert_eq!(payload["run_id"], serde_json::json!(run));
+    assert_eq!(payload["warn_at"], 80);
+    assert_eq!(
+        payload.as_object().expect("an object").len(),
+        12,
+        "the warning's twelve keys, no thirteenth"
+    );
+    assert_eq!(
+        warnings_in(&emitter.events()),
+        0,
+        "a halt notice is not a trace warning"
+    );
+
+    // The halt is sticky: later boundaries re-claim nothing.
+    for _ in 0..3 {
+        exhausted_of(guard.check(&guard_thread()).await);
+    }
+    assert_eq!(harness.notices.attempts().len(), 1);
+    assert!(harness.queued().await.is_empty());
+}
+
+#[tokio::test]
+async fn three_guards_halting_in_one_window_enqueue_one_allowance_halted_delivery() {
+    let harness = NoticeHarness::new(C);
+    let guards: Vec<_> = (0..3).map(|_| harness.guard(None).0).collect();
+
+    for guard in &guards {
+        exhausted_of(guard.check(&guard_thread()).await);
+    }
+
+    let halts = harness
+        .notices
+        .attempts()
+        .into_iter()
+        .filter(|record| record.kind == NoticeKind::Halt)
+        .count();
+    assert_eq!(halts, 3, "every run tries once; the store decides");
+    let queued = harness.queued().await;
+    assert_eq!(
+        queued.len(),
+        1,
+        "one operator delivery for the window (D-18)"
+    );
+    assert_eq!(queued[0].event, RunEventKind::AllowanceHalted);
+}
+
+#[tokio::test]
+async fn ledger_unavailable_halt_claims_no_notice_and_enqueues_nothing() {
+    let harness = NoticeHarness::new(0);
+    harness.ledger.set_failure(Some(FakeFailure::Backend));
+    let (guard, _) = harness.guard(Some(RecordingEmitter::new()));
+
+    assert_eq!(
+        guard.check(&guard_thread()).await,
+        SpendDecision::Halt(HaltReason::LedgerUnavailable)
+    );
+
+    assert!(harness.notices.attempts().is_empty());
+    assert!(harness.queued().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_guard_built_without_an_emitter_still_claims_and_notifies_but_emits_nothing() {
+    let harness = NoticeHarness::new(85);
+    // The published constructor: no emitter.
+    let run = RunId::new_v7();
+    let guard = harness
+        .treasurer
+        .spend_guard(subject("acme", "svc-a"), run.clone());
+
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+
+    let attempts = harness.notices.attempts();
+    assert_eq!(attempts.len(), 1);
+    assert_eq!(attempts[0].run_id.as_ref(), Some(&run));
+    let queued = harness.queued().await;
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].event, RunEventKind::AllowanceWarning);
+}
+
+#[tokio::test]
+async fn a_notice_store_failure_never_changes_the_guard_decision() {
+    // Warn leg: a failing store still lets the run continue.
+    let warn = NoticeHarness::new(85);
+    warn.notices.fail_record.store(true, Ordering::SeqCst);
+    let emitter = RecordingEmitter::new();
+    let (guard, _) = warn.guard(Some(emitter.clone()));
+    assert_eq!(guard.check(&guard_thread()).await, SpendDecision::Continue);
+    assert!(emitter.events().is_empty(), "no claim won, nothing emitted");
+    assert!(warn.queued().await.is_empty());
+
+    // Halt leg: a failing store still halts the run, with the exhausted figures.
+    let halt = NoticeHarness::new(C);
+    halt.notices.fail_record.store(true, Ordering::SeqCst);
+    let (guard, _) = halt.guard(None);
+    let refusal = exhausted_of(guard.check(&guard_thread()).await);
+    assert_eq!(refusal.balance.nanos(), C);
+    assert!(halt.queued().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_guard_without_a_notice_store_neither_claims_nor_notifies() {
+    // The ledger and policy only: the warn and halt legs are both off.
+    let ledger = FakeLedger::new(at(NOW)).with_row("acme", "svc-a", at(WS), C);
+    let guard = guard_for(key_policy(), &ledger);
+    exhausted_of(guard.check(&guard_thread()).await);
+}

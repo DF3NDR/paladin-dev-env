@@ -54,8 +54,8 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::allowance::{
-    Admission, AllowanceNotice, AllowanceWarning, NoticeKind, NoticeOutcome, NoticeRecord,
-    crosses_warn_threshold,
+    Admission, AllowanceNotice, AllowanceRefusal, AllowanceWarning, NoticeKind, NoticeOutcome,
+    NoticeRecord, crosses_warn_threshold,
 };
 use paladin_core::platform::container::cost::{Cost, PriceTable};
 use paladin_core::platform::container::principal::RunAttribution;
@@ -69,6 +69,8 @@ use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
 use crate::application::services::run::webhook::{AllowanceWarningPayload, operator_event_for};
+
+use evaluate::CeilingReading;
 
 pub use guard::TreasurerSpendGuard;
 pub use policy::{AllowancePolicy, Ceiling, ScopeAllowance};
@@ -307,7 +309,6 @@ impl Treasurer {
         recorded_at: DateTime<Utc>,
     ) -> Option<AllowanceNotice> {
         let ceiling = crossing.ceiling;
-        let currency = self.policy.currency().clone();
         let record = NoticeRecord {
             notice_id: uuid::Uuid::now_v7().to_string(),
             tenant_id: ceiling.tenant_id.clone(),
@@ -316,7 +317,7 @@ impl Treasurer {
                 scope_kind: ceiling.scope_kind,
                 limit_kind: ceiling.limit_kind,
                 balance: crossing.balance,
-                ceiling: Cost::new(ceiling.ceiling_nanos, currency),
+                ceiling: Cost::new(ceiling.ceiling_nanos, self.policy.currency().clone()),
                 window_start: crossing.window.map(|(start, _)| start),
                 window_end: crossing.window.map(|(_, end)| end),
                 warn_at: ceiling.warn_at,
@@ -325,18 +326,76 @@ impl Treasurer {
             recorded_at,
             kind: NoticeKind::Warning,
         };
-        match notices.record(&record).await {
-            Ok(NoticeOutcome::Recorded) => Some(AllowanceNotice::from(&record)),
+        Self::claim_record(notices, &record).await
+    }
+
+    /// Claim the once-per-window halt notice for the ceiling a run's boundary guard found
+    /// exhausted (ALLOW-03, Phase 42 D-18), and when this run won it, return it.
+    ///
+    /// The notice carries the exhausted figures (`refusal.balance`, `refusal.ceiling`, the
+    /// refusal's window bounds) and the ceiling's configured `warn_at`, and is keyed on
+    /// `notice_kind = 'halt'`, so it is claimed independently of the same window's warning.
+    /// `None` when another run already owns the window's halt notice, when no notice store is
+    /// attached, or when the store errors (logged, never propagated: a notice observes, it
+    /// never gates the halt).
+    pub(crate) async fn claim_halt_notice(
+        &self,
+        ceiling: &Ceiling,
+        refusal: &AllowanceRefusal,
+        run_id: &RunId,
+    ) -> Option<AllowanceNotice> {
+        let notices = self.notices.as_deref()?;
+        let record = NoticeRecord {
+            notice_id: uuid::Uuid::now_v7().to_string(),
+            tenant_id: ceiling.tenant_id.clone(),
+            api_key_id: ceiling.api_key_id.clone(),
+            warning: AllowanceWarning {
+                scope_kind: ceiling.scope_kind,
+                limit_kind: ceiling.limit_kind,
+                balance: refusal.balance.clone(),
+                ceiling: refusal.ceiling.clone(),
+                window_start: refusal.window.map(|(start, _)| start),
+                window_end: refusal.window.map(|(_, end)| end),
+                warn_at: ceiling.warn_at,
+            },
+            run_id: Some(run_id.clone()),
+            recorded_at: refusal.evaluated_at,
+            kind: NoticeKind::Halt,
+        };
+        Self::claim_record(notices, &record).await
+    }
+
+    /// Record one notice row and report whether this caller won it. The one claim step behind
+    /// the admission warning, the mid-run warning and the halt notice: `Recorded` yields the
+    /// notice, `AlreadyRecorded` yields `None`, and a store error is logged (scope kind and
+    /// tenant id only, never a key value) and yields `None` (D-15).
+    async fn claim_record(
+        notices: &dyn TreasuryNoticePort,
+        record: &NoticeRecord,
+    ) -> Option<AllowanceNotice> {
+        match notices.record(record).await {
+            Ok(NoticeOutcome::Recorded) => Some(AllowanceNotice::from(record)),
             Ok(NoticeOutcome::AlreadyRecorded) => None,
             Err(error) => {
                 log::error!(
-                    "allowance notice claim failed (the run is still admitted): scope={} \
+                    "allowance notice claim failed (the run is unaffected): kind={} scope={} \
                      tenant={} error={error}",
-                    ceiling.scope_kind.as_str(),
-                    ceiling.tenant_id,
+                    record.kind.as_str(),
+                    record.warning.scope_kind.as_str(),
+                    record.tenant_id,
                 );
                 None
             }
+        }
+    }
+
+    /// Enqueue the operator delivery for a notice this caller won, when an
+    /// [`OperatorNoticeTarget`] is attached; otherwise only the webhook leg is off.
+    ///
+    /// Best-effort, exactly like `confirm`: a failure is logged at `error` and swallowed.
+    pub(crate) async fn notify_operator(&self, notice: &AllowanceNotice) {
+        if let Some(target) = &self.operator_webhook {
+            self.enqueue_operator_delivery(target, notice).await;
         }
     }
 }
@@ -346,6 +405,30 @@ struct Crossing<'a> {
     ceiling: &'a Ceiling,
     balance: Cost,
     window: Option<(DateTime<Utc>, DateTime<Utc>)>,
+}
+
+/// The ceilings among `readings` whose balance has reached its warn threshold.
+///
+/// The one crossing rule (D-15): integer-only, on the balance as read. Admission calls it on the
+/// pre-admission balance and the mid-run boundary guard on each boundary's balance, so the two
+/// can never disagree about what a crossing is. A balance at the ceiling is exhausted and never
+/// reaches here, so `warn_at: 100` cannot cross.
+fn collect_crossings(readings: &[CeilingReading]) -> Vec<Crossing<'_>> {
+    readings
+        .iter()
+        .filter(|reading| {
+            crosses_warn_threshold(
+                reading.balance.nanos(),
+                reading.ceiling.ceiling_nanos,
+                reading.ceiling.warn_at,
+            )
+        })
+        .map(|reading| Crossing {
+            ceiling: &reading.ceiling,
+            balance: reading.balance.clone(),
+            window: reading.window,
+        })
+        .collect()
 }
 
 fn backend(message: impl Into<String>) -> AdmissionError {
@@ -373,7 +456,8 @@ impl Treasurer {
         };
         let evaluated_at = evaluation.evaluated_at;
 
-        if let Some(refusal) = evaluation.exhausted {
+        if let Some(exhausted) = evaluation.exhausted {
+            let refusal = exhausted.refusal;
             log::warn!(
                 "allowance refused: scope={} limit={} tenant={} balance={} ceiling={}",
                 refusal.scope_kind.as_str(),
@@ -395,24 +479,8 @@ impl Treasurer {
 
         // Ceilings whose balance has reached its warn threshold; claimed only because every
         // ceiling admits (a refused request notifies nothing -- the refusal is its own signal).
-        // D-15: integer-only crossing test on the PRE-admission balance. A balance at the
-        // ceiling was refused above, so `warn_at: 100` can never reach here.
-        let crossings: Vec<Crossing<'_>> = evaluation
-            .readings
-            .iter()
-            .filter(|reading| {
-                crosses_warn_threshold(
-                    reading.balance.nanos(),
-                    reading.ceiling.ceiling_nanos,
-                    reading.ceiling.warn_at,
-                )
-            })
-            .map(|reading| Crossing {
-                ceiling: &reading.ceiling,
-                balance: reading.balance.clone(),
-                window: reading.window,
-            })
-            .collect();
+        // D-15: integer-only crossing test on the PRE-admission balance.
+        let crossings = collect_crossings(&evaluation.readings);
 
         // The admitted path: claim every crossing's once-per-window notice (D-16). With no
         // notice store attached the warn leg is off.
@@ -469,11 +537,8 @@ impl AllowanceAdmissionPort for Treasurer {
     /// retried, and `confirm` never fails or blocks the run. With no target attached nothing
     /// is enqueued.
     async fn confirm(&self, admission: &Admission) {
-        let Some(target) = &self.operator_webhook else {
-            return;
-        };
         for notice in admission.notices() {
-            self.enqueue_operator_delivery(target, notice).await;
+            self.notify_operator(notice).await;
         }
     }
 

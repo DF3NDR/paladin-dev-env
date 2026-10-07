@@ -22,7 +22,12 @@
 //! The worker builds one sink per run dispatch (never shared across runs), so the recorded
 //! warnings are always the run's own.
 //!
-//! Renders metadata only — model, usage, duration, cost, allowance figures, run status —
+//! A run the Treasurer halted (Phase 42 D-19) carries its [`HaltReason`](paladin_core::platform::container::allowance::HaltReason) on its own
+//! `RunFinished`; the sink folds it in through [`ExecutionMetadata::with_halt_reason`], so each
+//! herald renders one halt line through [`ExecutionMetadata::halt_reason_display`] beside the
+//! warning line. A run without a halt reason renders exactly as before.
+//!
+//! Renders metadata only — model, usage, duration, cost, allowance and halt figures, run status —
 //! never prompt or response content (T-38-26). A herald error is diagnostics-only
 //! ([`TraceSinkError::Failed`]), per [`TraceSink`]'s own contract: it never fails the run
 //! (T-38-27).
@@ -32,6 +37,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use async_trait::async_trait;
 use paladin_core::platform::container::allowance::AllowanceWarning;
 use paladin_core::platform::container::herald::{ExecutionMetadata, Herald};
+use paladin_core::platform::container::trace::TraceEvent;
 use paladin_ports::output::trace_sink_port::{TraceRecord, TraceSink, TraceSinkError};
 
 /// The `log` target [`HeraldTraceSink`] writes its rendered summary to (D-11b), at `info`.
@@ -97,6 +103,16 @@ impl TraceSink for HeraldTraceSink {
         };
         let drained = std::mem::take(&mut *self.recorded_warnings());
         metadata.with_allowance_warnings(&drained);
+        // D-19: a spend halt names its reason on the run's own `RunFinished`; fold it beside
+        // the warning line so every herald renders one halt line. A finish without a reason
+        // (or any non-halt status) leaves the metadata exactly as it was.
+        if let TraceEvent::RunFinished {
+            halt_reason: Some(reason),
+            ..
+        } = &record.event
+        {
+            metadata.with_halt_reason(reason);
+        }
 
         match self.herald.finalize_stream(&metadata) {
             Ok(text) => {
@@ -121,6 +137,7 @@ mod tests {
         EngineLimits, InputMapping, NodeSpec, RunOutcome, WarEngine, WarGraph,
     };
     use paladin_core::base::entity::node::Node;
+    use paladin_core::platform::container::allowance::HaltReason;
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
     };
@@ -296,6 +313,68 @@ mod tests {
         assert!(!captured[0].metadata.contains_key(
             paladin_core::platform::container::herald::ALLOWANCE_WARNING_METADATA_KEY
         ));
+    }
+
+    fn halted_run_finished_record(halt_reason: Option<HaltReason>) -> TraceRecord {
+        TraceRecord {
+            thread_id: ThreadId::new("herald-sink-unit").unwrap(),
+            run_id: Some(RunId::new_v7()),
+            seq: 1,
+            at: Utc::now(),
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Halted,
+                total_supersteps: 1,
+                usage: TokenUsage::new(1_000, 2_000),
+                cost: None,
+                halt_reason,
+                duration_ms: 10,
+                trace_dropped_total: 0,
+            },
+        }
+    }
+
+    /// D-19: a `RunFinished` carrying a halt reason is folded into the metadata as exactly
+    /// one line; a finish without one leaves the metadata exactly as it was.
+    #[tokio::test]
+    async fn herald_sink_folds_a_halt_reason_into_one_line() {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+        };
+        use paladin_core::platform::container::herald::HALT_REASON_METADATA_KEY;
+
+        let herald = Arc::new(RecordingHerald::default());
+        let sink = HeraldTraceSink::new(Arc::clone(&herald) as Arc<dyn Herald>, "gpt-4");
+        let usd = CurrencyCode::new("USD").unwrap();
+        let reason = HaltReason::AllowanceExhausted(AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Window,
+            balance: Cost::new(25_000_000_000, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window: Utc
+                .with_ymd_and_hms(2026, 10, 5, 0, 0, 0)
+                .single()
+                .zip(Utc.with_ymd_and_hms(2026, 10, 6, 0, 0, 0).single()),
+            evaluated_at: Utc.with_ymd_and_hms(2026, 10, 5, 12, 0, 0).unwrap(),
+        });
+
+        sink.on_event(halted_run_finished_record(Some(reason)))
+            .await
+            .expect("herald sink succeeds");
+        sink.on_event(halted_run_finished_record(None))
+            .await
+            .expect("herald sink succeeds");
+
+        let captured = herald.captured();
+        assert_eq!(captured.len(), 2);
+        assert_eq!(
+            captured[0].halt_reason_display().as_deref(),
+            Some(
+                "\u{26D4} halted: allowance exhausted \u{2014} 25.0000 of 25.0000 USD \
+                 (api_key, window resets 2026-10-06T00:00:00Z)"
+            )
+        );
+        assert_eq!(captured[1].halt_reason_display(), None);
+        assert!(!captured[1].metadata.contains_key(HALT_REASON_METADATA_KEY));
     }
 
     /// 45-02 (D-14): a legacy agent run has no graph, so `RunWorkerPool::run_agent`

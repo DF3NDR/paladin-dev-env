@@ -331,6 +331,10 @@ impl Herald for TableHerald {
         if let Some(line) = metadata.allowance_warning_display() {
             table.add_row(vec![Cell::new("Allowance"), Cell::new(line)]);
         }
+        // D-19: one halt row, from the one shared helper, only when the Treasurer halted the run.
+        if let Some(line) = metadata.halt_reason_display() {
+            table.add_row(vec![Cell::new("Halt"), Cell::new(line)]);
+        }
 
         let mut output = String::from("\n--- Execution Metadata ---\n");
         writeln!(&mut output, "{}", table).map_err(|e| {
@@ -1091,6 +1095,24 @@ mod tests {
         assert_eq!(with.matches("allowance:").count(), 1, "{with}");
         assert!(with.contains("(tenant, lifetime cap)"), "{with}");
         assert!(!without.contains("llowance"), "{without}");
+        assert!(without.contains("0.0450 USD"), "{without}");
+    }
+
+    /// D-19: a halted run renders exactly one halt row; a run without a halt reason renders
+    /// exactly as before.
+    #[test]
+    fn finalize_stream_renders_exactly_one_halt_row_when_present() {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let herald = TableHerald::default();
+        let mut halted = allowance_metadata(false);
+        halted.with_halt_reason(&HaltReason::LedgerUnavailable);
+        let with = herald.finalize_stream(&halted).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        assert_eq!(with.matches("halted:").count(), 1, "{with}");
+        assert!(with.contains("ledger unavailable"), "{with}");
+        assert!(!without.contains("halted:"), "{without}");
         assert!(without.contains("0.0450 USD"), "{without}");
     }
 }

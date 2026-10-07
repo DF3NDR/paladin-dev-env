@@ -426,6 +426,10 @@ impl Herald for MarkdownHerald {
         if let Some(line) = metadata.allowance_warning_display() {
             output.push_str(&self.format_field("Allowance", &line));
         }
+        // D-19: one halt line, from the one shared helper, only when the Treasurer halted the run.
+        if let Some(line) = metadata.halt_reason_display() {
+            output.push_str(&self.format_field("Halt", &line));
+        }
 
         Ok(output)
     }
@@ -937,6 +941,28 @@ mod tests {
         );
         assert_eq!(with.replace(&line, ""), without);
         assert!(!without.contains("allowance"), "{without}");
+    }
+
+    /// D-19: a halted run renders exactly one halt line; a run without a halt reason renders
+    /// exactly as before.
+    #[test]
+    fn finalize_stream_renders_exactly_one_halt_line_when_present() {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+        let mut halted = allowance_metadata(false);
+        halted.with_halt_reason(&HaltReason::LedgerUnavailable);
+        let with = herald.finalize_stream(&halted).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        assert_eq!(with.matches("halted:").count(), 1, "{with}");
+        assert!(with.contains("(ledger unavailable)"), "{with}");
+        let line = herald.format_field("Halt", &halted.halt_reason_display().unwrap());
+        assert_eq!(with.replace(&line, ""), without);
+        assert!(!without.contains("halted:"), "{without}");
     }
 
     #[test]

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::platform::container::allowance::AllowanceWarning;
+use crate::platform::container::allowance::{AllowanceWarning, HaltReason};
 use crate::platform::container::cost::Cost;
 
 // Re-export actual domain types for Herald consumers
@@ -383,6 +383,12 @@ pub const COST_CURRENCY_METADATA_KEY: &str = "cost_currency";
 /// warning was won. Read back through [`ExecutionMetadata::allowance_warning_display`].
 pub const ALLOWANCE_WARNING_METADATA_KEY: &str = "treasurer.allowance_warning";
 
+/// The [`ExecutionMetadata::metadata`] key under which the Treasurer's halt reason for a run is
+/// recorded (D-19): the one rendered line of [`HaltReason::herald_line`] as a JSON string, present
+/// only when the run was halted by an allowance. Read back through
+/// [`ExecutionMetadata::halt_reason_display`].
+pub const HALT_REASON_METADATA_KEY: &str = "treasurer.halt_reason";
+
 /// Execution metadata for streaming with complete telemetry
 ///
 /// Tracks comprehensive execution metrics including timing, token usage,
@@ -664,6 +670,71 @@ impl ExecutionMetadata {
                 .collect::<Vec<_>>()
                 .join("; "),
         )
+    }
+
+    /// Record why the run was halted under [`HALT_REASON_METADATA_KEY`] as the one rendered
+    /// [`HaltReason::herald_line`] (D-19). The stored value is the display line only -- the
+    /// scope kind, the figures and the window end -- so no tenant id, key name or key value can
+    /// reach a herald through this key (D-00g).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::allowance::HaltReason;
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use uuid::Uuid;
+    ///
+    /// let mut metadata = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1, 1))
+    ///     .build()?;
+    /// assert_eq!(metadata.halt_reason_display(), None);
+    /// metadata.with_halt_reason(&HaltReason::LedgerUnavailable);
+    /// assert!(metadata.halt_reason_display().is_some());
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn with_halt_reason(&mut self, reason: &HaltReason) {
+        self.metadata.insert(
+            HALT_REASON_METADATA_KEY.to_string(),
+            serde_json::Value::String(reason.herald_line()),
+        );
+    }
+
+    /// Render the run's halt reason for display (D-19): the line recorded by
+    /// [`ExecutionMetadata::with_halt_reason`]. `None` when the key is absent or its value is not
+    /// a string -- a herald never fails because of this line.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::Utc;
+    /// use paladin_core::platform::container::allowance::HaltReason;
+    /// use paladin_core::platform::container::herald::ExecutionMetadata;
+    /// use paladin_core::platform::container::token_usage::TokenUsage;
+    /// use uuid::Uuid;
+    ///
+    /// let mut metadata = ExecutionMetadata::builder()
+    ///     .execution_id(Uuid::new_v4())
+    ///     .start_time(Utc::now())
+    ///     .model_used("gpt-4".to_string())
+    ///     .token_usage(TokenUsage::new(1, 1))
+    ///     .build()?;
+    /// metadata.with_halt_reason(&HaltReason::LedgerUnavailable);
+    /// assert_eq!(
+    ///     metadata.halt_reason_display().as_deref(),
+    ///     Some("\u{26D4} halted: allowance could not be evaluated (ledger unavailable)")
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn halt_reason_display(&self) -> Option<String> {
+        self.metadata
+            .get(HALT_REASON_METADATA_KEY)?
+            .as_str()
+            .map(str::to_owned)
     }
 
     /// Build [`ExecutionMetadata`] from a completed run's
@@ -1018,6 +1089,33 @@ mod tests {
             serde_json::json!([]),
         );
         assert_eq!(metadata.allowance_warning_display(), None);
+    }
+
+    #[test]
+    fn halt_reason_display_is_none_without_the_key() {
+        assert_eq!(bare_metadata().halt_reason_display(), None);
+    }
+
+    #[test]
+    fn with_halt_reason_records_one_line_under_the_key() {
+        let mut metadata = bare_metadata();
+        metadata.with_halt_reason(
+            &crate::platform::container::allowance::HaltReason::LedgerUnavailable,
+        );
+        assert_eq!(
+            metadata.halt_reason_display().as_deref(),
+            Some("\u{26D4} halted: allowance could not be evaluated (ledger unavailable)")
+        );
+        assert!(metadata.metadata.contains_key(HALT_REASON_METADATA_KEY));
+    }
+
+    #[test]
+    fn halt_reason_display_is_none_for_a_non_string_value() {
+        let mut metadata = bare_metadata();
+        metadata
+            .metadata
+            .insert(HALT_REASON_METADATA_KEY.to_string(), serde_json::json!(7));
+        assert_eq!(metadata.halt_reason_display(), None);
     }
 
     // Mock Herald implementation for testing

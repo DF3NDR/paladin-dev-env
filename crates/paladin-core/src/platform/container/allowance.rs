@@ -239,6 +239,81 @@ impl HaltReason {
         }
     }
 
+    /// The one-line operator rendering shared by the markdown, JSON and table heralds (D-19):
+    /// `⛔ halted: allowance exhausted — 25.0000 of 25.0000 USD (api_key, window resets
+    /// 2026-10-06T00:00:00Z)` for a window ceiling, `... (tenant, lifetime cap)` for a lifetime
+    /// one, and `⛔ halted: allowance could not be evaluated (ledger unavailable)` for a ledger
+    /// outage.
+    ///
+    /// It mirrors [`AllowanceWarning::herald_line`]: the line names the scope kind, never the
+    /// tenant id or the key name, and never a key value (D-00g). Both figures go through
+    /// [`format_cost`], the display edge (D-00h).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chrono::{TimeZone, Utc};
+    /// use paladin_core::platform::container::allowance::{
+    ///     AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, HaltReason,
+    /// };
+    /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let reason = HaltReason::AllowanceExhausted(AllowanceRefusal {
+    ///     scope_kind: AllowanceScopeKind::ApiKey,
+    ///     limit_kind: AllowanceLimitKind::Window,
+    ///     balance: Cost::new(25_000_000_000, usd.clone()),
+    ///     ceiling: Cost::new(25_000_000_000, usd),
+    ///     window: Utc
+    ///         .with_ymd_and_hms(2026, 10, 5, 0, 0, 0)
+    ///         .single()
+    ///         .zip(Utc.with_ymd_and_hms(2026, 10, 6, 0, 0, 0).single()),
+    ///     evaluated_at: Utc.with_ymd_and_hms(2026, 10, 5, 12, 0, 0).single().unwrap_or_default(),
+    /// });
+    /// assert_eq!(
+    ///     reason.herald_line(),
+    ///     "\u{26D4} halted: allowance exhausted \u{2014} 25.0000 of 25.0000 USD \
+    ///      (api_key, window resets 2026-10-06T00:00:00Z)"
+    /// );
+    /// assert_eq!(
+    ///     HaltReason::LedgerUnavailable.herald_line(),
+    ///     "\u{26D4} halted: allowance could not be evaluated (ledger unavailable)"
+    /// );
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn herald_line(&self) -> String {
+        match self {
+            HaltReason::AllowanceExhausted(refusal) => {
+                let horizon = match (refusal.limit_kind, refusal.window) {
+                    (AllowanceLimitKind::Window, Some((_, end))) => {
+                        format!(
+                            "window resets {}",
+                            end.to_rfc3339_opts(SecondsFormat::Secs, true)
+                        )
+                    }
+                    _ => "lifetime cap".to_string(),
+                };
+                // The currency is stated once, after the ceiling ("25.0000 of 25.0000 USD"); a
+                // balance in a different currency keeps its own code so nothing is misread.
+                let balance = format_cost(&refusal.balance);
+                let balance = if refusal.balance.currency() == refusal.ceiling.currency() {
+                    let code = format!(" {}", refusal.balance.currency().as_str());
+                    balance.strip_suffix(code.as_str()).unwrap_or(&balance)
+                } else {
+                    balance.as_str()
+                };
+                format!(
+                    "\u{26D4} halted: allowance exhausted \u{2014} {balance} of {} ({}, {horizon})",
+                    format_cost(&refusal.ceiling),
+                    refusal.scope_kind.as_str(),
+                )
+            }
+            HaltReason::LedgerUnavailable => {
+                "\u{26D4} halted: allowance could not be evaluated (ledger unavailable)".to_string()
+            }
+        }
+    }
+
     /// The caller-facing JSON object for this reason: the one wire builder (D-06, D-14, D-16).
     ///
     /// For [`HaltReason::AllowanceExhausted`] it is the refusal's
@@ -1212,6 +1287,40 @@ mod tests {
             HaltReason::LedgerUnavailable.wire_json(),
             serde_json::json!({"reason": "ledger_unavailable"})
         );
+    }
+
+    #[test]
+    fn halt_reason_herald_line_for_a_window_ceiling() {
+        let reason = HaltReason::AllowanceExhausted(window_refusal(at(3, 23, 0, 0)));
+        assert_eq!(
+            reason.herald_line(),
+            "\u{26D4} halted: allowance exhausted \u{2014} 2.5000 of 2.5000 USD \
+             (api_key, window resets 2026-10-04T00:00:00Z)"
+        );
+    }
+
+    #[test]
+    fn halt_reason_herald_line_for_a_lifetime_ceiling() {
+        let mut refusal = window_refusal(at(3, 23, 0, 0));
+        refusal.scope_kind = AllowanceScopeKind::Tenant;
+        refusal.limit_kind = AllowanceLimitKind::Lifetime;
+        refusal.window = None;
+        let line = HaltReason::AllowanceExhausted(refusal).herald_line();
+        assert!(line.ends_with("(tenant, lifetime cap)"), "{line}");
+    }
+
+    #[test]
+    fn halt_reason_herald_line_for_a_ledger_outage() {
+        assert_eq!(
+            HaltReason::LedgerUnavailable.herald_line(),
+            "\u{26D4} halted: allowance could not be evaluated (ledger unavailable)"
+        );
+    }
+
+    #[test]
+    fn halt_reason_herald_line_names_no_tenant_or_key() {
+        let line = HaltReason::AllowanceExhausted(window_refusal(at(3, 23, 0, 0))).herald_line();
+        assert!(!line.contains("acme") && !line.contains("svc-a"), "{line}");
     }
 
     #[test]

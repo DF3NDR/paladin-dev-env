@@ -218,6 +218,11 @@ impl Herald for JsonHerald {
         if let Some(line) = metadata.allowance_warning_display() {
             json["allowance_warning"] = Value::String(line);
         }
+        // D-19: the halt line follows the same convention -- added only when the Treasurer halted
+        // the run, so a run without a halt reason renders the exact same object as before.
+        if let Some(line) = metadata.halt_reason_display() {
+            json["halt_reason"] = Value::String(line);
+        }
 
         let serialized = serde_json::to_string(&json).map_err(|e| {
             HeraldError::SerializationError(format!("Metadata serialization failed: {}", e))
@@ -971,6 +976,35 @@ mod tests {
         // Same key set as before the change, plus the one new key.
         let mut with_keys: Vec<_> = with.as_object().unwrap().keys().cloned().collect();
         with_keys.retain(|k| k != "allowance_warning");
+        let without_keys: Vec<_> = without.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(with_keys, without_keys);
+    }
+
+    /// D-19: the halt key is added only when the run was halted; every other key is unchanged.
+    #[test]
+    fn finalize_stream_adds_the_halt_key_only_when_present() {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let herald = JsonHerald::new();
+        let mut halted = allowance_metadata(false);
+        halted.with_halt_reason(&HaltReason::LedgerUnavailable);
+        let with = herald.finalize_stream(&halted).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        let with: Value = serde_json::from_str(with.trim_end()).unwrap();
+        let without: Value = serde_json::from_str(without.trim_end()).unwrap();
+        assert_eq!(
+            with["halt_reason"],
+            "\u{26D4} halted: allowance could not be evaluated (ledger unavailable)"
+        );
+        assert_eq!(
+            with.to_string().matches("halted:").count(),
+            1,
+            "exactly one halt line"
+        );
+        assert!(without.get("halt_reason").is_none());
+        let mut with_keys: Vec<_> = with.as_object().unwrap().keys().cloned().collect();
+        with_keys.retain(|k| k != "halt_reason");
         let without_keys: Vec<_> = without.as_object().unwrap().keys().cloned().collect();
         assert_eq!(with_keys, without_keys);
     }

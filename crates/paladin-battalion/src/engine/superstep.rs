@@ -1629,7 +1629,8 @@ enum NodeRunOutcome {
 /// trace and a Waypoint never disagree. A `Succeeded` attempt is further
 /// split into `Ended`/`Parleyed` by its `Directive.next`, mirroring
 /// `NodeOutcomeKind`'s own doc comment; `Interrupted` is reported
-/// `Skipped { reason: "shutdown" }`, exactly as it is recorded on the
+/// `Skipped { reason: "shutdown" }`, and a `ChildHalted` Battalion node
+/// `Skipped { reason: "child_halted" }`, exactly as each is recorded on the
 /// Halted Waypoint itself.
 fn node_outcome_kind(outcome: &NodeRunOutcome) -> NodeOutcomeKind {
     match outcome {
@@ -1642,11 +1643,20 @@ fn node_outcome_kind(outcome: &NodeRunOutcome) -> NodeOutcomeKind {
             reason: reason.clone(),
         },
         NodeRunOutcome::Failed(_) => NodeOutcomeKind::Failed,
-        NodeRunOutcome::Interrupted | NodeRunOutcome::ChildHalted(_) => NodeOutcomeKind::Skipped {
+        NodeRunOutcome::Interrupted => NodeOutcomeKind::Skipped {
             reason: "shutdown".to_string(),
+        },
+        // A nested child halted (spend or cancel): the node is re-listed for resume, but its
+        // recorded reason must not contradict the run's own halt reason (Phase 42 review IN-12).
+        NodeRunOutcome::ChildHalted(_) => NodeOutcomeKind::Skipped {
+            reason: CHILD_HALTED_REASON.to_string(),
         },
     }
 }
+
+/// The `Skipped` reason recorded for a Battalion node whose child run halted on a spend ceiling
+/// or a cancel (Phase 42 review IN-12). Distinct from `"shutdown"`, which names a worker drain.
+const CHILD_HALTED_REASON: &str = "child_halted";
 
 /// What one spawned node-dispatch task (the `tokio::spawn`'d async block in
 /// the dispatch loop below) resolves to: the node's own `NodeId` (so the
@@ -3523,7 +3533,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         duration_ms,
                         usage,
                         outcome: NodeOutcomeKind::Skipped {
-                            reason: "shutdown".to_string(),
+                            reason: CHILD_HALTED_REASON.to_string(),
                         },
                         attempt,
                         attempts: failed_attempts,
@@ -10490,6 +10500,20 @@ mod tests {
             guard.evaluations.load(std::sync::atomic::Ordering::SeqCst),
             2,
             "the parent's second boundary was answered by the memoised halt, not a re-read"
+        );
+
+        // IN-12: the Battalion node's recorded reason names the child's halt, never a worker
+        // drain, so it does not contradict the run's own halt reason.
+        let parent_waypoints = store.saved_waypoints(&thread).await;
+        let record = parent_waypoints
+            .first()
+            .and_then(|wp| wp.completed.iter().find(|r| r.node_id.as_str() == "sub"))
+            .expect("the halted Battalion node is recorded on the parent's Halted Waypoint");
+        assert_eq!(
+            record.outcome,
+            NodeOutcomeKind::Skipped {
+                reason: "child_halted".to_string()
+            }
         );
 
         let child_waypoints = store

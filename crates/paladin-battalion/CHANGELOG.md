@@ -30,6 +30,10 @@ and this project follows lockstep workspace versioning.
 
 ### Fixed
 
+- A Battalion node whose nested child run halted (a spend ceiling or a cancel) is now recorded
+  `Skipped { reason: "child_halted" }` on the Halted Waypoint and in its `NodeFinished` trace
+  event, where the CR-1 fix reused `"shutdown"` and so contradicted the run's own halt reason.
+  Resume keys off the re-listed vanguard, not the string (Phase 42 review IN-12).
 - A boundary settlement that cannot be written (a ledger error or a currency mismatch) is now
   reported to an attached `SpendGuard` through `SpendGuard::note_unsettled_spend`, so a metering
   guard can halt the run instead of letting it spend unmetered (Phase 42 review WR-4). Settlement

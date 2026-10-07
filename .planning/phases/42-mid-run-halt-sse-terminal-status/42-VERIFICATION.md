@@ -1,10 +1,20 @@
 ---
 phase: 42-mid-run-halt-sse-terminal-status
 verified: 2026-10-07T02:35:00Z
-status: human_needed
+status: passed
 score: 4/4 roadmap success criteria verified (plus plan-level truths sampled against code and named tests)
 behavior_unverified: 0
-overrides_applied: 0
+overrides_applied: 1
+overrides:
+  - must_have: "last checkpoint kept ... on both an engine-driven and an agent-loop run"
+    reason: "Agent-kind runs have no Waypoint by construction (D-08, WINDOWS.md row 64); a halted agent-kind run resumes by a fresh POST /v1/runs. The engine path continues from its Halted Waypoint."
+    accepted_by: "operator (am0rfu5@protonmail.com) via UAT test 2"
+    accepted_at: "2026-10-07T20:58:19Z"
+human_verification_resolved:
+  - test: "Review the judgment-tier prohibition verdicts"
+    result: "passed, all 15 verdicts confirmed by the operator (2026-10-07T20:58:19Z)"
+  - test: "Decide the ROADMAP SC1/SC2 and REQUIREMENTS ALLOW-03 wording for the agent loop"
+    result: "override accepted by the operator (2026-10-07T20:58:19Z); roadmap and requirement text unchanged"
 human_verification:
   - test: "Review the judgment-tier prohibition verdicts below (about 20 must_haves.prohibitions across plans 42-01..42-12, all carried as `status: unresolved`, `verification: null`)"
     expected: "Each MUST NOT either confirmed as not-happening (the evidence column below points at code and a named passing test for every one) or redirected. These are NON-AUTHORITATIVE LLM-judge verdicts: unverified-prohibition, human review recommended."
@@ -18,7 +28,7 @@ human_verification:
 
 **Phase Goal:** A run that would overspend mid-flight stops cleanly and resumably instead of running unchecked, and the SSE stream reports the run's real terminal status.
 **Verified:** 2026-10-07
-**Status:** human_needed (no failed truth, no blocker, no missing artifact; the only open items are flagged judgment-tier prohibitions and one wording decision)
+**Status:** passed (human items resolved by the operator on 2026-10-07: prohibition verdicts confirmed, D-08 wording override accepted; no failed truth, no blocker, no missing artifact)
 **Re-verification:** No, initial verification
 
 Approach: SUMMARY claims were not trusted. I read the engine, guard, worker, limits, derive, SSE, storage and web code directly, then ran the named tests myself (`CARGO_INCREMENTAL=0`).

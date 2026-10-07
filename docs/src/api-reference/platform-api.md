@@ -773,6 +773,11 @@ the model response that crosses the figure and is recorded `halted`, not `comple
   notice appended.
 - The SSE `done` event carries `status: "halted"` and the same `halt_reason`, live and on replay,
   and a subscribed `halted` webhook carries it too.
+- When the run halts because a response crossed the derived figure, the `halt_reason`'s `balance`
+  is the binding `ceiling` itself: the loop cannot know the post-spend balance, so it reports a
+  conservative **upper bound**, not a ledger reading. Do not read it as "the allowance is spent":
+  a fresh `POST /v1/runs` is admitted with whatever remainder the ledger actually shows. A zero or
+  exhausted figure at dispatch carries the balance measured at that moment instead.
 - A zero or exhausted figure at dispatch records the same halt, and an unreadable ledger records
   `halt_reason: { "reason": "ledger_unavailable" }` (fail closed); in both cases the model is not
   called.

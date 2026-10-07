@@ -858,10 +858,13 @@ mod tests {
     // (and, where relevant, `assistant_id`), so tests do not interfere with
     // each other EXCEPT `list_filters_by_thread_assistant_and_status` and
     // `list_paginates_by_submitted_at_and_run_id_with_no_overlap_or_gap`,
-    // which scope themselves via a unique `assistant_id` filter rather than
-    // requiring a literally empty table -- unlike the Waypoint suite's
-    // `list_threads` clause, no Run contract clause here asserts on a
-    // completely empty store, so `store_or_skip` does not need to truncate.
+    // which scope every one of their `list` queries by their own thread or a
+    // unique `assistant_id` rather than requiring a literally empty table --
+    // unlike the Waypoint suite's `list_threads` clause, no Run contract
+    // clause here asserts on a completely empty store, so `store_or_skip`
+    // does not need to truncate. (An unscoped `status = Running` query in
+    // the filter clause once counted the `Running` rows the Phase 42
+    // `halt_reason` clauses leave behind and went red in CI alone.)
 
     fn postgres_test_url() -> String {
         std::env::var("STORAGE_POSTGRES_TEST_URL").unwrap_or_else(|_| {

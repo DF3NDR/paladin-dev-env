@@ -415,8 +415,14 @@ pub async fn list_filters_by_thread_assistant_and_status(port: &dyn RunRepositor
     assert_eq!(by_assistant.items.len(), 1);
     assert_eq!(by_assistant.items[0].run_id, run_b.run_id);
 
+    // The status filter is asserted within this test's own threads: the Postgres suite shares
+    // one database across every contract clause (`--test-threads=1`, no truncation), and other
+    // clauses legitimately leave `Running` runs behind (`insert_running_run`), so an unscoped
+    // `status = Running` query would count their rows too. Scoping by thread keeps the
+    // assertion about the status filter itself: thread B's run is Running, thread A's is not.
     let by_status = port
         .list(RunQuery {
+            thread_id: Some(thread_b.clone()),
             status: Some(RunStatus::Running),
             ..Default::default()
         })
@@ -424,6 +430,26 @@ pub async fn list_filters_by_thread_assistant_and_status(port: &dyn RunRepositor
         .unwrap();
     assert_eq!(by_status.items.len(), 1);
     assert_eq!(by_status.items[0].run_id, run_b.run_id);
+
+    let not_running_in_b = port
+        .list(RunQuery {
+            thread_id: Some(thread_b),
+            status: Some(RunStatus::Queued),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(not_running_in_b.items.is_empty());
+
+    let running_in_a = port
+        .list(RunQuery {
+            thread_id: Some(thread_a),
+            status: Some(RunStatus::Running),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(running_in_a.items.is_empty());
 }
 
 // ── Cancellation ───────────────────────────────────────────────────────────

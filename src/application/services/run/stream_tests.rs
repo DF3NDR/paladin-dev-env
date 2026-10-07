@@ -1978,6 +1978,200 @@ async fn replay_skips_a_drained_halted_record_when_the_run_later_completed() {
     .expect("replay_skips_a_drained_halted_record_when_the_run_later_completed timed out");
 }
 
+/// Seed a thread with a stale drained `Halted` record at `stale_seq`, `later` further superstep
+/// records behind it, and the run's own genuine terminal record last; replay the run (whose row
+/// is `row_status`) and return every event.
+async fn replay_after_a_stale_halted_record(
+    thread: &str,
+    row_status: RunStatus,
+    row_halt_reason: Option<HaltReason>,
+    prefix_supersteps: u64,
+    own_terminal: TraceEvent,
+) -> Vec<RunStreamEvent> {
+    use paladin_ports::output::trace_sink_port::RunFinishStatus;
+    let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    let mut run = Run::new(
+        RunId::new_v7(),
+        ThreadId::new(thread).unwrap(),
+        AssistantRef {
+            assistant_id: "a1".to_string(),
+            version: 1,
+        },
+        serde_json::json!({}),
+    )
+    .with_status(row_status);
+    run.halt_reason = row_halt_reason;
+    repository.insert(&run).await.unwrap();
+
+    let mut records = Vec::new();
+    let mut seq = 0;
+    for superstep in 1..=prefix_supersteps {
+        seq += 1;
+        records.push(run_stamped(
+            &run.thread_id,
+            &run.run_id,
+            seq,
+            superstep_event(superstep),
+        ));
+    }
+    seq += 1;
+    records.push(run_stamped(
+        &run.thread_id,
+        &run.run_id,
+        seq,
+        finished_event(RunFinishStatus::Halted, None),
+    ));
+    seq += 1;
+    records.push(run_stamped(
+        &run.thread_id,
+        &run.run_id,
+        seq,
+        superstep_event(prefix_supersteps + 1),
+    ));
+    seq += 1;
+    records.push(run_stamped(&run.thread_id, &run.run_id, seq, own_terminal));
+
+    let traces = Arc::new(InMemoryRunTraceStore::new());
+    traces.append(&records).await.unwrap();
+    collect_replay(&run, repository, traces).await
+}
+
+/// WR-5 (42-REVIEW): a drained dispatch's reasonless `Halted` record must not end the replay of a
+/// run that was requeued and then ended `Halted` (a spend halt) -- the row status cannot tell the
+/// stale record from the genuine one, so a later record of the same run decides.
+#[tokio::test]
+async fn replay_skips_a_drained_halted_record_when_the_run_later_halted_on_spend() {
+    use paladin_ports::output::trace_sink_port::RunFinishStatus;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let events = replay_after_a_stale_halted_record(
+            "t-replay-drained-then-halted",
+            RunStatus::Halted,
+            Some(HaltReason::LedgerUnavailable),
+            1,
+            finished_event(RunFinishStatus::Halted, Some(HaltReason::LedgerUnavailable)),
+        )
+        .await;
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                RunStreamEventKind::Superstep,
+                RunStreamEventKind::Superstep,
+                RunStreamEventKind::Done,
+            ],
+            "the stale halt record is skipped and the replay reaches the final record"
+        );
+        let done = events.last().expect("a terminal event");
+        assert_eq!(done.payload["status"], "halted");
+        assert_eq!(
+            done.payload["trace_seq"], 4,
+            "the run's own final record ends it"
+        );
+        assert_eq!(done.payload["halt_reason"]["reason"], "ledger_unavailable");
+    })
+    .await
+    .expect("replay_skips_a_drained_halted_record_when_the_run_later_halted_on_spend timed out");
+}
+
+/// WR-5 (42-REVIEW): the same stale drained record when the requeued run ends `Cancelled`.
+#[tokio::test]
+async fn replay_skips_a_drained_halted_record_when_the_run_later_cancelled() {
+    use paladin_ports::output::trace_sink_port::RunFinishStatus;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let events = replay_after_a_stale_halted_record(
+            "t-replay-drained-then-cancelled",
+            RunStatus::Cancelled,
+            None,
+            1,
+            finished_event(RunFinishStatus::Cancelled, None),
+        )
+        .await;
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                RunStreamEventKind::Superstep,
+                RunStreamEventKind::Superstep,
+                RunStreamEventKind::Done,
+            ],
+        );
+        let done = events.last().expect("a terminal event");
+        assert_eq!(done.payload["status"], "cancelled");
+        assert_eq!(done.payload["trace_seq"], 4);
+    })
+    .await
+    .expect("replay_skips_a_drained_halted_record_when_the_run_later_cancelled timed out");
+}
+
+/// WR-5 (42-REVIEW): a genuine reasonless `Halted` record that really is the last record of the
+/// run (a token halt with a persisted cancel flag, row `Cancelled`) still ends the replay, so the
+/// later-record rule does not swallow a real end.
+#[tokio::test]
+async fn replay_keeps_a_last_reasonless_halted_record_beside_a_cancelled_row() {
+    use paladin_ports::output::trace_sink_port::RunFinishStatus;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("t-replay-genuine-halted-cancelled").unwrap(),
+            AssistantRef {
+                assistant_id: "a1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_status(RunStatus::Cancelled);
+        repository.insert(&run).await.unwrap();
+        let traces = Arc::new(InMemoryRunTraceStore::new());
+        traces
+            .append(&[
+                run_stamped(&run.thread_id, &run.run_id, 1, superstep_event(1)),
+                run_stamped(
+                    &run.thread_id,
+                    &run.run_id,
+                    2,
+                    finished_event(RunFinishStatus::Halted, None),
+                ),
+            ])
+            .await
+            .unwrap();
+        let events = collect_replay(&run, repository, traces).await;
+        let done = events.last().expect("a terminal event");
+        assert_eq!(done.kind, RunStreamEventKind::Done);
+        assert_eq!(done.payload["status"], "cancelled");
+        assert_eq!(done.payload["trace_seq"], 2, "the last record is the end");
+        assert_eq!(events.len(), 2);
+    })
+    .await
+    .expect("replay_keeps_a_last_reasonless_halted_record_beside_a_cancelled_row timed out");
+}
+
+/// WR-5 (42-REVIEW): the stale record sits at the end of the first replay page, so the later
+/// same-run records are only found by reading the next page.
+#[tokio::test]
+async fn replay_skips_a_stale_halted_record_found_at_a_page_boundary() {
+    use paladin_ports::output::trace_sink_port::RunFinishStatus;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        // 255 supersteps + the stale record fill the 256-record first page exactly.
+        let events = replay_after_a_stale_halted_record(
+            "t-replay-stale-at-page-end",
+            RunStatus::Halted,
+            Some(HaltReason::LedgerUnavailable),
+            255,
+            finished_event(RunFinishStatus::Halted, Some(HaltReason::LedgerUnavailable)),
+        )
+        .await;
+        // 255 + 1 supersteps, then the run's own `done`; the stale record contributes nothing.
+        assert_eq!(events.len(), 257);
+        let done = events.last().expect("a terminal event");
+        assert_eq!(done.kind, RunStreamEventKind::Done);
+        assert_eq!(done.payload["trace_seq"], 258);
+        assert_eq!(done.payload["halt_reason"]["reason"], "ledger_unavailable");
+    })
+    .await
+    .expect("replay_skips_a_stale_halted_record_found_at_a_page_boundary timed out");
+}
+
 // --- Cancel and drain: the terminal event says what the row says (PLAT-09, D-05, D-14, D-15) ----
 
 /// D-05 assumption-delta invariant: every halt cause -- an allowance-exhausted halt, a

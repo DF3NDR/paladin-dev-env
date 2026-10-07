@@ -737,6 +737,11 @@ enum ReplayTerminal {
 ///   replay keeps reading until the run's own later terminal record, or, when
 ///   there is none, the row-synthesized terminal event.
 /// - Row unreadable or absent: today's mapped payload is kept unchanged.
+///
+/// Whether a record that survives these rules really is the END of the run is
+/// decided by the caller with [`later_record_of_run_exists`]: the row status
+/// alone cannot tell a stale drained `Halted` record from a genuine one
+/// (Phase 42 review WR-5).
 async fn replay_terminal_override(
     state: &ReplayState,
     finish_status: Option<RunFinishStatus>,
@@ -779,6 +784,51 @@ async fn replay_terminal_override(
     ReplayTerminal::Emit
 }
 
+/// Whether any record of THIS run (or one with no run id) follows the record
+/// just popped, in `pending` or in the unread remainder of the thread's trace
+/// (Phase 42 review WR-5).
+///
+/// A `RunFinished` is the last record a dispatch writes, so a terminal record
+/// that has a later same-run record behind it is a stale one -- the reasonless
+/// `Halted` record of a drained dispatch whose run was requeued and ran on to
+/// its own `Halted` or `Cancelled` end. The run row's status cannot make that
+/// call: a genuine reasonless `Halted` record (a token halt with a persisted
+/// cancel flag) also sits beside a `Cancelled` row.
+///
+/// Reads further pages from the port (recording only records that could belong
+/// to this run) until a same-run record is found or the port has no more rows.
+/// A read error answers `false`, so the caller emits the terminal record it has
+/// and a persistent store failure is not hidden behind an endless skip.
+async fn later_record_of_run_exists(state: &mut ReplayState) -> bool {
+    loop {
+        if state.pending.iter().any(|record| {
+            record
+                .run_id
+                .as_ref()
+                .is_none_or(|stamped| stamped == &state.run_id)
+        }) {
+            return true;
+        }
+        match state
+            .port
+            .read(&state.thread_id, state.after_seq, REPLAY_PAGE_LIMIT)
+            .await
+        {
+            Ok(rows) if !rows.is_empty() => {
+                state.after_seq = rows.last().map_or(state.after_seq, |r| r.seq);
+                let run_id = state.run_id.clone();
+                state.pending.extend(rows.into_iter().filter(|record| {
+                    record
+                        .run_id
+                        .as_ref()
+                        .is_none_or(|stamped| stamped == &run_id)
+                }));
+            }
+            _ => return false,
+        }
+    }
+}
+
 /// Build the replay stream for a run not bound on this instance, with at
 /// least one already-fetched `first_batch` of persisted records (D-16):
 /// replays every record through [`map_trace_event`] with `mode: replay` and
@@ -797,7 +847,8 @@ async fn replay_terminal_override(
 /// A replayed `RunFinished` takes its terminal `status` and `halt_reason`
 /// from the run row when the row is terminal, and is skipped (replay keeps
 /// reading) when it is not -- see [`replay_terminal_override`] (Phase 42 G10,
-/// D-15). For the same terminal run the `status` and `halt_reason` therefore
+/// D-15). A terminal record followed by a later record of the same run is also
+/// skipped, whatever the row says (Phase 42 review WR-5). For the same terminal run the `status` and `halt_reason` therefore
 /// match the live and degraded paths, and two replays of it are identical.
 fn replay_stream(
     run_id: RunId,
@@ -859,7 +910,19 @@ fn replay_stream(
                             .await
                             {
                                 ReplayTerminal::Skip => continue,
-                                ReplayTerminal::Emit => state.finished = true,
+                                ReplayTerminal::Emit => {
+                                    // WR-5 (42-REVIEW): a terminal record with a
+                                    // later record of this run behind it is a
+                                    // stale drained one, whatever the row says.
+                                    // The `awaiting_input` suspension is the one
+                                    // record kept as the end regardless.
+                                    if finish_status != Some(RunFinishStatus::AwaitingInput)
+                                        && later_record_of_run_exists(&mut state).await
+                                    {
+                                        continue;
+                                    }
+                                    state.finished = true;
+                                }
                             }
                         }
                         let seq = state.next_seq();

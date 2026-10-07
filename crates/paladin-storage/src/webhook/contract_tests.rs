@@ -354,3 +354,40 @@ pub async fn operator_allowance_delivery_round_trips_and_is_not_listed_for_other
         .unwrap();
     assert!(page.items.is_empty());
 }
+
+/// An operator halt notice (`RunEventKind::AllowanceHalted`, Phase 42 D-18) round-trips through
+/// `enqueue` and `get` with its event and payload intact, exactly like the operator warning row:
+/// both adapters' shared event decoder accepts `allowance_halted`, and the row is never listed
+/// under any run.
+pub async fn allowance_halted_operator_row_round_trips(port: &dyn WebhookDeliveryRepositoryPort) {
+    // Far-future `next_attempt_at`: this clause never claims, so the row cannot be swept into
+    // another clause's `claim_due` batch on a shared database.
+    let now = Utc.with_ymd_and_hms(2100, 1, 1, 0, 0, 0).unwrap();
+    let correlation = RunId::new_v7();
+    let payload = r#"{"event":"allowance_halted","run_id":null}"#;
+    let delivery = WebhookDelivery::new(
+        WebhookDeliveryId::new_v7(),
+        correlation.clone(),
+        ThreadId::new("treasurer-notices").unwrap(),
+        RunEventKind::AllowanceHalted,
+        "https://ops.example.com/allowance",
+        payload,
+        now,
+    );
+    let id = delivery.delivery_id.clone();
+    port.enqueue(delivery).await.unwrap();
+
+    let loaded = port.get(&id).await.unwrap().unwrap();
+    assert_eq!(loaded.event, RunEventKind::AllowanceHalted);
+    assert_eq!(loaded.event.as_str(), "allowance_halted");
+    assert_eq!(loaded.payload, payload, "payload stored verbatim");
+    assert_eq!(loaded.thread_id.as_str(), "treasurer-notices");
+    assert_eq!(loaded.run_id, correlation);
+
+    // Another, unrelated run lists nothing: the operator row names a correlation id no run owns.
+    let page = port
+        .list_for_run(&RunId::new_v7(), 100, None)
+        .await
+        .unwrap();
+    assert!(page.items.is_empty());
+}

@@ -9,7 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::allowance::{
-    AllowanceLimitKind, AllowanceNotice, AllowanceScopeKind,
+    AllowanceLimitKind, AllowanceNotice, AllowanceScopeKind, NoticeKind,
 };
 use paladin_core::platform::container::parley::ParleyRequest;
 use paladin_core::platform::container::run::{RunEventKind, RunId, RunStatus};
@@ -93,6 +93,8 @@ pub struct WebhookPayload {
 /// 41-01 design checkpoint to carry `tenant_id` and `api_key_id`): `{ event, scope, kind,
 /// balance, ceiling, window_start, window_end, warn_at, run_id, timestamp, tenant_id,
 /// api_key_id }` -- twelve keys, always all present (`null` where a value does not apply).
+/// `event` is `allowance_warning` for a warn-threshold notice and `allowance_halted` for a
+/// spend-halt notice (Phase 42, D-18); the key set is identical for both.
 /// Serialized ONCE per notice, stored verbatim on the `WebhookDelivery` row and signed and
 /// sent from that SAME buffer, like [`WebhookPayload`] (D-41).
 ///
@@ -141,7 +143,8 @@ pub struct WebhookPayload {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AllowanceWarningPayload {
-    /// Always [`RunEventKind::AllowanceWarning`].
+    /// [`RunEventKind::AllowanceWarning`] for a warning notice, [`RunEventKind::AllowanceHalted`]
+    /// for a halt notice.
     pub event: RunEventKind,
     /// Which identity the ceiling is held against.
     pub scope: AllowanceScopeKind,
@@ -168,13 +171,25 @@ pub struct AllowanceWarningPayload {
     pub api_key_id: Option<String>,
 }
 
+/// The operator [`RunEventKind`] a notice of `kind` is delivered as -- the one mapping the
+/// payload and the Treasurer's delivery row share, so the wire `event` and the row's `event`
+/// column can never disagree (Phase 42, D-18). Crate-private: not part of the public surface.
+pub(crate) fn operator_event_for(kind: NoticeKind) -> RunEventKind {
+    match kind {
+        NoticeKind::Halt => RunEventKind::AllowanceHalted,
+        // `Warning`, and any kind a later phase adds until it names its own event.
+        _ => RunEventKind::AllowanceWarning,
+    }
+}
+
 impl AllowanceWarningPayload {
     /// Build the payload for a won notice. `timestamp` is `notice.recorded_at`, the store
-    /// instant, so a payload re-built from the same notice is identical.
+    /// instant, so a payload re-built from the same notice is identical. `event` follows the
+    /// notice's kind: `Warning` -> `allowance_warning`, `Halt` -> `allowance_halted`.
     pub fn from_notice(notice: &AllowanceNotice) -> Self {
         let warning = &notice.warning;
         Self {
-            event: RunEventKind::AllowanceWarning,
+            event: operator_event_for(notice.kind),
             scope: warning.scope_kind,
             kind: warning.limit_kind,
             balance: format_cost(&warning.balance),
@@ -292,7 +307,7 @@ mod webhook_payload_tests {
 #[cfg(test)]
 mod allowance_warning_payload_tests {
     use super::*;
-    use paladin_core::platform::container::allowance::AllowanceWarning;
+    use paladin_core::platform::container::allowance::{AllowanceWarning, NoticeKind};
     use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 
     fn notice(run_id: Option<RunId>, api_key_id: Option<&str>) -> AllowanceNotice {
@@ -358,6 +373,48 @@ mod allowance_warning_payload_tests {
             assert_eq!(value["balance"], "0.8000 USD");
             assert_eq!(value["ceiling"], "1.0000 USD");
         }
+    }
+
+    #[test]
+    fn operator_event_for_maps_each_notice_kind_to_its_event() {
+        assert_eq!(
+            operator_event_for(NoticeKind::Warning),
+            RunEventKind::AllowanceWarning
+        );
+        assert_eq!(
+            operator_event_for(NoticeKind::Halt),
+            RunEventKind::AllowanceHalted
+        );
+    }
+
+    #[test]
+    fn allowance_halted_payload_has_the_same_twelve_keys() {
+        // A halt notice carries `event: allowance_halted` and EXACTLY the warning's key set
+        // (D-18, T-42-41): key names and tenant ids only, never a key value.
+        let warning_notice = notice(Some(RunId::new_v7()), Some("svc-w"));
+        let mut halt_notice = warning_notice.clone();
+        halt_notice.kind = NoticeKind::Halt;
+
+        let keys_of = |notice: &AllowanceNotice| -> Vec<String> {
+            let value = serde_json::to_value(AllowanceWarningPayload::from_notice(notice)).unwrap();
+            let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+            keys.sort_unstable();
+            keys
+        };
+        let halted =
+            serde_json::to_value(AllowanceWarningPayload::from_notice(&halt_notice)).unwrap();
+        assert_eq!(halted["event"], "allowance_halted");
+        assert_eq!(keys_of(&halt_notice).len(), 12);
+        assert_eq!(keys_of(&halt_notice), keys_of(&warning_notice));
+        let warned =
+            serde_json::to_value(AllowanceWarningPayload::from_notice(&warning_notice)).unwrap();
+        assert_eq!(warned["event"], "allowance_warning");
+        // Every other field is identical for the same underlying notice.
+        let mut halted_rest = halted.clone();
+        let mut warned_rest = warned.clone();
+        halted_rest.as_object_mut().unwrap().remove("event");
+        warned_rest.as_object_mut().unwrap().remove("event");
+        assert_eq!(halted_rest, warned_rest);
     }
 
     #[test]

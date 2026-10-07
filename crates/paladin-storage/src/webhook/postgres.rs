@@ -59,6 +59,7 @@ fn event_from_str(s: &str) -> Result<RunEventKind, WebhookDeliveryRepositoryErro
         "halted" => Ok(RunEventKind::Halted),
         "cancelled" => Ok(RunEventKind::Cancelled),
         "allowance_warning" => Ok(RunEventKind::AllowanceWarning),
+        "allowance_halted" => Ok(RunEventKind::AllowanceHalted),
         other => Err(WebhookDeliveryRepositoryError::Serialization {
             message: format!("unknown run event kind: {other:?}"),
         }),
@@ -530,5 +531,13 @@ mod tests {
             &store,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn allowance_halted_operator_row_round_trips() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        contract_tests::allowance_halted_operator_row_round_trips(&store).await;
     }
 }

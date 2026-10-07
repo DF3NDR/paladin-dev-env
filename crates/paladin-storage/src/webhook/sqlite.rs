@@ -59,7 +59,7 @@ static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
 /// `RunEventKind::as_str` (paladin-core) is the single to-string source;
 /// `event_from_str` is its inverse for the plain TEXT enum column (no
-/// payload, so no JSON), accepting the operator `allowance_warning` kind.
+/// payload, so no JSON), accepting the operator `allowance_warning` and `allowance_halted` kinds.
 fn event_to_str(event: RunEventKind) -> &'static str {
     event.as_str()
 }
@@ -72,6 +72,7 @@ fn event_from_str(s: &str) -> Result<RunEventKind, WebhookDeliveryRepositoryErro
         "halted" => Ok(RunEventKind::Halted),
         "cancelled" => Ok(RunEventKind::Cancelled),
         "allowance_warning" => Ok(RunEventKind::AllowanceWarning),
+        "allowance_halted" => Ok(RunEventKind::AllowanceHalted),
         other => Err(WebhookDeliveryRepositoryError::Serialization {
             message: format!("unknown run event kind: {other:?}"),
         }),
@@ -488,6 +489,11 @@ mod tests {
             &fresh_store().await,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn allowance_halted_operator_row_round_trips() {
+        contract_tests::allowance_halted_operator_row_round_trips(&fresh_store().await).await;
     }
 
     #[tokio::test]

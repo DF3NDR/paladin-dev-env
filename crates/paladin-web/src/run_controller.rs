@@ -1369,6 +1369,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn caller_cannot_subscribe_a_run_webhook_to_allowance_halted() {
+        // `allowance_halted` is the operator-level halt notice (Phase 42, D-18): the
+        // caller-facing parser must keep rejecting it with a 400.
+        let err = to_run_webhook_spec(RunWebhookRequestDto {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            events: vec!["allowance_halted".to_string()],
+        })
+        .unwrap_err();
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(
+            err.to_body().to_string().contains("allowance_halted"),
+            "the 400 names the unknown kind"
+        );
+    }
+
     fn sample_run(thread: &str) -> Run {
         Run::new(
             RunId::new_v7(),

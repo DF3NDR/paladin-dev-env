@@ -286,7 +286,8 @@ pub struct AssistantRef {
 /// [`WebhookSpec`] may subscribe to (the four terminal statuses plus
 /// `AwaitingInput`, since HITL suspension is a notable event even though the
 /// run is not yet finished) and the operator-level
-/// [`AllowanceWarning`](RunEventKind::AllowanceWarning) notice.
+/// [`AllowanceWarning`](RunEventKind::AllowanceWarning) and
+/// [`AllowanceHalted`](RunEventKind::AllowanceHalted) notices.
 ///
 /// The enum is `#[non_exhaustive]` so a further event kind is not a breaking
 /// change for downstream matches (Phase 41, D-17).
@@ -298,6 +299,7 @@ pub struct AssistantRef {
 ///
 /// assert_eq!(RunEventKind::Completed.as_str(), "completed");
 /// assert_eq!(RunEventKind::AllowanceWarning.as_str(), "allowance_warning");
+/// assert_eq!(RunEventKind::AllowanceHalted.as_str(), "allowance_halted");
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -316,6 +318,10 @@ pub enum RunEventKind {
     /// An operator-level Treasurer allowance warning (Phase 41, D-17) -- never a run
     /// lifecycle event and never subscribable by a caller's WebhookSpec.
     AllowanceWarning,
+    /// An operator-level Treasurer halt notice (Phase 42, D-18): a spend halt ended a run at
+    /// its ceiling. Never a run lifecycle event and never subscribable by a caller's
+    /// WebhookSpec; delivered to the operator webhook only, signed with the operator secret.
+    AllowanceHalted,
 }
 
 impl RunEventKind {
@@ -339,6 +345,7 @@ impl RunEventKind {
             Self::Halted => "halted",
             Self::Cancelled => "cancelled",
             Self::AllowanceWarning => "allowance_warning",
+            Self::AllowanceHalted => "allowance_halted",
         }
     }
 }
@@ -811,6 +818,7 @@ mod tests {
             RunEventKind::Halted,
             RunEventKind::Cancelled,
             RunEventKind::AllowanceWarning,
+            RunEventKind::AllowanceHalted,
         ] {
             assert_eq!(
                 serde_json::to_value(kind).unwrap(),
@@ -819,6 +827,9 @@ mod tests {
             );
         }
         assert_eq!(RunEventKind::AllowanceWarning.as_str(), "allowance_warning");
+        assert_eq!(RunEventKind::AllowanceHalted.as_str(), "allowance_halted");
+        let round_trip: RunEventKind = serde_json::from_str("\"allowance_halted\"").unwrap();
+        assert_eq!(round_trip, RunEventKind::AllowanceHalted);
     }
 
     #[test]

@@ -59,7 +59,7 @@ use paladin_core::platform::container::allowance::{
 };
 use paladin_core::platform::container::cost::{Cost, PriceTable};
 use paladin_core::platform::container::principal::RunAttribution;
-use paladin_core::platform::container::run::{RunEventKind, RunId};
+use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::treasury_ledger::format_cost;
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_core::platform::container::webhook::{WebhookDelivery, WebhookDeliveryId};
@@ -68,7 +68,7 @@ use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
-use crate::application::services::run::webhook::AllowanceWarningPayload;
+use crate::application::services::run::webhook::{AllowanceWarningPayload, operator_event_for};
 
 pub use guard::TreasurerSpendGuard;
 pub use policy::{AllowancePolicy, Ceiling, ScopeAllowance};
@@ -281,7 +281,7 @@ impl Treasurer {
             WebhookDeliveryId::new_v7(),
             RunId::new_v7(),
             thread_id,
-            RunEventKind::AllowanceWarning,
+            operator_event_for(notice.kind),
             target.url.clone(),
             payload,
             notice.recorded_at,

@@ -237,11 +237,15 @@ impl WebhookDeliveryService {
         // The signing value lives on the RUN's own WebhookSpec, never on
         // the delivery row (prohibition P1) -- read it fresh at send time.
         let new_attempt = delivery.attempt + 1;
-        let signing_key = if delivery.event == RunEventKind::AllowanceWarning {
-            // C3 (Phase 41, D-17): an operator allowance notice names a correlation run id
-            // no run owns, so there is no run whose secret could sign it -- and looking one
-            // up would reschedule the delivery forever (Pitfall 4). It is signed with the
-            // operator secret held on the service, before and instead of any run lookup.
+        let signing_key = if matches!(
+            delivery.event,
+            RunEventKind::AllowanceWarning | RunEventKind::AllowanceHalted
+        ) {
+            // C3 (Phase 41, D-17; Phase 42, D-18): an operator allowance notice -- a warning
+            // or a halt -- names a correlation run id no run owns, so there is no run whose
+            // secret could sign it -- and looking one up would reschedule the delivery forever
+            // (Pitfall 4). It is signed with the operator secret held on the service, before
+            // and instead of any run lookup.
             self.operator_notice_secret.clone().unwrap_or_default()
         } else {
             match self.runs.get(&delivery.run_id).await {

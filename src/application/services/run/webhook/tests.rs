@@ -989,15 +989,70 @@ async fn capturing_receiver(server: &mut mockito::ServerGuard) -> CapturedOperat
 /// An operator delivery: a correlation run id no run owns, the
 /// `treasurer-notices` thread, event `AllowanceWarning`.
 fn operator_delivery(url: &str, payload: &str, at: DateTime<Utc>) -> WebhookDelivery {
+    operator_delivery_of(RunEventKind::AllowanceWarning, url, payload, at)
+}
+
+/// An operator delivery of the given operator event kind.
+fn operator_delivery_of(
+    event: RunEventKind,
+    url: &str,
+    payload: &str,
+    at: DateTime<Utc>,
+) -> WebhookDelivery {
     WebhookDelivery::new(
         WebhookDeliveryId::new_v7(),
         RunId::new_v7(),
         ThreadId::new("treasurer-notices").unwrap(),
-        RunEventKind::AllowanceWarning,
+        event,
         url,
         payload,
         at,
     )
+}
+
+/// An `allowance_halted` operator delivery (Phase 42 D-18) is signed with the operator secret
+/// held on the service, carries `X-Paladin-Event: allowance_halted`, is delivered, and the run
+/// repository is NEVER queried -- exactly like `allowance_warning` (T-42-40).
+#[tokio::test]
+async fn operator_halted_delivery_is_signed_with_the_operator_secret_without_a_run_lookup() {
+    let mut server = mockito::Server::new_async().await;
+    let captured = capturing_receiver(&mut server).await;
+
+    let runs = Arc::new(NoLookupRunRepository::default());
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let payload = r#"{"event":"allowance_halted","run_id":null}"#;
+    let now = base_time();
+    let delivery = operator_delivery_of(
+        RunEventKind::AllowanceHalted,
+        &format!("{}/hook", server.url()),
+        payload,
+        now,
+    );
+    let delivery_id = delivery.delivery_id.clone();
+    deliveries.enqueue(delivery).await.unwrap();
+
+    let clock = AtomicClock::new(now);
+    let service = service_with(
+        Arc::clone(&deliveries),
+        Arc::clone(&runs) as Arc<dyn RunRepositoryPort>,
+        &clock,
+    )
+    .await
+    .with_operator_notice_secret(Some("op-secret-0123456789".to_string()));
+    assert_eq!(service.run_once(now).await, 1);
+
+    let (raw, signature, event) = captured.lock().unwrap().clone().expect("receiver was hit");
+    assert_eq!(raw, payload.as_bytes(), "signed and sent verbatim");
+    assert_eq!(event, "allowance_halted");
+    assert_eq!(signature, expected_signature(b"op-secret-0123456789", &raw));
+    assert_eq!(
+        runs.get_calls.load(Ordering::SeqCst),
+        0,
+        "the run repository must never be queried for an operator delivery"
+    );
+    let loaded = deliveries.get(&delivery_id).await.unwrap().unwrap();
+    assert!(matches!(loaded.status, WebhookDeliveryStatus::Delivered));
 }
 
 /// An operator delivery is signed with the operator secret held on the service, carries

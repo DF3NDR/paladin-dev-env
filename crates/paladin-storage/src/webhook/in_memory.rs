@@ -275,4 +275,12 @@ mod contract_suite {
         )
         .await;
     }
+
+    #[tokio::test]
+    async fn allowance_halted_operator_row_round_trips() {
+        contract_tests::allowance_halted_operator_row_round_trips(
+            &InMemoryWebhookDeliveryRepository::new(),
+        )
+        .await;
+    }
 }

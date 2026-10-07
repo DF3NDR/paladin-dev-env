@@ -629,6 +629,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn caller_cannot_subscribe_a_schedule_webhook_to_allowance_halted() {
+        // Operator-level halt notice, never caller-subscribable (Phase 42, D-18).
+        let err = to_webhook_spec(WebhookRequestDto {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            events: vec!["allowance_halted".to_string()],
+        })
+        .unwrap_err();
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(
+            err.to_body().to_string().contains("allowance_halted"),
+            "the 400 names the unknown kind"
+        );
+    }
+
     use crate::run_controller::run_router;
 
     // `paladin-web` does not depend on `paladin-ai`/`paladin-storage` (ADR-0031) --

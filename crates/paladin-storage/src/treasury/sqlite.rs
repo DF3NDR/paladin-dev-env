@@ -66,26 +66,32 @@ const SETTLE_INSERT: &str = "\
     ON CONFLICT (run_id, superstep, attempt) WHERE kind = 'settle' DO NOTHING";
 
 // The `ON CONFLICT (...)` column list below MUST textually match
-// `011_create_treasury_notices.sql`'s `idx_treasury_notices_once` index column list, or SQLite
-// cannot infer that unique index as the conflict target (Pitfall 3;
+// `014_add_treasury_notice_kind.sql`'s rebuilt `idx_treasury_notices_once` index column list
+// (`notice_kind` appended last), or SQLite cannot infer that unique index as the conflict target
+// (Pitfall 3;
 // `notice_arbiter_matches_the_migration` proves this stays true). `api_key_id` is bound as `''`
 // for tenant scope and `window_start` as the epoch for a lifetime notice (C5): no key column is
 // ever NULL. Bound in order: notice_id, scope_kind, tenant_id, api_key_id, limit_kind,
 // window_start, window_end, ceiling_nanos, currency, balance_nanos, warn_at, run_id,
-// recorded_at, schema_version.
+// recorded_at, schema_version, notice_kind.
 const NOTICE_INSERT: &str = "\
     INSERT INTO treasury_notices \
       (notice_id, scope_kind, tenant_id, api_key_id, limit_kind, window_start, window_end, \
-       ceiling_nanos, currency, balance_nanos, warn_at, run_id, recorded_at, schema_version) \
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-    ON CONFLICT (scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling_nanos) \
+       ceiling_nanos, currency, balance_nanos, warn_at, run_id, recorded_at, schema_version, \
+       notice_kind) \
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+    ON CONFLICT (scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling_nanos, \
+                 notice_kind) \
     DO NOTHING";
 
-/// Every notice recorded for one admitting run, oldest first. Bound: run_id.
+/// Every WARNING notice recorded for one admitting run, oldest first. Halt notices (Phase 42
+/// D-18) are excluded so the worker's first-dispatch replay never emits one as a warning.
+/// Bound: run_id.
 const NOTICES_FOR_RUN: &str = "\
     SELECT notice_id, scope_kind, tenant_id, api_key_id, limit_kind, window_start, window_end, \
-           ceiling_nanos, currency, balance_nanos, warn_at, run_id, recorded_at \
-    FROM treasury_notices WHERE run_id = ? ORDER BY recorded_at ASC, notice_id ASC";
+           ceiling_nanos, currency, balance_nanos, warn_at, run_id, recorded_at, notice_kind \
+    FROM treasury_notices WHERE run_id = ? AND notice_kind = 'warning' \
+    ORDER BY recorded_at ASC, notice_id ASC";
 
 /// Delete one notice by id (an abandoned admission's own row). Bound: notice_id.
 const NOTICE_DELETE: &str = "DELETE FROM treasury_notices WHERE notice_id = ?";
@@ -745,6 +751,7 @@ impl TreasuryNoticePort for SqliteTreasuryLedger {
             .bind(notice.run_id.as_ref().map(RunId::as_str))
             .bind(crate::run::storage_timestamp(notice.recorded_at))
             .bind(TREASURY_LEDGER_SCHEMA_VERSION)
+            .bind(notice.kind.as_str())
             .execute(&self.pool)
             .await
             .map_err(|e| self.wrap_error(e))?;
@@ -788,6 +795,7 @@ impl TreasuryNoticePort for SqliteTreasuryLedger {
                     warn_at: row.try_get("warn_at").map_err(|e| self.wrap_error(e))?,
                     run_id: row.try_get("run_id").map_err(|e| self.wrap_error(e))?,
                     recorded_at: row.try_get("recorded_at").map_err(|e| self.wrap_error(e))?,
+                    notice_kind: row.try_get("notice_kind").map_err(|e| self.wrap_error(e))?,
                 }
                 .into_record()
             })
@@ -1197,6 +1205,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn warning_and_halt_notices_for_one_identity_are_both_recorded() {
+        notices::warning_and_halt_notices_for_one_identity_are_both_recorded(&fresh_store().await)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn notices_for_run_returns_warning_rows_only() {
+        notices::notices_for_run_returns_warning_rows_only(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
     async fn notice_round_trips_every_field() {
         notices::notice_round_trips_every_field(&fresh_store().await).await;
     }
@@ -1229,9 +1248,9 @@ mod tests {
     /// list, or SQLite cannot infer the index as the arbiter (Pitfall 3).
     #[test]
     fn notice_arbiter_matches_the_migration() {
-        let migration = include_str!("../../migrations/sqlite/011_create_treasury_notices.sql");
-        let columns =
-            "(scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling_nanos)";
+        let migration = include_str!("../../migrations/sqlite/014_add_treasury_notice_kind.sql");
+        let columns = "(scope_kind, tenant_id, api_key_id, limit_kind, window_start, \
+                       ceiling_nanos, notice_kind)";
         assert!(
             migration.contains(&format!(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_treasury_notices_once ON treasury_notices {columns};"
@@ -1242,6 +1261,74 @@ mod tests {
             NOTICE_INSERT.contains(&format!("ON CONFLICT {columns} DO NOTHING")),
             "NOTICE_INSERT's ON CONFLICT column list must textually match the migration's \
              idx_treasury_notices_once (Pitfall 3)"
+        );
+    }
+
+    /// A row written by a pre-014 statement (no `notice_kind` in its column list) takes the
+    /// column default and reads back as a warning notice (Phase 42 D-18, G5): the migration
+    /// never disturbs a pre-existing claim.
+    #[tokio::test]
+    async fn a_row_written_without_notice_kind_reads_back_as_a_warning() {
+        use paladin_core::platform::container::allowance::NoticeKind;
+
+        let store = fresh_store().await;
+        let run = RunId::new_v7();
+        sqlx::query(
+            "INSERT INTO treasury_notices \
+               (notice_id, scope_kind, tenant_id, api_key_id, limit_kind, window_start, \
+                window_end, ceiling_nanos, currency, balance_nanos, warn_at, run_id, \
+                recorded_at, schema_version) \
+             VALUES ('legacy-1', 'tenant', 'acme', '', 'lifetime', '1970-01-01T00:00:00Z', \
+                     NULL, 100, 'USD', 80, 80, ?, '2026-10-03T00:00:00Z', 'v1')",
+        )
+        .bind(run.as_str())
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+        let rows = store.notices_for_run(&run).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].kind, NoticeKind::Warning);
+        assert_eq!(rows[0].notice_id, "legacy-1");
+    }
+
+    /// A halt notice is stored with `notice_kind = 'halt'` (the port never reads it back, so the
+    /// column is inspected directly), and the table rejects any other kind text.
+    #[tokio::test]
+    async fn a_halt_notice_is_stored_as_halt_and_the_check_rejects_other_kinds() {
+        let store = fresh_store().await;
+        let tenant = notices::notice_tenant("stored-halt");
+        let warning = notices::key_window_notice(&tenant, notices::notice_window(2), 100);
+        let halt = notices::halt_of(&warning);
+        store.record(&halt).await.unwrap();
+
+        let kind: String =
+            sqlx::query_scalar("SELECT notice_kind FROM treasury_notices WHERE notice_id = ?")
+                .bind(&halt.notice_id)
+                .fetch_one(&store.pool)
+                .await
+                .unwrap();
+        assert_eq!(kind, "halt");
+
+        let rejected = sqlx::query("UPDATE treasury_notices SET notice_kind = 'bogus'")
+            .execute(&store.pool)
+            .await;
+        assert!(rejected.is_err(), "the CHECK must reject an unknown kind");
+    }
+
+    /// The rebuilt dedup index is the one 014 defines: it lists `notice_kind` last.
+    #[tokio::test]
+    async fn migration_014_rebuilds_the_once_per_window_index_with_the_kind() {
+        let store = fresh_store().await;
+        let sql: String = sqlx::query_scalar(
+            "SELECT sql FROM sqlite_master WHERE name = 'idx_treasury_notices_once'",
+        )
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+        assert!(
+            sql.contains("ceiling_nanos, notice_kind)"),
+            "the rebuilt index must end with notice_kind, got: {sql}"
         );
     }
 

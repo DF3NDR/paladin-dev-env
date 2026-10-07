@@ -17,7 +17,8 @@ use chrono::{DateTime, TimeZone, Utc};
 use uuid::Uuid;
 
 use paladin_core::platform::container::allowance::{
-    AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, NoticeOutcome, NoticeRecord,
+    AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, NoticeKind, NoticeOutcome,
+    NoticeRecord,
 };
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::run::RunId;
@@ -72,6 +73,7 @@ pub fn key_window_notice(
         },
         run_id: None,
         recorded_at: window.0,
+        kind: NoticeKind::Warning,
     }
 }
 
@@ -94,6 +96,16 @@ pub fn tenant_lifetime_notice(tenant: &str, ceiling_nanos: i64) -> NoticeRecord 
     notice.warning.window_start = None;
     notice.warning.window_end = None;
     notice
+}
+
+/// `notice` as the halt notice for the same identity: the same scope, limit, window and ceiling,
+/// a fresh `notice_id`, kind [`NoticeKind::Halt`].
+pub fn halt_of(notice: &NoticeRecord) -> NoticeRecord {
+    NoticeRecord {
+        notice_id: Uuid::now_v7().to_string(),
+        kind: NoticeKind::Halt,
+        ..notice.clone()
+    }
 }
 
 /// `notice` re-keyed with a fresh `notice_id` -- the same identity, a different claim attempt.
@@ -200,6 +212,71 @@ pub async fn distinct_window_start_is_a_distinct_notice(port: &dyn TreasuryNotic
         record_ok(port, &reclaimed(&first)).await,
         NoticeOutcome::AlreadyRecorded
     );
+}
+
+/// A warning and a halt notice for one scope, limit, window and ceiling are BOTH recordable
+/// (the notice kind is part of the identity, Phase 42 D-18, G5); a second claim of either kind
+/// is `AlreadyRecorded`; raising the ceiling re-arms both kinds.
+pub async fn warning_and_halt_notices_for_one_identity_are_both_recorded(
+    port: &dyn TreasuryNoticePort,
+) {
+    let tenant = notice_tenant("warn-and-halt");
+    let window = notice_window(15);
+    let warning = key_window_notice(&tenant, window, 100);
+    let halt = halt_of(&warning);
+
+    assert_eq!(record_ok(port, &halt).await, NoticeOutcome::Recorded);
+    assert_eq!(
+        record_ok(port, &warning).await,
+        NoticeOutcome::Recorded,
+        "a halt notice must not claim the warning's identity"
+    );
+
+    // A second claim of either kind is a duplicate.
+    assert_eq!(
+        record_ok(port, &halt_of(&warning)).await,
+        NoticeOutcome::AlreadyRecorded,
+        "a second halt notice for one identity is AlreadyRecorded"
+    );
+    assert_eq!(
+        record_ok(port, &reclaimed(&warning)).await,
+        NoticeOutcome::AlreadyRecorded
+    );
+
+    // Raising the ceiling re-arms both kinds for the same window.
+    let raised = key_window_notice(&tenant, window, 200);
+    assert_eq!(record_ok(port, &raised).await, NoticeOutcome::Recorded);
+    assert_eq!(
+        record_ok(port, &halt_of(&raised)).await,
+        NoticeOutcome::Recorded,
+        "raising the ceiling re-arms the halt notice"
+    );
+    assert_eq!(
+        record_ok(port, &halt_of(&raised)).await,
+        NoticeOutcome::AlreadyRecorded
+    );
+}
+
+/// `notices_for_run` returns warning rows only: a run with one warning and one halt row reads
+/// back just the warning, so the worker's first-dispatch replay never emits a halt notice as a
+/// warning (Phase 42 D-18, G5).
+pub async fn notices_for_run_returns_warning_rows_only(port: &dyn TreasuryNoticePort) {
+    let tenant = notice_tenant("warning-only");
+    let run = RunId::new_v7();
+    let mut warning = key_window_notice(&tenant, notice_window(16), 100);
+    warning.run_id = Some(run.clone());
+    let halt = halt_of(&warning);
+    let mut halt_only = tenant_window_notice(&tenant, notice_window(16), 100);
+    halt_only.run_id = Some(run.clone());
+    let halt_only = halt_of(&halt_only);
+
+    for notice in [&halt, &warning, &halt_only] {
+        assert_eq!(record_ok(port, notice).await, NoticeOutcome::Recorded);
+    }
+
+    let rows = port.notices_for_run(&run).await.expect("read back");
+    assert_eq!(rows, vec![warning], "only the warning row is returned");
+    assert!(rows.iter().all(|row| row.kind == NoticeKind::Warning));
 }
 
 // ── Race (D-16) ───────────────────────────────────────────────────────────

@@ -277,7 +277,7 @@ pub(crate) fn validate_notice(notice: &NoticeRecord) -> Result<(), TreasuryLedge
 mod notice_row {
     use chrono::{DateTime, Utc};
     use paladin_core::platform::container::allowance::{
-        AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, NoticeRecord,
+        AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, NoticeKind, NoticeRecord,
     };
     use paladin_core::platform::container::cost::{Cost, CurrencyCode};
     use paladin_core::platform::container::run::RunId;
@@ -301,6 +301,7 @@ mod notice_row {
         pub warn_at: i64,
         pub run_id: Option<String>,
         pub recorded_at: DateTime<Utc>,
+        pub notice_kind: String,
     }
 
     impl RawNotice {
@@ -326,6 +327,11 @@ mod notice_row {
                 "window" => AllowanceLimitKind::Window,
                 "lifetime" => AllowanceLimitKind::Lifetime,
                 other => return Err(bad("limit_kind", other)),
+            };
+            let kind = match self.notice_kind.as_str() {
+                "warning" => NoticeKind::Warning,
+                "halt" => NoticeKind::Halt,
+                other => return Err(bad("notice_kind", other)),
             };
             let currency =
                 CurrencyCode::new(&self.currency).map_err(|_| bad("currency", &self.currency))?;
@@ -356,6 +362,7 @@ mod notice_row {
                 },
                 run_id,
                 recorded_at: self.recorded_at,
+                kind,
             })
         }
     }

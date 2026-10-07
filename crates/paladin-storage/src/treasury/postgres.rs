@@ -173,26 +173,32 @@ const SPEND_SELECT_PREFIX: &str = "\
     FROM treasury_ledger WHERE kind = 'settle'";
 
 // The `ON CONFLICT (...)` column list below MUST textually match
-// `011_create_treasury_notices.sql`'s `idx_treasury_notices_once` index column list, or Postgres
-// cannot infer that unique index as the conflict target (Pitfall 3;
+// `014_add_treasury_notice_kind.sql`'s rebuilt `idx_treasury_notices_once` index column list
+// (`notice_kind` appended last), or Postgres cannot infer that unique index as the conflict
+// target (Pitfall 3;
 // `notice_arbiter_matches_the_migration` proves this stays true). `api_key_id` is bound as `''`
 // for tenant scope and `window_start` as the epoch for a lifetime notice (C5): no key column is
 // ever NULL. Bound in order: notice_id, scope_kind, tenant_id, api_key_id, limit_kind,
 // window_start, window_end, ceiling_nanos, currency, balance_nanos, warn_at, run_id,
-// recorded_at, schema_version.
+// recorded_at, schema_version, notice_kind.
 const NOTICE_INSERT: &str = "\
     INSERT INTO treasury_notices \
       (notice_id, scope_kind, tenant_id, api_key_id, limit_kind, window_start, window_end, \
-       ceiling_nanos, currency, balance_nanos, warn_at, run_id, recorded_at, schema_version) \
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
-    ON CONFLICT (scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling_nanos) \
+       ceiling_nanos, currency, balance_nanos, warn_at, run_id, recorded_at, schema_version, \
+       notice_kind) \
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+    ON CONFLICT (scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling_nanos, \
+                 notice_kind) \
     DO NOTHING";
 
-/// Every notice recorded for one admitting run, oldest first. Bound: run_id.
+/// Every WARNING notice recorded for one admitting run, oldest first. Halt notices (Phase 42
+/// D-18) are excluded so the worker's first-dispatch replay never emits one as a warning.
+/// Bound: run_id.
 const NOTICES_FOR_RUN: &str = "\
     SELECT notice_id, scope_kind, tenant_id, api_key_id, limit_kind, window_start, window_end, \
-           ceiling_nanos, currency, balance_nanos, warn_at, run_id, recorded_at \
-    FROM treasury_notices WHERE run_id = $1 ORDER BY recorded_at ASC, notice_id ASC";
+           ceiling_nanos, currency, balance_nanos, warn_at, run_id, recorded_at, notice_kind \
+    FROM treasury_notices WHERE run_id = $1 AND notice_kind = 'warning' \
+    ORDER BY recorded_at ASC, notice_id ASC";
 
 /// Delete an abandoned admission's own notices by id in one statement. Bound: notice_ids
 /// (a `TEXT[]`).
@@ -783,6 +789,7 @@ impl TreasuryNoticePort for PostgresTreasuryLedger {
             .bind(notice.run_id.as_ref().map(RunId::as_str))
             .bind(crate::run::storage_timestamp(notice.recorded_at))
             .bind(TREASURY_LEDGER_SCHEMA_VERSION)
+            .bind(notice.kind.as_str())
             .execute(&self.pool)
             .await
             .map_err(|e| self.wrap_error(e))?;
@@ -827,6 +834,7 @@ impl TreasuryNoticePort for PostgresTreasuryLedger {
                     warn_at: i64::from(warn_at),
                     run_id: row.try_get("run_id").map_err(|e| self.wrap_error(e))?,
                     recorded_at: row.try_get("recorded_at").map_err(|e| self.wrap_error(e))?,
+                    notice_kind: row.try_get("notice_kind").map_err(|e| self.wrap_error(e))?,
                 }
                 .into_record()
             })
@@ -1240,6 +1248,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn warning_and_halt_notices_for_one_identity_are_both_recorded() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        notices::warning_and_halt_notices_for_one_identity_are_both_recorded(&store).await;
+    }
+
+    #[tokio::test]
+    async fn notices_for_run_returns_warning_rows_only() {
+        let Some(store) = store_or_skip().await else {
+            return;
+        };
+        notices::notices_for_run_returns_warning_rows_only(&store).await;
+    }
+
+    #[tokio::test]
     async fn notice_round_trips_every_field() {
         let Some(store) = store_or_skip().await else {
             return;
@@ -1259,9 +1283,9 @@ mod tests {
     /// list, or Postgres cannot infer the index as the arbiter (Pitfall 3).
     #[test]
     fn notice_arbiter_matches_the_migration() {
-        let migration = include_str!("../../migrations/postgres/011_create_treasury_notices.sql");
-        let columns =
-            "(scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling_nanos)";
+        let migration = include_str!("../../migrations/postgres/014_add_treasury_notice_kind.sql");
+        let columns = "(scope_kind, tenant_id, api_key_id, limit_kind, window_start, \
+                       ceiling_nanos, notice_kind)";
         assert!(
             migration.contains(&format!(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_treasury_notices_once ON treasury_notices {columns};"
@@ -1273,6 +1297,29 @@ mod tests {
             "NOTICE_INSERT's ON CONFLICT column list must textually match the migration's \
              idx_treasury_notices_once (Pitfall 3)"
         );
+    }
+
+    /// DB-free pin of migration 014's column and its `NOTICES_FOR_RUN` counterpart (the
+    /// PostgreSQL legs of the notice contract clauses self-skip without a server).
+    #[test]
+    fn notice_kind_column_and_warning_only_read_match_the_migration() {
+        let migration = include_str!("../../migrations/postgres/014_add_treasury_notice_kind.sql");
+        assert!(
+            migration.contains(
+                "ADD COLUMN IF NOT EXISTS notice_kind TEXT NOT NULL DEFAULT 'warning' \
+                 CHECK (notice_kind IN ('warning', 'halt'))"
+            ),
+            "014 must add notice_kind NOT NULL DEFAULT 'warning' with the two-kind CHECK"
+        );
+        assert!(
+            migration.contains("DROP INDEX IF EXISTS idx_treasury_notices_once;"),
+            "014 must drop the old once-per-window index before rebuilding it"
+        );
+        assert!(
+            NOTICES_FOR_RUN.contains("notice_kind = 'warning'"),
+            "notices_for_run must return warning rows only"
+        );
+        assert!(NOTICE_INSERT.contains("notice_kind"));
     }
 
     // ── Adapter-local tests (not part of the shared contract suite) ───────

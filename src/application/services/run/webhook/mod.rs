@@ -109,7 +109,7 @@ pub struct WebhookPayload {
 /// use chrono::{TimeZone, Utc};
 /// use paladin::application::services::run::webhook::AllowanceWarningPayload;
 /// use paladin_core::platform::container::allowance::{
-///     AllowanceLimitKind, AllowanceNotice, AllowanceScopeKind, AllowanceWarning,
+///     AllowanceLimitKind, AllowanceNotice, AllowanceScopeKind, AllowanceWarning, NoticeKind,
 /// };
 /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 ///
@@ -131,6 +131,7 @@ pub struct WebhookPayload {
 ///     },
 ///     run_id: None,
 ///     recorded_at: at,
+///     kind: NoticeKind::Warning,
 /// };
 /// let payload = AllowanceWarningPayload::from_notice(&notice);
 /// assert_eq!(payload.balance, "0.8000 USD");
@@ -315,6 +316,7 @@ mod allowance_warning_payload_tests {
             },
             run_id,
             recorded_at: Utc::now(),
+            kind: Default::default(),
         }
     }
 

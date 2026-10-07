@@ -2374,6 +2374,7 @@ mod tests {
             },
             run_id: Some(run.clone()),
             recorded_at: chrono::DateTime::from_timestamp(1_000_000_000, 0).unwrap(),
+            kind: Default::default(),
         };
         assert_eq!(
             notices.record(&record).await.unwrap(),

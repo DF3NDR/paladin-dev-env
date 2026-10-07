@@ -9,7 +9,7 @@
 //! ## Store-enforced deduplication (D-16)
 //!
 //! [`TreasuryNoticePort::record`] must compile to a store-enforced constraint -- a unique index
-//! over `(scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling)` with
+//! over `(scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling, notice_kind)` with
 //! `INSERT ... ON CONFLICT ... DO NOTHING` -- never an application-level "have I already sent
 //! this?" check (the Phase 39 `settle` precedent, D-06). Zero rows written is
 //! [`NoticeOutcome::AlreadyRecorded`], never an error: losing a claim is the normal outcome for
@@ -33,7 +33,8 @@
 //! use async_trait::async_trait;
 //! use chrono::{TimeZone, Utc};
 //! use paladin_core::platform::container::allowance::{
-//!     AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, NoticeOutcome, NoticeRecord,
+//!     AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning, NoticeKind, NoticeOutcome,
+//!     NoticeRecord,
 //! };
 //! use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 //! use paladin_core::platform::container::run::RunId;
@@ -58,6 +59,7 @@
 //!                 && r.warning.limit_kind == notice.warning.limit_kind
 //!                 && r.warning.window_start == notice.warning.window_start
 //!                 && r.warning.ceiling == notice.warning.ceiling
+//!                 && r.kind == notice.kind
 //!         };
 //!         if rows.iter().any(same) {
 //!             return Ok(NoticeOutcome::AlreadyRecorded);
@@ -107,6 +109,7 @@
 //!     },
 //!     run_id: Some(RunId::new_v7()),
 //!     recorded_at: Utc.timestamp_opt(0, 0).single().ok_or("bad instant")?,
+//!     kind: NoticeKind::Warning,
 //! };
 //!
 //! let notices = MockNotices::default();
@@ -136,6 +139,10 @@ pub trait TreasuryNoticePort: Send + Sync {
     /// tenant, API key, limit kind, window start and ceiling -- writes nothing and returns
     /// [`NoticeOutcome::AlreadyRecorded`].
     ///
+    /// The notice's [`NoticeKind`](paladin_core::platform::container::allowance::NoticeKind) is
+    /// part of that identity (Phase 42 D-18): a warning and a halt notice for one scope, limit,
+    /// window and ceiling are both recordable, each once; raising the ceiling re-arms both.
+    ///
     /// Deduplication is enforced by the store (a unique index plus `ON CONFLICT DO NOTHING`),
     /// so it holds across every replica sharing the store. `AlreadyRecorded` is never an error.
     ///
@@ -148,7 +155,10 @@ pub trait TreasuryNoticePort: Send + Sync {
     /// [`TreasuryLedgerError::Backend`] when the store fails.
     async fn record(&self, notice: &NoticeRecord) -> Result<NoticeOutcome, TreasuryLedgerError>;
 
-    /// Every notice recorded with `run_id` as its admitting run, oldest first.
+    /// Every WARNING notice recorded with `run_id` as its admitting run, oldest first.
+    ///
+    /// Halt notices (Phase 42 D-18) are never returned: this is the worker's first-dispatch
+    /// replay of warn crossings, and a halt row must not be re-emitted as a warning.
     ///
     /// A lifetime notice reads back with both window bounds `None`, and a tenant-scope notice
     /// with `api_key_id` `None`, exactly as it was recorded.

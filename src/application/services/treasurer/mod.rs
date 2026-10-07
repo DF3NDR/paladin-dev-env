@@ -54,7 +54,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::allowance::{
-    Admission, AllowanceNotice, AllowanceWarning, NoticeOutcome, NoticeRecord,
+    Admission, AllowanceNotice, AllowanceWarning, NoticeKind, NoticeOutcome, NoticeRecord,
     crosses_warn_threshold,
 };
 use paladin_core::platform::container::cost::{Cost, PriceTable};
@@ -323,6 +323,7 @@ impl Treasurer {
             },
             run_id: run_id.cloned(),
             recorded_at,
+            kind: NoticeKind::Warning,
         };
         match notices.record(&record).await {
             Ok(NoticeOutcome::Recorded) => Some(AllowanceNotice::from(&record)),

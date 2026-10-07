@@ -437,6 +437,52 @@ impl AllowanceWarning {
     }
 }
 
+/// Which rung of the allowance ladder a notice reports (Phase 42 D-18, ADR-0057 group g).
+///
+/// `Warning` is the Phase 41 warn-threshold crossing; `Halt` is the operator-facing notice that a
+/// spend halt ended a run at the ceiling. The kind is PART of the notice's once-per-window
+/// identity, so a warning and a halt for the same scope, limit, window and ceiling are two
+/// distinct notices, each recorded once. Every row written before migration 014 is a `Warning`.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::allowance::NoticeKind;
+///
+/// assert_eq!(NoticeKind::default(), NoticeKind::Warning);
+/// assert_eq!(NoticeKind::Warning.as_str(), "warning");
+/// assert_eq!(NoticeKind::Halt.as_str(), "halt");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum NoticeKind {
+    /// A warn-threshold crossing (the Phase 41 notice, and the default).
+    #[default]
+    Warning,
+    /// A spend halt reached the ceiling (Phase 42 D-18).
+    Halt,
+}
+
+impl NoticeKind {
+    /// The stable lowercase text stored in `treasury_notices.notice_kind` and carried on the
+    /// wire: `"warning"` or `"halt"`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::allowance::NoticeKind;
+    ///
+    /// assert_eq!(NoticeKind::Halt.as_str(), "halt");
+    /// ```
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            NoticeKind::Warning => "warning",
+            NoticeKind::Halt => "halt",
+        }
+    }
+}
+
 /// A once-per-window notice this admission won the right to emit (41-06).
 ///
 /// Carries everything `AllowanceAdmissionPort::confirm` needs to deliver the operator notice
@@ -458,6 +504,9 @@ pub struct AllowanceNotice {
     pub run_id: Option<RunId>,
     /// The store instant (whole seconds) the notice was recorded at.
     pub recorded_at: DateTime<Utc>,
+    /// Whether this is a warn-threshold notice or a spend-halt notice (Phase 42 D-18).
+    #[serde(default)]
+    pub kind: NoticeKind,
 }
 
 impl From<&NoticeRecord> for AllowanceNotice {
@@ -469,6 +518,7 @@ impl From<&NoticeRecord> for AllowanceNotice {
             warning: record.warning.clone(),
             run_id: record.run_id.clone(),
             recorded_at: record.recorded_at,
+            kind: record.kind,
         }
     }
 }
@@ -519,9 +569,10 @@ pub enum NoticeOutcome {
 
 /// A durable once-per-window notice row (D-16).
 ///
-/// The identity is `(scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling)`:
-/// a raised ceiling re-arms the notice for the same window, a new window is a new notice, and
-/// changing `warn_at` alone does not re-arm. `api_key_id` is `Some` exactly for API-key scope;
+/// The identity is
+/// `(scope_kind, tenant_id, api_key_id, limit_kind, window_start, ceiling, kind)`:
+/// a raised ceiling re-arms the notice for the same window, a new window is a new notice, a
+/// warning and a halt notice are distinct, and changing `warn_at` alone does not re-arm. `api_key_id` is `Some` exactly for API-key scope;
 /// `run_id` is the admitting run (`None` on the HTTP agent path).
 ///
 /// # Examples
@@ -529,7 +580,8 @@ pub enum NoticeOutcome {
 /// ```
 /// use chrono::{TimeZone, Utc};
 /// use paladin_core::platform::container::allowance::{
-///     AllowanceLimitKind, AllowanceNotice, AllowanceScopeKind, AllowanceWarning, NoticeRecord,
+///     AllowanceLimitKind, AllowanceNotice, AllowanceScopeKind, AllowanceWarning, NoticeKind,
+///     NoticeRecord,
 /// };
 /// use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 ///
@@ -549,6 +601,7 @@ pub enum NoticeOutcome {
 ///     },
 ///     run_id: None,
 ///     recorded_at: Utc.timestamp_opt(0, 0).single().ok_or("bad instant")?,
+///     kind: NoticeKind::Warning,
 /// };
 /// assert_eq!(AllowanceNotice::from(&record).notice_id, "n-1");
 /// # Ok::<(), Box<dyn std::error::Error>>(())
@@ -567,6 +620,10 @@ pub struct NoticeRecord {
     pub run_id: Option<RunId>,
     /// The store instant the claim was made at.
     pub recorded_at: DateTime<Utc>,
+    /// Whether this is a warn-threshold notice or a spend-halt notice; part of the
+    /// once-per-window identity (Phase 42 D-18, G5).
+    #[serde(default)]
+    pub kind: NoticeKind,
 }
 
 /// The per-run token budget the Treasurer derives from a principal's remaining allowance
@@ -874,6 +931,7 @@ mod tests {
             warning: warning.clone(),
             run_id: None,
             recorded_at: at(3, 12, 0, 0),
+            kind: NoticeKind::Warning,
         });
         assert!(!admission.is_empty());
         assert_eq!(admission.warnings().next(), Some(&warning));
@@ -1053,6 +1111,7 @@ mod tests {
             },
             run_id: Some(RunId::new_v7()),
             recorded_at: at(3, 12, 0, 0),
+            kind: NoticeKind::Halt,
         };
         let notice = AllowanceNotice::from(&record);
         assert_eq!(notice.notice_id, record.notice_id);
@@ -1061,9 +1120,49 @@ mod tests {
         assert_eq!(notice.warning, record.warning);
         assert_eq!(notice.run_id, record.run_id);
         assert_eq!(notice.recorded_at, record.recorded_at);
+        assert_eq!(notice.kind, NoticeKind::Halt);
         let json = serde_json::to_string(&record).unwrap();
         let back: NoticeRecord = serde_json::from_str(&json).unwrap();
         assert_eq!(back, record);
+    }
+
+    #[test]
+    fn notice_kind_defaults_to_warning_and_round_trips_snake_case() {
+        assert_eq!(NoticeKind::default(), NoticeKind::Warning);
+        assert_eq!(
+            serde_json::to_string(&NoticeKind::Halt).unwrap(),
+            "\"halt\""
+        );
+        for kind in [NoticeKind::Warning, NoticeKind::Halt] {
+            let json = serde_json::to_string(&kind).unwrap();
+            assert_eq!(json, format!("\"{}\"", kind.as_str()));
+            assert_eq!(serde_json::from_str::<NoticeKind>(&json).unwrap(), kind);
+        }
+    }
+
+    #[test]
+    fn a_notice_record_without_a_kind_deserializes_as_a_warning() {
+        let record = NoticeRecord {
+            notice_id: "n-legacy".to_string(),
+            tenant_id: "acme".to_string(),
+            api_key_id: None,
+            warning: AllowanceWarning {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(80, usd()),
+                ceiling: Cost::new(100, usd()),
+                window_start: None,
+                window_end: None,
+                warn_at: 80,
+            },
+            run_id: None,
+            recorded_at: at(3, 12, 0, 0),
+            kind: NoticeKind::Halt,
+        };
+        let mut value = serde_json::to_value(&record).unwrap();
+        value.as_object_mut().unwrap().remove("kind");
+        let back: NoticeRecord = serde_json::from_value(value).unwrap();
+        assert_eq!(back.kind, NoticeKind::Warning);
     }
 
     #[test]

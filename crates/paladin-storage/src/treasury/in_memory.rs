@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tokio::sync::Mutex;
 
-use paladin_core::platform::container::allowance::{NoticeOutcome, NoticeRecord};
+use paladin_core::platform::container::allowance::{NoticeKind, NoticeOutcome, NoticeRecord};
 use paladin_core::platform::container::cost::{Cost, CurrencyCode};
 use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::treasury_ledger::{
@@ -407,7 +407,7 @@ impl TreasuryLedgerPort for InMemoryTreasuryLedger {
 }
 
 /// The once-per-window identity of a notice (D-16): the in-memory twin of the SQL adapters'
-/// `idx_treasury_notices_once` column list. A tenant-scope key is `''` and a lifetime window
+/// `idx_treasury_notices_once` column list, `notice_kind` last (migration 014). A tenant-scope key is `''` and a lifetime window
 /// start is the epoch, so the comparison is field by field with no `Option` ever compared (C5).
 fn notice_identity(
     notice: &NoticeRecord,
@@ -418,6 +418,7 @@ fn notice_identity(
     paladin_core::platform::container::allowance::AllowanceLimitKind,
     DateTime<Utc>,
     i64,
+    paladin_core::platform::container::allowance::NoticeKind,
 ) {
     (
         notice.warning.scope_kind,
@@ -431,6 +432,7 @@ fn notice_identity(
                 .unwrap_or(paladin_core::platform::container::allowance::LIFETIME_WINDOW_START),
         ),
         notice.warning.ceiling.nanos(),
+        notice.kind,
     )
 }
 
@@ -475,6 +477,7 @@ impl TreasuryNoticePort for InMemoryTreasuryLedger {
             .notices
             .iter()
             .filter(|n| n.run_id.as_ref() == Some(run_id))
+            .filter(|n| n.kind == NoticeKind::Warning)
             .cloned()
             .collect();
         rows.sort_by(|a, b| {
@@ -722,6 +725,16 @@ mod contract_suite {
     #[tokio::test]
     async fn discard_removes_only_the_named_rows() {
         notices::discard_removes_only_the_named_rows(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn warning_and_halt_notices_for_one_identity_are_both_recorded() {
+        notices::warning_and_halt_notices_for_one_identity_are_both_recorded(&fresh_store()).await;
+    }
+
+    #[tokio::test]
+    async fn notices_for_run_returns_warning_rows_only() {
+        notices::notices_for_run_returns_warning_rows_only(&fresh_store()).await;
     }
 
     #[tokio::test]

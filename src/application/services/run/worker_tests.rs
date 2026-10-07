@@ -1778,6 +1778,7 @@ mod allowance_warnings {
             },
             run_id: Some(run_id.clone()),
             recorded_at: chrono::Utc::now(),
+            kind: Default::default(),
         }
     }
 

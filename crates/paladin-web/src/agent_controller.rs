@@ -1419,6 +1419,7 @@ mod tests {
             },
             run_id: None,
             recorded_at: chrono::Utc::now(),
+            kind: Default::default(),
         }
     }
 

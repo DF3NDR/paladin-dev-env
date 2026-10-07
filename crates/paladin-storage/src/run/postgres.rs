@@ -299,14 +299,24 @@ impl PostgresRunRepository {
         };
 
         // ALLOW-03 / D-06: NULL (every pre-013 row, every non-spend outcome) reads back as
-        // `None`; a stored value that is not valid `HaltReason` JSON is a typed serialization
-        // error here, never a panic (T-42-11).
+        // `None`. A stored value that is not valid `HaltReason` JSON (a variant a newer binary
+        // wrote, read by an older one, or a corrupt row) also reads back as `None`, never a
+        // panic and never an error: one unreadable reason must not take down `GET /runs`, `get`
+        // or the SSE degraded poller for every other run (T-42-11, Phase 42 review IN-6). The
+        // write side stays strict. Only the run id is logged -- the stored value and the serde
+        // message can quote it.
         let halt_reason_value: Option<serde_json::Value> =
             row.try_get("halt_reason").map_err(backend_err)?;
-        let halt_reason: Option<HaltReason> = halt_reason_value
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(ser_err)?;
+        let halt_reason: Option<HaltReason> =
+            halt_reason_value.and_then(|value| match serde_json::from_value(value) {
+                Ok(reason) => Some(reason),
+                Err(_) => {
+                    log::error!(
+                        "run {run_id}: stored halt_reason is unreadable and is read as none"
+                    );
+                    None
+                }
+            });
 
         let mut run = Run::new(
             run_id,

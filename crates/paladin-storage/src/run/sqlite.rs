@@ -317,13 +317,23 @@ impl SqliteRunRepository {
         };
 
         // ALLOW-03 / D-06: NULL (every pre-013 row, every non-spend outcome) reads back as
-        // `None`; a stored value that is not valid `HaltReason` JSON is a typed serialization
-        // error here, never a panic (T-42-11).
+        // `None`. A stored value that is not valid `HaltReason` JSON (a variant a newer binary
+        // wrote, read by an older one, or a corrupt row) also reads back as `None`, never a
+        // panic and never an error: one unreadable reason must not take down `GET /runs`, `get`
+        // or the SSE degraded poller for every other run (T-42-11, Phase 42 review IN-6). The
+        // write side stays strict. Only the run id is logged -- the stored text and the serde
+        // message can quote it.
         let halt_reason_str: Option<String> = row.try_get("halt_reason").map_err(backend_err)?;
-        let halt_reason: Option<HaltReason> = halt_reason_str
-            .map(|s| serde_json::from_str(&s))
-            .transpose()
-            .map_err(ser_err)?;
+        let halt_reason: Option<HaltReason> =
+            halt_reason_str.and_then(|text| match serde_json::from_str(&text) {
+                Ok(reason) => Some(reason),
+                Err(_) => {
+                    log::error!(
+                        "run {run_id}: stored halt_reason is unreadable and is read as none"
+                    );
+                    None
+                }
+            });
 
         let mut run = Run::new(
             run_id,
@@ -1278,7 +1288,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_corrupt_stored_halt_reason_is_a_serialization_error_not_a_panic() {
+    async fn an_unreadable_stored_halt_reason_reads_as_none_not_an_error() {
         let store = fresh_store().await;
         let run = bare_run();
         store.insert(&run).await.unwrap();
@@ -1290,27 +1300,46 @@ mod tests {
             .await
             .unwrap();
 
-        let err = store.get(&run.run_id).await.unwrap_err();
-        assert!(matches!(err, RunRepositoryError::Serialization { .. }));
+        let read = store
+            .get(&run.run_id)
+            .await
+            .unwrap()
+            .expect("the row exists");
+        assert!(
+            read.halt_reason.is_none(),
+            "an unreadable reason reads as none"
+        );
 
-        // A well-formed JSON object that is not a known HaltReason is the same typed error.
+        // A well-formed JSON object that is not a known HaltReason (a future variant) is the
+        // same: the row still reads, without a reason.
         sqlx::query("UPDATE runs SET halt_reason = ? WHERE run_id = ?")
             .bind(r#"{"reason":"made_up"}"#)
             .bind(run.run_id.as_str())
             .execute(&store.pool)
             .await
             .unwrap();
-        let err = store.get(&run.run_id).await.unwrap_err();
-        assert!(matches!(err, RunRepositoryError::Serialization { .. }));
+        let read = store
+            .get(&run.run_id)
+            .await
+            .unwrap()
+            .expect("the row exists");
+        assert!(read.halt_reason.is_none());
 
-        // `list` surfaces the same error rather than skipping the row or panicking.
-        let err = store
+        // `list` keeps returning the page, including the other runs on it, instead of failing
+        // as a whole because of one row.
+        let other = bare_run();
+        store.insert(&other).await.unwrap();
+        let page = store
             .list(RunQuery {
                 limit: 10,
                 ..Default::default()
             })
             .await
-            .unwrap_err();
-        assert!(matches!(err, RunRepositoryError::Serialization { .. }));
+            .unwrap();
+        assert_eq!(
+            page.items.len(),
+            2,
+            "one unreadable reason must not fail the page"
+        );
     }
 }

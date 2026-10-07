@@ -3600,6 +3600,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "croner",
+ "log",
  "paladin-ai-core",
  "paladin-ports",
  "redis",

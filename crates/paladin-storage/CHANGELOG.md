@@ -9,6 +9,11 @@ and this project follows lockstep workspace versioning.
 
 ### Fixed
 
+- The SQLite and PostgreSQL run repositories read a `runs.halt_reason` that does not decode into a
+  `HaltReason` (a variant a newer binary wrote, or a corrupt row) as `None` and log the run id at
+  `error`, instead of failing `get`, `list` and the SSE degraded poller for the whole page. The
+  write side is unchanged and stays strict (Phase 42 review IN-6). Adds a `log` dependency.
+
 - `MinioAdapter` bucket bootstrap is path-style (`Bucket::create_with_path_style`), so a missing
   bucket is created on RustFS and on MinIO without domain configuration; virtual-hosted creation
   was rejected by both (STORE-01, STORE-02).

@@ -610,7 +610,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ADR-0057).** Three limits are accepted and recorded. (1) The mid-run boundary check is a
   check-only read with no reservation, so runs admitted in the same instant can all start and each
   halts at its first boundary after the allowance is exhausted: overshoot is at most one
-  superstep's spend per run, and a per-superstep reservation hold is the deferred mitigation.
+  top-level superstep's spend per run (including any nested Battalion run that superstep
+  contains), and a per-superstep reservation hold is the deferred mitigation.
   (2) A true streamed `execute/stream` call is one provider call and is not cut mid-flight: its
   overshoot is that one call, and its terminal `done` carries an informational `halt_reason` only
   when the final usage crossed the derived figure, so it is not byte-identical to a pre-Phase-42

@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same ceiling evaluation admission uses, so an allowance exhausted while a run is in flight
   halts the run at its next boundary with its last checkpoint kept: the run is recorded `halted`
   with no error and a `WaypointStatus::Halted` Waypoint whose vanguard is the boundary's, and no
-  node of that superstep runs. Overshoot is at most one superstep's spend. `RunOutcome::Halted`
+  node of that superstep runs. Overshoot is at most one top-level superstep's spend, including
+  any nested `Battalion` run that superstep contains. `RunOutcome::Halted`
   carries a typed `HaltCause` (caller cancel, in-process token, or `Spend(HaltReason)`), the
   worker maps a spend halt to `halted` whatever its cancel and shutdown flags say, and
   `RunWorkerPool::with_treasurer` attaches the guard per run for every run that records a

@@ -70,8 +70,11 @@ usage did not cross the figure stays byte-identical to today's `{ "done": true, 
 stream clause holds for BOTH the buffered fallback and the true stream (group (e)).
 
 **Overshoot, stated exactly (RESEARCH Pitfall 14, G16).** Every guarantee in this ADR is bounded; none is absolute.
-The boundary check runs after a superstep, so on the engine path a run can spend at most one superstep beyond a
-ceiling. The derived budget is compared after a response, so on the agent loop a run can spend at most one model
+The boundary check runs after a superstep, so on the engine path a run can spend at most one TOP-LEVEL superstep
+beyond a ceiling. A nested `NodeSpec::Battalion` child run is part of the top-level superstep that hosts it: its
+spend folds into the parent's accumulator, which is settled only at the parent's own boundary (CF-FR-16), so the
+child's inner boundary checks see other runs' spend but none of this run's in-flight spend, and a parent superstep
+that hosts a long child graph can overspend by that whole graph (Phase 42 review WR-1). The derived budget is compared after a response, so on the agent loop a run can spend at most one model
 response beyond the figure. A true streamed call is one provider call, so its overshoot is that one whole call.
 Two runs admitted in the same instant can both start, and each is halted at its own first boundary after
 exhaustion. Neither this ADR nor the docs and rustdoc it governs may promise that an allowance can never be

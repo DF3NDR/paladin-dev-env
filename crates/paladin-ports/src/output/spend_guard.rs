@@ -75,6 +75,16 @@ pub enum SpendDecision {
 /// Unlike a cancellation probe, a failed read is a [`SpendDecision::Halt`] answer, never a
 /// swallowed `Continue` (D-03) -- see the module-level section.
 ///
+/// # Overshoot bound and nested runs
+///
+/// A run can spend at most one **top-level** superstep beyond a ceiling, where that superstep
+/// includes any nested `NodeSpec::Battalion` run it contains. A nested child's spend is folded
+/// into its parent's accumulator and settled only at the parent's own boundary, so a guard
+/// consulted at a child's inner boundary sees the spend of OTHER runs but none of the in-flight
+/// spend of the run that hosts it. The inner checks are still valuable (they stop a child as soon
+/// as another run exhausts the allowance), but they are not a tighter bound on the hosting run's
+/// own spend.
+///
 /// # Thread Safety
 ///
 /// Implementations must be `Send + Sync`; see the module-level section.

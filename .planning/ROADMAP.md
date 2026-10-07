@@ -524,7 +524,7 @@ Plans:
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 42-10-PLAN.md — Migration 014 notice_kind (the notice store's halt rung) and the allowance_halted operator webhook event, signing and payload; register the surface (wave 10)
+- [x] 42-10-PLAN.md — Migration 014 notice_kind (the notice store's halt rung) and the allowance_halted operator webhook event, signing and payload; register the surface (wave 10)
 
 **Wave 11** *(blocked on Wave 10 completion)*
 

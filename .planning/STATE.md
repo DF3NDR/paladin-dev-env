@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 42
 current_phase_name: mid-run-halt-sse-terminal-status
 status: executing
-stopped_at: Completed 42-09-PLAN.md
-last_updated: "2026-10-07T01:04:40.141Z"
+stopped_at: Completed 42-10-PLAN.md
+last_updated: "2026-10-07T01:30:21.600Z"
 last_activity: 2026-10-06
 last_activity_desc: Phase 42 execution started
 progress:
   total_phases: 6
   completed_phases: 5
   total_plans: 51
-  completed_plans: 48
+  completed_plans: 49
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 94%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([██████████] 96%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 42 (mid-run-halt-sse-terminal-status) — EXECUTING
-Plan: 10 of 12
+Plan: 11 of 12
 Status: Ready to execute
 Last activity: 2026-10-06 — Phase 42 execution started
 
@@ -237,6 +237,7 @@ Last activity: 2026-10-06 — Phase 42 execution started
 | Phase 42 P07 | 1h | 3 tasks | 12 files |
 | Phase 42 P08 | 45min | 3 tasks | 11 files |
 | Phase 42 P09 | 66min | 2 tasks | 16 files |
+| Phase 42 P10 | 25min | 3 tasks | 25 files |
 
 ## Accumulated Context
 
@@ -372,6 +373,9 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 42-08: v0.9 golden Phase 42 exception is one document-level function (strip_known_v0_11_halt_reason) applied at load; unstripped loaders only for the scope test
 - [Phase ?]: 42-09: the budget for a worker-dispatched agent-kind run is re-derived at dispatch from the ledger, never persisted at submit time; a refusal halts with real figures, an unreadable ledger halts ledger_unavailable, an unpriced model records Failed, all without calling the LLM
 - [Phase ?]: 42-09: the shared run-engine service installs TokenBudget in Treasurer-only mode (operator figure forced off) so an engine node is never capped; agent-kind runs write no Waypoint and resume by resubmission (WINDOWS.md row 64, D-08)
+- [Phase ?]: [42-10] notice_kind is the last column of the rebuilt idx_treasury_notices_once and of every ON CONFLICT arbiter list; the arbiter tests read migration 014
+- [Phase ?]: [42-10] operator_event_for(NoticeKind) is crate-private and shared by the payload and the delivery row, so the paladin facade surface is unchanged
+- [Phase ?]: [42-10] A pre-014 replica against a migrated database cannot infer the rebuilt index: its notice claim errors (logged, skipped); migrate and upgrade replicas together (MIGRATION 9.4)
 
 ### Pending Todos
 
@@ -586,8 +590,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-07T01:04:40.116Z
-**Stopped at:** Completed 42-09-PLAN.md
+**Last session:** 2026-10-07T01:30:16.576Z
+**Stopped at:** Completed 42-10-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

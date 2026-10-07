@@ -528,7 +528,7 @@ Plans:
 
 **Wave 11** *(blocked on Wave 10 completion)*
 
-- [ ] 42-11-PLAN.md — The boundary guard's notice legs: mid-run warn on the run's own stream and once-per-window halt notices to the operator, proven end to end (wave 11)
+- [x] 42-11-PLAN.md — The boundary guard's notice legs: mid-run warn on the run's own stream and once-per-window halt notices to the operator, proven end to end (wave 11)
 
 **Wave 12** *(blocked on Wave 11 completion)*
 

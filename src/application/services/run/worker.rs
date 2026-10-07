@@ -170,6 +170,32 @@ fn compose_run_sink(
     }
 }
 
+/// Emit the one terminal [`TraceEvent::RunFinished`] of an agent-kind run (Phase 42 review
+/// IN-9).
+///
+/// An agent-kind run has no engine hosting it, so `run_agent` writes this record itself, on every
+/// exit that reaches the model or decides not to (a completion, a halt, a failure, a dispatch-time
+/// halt or an unpriced model). Building it in one place keeps the "exactly one terminal event per
+/// run" invariant auditable: the usage and cost totals always come from the dispatcher's own
+/// tallies, and an agent loop has no superstep, so `total_supersteps` and the dropped count are
+/// always zero here.
+fn emit_agent_run_finished(
+    dispatcher: &TraceDispatcher,
+    status: RunFinishStatus,
+    halt_reason: Option<HaltReason>,
+    duration_ms: u64,
+) {
+    dispatcher.emit(TraceEvent::RunFinished {
+        status,
+        total_supersteps: 0,
+        usage: dispatcher.total_usage(),
+        cost: dispatcher.total_cost(),
+        duration_ms,
+        halt_reason,
+        trace_dropped_total: 0,
+    });
+}
+
 /// Elapsed wall-clock milliseconds since `started`, saturating rather than
 /// panicking on an (unreachable in practice) overflow.
 fn elapsed_ms(started: std::time::Instant) -> u64 {
@@ -1622,29 +1648,18 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         });
         let derived_budget = match derived_budget {
             DispatchBudget::Halt(reason) => {
-                dispatcher.emit(TraceEvent::RunFinished {
-                    status: RunFinishStatus::Halted,
-                    total_supersteps: 0,
-                    usage: dispatcher.total_usage(),
-                    cost: dispatcher.total_cost(),
-                    duration_ms: 0,
-                    halt_reason: Some(reason.clone()),
-                    trace_dropped_total: 0,
-                });
+                emit_agent_run_finished(
+                    &dispatcher,
+                    RunFinishStatus::Halted,
+                    Some(reason.clone()),
+                    0,
+                );
                 let persisted = self.persist_agent_halt(leased, run, None, reason).await;
                 self.unbind_after_drain(run).await;
                 return persisted;
             }
             DispatchBudget::Unpriced(model) => {
-                dispatcher.emit(TraceEvent::RunFinished {
-                    status: RunFinishStatus::Failed,
-                    total_supersteps: 0,
-                    usage: dispatcher.total_usage(),
-                    cost: dispatcher.total_cost(),
-                    duration_ms: 0,
-                    halt_reason: None,
-                    trace_dropped_total: 0,
-                });
+                emit_agent_run_finished(&dispatcher, RunFinishStatus::Failed, None, 0);
                 let persisted = self
                     .persist_failure(
                         leased,
@@ -1715,30 +1730,19 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                 // the one terminal event carries the reason (SSE `done`, the `halted` webhook).
                 if let StopReason::AllowanceHalted(refusal) = &result.stop_reason {
                     let reason = HaltReason::AllowanceExhausted(refusal.clone());
-                    dispatcher.emit(TraceEvent::RunFinished {
-                        status: RunFinishStatus::Halted,
-                        total_supersteps: 0,
-                        usage: dispatcher.total_usage(),
-                        cost: dispatcher.total_cost(),
+                    emit_agent_run_finished(
+                        &dispatcher,
+                        RunFinishStatus::Halted,
+                        Some(reason.clone()),
                         duration_ms,
-                        halt_reason: Some(reason.clone()),
-                        trace_dropped_total: 0,
-                    });
+                    );
                     let persisted = self
                         .persist_agent_halt(leased, run, Some(result.output), reason)
                         .await;
                     self.unbind_after_drain(run).await;
                     return persisted;
                 }
-                dispatcher.emit(TraceEvent::RunFinished {
-                    status: RunFinishStatus::Completed,
-                    total_supersteps: 0,
-                    usage: dispatcher.total_usage(),
-                    cost: dispatcher.total_cost(),
-                    duration_ms,
-                    halt_reason: None,
-                    trace_dropped_total: 0,
-                });
+                emit_agent_run_finished(&dispatcher, RunFinishStatus::Completed, None, duration_ms);
                 async {
                     self.repository
                         .update_status(
@@ -1786,15 +1790,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                     cost: None,
                     cache_hit: false,
                 });
-                dispatcher.emit(TraceEvent::RunFinished {
-                    status: RunFinishStatus::Failed,
-                    total_supersteps: 0,
-                    usage: dispatcher.total_usage(),
-                    cost: dispatcher.total_cost(),
-                    duration_ms,
-                    halt_reason: None,
-                    trace_dropped_total: 0,
-                });
+                emit_agent_run_finished(&dispatcher, RunFinishStatus::Failed, None, duration_ms);
                 self.persist_failure(leased, run, error.to_string()).await
             }
         };

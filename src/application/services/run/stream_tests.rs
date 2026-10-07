@@ -30,7 +30,7 @@ use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::parley::ParleyKind;
 use paladin_core::platform::container::principal::{RunAttribution, TenantId};
 use paladin_core::platform::container::run::{
-    AssistantRef, Run, RunId, RunStatus, RunStreamEventKind, RunStreamMode,
+    AssistantRef, Run, RunId, RunStatus, RunStreamEvent, RunStreamEventKind, RunStreamMode,
 };
 use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
@@ -1785,6 +1785,197 @@ async fn replay_trusts_the_row_over_the_recorded_status() {
     })
     .await
     .expect("replay_trusts_the_row_over_the_recorded_status timed out");
+}
+
+/// A run record carrying `run_id` for the shared-thread replay tests (WR-2).
+fn run_stamped(thread_id: &ThreadId, run_id: &RunId, seq: u64, event: TraceEvent) -> TraceRecord {
+    TraceRecord {
+        thread_id: thread_id.clone(),
+        run_id: Some(run_id.clone()),
+        seq,
+        at: chrono::Utc::now(),
+        event,
+    }
+}
+
+fn superstep_event(superstep: u64) -> TraceEvent {
+    TraceEvent::SuperstepStarted {
+        superstep,
+        vanguard: vec![NodeId::new("n0")],
+    }
+}
+
+fn finished_event(
+    status: paladin_ports::output::trace_sink_port::RunFinishStatus,
+    halt_reason: Option<HaltReason>,
+) -> TraceEvent {
+    TraceEvent::RunFinished {
+        status,
+        total_supersteps: 1,
+        usage: TokenUsage::new(3, 4),
+        cost: None,
+        halt_reason,
+        duration_ms: 5,
+        trace_dropped_total: 0,
+    }
+}
+
+/// Replay `run_id` over `traces` and collect every event until the stream ends.
+async fn collect_replay(
+    run: &Run,
+    repository: Arc<dyn RunRepositoryPort>,
+    traces: Arc<InMemoryRunTraceStore>,
+) -> Vec<RunStreamEvent> {
+    let waypoints: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+    let service = RunEventStreamService::new(
+        Arc::new(RunEventBus::new()),
+        repository,
+        waypoints,
+        Duration::from_millis(20),
+    )
+    .with_replay(traces as Arc<dyn RunTracePort>);
+    let mut stream = service.stream(&run.run_id).await.unwrap();
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+    events
+}
+
+/// WR-2 (42-REVIEW): replay reads the whole THREAD, and the documented recovery path is a NEW
+/// run on the SAME thread (a fork). A prior run's `RunFinished` must never end the later run's
+/// replay: records stamped with another run's id are skipped, so the replay shows only this
+/// run's events and ends on this run's own terminal record.
+#[tokio::test]
+async fn replay_ignores_another_runs_records_on_a_shared_thread() {
+    use paladin_ports::output::trace_sink_port::RunFinishStatus;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let thread = ThreadId::new("t-replay-shared-thread").unwrap();
+        let assistant = AssistantRef {
+            assistant_id: "a1".to_string(),
+            version: 1,
+        };
+        let first = Run::new(
+            RunId::new_v7(),
+            thread.clone(),
+            assistant.clone(),
+            serde_json::json!({}),
+        )
+        .with_status(RunStatus::Halted);
+        let second = Run::new(
+            RunId::new_v7(),
+            thread.clone(),
+            assistant,
+            serde_json::json!({}),
+        )
+        .with_status(RunStatus::Completed);
+        repository.insert(&first).await.unwrap();
+        repository.insert(&second).await.unwrap();
+
+        let traces = Arc::new(InMemoryRunTraceStore::new());
+        traces
+            .append(&[
+                run_stamped(&thread, &first.run_id, 1, superstep_event(1)),
+                run_stamped(
+                    &thread,
+                    &first.run_id,
+                    2,
+                    finished_event(RunFinishStatus::Halted, Some(HaltReason::LedgerUnavailable)),
+                ),
+                run_stamped(&thread, &second.run_id, 3, superstep_event(2)),
+                run_stamped(&thread, &second.run_id, 4, superstep_event(3)),
+                run_stamped(
+                    &thread,
+                    &second.run_id,
+                    5,
+                    finished_event(RunFinishStatus::Completed, None),
+                ),
+            ])
+            .await
+            .unwrap();
+
+        let events = collect_replay(&second, repository, traces).await;
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                RunStreamEventKind::Superstep,
+                RunStreamEventKind::Superstep,
+                RunStreamEventKind::Done,
+            ],
+            "the second run replays only its own two supersteps and its own terminal event"
+        );
+        let done = events.last().expect("a terminal event");
+        assert_eq!(done.payload["status"], "completed");
+        assert_eq!(
+            done.payload["trace_seq"], 5,
+            "the terminal event is the second run's own record, not the first run's"
+        );
+        assert!(done.payload.get("halt_reason").is_none());
+    })
+    .await
+    .expect("replay_ignores_another_runs_records_on_a_shared_thread timed out");
+}
+
+/// WR-2 (42-REVIEW): a worker that drained on shutdown persisted a reasonless
+/// `RunFinished { Halted }` for a run that was then requeued and later completed. Once the row
+/// is `Completed`, that stale halted record must not end the replay early.
+#[tokio::test]
+async fn replay_skips_a_drained_halted_record_when_the_run_later_completed() {
+    use paladin_ports::output::trace_sink_port::RunFinishStatus;
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let run = Run::new(
+            RunId::new_v7(),
+            ThreadId::new("t-replay-drained-then-done").unwrap(),
+            AssistantRef {
+                assistant_id: "a1".to_string(),
+                version: 1,
+            },
+            serde_json::json!({}),
+        )
+        .with_status(RunStatus::Completed);
+        repository.insert(&run).await.unwrap();
+
+        let traces = Arc::new(InMemoryRunTraceStore::new());
+        traces
+            .append(&[
+                run_stamped(&run.thread_id, &run.run_id, 1, superstep_event(1)),
+                run_stamped(
+                    &run.thread_id,
+                    &run.run_id,
+                    2,
+                    finished_event(RunFinishStatus::Halted, None),
+                ),
+                run_stamped(&run.thread_id, &run.run_id, 3, superstep_event(2)),
+                run_stamped(
+                    &run.thread_id,
+                    &run.run_id,
+                    4,
+                    finished_event(RunFinishStatus::Completed, None),
+                ),
+            ])
+            .await
+            .unwrap();
+
+        let events = collect_replay(&run, repository, traces).await;
+        let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                RunStreamEventKind::Superstep,
+                RunStreamEventKind::Superstep,
+                RunStreamEventKind::Done,
+            ],
+            "the drained halt record is skipped and the replay runs to the real terminal event"
+        );
+        let done = events.last().expect("a terminal event");
+        assert_eq!(done.payload["status"], "completed");
+        assert_eq!(done.payload["trace_seq"], 4);
+    })
+    .await
+    .expect("replay_skips_a_drained_halted_record_when_the_run_later_completed timed out");
 }
 
 // --- Cancel and drain: the terminal event says what the row says (PLAT-09, D-05, D-14, D-15) ----

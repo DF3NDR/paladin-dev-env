@@ -522,6 +522,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- SSE replay of a run on a thread that already hosts another run (the documented fork recovery
+  path) no longer ends on the prior run's `RunFinished`: replayed records stamped with a different
+  run's id are skipped, and a persisted `RunFinished { Halted }` is skipped when the run row is
+  `Completed` or `Failed` (a drained worker's halt record for a run that was requeued and ran on)
+  (Phase 42 review WR-2). The trace store itself is still keyed `(thread_id, seq)`; see Known
+  limitations.
 - PLAT-08 / `WINDOWS.md` row 31 (WR-02): runs against a code-registered agent now stream live SSE
   (`node_started`, `node_finished`, then `done` or `error`) through the same `map_trace_event`
   mapping a graph run uses, persist their trace rows and feed the OTel and herald sinks when
@@ -585,6 +591,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the final usage crossed the derived figure, so it is not byte-identical to a pre-Phase-42
   `done` in every case. (3) A graph Paladin node on a model with no `treasurer.pricing` row settles
   nothing, so no allowance can bound it; price every model a metered principal can reach.
+
+- **Run traces are keyed by thread, so a second run on one thread can lose trace rows (Phase 42
+  review WR-2).** Each dispatch starts its trace `seq` at 1 and `run_traces` is keyed
+  `(thread_id, seq)` with `ON CONFLICT DO NOTHING`, so a later run on the same thread (a fork)
+  drops any record whose `seq` an earlier run already used. Replay filters by run id and still
+  ends on the run row's own terminal event, but the later run's replay can be missing its early
+  events. Seeding the dispatcher's `seq` from the thread's maximum, or keying the table on
+  `(thread_id, run_id, seq)`, is the deferred fix.
 
 - **Tracing overhead still exceeds the ≤3% bar after the Phase 45 fixes (OBS-05).** Re-measured
   on the maintainer's machine on 2026-09-30 with the `paladin::trace` target enabled:

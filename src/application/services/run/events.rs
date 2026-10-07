@@ -730,6 +730,12 @@ enum ReplayTerminal {
 ///   one exception is a record that itself says `awaiting_input`: that is a
 ///   suspension the run row reports as `AwaitingInput` (never terminal), and
 ///   it keeps ending the replay exactly as before.
+/// - Run row `Completed` or `Failed` but the record says `Halted`: the record
+///   is skipped. A worker that drained on shutdown persisted a reasonless
+///   `RunFinished { Halted }` and the run was then requeued and ran on, so
+///   that stale record is not the end of the run (Phase 42 review WR-2); the
+///   replay keeps reading until the run's own later terminal record, or, when
+///   there is none, the row-synthesized terminal event.
 /// - Row unreadable or absent: today's mapped payload is kept unchanged.
 async fn replay_terminal_override(
     state: &ReplayState,
@@ -746,6 +752,11 @@ async fn replay_terminal_override(
         } else {
             ReplayTerminal::Skip
         };
+    }
+    if finish_status == Some(RunFinishStatus::Halted)
+        && matches!(run.status, RunStatus::Completed | RunStatus::Failed)
+    {
+        return ReplayTerminal::Skip;
     }
     let (row_kind, row_payload) = terminal_payload(&run);
     *kind = row_kind;
@@ -780,6 +791,9 @@ async fn replay_terminal_override(
 /// the terminal event from [`Run::status`] via [`terminal_payload`] instead
 /// of hanging forever waiting for a record that will never arrive.
 ///
+/// Records stamped with a different run's id (a prior run on the same thread,
+/// after a fork) are skipped (Phase 42 review WR-2).
+///
 /// A replayed `RunFinished` takes its terminal `status` and `halt_reason`
 /// from the run row when the row is terminal, and is skipped (replay keeps
 /// reading) when it is not -- see [`replay_terminal_override`] (Phase 42 G10,
@@ -812,6 +826,19 @@ fn replay_stream(
             }
 
             if let Some(record) = state.pending.pop_front() {
+                // --- WR-2 (42-REVIEW): the trace store is keyed by THREAD, and
+                // a fork starts a NEW run on the SAME thread, so the rows read
+                // here can belong to a prior run. A record stamped with another
+                // run's id is not this run's event: skip it, so a prior run's
+                // `RunFinished` can never end this replay. A record with no run
+                // id (written by a path that does not know it) is kept.
+                if record
+                    .run_id
+                    .as_ref()
+                    .is_some_and(|stamped| stamped != &state.run_id)
+                {
+                    continue;
+                }
                 let at = record.at;
                 let finish_status = match &record.event {
                     TraceEvent::RunFinished { status, .. } => Some(*status),

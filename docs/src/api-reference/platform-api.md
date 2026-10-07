@@ -116,6 +116,12 @@ graceful-shutdown drain (no cancel requested) also produces a `Halted` Waypoint,
 caller-cancelled run's `done` says `cancelled` (see [Streaming](#streaming) below), and a
 worker drain emits no terminal event at all.
 
+A cancel and a spend halt can meet at the same superstep boundary. A cancel is observed by the
+engine first, so it normally wins, but a cancel written by another instance is read through a
+debounced probe and can miss the boundary where the allowance guard halts the run. A run that
+halts on spend in that window is recorded `halted` with its `halt_reason`, whatever the persisted
+cancel flag says, rather than `cancelled` (ADR-0057). Either way the run has stopped.
+
 ### Halted runs
 
 A run whose spend allowance is exhausted while it is in flight halts at its next superstep

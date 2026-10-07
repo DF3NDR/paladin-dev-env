@@ -157,8 +157,9 @@ ceiling's own figures -- the same keys, built by the same function, as the `deta
 
 `balance` and `ceiling` are display strings rendered at the edge from exact integer nano-units;
 `window_start`/`window_end` are RFC 3339 and `null` for a lifetime ceiling. When the spend ledger
-could not be read at the boundary the run halts fail-closed and `halt_reason` is exactly
-`{ "reason": "ledger_unavailable" }`. The object never carries another scope's figures, a tenant
+could not be read at the boundary, or one of the run's own superstep charges could not be written
+to it (so the run's balance can no longer be trusted), the run halts fail-closed and `halt_reason`
+is exactly `{ "reason": "ledger_unavailable" }`. The object never carries another scope's figures, a tenant
 id, or an API key name or value.
 
 The reason is written to the run row before the status flips to `halted`, so a reader never sees
@@ -184,7 +185,7 @@ re-runs the allowance check at submission:
    own `halt_reason`. The original run stays `halted`.
 
 A run halted with `halt_reason: { "reason": "ledger_unavailable" }` resumes the same way once the
-ledger reads again. An agent-kind run has no checkpoint (the agent loop writes no Waypoint), so it
+ledger reads and accepts writes again. An agent-kind run has no checkpoint (the agent loop writes no Waypoint), so it
 has no Halted Waypoint to fork from and its `final_waypoint_id` is `null`: resume it with a fresh
 `POST /v1/runs`, which re-executes from the start.
 
@@ -223,7 +224,7 @@ degraded path; only their timing and granularity relative to the live path are u
 and a `halt_reason` object -- the same object `GET /v1/runs/{run_id}` returns (see
 [Halted runs](#halted-runs)), built by one function. For an exhausted allowance it is
 `{ "reason": "allowance_exhausted", "scope", "kind", "balance", "ceiling", "window_start",
-"window_end" }`; for a ledger that could not be read it is exactly
+"window_end" }`; for a ledger that could not be read or written it is exactly
 `{ "reason": "ledger_unavailable" }` and is still a `done`, never an `error` (`error` is reserved
 for a `failed` run). A halt with no spend reason (a caller cancel or a token halt) keeps the
 payload without a `halt_reason` key. The live, degraded and replay paths agree on `status` and
@@ -524,9 +525,10 @@ sends it: an agent-kind run that halts at dispatch, or on its derived token budg
 `allowance_halted`. The overshoot bound is one **top-level**
 superstep, including any nested sub-workflow (`Battalion` node) run it contains: a sub-workflow's
 spend is settled only when its hosting superstep ends, so a long sub-workflow can spend past a
-ceiling by its whole length before the run halts. A halt caused by an unreadable ledger
-(`halt_reason.reason` of `ledger_unavailable`) sends the operator **no** notice: nothing was
-measured, so there is no balance to report, and the failure is in the server log at `error`.
+ceiling by its whole length before the run halts. A halt caused by an unreadable ledger,
+or by a superstep charge that could not be written to it (`halt_reason.reason` of
+`ledger_unavailable`), sends the operator **no** notice: there is no trustworthy balance to
+report, and the failure is in the server log at `error`.
 
 **Payload** (exactly these twelve keys; no run input, no API key value and no signing secret ever
 appears):

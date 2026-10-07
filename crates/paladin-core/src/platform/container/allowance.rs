@@ -235,8 +235,11 @@ impl AllowanceRefusal {
 pub enum HaltReason {
     /// A ceiling was reached; the figures are that ceiling's own.
     AllowanceExhausted(AllowanceRefusal),
-    /// A ceiling could not be evaluated (a failed balance or store-clock read); the run halts
-    /// fail-closed (D-03) and carries no figures.
+    /// The ledger cannot be trusted to meter the run: a ceiling could not be evaluated (a failed
+    /// balance or store-clock read), or one of the run's own superstep charges could not be
+    /// written to it (a ledger write error or a currency mismatch), so the run's balance can no
+    /// longer be trusted even though every read succeeded. The run halts fail-closed (D-03) and
+    /// carries no figures; the wire object stays exactly `{"reason":"ledger_unavailable"}`.
     LedgerUnavailable,
 }
 

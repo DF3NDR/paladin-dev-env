@@ -19,7 +19,9 @@
 //! This is the deliberate difference from [`crate::output::cancellation_probe::CancellationProbe`],
 //! which answers a plain `bool` and swallows its own read failures. A guard that could not read
 //! the ledger must not let a metered run keep spending: it answers
-//! [`SpendDecision::Halt`] with [`HaltReason::LedgerUnavailable`] (fail closed).
+//! [`SpendDecision::Halt`] with [`HaltReason::LedgerUnavailable`] (fail closed). The same answer
+//! covers a ledger that reads but no longer holds the run's own spend: see
+//! [`SpendGuard::note_unsettled_spend`].
 //!
 //! ## Thread Safety
 //!

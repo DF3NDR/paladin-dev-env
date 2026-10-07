@@ -520,7 +520,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 42-09-PLAN.md — Worker agent-kind halt (re-derive at dispatch), Treasurer-only TokenBudget on the shared service, agent-kind admission at POST /runs, WINDOWS.md D-08 row (wave 9)
+- [x] 42-09-PLAN.md — Worker agent-kind halt (re-derive at dispatch), Treasurer-only TokenBudget on the shared service, agent-kind admission at POST /runs, WINDOWS.md D-08 row (wave 9)
 
 **Wave 10** *(blocked on Wave 9 completion)*
 

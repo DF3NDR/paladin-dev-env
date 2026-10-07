@@ -956,6 +956,12 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
     /// point) when an allowance has been exhausted mid-run -- overshoot is at most one
     /// superstep's spend, never absolute.
     ///
+    /// The guard is built with the run's own trace emitter (Phase 42 D-17), so a `warn_at`
+    /// crossing the run reaches mid-run is emitted as one [`TraceEvent::AllowanceWarning`] on
+    /// that run's own stream, once per window, and a spend halt notifies the operator once per
+    /// window (D-18). Without a configured trace sink the notices are still claimed and queued;
+    /// only the stream event is skipped.
+    ///
     /// A run whose row records no submitter (`submitted_by: None`, a schedule-fired or internal
     /// run) gets no guard and no ledger read (D-00e). Only takes effect on the
     /// [`Self::with_engine_factory`] path, exactly like [`Self::with_treasury_ledger`]. A pool
@@ -1204,19 +1210,6 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                             },
                         );
                     }
-                    // --- ALLOW-03, Phase 42 D-04, D-00e: the per-run spend guard,
-                    // attached beside the probe and the ledger. Only a run whose
-                    // row records a submitter gets one -- an unattributed run has
-                    // no allowance identity, so it makes no guard and no ledger
-                    // read. The guard takes the recorded identity (tenant and key
-                    // NAME), never a role.
-                    if let (Some(treasurer), Some(attribution)) =
-                        (&self.treasurer, run.submitted_by.as_ref())
-                    {
-                        engine = engine.with_spend_guard(
-                            treasurer.spend_guard(attribution.clone(), run.run_id.clone()),
-                        );
-                    }
                     // --- 28-06 (OBS-02, D-03, D-11): one CompositeSink, one
                     // TraceDispatcher, per run. `build_run_sink` is the single
                     // place a run's sink fan-out (the default-on log sink
@@ -1273,6 +1266,24 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
                         }
                         None => None,
                     };
+                    // --- ALLOW-03, Phase 42 D-04, D-00e, D-17: the per-run spend guard,
+                    // attached beside the probe and the ledger but built AFTER the run's
+                    // own trace emitter exists, so a `warn_at` crossing the run reaches
+                    // mid-run is emitted on THIS run's stream (the same emitter the
+                    // first-dispatch warning replay uses). Only a run whose row records
+                    // a submitter gets one -- an unattributed run has no allowance
+                    // identity, so it makes no guard and no ledger read. The guard takes
+                    // the recorded identity (tenant and key NAME), never a role. It is
+                    // still attached before `start`/`resume`/`fork` below.
+                    if let (Some(treasurer), Some(attribution)) =
+                        (&self.treasurer, run.submitted_by.as_ref())
+                    {
+                        engine = engine.with_spend_guard(treasurer.spend_guard_with_emitter(
+                            attribution.clone(),
+                            run.run_id.clone(),
+                            run_trace_emitter.clone(),
+                        ));
+                    }
                     (
                         Arc::new(engine),
                         Some(run.run_id.clone()),

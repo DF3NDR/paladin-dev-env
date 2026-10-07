@@ -2727,3 +2727,367 @@ async fn agent_kind_run_halts_on_the_derived_budget() {
     .await
     .expect("agent_kind_run_halts_on_the_derived_budget timed out");
 }
+
+/// The Phase 42 mid-run operator-notice tracer (ALLOW-03, D-17, D-18, T-42-38): a run that
+/// crosses `warn_at` mid-run and then spends its allowance away warns on its OWN trace stream
+/// once and reaches the operator twice -- one signed `allowance_warning` and one signed
+/// `allowance_halted` -- and a second run of the same key halting in the same window adds
+/// nothing at the operator.
+///
+/// Two runs are submitted up front (both admitted: nothing is spent yet). Run A's first node
+/// settles 85% of the ceiling (a `warn_at` crossing at the first boundary), its second settles
+/// past it (the halt at the next). Run B's first node alone takes the shared balance past the
+/// ceiling, so B halts at its first boundary: its halt notice is the same scope, limit, window
+/// and ceiling as A's, the store answers `AlreadyRecorded`, and no further delivery is queued.
+///
+/// The router, `Treasurer` (config-built, with the notice store and operator webhook), SQLite
+/// ledger/notices/deliveries, worker pool and `WebhookDeliveryService` are the real ones; the
+/// operator receiver is a mockito server recomputing each `X-Paladin-Signature` over the raw
+/// bytes it captured.
+///
+/// Pitfall 10: windows are epoch-aligned, so a UTC hour boundary crossed mid-scenario re-runs it
+/// once on a fresh store (a new SQLite file, hence a fresh scope).
+#[tokio::test(flavor = "multi_thread")]
+async fn mid_run_warn_and_halt_notices_reach_the_operator_once() {
+    tokio::time::timeout(Duration::from_secs(60), async {
+        for attempt in 1..=2 {
+            if run_mid_run_notices_once().await {
+                return;
+            }
+            eprintln!(
+                "mid_run_warn_and_halt_notices_reach_the_operator_once: a window boundary was \
+                 crossed (attempt {attempt}); re-running"
+            );
+        }
+        panic!("the allowance window boundary was crossed on both attempts");
+    })
+    .await
+    .expect("mid_run_warn_and_halt_notices_reach_the_operator_once timed out");
+}
+
+/// One full run of the mid-run notice scenario. Returns `false` when the one-hour allowance
+/// window rolled over while it ran (nothing further asserted).
+async fn run_mid_run_notices_once() -> bool {
+    use std::sync::atomic::AtomicUsize;
+
+    let (path, url) = temp_sqlite_url("mid_run_notices");
+    let repository: Arc<dyn RunRepositoryPort> =
+        Arc::new(SqliteRunRepository::new(&url).await.unwrap());
+    let ledger = Arc::new(SqliteTreasuryLedger::new(&url).await.unwrap());
+    let ledger_port: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+    let notices: Arc<dyn TreasuryNoticePort> = ledger.clone();
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(SqliteWebhookDeliveryRepository::new(&url).await.unwrap());
+    let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+
+    // n0 settles 0.85 of the 1.00 ceiling; n1 settles 0.20 more (past it); n2 settles nothing
+    // and must never run once the allowance is exhausted.
+    let amounts = [850_000_000_i64, 200_000_000, 0];
+    let mut graph = WarGraph::new(BattlefieldSchema::new(vec![]), EngineLimits::default());
+    let ids: Vec<NodeId> = (0..amounts.len())
+        .map(|i| NodeId::new(format!("n{i}")))
+        .collect();
+    for (id, amount) in ids.iter().zip(amounts) {
+        graph.add_node(
+            id.clone(),
+            NodeSpec::Function(Arc::new(SpendingNode {
+                ledger: Arc::clone(&ledger_port),
+                scope: LedgerScope::new("acme", "svc-m"),
+                amount_nanos: amount,
+                runs: Arc::new(AtomicUsize::new(0)),
+            })),
+        );
+    }
+    for pair in ids.windows(2) {
+        graph.add_edge(EdgeSpec {
+            from: pair[0].clone(),
+            to: pair[1].clone(),
+            condition: None,
+        });
+    }
+    graph.add_entry(ids[0].clone());
+    let resolver: Arc<dyn AssistantResolver> =
+        Arc::new(CodeWorkflowResolver::new().register("notice-wf", Arc::new(graph)));
+
+    // The operator receiver: captures raw body, signature and event header of every POST.
+    type Captured = Arc<std::sync::Mutex<Vec<(Vec<u8>, String, String)>>>;
+    let mut receiver = mockito::Server::new_async().await;
+    let captured: Captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+    {
+        let sink = Arc::clone(&captured);
+        receiver
+            .mock("POST", "/hook")
+            .with_status_code_from_request(move |req| {
+                let header = |name: &str| {
+                    req.header(name)
+                        .first()
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string()
+                };
+                sink.lock().unwrap().push((
+                    req.body().cloned().unwrap_or_default(),
+                    header("x-paladin-signature"),
+                    header("x-paladin-event"),
+                ));
+                200
+            })
+            .expect_at_least(0)
+            .create_async()
+            .await;
+    }
+
+    // The Treasurer is built from config, never by hand (D-02, D-17).
+    let hook_url = format!("{}/hook", receiver.url());
+    let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+        "currency": "USD",
+        "allowance": {
+            "warn_at": 80,
+            "api_keys": { "svc-m": { "period": "1h", "amount": "1.00" } },
+            "webhook": { "url": hook_url, "secret": "op-secret" }
+        }
+    }))
+    .unwrap();
+    let treasurer = Arc::new(
+        Treasurer::new(config.allowance_policy().unwrap(), ledger_port)
+            .with_notices(Arc::clone(&notices))
+            .with_operator_webhook(OperatorNoticeTarget::new(
+                hook_url.clone(),
+                Arc::clone(&deliveries),
+            )),
+    );
+    let submission: Arc<dyn RunSubmissionPort> = Arc::new(
+        RunSubmissionService::new(repository.clone(), queue.clone(), resolver.clone())
+            .with_treasurer(Arc::clone(&treasurer)
+                as Arc<
+                    dyn paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort,
+                >),
+    );
+
+    let mut api_keys = HashMap::new();
+    api_keys.insert(
+        "notice-key".to_string(),
+        Principal::new("svc-m", UserRole::User, TenantId::new("acme").unwrap()),
+    );
+    let app = run_router(
+        RunApiState::new()
+            .with_submission(submission)
+            .with_repository(repository.clone())
+            .with_webhook_deliveries(Arc::clone(&deliveries))
+            .with_auth(AgentAuthConfig {
+                enabled: true,
+                api_keys,
+                token_verifier: None,
+                bearer_tenant: None,
+            }),
+    );
+
+    let window_before = window_for(ledger.store_now().await.unwrap(), 3_600).unwrap();
+    let submit = || {
+        let app = app.clone();
+        async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", "notice-key")
+                        .body(Body::from(
+                            serde_json::to_vec(&serde_json::json!({
+                                "assistant_id": "notice-wf",
+                                "input": {}
+                            }))
+                            .unwrap(),
+                        ))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read submit body");
+            let body: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON body");
+            (
+                RunId::parse(body["run_id"].as_str().unwrap()).unwrap(),
+                paladin_core::platform::container::waypoint::ThreadId::new(
+                    body["thread_id"].as_str().unwrap(),
+                )
+                .unwrap(),
+            )
+        }
+    };
+    // Both runs are admitted before either spends: the ledger reads zero for each.
+    let (run_a, thread_a) = submit().await;
+    let (run_b, thread_b) = submit().await;
+    assert_ne!(run_a, run_b);
+
+    // The pool, built the way the warn-path tracer builds it (engine factory, persisted run
+    // traces) plus the Treasurer, which attaches the per-run guard with the run's own emitter.
+    let waypoints = Arc::new(InMemoryWaypointStore::new());
+    let factory_store = waypoints.clone();
+    let engine_factory: Arc<
+        dyn Fn(tokio_util::sync::CancellationToken) -> WarEngine<InMemoryWaypointStore>
+            + Send
+            + Sync,
+    > = Arc::new(move |token| {
+        WarEngine::new(Arc::new(UnusedPaladinPort), factory_store.clone())
+            .with_cancellation_token(token)
+    });
+    let traces = Arc::new(InMemoryRunTraceStore::new());
+    let pool = RunWorkerPool::new(
+        Arc::new(WarEngine::new(
+            Arc::new(UnusedPaladinPort),
+            waypoints.clone(),
+        )),
+        waypoints.clone(),
+        repository.clone(),
+        queue.clone(),
+        resolver.clone(),
+        Duration::from_secs(30),
+    )
+    .with_engine_factory(engine_factory)
+    .with_trace_config(TraceConfig {
+        log_sink: false,
+        persist: true,
+        ..TraceConfig::default()
+    })
+    .with_run_trace_port(traces.clone())
+    .with_treasurer(Arc::clone(&treasurer))
+    .with_treasury_notices(Arc::clone(&notices));
+
+    let read_traces = |thread: paladin_core::platform::container::waypoint::ThreadId| {
+        let traces = traces.clone();
+        async move {
+            let mut rows = Vec::new();
+            for _ in 0..100 {
+                rows = traces.read(&thread, 0, 100).await.unwrap();
+                if rows
+                    .iter()
+                    .any(|r| matches!(r.event, TraceEvent::RunFinished { .. }))
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            rows
+        }
+    };
+
+    // (a) Run A: warns at its first boundary past 80%, halts at the next.
+    assert!(pool.run_once().await.unwrap());
+    let window_after = window_for(ledger.store_now().await.unwrap(), 3_600).unwrap();
+    if window_before != window_after {
+        cleanup(&path);
+        return false;
+    }
+    assert_eq!(
+        repository.get(&run_a).await.unwrap().unwrap().status,
+        RunStatus::Halted,
+        "run A halts once its spend passes the ceiling"
+    );
+    let rows_a = read_traces(thread_a).await;
+    let warnings_a: Vec<_> = rows_a
+        .iter()
+        .filter(|r| matches!(r.event, TraceEvent::AllowanceWarning { .. }))
+        .collect();
+    assert_eq!(
+        warnings_a.len(),
+        1,
+        "exactly one mid-run allowance_warning on run A's own stream: {rows_a:?}"
+    );
+    match &warnings_a[0].event {
+        TraceEvent::AllowanceWarning {
+            balance, warn_at, ..
+        } => {
+            assert_eq!(balance.nanos(), 850_000_000, "the balance at the boundary");
+            assert_eq!(*warn_at, 80);
+        }
+        other => unreachable!("filtered to warnings: {other:?}"),
+    }
+    let warning_row = notices
+        .notices_for_run(&run_a)
+        .await
+        .unwrap()
+        .pop()
+        .expect("the mid-run warning claimed a warning row naming run A");
+
+    // (b) One delivery pass sends exactly two signed operator POSTs: the warning and the halt.
+    let delivery_service = WebhookDeliveryService::new(
+        Arc::clone(&deliveries),
+        repository.clone(),
+        WebhookDeliveryOptions::default(),
+    )
+    .unwrap()
+    .with_guard(SsrfGuard::new(true))
+    .with_operator_notice_secret(Some("op-secret".to_string()));
+    let pass_at = warning_row.recorded_at + chrono::Duration::seconds(10);
+    assert_eq!(delivery_service.run_once(pass_at).await, 2);
+    {
+        let seen = captured.lock().unwrap();
+        assert_eq!(seen.len(), 2, "one warning and one halt POST");
+        let mut events: Vec<&str> = seen.iter().map(|(_, _, event)| event.as_str()).collect();
+        events.sort_unstable();
+        assert_eq!(events, ["allowance_halted", "allowance_warning"]);
+        for (raw, signature, event) in seen.iter() {
+            assert_eq!(
+                signature,
+                &recompute_signature(b"op-secret", raw),
+                "the HMAC verifies over the captured raw bytes ({event})"
+            );
+            let payload: serde_json::Value = serde_json::from_slice(raw).unwrap();
+            assert_eq!(payload["event"], event.as_str());
+            assert_eq!(payload["run_id"], serde_json::json!(run_a));
+            assert_eq!(payload["tenant_id"], "acme");
+            assert_eq!(payload["api_key_id"], "svc-m");
+            assert_eq!(payload["warn_at"], 80);
+            assert_eq!(
+                payload.as_object().unwrap().len(),
+                12,
+                "the same twelve keys on both events: {payload}"
+            );
+            let raw_text = String::from_utf8_lossy(raw);
+            assert!(
+                !raw_text.contains("notice-key") && !raw_text.contains("op-secret"),
+                "the payload carries no key value and no secret: {raw_text}"
+            );
+        }
+    }
+
+    // (c) Run B halts in the same window: its halt notice is the same identity, so the store
+    // answers already-recorded and nothing further reaches the operator.
+    assert!(pool.run_once().await.unwrap());
+    let window_after = window_for(ledger.store_now().await.unwrap(), 3_600).unwrap();
+    if window_before != window_after {
+        cleanup(&path);
+        return false;
+    }
+    assert_eq!(
+        repository.get(&run_b).await.unwrap().unwrap().status,
+        RunStatus::Halted,
+        "run B halts at its first boundary: the shared balance is already past the ceiling"
+    );
+    assert_eq!(
+        delivery_service
+            .run_once(pass_at + chrono::Duration::seconds(1))
+            .await,
+        0,
+        "no further operator delivery is due"
+    );
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        2,
+        "the receiver count stays 2"
+    );
+    let rows_b = read_traces(thread_b).await;
+    assert!(
+        !rows_b
+            .iter()
+            .any(|r| matches!(r.event, TraceEvent::AllowanceWarning { .. })),
+        "run B crossed no threshold mid-run: {rows_b:?}"
+    );
+
+    cleanup(&path);
+    true
+}

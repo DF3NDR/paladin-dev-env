@@ -2570,8 +2570,8 @@ pub(super) mod agent_budget {
             .expect("partial output kept");
         assert!(output.contains("chunk"), "partial output kept: {output}");
         assert!(
-            output.contains("Token budget reached"),
-            "truncation notice kept: {output}"
+            output.contains("Allowance reached"),
+            "allowance-halt notice kept: {output}"
         );
         assert!(
             run.final_waypoint_id.is_none(),

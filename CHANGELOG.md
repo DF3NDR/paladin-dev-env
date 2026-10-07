@@ -423,6 +423,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The output of an agent run that ends on the Treasurer's derived allowance figure now carries
+  `[budget] Allowance reached — this response is partial; the run was halted.` instead of the
+  operator-budget text that called the partial response "this run's final answer". An operator
+  `token_budget` stop keeps its existing text (Phase 42 review IN-3).
+
 - **The operator `agent_runtime.token_budget` now takes effect on the HTTP agent routes (ALLOW-05;
   Phase 42 plan 42-08).** Every per-agent `PaladinExecutionService`, config-defined or
   runtime-provisioned, now installs the one `TokenBudget`, so `agent_runtime.token_budget`

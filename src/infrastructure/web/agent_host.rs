@@ -966,8 +966,8 @@ mod tests {
         let output = body["output"].as_str().expect("output text");
         assert!(output.contains("chunk"), "partial output is kept: {raw}");
         assert!(
-            output.contains("[budget] Token budget reached"),
-            "the truncation notice is on the output: {raw}"
+            output.contains("[budget] Allowance reached"),
+            "the allowance-halt notice is on the output: {raw}"
         );
         assert!(!raw.contains("key-a"), "no key value in the body: {raw}");
 

@@ -2711,7 +2711,7 @@ async fn agent_kind_run_halts_on_the_derived_budget() {
             .and_then(|value| value.as_str())
             .expect("the partial output is kept");
         assert!(output.contains("chunk"), "{output}");
-        assert!(output.contains("Token budget reached"), "{output}");
+        assert!(output.contains("Allowance reached"), "{output}");
         assert!(
             body["final_waypoint_id"].is_null(),
             "an agent-kind run has no checkpoint (D-08): {body}"

@@ -710,7 +710,8 @@ response; see the [configuration guide](../getting-started/configuration.md#the-
 
 **`stop_reason: "allowance_halted"` and `halt_reason`.** A call that ends this way answers `200`
 with `stop_reason: "allowance_halted"` and a `halt_reason` object, with the partial output kept
-and the truncation notice appended. `ExecuteResponse.halt_reason` is the same object
+and an allowance-halt notice appended (`[budget] Allowance reached — this response is partial; the
+run was halted.`). `ExecuteResponse.halt_reason` is the same object
 `GET /runs/{run_id}` returns for a halted run, `{ "reason": "allowance_exhausted", "scope",
 "kind", "balance", "ceiling", "window_start", "window_end" }`, built by the same function. The
 figures are the binding ceiling's own, with `balance` equal to `ceiling`: a conservative bound,
@@ -768,8 +769,8 @@ submission, so an allowance spent while the run sat in the queue is honoured. Th
 the model response that crosses the figure and is recorded `halted`, not `completed`:
 
 - `status` is `halted`, `error` is `null` and `halt_reason` is the `allowance_exhausted` object
-  ([Halted runs](#halted-runs)); the partial output is kept on the run, with the truncation notice
-  appended.
+  ([Halted runs](#halted-runs)); the partial output is kept on the run, with the allowance-halt
+  notice appended.
 - The SSE `done` event carries `status: "halted"` and the same `halt_reason`, live and on replay,
   and a subscribed `halted` webhook carries it too.
 - A zero or exhausted figure at dispatch records the same halt, and an unreadable ledger records

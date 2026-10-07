@@ -62,6 +62,12 @@ const CALL_LIMIT_NOTICE: &str =
 const TOKEN_BUDGET_NOTICE: &str =
     "\n\n[budget] Token budget reached — the response above is this run's final answer.";
 
+/// The text appended to the crossing response's content when the Treasurer's derived allowance
+/// figure, not the operator budget, ends a run (Phase 42 review IN-3). The output of such a run
+/// is partial and the run is a resume point, so it must not read as a final answer.
+const ALLOWANCE_HALT_NOTICE: &str =
+    "\n\n[budget] Allowance reached — this response is partial; the run was halted.";
+
 /// Per-run call count for [`ModelCallLimit`], stored on
 /// [`ModelCallContext`]'s typed state bag (D-03) -- never a field on the
 /// middleware struct.
@@ -193,10 +199,15 @@ impl ExecutionMiddleware for TokenBudget {
             // from `resp.content` (the mutable response view), not from
             // `FinalResult::output` -- so the notice must land on `resp`
             // itself to reach the returned `PaladinResult`.
-            resp.content.push_str(TOKEN_BUDGET_NOTICE);
             let stop_reason = match allowance_figures {
-                Some(figures) => StopReason::AllowanceHalted(figures),
-                None => StopReason::TokenBudget,
+                Some(figures) => {
+                    resp.content.push_str(ALLOWANCE_HALT_NOTICE);
+                    StopReason::AllowanceHalted(figures)
+                }
+                None => {
+                    resp.content.push_str(TOKEN_BUDGET_NOTICE);
+                    StopReason::TokenBudget
+                }
             };
             return Ok(MiddlewareFlow::Finish(FinalResult::new(
                 resp.content.clone(),
@@ -715,7 +726,7 @@ mod tests {
         assert!(result.stop_reason.is_limit());
         assert_eq!(
             result.output,
-            format!("partial answer{TOKEN_BUDGET_NOTICE}")
+            format!("partial answer{ALLOWANCE_HALT_NOTICE}")
         );
         assert_eq!(
             content, result.output,
@@ -812,7 +823,11 @@ mod tests {
         );
         assert!(!result.stop_reason.is_successful());
         assert!(result.output.contains("chunk"));
-        assert!(result.output.contains(TOKEN_BUDGET_NOTICE));
+        assert!(result.output.contains(ALLOWANCE_HALT_NOTICE));
+        assert!(
+            !result.output.contains("final answer"),
+            "a halted run's partial output is not called a final answer"
+        );
     }
 
     /// Boundary through a real service: a figure of exactly 200 lets the run reach

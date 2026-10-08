@@ -17,15 +17,15 @@ doctest = false
 
 [features]
 default = ["openai", "mock"]
-openai = ["dep:reqwest", "dep:rand"]
-anthropic = ["dep:reqwest", "dep:rand"]
-deepseek = ["dep:reqwest", "dep:rand"]
-kimi = ["dep:reqwest", "dep:rand"]
-qwen = ["dep:reqwest", "dep:rand"]
-grok = ["dep:reqwest", "dep:rand"]
-ollama = ["dep:reqwest", "dep:rand"]
-openai-compatible = ["dep:reqwest", "dep:rand"]
-gemini = ["dep:reqwest", "dep:rand"]
+openai = ["dep:reqwest"]
+anthropic = ["dep:reqwest"]
+deepseek = ["dep:reqwest"]
+kimi = ["dep:reqwest"]
+qwen = ["dep:reqwest"]
+grok = ["dep:reqwest"]
+ollama = ["dep:reqwest"]
+openai-compatible = ["dep:reqwest"]
+gemini = ["dep:reqwest"]
 mock = []
 vision = ["openai", "dep:base64"]
 openai-embeddings = ["openai"]
@@ -46,7 +46,11 @@ tokio = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
 reqwest = { workspace = true, features = ["json", "stream"], optional = true }
-rand = { workspace = true, optional = true }
+# Required, not optional: the un-gated Cadence decorator (`cadence.rs`) spreads waiters released by
+# one gate with a random fraction, and it must do so in every build -- including
+# `--no-default-features`, where no provider feature pulls `rand` in (PACE-02, research
+# Pitfall 8, option a). `rand 0.8` is already a workspace dependency; no new package.
+rand = { workspace = true }
 base64 = { workspace = true, optional = true }
 
 [dev-dependencies]

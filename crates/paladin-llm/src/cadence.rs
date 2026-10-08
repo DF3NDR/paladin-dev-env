@@ -46,6 +46,25 @@
 //! or the run halts with an actionable message instead of a worker lease sitting idle for an
 //! hour, and a self-generated refusal can never escalate the shared streak.
 //!
+//! ## Streaming is paced like a buffered call (D-01)
+//!
+//! [`generate_stream`](LlmPort::generate_stream) runs the same gate loop (including the D-06
+//! refusal) before it delegates. A 429 answered by the call itself is recorded and returned
+//! unchanged. Otherwise the stream's FIRST item is peeked, exactly as `FallbackLlmAdapter` does,
+//! and re-attached in front of the remainder so the consumer sees every item the provider
+//! produced: a first-item 429 is recorded, a first `Ok` item resets a non-zero streak, and every
+//! later item -- including a mid-stream error -- passes through untouched and records nothing.
+//!
+//! ## The waiter spread (research Pitfall 4)
+//!
+//! When many calls wait on one gate they would all wake in the same instant and walk back into
+//! the provider's limit together. After a non-zero gate reading each waiter therefore sleeps
+//! `wait + spread`, where `spread = u * min(wait / 10, 1 s)` for a random `u` in `[0, 1)`, and
+//! then re-reads the gate before sending (a concurrent 429 may have extended it). The spread is
+//! only ever *added*: it never subtracts from a wait, so a provider's explicit delay is still the
+//! minimum. It is not configurable. Waiting is read-only on the port, so a caller dropped while
+//! it sleeps leaves no state behind.
+//!
 //! ## Bookkeeping never fails a call
 //!
 //! A port error is logged under [`CADENCE_LOG_TARGET`] at `warn` (once per call) and the call
@@ -59,7 +78,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures::stream::Stream;
+use futures::stream::{self, Stream, StreamExt};
 use paladin_ports::output::cadence_port::{
     CADENCE_LOG_TARGET, CadenceError, CadenceKey, CadencePort,
 };
@@ -212,7 +231,11 @@ impl CadenceLlmAdapter {
                         key.model(),
                         reading.wait()
                     );
-                    tokio::time::sleep(reading.wait()).await;
+                    // Spread the herd: every caller one gate releases would otherwise wake in the
+                    // same instant and re-trigger the provider's limit (research Pitfall 4). The
+                    // spread is only added, then the gate is re-read before sending.
+                    let spread = waiter_spread(reading.wait(), rand::random::<f64>());
+                    tokio::time::sleep(reading.wait().saturating_add(spread)).await;
                 }
                 Err(err) => {
                     Self::warn_port_error("gate", key, &err, warned);
@@ -231,18 +254,29 @@ impl CadenceLlmAdapter {
         warned: &mut bool,
     ) {
         match outcome {
-            Ok(_) if pre_send_streak > 0 => {
-                if let Err(err) = self.wiring.port().record_success(key).await {
-                    Self::warn_port_error("record_success", key, &err, warned);
-                }
+            Ok(_) => self.note_success(key, pre_send_streak, warned).await,
+            Err(err) => self.note_failure(key, err, warned).await,
+        }
+    }
+
+    /// A call succeeded: reset the streak, but only if the gate was ever non-zero before the
+    /// send -- state exists only after a 429, so a clean key is never written.
+    async fn note_success(&self, key: &CadenceKey, pre_send_streak: u32, warned: &mut bool) {
+        if pre_send_streak > 0
+            && let Err(err) = self.wiring.port().record_success(key).await
+        {
+            Self::warn_port_error("record_success", key, &err, warned);
+        }
+    }
+
+    /// A call failed: a 429 is recorded with the provider's own delay as the minimum; any other
+    /// error opens no gate.
+    async fn note_failure(&self, key: &CadenceKey, err: &LlmError, warned: &mut bool) {
+        if matches!(err, LlmError::RateLimitExceeded { .. }) {
+            let minimum = self.minimum_delay(err);
+            if let Err(err) = self.wiring.port().record_rate_limited(key, minimum).await {
+                Self::warn_port_error("record_rate_limited", key, &err, warned);
             }
-            Err(err @ LlmError::RateLimitExceeded { .. }) => {
-                let minimum = self.minimum_delay(err);
-                if let Err(err) = self.wiring.port().record_rate_limited(key, minimum).await {
-                    Self::warn_port_error("record_rate_limited", key, &err, warned);
-                }
-            }
-            _ => {}
         }
     }
 
@@ -281,6 +315,24 @@ impl CadenceLlmAdapter {
     }
 }
 
+/// The longest extra delay the per-waiter spread ever adds (research Pitfall 4).
+const MAX_WAITER_SPREAD: Duration = Duration::from_secs(1);
+
+/// The extra time one waiter sleeps beyond its gate so the callers a single gate releases do
+/// not all send in the same instant: `fraction * min(wait / 10, 1 s)`.
+///
+/// Only ever added to the wait, never subtracted, so a provider's own delay stays a minimum.
+/// `fraction` is clamped into `[0, 1]` (NaN counts as zero), so any input yields a spread in
+/// `[0, min(wait / 10, 1 s)]` and nothing here can panic.
+fn waiter_spread(wait: Duration, fraction: f64) -> Duration {
+    let fraction = if fraction.is_nan() {
+        0.0
+    } else {
+        fraction.clamp(0.0, 1.0)
+    };
+    (wait / 10).min(MAX_WAITER_SPREAD).mul_f64(fraction)
+}
+
 /// Wrap `inner` with rate pacing from `cadence`, UNLESS pacing is off (`None`) or `inner` is a
 /// fallback chain (it reports [`FALLBACK_PROVIDER_NAME`]; each hop is paced instead, plan 43-06)
 /// -- in both cases `inner` comes back unchanged (`Arc::ptr_eq` holds), so nothing is installed.
@@ -312,12 +364,36 @@ impl LlmPort for CadenceLlmAdapter {
         outcome
     }
 
-    /// Delegates unpaced in this plan; stream gating arrives in plan 43-05.
+    /// Paced exactly like [`generate`](LlmPort::generate) (D-01): waits out the key's gate (or
+    /// refuses a gate beyond `max_wait`) before delegating, never retries, and returns the
+    /// provider's own error unchanged.
+    ///
+    /// A 429 answered by the call itself is recorded with the provider's delay as the minimum.
+    /// Otherwise the FIRST item is peeked (the idiom `FallbackLlmAdapter` uses) and re-attached
+    /// in front of the remainder, so the consumer still sees every item the provider produced: a
+    /// first-item 429 is recorded, and a first `Ok` item resets a non-zero streak. Later items
+    /// pass through untouched -- a mid-stream error is the consumer's, never a new gate.
     async fn generate_stream(
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        self.inner.generate_stream(request).await
+        let key = CadenceKey::new(self.inner.get_provider_name(), &request.model);
+        let mut warned = false;
+        let streak = self.wait_for_gate(&key, &mut warned).await?;
+        let started = self.inner.generate_stream(request).await;
+        if let Err(err) = &started {
+            self.note_failure(&key, err, &mut warned).await;
+        }
+        // `Box<dyn Stream>` is not `Unpin`: pin it once and keep the pinned handle, which is
+        // what the caller receives.
+        let mut rest = Box::into_pin(started?);
+        let peeked = rest.next().await;
+        match &peeked {
+            Some(Ok(_)) => self.note_success(&key, streak, &mut warned).await,
+            Some(Err(err)) => self.note_failure(&key, err, &mut warned).await,
+            None => {}
+        }
+        Ok(Box::new(stream::iter(peeked).chain(rest)))
     }
 
     /// Unchanged -- delegates to `inner`.
@@ -346,6 +422,7 @@ mod tests {
     use super::*;
     use crate::fallback::FallbackLlmAdapter;
     use crate::mock::{MockLlmAdapter, MockScriptEntry};
+    use futures::StreamExt;
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_ports::output::cadence_port::{CadencePolicy, GateReading};
     use paladin_ports::output::rate_limit_hints::{
@@ -354,6 +431,18 @@ mod tests {
     use paladin_storage::cadence::InMemoryCadence;
 
     const BASE: Duration = Duration::from_millis(500);
+    /// The most the waiter spread ever adds (`min(wait / 10, 1 s)`).
+    const MAX_SPREAD: Duration = Duration::from_secs(1);
+    /// Tokio rounds a timer deadline up to the next millisecond.
+    const TIMER_ROUNDING: Duration = Duration::from_millis(2);
+
+    type StreamItems = Vec<Result<StreamingResponse, LlmError>>;
+
+    async fn drain(
+        stream: Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+    ) -> StreamItems {
+        Box::into_pin(stream).collect().await
+    }
 
     fn request(model: &str) -> LlmRequest {
         let prompt = PromptItem::new(PromptType::User(UserPrompt {
@@ -529,13 +618,14 @@ mod tests {
         let waited = second_start.elapsed();
         assert!(waited >= BASE, "waited only {waited:?}");
         assert!(
-            waited <= CadenceSettings::default().max_backoff(),
-            "a reset-derived delay must be bounded by max_backoff; waited {waited:?}"
+            waited <= CadenceSettings::default().max_backoff() + MAX_SPREAD + TIMER_ROUNDING,
+            "a reset-derived delay must be bounded by max_backoff plus the spread; \
+             waited {waited:?}"
         );
-        assert_eq!(
-            waited,
-            CadenceSettings::default().max_backoff(),
-            "the estimate is used, only bounded"
+        // The estimate is used, only bounded; the waiter spread (at most 1 s) may only add.
+        assert!(
+            waited >= CadenceSettings::default().max_backoff(),
+            "the estimate is used, only bounded; waited {waited:?}"
         );
     }
 
@@ -549,7 +639,12 @@ mod tests {
         let response = paced.generate(request("gpt-x")).await.expect("waited out");
 
         assert_eq!(response.content, "ok");
-        assert_eq!(second_start.elapsed(), Duration::from_secs(300));
+        let waited = second_start.elapsed();
+        assert!(waited >= Duration::from_secs(300), "waited only {waited:?}");
+        assert!(
+            waited <= Duration::from_secs(300) + MAX_SPREAD + TIMER_ROUNDING,
+            "waited {waited:?}"
+        );
         assert_eq!(inner.call_count(), 2);
     }
 
@@ -681,6 +776,319 @@ mod tests {
             .await
             .expect("second call succeeds");
         assert_eq!(inner.call_count(), 2);
+    }
+
+    // --- Streaming is paced like a buffered call (D-01, PACE-02) ---------------------------
+
+    fn stream_provider(items: Vec<Result<String, LlmError>>) -> Arc<MockLlmAdapter> {
+        Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_stream_items(items),
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stream_waits_on_the_gate_before_delegating() {
+        let wiring = wiring();
+        let inner = stream_provider(vec![Ok("a".to_string())]);
+        let paced = with_cadence(inner.clone(), Some(&wiring));
+        let key = CadenceKey::new("openai", "gpt-x");
+        wiring
+            .port()
+            .record_rate_limited(&key, Some(Duration::from_secs(2)))
+            .await
+            .expect("open the gate");
+
+        let start = tokio::time::Instant::now();
+        let stream = paced.generate_stream(request("gpt-x")).await;
+        let waited = start.elapsed();
+        let items = drain(stream.unwrap_or_else(|e| panic!("stream refused: {e}"))).await;
+
+        assert!(waited >= Duration::from_secs(2), "waited only {waited:?}");
+        assert_eq!(items.len(), 1);
+        assert_eq!(inner.call_count(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stream_gate_beyond_max_wait_is_refused_without_calling_the_provider() {
+        let wiring = wiring();
+        let inner = stream_provider(vec![Ok("a".to_string())]);
+        let paced = with_cadence(inner.clone(), Some(&wiring));
+        let beyond = Duration::from_secs(300) + Duration::from_millis(1);
+        wiring
+            .port()
+            .record_rate_limited(&CadenceKey::new("openai", "gpt-x"), Some(beyond))
+            .await
+            .expect("open the gate");
+
+        let start = tokio::time::Instant::now();
+        let Err(error) = paced.generate_stream(request("gpt-x")).await else {
+            panic!("a gate beyond max_wait must refuse the stream");
+        };
+        assert!(matches!(error, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(error.retry_after(), Some(beyond));
+        assert_eq!(start.elapsed(), Duration::ZERO, "no sleep");
+        assert_eq!(inner.call_count(), 0, "the provider is not called");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stream_call_level_429_is_recorded_and_returned_unchanged() {
+        let wiring = wiring();
+        let inner = error_then_ok(LlmError::rate_limited(Some(Duration::from_secs(7))));
+        let paced = with_cadence(inner.clone(), Some(&wiring));
+
+        let start = tokio::time::Instant::now();
+        let Err(error) = paced.generate_stream(request("gpt-x")).await else {
+            panic!("the provider's 429 must be returned");
+        };
+        assert!(matches!(error, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(error.retry_after(), Some(Duration::from_secs(7)));
+        assert_eq!(
+            start.elapsed(),
+            Duration::ZERO,
+            "the failing call never sleeps"
+        );
+        assert_eq!(inner.call_count(), 1, "never re-issued");
+
+        let reading = wiring
+            .port()
+            .gate(&CadenceKey::new("openai", "gpt-x"))
+            .await
+            .expect("gate");
+        assert_eq!(reading.streak(), 1);
+        assert_eq!(
+            reading.wait(),
+            Duration::from_secs(7),
+            "the delay is the minimum"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stream_first_item_429_is_recorded_and_the_item_is_still_delivered() {
+        let wiring = wiring();
+        let inner = stream_provider(vec![
+            Err(LlmError::rate_limited(Some(Duration::from_secs(3)))),
+            Ok("late".to_string()),
+        ]);
+        let paced = with_cadence(inner.clone(), Some(&wiring));
+
+        let stream = paced.generate_stream(request("gpt-x")).await;
+        let items = drain(stream.unwrap_or_else(|e| panic!("stream refused: {e}"))).await;
+
+        assert_eq!(
+            items.len(),
+            2,
+            "the consumer sees every item the provider produced"
+        );
+        match &items[0] {
+            Err(error @ LlmError::RateLimitExceeded { .. }) => {
+                assert_eq!(error.retry_after(), Some(Duration::from_secs(3)));
+            }
+            other => panic!("the peeked 429 must be delivered first, got {other:?}"),
+        }
+        assert_eq!(items[1].as_ref().expect("second item").delta, "late");
+
+        let reading = wiring
+            .port()
+            .gate(&CadenceKey::new("openai", "gpt-x"))
+            .await
+            .expect("gate");
+        assert_eq!(reading.streak(), 1);
+        assert_eq!(reading.wait(), Duration::from_secs(3));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stream_first_ok_chunk_resets_a_nonzero_streak() {
+        let wiring = wiring();
+        let inner = stream_provider(vec![Ok("a".to_string()), Ok("b".to_string())]);
+        let paced = with_cadence(inner, Some(&wiring));
+        let key = CadenceKey::new("openai", "gpt-x");
+        wiring
+            .port()
+            .record_rate_limited(&key, None)
+            .await
+            .expect("open the gate");
+
+        let stream = paced.generate_stream(request("gpt-x")).await;
+        let items = drain(stream.unwrap_or_else(|e| panic!("stream refused: {e}"))).await;
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(wiring.port().gate(&key).await.expect("gate").streak(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn stream_error_after_the_first_item_passes_through_unrecorded() {
+        let wiring = wiring();
+        let inner = stream_provider(vec![Ok("a".to_string()), Err(LlmError::rate_limited(None))]);
+        let paced = with_cadence(inner, Some(&wiring));
+
+        let stream = paced.generate_stream(request("gpt-x")).await;
+        let items = drain(stream.unwrap_or_else(|e| panic!("stream refused: {e}"))).await;
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[1], Err(LlmError::RateLimitExceeded { .. })));
+        let reading = wiring
+            .port()
+            .gate(&CadenceKey::new("openai", "gpt-x"))
+            .await
+            .expect("gate");
+        assert!(
+            reading.is_clear() && reading.streak() == 0,
+            "later items pass through untouched: {reading:?}"
+        );
+    }
+
+    // --- The per-waiter spread (research Pitfall 4) ----------------------------------------
+
+    /// Run `callers` concurrent calls against a gate opened with `provider_delay`, returning
+    /// the instant each call reached the provider and the instant the gate opened.
+    async fn release_herd(
+        callers: usize,
+        provider_delay: Option<Duration>,
+    ) -> (tokio::time::Instant, Vec<tokio::time::Instant>) {
+        let wiring = wiring();
+        let inner = Arc::new(MockLlmAdapter::new().with_provider_name("openai"));
+        let paced = with_cadence(inner, Some(&wiring));
+        wiring
+            .port()
+            .record_rate_limited(&CadenceKey::new("openai", "gpt-x"), provider_delay)
+            .await
+            .expect("open the gate");
+
+        let opened = tokio::time::Instant::now();
+        let handles: Vec<_> = (0..callers)
+            .map(|_| {
+                let paced = paced.clone();
+                tokio::spawn(async move {
+                    paced.generate(request("gpt-x")).await.expect("call");
+                    tokio::time::Instant::now()
+                })
+            })
+            .collect();
+        let mut sends = Vec::with_capacity(callers);
+        for handle in handles {
+            sends.push(handle.await.expect("task"));
+        }
+        (opened, sends)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn twenty_concurrent_callers_do_not_all_send_at_the_same_instant_and_none_sends_before_the_gate()
+     {
+        let (opened, sends) = release_herd(20, None).await;
+
+        let earliest = sends.iter().min().copied().expect("sends");
+        let latest = sends.iter().max().copied().expect("sends");
+        assert!(
+            earliest >= opened + BASE,
+            "a caller sent {:?} before the gate",
+            (opened + BASE) - earliest
+        );
+        assert!(
+            latest - earliest > Duration::ZERO,
+            "all 20 callers sent at the identical instant: a thundering herd"
+        );
+        let spread_cap = BASE / 10;
+        assert!(
+            latest <= opened + BASE + spread_cap + TIMER_ROUNDING,
+            "the spread must stay within wait / 10; latest send {:?} after the gate",
+            latest - (opened + BASE)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn spread_never_reduces_an_explicit_retry_after() {
+        let provider_delay = Duration::from_secs(7);
+        let (opened, sends) = release_herd(20, Some(provider_delay)).await;
+
+        for send in &sends {
+            assert!(
+                *send >= opened + provider_delay,
+                "a call reached the provider {:?} before the provider's own delay",
+                (opened + provider_delay) - *send
+            );
+        }
+        let latest = sends.iter().max().copied().expect("sends");
+        assert!(
+            latest <= opened + provider_delay + provider_delay / 10 + TIMER_ROUNDING,
+            "the spread is bounded by a tenth of the wait"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropped_waiting_future_leaves_no_state() {
+        let wiring = wiring();
+        let inner = Arc::new(MockLlmAdapter::new().with_provider_name("openai"));
+        let paced = with_cadence(inner.clone(), Some(&wiring));
+        let key = CadenceKey::new("openai", "gpt-x");
+        wiring
+            .port()
+            .record_rate_limited(&key, Some(Duration::from_secs(10)))
+            .await
+            .expect("open the gate");
+
+        // The caller gives up mid-wait: the future is dropped while it sleeps on the gate.
+        let abandoned =
+            tokio::time::timeout(Duration::from_secs(2), paced.generate(request("gpt-x"))).await;
+        assert!(
+            abandoned.is_err(),
+            "the call was still waiting when dropped"
+        );
+
+        let after = wiring.port().gate(&key).await.expect("gate");
+        assert_eq!(
+            after.streak(),
+            1,
+            "a dropped waiter neither escalates nor resets"
+        );
+        assert!(
+            after.wait() <= Duration::from_secs(8)
+                && after.wait() + TIMER_ROUNDING >= Duration::from_secs(8),
+            "the gate only aged with the clock: {:?}",
+            after.wait()
+        );
+        assert_eq!(inner.call_count(), 0, "the provider was never reached");
+        assert!(
+            wiring
+                .port()
+                .gate(&CadenceKey::new("openai", "gpt-y"))
+                .await
+                .expect("gate")
+                .is_clear(),
+            "no state leaked to another key"
+        );
+    }
+
+    #[test]
+    fn waiter_spread_is_a_fraction_of_a_tenth_of_the_wait_capped_at_one_second() {
+        let wait = Duration::from_millis(500);
+        assert_eq!(waiter_spread(wait, 0.0), Duration::ZERO);
+        assert_eq!(waiter_spread(wait, 0.5), Duration::from_millis(25));
+        assert_eq!(waiter_spread(wait, 1.0), Duration::from_millis(50));
+        // A long wait is capped at one second, not a tenth.
+        assert_eq!(waiter_spread(Duration::from_secs(60), 1.0), MAX_SPREAD);
+        assert_eq!(waiter_spread(Duration::from_secs(60), 0.5), MAX_SPREAD / 2);
+        assert_eq!(waiter_spread(Duration::ZERO, 0.9), Duration::ZERO);
+    }
+
+    #[test]
+    fn waiter_spread_never_panics_on_hostile_inputs_and_is_never_negative() {
+        for fraction in [f64::NAN, -1.0, f64::NEG_INFINITY] {
+            assert_eq!(
+                waiter_spread(BASE, fraction),
+                Duration::ZERO,
+                "fraction {fraction}"
+            );
+        }
+        for fraction in [2.0, f64::INFINITY] {
+            assert_eq!(
+                waiter_spread(BASE, fraction),
+                BASE / 10,
+                "fraction {fraction}"
+            );
+        }
+        assert_eq!(waiter_spread(Duration::MAX, 1.0), MAX_SPREAD);
     }
 
     #[test]

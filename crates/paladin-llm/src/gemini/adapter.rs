@@ -592,8 +592,8 @@ impl GeminiAdapter {
             }
             400 if rpc_status == Some("INVALID_ARGUMENT") => LlmError::InvalidPrompt(excerpt),
             404 if rpc_status == Some("NOT_FOUND") => LlmError::ModelNotAvailable(excerpt),
-            429 => LlmError::RateLimitExceeded,
-            _ if rpc_status == Some("RESOURCE_EXHAUSTED") => LlmError::RateLimitExceeded,
+            429 => LlmError::rate_limited(None),
+            _ if rpc_status == Some("RESOURCE_EXHAUSTED") => LlmError::rate_limited(None),
             // WR-04 (`17-REVIEW.md`, T-17-52): this client's redirect
             // policy is `none` (see `GeminiAdapter::new`), so a `3xx`
             // response is never followed — it arrives here as an ordinary
@@ -1878,7 +1878,7 @@ mod tests {
         .to_string();
 
         let error = adapter.map_error(429, &body);
-        assert!(matches!(error, LlmError::RateLimitExceeded));
+        assert!(matches!(error, LlmError::RateLimitExceeded { .. }));
     }
 
     #[test]
@@ -1893,7 +1893,7 @@ mod tests {
         // code, since Google's error envelope is ambiguous on HTTP 429
         // alone (see this adapter's map_error doc comment).
         let error = adapter.map_error(500, &body);
-        assert!(matches!(error, LlmError::RateLimitExceeded));
+        assert!(matches!(error, LlmError::RateLimitExceeded { .. }));
     }
 
     #[test]
@@ -2191,7 +2191,7 @@ mod tests {
         );
 
         let result = adapter.generate(request).await;
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
     }
 
     // ── Streaming ──

@@ -578,7 +578,7 @@ mod tests {
         let adapter = QwenAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("qwen-plus")).await;
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
     }
 
     #[tokio::test]

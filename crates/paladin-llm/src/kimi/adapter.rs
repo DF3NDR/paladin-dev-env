@@ -663,7 +663,7 @@ mod tests {
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
     }
 
     #[tokio::test]

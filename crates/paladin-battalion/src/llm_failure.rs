@@ -280,7 +280,7 @@ mod tests {
             LlmError::NetworkError("connection refused".to_string()),
             LlmError::AuthenticationError("invalid API key".to_string()),
             LlmError::InvalidPrompt("empty prompt".to_string()),
-            LlmError::RateLimitExceeded,
+            LlmError::rate_limited(None),
             LlmError::UsageLimitExceeded {
                 provider: "anthropic".to_string(),
                 regain_hint: Some("2026-10-01 00:00 UTC".to_string()),

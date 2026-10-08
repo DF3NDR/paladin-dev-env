@@ -250,7 +250,7 @@ async fn test_anthropic_rate_limit_429() {
     let error = response.unwrap_err();
     assert!(matches!(
         error,
-        paladin_ports::output::llm_port::LlmError::RateLimitExceeded
+        paladin_ports::output::llm_port::LlmError::RateLimitExceeded { .. }
     ));
 }
 

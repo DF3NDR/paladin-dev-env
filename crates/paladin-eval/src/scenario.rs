@@ -408,7 +408,7 @@ impl LlmErrorKind {
             LlmErrorKind::InvalidPrompt => LlmError::InvalidPrompt(format!(
                 "scripted invalid prompt (node {node}, call {call_index})"
             )),
-            LlmErrorKind::RateLimit => LlmError::RateLimitExceeded,
+            LlmErrorKind::RateLimit => LlmError::rate_limited(None),
             LlmErrorKind::UsageLimit => LlmError::UsageLimitExceeded {
                 provider: "scenario".to_string(),
                 regain_hint: None,

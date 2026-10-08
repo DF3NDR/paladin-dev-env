@@ -1304,7 +1304,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
         ));
         assert!(matches!(
             adapter.map_error(429, "slow down"),
-            LlmError::RateLimitExceeded
+            LlmError::RateLimitExceeded { .. }
         ));
         assert!(matches!(
             adapter.map_error(400, "bad prompt"),

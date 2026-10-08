@@ -1053,7 +1053,7 @@ mod tests {
         let adapter = OpenAiCompatibleAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("some-model")).await;
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
     }
 
     #[tokio::test]

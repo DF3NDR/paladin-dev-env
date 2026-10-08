@@ -303,7 +303,7 @@ pub(crate) fn llm_error_class(error: &LlmError) -> &'static str {
         LlmError::NetworkError(_) => "network error",
         LlmError::AuthenticationError(_) => "authentication error",
         LlmError::InvalidPrompt(_) => "invalid prompt",
-        LlmError::RateLimitExceeded => "rate limit exceeded",
+        LlmError::RateLimitExceeded { .. } => "rate limit exceeded",
         LlmError::UsageLimitExceeded { .. } => "usage limit exceeded",
         LlmError::ModelNotAvailable(_) => "model not available",
         LlmError::TokenLimitExceeded => "token limit exceeded",
@@ -478,7 +478,7 @@ mod tests {
     #[tokio::test]
     async fn llm_error_surfaces_as_a_typed_evaluator_error() {
         let llm: Arc<dyn LlmPort> =
-            Arc::new(MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded));
+            Arc::new(MockLlmAdapter::new().with_error(LlmError::rate_limited(None)));
         let evaluator = make_evaluator(llm);
         let source = NodeId::new("triage");
         let urgent = NodeId::new("urgent");

@@ -54,13 +54,16 @@ async fn test_mock_llm_adapter_multiple_responses() {
 #[tokio::test]
 async fn test_mock_llm_adapter_simulates_error() {
     // Test error simulation
-    let adapter = MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded);
+    let adapter = MockLlmAdapter::new().with_error(LlmError::rate_limited(None));
 
     let request = create_test_request();
     let result = adapter.generate(request).await;
 
     assert!(result.is_err(), "Should fail with configured error");
-    assert!(matches!(result.unwrap_err(), LlmError::RateLimitExceeded));
+    assert!(matches!(
+        result.unwrap_err(),
+        LlmError::RateLimitExceeded { .. }
+    ));
 }
 
 #[tokio::test]

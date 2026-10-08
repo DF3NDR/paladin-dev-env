@@ -1267,7 +1267,7 @@ mod tests {
         ));
         assert!(matches!(
             adapter.map_error(429, "slow down"),
-            LlmError::RateLimitExceeded
+            LlmError::RateLimitExceeded { .. }
         ));
         assert!(matches!(
             adapter.map_error(404, "no model"),
@@ -1481,7 +1481,7 @@ mod tests {
                     let calls = Arc::clone(&calls_clone);
                     async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Err(LlmError::RateLimitExceeded)
+                        Err(LlmError::rate_limited(None))
                     }
                 },
                 3,

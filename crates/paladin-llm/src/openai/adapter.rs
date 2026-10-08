@@ -493,7 +493,7 @@ impl OpenAIAdapter {
                     if matches!(
                         e,
                         LlmError::AuthenticationError(_)
-                            | LlmError::RateLimitExceeded
+                            | LlmError::RateLimitExceeded { .. }
                             | LlmError::UsageLimitExceeded { .. }
                     ) {
                         return Err(e);
@@ -1033,7 +1033,7 @@ mod tests {
                 let ok = matches!(
                     (expect, &err),
                     ("AuthenticationError", LlmError::AuthenticationError(_))
-                        | ("RateLimitExceeded", LlmError::RateLimitExceeded)
+                        | ("RateLimitExceeded", LlmError::RateLimitExceeded { .. })
                         | ("InvalidPrompt", LlmError::InvalidPrompt(_))
                         | ("TokenLimitExceeded", LlmError::TokenLimitExceeded)
                 );
@@ -1066,7 +1066,7 @@ mod tests {
             let result = adapter.generate(build_request(false)).await;
 
             assert!(
-                matches!(result, Err(LlmError::RateLimitExceeded)),
+                matches!(result, Err(LlmError::RateLimitExceeded { .. })),
                 "expected RateLimitExceeded, got {result:?}"
             );
             assert!(

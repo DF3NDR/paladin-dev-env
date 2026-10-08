@@ -262,7 +262,7 @@ fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
 
         // A rate limit says "you called too often", not "you configured the
         // wrong thing" — the credential and the endpoint are both fine.
-        LlmError::RateLimitExceeded => FetchFailureClass::Supported,
+        LlmError::RateLimitExceeded { .. } => FetchFailureClass::Supported,
         // An exhausted quota is an account-billing state, not a
         // credential/endpoint mismatch — nothing about the CONFIGURATION is
         // wrong here either.
@@ -1194,7 +1194,7 @@ mod tests {
         ));
         assert!(matches!(
             engine.map_error(429, "slow down"),
-            LlmError::RateLimitExceeded
+            LlmError::RateLimitExceeded { .. }
         ));
         assert!(matches!(
             engine.map_error(404, "no model"),
@@ -1875,7 +1875,7 @@ mod tests {
     #[test]
     fn classify_fetch_failure_rate_limit_exceeded_is_supported() {
         assert_eq!(
-            classify_fetch_failure(&LlmError::RateLimitExceeded),
+            classify_fetch_failure(&LlmError::rate_limited(None)),
             FetchFailureClass::Supported
         );
     }

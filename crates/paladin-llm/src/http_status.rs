@@ -80,7 +80,7 @@ fn signals_context_length_overflow(redacted_body: &str) -> bool {
 ///
 /// assert!(matches!(
 ///     map_http_status("openai", 429, "", "sk-secret"),
-///     LlmError::RateLimitExceeded
+///     LlmError::RateLimitExceeded { .. }
 /// ));
 /// ```
 pub fn map_http_status(provider: &str, status: u16, body: &str, api_key: &str) -> LlmError {
@@ -95,7 +95,7 @@ pub fn map_http_status(provider: &str, status: u16, body: &str, api_key: &str) -
         401 => LlmError::AuthenticationError(format!(
             "Invalid API key for provider '{provider}'. Error: {message}"
         )),
-        429 => LlmError::RateLimitExceeded,
+        429 => LlmError::rate_limited(None),
         402 => LlmError::UsageLimitExceeded {
             provider: provider.to_string(),
             regain_hint: None,
@@ -149,7 +149,7 @@ mod tests {
         ));
         assert!(matches!(
             map_http_status(PROVIDER, 429, "slow down", KEY),
-            LlmError::RateLimitExceeded
+            LlmError::RateLimitExceeded { .. }
         ));
         match map_http_status(PROVIDER, 402, "insufficient balance", KEY) {
             LlmError::UsageLimitExceeded {

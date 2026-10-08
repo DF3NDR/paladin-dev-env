@@ -56,7 +56,7 @@ impl From<LlmProviderError> for LlmError {
         match err {
             LlmProviderError::AuthenticationError(msg) => LlmError::AuthenticationError(msg),
             LlmProviderError::NetworkError(msg) => LlmError::NetworkError(msg),
-            LlmProviderError::RateLimitExceeded => LlmError::RateLimitExceeded,
+            LlmProviderError::RateLimitExceeded => LlmError::rate_limited(None),
             LlmProviderError::InvalidPrompt(msg) => LlmError::InvalidPrompt(msg),
             LlmProviderError::ProcessingError(msg) => LlmError::ProcessingError(msg),
             LlmProviderError::TokenLimitExceeded => LlmError::TokenLimitExceeded,
@@ -108,8 +108,8 @@ mod tests {
     fn rate_limit_exceeded_converts_to_rate_limit_exceeded() {
         let err = LlmProviderError::RateLimitExceeded;
         match LlmError::from(err) {
-            LlmError::RateLimitExceeded => {}
-            other => panic!("expected LlmError::RateLimitExceeded, got {other:?}"),
+            LlmError::RateLimitExceeded { .. } => {}
+            other => panic!("expected a rate-limit error, got {other:?}"),
         }
     }
 

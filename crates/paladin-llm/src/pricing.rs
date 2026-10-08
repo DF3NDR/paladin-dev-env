@@ -484,7 +484,7 @@ mod tests {
     #[tokio::test]
     async fn prices_the_served_model_after_fallback_hop() {
         let primary: Arc<dyn LlmPort> =
-            Arc::new(MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded));
+            Arc::new(MockLlmAdapter::new().with_error(LlmError::rate_limited(None)));
         let backup: Arc<dyn LlmPort> = Arc::new(NamedModelPort {
             model: "backup-model",
             usage: TokenUsage::new(100, 0),

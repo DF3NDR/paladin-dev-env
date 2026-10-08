@@ -166,7 +166,9 @@ async fn test_paladin_with_stop_word() {
 async fn test_paladin_error_handling() {
     // Arrange: Create mock that simulates an error
     let mock_llm = Arc::new(MockLlmAdapter::new());
-    mock_llm.add_failure(paladin_ports::output::llm_port::LlmError::RateLimitExceeded);
+    mock_llm.add_failure(paladin_ports::output::llm_port::LlmError::rate_limited(
+        None,
+    ));
 
     let paladin_data = PaladinData {
         system_prompt: "You are a test assistant.".to_string(),

@@ -625,9 +625,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_mock_returns_error() {
-        let adapter = MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded);
+        let adapter = MockLlmAdapter::new().with_error(LlmError::rate_limited(None));
         let result = adapter.generate(make_request()).await;
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
     }
 
     #[tokio::test]
@@ -735,14 +735,14 @@ mod tests {
         );
         assert_eq!(cycling.call_count(), 3);
 
-        let erroring = MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded);
+        let erroring = MockLlmAdapter::new().with_error(LlmError::rate_limited(None));
         assert!(matches!(
             erroring.generate(make_request()).await,
-            Err(LlmError::RateLimitExceeded)
+            Err(LlmError::RateLimitExceeded { .. })
         ));
 
         let recovering =
-            MockLlmAdapter::new().with_error_then_response(LlmError::RateLimitExceeded, "ok");
+            MockLlmAdapter::new().with_error_then_response(LlmError::rate_limited(None), "ok");
         assert!(recovering.generate(make_request()).await.is_err());
         assert_eq!(
             recovering.generate(make_request()).await.unwrap().content,

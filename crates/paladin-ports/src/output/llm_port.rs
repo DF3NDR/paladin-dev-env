@@ -223,6 +223,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -230,6 +231,8 @@ use paladin_core::platform::container::content::ContentItem;
 use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::prompt::PromptItem;
 use paladin_core::platform::container::transience::Transience;
+
+use crate::output::rate_limit_hints::RateLimitHints;
 
 /// Errors that can occur during LLM operations
 ///
@@ -240,7 +243,7 @@ use paladin_core::platform::container::transience::Transience;
 ///
 /// ### Retryable Errors
 /// - [`LlmError::NetworkError`] - Retry with exponential backoff
-/// - [`LlmError::RateLimitExceeded`] - Retry after delay (check `Retry-After` header)
+/// - [`LlmError::RateLimitExceeded`] - Retry after delay (read [`LlmError::retry_after`])
 /// - [`LlmError::Timeout`] - Retry with potentially longer timeout
 ///
 /// ### Configuration Errors (Non-Retryable)
@@ -262,7 +265,7 @@ use paladin_core::platform::container::transience::Transience;
 ///             // Retryable - implement backoff
 ///             true
 ///         }
-///         LlmError::RateLimitExceeded => {
+///         LlmError::RateLimitExceeded { .. } => {
 ///             // Retryable after delay
 ///             true
 ///         }
@@ -322,24 +325,42 @@ pub enum LlmError {
 
     /// Rate limit exceeded (too many requests in time window)
     ///
-    /// **Recovery**: Wait and retry. Check `Retry-After` header if available.
+    /// **Recovery**: Wait and retry. The provider's own delay, when it gave one, is
+    /// [`LlmError::retry_after`]; the full parsed header snapshot is
+    /// [`LlmError::rate_limit_hints`].
+    ///
+    /// Marked `#[non_exhaustive]` so a field can be added later without a break: build it
+    /// with [`LlmError::rate_limited`] or [`LlmError::rate_limited_with_hints`], and match it
+    /// with `RateLimitExceeded { .. }`. Its `Display` text is unchanged (`Rate limit exceeded`)
+    /// and it is still [`Transience::Transient`].
     ///
     /// # Examples
     ///
     /// ```rust
     /// use paladin_ports::output::llm_port::LlmError;
-    /// use std::thread;
     /// use std::time::Duration;
     ///
-    /// fn handle_rate_limit(error: LlmError) {
-    ///     if matches!(error, LlmError::RateLimitExceeded) {
-    ///         // Wait before retry (implement exponential backoff in production)
-    ///         println!("Rate limited, waiting before retry");
+    /// fn handle_rate_limit(error: &LlmError) -> Option<Duration> {
+    ///     if matches!(error, LlmError::RateLimitExceeded { .. }) {
+    ///         // Never wait less than the provider asked for.
+    ///         return error.retry_after();
     ///     }
+    ///     None
     /// }
+    ///
+    /// let error = LlmError::rate_limited(Some(Duration::from_secs(7)));
+    /// assert_eq!(handle_rate_limit(&error), Some(Duration::from_secs(7)));
+    /// assert_eq!(error.to_string(), "Rate limit exceeded");
     /// ```
     #[error("Rate limit exceeded")]
-    RateLimitExceeded,
+    #[non_exhaustive]
+    RateLimitExceeded {
+        /// The effective delay before the next attempt, as the provider stated it. `None`
+        /// when the provider gave nothing parseable -- a delay is never guessed.
+        retry_after: Option<Duration>,
+        /// The full parsed rate-limit snapshot, when the adapter had response headers.
+        hints: Option<Box<RateLimitHints>>,
+    },
 
     /// The provider reports the account has reached its configured API usage
     /// limit for the billing period — a hard quota/balance ceiling, not a
@@ -493,6 +514,101 @@ pub enum LlmError {
 }
 
 impl LlmError {
+    /// Build a [`LlmError::RateLimitExceeded`] from an optional provider retry delay.
+    ///
+    /// Pass `None` when the provider gave no delay; nothing is guessed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmError;
+    /// use std::time::Duration;
+    ///
+    /// assert_eq!(LlmError::rate_limited(None).retry_after(), None);
+    /// assert_eq!(
+    ///     LlmError::rate_limited(Some(Duration::from_secs(3))).retry_after(),
+    ///     Some(Duration::from_secs(3))
+    /// );
+    /// ```
+    pub fn rate_limited(retry_after: Option<Duration>) -> Self {
+        LlmError::RateLimitExceeded {
+            retry_after,
+            hints: None,
+        }
+    }
+
+    /// Build a [`LlmError::RateLimitExceeded`] from a parsed header snapshot. The error's
+    /// [`retry_after`](LlmError::retry_after) is the snapshot's
+    /// [`effective_retry_after`](RateLimitHints::effective_retry_after); a snapshot that
+    /// recorded nothing is not stored.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmError;
+    /// use paladin_ports::output::rate_limit_hints::{RateLimitHints, RetryDelaySource};
+    /// use std::time::Duration;
+    ///
+    /// let hints = RateLimitHints::default()
+    ///     .with_retry_after(Duration::from_secs(5), RetryDelaySource::RetryAfter);
+    /// let error = LlmError::rate_limited_with_hints(hints);
+    /// assert_eq!(error.retry_after(), Some(Duration::from_secs(5)));
+    /// assert!(error.rate_limit_hints().is_some());
+    /// ```
+    pub fn rate_limited_with_hints(hints: RateLimitHints) -> Self {
+        let retry_after = hints.effective_retry_after().map(|(delay, _)| delay);
+        LlmError::RateLimitExceeded {
+            retry_after,
+            hints: (!hints.is_empty()).then(|| Box::new(hints)),
+        }
+    }
+
+    /// The provider's retry delay carried by a rate-limit error, if any.
+    ///
+    /// For [`LlmError::AllProvidersFailed`] this is the delay of its last error, mirroring how
+    /// [`transience`](LlmError::transience) delegates; every other variant reports `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmError;
+    /// use std::time::Duration;
+    ///
+    /// let chain = LlmError::AllProvidersFailed {
+    ///     attempts: vec![("openai".to_string(), "rate limited".to_string())],
+    ///     last: Box::new(LlmError::rate_limited(Some(Duration::from_secs(9)))),
+    /// };
+    /// assert_eq!(chain.retry_after(), Some(Duration::from_secs(9)));
+    /// assert_eq!(LlmError::TokenLimitExceeded.retry_after(), None);
+    /// ```
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            LlmError::RateLimitExceeded { retry_after, .. } => *retry_after,
+            LlmError::AllProvidersFailed { last, .. } => last.retry_after(),
+            _ => None,
+        }
+    }
+
+    /// The parsed rate-limit snapshot carried by a rate-limit error, if the adapter had one.
+    ///
+    /// Like [`retry_after`](LlmError::retry_after) this looks through
+    /// [`LlmError::AllProvidersFailed`] to its last error.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// assert!(LlmError::rate_limited(None).rate_limit_hints().is_none());
+    /// ```
+    pub fn rate_limit_hints(&self) -> Option<&RateLimitHints> {
+        match self {
+            LlmError::RateLimitExceeded { hints, .. } => hints.as_deref(),
+            LlmError::AllProvidersFailed { last, .. } => last.rate_limit_hints(),
+            _ => None,
+        }
+    }
+
     /// Classify whether this error is worth retrying (Doc 04 FT-FR-01, D-05).
     ///
     /// Every arm reads a typed field or a variant identity only -- never a
@@ -508,7 +624,7 @@ impl LlmError {
             // rate limit all describe conditions that clear with time.
             LlmError::NetworkError(_) => Transience::Transient,
             LlmError::Timeout(_) => Transience::Transient,
-            LlmError::RateLimitExceeded => Transience::Transient,
+            LlmError::RateLimitExceeded { .. } => Transience::Transient,
 
             // Obviously permanent: retrying the exact same request
             // reproduces the exact same failure. Each of these is matched on
@@ -1358,7 +1474,7 @@ pub trait LlmPort: Send + Sync {
     /// - [`LlmError::NetworkError`] - Connection failure (retryable)
     /// - [`LlmError::AuthenticationError`] - Invalid credentials (fix configuration)
     /// - [`LlmError::InvalidPrompt`] - Malformed prompt (fix request)
-    /// - [`LlmError::RateLimitExceeded`] - Too many requests (retry with backoff)
+    /// - [`LlmError::RateLimitExceeded`] - Too many requests (wait [`LlmError::retry_after`], then retry)
     /// - [`LlmError::ModelNotAvailable`] - Model not supported (use different model)
     /// - [`LlmError::TokenLimitExceeded`] - Prompt too long (reduce size)
     /// - [`LlmError::ProcessingError`] - Provider-side error (may be retryable)
@@ -1408,11 +1524,12 @@ pub trait LlmPort: Send + Sync {
     ///
     ///     match llm.generate(request).await {
     ///         Ok(response) => Ok(response.content),
-    ///         Err(LlmError::RateLimitExceeded) => {
-    ///             // Implement retry with backoff
-    ///             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+    ///         Err(error @ LlmError::RateLimitExceeded { .. }) => {
+    ///             // Wait at least as long as the provider asked, then retry.
+    ///             let delay = error.retry_after().unwrap_or(tokio::time::Duration::from_secs(5));
+    ///             tokio::time::sleep(delay).await;
     ///             // Retry logic here
-    ///             Err(LlmError::RateLimitExceeded)
+    ///             Err(error)
     ///         }
     ///         Err(e) => Err(e),
     ///     }
@@ -1966,7 +2083,11 @@ mod tests {
         let cases: Vec<(LlmError, Transience)> = vec![
             (LlmError::NetworkError("x".into()), Transient),
             (LlmError::Timeout("x".into()), Transient),
-            (LlmError::RateLimitExceeded, Transient),
+            (LlmError::rate_limited(None), Transient),
+            (
+                LlmError::rate_limited(Some(Duration::from_secs(7))),
+                Transient,
+            ),
             (LlmError::AuthenticationError("x".into()), Permanent),
             (LlmError::InvalidPrompt("x".into()), Permanent),
             (
@@ -2048,5 +2169,86 @@ mod tests {
             last: Box::new(LlmError::AuthenticationError("bad key".into())),
         };
         assert_eq!(permanent.transience(), Transience::Permanent);
+    }
+
+    // --- PACE-01: typed retry delay on the 429 ---------------------------------
+
+    #[test]
+    fn rate_limited_none_has_no_delay_and_no_hints() {
+        let err = LlmError::rate_limited(None);
+        assert_eq!(err.retry_after(), None);
+        assert!(err.rate_limit_hints().is_none());
+    }
+
+    #[test]
+    fn rate_limited_some_carries_the_delay() {
+        let err = LlmError::rate_limited(Some(Duration::from_secs(7)));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+        assert!(err.rate_limit_hints().is_none());
+    }
+
+    #[test]
+    fn display_is_byte_identical() {
+        assert_eq!(
+            LlmError::rate_limited(Some(Duration::from_secs(7))).to_string(),
+            "Rate limit exceeded"
+        );
+        assert_eq!(
+            LlmError::rate_limited(None).to_string(),
+            "Rate limit exceeded"
+        );
+    }
+
+    #[test]
+    fn rate_limited_is_transient_with_or_without_a_delay() {
+        assert_eq!(
+            LlmError::rate_limited(None).transience(),
+            Transience::Transient
+        );
+        assert_eq!(
+            LlmError::rate_limited(Some(Duration::from_secs(1))).transience(),
+            Transience::Transient
+        );
+    }
+
+    #[test]
+    fn all_providers_failed_delegates_retry_after_to_its_last_error() {
+        let wrapped = LlmError::AllProvidersFailed {
+            attempts: vec![("openai".into(), "429".into())],
+            last: Box::new(LlmError::rate_limited(Some(Duration::from_secs(9)))),
+        };
+        assert_eq!(wrapped.retry_after(), Some(Duration::from_secs(9)));
+
+        let other = LlmError::AllProvidersFailed {
+            attempts: vec![("openai".into(), "boom".into())],
+            last: Box::new(LlmError::NetworkError("reset".into())),
+        };
+        assert_eq!(other.retry_after(), None);
+        assert_eq!(LlmError::NetworkError("x".into()).retry_after(), None);
+    }
+
+    #[test]
+    fn rate_limited_with_hints_sets_retry_after_from_effective_retry_after() {
+        use crate::output::rate_limit_hints::{
+            RateLimitDimension, RateLimitDimensionKind, RateLimitHints, RetryDelaySource,
+        };
+
+        let explicit = RateLimitHints::default()
+            .with_retry_after(Duration::from_secs(4), RetryDelaySource::RetryAfter);
+        let err = LlmError::rate_limited_with_hints(explicit.clone());
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(4)));
+        assert_eq!(err.rate_limit_hints(), Some(&explicit));
+
+        let derived = RateLimitHints::default().with_dimension(
+            RateLimitDimensionKind::Requests,
+            RateLimitDimension::new(None, Some(0), Some(Duration::from_secs(12))),
+        );
+        let err = LlmError::rate_limited_with_hints(derived);
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(12)));
+
+        // Hints that name nothing usable give no delay, and an empty parse is not stored.
+        let empty = LlmError::rate_limited_with_hints(RateLimitHints::default());
+        assert_eq!(empty.retry_after(), None);
+        assert!(empty.rate_limit_hints().is_none());
     }
 }

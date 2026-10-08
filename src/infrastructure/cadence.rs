@@ -203,7 +203,7 @@ mod tests {
         let first = llm.generate(request()?).await;
         let first_returned = Instant::now();
         assert!(
-            matches!(first, Err(LlmError::RateLimitExceeded)),
+            matches!(first, Err(LlmError::RateLimitExceeded { .. })),
             "expected the unchanged rate limit, got {first:?}"
         );
         rate_limited.assert_async().await;

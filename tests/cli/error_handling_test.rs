@@ -25,7 +25,7 @@ use crate::helpers::MockLlmAdapter;
 async fn test_llm_rate_limit_error() {
     // Arrange: Mock that simulates rate limiting
     let mock_llm = Arc::new(MockLlmAdapter::new());
-    mock_llm.add_failure(LlmError::RateLimitExceeded);
+    mock_llm.add_failure(LlmError::rate_limited(None));
 
     let paladin_data = PaladinData {
         system_prompt: "Test system".to_string(),

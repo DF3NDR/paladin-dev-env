@@ -30,6 +30,9 @@ pub mod paladin_executor_port;
 pub mod paladin_port;
 pub mod paladin_registry;
 pub mod queue_port;
+/// Rate-limit hints (PACE-01, D-04): the parsed retry delay and quota snapshot a provider's 429
+/// carries on `LlmError::RateLimitExceeded`.
+pub mod rate_limit_hints;
 /// SQL database repository port traits.
 pub mod repository_port;
 /// Run queue port (D-06): lease-based work queue for dispatching runs to

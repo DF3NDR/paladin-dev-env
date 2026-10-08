@@ -284,7 +284,7 @@ async fn test_concurrent_paladin_execution() {
 #[tokio::test]
 async fn test_error_propagation_across_layers() {
     // Test that errors propagate correctly from LLM through service to caller
-    let llm_port = Arc::new(MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded));
+    let llm_port = Arc::new(MockLlmAdapter::new().with_error(LlmError::rate_limited(None)));
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(5, 2, Duration::from_secs(30)));
     let service = PaladinExecutionService::new(llm_port.clone(), circuit_breaker, None, None);

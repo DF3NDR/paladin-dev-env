@@ -801,7 +801,7 @@ mod tests {
         assert!(!ConclaveExecutionService::is_retryable_error(&unknown));
 
         // Rendered text is byte-identical to the legacy erasure (X-03).
-        let fixed = LlmError::RateLimitExceeded;
+        let fixed = LlmError::rate_limited(None);
         assert_eq!(
             to_paladin_error(&fixed).to_string(),
             format!("LLM error: {fixed}")

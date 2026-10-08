@@ -2270,7 +2270,7 @@ mod tests {
         let paladins = vec![create_test_paladin(), create_test_paladin()];
         let config = create_test_config();
         let llm: Arc<dyn LlmPort> =
-            Arc::new(MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded));
+            Arc::new(MockLlmAdapter::new().with_error(LlmError::rate_limited(None)));
 
         let commander = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Auto)

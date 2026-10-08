@@ -458,7 +458,7 @@ mod tests {
         let adapter = GrokAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(GROK_DEFAULT_MODEL)).await;
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
     }
 
     #[tokio::test]

@@ -199,7 +199,7 @@ impl CadenceLlmAdapter {
                     Self::warn_port_error("record_success", key, &err, warned);
                 }
             }
-            Err(LlmError::RateLimitExceeded) => {
+            Err(LlmError::RateLimitExceeded { .. }) => {
                 if let Err(err) = self.wiring.port().record_rate_limited(key, None).await {
                     Self::warn_port_error("record_rate_limited", key, &err, warned);
                 }
@@ -312,7 +312,7 @@ mod tests {
             MockLlmAdapter::new()
                 .with_provider_name("openai")
                 .with_script(vec![
-                    MockScriptEntry::Error(LlmError::RateLimitExceeded),
+                    MockScriptEntry::Error(LlmError::rate_limited(None)),
                     MockScriptEntry::Text("ok".to_string()),
                 ]),
         )
@@ -326,7 +326,7 @@ mod tests {
         let start = tokio::time::Instant::now();
         let result = paced.generate(request("gpt-x")).await;
 
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
         assert_eq!(
             start.elapsed(),
             Duration::ZERO,
@@ -456,7 +456,7 @@ mod tests {
 
         assert!(matches!(
             paced.generate(request("m")).await,
-            Err(LlmError::RateLimitExceeded)
+            Err(LlmError::RateLimitExceeded { .. })
         ));
         paced
             .generate(request("m"))

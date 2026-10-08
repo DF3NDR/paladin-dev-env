@@ -4,15 +4,15 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 43
 current_phase_name: Rate Pacing
-status: planning
+status: executing
 stopped_at: Phase 43 context gathered
-last_updated: "2026-10-07T23:04:13.214Z"
+last_updated: "2026-10-08T00:55:11.287Z"
 last_activity: 2026-10-07
 last_activity_desc: Phase 42 complete (verified, UAT 2/2, D-08 wording override accepted); next in roadmap order is Phase 43 (Phase 45 was sealed 2026-09-30 out of sequence)
 progress:
   total_phases: 7
   completed_phases: 6
-  total_plans: 51
+  total_plans: 64
   completed_plans: 51
 ---
 
@@ -52,7 +52,7 @@ under `milestones/`.
 
 Phase: 43 — Rate Pacing
 Plan: Not started
-Status: Ready to plan
+Status: Ready to execute
 Last activity: 2026-10-07 — Phase 42 complete (verified, UAT 2/2, D-08 wording override accepted); next in roadmap order is Phase 43 (Phase 45 was sealed 2026-09-30 out of sequence)
 
 ## Performance Metrics

@@ -31,6 +31,11 @@ redis-queue = ["dep:redis"]
 ## Shares the already-declared optional `redis` dependency with
 ## `redis-queue` -- no new dependency name, no version bump.
 redis-cache = ["dep:redis"]
+## Enable the Redis-backed `CadencePort` adapter (PACE-03, D-09): fleet-wide rate pacing
+## through one atomic server-clock Lua script per operation. Shares the already-declared
+## optional `redis` dependency with `redis-queue` and `redis-cache` -- no new dependency
+## name, no version bump.
+redis-cadence = ["dep:redis"]
 ## Enable the tokio-cron-scheduler-backed SchedulerPort adapter.
 scheduler = ["dep:tokio-cron-scheduler"]
 
@@ -63,7 +68,7 @@ sqlx = { workspace = true, optional = true }
 # rust-s3 is optional: activated by the s3 feature (MinIO/S3 file storage).
 rust-s3 = { version = "0.35.1", optional = true }
 
-# redis is optional: activated by the redis-queue or redis-cache feature.
+# redis is optional: activated by the redis-queue, redis-cache or redis-cadence feature.
 # `safe_iterators` is required by the redis-cache adapter's `scan_match`-based
 # `invalidate` (T-25-17): without it, `redis::AsyncIter` silently stops at the
 # first value that fails conversion rather than surfacing the error.

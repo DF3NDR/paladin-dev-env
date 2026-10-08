@@ -553,6 +553,12 @@ storage = ["storage-mysql", "storage-postgres"]
 # already opts in separately.
 redis-cache = ["paladin-storage/redis-cache"]
 
+# Redis-backed `CadencePort` adapter (PACE-03, D-09): a 429 on one worker paces every worker
+# sharing the Redis server. Deliberately NOT part of `default`, `storage`, or `full`'s implicit
+# set -- see X-11.4: the default `paladin-ai` build must gain no Redis driver beyond what
+# `redis-queue` already opts in separately.
+redis-cadence = ["paladin-storage/redis-cadence"]
+
 # OTLP trace export (28-09, D-12/D-13). Deliberately NOT part of `default`
 # or `full`'s implicit set -- see X-11.4: the default `paladin-ai` build
 # must gain no OTel dependency.

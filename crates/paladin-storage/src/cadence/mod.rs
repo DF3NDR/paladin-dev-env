@@ -3,9 +3,9 @@
 //! Implementations of `paladin_ports::output::cadence_port::CadencePort`, the
 //! shared rate-pacing state a provider 429 opens a gate in. Mirrors
 //! `node_cache/`'s module layout: an always-available in-memory backend now;
-//! the Redis backend arrives behind the `redis-cache`-style `redis-cadence`
-//! feature in a later Phase 43 plan (43-07); [`contract_tests`] is the shared
-//! contract suite every backend runs unchanged (43-05, then 43-07 and 43-08).
+//! the Redis backend ([`redis`], behind the `redis-cadence` feature, 43-07) shares
+//! pacing state across a worker fleet; [`contract_tests`] is the shared contract suite
+//! every backend runs unchanged (43-05, then 43-07 and 43-08).
 
 /// In-process implementation, always available (no feature gate, mirroring
 /// `node_cache::in_memory`): the default backend (D-08), process-wide when one
@@ -16,4 +16,14 @@ pub mod in_memory;
 /// by every backend (plain, not `#[cfg(test)]`, mirroring `node_cache`).
 pub mod contract_tests;
 
+/// Redis implementation: one atomic server-clock Lua script per operation, shared by every worker
+/// pointed at the same server (PACE-03, D-09), behind the `redis-cadence` feature.
+#[cfg(feature = "redis-cadence")]
+pub mod redis;
+
 pub use in_memory::{DEFAULT_KEY_CAPACITY, InMemoryCadence};
+#[cfg(feature = "redis-cadence")]
+pub use redis::{
+    CADENCE_GATE_LUA, CADENCE_RECORD_429_LUA, CADENCE_RECORD_SUCCESS_LUA,
+    DEFAULT_CADENCE_KEY_PREFIX, RedisCadence, RedisCadenceConfig,
+};

@@ -11,6 +11,7 @@
 //! | `mysql`  | [`mysql_content_repository`] |
 //! | `s3`     | [`minio`] (MinIO / S3 file storage) |
 //! | `redis-queue` | [`redis`] (Redis-backed queue) |
+//! | `redis-cadence` | [`cadence::redis`] (fleet-wide rate pacing through Redis) |
 //! | `scheduler` | [`scheduler`] (`tokio-cron-scheduler`-backed `SchedulerPort`) |
 //!
 //! Enable only the backends your deployment actually uses.
@@ -33,6 +34,11 @@ pub mod run_trace;
 /// always available (no feature gate, mirroring `node_cache`); the Redis backend
 /// is added by a later Phase 43 plan behind its own feature.
 pub mod cadence;
+
+/// Redis connection-URL redaction shared by every Redis-backed adapter (the run queue and the
+/// cadence adapter). Crate-private.
+#[cfg(any(feature = "redis-queue", feature = "redis-cadence"))]
+pub(crate) mod redis_url;
 
 /// `NodeCachePort` storage adapters (Doc 04 FT-FR-18…20, D-27). The
 /// in-memory backend is always available (no feature gate, mirroring

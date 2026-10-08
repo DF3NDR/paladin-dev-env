@@ -19,8 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   429 instead of retrying it inside its own loop. New public surface: `CadencePort`, `CadenceKey`,
   `GateReading`, `CadenceError`, `CadencePolicy` (ports), `InMemoryCadence` (storage),
   `CadenceLlmAdapter`, `CadenceSettings`, `CadenceWiring`, `with_cadence` (llm), `CadenceConfig`,
-  `CadenceBackend`, `build_cadence`, `compose_llm` and `TreasurerConfig.cadence` (facade). Later
-  Phase 43 plans extend this entry.
+  `CadenceBackend`, `build_cadence`, `compose_llm` and `TreasurerConfig.cadence` (facade).
+  Plan 43-05 hardens it: streaming calls (`generate_stream`) are paced exactly like buffered
+  ones (a 429 as the call's error or as the stream's first item opens the gate and the stream's
+  items are still delivered unchanged); the callers one gate releases are spread by up to
+  `min(wait / 10, 1 s)` so they do not all send in the same instant, never below a provider's
+  explicit delay; `InMemoryCadence` holds at most `DEFAULT_KEY_CAPACITY` (4096) keys,
+  configurable with `InMemoryCadence::with_capacity`, evicting idle entries first and warning
+  once under `paladin::cadence` when a live entry must go; and a shared contract suite,
+  `paladin_storage::cadence::contract_tests`, holds every adapter to the same pacing rules.
+  `rand` is now a required dependency of `paladin-llm`. Later Phase 43 plans extend this entry.
 - **Provider retry delay on a 429 (PACE-01, PACE-02; Phase 43 plan 43-02).**
   `LlmError::RateLimitExceeded` now carries the provider's own retry delay and a rate-limit header
   snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new

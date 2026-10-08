@@ -13,7 +13,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
@@ -21,8 +21,10 @@ use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
     StreamingResponse, TokenUsage,
 };
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
-use crate::http_status::map_http_status;
+use crate::http_status::map_http_status_with_hints;
+use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 // WR-01 (`25-REVIEW.md`): this adapter previously carried its own
 // byte-for-byte copy of the crate's shared credential-redaction routine
 // (`RESPONSE_EXCERPT_CHAR_BUDGET`, `CREDENTIAL_PLACEHOLDER`,
@@ -37,6 +39,22 @@ use crate::redaction::{RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, redact_cre
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits.
 const DEEPSEEK_PROVIDER: &str = "deepseek";
+
+/// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
+///
+/// Must run BEFORE `response.text()` consumes the response (research Pitfall 2). Only a 429
+/// is parsed, and no credential header is read.
+fn snapshot_rate_limit_hints(
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+) -> Option<RateLimitHints> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    hints_from_headers(RateLimitHeaderFamily::Generic, SystemTime::now(), |name| {
+        headers.get(name).and_then(|v| v.to_str().ok())
+    })
+}
 
 /// Configuration for DeepSeek LLM adapter.
 #[derive(Debug, Clone)]
@@ -528,21 +546,36 @@ impl DeepSeekAdapter {
         bounded_excerpt(&redacted, RESPONSE_EXCERPT_CHAR_BUDGET)
     }
 
-    /// Map a non-2xx DeepSeek response to [`LlmError`].
+    /// Map a non-2xx DeepSeek response to [`LlmError`] with no rate-limit headers.
+    ///
+    /// A thin wrapper over [`Self::map_error_with_hints`], kept so the status-mapping unit
+    /// tests read the same as before PACE-01. Production paths call the hints variant.
+    #[cfg(test)]
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
+        self.map_error_with_hints(status, body, None)
+    }
+
+    /// Map a non-2xx DeepSeek response to [`LlmError`], carrying the parsed rate-limit
+    /// headers of a `429` (PACE-01).
     ///
     /// `300..=399` is named explicitly (CR-02, mirroring
     /// `CompatEngine::map_error`/`GeminiAdapter::map_error`) because this
     /// client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
     /// response is never followed — it arrives here as an ordinary
     /// non-success status instead. Everything else delegates wholesale to
-    /// the crate-wide [`map_http_status`] (Phase 25 D-03, FT-FR-01): `body`
+    /// the crate-wide [`map_http_status_with_hints`] (Phase 25 D-03, FT-FR-01): `body`
     /// is the RAW response text, redacted and bounded once inside the
     /// helper — never pre-excerpted here, which would bound twice.
     /// DeepSeek's documented insufficient-balance status is 402; the
     /// helper's 402 arm carries `regain_hint: None` because DeepSeek's 402
     /// body shape is not first-party-confirmed (Phase 41 RESEARCH
     /// Assumption A1), so there is no prose to parse yet.
-    fn map_error(&self, status: u16, body: &str) -> LlmError {
+    fn map_error_with_hints(
+        &self,
+        status: u16,
+        body: &str,
+        hints: Option<RateLimitHints>,
+    ) -> LlmError {
         match status {
             300..=399 => LlmError::ProviderError {
                 provider: DEEPSEEK_PROVIDER.to_string(),
@@ -556,7 +589,13 @@ impl DeepSeekAdapter {
                     self.diagnostic_excerpt(body)
                 ),
             },
-            _ => map_http_status(DEEPSEEK_PROVIDER, status, body, &self.config.api_key),
+            _ => map_http_status_with_hints(
+                DEEPSEEK_PROVIDER,
+                status,
+                body,
+                &self.config.api_key,
+                hints,
+            ),
         }
     }
 
@@ -578,9 +617,18 @@ impl DeepSeekAdapter {
     /// - The two adapters' retryable SETS must stay in lockstep: changing one
     ///   without the other is the exact bug this change fixed (D-02). Today
     ///   both retry `NetworkError | Timeout | ProcessingError |
-    ///   RateLimitExceeded | ModelNotAvailable | TokenLimitExceeded` and
-    ///   never retry `AuthenticationError | InvalidPrompt | EmptyCompletion |
-    ///   UsageLimitExceeded`.
+    ///   ModelNotAvailable | TokenLimitExceeded` and never retry
+    ///   `AuthenticationError | InvalidPrompt | EmptyCompletion |
+    ///   UsageLimitExceeded | RateLimitExceeded`.
+    ///
+    /// **A 429 is surfaced on the first attempt (Phase 43 D-02).** Before
+    /// PACE-01 this loop retried `RateLimitExceeded` with a 100 ms-scale
+    /// backoff, which re-sent into a limit the provider had just announced.
+    /// A 429 is the one error whose cure is waiting, and the Cadence
+    /// decorator above this adapter owns waiting with a gate shared by every
+    /// caller of the same provider and model; the error now carries the
+    /// provider's own `Retry-After` for it to honour. Network, timeout, 5xx
+    /// and decode retries are unchanged.
     async fn call_api_with_retry<F, Fut, T>(
         &self,
         operation: F,
@@ -611,6 +659,8 @@ impl DeepSeekAdapter {
                             | LlmError::InvalidPrompt(_)
                             | LlmError::EmptyCompletion(_)
                             | LlmError::UsageLimitExceeded { .. }
+                            // D-02: surface the first 429; the Cadence decorator waits.
+                            | LlmError::RateLimitExceeded { .. }
                     ) {
                         return Err(e);
                     }
@@ -660,11 +710,14 @@ impl LlmPort for DeepSeekAdapter {
             let status = response.status();
 
             if !status.is_success() {
+                // Snapshot the 429 headers BEFORE `.text()` consumes the response
+                // (research Pitfall 2).
+                let hints = snapshot_rate_limit_hints(status, response.headers());
                 let error_text = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status.as_u16(), &error_text));
+                return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
             }
 
             // Read the body to text FIRST, then deserialize it separately.
@@ -767,11 +820,13 @@ impl LlmPort for DeepSeekAdapter {
 
         let status = response.status();
         if !status.is_success() {
+            // Same header snapshot as the buffered path, taken before the body read.
+            let hints = snapshot_rate_limit_hints(status, response.headers());
             let error_text = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(self.map_error(status.as_u16(), &error_text));
+            return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
         }
 
         let stream = response.bytes_stream();
@@ -1470,7 +1525,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn call_api_with_retry_still_retries_rate_limit_exceeded() {
+    async fn call_api_with_retry_surfaces_rate_limit_exceeded_on_the_first_attempt() {
         let adapter = test_adapter();
         let calls = Arc::new(AtomicU32::new(0));
         let calls_clone = Arc::clone(&calls);
@@ -1488,12 +1543,86 @@ mod tests {
             )
             .await;
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
         assert_eq!(
             calls.load(Ordering::SeqCst),
-            4,
-            "RateLimitExceeded retry behavior must not regress"
+            1,
+            "a 429 is surfaced on the first attempt (D-02): the Cadence decorator owns waiting, \
+             so this loop must not re-send into a limit the provider just announced"
         );
+    }
+
+    // ── PACE-01: a 429 carries the provider's Retry-After, buffered and streamed ──
+
+    #[tokio::test]
+    async fn deepseek_429_carries_retry_after_from_the_header() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(r#"{"error":{"message":"rate limit"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter_at(&server.url());
+        let err = adapter
+            .generate(build_response_format_request(None))
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        mock.assert_async().await;
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+    }
+
+    #[tokio::test]
+    async fn deepseek_stream_open_429_carries_retry_after_from_the_header() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(r#"{"error":{"message":"rate limit"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter_at(&server.url());
+        let result = adapter
+            .generate_stream(build_response_format_request(None))
+            .await;
+
+        mock.assert_async().await;
+        match &result {
+            Err(err @ LlmError::RateLimitExceeded { .. }) => {
+                assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+            }
+            Ok(_) => panic!("expected a rate-limit error, got Ok(<stream>)"),
+            Err(other) => panic!("expected a rate-limit error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn deepseek_429_without_retry_after_carries_no_delay() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_body("{}")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter_at(&server.url());
+        let err = adapter
+            .generate(build_response_format_request(None))
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), None);
     }
 
     // ── Phase 26 (RT-05, D-28): response_format reaches the wire ──────────

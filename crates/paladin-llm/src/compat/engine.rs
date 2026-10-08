@@ -22,7 +22,7 @@ use reqwest::{
     header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
@@ -31,13 +31,33 @@ use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
     StreamingResponse, TokenUsage,
 };
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use super::types::{
     CompatMessage, CompatModelsResponse, CompatRequest, CompatResponse, CompatResponseFormat,
     CompatStreamOptions, CompatUsage,
 };
-use crate::http_status::map_http_status;
+use crate::http_status::map_http_status_with_hints;
+use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
+
+/// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
+///
+/// Must run BEFORE `response.text()` consumes the response (research Pitfall 2). Only a 429
+/// is parsed, and no credential header is read: the generic family looks at `Retry-After`,
+/// `retry-after-ms` and the `x-ratelimit-*` names only, so a preset that is not one of the
+/// named providers still surfaces the delay its endpoint sent.
+fn snapshot_rate_limit_hints(
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+) -> Option<RateLimitHints> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    hints_from_headers(RateLimitHeaderFamily::Generic, SystemTime::now(), |name| {
+        headers.get(name).and_then(|v| v.to_str().ok())
+    })
+}
 
 /// Capabilities a preset declares for its own request path.
 ///
@@ -651,12 +671,28 @@ impl CompatEngine {
     /// Checks the preset's `error_override` first (handed the redacted,
     /// bounded excerpt, as before) so a preset-specific status can be added
     /// without editing this engine. Everything else is the crate-wide
-    /// [`map_http_status`] (Phase 25 D-03, FT-FR-01): it redacts `body`
+    /// [`map_http_status_with_hints`] (Phase 25 D-03, FT-FR-01): it redacts `body`
     /// before bounding it and emits a typed `ProviderError { status }` for
     /// every status without a dedicated variant — which is why callers pass
     /// the raw body here rather than a pre-built excerpt (bounding twice
     /// would truncate the first elision marker).
+    ///
+    /// A thin wrapper over [`Self::map_error_with_hints`], kept so the status-mapping unit
+    /// tests read the same as before PACE-01. Production paths call the hints variant.
+    #[cfg(test)]
     fn map_error(&self, status: u16, body: &str) -> LlmError {
+        self.map_error_with_hints(status, body, None)
+    }
+
+    /// Map a non-2xx HTTP status + RAW response body to [`LlmError`], carrying the parsed
+    /// rate-limit headers of a `429` (PACE-01). See `map_error` for the rules; the
+    /// preset's `error_override` still runs first and is handed no hints.
+    fn map_error_with_hints(
+        &self,
+        status: u16,
+        body: &str,
+        hints: Option<RateLimitHints>,
+    ) -> LlmError {
         if let Some(override_fn) = self.config.error_override
             && let Some(err) = override_fn(status, &self.diagnostic_excerpt(body))
         {
@@ -692,17 +728,32 @@ impl CompatEngine {
                     self.diagnostic_excerpt(body)
                 ),
             },
-            _ => map_http_status(self.provider_name, status, body, &self.config.api_key),
+            _ => map_http_status_with_hints(
+                self.provider_name,
+                status,
+                body,
+                &self.config.api_key,
+                hints,
+            ),
         }
     }
 
     /// Perform an API call with exponential-backoff-plus-jitter retry.
     ///
     /// Non-retryable set: `AuthenticationError | InvalidPrompt |
-    /// EmptyCompletion | UsageLimitExceeded` — matching
+    /// EmptyCompletion | UsageLimitExceeded | RateLimitExceeded` — matching
     /// `deepseek/adapter.rs::call_api_with_retry`'s rationale: these need
     /// operator intervention or will not clear on backoff, so retrying
     /// burns attempts for no benefit.
+    ///
+    /// `RateLimitExceeded` is in the set for a different reason (Phase 43
+    /// D-02): a 429 is the one error whose cure is *waiting*, and the
+    /// Cadence decorator above this engine owns waiting, with a gate shared
+    /// by every caller of the same provider and model. Retrying it here would
+    /// re-send into a limit the provider just announced and hide the thrash
+    /// below the decorator, so the first 429 is surfaced carrying the
+    /// provider's own `Retry-After`. Network, timeout and 5xx retries are
+    /// unchanged.
     async fn call_api_with_retry<F, Fut, T>(
         &self,
         operation: F,
@@ -724,6 +775,8 @@ impl CompatEngine {
                             | LlmError::InvalidPrompt(_)
                             | LlmError::EmptyCompletion(_)
                             | LlmError::UsageLimitExceeded { .. }
+                            // D-02: surface the first 429; the Cadence decorator waits.
+                            | LlmError::RateLimitExceeded { .. }
                     ) {
                         return Err(e);
                     }
@@ -771,11 +824,14 @@ impl CompatEngine {
             let status = response.status();
 
             if !status.is_success() {
+                // Snapshot the 429 headers BEFORE `.text()` consumes the response
+                // (research Pitfall 2).
+                let hints = snapshot_rate_limit_hints(status, response.headers());
                 let error_text = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status.as_u16(), &error_text));
+                return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
             }
 
             // Read the body to text FIRST, then deserialize it separately —
@@ -895,11 +951,13 @@ impl CompatEngine {
 
             let status = response.status();
             if !status.is_success() {
+                // Same header snapshot as the buffered path, taken before the body read.
+                let hints = snapshot_rate_limit_hints(status, response.headers());
                 let error_text = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status.as_u16(), &error_text));
+                return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
             }
 
             Ok(response)
@@ -1004,11 +1062,12 @@ impl CompatEngine {
 
         let status = response.status();
         if !status.is_success() {
+            let hints = snapshot_rate_limit_hints(status, response.headers());
             let error_text = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(self.map_error(status.as_u16(), &error_text));
+            return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
         }
 
         let body = response
@@ -1500,6 +1559,109 @@ mod tests {
             Ok(_) => panic!("expected Err(AuthenticationError), got Ok(<stream>)"),
             Err(other) => panic!("expected AuthenticationError, got: {other:?}"),
         }
+    }
+
+    // ── PACE-01 / D-02: a 429 is surfaced on the FIRST attempt, with its delay ──
+    //
+    // The decorator above this engine (the Cadence) owns waiting. A private
+    // retry loop that re-sent a 429 would hide thrash below it, so a 429 is
+    // never retried here; network, timeout and 5xx retries are unchanged
+    // (`call_api_with_retry_retries_network_error_up_to_max_retries_plus_one`).
+
+    #[tokio::test(start_paused = true)]
+    async fn call_api_with_retry_surfaces_rate_limit_exceeded_on_the_first_attempt() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let engine = CompatEngine::new(test_config()).unwrap();
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        let result: Result<(), LlmError> = engine
+            .call_api_with_retry(
+                move || {
+                    let calls = Arc::clone(&calls_clone);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err(LlmError::rate_limited(None))
+                    }
+                },
+                3,
+            )
+            .await;
+
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn compat_429_is_surfaced_on_the_first_attempt_with_its_retry_delay() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(r#"{"error":{"message":"slow down"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let engine = CompatEngine::new(test_config_at(&server.url())).unwrap();
+        let err = engine
+            .generate(build_request("test-model"))
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        mock.assert_async().await;
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+    }
+
+    #[tokio::test]
+    async fn compat_stream_open_429_is_surfaced_once_with_its_retry_delay() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(r#"{"error":{"message":"slow down"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let engine = CompatEngine::new(test_config_at(&server.url())).unwrap();
+        let result = engine.generate_stream(build_request("test-model")).await;
+
+        mock.assert_async().await;
+        match &result {
+            Err(err @ LlmError::RateLimitExceeded { .. }) => {
+                assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+            }
+            Ok(_) => panic!("expected a rate-limit error, got Ok(<stream>)"),
+            Err(other) => panic!("expected a rate-limit error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_429_without_retry_after_carries_no_delay() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_body("{}")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let engine = CompatEngine::new(test_config_at(&server.url())).unwrap();
+        let err = engine
+            .generate(build_request("test-model"))
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        mock.assert_async().await;
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), None);
     }
 
     #[tokio::test]

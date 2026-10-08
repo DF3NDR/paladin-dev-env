@@ -73,7 +73,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
@@ -82,8 +82,10 @@ use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
     StreamingResponse, TokenUsage,
 };
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
-use crate::http_status::map_http_status;
+use crate::http_status::map_http_status_with_hints;
+use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::{
     RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, diagnostic_excerpt, redact_credentials,
 };
@@ -91,6 +93,33 @@ use crate::redaction::{
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits (Phase 25 D-03).
 const GEMINI_PROVIDER: &str = "gemini";
+
+/// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
+///
+/// Must run BEFORE `response.text()` consumes the response (research Pitfall 2). Only a 429
+/// is parsed, and no credential header (`x-goog-api-key` included) is read. Gemini's own
+/// body-level `RetryInfo` is deliberately not parsed this phase (research OQ6): a Gemini 429
+/// carries a delay only if the endpoint also sent a `Retry-After` header.
+fn snapshot_rate_limit_hints(
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+) -> Option<RateLimitHints> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    hints_from_headers(RateLimitHeaderFamily::Generic, SystemTime::now(), |name| {
+        headers.get(name).and_then(|v| v.to_str().ok())
+    })
+}
+
+/// Build the rate-limit error for a Gemini `429` / `RESOURCE_EXHAUSTED`, carrying the header
+/// snapshot when one was taken.
+fn rate_limit_error(hints: Option<RateLimitHints>) -> LlmError {
+    match hints {
+        Some(hints) => LlmError::rate_limited_with_hints(hints),
+        None => LlmError::rate_limited(None),
+    }
+}
 
 /// Default Gemini API base URL — the `v1beta` surface, current as of this
 /// writing `[CITED: ai.google.dev/api]`.
@@ -550,7 +579,23 @@ impl GeminiAdapter {
     /// Verification path: the `live-api-tests` feature with a real
     /// `GEMINI_API_KEY` (17-CONTEXT.md D-15 leaves this available and
     /// deliberately unused this phase).
+    ///
+    /// A thin wrapper over [`Self::map_error_with_hints`], kept so the status-mapping unit
+    /// tests read the same as before PACE-01. Production paths call the hints variant.
+    #[cfg(test)]
     fn map_error(&self, status: u16, body: &str) -> LlmError {
+        self.map_error_with_hints(status, body, None)
+    }
+
+    /// Map a non-2xx Gemini response to [`LlmError`], carrying the parsed rate-limit headers
+    /// of a `429` (PACE-01). Both the `429` arm and the `RESOURCE_EXHAUSTED` arm build the
+    /// rate-limit error from `hints`; see [`Self::map_error`] for every other rule.
+    fn map_error_with_hints(
+        &self,
+        status: u16,
+        body: &str,
+        hints: Option<RateLimitHints>,
+    ) -> LlmError {
         let envelope: Option<GeminiErrorEnvelope> = serde_json::from_str(body).ok();
         let rpc_status = envelope.as_ref().and_then(|e| e.error.status.as_deref());
         let raw_message = envelope
@@ -592,8 +637,8 @@ impl GeminiAdapter {
             }
             400 if rpc_status == Some("INVALID_ARGUMENT") => LlmError::InvalidPrompt(excerpt),
             404 if rpc_status == Some("NOT_FOUND") => LlmError::ModelNotAvailable(excerpt),
-            429 => LlmError::rate_limited(None),
-            _ if rpc_status == Some("RESOURCE_EXHAUSTED") => LlmError::rate_limited(None),
+            429 => rate_limit_error(hints),
+            _ if rpc_status == Some("RESOURCE_EXHAUSTED") => rate_limit_error(hints),
             // WR-04 (`17-REVIEW.md`, T-17-52): this client's redirect
             // policy is `none` (see `GeminiAdapter::new`), so a `3xx`
             // response is never followed — it arrives here as an ordinary
@@ -633,11 +678,12 @@ impl GeminiAdapter {
                     Some(rpc) => format!("{raw_message} (status={rpc})"),
                     None => raw_message.to_string(),
                 };
-                map_http_status(
+                map_http_status_with_hints(
                     GEMINI_PROVIDER,
                     status,
                     &envelope_text,
                     &self.config.api_key,
+                    hints,
                 )
             }
         }
@@ -656,6 +702,16 @@ impl GeminiAdapter {
     /// `UsageLimitExceeded` (a usage cap resets on a provider-side billing
     /// schedule, not a short window — retrying here would burn the bounded
     /// retry budget before a higher-level breaker ever sees the error).
+    ///
+    /// **A 429 is surfaced on the first attempt (Phase 43 D-02).**
+    /// `RateLimitExceeded` is in the same set, but for a different reason: a
+    /// 429 is the one error whose cure is waiting, and the Cadence decorator
+    /// above this adapter owns waiting with a gate shared by every caller of
+    /// the same provider and model. Retrying it here would re-send into a
+    /// limit the provider just announced and hide the thrash below the
+    /// decorator; the error carries the provider's own `Retry-After` for the
+    /// decorator to honour. Network, timeout, 5xx and decode retries are
+    /// unchanged.
     async fn execute_with_retry<F, Fut, T>(
         &self,
         operation: F,
@@ -680,6 +736,8 @@ impl GeminiAdapter {
                             | LlmError::InvalidPrompt(_)
                             | LlmError::EmptyCompletion(_)
                             | LlmError::UsageLimitExceeded { .. }
+                            // D-02: surface the first 429; the Cadence decorator waits.
+                            | LlmError::RateLimitExceeded { .. }
                     ) {
                         return Err(e);
                     }
@@ -718,11 +776,12 @@ impl GeminiAdapter {
 
         let status = response.status().as_u16();
         if !response.status().is_success() {
+            let hints = snapshot_rate_limit_hints(response.status(), response.headers());
             let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(self.map_error(status, &body));
+            return Err(self.map_error_with_hints(status, &body, hints));
         }
 
         let body = response.text().await.map_err(|e| {
@@ -815,11 +874,14 @@ impl LlmPort for GeminiAdapter {
             let status = response.status().as_u16();
 
             if !response.status().is_success() {
+                // Snapshot the 429 headers BEFORE `.text()` consumes the response
+                // (research Pitfall 2).
+                let hints = snapshot_rate_limit_hints(response.status(), response.headers());
                 let body = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status, &body));
+                return Err(self.map_error_with_hints(status, &body, hints));
             }
 
             // Read the body to a String first, deserialize separately — a
@@ -906,11 +968,13 @@ impl LlmPort for GeminiAdapter {
 
             if !response.status().is_success() {
                 let status = response.status().as_u16();
+                // Same header snapshot as the buffered path, taken before the body read.
+                let hints = snapshot_rate_limit_hints(response.status(), response.headers());
                 let body = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status, &body));
+                return Err(self.map_error_with_hints(status, &body, hints));
             }
 
             Ok(response)
@@ -2192,6 +2256,140 @@ mod tests {
 
         let result = adapter.generate(request).await;
         assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
+    }
+
+    // ── PACE-01 / D-02: a 429 is surfaced on the FIRST attempt, with its delay ──
+    //
+    // The Cadence decorator above this adapter owns waiting; a private retry
+    // loop that re-sent a 429 would hide thrash below it. Network, timeout
+    // and 5xx retries are unchanged (`execute_with_retry_retries_a_retryable_error_up_to_max_retries`).
+
+    fn user_request() -> LlmRequest {
+        build_request(
+            "gemini-2.5-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        )
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn execute_with_retry_surfaces_rate_limit_exceeded_on_the_first_attempt() {
+        let adapter = test_adapter("https://example.invalid");
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        let result: Result<(), LlmError> = adapter
+            .execute_with_retry(
+                move || {
+                    let calls = Arc::clone(&calls_clone);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err(LlmError::rate_limited(None))
+                    }
+                },
+                3,
+            )
+            .await;
+
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn gemini_429_is_surfaced_on_the_first_attempt_with_its_retry_delay() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(
+                json!({
+                    "error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter(&server.url());
+        let err = adapter
+            .generate(user_request())
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        mock.assert_async().await;
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+    }
+
+    #[tokio::test]
+    async fn gemini_stream_open_429_is_surfaced_once_with_its_retry_delay() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(Matcher::UrlEncoded("alt".to_string(), "sse".to_string()))
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(
+                json!({
+                    "error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}
+                })
+                .to_string(),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter(&server.url());
+        let result = adapter.generate_stream(user_request()).await;
+
+        mock.assert_async().await;
+        match &result {
+            Err(err @ LlmError::RateLimitExceeded { .. }) => {
+                assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+            }
+            Ok(_) => panic!("expected a rate-limit error, got Ok(<stream>)"),
+            Err(other) => panic!("expected a rate-limit error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gemini_resource_exhausted_envelope_still_maps_to_rate_limit_exceeded() {
+        // The envelope alone (no 429 status, so no header snapshot) still maps to the
+        // rate-limit variant, just without a delay.
+        let adapter = test_adapter("https://example.invalid");
+        let body = json!({
+            "error": {"code": 429, "message": "Quota exceeded", "status": "RESOURCE_EXHAUSTED"}
+        })
+        .to_string();
+
+        let error = adapter.map_error_with_hints(500, &body, None);
+        assert!(matches!(error, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(error.retry_after(), None);
+    }
+
+    #[tokio::test]
+    async fn gemini_429_without_retry_after_carries_no_delay() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .with_status(429)
+            .with_body("{}")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter(&server.url());
+        let err = adapter
+            .generate(user_request())
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), None);
     }
 
     // ── Streaming ──

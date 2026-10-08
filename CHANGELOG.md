@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Rate pacing, the Cadence (PACE-02; Phase 43 plan 43-01).** A new `CadencePort` output port
+  (`paladin-ports`) with an in-process adapter, `InMemoryCadence` (`paladin-storage`), and a
+  `CadenceLlmAdapter` decorator (`paladin-llm`) composed as `Pricing(Cadence(provider))` on every
+  agent the server builds from configuration or provisions at runtime. A provider 429 gates later
+  calls to that provider and model for an exponential back-off with full jitter (500 ms to 30 s);
+  the decorator never retries. Pacing is on by default and configured under `treasurer.cadence`
+  (`enabled: false` restores the previous behaviour). The OpenAI adapter now surfaces its first
+  429 instead of retrying it inside its own loop. New public surface: `CadencePort`, `CadenceKey`,
+  `GateReading`, `CadenceError`, `CadencePolicy` (ports), `InMemoryCadence` (storage),
+  `CadenceLlmAdapter`, `CadenceSettings`, `CadenceWiring`, `with_cadence` (llm), `CadenceConfig`,
+  `CadenceBackend`, `build_cadence`, `compose_llm` and `TreasurerConfig.cadence` (facade). Later
+  Phase 43 plans extend this entry.
 - **Mid-run allowance halts on the engine path (ALLOW-03; Phase 42 plan 42-02, ADR-0057).** The
   `WarEngine` now consults a new `SpendGuard` output port (`paladin-ports`) at every superstep
   boundary, beside the existing cancellation token and probe. The `Treasurer` answers it through

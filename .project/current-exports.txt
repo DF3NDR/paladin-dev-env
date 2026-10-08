@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-07 13:01:02 UTC
+# Public API Surface - Generated 2026-10-08 02:03:10 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -5782,6 +5782,27 @@ impl core::marker::UnsafeUnpin for paladin::config::trace::TraceConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::trace::TraceConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::trace::TraceConfig
 pub mod paladin::config::treasurer
+pub enum paladin::config::treasurer::CadenceBackend
+pub paladin::config::treasurer::CadenceBackend::InProcess
+impl core::clone::Clone for paladin::config::treasurer::CadenceBackend
+pub fn paladin::config::treasurer::CadenceBackend::clone(&self) -> paladin::config::treasurer::CadenceBackend
+impl core::cmp::Eq for paladin::config::treasurer::CadenceBackend
+impl core::cmp::PartialEq for paladin::config::treasurer::CadenceBackend
+pub fn paladin::config::treasurer::CadenceBackend::eq(&self, &paladin::config::treasurer::CadenceBackend) -> bool
+impl core::fmt::Debug for paladin::config::treasurer::CadenceBackend
+pub fn paladin::config::treasurer::CadenceBackend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::treasurer::CadenceBackend
+impl serde_core::ser::Serialize for paladin::config::treasurer::CadenceBackend
+pub fn paladin::config::treasurer::CadenceBackend::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::treasurer::CadenceBackend
+pub fn paladin::config::treasurer::CadenceBackend::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::treasurer::CadenceBackend
+impl core::marker::Send for paladin::config::treasurer::CadenceBackend
+impl core::marker::Sync for paladin::config::treasurer::CadenceBackend
+impl core::marker::Unpin for paladin::config::treasurer::CadenceBackend
+impl core::marker::UnsafeUnpin for paladin::config::treasurer::CadenceBackend
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::CadenceBackend
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::CadenceBackend
 pub struct paladin::config::treasurer::AllowanceConfig
 pub paladin::config::treasurer::AllowanceConfig::api_keys: alloc::collections::btree::map::BTreeMap<alloc::string::String, paladin::config::treasurer::AllowanceEntryConfig>
 pub paladin::config::treasurer::AllowanceConfig::tenants: alloc::collections::btree::map::BTreeMap<alloc::string::String, paladin::config::treasurer::AllowanceEntryConfig>
@@ -5855,6 +5876,39 @@ impl core::marker::Unpin for paladin::config::treasurer::AllowanceWebhookConfig
 impl core::marker::UnsafeUnpin for paladin::config::treasurer::AllowanceWebhookConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::AllowanceWebhookConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::AllowanceWebhookConfig
+pub struct paladin::config::treasurer::CadenceConfig
+pub paladin::config::treasurer::CadenceConfig::backend: paladin::config::treasurer::CadenceBackend
+pub paladin::config::treasurer::CadenceConfig::base_backoff_ms: u64
+pub paladin::config::treasurer::CadenceConfig::degraded_multiplier: f64
+pub paladin::config::treasurer::CadenceConfig::enabled: bool
+pub paladin::config::treasurer::CadenceConfig::fallback_pace_budget_secs: u64
+pub paladin::config::treasurer::CadenceConfig::lock_ttl_secs: u64
+pub paladin::config::treasurer::CadenceConfig::max_backoff_ms: u64
+pub paladin::config::treasurer::CadenceConfig::max_wait_secs: u64
+impl paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::policy(&self) -> core::result::Result<paladin_ports::output::cadence_port::CadencePolicy, alloc::string::String>
+pub fn paladin::config::treasurer::CadenceConfig::settings(&self) -> paladin_llm::cadence::CadenceSettings
+pub fn paladin::config::treasurer::CadenceConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::clone(&self) -> paladin::config::treasurer::CadenceConfig
+impl core::cmp::PartialEq for paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::eq(&self, &paladin::config::treasurer::CadenceConfig) -> bool
+impl core::default::Default for paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::treasurer::CadenceConfig
+impl serde_core::ser::Serialize for paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::treasurer::CadenceConfig where paladin::config::treasurer::CadenceConfig: core::default::Default
+pub fn paladin::config::treasurer::CadenceConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::treasurer::CadenceConfig
+impl core::marker::Send for paladin::config::treasurer::CadenceConfig
+impl core::marker::Sync for paladin::config::treasurer::CadenceConfig
+impl core::marker::Unpin for paladin::config::treasurer::CadenceConfig
+impl core::marker::UnsafeUnpin for paladin::config::treasurer::CadenceConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::CadenceConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::CadenceConfig
 pub struct paladin::config::treasurer::PriceRowConfig
 pub paladin::config::treasurer::PriceRowConfig::cache_read: core::option::Option<alloc::string::String>
 pub paladin::config::treasurer::PriceRowConfig::cache_write: core::option::Option<alloc::string::String>
@@ -5881,6 +5935,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::Pri
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::PriceRowConfig
 pub struct paladin::config::treasurer::TreasurerConfig
 pub paladin::config::treasurer::TreasurerConfig::allowance: paladin::config::treasurer::AllowanceConfig
+pub paladin::config::treasurer::TreasurerConfig::cadence: paladin::config::treasurer::CadenceConfig
 pub paladin::config::treasurer::TreasurerConfig::currency: alloc::string::String
 pub paladin::config::treasurer::TreasurerConfig::pricing: alloc::collections::btree::map::BTreeMap<alloc::string::String, paladin::config::treasurer::PriceRowConfig>
 impl paladin::config::treasurer::TreasurerConfig
@@ -6137,6 +6192,27 @@ impl core::marker::Unpin for paladin::config::webhooks::WebhooksConfig
 impl core::marker::UnsafeUnpin for paladin::config::webhooks::WebhooksConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::webhooks::WebhooksConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::webhooks::WebhooksConfig
+pub enum paladin::config::CadenceBackend
+pub paladin::config::CadenceBackend::InProcess
+impl core::clone::Clone for paladin::config::treasurer::CadenceBackend
+pub fn paladin::config::treasurer::CadenceBackend::clone(&self) -> paladin::config::treasurer::CadenceBackend
+impl core::cmp::Eq for paladin::config::treasurer::CadenceBackend
+impl core::cmp::PartialEq for paladin::config::treasurer::CadenceBackend
+pub fn paladin::config::treasurer::CadenceBackend::eq(&self, &paladin::config::treasurer::CadenceBackend) -> bool
+impl core::fmt::Debug for paladin::config::treasurer::CadenceBackend
+pub fn paladin::config::treasurer::CadenceBackend::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::treasurer::CadenceBackend
+impl serde_core::ser::Serialize for paladin::config::treasurer::CadenceBackend
+pub fn paladin::config::treasurer::CadenceBackend::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::treasurer::CadenceBackend
+pub fn paladin::config::treasurer::CadenceBackend::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::treasurer::CadenceBackend
+impl core::marker::Send for paladin::config::treasurer::CadenceBackend
+impl core::marker::Sync for paladin::config::treasurer::CadenceBackend
+impl core::marker::Unpin for paladin::config::treasurer::CadenceBackend
+impl core::marker::UnsafeUnpin for paladin::config::treasurer::CadenceBackend
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::CadenceBackend
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::CadenceBackend
 pub enum paladin::config::NodeCacheBackend
 pub paladin::config::NodeCacheBackend::InMemory
 pub paladin::config::NodeCacheBackend::Redis
@@ -6522,6 +6598,39 @@ impl core::marker::Unpin for paladin::config::agents::BearerTokenAuthConfig
 impl core::marker::UnsafeUnpin for paladin::config::agents::BearerTokenAuthConfig
 impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::agents::BearerTokenAuthConfig
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::agents::BearerTokenAuthConfig
+pub struct paladin::config::CadenceConfig
+pub paladin::config::CadenceConfig::backend: paladin::config::treasurer::CadenceBackend
+pub paladin::config::CadenceConfig::base_backoff_ms: u64
+pub paladin::config::CadenceConfig::degraded_multiplier: f64
+pub paladin::config::CadenceConfig::enabled: bool
+pub paladin::config::CadenceConfig::fallback_pace_budget_secs: u64
+pub paladin::config::CadenceConfig::lock_ttl_secs: u64
+pub paladin::config::CadenceConfig::max_backoff_ms: u64
+pub paladin::config::CadenceConfig::max_wait_secs: u64
+impl paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::policy(&self) -> core::result::Result<paladin_ports::output::cadence_port::CadencePolicy, alloc::string::String>
+pub fn paladin::config::treasurer::CadenceConfig::settings(&self) -> paladin_llm::cadence::CadenceSettings
+pub fn paladin::config::treasurer::CadenceConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
+impl core::clone::Clone for paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::clone(&self) -> paladin::config::treasurer::CadenceConfig
+impl core::cmp::PartialEq for paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::eq(&self, &paladin::config::treasurer::CadenceConfig) -> bool
+impl core::default::Default for paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::default() -> Self
+impl core::fmt::Debug for paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::treasurer::CadenceConfig
+impl serde_core::ser::Serialize for paladin::config::treasurer::CadenceConfig
+pub fn paladin::config::treasurer::CadenceConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::treasurer::CadenceConfig where paladin::config::treasurer::CadenceConfig: core::default::Default
+pub fn paladin::config::treasurer::CadenceConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::treasurer::CadenceConfig
+impl core::marker::Send for paladin::config::treasurer::CadenceConfig
+impl core::marker::Sync for paladin::config::treasurer::CadenceConfig
+impl core::marker::Unpin for paladin::config::treasurer::CadenceConfig
+impl core::marker::UnsafeUnpin for paladin::config::treasurer::CadenceConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::treasurer::CadenceConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::treasurer::CadenceConfig
 pub struct paladin::config::CitadelConfig
 pub paladin::config::CitadelConfig::autosave_enabled: bool
 pub paladin::config::CitadelConfig::cleanup_enabled: bool
@@ -7204,6 +7313,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::trace::TraceCo
 impl core::panic::unwind_safe::UnwindSafe for paladin::config::trace::TraceConfig
 pub struct paladin::config::TreasurerConfig
 pub paladin::config::TreasurerConfig::allowance: paladin::config::treasurer::AllowanceConfig
+pub paladin::config::TreasurerConfig::cadence: paladin::config::treasurer::CadenceConfig
 pub paladin::config::TreasurerConfig::currency: alloc::string::String
 pub paladin::config::TreasurerConfig::pricing: alloc::collections::btree::map::BTreeMap<alloc::string::String, paladin::config::treasurer::PriceRowConfig>
 impl paladin::config::treasurer::TreasurerConfig
@@ -7628,6 +7738,9 @@ pub mod paladin::infrastructure::adapters::sanctum
 pub use paladin::infrastructure::adapters::sanctum::InMemorySanctum
 pub mod paladin::infrastructure::adapters::scheduling
 pub mod paladin::infrastructure::adapters::scheduling::tokio_cron_adapter
+pub mod paladin::infrastructure::cadence
+pub fn paladin::infrastructure::cadence::build_cadence(&paladin::config::treasurer::CadenceConfig) -> core::result::Result<core::option::Option<paladin_llm::cadence::CadenceWiring>, alloc::string::String>
+pub fn paladin::infrastructure::cadence::compose_llm(alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>, &alloc::sync::Arc<paladin_core::platform::container::cost::PriceTable>, core::option::Option<&paladin_llm::cadence::CadenceWiring>) -> alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>
 pub mod paladin::infrastructure::repositories
 pub use paladin::infrastructure::repositories::sqlite_content_repository
 pub use paladin::infrastructure::repositories::sqlite_user_repository
@@ -8447,4 +8560,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4210
+Total public items: 4265

@@ -46,6 +46,9 @@ serde_json = { workspace = true }
 thiserror  = { workspace = true }
 uuid       = { workspace = true }
 tokio      = { workspace = true }
+# rand draws the full-jitter fraction `InMemoryCadence` feeds `CadencePolicy::delay_for`
+# (PACE-02, D-04); the workspace-pinned 0.8 `paladin-llm` already uses.
+rand       = { workspace = true }
 
 # croner/chrono-tz back `cron.rs`'s cron parsing (D-38) -- always compiled,
 # no feature gate, since `run_schedule`'s InMemory adapter needs them with
@@ -74,6 +77,9 @@ tokio-cron-scheduler = { version = "0.13", optional = true }
 url = "2"
 
 [dev-dependencies]
+# `test-util` gives `InMemoryCadence`'s paused-clock tests (`start_paused`, `advance`)
+# -- a feature of the already-present tokio dependency, not a new crate.
+tokio = { workspace = true, features = ["test-util"] }
 # tempfile is used by SqliteRunRepository's on-disk (not sqlite::memory:)
 # multi-thread stress test (D-52) -- pinned to the same "3.10.1" the
 # workspace root and paladin-memory already resolve.

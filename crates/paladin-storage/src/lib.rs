@@ -29,6 +29,11 @@ pub mod waypoint;
 /// `sqlite`/`postgres` features.
 pub mod run_trace;
 
+/// `CadencePort` storage adapters (PACE-02, D-07). The in-process backend is
+/// always available (no feature gate, mirroring `node_cache`); the Redis backend
+/// is added by a later Phase 43 plan behind its own feature.
+pub mod cadence;
+
 /// `NodeCachePort` storage adapters (Doc 04 FT-FR-18…20, D-27). The
 /// in-memory backend is always available (no feature gate, mirroring
 /// `waypoint`'s D-01 precedent); the Redis backend is added behind the

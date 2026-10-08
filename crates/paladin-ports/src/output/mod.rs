@@ -7,6 +7,9 @@ pub mod assistant_repository_port;
 /// Authentication port for issuing and verifying bearer tokens.
 pub mod auth_port;
 pub mod battalion_port;
+/// Cadence port (PACE-02, D-07): the shared, cross-call rate-pacing state a provider 429 opens a
+/// gate in, read by the `CadenceLlmAdapter` decorator before every call to that provider and model.
+pub mod cadence_port;
 /// Cancellation probe port (D-14): the seam a durable, cross-instance cancel
 /// signal attaches to the superstep engine through, consulted at every
 /// superstep boundary beside the existing `CancellationToken`.

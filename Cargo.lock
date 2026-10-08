@@ -3603,6 +3603,7 @@ dependencies = [
  "log",
  "paladin-ai-core",
  "paladin-ports",
+ "rand 0.8.6",
  "redis",
  "rust-s3",
  "serde",

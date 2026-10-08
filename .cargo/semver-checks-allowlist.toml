@@ -286,3 +286,23 @@ lint = "enum_marked_non_exhaustive"
 migration_row = "paladin-ai-core | RunEventKind"
 requirement_id = "ALLOW-04"
 justification = "RunEventKind gained the operator-level AllowanceWarning variant (Phase 41, D-17, C3 Option A) because webhook_deliveries.event is this enum, and is marked #[non_exhaustive] so the next event kind is not a semver-major bump. Every in-tree exhaustive match was replaced by the new RunEventKind::as_str() in the same commit; the caller-facing parsers still reject allowance_warning."
+
+# --- Phase 43 (Rate Pacing, PACE-01/02) -------------------------------------
+# Entries below mirror MIGRATION.md's `paladin-ports | LlmError` row for
+# `RateLimitExceeded` (43-02). The D-27 diagnostic (cargo-semver-checks 0.50.0 vs
+# 0.10.1, crate-wide allows disabled) fired these two lints for it; the new
+# `RateLimitHints` family fired nothing (new items in a new module).
+
+[[entry]]
+crate = "paladin-ports"
+lint = "enum_unit_variant_changed_kind"
+migration_row = "paladin-ports | LlmError"
+requirement_id = "PACE-01"
+justification = "LlmError::RateLimitExceeded changed from a unit variant to a struct variant { retry_after, hints } so a 429 carries the provider's own retry delay (and an optional header snapshot) to the Cadence decorator and to any RetryPolicy above it. Its Display text (Rate limit exceeded) and its Transient classification are unchanged; construct it with LlmError::rate_limited(..) and match it with RateLimitExceeded { .. }. Every in-tree value and pattern site migrated in the same commit series."
+
+[[entry]]
+crate = "paladin-ports"
+lint = "enum_variant_marked_non_exhaustive"
+migration_row = "paladin-ports | LlmError"
+requirement_id = "PACE-01"
+justification = "The reshaped LlmError::RateLimitExceeded variant is marked #[non_exhaustive] so a later field (a further parsed header, say) can be added without a break, in the same way the enclosing enum already is. Out-of-crate code can no longer build the variant with a literal; LlmError::rate_limited and LlmError::rate_limited_with_hints are the constructors."

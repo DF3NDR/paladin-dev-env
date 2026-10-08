@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CadenceLlmAdapter`, `CadenceSettings`, `CadenceWiring`, `with_cadence` (llm), `CadenceConfig`,
   `CadenceBackend`, `build_cadence`, `compose_llm` and `TreasurerConfig.cadence` (facade). Later
   Phase 43 plans extend this entry.
+- **Provider retry delay on a 429 (PACE-01, PACE-02; Phase 43 plan 43-02).**
+  `LlmError::RateLimitExceeded` now carries the provider's own retry delay and a rate-limit header
+  snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new
+  `RateLimitHints`, `RateLimitDimension`, `RateLimitDimensionKind` and `RetryDelaySource` types
+  (`paladin-ports`) hold parsed numbers and durations only, never a raw header string. A delay is
+  never guessed: when the provider gives nothing parseable `retry_after()` is `None`. The Cadence
+  honours an explicit delay as a minimum before the next send (jitter only adds), bounds a delay
+  derived from a reset header to the back-off cap, and surfaces a delay beyond
+  `treasurer.cadence.max_wait_secs` immediately as a typed `RateLimitExceeded` instead of holding a
+  worker for it (D-06); that refusal calls no provider and never escalates the shared streak. The
+  429 `Display` text and its `Transient` classification are unchanged.
 - **Mid-run allowance halts on the engine path (ALLOW-03; Phase 42 plan 42-02, ADR-0057).** The
   `WarEngine` now consults a new `SpendGuard` output port (`paladin-ports`) at every superstep
   boundary, beside the existing cancellation token and probe. The `Treasurer` answers it through
@@ -435,6 +446,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `LlmError::RateLimitExceeded` is now a struct variant `{ retry_after, hints }`, marked
+  `#[non_exhaustive]` (PACE-01; Phase 43 plan 43-02; `MIGRATION.md` section 9.2). Construct it with
+  `LlmError::rate_limited(None)` (or `rate_limited(Some(delay))` /
+  `rate_limited_with_hints(hints)`), and match it with `LlmError::RateLimitExceeded { .. }`. Its
+  `Display` text and its `Transient` classification are unchanged, so no message assertion moves.
 - The output of an agent run that ends on the Treasurer's derived allowance figure now carries
   `[budget] Allowance reached — this response is partial; the run was halted.` instead of the
   operator-budget text that called the partial response "this run's final answer". An operator

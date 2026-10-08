@@ -63,7 +63,20 @@ mime_guess = "2"
 # as `None`. Register/remove this suppression only in the same commit as the matching
 # MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entry (kept set-equal by
 # CI's `semver` job).
+#
+# X-10.6 deliberate-breaking suppression (PACE-01, MIGRATION.md §9.2, Phase 43 plan 43-02).
+# `LlmError::RateLimitExceeded` changed from a unit variant to a struct variant
+# `{ retry_after, hints }` carrying the provider's own retry delay, and the variant is marked
+# `#[non_exhaustive]` so a further field is free. The D-27 diagnostic (cargo-semver-checks
+# 0.50.0 vs 0.10.1, crate-wide allows disabled) fired exactly two lints for it,
+# `enum_unit_variant_changed_kind` and `enum_variant_marked_non_exhaustive`; the existing
+# crate-wide allows do not cover them, so both are added below. `Display` is unchanged and a 429
+# stays `Transient`. Register/remove these suppressions only in the same commit as the matching
+# MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entries (kept set-equal by CI's
+# `semver` job).
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 struct_marked_non_exhaustive = "allow"
 constructible_struct_adds_field = "allow"
+enum_unit_variant_changed_kind = "allow"
+enum_variant_marked_non_exhaustive = "allow"

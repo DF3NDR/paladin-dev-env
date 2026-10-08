@@ -96,7 +96,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [ ] **PACE-04**: A distributed cache-stampede lock (set-if-absent with expiry, fencing token,
   delete-only-if-owner) stops concurrent workers from issuing the same cached request twice
 
-- [ ] **PACE-05**: When Redis is unavailable, pacing degrades to conservative per-process pacing
+- [x] **PACE-05**: When Redis is unavailable, pacing degrades to conservative per-process pacing
   with a trace warning and never runs unpaced; this is covered by a test
 
 ### Legacy clean break (LEGACY)
@@ -227,7 +227,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PACE-02 | Phase 43 | Complete |
 | PACE-03 | Phase 43 | Complete |
 | PACE-04 | Phase 43 | Pending |
-| PACE-05 | Phase 43 | Pending |
+| PACE-05 | Phase 43 | Complete |
 | LEGACY-01 | Phase 44 | Pending |
 | LEGACY-02 | Phase 44 | Pending |
 | LEGACY-03 | Phase 44 | Pending |

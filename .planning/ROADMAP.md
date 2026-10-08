@@ -593,7 +593,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 43-08-PLAN.md — ResilientCadence degraded mode (D-05): in-process fallback x degraded_multiplier, one warning per outage, probe back-off, recovery; dead-Redis and never-unpaced tests (wave 8)
+- [x] 43-08-PLAN.md — ResilientCadence degraded mode (D-05): in-process fallback x degraded_multiplier, one warning per outage, probe back-off, recovery; dead-Redis and never-unpaced tests (wave 8)
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

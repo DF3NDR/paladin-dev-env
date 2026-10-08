@@ -1154,7 +1154,7 @@ mod tests {
     use crate::cadence::{CadenceSettings, CadenceWiring, pin_waiter_spread};
     use crate::mock::MockScriptEntry;
     use paladin_ports::output::cadence_port::{
-        CadenceError, CadenceKey, CadencePolicy, CadencePort, GateReading,
+        CadenceError, CadenceKey, CadencePolicy, CadencePort, FencingToken, GateReading, LockKey,
     };
     use paladin_storage::cadence::InMemoryCadence;
     use std::sync::Mutex;
@@ -1592,6 +1592,22 @@ mod tests {
 
             async fn record_success(&self, _key: &CadenceKey) -> Result<(), CadenceError> {
                 Ok(())
+            }
+
+            async fn try_lock(
+                &self,
+                _key: &LockKey,
+                _ttl: Duration,
+            ) -> Result<Option<FencingToken>, CadenceError> {
+                Ok(None)
+            }
+
+            async fn unlock(
+                &self,
+                _key: &LockKey,
+                _token: &FencingToken,
+            ) -> Result<bool, CadenceError> {
+                Ok(false)
             }
         }
 

@@ -40,6 +40,16 @@
 //!
 //! Every adapter reports waits as a [`Duration`] relative to "now", never as an
 //! absolute timestamp, so no caller ever compares clocks across hosts.
+//!
+//! ## The stampede lock (PACE-04)
+//!
+//! The same port carries a small lock, [`CadencePort::try_lock`] and
+//! [`CadencePort::unlock`], so workers about to compute the same costly result can let
+//! one of them do it. It is set-if-absent with expiry, hands out strictly increasing
+//! [`FencingToken`]s, and releases only for the token that owns it. Tokens carry their source
+//! (shared backend or one process) so a resource that checks them never ranks a per-process
+//! counter against a fleet-wide one. The lock is an optimisation: any error means "proceed
+//! without it".
 
 use std::time::Duration;
 
@@ -144,6 +154,82 @@ impl GateReading {
     /// Whether the key may be sent to right now (the wait is zero).
     pub fn is_clear(&self) -> bool {
         self.wait.is_zero()
+    }
+}
+
+/// Identity of one stampede lock (PACE-04, D-11): an opaque string naming the work being
+/// coalesced, for example the cache key of a node about to be computed.
+///
+/// Equality is exact, case-sensitive byte equality, and the string is never parsed, so a lock
+/// named `a:b` can never alias a lock named `a` plus `b`.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_ports::output::cadence_port::LockKey;
+///
+/// let key = LockKey::new("graphA:node1:input-hash");
+/// assert_eq!(key.as_str(), "graphA:node1:input-hash");
+/// assert_ne!(key, LockKey::new("graphA:node1:INPUT-HASH"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LockKey(String);
+
+impl LockKey {
+    /// Build a lock key from any string-like value.
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+
+    /// The key exactly as given.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A fencing token: proof of holding a [`CadencePort`] lock, and the number a protected
+/// resource compares to refuse a stale holder's late write (D-14).
+///
+/// A token carries its **source**. A [`FencingToken::Distributed`] token is issued by a shared
+/// backend, so every worker's tokens for one key are ordered against each other. A
+/// [`FencingToken::Local`] token is issued by one process's in-memory fallback and means nothing
+/// outside it. The two are deliberately not comparable: the type has no `Ord`, and
+/// `Local(1) != Distributed(1)`, so a resource can never rank a per-process counter against a
+/// fleet-wide one by accident (research Pitfall 13).
+///
+/// # Examples
+///
+/// ```
+/// use paladin_ports::output::cadence_port::FencingToken;
+///
+/// let shared = FencingToken::Distributed(7);
+/// let local = FencingToken::Local(7);
+/// assert_eq!(shared.value(), local.value());
+/// assert_ne!(shared, local, "the same number from different sources is a different token");
+/// assert!(shared.is_distributed());
+/// assert!(!local.is_distributed());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum FencingToken {
+    /// Issued by a shared backend; comparable across workers for one lock key.
+    Distributed(u64),
+    /// Issued by one process; only meaningful inside it.
+    Local(u64),
+}
+
+impl FencingToken {
+    /// The counter value, whichever the source. Compare two values only after checking that
+    /// both tokens are from the same source.
+    pub fn value(&self) -> u64 {
+        match self {
+            Self::Distributed(value) | Self::Local(value) => *value,
+        }
+    }
+
+    /// Whether a shared backend issued the token.
+    pub fn is_distributed(&self) -> bool {
+        matches!(self, Self::Distributed(_))
     }
 }
 
@@ -328,7 +414,7 @@ fn sanitize_fraction(fraction: f64) -> f64 {
 ///
 /// use async_trait::async_trait;
 /// use paladin_ports::output::cadence_port::{
-///     CadenceError, CadenceKey, CadencePort, GateReading,
+///     CadenceError, CadenceKey, CadencePort, FencingToken, GateReading, LockKey,
 /// };
 ///
 /// /// A toy port: a fixed one-second gate after any 429, until a success.
@@ -366,6 +452,20 @@ fn sanitize_fraction(fraction: f64) -> f64 {
 ///     async fn record_success(&self, key: &CadenceKey) -> Result<(), CadenceError> {
 ///         self.streaks()?.remove(key);
 ///         Ok(())
+///     }
+///
+///     // A toy never coordinates anything: every caller "wins" the lock, which a caller
+///     // must tolerate (the lock is an optimisation, never a correctness dependency).
+///     async fn try_lock(
+///         &self,
+///         _key: &LockKey,
+///         _ttl: Duration,
+///     ) -> Result<Option<FencingToken>, CadenceError> {
+///         Ok(Some(FencingToken::Local(1)))
+///     }
+///
+///     async fn unlock(&self, _key: &LockKey, _token: &FencingToken) -> Result<bool, CadenceError> {
+///         Ok(false)
 ///     }
 /// }
 ///
@@ -414,6 +514,45 @@ pub trait CadencePort: Send + Sync {
     /// State exists only after a 429, so an adapter may drop the entry once
     /// its gate has also elapsed.
     async fn record_success(&self, key: &CadenceKey) -> Result<(), CadenceError>;
+
+    /// Try to take the stampede lock `key` for `ttl` (PACE-04, D-11).
+    ///
+    /// Set-if-absent with expiry: exactly one caller at a time receives `Some(token)`; every
+    /// other caller receives `None` without waiting. The lock is **not re-entrant** -- the
+    /// current holder calling again also gets `None`. It is free again the moment `ttl` has
+    /// elapsed (closed boundary: free at exactly `acquired + ttl`, still held one tick before),
+    /// so a crashed holder never blocks anyone for longer than `ttl`. A `ttl` of zero is raised
+    /// to one millisecond, and an excessive one is clamped at [`CADENCE_DELAY_CEILING`].
+    ///
+    /// Tokens for one key are strictly increasing in acquisition order. Among concurrent
+    /// contenders the winner is unspecified. The token's source tells a resource how to use it:
+    /// see [`FencingToken`].
+    ///
+    /// The lock is an optimisation, never a correctness dependency (D-13, D-29): callers must
+    /// treat any `Err` as "proceed without the lock".
+    ///
+    /// # Errors
+    ///
+    /// [`CadenceError`] when the backend is unavailable.
+    async fn try_lock(
+        &self,
+        key: &LockKey,
+        ttl: Duration,
+    ) -> Result<Option<FencingToken>, CadenceError>;
+
+    /// Release the lock `key`, but only if `token` still owns it.
+    ///
+    /// Returns `Ok(true)` when the lock was held by `token` and has been released. Returns
+    /// `Ok(false)` -- never an error -- when the key was never locked, the lock expired or was
+    /// taken over by a later holder, the token was already used to unlock, or the token comes
+    /// from another source than this port issues. A second `unlock` with the same token is
+    /// therefore `Ok(false)`, and a stale holder can never release a newer holder's lock.
+    ///
+    /// # Errors
+    ///
+    /// [`CadenceError`] when the backend is unavailable; the lock then simply expires by its
+    /// `ttl`.
+    async fn unlock(&self, key: &LockKey, token: &FencingToken) -> Result<bool, CadenceError>;
 }
 
 #[cfg(test)]
@@ -511,6 +650,25 @@ mod tests {
             CadenceKey::new("openai", "m"),
             CadenceKey::new("openai", "n")
         );
+    }
+
+    #[test]
+    fn fencing_tokens_from_different_sources_are_never_equal() {
+        assert_ne!(FencingToken::Local(1), FencingToken::Distributed(1));
+        assert_eq!(FencingToken::Local(1), FencingToken::Local(1));
+        assert_eq!(FencingToken::Distributed(9), FencingToken::Distributed(9));
+        assert_eq!(FencingToken::Local(3).value(), 3);
+        assert_eq!(FencingToken::Distributed(4).value(), 4);
+        assert!(FencingToken::Distributed(1).is_distributed());
+        assert!(!FencingToken::Local(1).is_distributed());
+    }
+
+    #[test]
+    fn lock_key_equality_is_exact_and_the_string_is_opaque() {
+        assert_eq!(LockKey::new("a:b"), LockKey::new(String::from("a:b")));
+        assert_ne!(LockKey::new("a:b"), LockKey::new("A:b"));
+        assert_ne!(LockKey::new("a:b"), LockKey::new("a"));
+        assert_eq!(LockKey::new("x y").as_str(), "x y");
     }
 
     #[test]

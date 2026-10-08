@@ -19,14 +19,26 @@ streak zero (they read exactly like an absent key); if every entry is still live
 whose gate expires soonest is evicted -- it is the one that costs the least pacing -- and one
 warning is logged, naming the capacity and never a key or model.
 
-The lock is never held across an `.await`; a poisoned lock is recovered with
+## The stampede lock (PACE-04, D-11, D-14)
+
+A separate map holds the stampede locks: key to `(token, expires_at)`. `try_lock` is
+set-if-absent with expiry under one mutex acquisition, so exactly one of any number of
+concurrent callers wins. A lock whose expiry has passed is free -- the boundary is closed, free
+at exactly `acquired + ttl` and still held one tick before -- and expired entries are pruned on
+every access, so the map holds only live locks. Tokens come from a per-instance `AtomicU64`
+starting at 1 and are always `FencingToken::Local`: they order acquisitions inside this process
+only and are never comparable with a shared backend's tokens (research Pitfall 13). `unlock`
+removes an entry only on an exact `Local` value match against a live lock; any other token
+(a `Distributed` one, a stale one, an already-used one) returns `Ok(false)`.
+
+The mutexes are never held across an `.await`; a poisoned lock is recovered with
 `PoisonError::into_inner`, because the state is a pacing hint, never a
 correctness dependency.
 */
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -35,7 +47,7 @@ use tokio::time::Instant;
 
 use paladin_ports::output::cadence_port::{
     CADENCE_DELAY_CEILING, CADENCE_LOG_TARGET, CadenceError, CadenceKey, CadencePolicy,
-    CadencePort, GateReading,
+    CadencePort, FencingToken, GateReading, LockKey,
 };
 
 /// The default bound on distinct keys held in-process (research Pitfall 11).
@@ -70,6 +82,10 @@ pub struct InMemoryCadence {
     /// Set the first time a live entry had to be evicted at the cap; gates the one-time warning.
     cap_announced: AtomicBool,
     state: Mutex<HashMap<CadenceKey, GateState>>,
+    /// Live stampede locks: key to `(Local token, expiry)`.
+    locks: Mutex<HashMap<LockKey, (u64, Instant)>>,
+    /// The next `Local` fencing token; starts at 1 and only increases.
+    next_token: AtomicU64,
 }
 
 impl InMemoryCadence {
@@ -83,6 +99,8 @@ impl InMemoryCadence {
             multiplier: 1.0,
             cap_announced: AtomicBool::new(false),
             state: Mutex::new(HashMap::new()),
+            locks: Mutex::new(HashMap::new()),
+            next_token: AtomicU64::new(1),
         }
     }
 
@@ -181,7 +199,15 @@ impl InMemoryCadence {
     fn lock(&self) -> MutexGuard<'_, HashMap<CadenceKey, GateState>> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    fn lock_table(&self) -> MutexGuard<'_, HashMap<LockKey, (u64, Instant)>> {
+        self.locks.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
+
+/// The shortest lock lifetime: a zero TTL is raised to one millisecond (the Redis adapter
+/// cannot express less), so the adapters agree on what a zero TTL means.
+const MIN_LOCK_TTL: Duration = Duration::from_millis(1);
 
 impl fmt::Debug for InMemoryCadence {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -256,6 +282,41 @@ impl CadencePort for InMemoryCadence {
             }
         }
         Ok(())
+    }
+
+    async fn try_lock(
+        &self,
+        key: &LockKey,
+        ttl: Duration,
+    ) -> Result<Option<FencingToken>, CadenceError> {
+        let now = Instant::now();
+        let mut locks = self.lock_table();
+        // Closed boundary: a lock is live only while `now < expires_at`.
+        locks.retain(|_, (_, expires_at)| now < *expires_at);
+        if locks.contains_key(key) {
+            return Ok(None);
+        }
+        let token = self.next_token.fetch_add(1, Ordering::SeqCst);
+        let expires_at = deadline_after(now, ttl.max(MIN_LOCK_TTL));
+        locks.insert(key.clone(), (token, expires_at));
+        Ok(Some(FencingToken::Local(token)))
+    }
+
+    async fn unlock(&self, key: &LockKey, token: &FencingToken) -> Result<bool, CadenceError> {
+        // A shared backend's token never names a lock held in this process.
+        let FencingToken::Local(value) = token else {
+            return Ok(false);
+        };
+        let now = Instant::now();
+        let mut locks = self.lock_table();
+        locks.retain(|_, (_, expires_at)| now < *expires_at);
+        match locks.get(key) {
+            Some((held, _)) if held == value => {
+                locks.remove(key);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
 }
 
@@ -369,6 +430,178 @@ mod tests {
     async fn contract_run_all_paused_at_both_jitter_ends() {
         contract_tests::run_all_paused(&adapter(|| 0.0), policy()).await;
         contract_tests::run_all_paused(&adapter(|| 0.999), policy()).await;
+    }
+
+    // --- The lock clauses of the shared contract (PACE-04), one named test per clause.
+
+    #[tokio::test(start_paused = true)]
+    async fn contract_try_lock_is_exclusive() {
+        contract_tests::try_lock_is_exclusive(&adapter(|| 0.0), policy()).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn contract_tokens_increase_per_key() {
+        contract_tests::tokens_increase_per_key(&adapter(|| 0.0), policy()).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn contract_unlock_only_by_the_owner() {
+        contract_tests::unlock_only_by_the_owner(&adapter(|| 0.0), policy()).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn contract_unlock_is_idempotent() {
+        contract_tests::unlock_is_idempotent(&adapter(|| 0.0), policy()).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn contract_unlock_of_a_never_locked_key_is_false() {
+        contract_tests::unlock_of_a_never_locked_key_is_false(&adapter(|| 0.0), policy()).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn contract_lock_is_not_reentrant() {
+        contract_tests::lock_is_not_reentrant(&adapter(|| 0.0), policy()).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn contract_lock_expires_at_its_ttl_paused() {
+        contract_tests::lock_expires_at_its_ttl_paused(&adapter(|| 0.0), policy()).await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn contract_concurrent_try_lock_has_exactly_one_winner() {
+        contract_tests::concurrent_try_lock_has_exactly_one_winner(&adapter(|| 0.0), policy())
+            .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn contract_run_all_locks() {
+        contract_tests::run_all_locks(&adapter(|| 0.0), policy()).await;
+    }
+
+    // --- In-memory specifics of the lock the port contract cannot observe.
+
+    fn lock_key(name: &str) -> LockKey {
+        LockKey::new(name)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn in_memory_tokens_are_local_and_start_at_one() {
+        let cadence = adapter(|| 0.0);
+        let first = cadence
+            .try_lock(&lock_key("a"), Duration::from_secs(5))
+            .await
+            .expect("lock")
+            .expect("free");
+        assert_eq!(first, FencingToken::Local(1));
+        let second = cadence
+            .try_lock(&lock_key("b"), Duration::from_secs(5))
+            .await
+            .expect("lock")
+            .expect("free");
+        assert_eq!(second, FencingToken::Local(2), "one counter per instance");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn in_memory_distributed_token_never_releases_a_local_lock() {
+        let cadence = adapter(|| 0.0);
+        let k = lock_key("a");
+        let token = cadence
+            .try_lock(&k, Duration::from_secs(5))
+            .await
+            .expect("lock")
+            .expect("free");
+        assert!(
+            !cadence
+                .unlock(&k, &FencingToken::Distributed(token.value()))
+                .await
+                .expect("unlock"),
+            "Local(1) is not Distributed(1)"
+        );
+        assert!(cadence.unlock(&k, &token).await.expect("owner"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn in_memory_expired_locks_are_pruned_on_access() {
+        let cadence = adapter(|| 0.0);
+        for n in 0..5 {
+            cadence
+                .try_lock(&lock_key(&format!("k{n}")), Duration::from_millis(10))
+                .await
+                .expect("lock");
+        }
+        assert_eq!(cadence.lock_table().len(), 5);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        cadence
+            .try_lock(&lock_key("fresh"), Duration::from_secs(5))
+            .await
+            .expect("lock");
+        assert_eq!(
+            cadence.lock_table().len(),
+            1,
+            "the expired locks are gone, only the fresh one is held"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn in_memory_zero_ttl_is_raised_to_one_millisecond_and_an_absurd_one_is_clamped() {
+        let cadence = adapter(|| 0.0);
+        let zero = lock_key("zero");
+        assert!(
+            cadence
+                .try_lock(&zero, Duration::ZERO)
+                .await
+                .expect("lock")
+                .is_some()
+        );
+        assert_eq!(
+            cadence
+                .try_lock(&zero, Duration::ZERO)
+                .await
+                .expect("again"),
+            None,
+            "a zero TTL still holds for the one millisecond floor"
+        );
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        assert!(
+            cadence
+                .try_lock(&zero, Duration::ZERO)
+                .await
+                .expect("after the floor")
+                .is_some()
+        );
+
+        // Never panics, whatever the TTL.
+        assert!(
+            cadence
+                .try_lock(&lock_key("huge"), Duration::MAX)
+                .await
+                .expect("lock")
+                .is_some()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn in_memory_locks_and_gates_do_not_share_state() {
+        let cadence = adapter(|| 0.0);
+        cadence
+            .try_lock(&lock_key("m"), Duration::from_secs(5))
+            .await
+            .expect("lock");
+        assert_eq!(entries(&cadence), 0, "a lock creates no pacing state");
+        cadence
+            .record_rate_limited(&key("m"), None)
+            .await
+            .expect("429");
+        assert!(
+            cadence
+                .try_lock(&lock_key("m"), Duration::from_secs(5))
+                .await
+                .expect("lock")
+                .is_none(),
+            "a gate does not release a lock"
+        );
     }
 
     // --- In-memory specifics the port contract cannot observe.

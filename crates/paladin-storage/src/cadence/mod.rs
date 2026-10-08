@@ -34,7 +34,7 @@ pub mod resilient;
 pub use in_memory::{DEFAULT_KEY_CAPACITY, InMemoryCadence};
 #[cfg(feature = "redis-cadence")]
 pub use redis::{
-    CADENCE_GATE_LUA, CADENCE_RECORD_429_LUA, CADENCE_RECORD_SUCCESS_LUA,
-    DEFAULT_CADENCE_KEY_PREFIX, RedisCadence, RedisCadenceConfig,
+    CADENCE_GATE_LUA, CADENCE_RECORD_429_LUA, CADENCE_RECORD_SUCCESS_LUA, CADENCE_TRY_LOCK_LUA,
+    CADENCE_UNLOCK_LUA, DEFAULT_CADENCE_KEY_PREFIX, RedisCadence, RedisCadenceConfig,
 };
 pub use resilient::{DEFAULT_PROBE_INTERVAL, ResilientCadence};

@@ -464,7 +464,7 @@ mod tests {
     use crate::mock::{MockLlmAdapter, MockScriptEntry};
     use futures::StreamExt;
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
-    use paladin_ports::output::cadence_port::{CadencePolicy, GateReading};
+    use paladin_ports::output::cadence_port::{CadencePolicy, FencingToken, GateReading, LockKey};
     use paladin_ports::output::rate_limit_hints::{
         RateLimitDimension, RateLimitDimensionKind, RateLimitHints, RetryDelaySource,
     };
@@ -795,6 +795,24 @@ mod tests {
             })
         }
         async fn record_success(&self, _key: &CadenceKey) -> Result<(), CadenceError> {
+            Err(CadenceError::Backend {
+                message: "down".to_string(),
+            })
+        }
+        async fn try_lock(
+            &self,
+            _key: &LockKey,
+            _ttl: Duration,
+        ) -> Result<Option<FencingToken>, CadenceError> {
+            Err(CadenceError::Backend {
+                message: "down".to_string(),
+            })
+        }
+        async fn unlock(
+            &self,
+            _key: &LockKey,
+            _token: &FencingToken,
+        ) -> Result<bool, CadenceError> {
             Err(CadenceError::Backend {
                 message: "down".to_string(),
             })

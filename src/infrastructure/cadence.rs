@@ -416,7 +416,8 @@ mod tests {
         use paladin_llm::cadence::CadenceSettings;
         use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
         use paladin_ports::output::cadence_port::{
-            CadenceError, CadenceKey, CadencePolicy, CadencePort, GateReading,
+            CadenceError, CadenceKey, CadencePolicy, CadencePort, FencingToken, GateReading,
+            LockKey,
         };
         use paladin_ports::output::llm_port::{LlmError, LlmRequest};
         use paladin_storage::cadence::ResilientCadence;
@@ -444,6 +445,16 @@ mod tests {
                 Err(down())
             }
             async fn record_success(&self, _: &CadenceKey) -> Result<(), CadenceError> {
+                Err(down())
+            }
+            async fn try_lock(
+                &self,
+                _: &LockKey,
+                _: Duration,
+            ) -> Result<Option<FencingToken>, CadenceError> {
+                Err(down())
+            }
+            async fn unlock(&self, _: &LockKey, _: &FencingToken) -> Result<bool, CadenceError> {
                 Err(down())
             }
         }

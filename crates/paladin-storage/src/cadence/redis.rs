@@ -62,6 +62,27 @@ The manager is cloned per call (it is a multiplexed handle over an `Arc`) rather
 behind a shared lock, so concurrent gates and records pipeline on one socket instead of
 serialising behind each other.
 
+## The stampede lock and its fencing tokens (PACE-04, D-11, D-14)
+
+`try_lock` and `unlock` are two more single-`EVAL` scripts, [`CADENCE_TRY_LOCK_LUA`] and
+[`CADENCE_UNLOCK_LUA`]. The lock is a plain string key, `{prefix}:%lock:{key}`, set only when
+absent with `PX` (set-if-absent with expiry); the value is the fencing token, so `unlock` can
+compare-and-delete on the exact token and never release another holder's lock. The token is an
+`INCR` of a per-key counter at `{prefix}:%fence:{key}` taken in the same script as the `SET`, so
+tokens for one key are strictly increasing in acquisition order across every worker, and are
+issued as `FencingToken::Distributed`. The counter's TTL is `max(10 * lock ttl, 1 h)`, refreshed
+on every acquisition: it must outlive any lock it numbers by a wide margin, because a counter
+that expired and restarted at 1 would let a stale holder's old token outrank a new holder's
+(research Pitfall 13, T-43-40).
+
+The `%lock` and `%fence` segments are not decoration: the pacing state key is
+`{prefix}:{provider}:{model}` with `%` and `:` escaped in the provider half, so a provider half
+can never contain `%l` or `%f`. A lock key therefore can never equal a pacing key -- a provider
+literally named `lock` would otherwise have collided with `{prefix}:lock:{key}` and turned
+every pacing script on that lane into a WRONGTYPE error.
+
+A `Local` token never reaches Redis: `unlock` returns `Ok(false)` without a round trip.
+
 ## Credentials
 
 The connection URL may carry a password. It lives in a private field of
@@ -93,7 +114,8 @@ use tokio::sync::OnceCell;
 
 use crate::redis_url::redact_connection_url;
 use paladin_ports::output::cadence_port::{
-    CADENCE_DELAY_CEILING, CadenceError, CadenceKey, CadencePolicy, CadencePort, GateReading,
+    CADENCE_DELAY_CEILING, CadenceError, CadenceKey, CadencePolicy, CadencePort, FencingToken,
+    GateReading, LockKey,
 };
 
 /// The default key namespace every cadence key is written under.
@@ -104,6 +126,12 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// The floor for a key's idle time-to-live.
 const MIN_KEY_TTL: Duration = Duration::from_secs(60);
+
+/// The floor for a fencing counter's time-to-live (research Pitfall 13).
+const MIN_FENCE_TTL: Duration = Duration::from_secs(60 * 60);
+
+/// How many times longer than its lock a fencing counter must live.
+const FENCE_TTL_FACTOR: u32 = 10;
 
 /// Reconnect attempts the manager makes before giving up on one command.
 const RECONNECT_RETRIES: usize = 1;
@@ -205,6 +233,45 @@ else
     redis.call('HSET', KEYS[1], 'streak', '0')
 end
 return 1
+"#;
+
+/// Stampede-lock acquire script: set-if-absent with expiry, and a fencing token from an
+/// `INCR` taken in the same atomic step.
+///
+/// If the lock key exists the lock is held and the reply is nil (`None`). Otherwise the
+/// per-key counter is incremented, the lock is set to that token with `PX`, the counter's TTL is
+/// refreshed, and the token is returned. Because the `INCR` and the `SET` are one script, a
+/// token is issued only to the caller that holds the lock, and tokens for one key increase in
+/// acquisition order across every worker.
+///
+/// - `KEYS[1]` = the lock key, `{prefix}:%lock:{key}`
+/// - `KEYS[2]` = the fencing counter key, `{prefix}:%fence:{key}`
+/// - `ARGV[1]` = the lock's time-to-live, in milliseconds
+/// - `ARGV[2]` = the counter's time-to-live, in milliseconds (at least ten times the lock's, and
+///   at least one hour)
+pub const CADENCE_TRY_LOCK_LUA: &str = r#"
+if redis.call('EXISTS', KEYS[1]) == 1 then
+    return false
+end
+local token = redis.call('INCR', KEYS[2])
+redis.call('SET', KEYS[1], tostring(token), 'PX', ARGV[1])
+redis.call('PEXPIRE', KEYS[2], ARGV[2])
+return token
+"#;
+
+/// Stampede-lock release script: compare-and-delete on the exact token.
+///
+/// Deletes the lock only when its stored token equals `ARGV[1]`, so a stale holder (whose lock
+/// expired and was taken by a later holder) can never release the newer holder's lock. Returns
+/// `1` when the lock was released and `0` otherwise (never locked, expired, another token).
+///
+/// - `KEYS[1]` = the lock key, `{prefix}:%lock:{key}`
+/// - `ARGV[1]` = the fencing token, as a decimal string
+pub const CADENCE_UNLOCK_LUA: &str = r#"
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
 "#;
 
 /// Connection settings for [`RedisCadence`].
@@ -313,6 +380,8 @@ pub struct RedisCadence {
     record_429_script: Script,
     gate_script: Script,
     record_success_script: Script,
+    try_lock_script: Script,
+    unlock_script: Script,
 }
 
 impl RedisCadence {
@@ -346,6 +415,8 @@ impl RedisCadence {
             record_429_script: Script::new(CADENCE_RECORD_429_LUA),
             gate_script: Script::new(CADENCE_GATE_LUA),
             record_success_script: Script::new(CADENCE_RECORD_SUCCESS_LUA),
+            try_lock_script: Script::new(CADENCE_TRY_LOCK_LUA),
+            unlock_script: Script::new(CADENCE_UNLOCK_LUA),
         })
     }
 
@@ -363,6 +434,17 @@ impl RedisCadence {
     fn state_key(&self, key: &CadenceKey) -> String {
         let provider = key.provider().replace('%', "%25").replace(':', "%3A");
         format!("{}:{provider}:{}", self.key_prefix, key.model())
+    }
+
+    /// The lock key for `key`: `{prefix}:%lock:{key}`. The `%` makes it impossible for a pacing
+    /// key (whose provider half never contains `%l`) to equal it.
+    fn lock_key(&self, key: &LockKey) -> String {
+        format!("{}:%lock:{}", self.key_prefix, key.as_str())
+    }
+
+    /// The fencing counter key for `key`: `{prefix}:%fence:{key}`.
+    fn fence_key(&self, key: &LockKey) -> String {
+        format!("{}:%fence:{}", self.key_prefix, key.as_str())
     }
 
     /// The idle TTL every write refreshes: `max(2 * max_backoff, 60 s)`, in milliseconds.
@@ -405,10 +487,25 @@ impl RedisCadence {
         key: &CadenceKey,
         args: &[String],
     ) -> Result<T, CadenceError> {
+        self.evaluate_keys(script, &[self.state_key(key)], args)
+            .await
+    }
+
+    /// Run `script` against `keys` with `args`, inside the operation deadline. Keys, tokens and
+    /// durations travel only as `KEYS`/`ARGV`; nothing is ever formatted into script text.
+    async fn evaluate_keys<T: redis::FromRedisValue>(
+        &self,
+        script: &Script,
+        keys: &[String],
+        args: &[String],
+    ) -> Result<T, CadenceError> {
         let budget = self.operation_budget();
         let outcome = tokio::time::timeout(budget, async {
             let mut connection = self.manager().await?;
-            let mut invocation = script.key(self.state_key(key));
+            let mut invocation = script.prepare_invoke();
+            for key in keys {
+                invocation.key(key.as_str());
+            }
             for arg in args {
                 invocation.arg(arg.as_str());
             }
@@ -446,6 +543,20 @@ fn millis(duration: Duration) -> i64 {
 /// provider-controlled number large enough to overflow its arithmetic.
 fn clamped_micros(duration: Duration) -> i64 {
     i64::try_from(duration.min(CADENCE_DELAY_CEILING).as_micros()).unwrap_or(i64::MAX)
+}
+
+/// A lock's TTL in whole milliseconds: at least one (Redis rejects `PX 0`) and at most the
+/// 24 h delay ceiling.
+fn lock_ttl_ms(ttl: Duration) -> i64 {
+    millis(ttl.clamp(Duration::from_millis(1), CADENCE_DELAY_CEILING))
+}
+
+/// A fencing counter's TTL for a lock of `lock_ttl_ms`: `max(10 * lock ttl, 1 h)`, so the
+/// counter always outlives the locks it numbers (research Pitfall 13).
+fn fence_ttl_ms(lock_ttl_ms: i64) -> i64 {
+    lock_ttl_ms
+        .saturating_mul(i64::from(FENCE_TTL_FACTOR))
+        .max(millis(MIN_FENCE_TTL))
 }
 
 /// Map a jitter fraction into `[0, 1)`: NaN and negatives to zero, one and above to just below
@@ -513,6 +624,45 @@ impl CadencePort for RedisCadence {
         self.evaluate::<i64>(&self.record_success_script, key, &[])
             .await
             .map(|_existed| ())
+    }
+
+    async fn try_lock(
+        &self,
+        key: &LockKey,
+        ttl: Duration,
+    ) -> Result<Option<FencingToken>, CadenceError> {
+        let lock_ttl = lock_ttl_ms(ttl);
+        let args = [lock_ttl.to_string(), fence_ttl_ms(lock_ttl).to_string()];
+        let token: Option<i64> = self
+            .evaluate_keys(
+                &self.try_lock_script,
+                &[self.lock_key(key), self.fence_key(key)],
+                &args,
+            )
+            .await?;
+        match token {
+            None => Ok(None),
+            Some(value) => u64::try_from(value)
+                .map(|value| Some(FencingToken::Distributed(value)))
+                .map_err(|_| CadenceError::Backend {
+                    message: "redis cadence issued a negative fencing token".to_string(),
+                }),
+        }
+    }
+
+    async fn unlock(&self, key: &LockKey, token: &FencingToken) -> Result<bool, CadenceError> {
+        // A process-local token never names a lock held in Redis: no round trip.
+        let FencingToken::Distributed(value) = token else {
+            return Ok(false);
+        };
+        let released: i64 = self
+            .evaluate_keys(
+                &self.unlock_script,
+                &[self.lock_key(key)],
+                &[value.to_string()],
+            )
+            .await?;
+        Ok(released == 1)
     }
 }
 

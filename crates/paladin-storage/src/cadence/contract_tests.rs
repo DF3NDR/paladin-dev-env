@@ -46,7 +46,8 @@ use std::task::Poll;
 use std::time::Duration;
 
 use paladin_ports::output::cadence_port::{
-    CADENCE_DELAY_CEILING, CadenceKey, CadencePolicy, CadencePort, GateReading,
+    CADENCE_DELAY_CEILING, CadenceKey, CadencePolicy, CadencePort, FencingToken, GateReading,
+    LockKey,
 };
 
 /// The streak the saturation clause drives a key to.
@@ -55,6 +56,13 @@ pub const SATURATION_STREAK: u32 = 10_000;
 /// How many callers record concurrently in `concurrent_429s_escalate_at_most_once`.
 pub const CONCURRENT_RECORDERS: usize = 16;
 
+/// How many callers contend for one lock in `concurrent_try_lock_has_exactly_one_winner`.
+pub const CONCURRENT_LOCKERS: usize = 16;
+
+/// The lock lifetime the real-time lock clauses use: long enough that no clause can see a
+/// lock expire under it, short enough that a failed run leaves nothing lasting on a server.
+const LOCK_TTL: Duration = Duration::from_secs(30);
+
 /// Extra real-time headroom added when sleeping out a gate, so a server that
 /// rounds a deadline up to the next millisecond is still observed as clear.
 const SETTLE: Duration = Duration::from_millis(15);
@@ -62,6 +70,33 @@ const SETTLE: Duration = Duration::from_millis(15);
 /// The key a clause uses, namespaced by the clause's own name.
 fn key(clause: &str) -> CadenceKey {
     CadenceKey::new("contract", clause)
+}
+
+/// The lock a clause uses, namespaced by the clause's own name.
+fn lock_key(clause: &str) -> LockKey {
+    LockKey::new(format!("contract/{clause}"))
+}
+
+/// A token of the other source with the same value, for the wrong-source unlock probes.
+fn other_source(token: FencingToken) -> FencingToken {
+    if token.is_distributed() {
+        FencingToken::Local(token.value())
+    } else {
+        FencingToken::Distributed(token.value())
+    }
+}
+
+/// Take `key` or fail the clause: the lock must be free when a clause expects to win it.
+async fn must_lock(
+    port: &dyn CadencePort,
+    key: &LockKey,
+    ttl: Duration,
+    context: &str,
+) -> FencingToken {
+    port.try_lock(key, ttl)
+        .await
+        .unwrap_or_else(|e| panic!("{context}: try_lock failed: {e}"))
+        .unwrap_or_else(|| panic!("{context}: the lock was expected to be free"))
 }
 
 /// Half the base back-off: the tolerance every non-paused comparison allows.
@@ -592,6 +627,217 @@ pub async fn concurrent_429s_escalate_at_most_once(port: &dyn CadencePort, _poli
         );
     }
     assert_eq!(port.gate(&k).await.expect("gate").streak(), 1);
+}
+
+/// Edge (empty + exclusivity): `try_lock` on a fresh key returns `Some`; while that lock is
+/// held every other `try_lock` on the key returns `None`, whatever the contender; a different
+/// key is independent; the winner can release it.
+pub async fn try_lock_is_exclusive(port: &dyn CadencePort, _policy: CadencePolicy) {
+    let k = lock_key("try_lock_is_exclusive");
+    let other = lock_key("try_lock_is_exclusive/other");
+
+    let token = must_lock(port, &k, LOCK_TTL, "fresh key").await;
+    for _ in 0..3 {
+        assert_eq!(
+            port.try_lock(&k, LOCK_TTL).await.expect("contender"),
+            None,
+            "a held lock must refuse every other contender"
+        );
+    }
+    let independent = must_lock(port, &other, LOCK_TTL, "an unrelated key").await;
+    assert!(
+        port.unlock(&k, &token).await.expect("unlock"),
+        "the winner releases its lock"
+    );
+    assert!(port.unlock(&other, &independent).await.expect("unlock"));
+}
+
+/// Edge (ordering): tokens for one key are strictly increasing in acquisition order --
+/// acquire, unlock, acquire again yields a larger token -- and one source throughout.
+pub async fn tokens_increase_per_key(port: &dyn CadencePort, _policy: CadencePolicy) {
+    let k = lock_key("tokens_increase_per_key");
+    let mut last: Option<FencingToken> = None;
+    for round in 0..4 {
+        let token = must_lock(port, &k, LOCK_TTL, &format!("round {round}")).await;
+        if let Some(previous) = last {
+            assert_eq!(
+                token.is_distributed(),
+                previous.is_distributed(),
+                "a port issues tokens from one source"
+            );
+            assert!(
+                token.value() > previous.value(),
+                "round {round}: token {token:?} is not above the previous {previous:?}"
+            );
+        }
+        assert!(port.unlock(&k, &token).await.expect("unlock"));
+        last = Some(token);
+    }
+}
+
+/// Edge (ownership): only the token that owns the lock releases it. A token from the other
+/// source, and a same-source token with a different value, both return `Ok(false)` and leave
+/// the lock held; the owner's token then releases it.
+pub async fn unlock_only_by_the_owner(port: &dyn CadencePort, _policy: CadencePolicy) {
+    let k = lock_key("unlock_only_by_the_owner");
+    let token = must_lock(port, &k, LOCK_TTL, "owner").await;
+
+    let foreign = other_source(token);
+    assert!(
+        !port.unlock(&k, &foreign).await.expect("wrong source"),
+        "a token from the other source never releases the lock"
+    );
+    let same_source_other_value = match token {
+        FencingToken::Distributed(v) => FencingToken::Distributed(v + 1000),
+        _ => FencingToken::Local(token.value() + 1000),
+    };
+    assert!(
+        !port
+            .unlock(&k, &same_source_other_value)
+            .await
+            .expect("wrong value"),
+        "a token with another value never releases the lock"
+    );
+    assert_eq!(
+        port.try_lock(&k, LOCK_TTL).await.expect("still held"),
+        None,
+        "the failed unlocks left the lock held"
+    );
+    assert!(port.unlock(&k, &token).await.expect("owner unlock"));
+}
+
+/// Edge (idempotency): a second `unlock` with the same token returns `Ok(false)`, and it must
+/// not release a later holder's lock.
+pub async fn unlock_is_idempotent(port: &dyn CadencePort, _policy: CadencePolicy) {
+    let k = lock_key("unlock_is_idempotent");
+    let first = must_lock(port, &k, LOCK_TTL, "first holder").await;
+    assert!(port.unlock(&k, &first).await.expect("unlock"));
+    assert!(
+        !port.unlock(&k, &first).await.expect("second unlock"),
+        "a used token releases nothing"
+    );
+
+    let second = must_lock(port, &k, LOCK_TTL, "second holder").await;
+    assert!(
+        !port.unlock(&k, &first).await.expect("stale unlock"),
+        "the previous holder's token must not release the new holder's lock"
+    );
+    assert_eq!(port.try_lock(&k, LOCK_TTL).await.expect("held"), None);
+    assert!(port.unlock(&k, &second).await.expect("unlock"));
+}
+
+/// Edge (empty): `unlock` of a key never locked is `Ok(false)` for either token source.
+pub async fn unlock_of_a_never_locked_key_is_false(port: &dyn CadencePort, _policy: CadencePolicy) {
+    let k = lock_key("unlock_of_a_never_locked_key_is_false");
+    for token in [FencingToken::Local(1), FencingToken::Distributed(1)] {
+        assert!(
+            !port.unlock(&k, &token).await.expect("unlock"),
+            "{token:?} on a key never locked"
+        );
+    }
+    // And it left nothing behind: the key is still free.
+    let token = must_lock(port, &k, LOCK_TTL, "after the probes").await;
+    assert!(port.unlock(&k, &token).await.expect("unlock"));
+}
+
+/// Edge (idempotency): the current holder calling `try_lock` again gets `None` -- the lock is
+/// not re-entrant -- and the original token still owns it.
+pub async fn lock_is_not_reentrant(port: &dyn CadencePort, _policy: CadencePolicy) {
+    let k = lock_key("lock_is_not_reentrant");
+    let token = must_lock(port, &k, LOCK_TTL, "holder").await;
+    assert_eq!(
+        port.try_lock(&k, LOCK_TTL).await.expect("again"),
+        None,
+        "the holder is not given the lock a second time"
+    );
+    assert!(
+        port.unlock(&k, &token).await.expect("unlock"),
+        "the original token is unaffected by the refused re-entry"
+    );
+}
+
+/// Edge (adjacency, paused clock only): one tick (1 ms) before the TTL elapses the lock is
+/// still held; at exactly the TTL it is free (closed boundary) and the next holder's token is
+/// larger. The expired holder's late `unlock` returns `Ok(false)` and does not release the new
+/// holder's lock.
+pub async fn lock_expires_at_its_ttl_paused(port: &dyn CadencePort, _policy: CadencePolicy) {
+    let tick = Duration::from_millis(1);
+    let ttl = Duration::from_millis(200);
+    let k = lock_key("lock_expires_at_its_ttl_paused");
+
+    let first = must_lock(port, &k, ttl, "first holder").await;
+    tokio::time::sleep(ttl - tick).await;
+    assert_eq!(
+        port.try_lock(&k, ttl).await.expect("one tick early"),
+        None,
+        "one tick before the TTL the lock is still held"
+    );
+
+    tokio::time::sleep(tick).await;
+    let second = must_lock(port, &k, ttl, "exactly at the TTL").await;
+    assert_eq!(first.is_distributed(), second.is_distributed());
+    assert!(
+        second.value() > first.value(),
+        "the next holder's token {second:?} must exceed the expired one {first:?}"
+    );
+
+    assert!(
+        !port.unlock(&k, &first).await.expect("late unlock"),
+        "an expired holder releases nothing"
+    );
+    assert_eq!(
+        port.try_lock(&k, ttl).await.expect("still held"),
+        None,
+        "the new holder's lock survived the stale unlock"
+    );
+    assert!(port.unlock(&k, &second).await.expect("unlock"));
+}
+
+/// Edge (concurrency): [`CONCURRENT_LOCKERS`] callers racing for one key at once yield exactly
+/// one `Some`. After the winner unlocks, the next caller acquires with a larger token.
+pub async fn concurrent_try_lock_has_exactly_one_winner(
+    port: &dyn CadencePort,
+    _policy: CadencePolicy,
+) {
+    let k = lock_key("concurrent_try_lock_has_exactly_one_winner");
+    let futures: Vec<Pin<Box<dyn Future<Output = Option<FencingToken>> + Send + '_>>> = (0
+        ..CONCURRENT_LOCKERS)
+        .map(|_| {
+            let k = k.clone();
+            Box::pin(async move { port.try_lock(&k, LOCK_TTL).await.expect("racer") })
+                as Pin<Box<dyn Future<Output = Option<FencingToken>> + Send + '_>>
+        })
+        .collect();
+
+    let outcomes = join_all(futures).await;
+    assert_eq!(outcomes.len(), CONCURRENT_LOCKERS);
+    let winners: Vec<FencingToken> = outcomes.into_iter().flatten().collect();
+    assert_eq!(
+        winners.len(),
+        1,
+        "exactly one contender may win the lock, got {winners:?}"
+    );
+    let winner = winners[0];
+
+    assert!(port.unlock(&k, &winner).await.expect("winner unlocks"));
+    let next = must_lock(port, &k, LOCK_TTL, "after the winner unlocked").await;
+    assert!(
+        next.value() > winner.value(),
+        "the next acquisition's token {next:?} must exceed the winner's {winner:?}"
+    );
+    assert!(port.unlock(&k, &next).await.expect("unlock"));
+}
+
+/// Every lock clause that is valid on any clock, against a single port. The paused TTL clause
+/// ([`lock_expires_at_its_ttl_paused`]) is separate: only a paused-clock adapter may run it.
+pub async fn run_all_locks(port: &dyn CadencePort, policy: CadencePolicy) {
+    try_lock_is_exclusive(port, policy).await;
+    tokens_increase_per_key(port, policy).await;
+    unlock_only_by_the_owner(port, policy).await;
+    unlock_is_idempotent(port, policy).await;
+    unlock_of_a_never_locked_key_is_false(port, policy).await;
+    lock_is_not_reentrant(port, policy).await;
+    concurrent_try_lock_has_exactly_one_winner(port, policy).await;
 }
 
 /// Smoke aggregate: runs every clause that is valid on any clock against a

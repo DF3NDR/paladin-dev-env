@@ -34,6 +34,23 @@
 //!   back into the primary; instead `gate` returns the larger wait (and streak) of the primary
 //!   and the fallback, so a key gated during the outage is not released early.
 //!
+//! ## The stampede lock fails open (D-13)
+//!
+//! [`CadencePort::try_lock`] and [`CadencePort::unlock`] follow the same latch, probe and
+//! single-warning rules as the pacing methods: one outage, one warning, whichever method
+//! tripped it.
+//!
+//! * `try_lock`: healthy goes to the primary; a primary error latches and the same call is
+//!   served by the in-process fallback, which issues [`FencingToken::Local`] tokens, so tasks
+//!   inside one worker still coalesce even though the fleet can no longer be coordinated.
+//!   Degraded goes to the fallback unless this caller wins the probe.
+//! * `unlock` routes by token source: a `Distributed` token belongs to the primary, a `Local`
+//!   token to the fallback. A `Distributed` unlock never waits on a primary known to be down:
+//!   while degraded (and not probing) it returns `Ok(false)` at once and the lock expires by
+//!   its TTL; a primary error during an unlock latches and also returns `Ok(false)`.
+//! * Neither ever returns `Err`: callers need no error path for the lock at all, and a lock
+//!   outage can never fail a run.
+//!
 //! ## Flagged assumptions
 //!
 //! * A1: during an outage a worker cannot see 429s other workers observe; the multiplier is a
@@ -57,7 +74,7 @@ use async_trait::async_trait;
 use tokio::time::Instant;
 
 use paladin_ports::output::cadence_port::{
-    CADENCE_LOG_TARGET, CadenceError, CadenceKey, CadencePort, GateReading,
+    CADENCE_LOG_TARGET, CadenceError, CadenceKey, CadencePort, FencingToken, GateReading, LockKey,
 };
 
 use super::in_memory::InMemoryCadence;
@@ -131,7 +148,7 @@ impl Drop for ProbeClaim<'_> {
 /// use std::time::Duration;
 /// use async_trait::async_trait;
 /// use paladin_ports::output::cadence_port::{
-///     CadenceError, CadenceKey, CadencePolicy, CadencePort, GateReading,
+///     CadenceError, CadenceKey, CadencePolicy, CadencePort, FencingToken, GateReading, LockKey,
 /// };
 /// use paladin_storage::cadence::{InMemoryCadence, ResilientCadence};
 ///
@@ -153,6 +170,16 @@ impl Drop for ProbeClaim<'_> {
 ///     async fn record_success(&self, _: &CadenceKey) -> Result<(), CadenceError> {
 ///         Err(CadenceError::Backend { message: "connection refused".into() })
 ///     }
+///     async fn try_lock(
+///         &self,
+///         _: &LockKey,
+///         _: Duration,
+///     ) -> Result<Option<FencingToken>, CadenceError> {
+///         Err(CadenceError::Backend { message: "connection refused".into() })
+///     }
+///     async fn unlock(&self, _: &LockKey, _: &FencingToken) -> Result<bool, CadenceError> {
+///         Err(CadenceError::Backend { message: "connection refused".into() })
+///     }
 /// }
 ///
 /// # #[tokio::main(flavor = "current_thread")]
@@ -169,6 +196,17 @@ impl Drop for ProbeClaim<'_> {
 /// assert_eq!(reading.wait(), Duration::from_secs(1));
 /// assert!(cadence.is_degraded());
 /// assert_eq!(cadence.degraded_transitions(), 1);
+///
+/// // The stampede lock fails open onto the in-process lock: still exclusive inside this
+/// // worker, with a `Local` token, and never an error.
+/// let lock = LockKey::new("graphA:node1:input-hash");
+/// let token = cadence
+///     .try_lock(&lock, Duration::from_secs(120))
+///     .await?
+///     .expect("the fallback grants the free lock");
+/// assert!(!token.is_distributed());
+/// assert_eq!(cadence.try_lock(&lock, Duration::from_secs(120)).await?, None);
+/// assert!(cadence.unlock(&lock, &token).await?);
 /// # Ok(())
 /// # }
 /// ```
@@ -373,6 +411,56 @@ impl CadencePort for ResilientCadence {
             Route::Fallback => self.fallback.record_success(key).await,
         }
     }
+
+    async fn try_lock(
+        &self,
+        key: &LockKey,
+        ttl: Duration,
+    ) -> Result<Option<FencingToken>, CadenceError> {
+        match self.route() {
+            Route::Primary => match self.primary.try_lock(key, ttl).await {
+                Ok(outcome) => Ok(outcome),
+                Err(error) => {
+                    self.latch(&error);
+                    self.fallback.try_lock(key, ttl).await
+                }
+            },
+            Route::Probe(_claim) => match self.primary.try_lock(key, ttl).await {
+                Ok(outcome) => {
+                    self.recover();
+                    Ok(outcome)
+                }
+                Err(_) => self.fallback.try_lock(key, ttl).await,
+            },
+            Route::Fallback => self.fallback.try_lock(key, ttl).await,
+        }
+    }
+
+    async fn unlock(&self, key: &LockKey, token: &FencingToken) -> Result<bool, CadenceError> {
+        if !token.is_distributed() {
+            // A `Local` token was issued by the fallback, whatever the latch says now.
+            return self.fallback.unlock(key, token).await;
+        }
+        match self.route() {
+            Route::Primary => match self.primary.unlock(key, token).await {
+                Ok(released) => Ok(released),
+                Err(error) => {
+                    // The lock now expires by its TTL; nothing else to do.
+                    self.latch(&error);
+                    Ok(false)
+                }
+            },
+            Route::Probe(_claim) => match self.primary.unlock(key, token).await {
+                Ok(released) => {
+                    self.recover();
+                    Ok(released)
+                }
+                Err(_) => Ok(false),
+            },
+            // A primary known to be down: do not add its timeout to the caller.
+            Route::Fallback => Ok(false),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -489,6 +577,30 @@ mod tests {
         async fn record_success(&self, key: &CadenceKey) -> Result<(), CadenceError> {
             self.enter().await?;
             self.inner.record_success(key).await
+        }
+
+        /// Behaves like a shared backend: the tokens it issues are `Distributed`.
+        async fn try_lock(
+            &self,
+            key: &LockKey,
+            ttl: Duration,
+        ) -> Result<Option<FencingToken>, CadenceError> {
+            self.enter().await?;
+            Ok(self
+                .inner
+                .try_lock(key, ttl)
+                .await?
+                .map(|token| FencingToken::Distributed(token.value())))
+        }
+
+        async fn unlock(&self, key: &LockKey, token: &FencingToken) -> Result<bool, CadenceError> {
+            self.enter().await?;
+            match token {
+                FencingToken::Distributed(value) => {
+                    self.inner.unlock(key, &FencingToken::Local(*value)).await
+                }
+                _ => Ok(false),
+            }
         }
     }
 
@@ -885,6 +997,252 @@ mod tests {
         assert!(rendered.contains("degraded: true"), "{rendered}");
         assert!(rendered.contains("degraded_transitions: 1"), "{rendered}");
         assert!(!rendered.contains("secret-model"), "{rendered}");
+    }
+
+    // --- The stampede lock fails open (D-13).
+
+    fn lock_name(name: &str) -> LockKey {
+        LockKey::new(name)
+    }
+
+    const LOCK_TTL: Duration = Duration::from_secs(120);
+
+    #[tokio::test(start_paused = true)]
+    async fn healthy_try_lock_goes_to_the_primary_with_distributed_tokens() {
+        let primary = FlakyCadence::new();
+        let cadence = resilient(&primary, 2.0);
+        let k = lock_name("healthy");
+
+        let token = cadence
+            .try_lock(&k, LOCK_TTL)
+            .await
+            .expect("never errors")
+            .expect("free");
+        assert!(token.is_distributed(), "{token:?}");
+        assert_eq!(primary.calls(), 1);
+        assert!(
+            cadence
+                .fallback
+                .try_lock(&k, LOCK_TTL)
+                .await
+                .expect("fallback")
+                .is_some(),
+            "the fallback's own lock table was never touched"
+        );
+        assert!(!cadence.is_degraded());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resilient_try_lock_fails_open_onto_the_in_process_lock_with_one_warning() {
+        test_logger::install();
+        let primary = FlakyCadence::failing();
+        let cadence = resilient(&primary, 2.0);
+        let k = lock_name("node:input");
+
+        // The failing call itself is served by the fallback.
+        let first = cadence
+            .try_lock(&k, LOCK_TTL)
+            .await
+            .expect("a lock outage never errors")
+            .expect("the in-process lock is free");
+        assert_eq!(
+            first,
+            FencingToken::Local(1),
+            "the fallback issues Local tokens"
+        );
+        assert!(cadence.is_degraded());
+        assert_eq!(cadence.degraded_transitions(), 1);
+
+        // Tasks in one worker still coalesce: the lock is exclusive in-process.
+        for _ in 0..10 {
+            assert_eq!(
+                cadence.try_lock(&k, LOCK_TTL).await.expect("never errors"),
+                None,
+                "a second task in the same worker is refused"
+            );
+        }
+        assert!(cadence.unlock(&k, &first).await.expect("never errors"));
+        let again = cadence
+            .try_lock(&k, LOCK_TTL)
+            .await
+            .expect("never errors")
+            .expect("free after unlock");
+        assert!(again.value() > first.value());
+
+        // One outage, one warning, however many lock calls it spans.
+        let warnings = test_logger::warnings_for_this_thread();
+        assert_eq!(warnings.len(), 1, "exactly one warning: {warnings:?}");
+        assert!(warnings[0].contains(MARKER), "{}", warnings[0]);
+        assert!(!warnings[0].contains("redis://"), "{}", warnings[0]);
+        assert_eq!(
+            primary.calls(),
+            1,
+            "only the first call reached the dead primary; the probe interval has not elapsed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lock_call_and_a_pacing_call_share_one_outage_and_one_warning() {
+        test_logger::install();
+        let primary = FlakyCadence::failing();
+        let cadence = resilient(&primary, 2.0);
+
+        // The lock trips the latch...
+        cadence
+            .try_lock(&lock_name("a"), LOCK_TTL)
+            .await
+            .expect("never errors");
+        // ...and the pacing methods, served by the fallback, do not announce a second outage.
+        cadence.gate(&key("m")).await.expect("gate");
+        cadence
+            .record_rate_limited(&key("m"), None)
+            .await
+            .expect("record");
+
+        assert_eq!(cadence.degraded_transitions(), 1);
+        assert_eq!(test_logger::warnings_for_this_thread().len(), 1);
+
+        // And the other way round: a pacing call trips it, the lock rides the same outage.
+        let primary = FlakyCadence::failing();
+        let cadence = resilient(&primary, 2.0);
+        cadence.gate(&key("m")).await.expect("gate");
+        let warnings_before = test_logger::warnings_for_this_thread().len();
+        cadence
+            .try_lock(&lock_name("a"), LOCK_TTL)
+            .await
+            .expect("never errors");
+        assert_eq!(cadence.degraded_transitions(), 1);
+        assert_eq!(
+            test_logger::warnings_for_this_thread().len(),
+            warnings_before,
+            "the lock call added no second warning"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resilient_unlock_routes_by_token_source() {
+        let primary = FlakyCadence::new();
+        let cadence = resilient(&primary, 2.0);
+        let k = lock_name("routing");
+
+        // A Distributed token reaches the primary and releases its lock.
+        let shared = cadence
+            .try_lock(&k, LOCK_TTL)
+            .await
+            .expect("lock")
+            .expect("free");
+        assert!(shared.is_distributed());
+        let calls = primary.calls();
+        assert!(cadence.unlock(&k, &shared).await.expect("unlock"));
+        assert_eq!(
+            primary.calls(),
+            calls + 1,
+            "a Distributed token goes to the primary"
+        );
+
+        // A Local token (issued by the fallback) never touches the primary.
+        let local = cadence
+            .fallback
+            .try_lock(&k, LOCK_TTL)
+            .await
+            .expect("fallback lock")
+            .expect("free");
+        assert!(!local.is_distributed());
+        let calls = primary.calls();
+        assert!(cadence.unlock(&k, &local).await.expect("unlock"));
+        assert_eq!(
+            primary.calls(),
+            calls,
+            "a Local token goes to the fallback only"
+        );
+        assert!(!cadence.is_degraded());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_distributed_unlock_during_an_outage_is_false_without_waiting_on_the_primary() {
+        test_logger::install();
+        let primary = FlakyCadence::new();
+        let cadence = resilient(&primary, 2.0);
+        let k = lock_name("outage-mid-hold");
+
+        let shared = cadence
+            .try_lock(&k, LOCK_TTL)
+            .await
+            .expect("lock")
+            .expect("free");
+
+        // The primary dies while the lock is held. The unlock that discovers it latches (one
+        // warning) and reports false: the lock expires by its TTL.
+        primary.set_failing(true);
+        assert!(!cadence.unlock(&k, &shared).await.expect("never errors"));
+        assert!(cadence.is_degraded());
+        assert_eq!(test_logger::warnings_for_this_thread().len(), 1);
+
+        // While degraded, a Distributed unlock does not even try the primary.
+        let calls = primary.calls();
+        assert!(!cadence.unlock(&k, &shared).await.expect("never errors"));
+        assert_eq!(primary.calls(), calls);
+        assert_eq!(cadence.degraded_transitions(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_lock_returns_to_the_primary_after_recovery() {
+        let primary = FlakyCadence::failing();
+        let cadence = resilient(&primary, 2.0).with_probe_interval(Duration::from_secs(5));
+        let k = lock_name("recovery");
+
+        let local = cadence
+            .try_lock(&k, Duration::from_millis(100))
+            .await
+            .expect("lock")
+            .expect("free");
+        assert!(!local.is_distributed());
+
+        primary.set_failing(false);
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        let recovered = cadence
+            .try_lock(&k, LOCK_TTL)
+            .await
+            .expect("lock")
+            .expect("the probe is served by the recovered primary, whose lock is free");
+        assert!(recovered.is_distributed(), "{recovered:?}");
+        assert!(!cadence.is_degraded());
+        assert!(cadence.unlock(&k, &recovered).await.expect("unlock"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_timeout_from_the_primary_fails_the_lock_open_too() {
+        let primary = FlakyCadence::failing();
+        primary.fail_with_timeout.store(true, Ordering::SeqCst);
+        let cadence = resilient(&primary, 1.0);
+        let token = cadence
+            .try_lock(&lock_name("t"), LOCK_TTL)
+            .await
+            .expect("never errors");
+        assert_eq!(token, Some(FencingToken::Local(1)));
+        assert!(cadence.is_degraded());
+    }
+
+    // --- The lock clauses of the shared contract, against the composite.
+
+    #[tokio::test(start_paused = true)]
+    async fn resilient_cadence_passes_the_lock_contract_healthy() {
+        let primary = FlakyCadence::new();
+        let cadence = resilient(&primary, 1.0);
+        contract_tests::run_all_locks(&cadence, policy()).await;
+        contract_tests::lock_expires_at_its_ttl_paused(&cadence, policy()).await;
+        assert!(!cadence.is_degraded());
+        assert!(primary.calls() > 0, "the primary served the lock clauses");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn resilient_cadence_passes_the_lock_contract_degraded() {
+        let primary = FlakyCadence::failing();
+        let cadence = resilient(&primary, 1.0);
+        contract_tests::run_all_locks(&cadence, policy()).await;
+        contract_tests::lock_expires_at_its_ttl_paused(&cadence, policy()).await;
+        assert!(cadence.is_degraded());
+        assert_eq!(cadence.degraded_transitions(), 1);
     }
 
     // --- The shared contract suite, unchanged, against the composite.

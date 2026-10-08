@@ -153,6 +153,114 @@ mod tests {
         assert!(err.contains("treasurer.cadence.base_backoff_ms"), "{err}");
     }
 
+    /// PACE-05 / ROADMAP success criterion 5, end to end: with the shared backend down, a call
+    /// after a provider 429 is still delayed -- by the in-process fallback, at the stricter
+    /// degraded multiplier -- and nothing the outage does fails an LLM call. Needs no Redis
+    /// server: the "dead Redis" is a test-local port that errors on every operation.
+    #[tokio::test(start_paused = true)]
+    async fn cadence_with_redis_down_still_paces() -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::Duration;
+
+        use async_trait::async_trait;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_llm::cadence::CadenceSettings;
+        use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
+        use paladin_ports::output::cadence_port::{
+            CadenceError, CadenceKey, CadencePolicy, CadencePort, GateReading,
+        };
+        use paladin_ports::output::llm_port::{LlmError, LlmRequest};
+        use paladin_storage::cadence::ResilientCadence;
+        use tokio::time::Instant;
+
+        /// A shared pacing backend that is unreachable.
+        struct RedisDown;
+
+        fn down() -> CadenceError {
+            CadenceError::Backend {
+                message: "connection refused".to_string(),
+            }
+        }
+
+        #[async_trait]
+        impl CadencePort for RedisDown {
+            async fn gate(&self, _: &CadenceKey) -> Result<GateReading, CadenceError> {
+                Err(down())
+            }
+            async fn record_rate_limited(
+                &self,
+                _: &CadenceKey,
+                _: Option<Duration>,
+            ) -> Result<GateReading, CadenceError> {
+                Err(down())
+            }
+            async fn record_success(&self, _: &CadenceKey) -> Result<(), CadenceError> {
+                Err(down())
+            }
+        }
+
+        let policy = CadencePolicy::default();
+        let base = policy.base_backoff();
+        let resilient = Arc::new(ResilientCadence::new(
+            Arc::new(RedisDown),
+            InMemoryCadence::new(policy).with_multiplier(2.0),
+        ));
+        let wiring = CadenceWiring::new(
+            Arc::clone(&resilient) as Arc<dyn CadencePort>,
+            CadenceSettings::default(),
+        );
+
+        // The provider answers a delay-less 429, then succeeds.
+        let provider = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_script(vec![
+                    MockScriptEntry::Error(LlmError::rate_limited(None)),
+                    MockScriptEntry::Text("ok".to_string()),
+                ]),
+        );
+        let llm = compose_llm(provider.clone(), &empty_price_table()?, Some(&wiring));
+
+        let request = || -> Result<LlmRequest, Box<dyn std::error::Error>> {
+            Ok(LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))?,
+            ))
+        };
+
+        // Call 1: the provider's 429 reaches the caller unchanged, outage or not.
+        let first = llm.generate(request()?).await;
+        let first_returned = Instant::now();
+        assert!(
+            matches!(first, Err(LlmError::RateLimitExceeded { .. })),
+            "the outage must not change the call's outcome, got {first:?}"
+        );
+        assert!(
+            resilient.is_degraded(),
+            "the dead backend latched degraded mode"
+        );
+        assert_eq!(provider.call_count(), 1);
+
+        // Call 2: still gated -- at the degraded 2 x base, from the in-process fallback.
+        let second = llm.generate(request()?).await?;
+        let gap = first_returned.elapsed();
+        assert_eq!(second.content, "ok");
+        assert!(
+            gap >= base * 2,
+            "call 2 reached the provider only {gap:?} after the 429; a run must never be \
+             unpaced, and degraded delays are 2 x base = {:?}",
+            base * 2
+        );
+        assert!(
+            gap < base * 2 + Duration::from_millis(150),
+            "the wait should be the degraded gate plus a small spread, got {gap:?}"
+        );
+        assert_eq!(provider.call_count(), 2);
+        Ok(())
+    }
+
     /// The Redis server the fleet test talks to: `CADENCE_REDIS_TEST_URL`, defaulting to the
     /// compose `redis-test` service on logical database 2 (the database the storage suite uses).
     #[cfg(feature = "redis-cadence")]

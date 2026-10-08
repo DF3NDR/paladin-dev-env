@@ -44,8 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skew between workers cannot shorten or lengthen a wait; the connection is lazy with explicit
   timeouts so a dead server errors instead of hanging, and the URL's password is redacted in
   `Debug` and in every error. Every key carries a TTL and reads create none. A CI job,
-  `redis-cadence-integration`, runs the live suite and fails if it was skipped. Later Phase 43
-  plans extend this entry.
+  `redis-cadence-integration`, runs the live suite and fails if it was skipped.
+  Plan 43-08 makes a Redis outage a degradation, never a failure (PACE-05): `ResilientCadence`
+  in `paladin-storage` serves from the shared backend while it answers and, on the first error or
+  timeout, from an in-process fallback built with the new `InMemoryCadence::with_multiplier`
+  (delays multiplied, default 2.0), so a 429 recorded during the outage still gates its key. It
+  warns once per outage and logs one line on recovery under `paladin::cadence`, probes the backend
+  at most every `DEFAULT_PROBE_INTERVAL` (5 s) without making concurrent callers wait, and honours
+  locally recorded gates after recovery. Later Phase 43 plans extend this entry.
 - **Provider retry delay on a 429 (PACE-01, PACE-02; Phase 43 plan 43-02).**
   `LlmError::RateLimitExceeded` now carries the provider's own retry delay and a rate-limit header
   snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new

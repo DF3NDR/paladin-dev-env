@@ -1041,4 +1041,107 @@ mod tests {
         );
         drop(listener);
     }
+
+    // ---- Degradation within the timeout budget (PACE-05, research Pitfall 9) -----------------
+    //
+    // These need no Redis server -- the "server" is a refused port or a listener that never
+    // answers -- so unlike the live-server tests above they never print `SKIP:` and the CI count
+    // guard counts them.
+
+    use crate::cadence::{InMemoryCadence, ResilientCadence};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// Wrap `redis` (200 ms response and connection timeouts) in a `ResilientCadence` whose
+    /// fallback doubles delays, and prove one `record_rate_limited` then `gate` completes well
+    /// inside the budget from the fallback.
+    async fn assert_degrades_within_budget(redis: RedisCadence) {
+        let cadence = ResilientCadence::new(
+            Arc::new(redis),
+            InMemoryCadence::new(policy())
+                .with_jitter(floor)
+                .with_multiplier(2.0),
+        );
+        let key = CadenceKey::new("openai", "gpt-4o");
+
+        let started = Instant::now();
+        let recorded = cadence
+            .record_rate_limited(&key, None)
+            .await
+            .expect("the composite never errors");
+        let gated = cadence
+            .gate(&key)
+            .await
+            .expect("the composite never errors");
+        let took = started.elapsed();
+
+        assert!(
+            took < Duration::from_millis(1500),
+            "a dead Redis must degrade within the timeout budget, not seconds; took {took:?}"
+        );
+        assert_eq!(
+            recorded.wait(),
+            BASE * 2,
+            "the fallback's multiplied first gate"
+        );
+        assert!(
+            gated.wait() > BASE && gated.wait() <= BASE * 2,
+            "the fallback still gates the key after the 429, got {:?}",
+            gated.wait()
+        );
+        assert!(cadence.is_degraded());
+        assert_eq!(cadence.degraded_transitions(), 1);
+    }
+
+    fn short_timeouts(url: String) -> RedisCadenceConfig {
+        RedisCadenceConfig::new(url)
+            .with_response_timeout(Duration::from_millis(200))
+            .with_connection_timeout(Duration::from_millis(200))
+    }
+
+    #[tokio::test]
+    async fn unreachable_redis_degrades_within_the_timeout_budget() {
+        // Port 1 refuses connections.
+        let redis = RedisCadence::new(
+            short_timeouts("redis://127.0.0.1:1/0".to_string()),
+            policy(),
+        )
+        .expect("parsable")
+        .with_jitter(floor);
+        assert_degrades_within_budget(redis).await;
+    }
+
+    #[tokio::test]
+    async fn black_holed_redis_degrades_within_the_timeout_budget() {
+        // A listener that accepts connections and holds them open without ever writing: the
+        // shape of a firewall that silently drops the conversation.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local port");
+        listener.set_nonblocking(true).expect("non-blocking accept");
+        let port = listener.local_addr().expect("local addr").port();
+        let stop = Arc::new(AtomicBool::new(false));
+        let holder = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let mut held = Vec::new();
+                while !stop.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((stream, _)) => held.push(stream),
+                        Err(_) => std::thread::sleep(Duration::from_millis(5)),
+                    }
+                }
+                drop(held);
+            })
+        };
+
+        let redis = RedisCadence::new(
+            short_timeouts(format!("redis://127.0.0.1:{port}/0")),
+            policy(),
+        )
+        .expect("parsable")
+        .with_jitter(floor);
+        assert_degrades_within_budget(redis).await;
+
+        stop.store(true, Ordering::SeqCst);
+        holder.join().expect("the holder thread exits");
+    }
 }

@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 43
 current_phase_name: Rate Pacing
 status: executing
-stopped_at: Phase 43 context gathered
-last_updated: "2026-10-08T01:33:14.540Z"
+stopped_at: Completed 43-01-PLAN.md
+last_updated: "2026-10-08T02:04:07.222Z"
 last_activity: 2026-10-08
 last_activity_desc: Phase 43 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 64
-  completed_plans: 51
+  completed_plans: 52
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([██████████] 100%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([████████░░] 81%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,8 +51,8 @@ under `milestones/`.
 ## Current Position
 
 Phase: 43 (Rate Pacing) — EXECUTING
-Plan: 1 of 13
-Status: Executing Phase 43
+Plan: 2 of 13
+Status: Ready to execute
 Last activity: 2026-10-08 — Phase 43 execution started
 
 ## Performance Metrics
@@ -241,6 +241,7 @@ Last activity: 2026-10-08 — Phase 43 execution started
 | Phase 42 P10 | 25min | 3 tasks | 25 files |
 | Phase 42 P11 | 35min | 3 tasks | 10 files |
 | Phase 42 P12 | 35min | 3 tasks | 18 files |
+| Phase 43 P01 | multi-session | 3 tasks | 18 files |
 
 ## Accumulated Context
 
@@ -384,6 +385,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: Phase 42-12: the halt line states the currency once after the ceiling (25.0000 of 25.0000 USD); ExecutionMetadata stores the rendered line, never the typed HaltReason
 - [Phase ?]: Phase 42-12: the G2 windows row states the option-b scope (a true stream's done carries an informational halt_reason only when its terminal usage crossed the derived figure; not byte-identical in every case)
 - [Phase ?]: Phase 42-12: the vocabulary guard assembles both forbidden strings at run time and proves it can fail through a planted temporary tree before scanning the repository
+- [Phase 43]: 43-01: pacing on by default (treasurer.cadence.enabled false opts out); OpenAI adapter surfaces its first 429; engine-port and shared gate wiring deferred to 43-09
 
 ### Pending Todos
 
@@ -598,9 +600,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-07T23:04:12.039Z
-**Stopped at:** Phase 43 context gathered
-**Resume file:** .planning/phases/43-rate-pacing/43-CONTEXT.md
+**Last session:** 2026-10-08T02:04:07.193Z
+**Stopped at:** Completed 43-01-PLAN.md
+**Resume file:** None
 
 ## Operator Next Steps
 

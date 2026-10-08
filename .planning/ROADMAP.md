@@ -565,7 +565,7 @@ does not resolve; needs deeper phase-specific research.
 Plans:
 **Wave 1**
 
-- [ ] 43-01-PLAN.md — Tracer: CadencePort + CadencePolicy, InMemoryCadence, CadenceLlmAdapter composed as Pricing(Cadence(provider)), OpenAI surfaces its first 429, treasurer.cadence, build_cadence/compose_llm at the agent host, end-to-end cadence_tracer test through a real OpenAI adapter; register (wave 1)
+- [x] 43-01-PLAN.md — Tracer: CadencePort + CadencePolicy, InMemoryCadence, CadenceLlmAdapter composed as Pricing(Cadence(provider)), OpenAI surfaces its first 429, treasurer.cadence, build_cadence/compose_llm at the agent host, end-to-end cadence_tracer test through a real OpenAI adapter; register (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

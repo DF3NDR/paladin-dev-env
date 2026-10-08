@@ -86,7 +86,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
   (delta-seconds or HTTP-date) and from provider rate-limit headers, with the header names verified
   against official OpenAI and Anthropic documentation
 
-- [ ] **PACE-02**: An `LlmPort` pacing decorator paces each provider and model in-process and backs
+- [x] **PACE-02**: An `LlmPort` pacing decorator paces each provider and model in-process and backs
   off with jitter on a 429, treating the retry delay as a minimum; it wraps every
   `FallbackLlmAdapter` hop, and a mocked-429 test proves back-off rather than thrash
 
@@ -224,7 +224,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ALLOW-04 | Phase 41 | Complete |
 | ALLOW-05 | Phase 42 | Complete |
 | PACE-01 | Phase 43 | Pending |
-| PACE-02 | Phase 43 | Pending |
+| PACE-02 | Phase 43 | Complete |
 | PACE-03 | Phase 43 | Pending |
 | PACE-04 | Phase 43 | Pending |
 | PACE-05 | Phase 43 | Pending |

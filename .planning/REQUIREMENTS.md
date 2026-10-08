@@ -82,7 +82,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Rate pacing (PACE)
 
-- [ ] **PACE-01**: `LlmError::RateLimitExceeded` carries a retry delay parsed from `Retry-After`
+- [x] **PACE-01**: `LlmError::RateLimitExceeded` carries a retry delay parsed from `Retry-After`
   (delta-seconds or HTTP-date) and from provider rate-limit headers, with the header names verified
   against official OpenAI and Anthropic documentation
 
@@ -223,7 +223,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ALLOW-03 | Phase 42 | Complete |
 | ALLOW-04 | Phase 41 | Complete |
 | ALLOW-05 | Phase 42 | Complete |
-| PACE-01 | Phase 43 | Pending |
+| PACE-01 | Phase 43 | Complete |
 | PACE-02 | Phase 43 | Complete |
 | PACE-03 | Phase 43 | Pending |
 | PACE-04 | Phase 43 | Pending |

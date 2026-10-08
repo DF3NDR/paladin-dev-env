@@ -569,7 +569,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 43-02-PLAN.md — Typed retry delay: RateLimitExceeded { retry_after, hints } + RateLimitHints, workspace sweep, the decorator honours the provider delay as a minimum and surfaces a delay beyond max_wait_secs (D-06); D-27 + register (wave 2)
+- [x] 43-02-PLAN.md — Typed retry delay: RateLimitExceeded { retry_after, hints } + RateLimitHints, workspace sweep, the decorator honours the provider delay as a minimum and surfaces a delay beyond max_wait_secs (D-06); D-27 + register (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

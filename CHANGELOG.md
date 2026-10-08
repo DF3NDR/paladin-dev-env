@@ -475,6 +475,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged. An account-level quota or spend-cap 429 (OpenAI `insufficient_quota`, Anthropic
   `enforced_spend_limit_reached`) is now reported as `LlmError::UsageLimitExceeded`, which is
   permanent, instead of `LlmError::RateLimitExceeded` (`MIGRATION.md` section 9.1).
+- The compat engine (and through it the Kimi, Qwen, Grok, Ollama and OpenAI-compatible presets),
+  the DeepSeek adapter and the Gemini adapter now surface a 429 on their first attempt instead of
+  retrying it inside their own loops, and carry the provider's `Retry-After` (delta-seconds or
+  HTTP-date), `retry-after-ms` and generic `x-ratelimit-*` values on the error, on both the buffered
+  and streaming paths (D-02; PACE-01, PACE-02; Phase 43 plan 43-04; `MIGRATION.md` section 9.1).
+  Their network, timeout and 5xx retries are unchanged. The shared conformance suite gained a
+  tenth case, `rate_limit_is_surfaced_once_with_its_retry_delay`, which every adapter fixture runs.
 - The output of an agent run that ends on the Treasurer's derived allowance figure now carries
   `[budget] Allowance reached — this response is partial; the run was halted.` instead of the
   operator-budget text that called the partial response "this run's final answer". An operator

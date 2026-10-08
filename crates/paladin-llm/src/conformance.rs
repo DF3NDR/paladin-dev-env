@@ -20,10 +20,16 @@
 //! terminal-chunk streaming usage contract (D-14) holds for every adapter: the streamed usage on
 //! the finish-reason-bearing chunk equals the non-streaming `LlmResponse.usage` field-for-field.
 //!
+//! Phase 43 (D-02, PACE-01) adds a tenth case, `rate_limit_is_surfaced_once_with_its_retry_delay`:
+//! a mocked `429` carrying `Retry-After: 7` is observed by the provider exactly once, is
+//! `RateLimitExceeded`, classifies `Transient`, and carries `Some(7s)` -- so no adapter in the
+//! suite retries a rate limit below the Cadence decorator, which owns waiting.
+//!
 //! `#[cfg(test)]`-only: [`ConformanceFixture`] and [`llm_conformance_suite!`] never ship in a
 //! release build.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::StreamExt;
 use mockito::{Matcher, Server};
@@ -315,6 +321,62 @@ pub mod cases {
         }
     }
 
+    /// Case: a `429` carrying `Retry-After: 7` is observed by the provider exactly once, is
+    /// [`LlmError::RateLimitExceeded`], classifies [`Transience::Transient`], and carries
+    /// `Some(7s)` (Phase 43 D-02 verification clause, PACE-01).
+    ///
+    /// **Why exactly once.** A 429 is the one error whose cure is waiting, and the Cadence
+    /// decorator above every adapter owns waiting with a gate shared by all callers of the same
+    /// provider and model. An adapter that re-sent a 429 inside its own retry loop would hit a
+    /// limit the provider had just announced and hide that thrash below the decorator, so the
+    /// first 429 must be surfaced. The mock's `expect(1)` is asserted at the end -- a second hit
+    /// fails the case. [`transience_by_value`]'s 429 row deliberately keeps `expect_at_least(1)`:
+    /// that case measures classification, this one measures attempt count.
+    ///
+    /// **Coverage notes.** The Anthropic adapter is not instantiated with
+    /// [`llm_conformance_suite!`]; its once-only proof is the hand-written
+    /// `anthropic_429_is_surfaced_once_with_its_retry_delay_and_four_dimensions` (plan 43-03). The OpenAI fixture is built
+    /// with `max_retries: 0`, so the "exactly once" half is vacuous for it here; its once-only
+    /// proof with `max_retries: 3` is `openai_429_is_surfaced_on_the_first_attempt` (plan 43-01),
+    /// and `openai_429_carries_retry_after_and_ratelimit_dimensions` (plan 43-03) covers the
+    /// header carriage. The delay and classification halves still run for it.
+    pub async fn rate_limit_is_surfaced_once_with_its_retry_delay<F: ConformanceFixture>() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("POST", Matcher::Any)
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(F::error_body(429))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = F::adapter(&server.url());
+        let result = adapter.generate(conformance_request()).await;
+
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("a 429 must be an error, got Ok"),
+        };
+        assert!(
+            matches!(err, LlmError::RateLimitExceeded { .. }),
+            "a 429 must map to RateLimitExceeded, got {err:?}"
+        );
+        assert_eq!(
+            err.retry_after(),
+            Some(Duration::from_secs(7)),
+            "the provider's Retry-After must reach the error (err: {err:?})"
+        );
+        assert_eq!(
+            err.transience(),
+            Transience::Transient,
+            "a rate limit is transient by value (err: {err:?})"
+        );
+        // The provider must have been hit exactly once: a retry inside the adapter would fail
+        // this assertion.
+        mock.assert_async().await;
+    }
+
     /// Case: with a credential-shaped token positioned to straddle the response-excerpt
     /// truncation boundary, no rendered error -- `Display`, `Debug`, nor a prefix of the token
     /// longer than a few characters -- ever contains it (redact-then-bound,
@@ -482,7 +544,7 @@ pub mod cases {
 /// [`ConformanceFixture`], plus a `CASE_COUNT` derived from the SAME identifier list the tests
 /// are generated from -- so a case silently dropped from this list shrinks `CASE_COUNT` too,
 /// which `suite_generates_the_full_case_list_for_a_fixture` (below) pins against the documented
-/// `8`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
+/// `10`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
 #[macro_export]
 macro_rules! llm_conformance_suite {
     ($fixture:ty) => {
@@ -496,6 +558,7 @@ macro_rules! llm_conformance_suite {
             credential_never_appears_in_a_rendered_error,
             redirect_is_not_followed_with_a_credential_header,
             streaming_usage_equals_non_streaming_usage,
+            rate_limit_is_surfaced_once_with_its_retry_delay,
         );
     };
     (@cases $fixture:ty; $($case:ident),+ $(,)?) => {
@@ -533,7 +596,7 @@ mod tests {
     // correct (below) -- not built on any feature-gated adapter or `CompatEngine`, so this
     // compile/behavior-safety check runs under every feature combination `paladin-llm` is ever
     // tested with, not only `--all-features`. It routes its own non-2xx branch through the same
-    // `crate::http_status::map_http_status` every real adapter uses, so the 8 generated cases
+    // `crate::http_status::map_http_status_with_hints` every real adapter uses, so the generated cases
     // exercise real, shared production logic rather than a second, parallel implementation.
 
     struct TrivialAdapter {
@@ -565,6 +628,21 @@ mod tests {
         usage: Option<TrivialUsage>,
     }
 
+    /// Snapshot a `429`'s rate-limit headers through the generic family, as every real adapter
+    /// does (PACE-01); any other status carries no hints.
+    fn snapshot_trivial_hints(
+        response: &reqwest::Response,
+    ) -> Option<paladin_ports::output::rate_limit_hints::RateLimitHints> {
+        if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return None;
+        }
+        crate::rate_limit_headers::hints_from_headers(
+            crate::rate_limit_headers::RateLimitHeaderFamily::Generic,
+            std::time::SystemTime::now(),
+            |name| response.headers().get(name).and_then(|v| v.to_str().ok()),
+        )
+    }
+
     const TRIVIAL_PROVIDER: &str = "trivial-fixture";
     const TRIVIAL_API_KEY: &str = "trivial-canary-key";
 
@@ -578,17 +656,20 @@ mod tests {
                 .await
                 .map_err(|e| LlmError::NetworkError(e.to_string()))?;
             let status = response.status().as_u16();
+            // PACE-01: snapshot the 429 headers BEFORE the body read consumes the response.
+            let hints = snapshot_trivial_hints(&response);
             let body = response
                 .text()
                 .await
                 .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 
             if status >= 300 {
-                return Err(crate::http_status::map_http_status(
+                return Err(crate::http_status::map_http_status_with_hints(
                     TRIVIAL_PROVIDER,
                     status,
                     &body,
                     TRIVIAL_API_KEY,
+                    hints,
                 ));
             }
 
@@ -625,15 +706,17 @@ mod tests {
             let status = response.status().as_u16();
 
             if status >= 300 {
+                let hints = snapshot_trivial_hints(&response);
                 let body = response
                     .text()
                     .await
                     .map_err(|e| LlmError::NetworkError(e.to_string()))?;
-                return Err(crate::http_status::map_http_status(
+                return Err(crate::http_status::map_http_status_with_hints(
                     TRIVIAL_PROVIDER,
                     status,
                     &body,
                     TRIVIAL_API_KEY,
+                    hints,
                 ));
             }
 
@@ -740,8 +823,8 @@ mod tests {
     #[test]
     fn suite_generates_the_full_case_list_for_a_fixture() {
         assert_eq!(
-            CASE_COUNT, 9,
-            "llm_conformance_suite! must generate exactly the documented 9 fixed cases -- if this \
+            CASE_COUNT, 10,
+            "llm_conformance_suite! must generate exactly the documented 10 fixed cases -- if this \
              fails, a case was added to or removed from the macro's list without updating this \
              pinned expectation"
         );

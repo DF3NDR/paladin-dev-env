@@ -32,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `treasurer.cadence.max_wait_secs` immediately as a typed `RateLimitExceeded` instead of holding a
   worker for it (D-06); that refusal calls no provider and never escalates the shared streak. The
   429 `Display` text and its `Transient` classification are unchanged.
+- **Provider rate-limit headers on a 429 (PACE-01; Phase 43 plan 43-03).** A shared, un-gated parser,
+  `paladin_llm::rate_limit_headers` (`hints_from_headers`, `parse_retry_after`, `parse_go_duration`,
+  `RateLimitHeaderFamily`), turns a provider's 429 headers into the `RateLimitHints` carried on
+  `LlmError::RateLimitExceeded`: `Retry-After` in delta-seconds or any of the three HTTP-date forms,
+  `retry-after-ms`, OpenAI's `x-ratelimit-*` limit, remaining and Go-style reset values, and
+  Anthropic's `anthropic-ratelimit-*` values with RFC 3339 resets measured from the response `Date`.
+  The OpenAI and Anthropic adapters read them before the body is consumed, on both the buffered and
+  streaming paths, so the Cadence waits for the provider's own number. Parsing is panic-free and
+  bounded, every delay is clamped to 24 hours, and no raw header value reaches an error or a log
+  line. `map_http_status_with_hints` carries the hints through the shared status mapping
+  (`map_http_status` is unchanged). `httpdate` is now a direct dependency of `paladin-llm`.
 - **Mid-run allowance halts on the engine path (ALLOW-03; Phase 42 plan 42-02, ADR-0057).** The
   `WarEngine` now consults a new `SpendGuard` output port (`paladin-ports`) at every superstep
   boundary, beside the existing cancellation token and probe. The `Treasurer` answers it through
@@ -451,6 +462,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LlmError::rate_limited(None)` (or `rate_limited(Some(delay))` /
   `rate_limited_with_hints(hints)`), and match it with `LlmError::RateLimitExceeded { .. }`. Its
   `Display` text and its `Transient` classification are unchanged, so no message assertion moves.
+- The Anthropic adapter now surfaces a 429 on its first attempt instead of retrying it inside its own
+  loop, matching OpenAI (D-02; PACE-02; Phase 43 plan 43-03); its network and 5xx retries are
+  unchanged. An account-level quota or spend-cap 429 (OpenAI `insufficient_quota`, Anthropic
+  `enforced_spend_limit_reached`) is now reported as `LlmError::UsageLimitExceeded`, which is
+  permanent, instead of `LlmError::RateLimitExceeded` (`MIGRATION.md` section 9.1).
 - The output of an agent run that ends on the Treasurer's derived allowance figure now carries
   `[budget] Allowance reached — this response is partial; the run was halted.` instead of the
   operator-budget text that called the partial response "this run's final answer". An operator

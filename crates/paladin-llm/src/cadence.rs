@@ -234,7 +234,7 @@ impl CadenceLlmAdapter {
                     // Spread the herd: every caller one gate releases would otherwise wake in the
                     // same instant and re-trigger the provider's limit (research Pitfall 4). The
                     // spread is only added, then the gate is re-read before sending.
-                    let spread = waiter_spread(reading.wait(), rand::random::<f64>());
+                    let spread = waiter_spread(reading.wait(), spread_fraction());
                     tokio::time::sleep(reading.wait().saturating_add(spread)).await;
                 }
                 Err(err) => {
@@ -331,6 +331,46 @@ fn waiter_spread(wait: Duration, fraction: f64) -> Duration {
         fraction.clamp(0.0, 1.0)
     };
     (wait / 10).min(MAX_WAITER_SPREAD).mul_f64(fraction)
+}
+
+/// The random fraction one waiter's spread is drawn from: `rand::random` in production.
+#[cfg(not(test))]
+fn spread_fraction() -> f64 {
+    rand::random::<f64>()
+}
+
+/// As the production source, unless the current test thread pinned it with
+/// [`pin_waiter_spread`].
+#[cfg(test)]
+fn spread_fraction() -> f64 {
+    PINNED_SPREAD
+        .with(std::cell::Cell::get)
+        .unwrap_or_else(rand::random::<f64>)
+}
+
+#[cfg(test)]
+thread_local! {
+    static PINNED_SPREAD: std::cell::Cell<Option<f64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Restores the random spread when dropped.
+#[cfg(test)]
+pub(crate) struct PinnedSpread;
+
+#[cfg(test)]
+impl Drop for PinnedSpread {
+    fn drop(&mut self) {
+        PINNED_SPREAD.with(|pinned| pinned.set(None));
+    }
+}
+
+/// Test seam: pin the waiter-spread fraction on the current thread so a paused-clock test can
+/// assert exact send times (a fraction of `0.0` removes the spread). The returned guard restores
+/// the random draw. Thread-local on purpose: `#[tokio::test]` runs the whole test on one thread.
+#[cfg(test)]
+pub(crate) fn pin_waiter_spread(fraction: f64) -> PinnedSpread {
+    PINNED_SPREAD.with(|pinned| pinned.set(Some(fraction)));
+    PinnedSpread
 }
 
 /// Wrap `inner` with rate pacing from `cadence`, UNLESS pacing is off (`None`) or `inner` is a

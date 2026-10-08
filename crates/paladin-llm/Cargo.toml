@@ -38,6 +38,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+# Parses the three RFC 7231 HTTP-date forms of a `Retry-After` header (PACE-01). Already in
+# `Cargo.lock` (1.0.3) via hyper; promoted from transitive to a direct dependency.
+httpdate = "1.0"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }

@@ -3518,6 +3518,7 @@ dependencies = [
  "chrono",
  "criterion",
  "futures",
+ "httpdate",
  "log",
  "mockito",
  "paladin-ai-core",

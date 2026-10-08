@@ -101,6 +101,8 @@ pub mod pricing;
 /// Factory for selecting provider adapters from runtime configuration.
 #[allow(missing_docs)]
 pub mod provider_factory;
+// Documented by its own inner `//!` block (a `pub mod` carries one doc form, never both).
+pub mod rate_limit_headers;
 /// Credential redaction shared by every provider adapter (not feature-gated
 /// — reused by the shared compatible core and by bespoke adapters alike).
 #[allow(missing_docs)]

@@ -18,6 +18,7 @@
 //! `.github/instructions/security.instructions.md` and [`crate::redaction`].
 
 use paladin_ports::output::llm_port::LlmError;
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use crate::redaction::{RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, redact_credentials};
 
@@ -49,7 +50,7 @@ fn signals_context_length_overflow(redacted_body: &str) -> bool {
 /// | status | variant |
 /// |--------|---------|
 /// | 401 | [`LlmError::AuthenticationError`] |
-/// | 429 | [`LlmError::RateLimitExceeded`] |
+/// | 429 | [`LlmError::RateLimitExceeded`] (no retry delay; see [`map_http_status_with_hints`] to carry one) |
 /// | 402 | [`LlmError::UsageLimitExceeded`] (no regain hint) |
 /// | 404 | [`LlmError::ModelNotAvailable`] |
 /// | 400 | [`LlmError::TokenLimitExceeded`] when the body signals a context-length overflow, else [`LlmError::InvalidPrompt`] |
@@ -84,6 +85,52 @@ fn signals_context_length_overflow(redacted_body: &str) -> bool {
 /// ));
 /// ```
 pub fn map_http_status(provider: &str, status: u16, body: &str, api_key: &str) -> LlmError {
+    map_http_status_with_hints(provider, status, body, api_key, None)
+}
+
+/// [`map_http_status`] for an adapter that has already parsed the response's rate-limit headers
+/// (PACE-01).
+///
+/// The table is identical; the only difference is the `429` row. With `hints` it returns
+/// [`LlmError::rate_limited_with_hints`], so the error carries the provider's own retry delay and
+/// quota dimensions; without them it returns [`LlmError::rate_limited`]`(None)`, exactly what
+/// [`map_http_status`] produces. `hints` is ignored for every other status.
+///
+/// The adapter must snapshot the headers **before** it consumes the response body (the body read
+/// takes the response by value), then hand the parsed
+/// [`RateLimitHints`] here -- see [`crate::rate_limit_headers`]. The hints hold parsed numbers
+/// only, so nothing from a provider header can reach the rendered error.
+///
+/// | status | variant |
+/// |--------|---------|
+/// | 429 | [`LlmError::RateLimitExceeded`] carrying `hints` when given |
+/// | every other status | exactly as [`map_http_status`] |
+///
+/// # Examples
+///
+/// ```
+/// use std::time::Duration;
+/// use paladin_llm::http_status::map_http_status_with_hints;
+/// use paladin_ports::output::llm_port::LlmError;
+/// use paladin_ports::output::rate_limit_hints::{RateLimitHints, RetryDelaySource};
+///
+/// let hints = RateLimitHints::default()
+///     .with_retry_after(Duration::from_secs(7), RetryDelaySource::RetryAfter);
+/// let err = map_http_status_with_hints("openai", 429, "", "sk-secret", Some(hints));
+/// assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+/// assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+///
+/// // Without hints a 429 is the bare rate-limit error.
+/// let bare = map_http_status_with_hints("openai", 429, "", "sk-secret", None);
+/// assert_eq!(bare.retry_after(), None);
+/// ```
+pub fn map_http_status_with_hints(
+    provider: &str,
+    status: u16,
+    body: &str,
+    api_key: &str,
+    hints: Option<RateLimitHints>,
+) -> LlmError {
     // Redact BEFORE bounding — see the module docs for why the order is
     // load-bearing. The overflow predicate reads the full redacted body (not
     // the bounded excerpt) so a signature past the character budget is not
@@ -95,7 +142,10 @@ pub fn map_http_status(provider: &str, status: u16, body: &str, api_key: &str) -
         401 => LlmError::AuthenticationError(format!(
             "Invalid API key for provider '{provider}'. Error: {message}"
         )),
-        429 => LlmError::rate_limited(None),
+        429 => match hints {
+            Some(hints) => LlmError::rate_limited_with_hints(hints),
+            None => LlmError::rate_limited(None),
+        },
         402 => LlmError::UsageLimitExceeded {
             provider: provider.to_string(),
             regain_hint: None,
@@ -120,6 +170,8 @@ pub fn map_http_status(provider: &str, status: u16, body: &str, api_key: &str) -
 mod tests {
     use super::*;
     use paladin_core::platform::container::transience::Transience;
+    use paladin_ports::output::rate_limit_hints::RetryDelaySource;
+    use std::time::Duration;
 
     const PROVIDER: &str = "test-provider";
     const KEY: &str = "livekey-ABCDEF0123456789";
@@ -263,5 +315,74 @@ mod tests {
             other => panic!("expected ProviderError, got {other:?}"),
         }
         assert_eq!(err.transience(), Transience::Transient);
+    }
+
+    fn sample_hints() -> RateLimitHints {
+        RateLimitHints::default()
+            .with_retry_after(Duration::from_secs(7), RetryDelaySource::RetryAfter)
+    }
+
+    #[test]
+    fn map_http_status_with_hints_429_carries_the_hints() {
+        let err = map_http_status_with_hints(PROVIDER, 429, "slow down", KEY, Some(sample_hints()));
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+        assert_eq!(err.rate_limit_hints(), Some(&sample_hints()));
+        assert_eq!(err.transience(), Transience::Transient);
+
+        // No hints: the same bare error `map_http_status` has always produced.
+        let bare = map_http_status_with_hints(PROVIDER, 429, "slow down", KEY, None);
+        assert_eq!(bare.retry_after(), None);
+        assert_eq!(bare.rate_limit_hints(), None);
+    }
+
+    #[test]
+    fn map_http_status_with_hints_none_hints_matches_map_http_status_for_every_other_status() {
+        for status in (300u16..=599).filter(|s| *s != 429) {
+            for body in [
+                "",
+                "boom",
+                "This model's maximum context length is 8192 tokens",
+            ] {
+                let plain = map_http_status(PROVIDER, status, body, KEY);
+                let with_none = map_http_status_with_hints(PROVIDER, status, body, KEY, None);
+                assert_eq!(
+                    format!("{plain:?}"),
+                    format!("{with_none:?}"),
+                    "status {status}, body {body:?}"
+                );
+                // Hints only ever ride a 429: any other status ignores them entirely.
+                let with_some =
+                    map_http_status_with_hints(PROVIDER, status, body, KEY, Some(sample_hints()));
+                assert_eq!(
+                    format!("{plain:?}"),
+                    format!("{with_some:?}"),
+                    "status {status}, body {body:?}, hints supplied"
+                );
+            }
+        }
+        // And the 429 delegation is identical for the hint-less case.
+        assert_eq!(
+            format!("{:?}", map_http_status(PROVIDER, 429, "x", KEY)),
+            format!(
+                "{:?}",
+                map_http_status_with_hints(PROVIDER, 429, "x", KEY, None)
+            )
+        );
+    }
+
+    #[test]
+    fn a_429_error_never_renders_the_response_body_or_the_key() {
+        let err = map_http_status_with_hints(
+            PROVIDER,
+            429,
+            &format!("echoed {KEY} back"),
+            KEY,
+            Some(sample_hints()),
+        );
+        for rendered in [format!("{err}"), format!("{err:?}")] {
+            assert!(!rendered.contains(KEY), "{rendered}");
+            assert!(!rendered.contains("echoed"), "{rendered}");
+        }
     }
 }

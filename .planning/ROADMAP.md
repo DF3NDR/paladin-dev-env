@@ -573,7 +573,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 43-03-PLAN.md — Shared rate-limit header parser (Retry-After both forms, retry-after-ms, OpenAI x-ratelimit-*, Anthropic anthropic-ratelimit-*), map_http_status_with_hints, OpenAI/Anthropic header snapshots, Anthropic first 429, quota-class 429s to UsageLimitExceeded (wave 3)
+- [x] 43-03-PLAN.md — Shared rate-limit header parser (Retry-After both forms, retry-after-ms, OpenAI x-ratelimit-*, Anthropic anthropic-ratelimit-*), map_http_status_with_hints, OpenAI/Anthropic header snapshots, Anthropic first 429, quota-class 429s to UsageLimitExceeded (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

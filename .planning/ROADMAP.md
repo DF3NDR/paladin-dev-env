@@ -557,10 +557,63 @@ the whole worker fleet, without ever leaving a run unpaced.
 
   5. When Redis is unavailable, pacing degrades to conservative per-process pacing with a trace
      warning; a run is never left unpaced — covered by a test.
-**Plans**: TBD
+**Plans**: 13 plans
 **Research flag**: yes — no adjacent in-tree pattern to imitate for the stampede lock, and the
 fail-open-vs-fail-closed decision on Redis unavailability is a genuine open design question the PRD
 does not resolve; needs deeper phase-specific research.
+
+Plans:
+**Wave 1**
+
+- [ ] 43-01-PLAN.md — Tracer: CadencePort + CadencePolicy, InMemoryCadence, CadenceLlmAdapter composed as Pricing(Cadence(provider)), OpenAI surfaces its first 429, treasurer.cadence, build_cadence/compose_llm at the agent host, end-to-end cadence_tracer test through a real OpenAI adapter; register (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 43-02-PLAN.md — Typed retry delay: RateLimitExceeded { retry_after, hints } + RateLimitHints, workspace sweep, the decorator honours the provider delay as a minimum and surfaces a delay beyond max_wait_secs (D-06); D-27 + register (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 43-03-PLAN.md — Shared rate-limit header parser (Retry-After both forms, retry-after-ms, OpenAI x-ratelimit-*, Anthropic anthropic-ratelimit-*), map_http_status_with_hints, OpenAI/Anthropic header snapshots, Anthropic first 429, quota-class 429s to UsageLimitExceeded (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 43-04-PLAN.md — Compat engine, DeepSeek and Gemini surface their first 429 with Retry-After (D-02 extended); conformance case 10 (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 43-05-PLAN.md — Shared cadence contract suite, bounded in-process state, stream gating, waiter spread, cancellation safety (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 43-06-PLAN.md — Fallback chains pace first and hop last (D-03): FallbackLlmAdapter::with_cadence, ModelFallbackMiddleware::paced, AgentRuntimeDeps.cadence; success-criterion-2 tests (wave 6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 43-07-PLAN.md — RedisCadence behind redis-cadence: server-clock Lua, lazy timed connection, live contract suite, two-worker fleet proof, CI job redis-cadence-integration (wave 7)
+
+**Wave 8** *(blocked on Wave 7 completion)*
+
+- [ ] 43-08-PLAN.md — ResilientCadence degraded mode (D-05): in-process fallback x degraded_multiplier, one warning per outage, probe back-off, recovery; dead-Redis and never-unpaced tests (wave 8)
+
+**Wave 9** *(blocked on Wave 8 completion)*
+
+- [ ] 43-09-PLAN.md — treasurer.cadence redis backend + env overrides, build_cadence resilient branch, every server composition root paced from one shared wiring, operator docs (wave 9)
+
+**Wave 10** *(blocked on Wave 9 completion)*
+
+- [ ] 43-10-PLAN.md — Stampede lock primitives: CadencePort::try_lock/unlock, FencingToken (Distributed/Local), in-memory/Redis/resilient fail-open, defaulted NodeCachePort::put_fenced with the RedisNodeCache fenced write (wave 10)
+
+**Wave 11** *(blocked on Wave 10 completion)*
+
+- [ ] 43-11-PLAN.md — Engine stampede lock: WarEngine::with_cadence, lock loop around the cache miss-to-put window, release on every exit, cancellation-aware waiting (wave 11)
+
+**Wave 12** *(blocked on Wave 11 completion)*
+
+- [ ] 43-12-PLAN.md — Provider header verification against official OpenAI/Anthropic docs with an operator checkpoint for what the sandbox cannot fetch; verified-source rustdoc (wave 12, non-autonomous)
+
+**Wave 13** *(blocked on Wave 12 completion)*
+
+- [ ] 43-13-PLAN.md — ADR-0058, Cadence in the ubiquitous language, crate CHANGELOGs, D-27 semver measurement, full phase gate and manual credential review (wave 13)
 
 ### Phase 44: Legacy Clean-Break Removal
 

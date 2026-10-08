@@ -35,7 +35,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain hops. A 5xx, timeout or network error still hops at once, and a chain built without
   `with_cadence` is unchanged. `ModelFallbackMiddleware::paced` builds a paced middleware chain,
   and `AgentRuntimeDeps.cadence` (an in-process wiring by default) paces every config-built
-  `model_fallback` chain; set it to `None` to opt out. Later Phase 43 plans extend this entry.
+  `model_fallback` chain; set it to `None` to opt out.
+  Plan 43-07 shares pacing across a worker fleet through Redis (PACE-03): `RedisCadence` and
+  `RedisCadenceConfig` in `paladin-storage`, behind the new `redis-cadence` Cargo feature (also a
+  `paladin-ai` passthrough, in neither `default` nor `full`). A 429 recorded by one worker gates
+  every worker on the same Redis server for that provider and model. Each operation is one
+  atomic Lua script that reads the Redis server's own clock and returns relative waits, so clock
+  skew between workers cannot shorten or lengthen a wait; the connection is lazy with explicit
+  timeouts so a dead server errors instead of hanging, and the URL's password is redacted in
+  `Debug` and in every error. Every key carries a TTL and reads create none. A CI job,
+  `redis-cadence-integration`, runs the live suite and fails if it was skipped. Later Phase 43
+  plans extend this entry.
 - **Provider retry delay on a 429 (PACE-01, PACE-02; Phase 43 plan 43-02).**
   `LlmError::RateLimitExceeded` now carries the provider's own retry delay and a rate-limit header
   snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new

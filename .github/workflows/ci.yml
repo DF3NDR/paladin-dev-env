@@ -1229,6 +1229,92 @@ jobs:
         if: always()
         run: docker compose -f docker/docker-compose.test.yml down -v
 
+  # Redis cadence live-server integration (PACE-03, D-09). The RedisCadence suite and the
+  # two-worker fleet test self-skip -- and therefore pass -- when no server is reachable,
+  # exactly like the redis-cache-integration and redis-queue jobs above. Without this job the
+  # claim "a 429 on one worker slows every worker sharing that provider and model" would be
+  # proved in no environment at all while every CI run reported green -- the same failure
+  # shape the Postgres, Ollama, redis-cache and redis-queue jobs were each added to close.
+  #
+  # Reuses the `redis-test` service the jobs above bring up
+  # (docker/docker-compose.test.yml) rather than defining a second Redis container. Uses
+  # logical database index 2 (`redis://127.0.0.1:6380/2`) so this job's keys never share a
+  # keyspace with the redis-cache-integration (0) or redis-queue (1) jobs even if all three
+  # ever ran against the same server.
+  #
+  # The reachability assertion (`redis-cli ping`), the early-return detection step and the
+  # selected-count assertion below are what give this job its meaning -- do not remove them.
+  redis-cadence-integration:
+    name: Redis Cadence Contract Suite (live server)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: redis-cadence-integration
+
+      - name: Start redis-test and wait for healthy
+        run: |
+          docker compose -f docker/docker-compose.test.yml up -d redis-test
+          echo "Waiting for redis-test to report healthy..."
+          timeout 120 sh -c 'until docker inspect paladin-redis-test --format="{{.State.Health.Status}}" 2>/dev/null | grep -qx healthy; do sleep 3; done'
+
+      - name: Assert the live server accepts connections
+        run: docker exec paladin-redis-test redis-cli ping
+
+      - name: Run RedisCadence contract suite and the two-worker fleet test
+        run: |
+          set -o pipefail
+          # --nocapture: the self-skip path announces itself on stdout, which cargo swallows
+          # without it -- the detection step below would have nothing to read. Database
+          # index 2 (not 0 or 1, which the cache and queue jobs use). Each cargo invocation
+          # appends to the one log; the count step below sums the per-binary results.
+          CADENCE_REDIS_TEST_URL=redis://127.0.0.1:6380/2 \
+            cargo test -p paladin-storage --features redis-cadence --lib cadence::redis \
+            -- --nocapture 2>&1 | tee /tmp/redis-cadence-test.log
+          CADENCE_REDIS_TEST_URL=redis://127.0.0.1:6380/2 \
+            cargo test -p paladin-ai --features redis-cadence --lib cadence_fleet \
+            -- --nocapture 2>&1 | tee -a /tmp/redis-cadence-test.log
+
+      - name: Fail if the suite took the SKIP path
+        run: |
+          if grep -q 'SKIP:' /tmp/redis-cadence-test.log; then
+            echo "::error::the cadence Redis tests took the SKIP path — the live server was NOT exercised."
+            grep 'SKIP:' /tmp/redis-cadence-test.log
+            exit 1
+          fi
+          echo "All cadence Redis tests exercised the live server."
+
+      - name: Fail if the suite selected fewer tests than it declares
+        run: |
+          set -o pipefail
+          # Declared: every test in the storage module, plus the one fleet test in the facade.
+          # Passed: the sum over both cargo invocations in the log (each prints its own
+          # `test result: ok. N passed` line).
+          STORAGE=$(grep -cE '^\s*#\[test\]|^\s*#\[tokio::test\]' crates/paladin-storage/src/cadence/redis.rs)
+          FLEET=$(grep -c 'fn cadence_fleet_' src/infrastructure/cadence.rs)
+          EXPECTED=$((STORAGE + FLEET))
+          ACTUAL=$(grep -oP 'test result: ok\. \K[0-9]+(?= passed)' /tmp/redis-cadence-test.log | awk '{ total += $1 } END { print total + 0 }' || true)
+          echo "Declared tests: $EXPECTED (storage $STORAGE + fleet $FLEET), passed: ${ACTUAL:-0}"
+          if [ -z "$ACTUAL" ] || [ "$ACTUAL" -lt "$EXPECTED" ]; then
+            echo "::error::the cadence Redis tests selected fewer tests (${ACTUAL:-0}) than declared ($EXPECTED) -- a stale or mistyped filter would report green having run nothing."
+            exit 1
+          fi
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker compose -f docker/docker-compose.test.yml logs redis-test
+
+      - name: Stop services
+        if: always()
+        run: docker compose -f docker/docker-compose.test.yml down -v
+
   # Generated SDK clients smoke (PLAT-FR-17, D-49, 27-18): proves
   # `crates/paladin-web/openapi.json` is genuinely generatable into a working Python
   # AND TypeScript client, not just schema-valid — runs on every PR/push (no path

@@ -153,6 +153,136 @@ mod tests {
         assert!(err.contains("treasurer.cadence.base_backoff_ms"), "{err}");
     }
 
+    /// The Redis server the fleet test talks to: `CADENCE_REDIS_TEST_URL`, defaulting to the
+    /// compose `redis-test` service on logical database 2 (the database the storage suite uses).
+    #[cfg(feature = "redis-cadence")]
+    fn cadence_redis_test_url() -> String {
+        std::env::var("CADENCE_REDIS_TEST_URL")
+            .unwrap_or_else(|_| "redis://127.0.0.1:6380/2".to_string())
+    }
+
+    /// A short-timeout TCP probe, so a missing server is a fast, clean skip.
+    #[cfg(feature = "redis-cadence")]
+    fn redis_reachable(url: &str) -> bool {
+        use std::net::ToSocketAddrs;
+
+        let Ok(parsed) = url::Url::parse(url) else {
+            return false;
+        };
+        let Some(host) = parsed.host_str() else {
+            return false;
+        };
+        let port = parsed.port().unwrap_or(6379);
+        (host, port)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addrs| addrs.next())
+            .is_some_and(|addr| {
+                std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(750))
+                    .is_ok()
+            })
+    }
+
+    /// PACE-03 / ROADMAP success criterion 3, end to end across workers: two workers, each with
+    /// its own `RedisCadence` (hence its own Redis connection) over one server and one key
+    /// prefix. A 429 on worker A measurably slows worker B's next call to the same provider and
+    /// model, while another model on worker B is not delayed.
+    #[cfg(feature = "redis-cadence")]
+    #[tokio::test]
+    async fn cadence_fleet_429_on_one_worker_slows_the_other()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::{Duration, Instant};
+
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_llm::cadence::CadenceSettings;
+        use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
+        use paladin_ports::output::cadence_port::CadencePolicy;
+        use paladin_ports::output::llm_port::{LlmError, LlmRequest};
+        use paladin_storage::cadence::redis::{RedisCadence, RedisCadenceConfig};
+
+        let url = cadence_redis_test_url();
+        if !redis_reachable(&url) {
+            println!(
+                "SKIP: redis-test not reachable at {url} -- bring it up with \
+                 `docker compose -f docker/docker-compose.test.yml up -d redis-test` \
+                 (or point CADENCE_REDIS_TEST_URL at a reachable server)"
+            );
+            return Ok(());
+        }
+
+        // One unique prefix: the two workers share state, no other test does.
+        let prefix = format!("test-cadence-fleet-{}", uuid::Uuid::new_v4());
+        let worker_wiring = || -> Result<CadenceWiring, Box<dyn std::error::Error>> {
+            let port = RedisCadence::new(
+                RedisCadenceConfig::new(url.as_str()).with_key_prefix(prefix.as_str()),
+                CadencePolicy::default(),
+            )?;
+            Ok(CadenceWiring::new(
+                Arc::new(port),
+                CadenceSettings::default(),
+            ))
+        };
+        let wiring_a = worker_wiring()?;
+        let wiring_b = worker_wiring()?;
+
+        // Both workers talk to "openai"; worker A's provider answers one 429 with a 1 s delay.
+        let provider_a = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_script(vec![MockScriptEntry::Error(LlmError::rate_limited(Some(
+                    Duration::from_secs(1),
+                )))]),
+        );
+        let provider_b = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_script(vec![MockScriptEntry::Text("ok".to_string())]),
+        );
+        let worker_a = compose_llm(provider_a.clone(), &empty_price_table()?, Some(&wiring_a));
+        let worker_b = compose_llm(provider_b.clone(), &empty_price_table()?, Some(&wiring_b));
+
+        let request = |model: &str| -> Result<LlmRequest, Box<dyn std::error::Error>> {
+            Ok(LlmRequest::new(
+                model,
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))?,
+            ))
+        };
+
+        // Worker A gets the 429, unchanged, with exactly one provider hit.
+        let first = worker_a.generate(request("gpt-4o")?).await;
+        let recorded_at = Instant::now();
+        assert!(
+            matches!(first, Err(LlmError::RateLimitExceeded { .. })),
+            "expected the unchanged rate limit, got {first:?}"
+        );
+        assert_eq!(provider_a.call_count(), 1);
+
+        // Another model on worker B is not delayed by a gate on gpt-4o.
+        let unrelated_started = Instant::now();
+        let unrelated = worker_b.generate(request("gpt-4o-mini")?).await?;
+        let unrelated_took = unrelated_started.elapsed();
+        assert_eq!(unrelated.content, "ok");
+        assert!(
+            unrelated_took < Duration::from_millis(200),
+            "a different model must not be gated by worker A's 429, took {unrelated_took:?}"
+        );
+
+        // Worker B's call to the same provider and model is held by the gate worker A opened.
+        let paced = worker_b.generate(request("gpt-4o")?).await?;
+        let gap = recorded_at.elapsed();
+        assert_eq!(paced.content, "ok", "the script cycles, so B answers again");
+        assert!(
+            gap >= Duration::from_millis(900),
+            "worker B reached its provider only {gap:?} after worker A's 429; the shared gate \
+             must hold it for about 1 s"
+        );
+        assert_eq!(provider_b.call_count(), 2);
+        Ok(())
+    }
+
     /// Phase 43's tracer: a provider 429 slows the NEXT call, end to end -- config ->
     /// `build_cadence` -> `compose_llm` -> decorator -> port -> in-process adapter -> a real
     /// `OpenAIAdapter` (with `max_retries: 3`) -> an HTTP mock.

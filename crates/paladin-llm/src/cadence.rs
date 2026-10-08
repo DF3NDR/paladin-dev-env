@@ -27,6 +27,25 @@
 //! its own back-off after a failure and then calls again, hitting the gate -- so an attempt-count
 //! test must not assume a wall-clock sum.
 //!
+//! ## The provider's delay is a minimum (PACE-02, D-01, D-04)
+//!
+//! When a 429 carries a delay ([`LlmError::retry_after`]) the decorator hands it to the port as
+//! the *minimum* before the next send to that provider and model. The port adds nothing
+//! subtractive: jitter may lengthen a gate, never shorten one below the provider's own number.
+//! An explicit `Retry-After` / `retry-after-ms` value is passed through unreduced. A delay whose
+//! source is [`RetryDelaySource::ResetHeader`] is different in kind -- it is derived from a
+//! quota's full-replenishment time, which over-estimates the minimum -- so it is clamped to
+//! [`CadenceSettings::max_backoff`] before it reaches the port.
+//!
+//! ## A gate beyond `max_wait` is surfaced, not slept (D-06)
+//!
+//! A gate no longer than [`CadenceSettings::max_wait`] is waited out. A longer one makes the call
+//! return [`LlmError::RateLimitExceeded`] at once, carrying the remaining gate as its
+//! [`retry_after`](LlmError::retry_after), without calling the provider and without recording a
+//! new 429 on the port: the refusal is the decorator's own typed error, so `RetryPolicy` exhausts
+//! or the run halts with an actionable message instead of a worker lease sitting idle for an
+//! hour, and a self-generated refusal can never escalate the shared streak.
+//!
 //! ## Bookkeeping never fails a call
 //!
 //! A port error is logged under [`CADENCE_LOG_TARGET`] at `warn` (once per call) and the call
@@ -47,6 +66,7 @@ use paladin_ports::output::cadence_port::{
 use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
+use paladin_ports::output::rate_limit_hints::RetryDelaySource;
 
 use crate::fallback::FALLBACK_PROVIDER_NAME;
 
@@ -86,7 +106,8 @@ impl CadenceSettings {
         self.max_wait
     }
 
-    /// The largest delay-less gate (mirrors the policy's cap).
+    /// The largest delay-less gate (mirrors the policy's cap). Also the bound on a delay derived
+    /// from a rate-limit reset header, which over-estimates the provider's minimum.
     pub fn max_backoff(&self) -> Duration {
         self.max_backoff
     }
@@ -162,11 +183,27 @@ impl fmt::Debug for CadenceLlmAdapter {
 impl CadenceLlmAdapter {
     /// Wait until the key's gate is clear, re-checking after every sleep because a concurrent
     /// 429 may have extended it. Returns the streak read at the moment the gate cleared (zero
-    /// when the port failed), and whether the port misbehaved.
-    async fn wait_for_gate(&self, key: &CadenceKey, warned: &mut bool) -> u32 {
+    /// when the port failed).
+    ///
+    /// A gate longer than `max_wait` is not slept (D-06): the call is refused with a typed
+    /// [`LlmError::RateLimitExceeded`] whose delay is the remaining gate. The check runs on every
+    /// reading, so a gate a concurrent 429 stretches past the cap mid-wait is surfaced too.
+    async fn wait_for_gate(&self, key: &CadenceKey, warned: &mut bool) -> Result<u32, LlmError> {
         loop {
             match self.wiring.port().gate(key).await {
-                Ok(reading) if reading.is_clear() => return reading.streak(),
+                Ok(reading) if reading.is_clear() => return Ok(reading.streak()),
+                Ok(reading) if reading.wait() > self.wiring.settings().max_wait() => {
+                    log::debug!(
+                        target: CADENCE_LOG_TARGET,
+                        "provider {} model {} is gated for {:?}, beyond max_wait {:?}; \
+                         surfacing a rate limit instead of waiting",
+                        key.provider(),
+                        key.model(),
+                        reading.wait(),
+                        self.wiring.settings().max_wait()
+                    );
+                    return Err(LlmError::rate_limited(Some(reading.wait())));
+                }
                 Ok(reading) => {
                     log::trace!(
                         target: CADENCE_LOG_TARGET,
@@ -179,7 +216,7 @@ impl CadenceLlmAdapter {
                 }
                 Err(err) => {
                     Self::warn_port_error("gate", key, &err, warned);
-                    return 0;
+                    return Ok(0);
                 }
             }
         }
@@ -199,13 +236,34 @@ impl CadenceLlmAdapter {
                     Self::warn_port_error("record_success", key, &err, warned);
                 }
             }
-            Err(LlmError::RateLimitExceeded { .. }) => {
-                if let Err(err) = self.wiring.port().record_rate_limited(key, None).await {
+            Err(err @ LlmError::RateLimitExceeded { .. }) => {
+                let minimum = self.minimum_delay(err);
+                if let Err(err) = self.wiring.port().record_rate_limited(key, minimum).await {
                     Self::warn_port_error("record_rate_limited", key, &err, warned);
                 }
             }
             _ => {}
         }
+    }
+
+    /// The provider's own delay for `err`, as the minimum the port must honour.
+    ///
+    /// An explicit `Retry-After` / `retry-after-ms` delay is returned unchanged: it is the
+    /// provider's stated minimum and is never reduced. A delay derived from a reset header
+    /// ([`RetryDelaySource::ResetHeader`]) is clamped to `max_backoff`, because a quota's
+    /// full-replenishment time over-estimates how long the provider needs before the next
+    /// request is admitted. `None` when the provider gave nothing -- no delay is invented.
+    fn minimum_delay(&self, err: &LlmError) -> Option<Duration> {
+        let reset_derived = err
+            .rate_limit_hints()
+            .and_then(|hints| hints.effective_retry_after())
+            .is_some_and(|(_, source)| source == RetryDelaySource::ResetHeader);
+        let delay = err.retry_after()?;
+        Some(if reset_derived {
+            delay.min(self.wiring.settings().max_backoff())
+        } else {
+            delay
+        })
     }
 
     /// Log a port failure at most once per call.
@@ -241,12 +299,14 @@ pub fn with_cadence(inner: Arc<dyn LlmPort>, cadence: Option<&CadenceWiring>) ->
 #[async_trait]
 impl LlmPort for CadenceLlmAdapter {
     /// Waits out the key's gate, delegates exactly once, then records the outcome. A 429 is
-    /// recorded and returned UNCHANGED, with no sleep and no second attempt (D-01); any other
-    /// error passes through untouched.
+    /// recorded with the provider's own delay as the minimum and returned UNCHANGED, with no
+    /// sleep and no second attempt (D-01); any other error passes through untouched. A gate
+    /// longer than `max_wait` returns a typed rate-limit error before the provider is called and
+    /// records nothing (D-06).
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
         let key = CadenceKey::new(self.inner.get_provider_name(), &request.model);
         let mut warned = false;
-        let streak = self.wait_for_gate(&key, &mut warned).await;
+        let streak = self.wait_for_gate(&key, &mut warned).await?;
         let outcome = self.inner.generate(request).await;
         self.note_outcome(&key, streak, &outcome, &mut warned).await;
         outcome
@@ -288,6 +348,9 @@ mod tests {
     use crate::mock::{MockLlmAdapter, MockScriptEntry};
     use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
     use paladin_ports::output::cadence_port::{CadencePolicy, GateReading};
+    use paladin_ports::output::rate_limit_hints::{
+        RateLimitDimension, RateLimitDimensionKind, RateLimitHints, RetryDelaySource,
+    };
     use paladin_storage::cadence::InMemoryCadence;
 
     const BASE: Duration = Duration::from_millis(500);
@@ -302,9 +365,32 @@ mod tests {
     }
 
     fn wiring() -> CadenceWiring {
+        wiring_with(CadenceSettings::default())
+    }
+
+    fn wiring_with(settings: CadenceSettings) -> CadenceWiring {
         let policy = CadencePolicy::new(BASE, Duration::from_secs(30)).expect("policy");
         let port = InMemoryCadence::new(policy).with_jitter(|| 0.999);
-        CadenceWiring::new(Arc::new(port), CadenceSettings::default())
+        CadenceWiring::new(Arc::new(port), settings)
+    }
+
+    /// A provider that answers `error` once and then `ok`.
+    fn error_then_ok(error: LlmError) -> Arc<MockLlmAdapter> {
+        Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_script(vec![
+                    MockScriptEntry::Error(error),
+                    MockScriptEntry::Text("ok".to_string()),
+                ]),
+        )
+    }
+
+    fn exhausted_requests_hint(reset: Duration) -> RateLimitHints {
+        RateLimitHints::default().with_dimension(
+            RateLimitDimensionKind::Requests,
+            RateLimitDimension::new(Some(60), Some(0), Some(reset)),
+        )
     }
 
     fn rate_limited_then_ok() -> Arc<MockLlmAdapter> {
@@ -397,6 +483,138 @@ mod tests {
         assert_eq!(wiring.port().gate(&key).await.expect("gate").streak(), 1);
         paced.generate(request("gpt-x")).await.expect("second");
         assert_eq!(wiring.port().gate(&key).await.expect("gate").streak(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn explicit_retry_after_is_honoured_as_a_minimum() {
+        let inner = error_then_ok(LlmError::rate_limited(Some(Duration::from_secs(7))));
+        let paced = with_cadence(inner.clone(), Some(&wiring()));
+
+        let _ = paced.generate(request("gpt-x")).await;
+        let second_start = tokio::time::Instant::now();
+        paced.generate(request("gpt-x")).await.expect("second call");
+
+        assert!(
+            second_start.elapsed() >= Duration::from_secs(7),
+            "the next send must not precede the provider's 7 s; waited {:?}",
+            second_start.elapsed()
+        );
+        assert_eq!(inner.call_count(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_explicit_delay_above_max_backoff_is_never_reduced() {
+        let inner = error_then_ok(LlmError::rate_limited(Some(Duration::from_secs(60))));
+        let paced = with_cadence(inner, Some(&wiring()));
+
+        let _ = paced.generate(request("gpt-x")).await;
+        let second_start = tokio::time::Instant::now();
+        paced.generate(request("gpt-x")).await.expect("second call");
+        assert!(second_start.elapsed() >= Duration::from_secs(60));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn reset_derived_delay_is_clamped_to_max_backoff() {
+        // Only an exhausted dimension resetting in 600 s: a full-replenishment estimate.
+        let hints = exhausted_requests_hint(Duration::from_secs(600));
+        let error = LlmError::rate_limited_with_hints(hints);
+        assert_eq!(error.retry_after(), Some(Duration::from_secs(600)));
+        let inner = error_then_ok(error);
+        let paced = with_cadence(inner, Some(&wiring()));
+
+        let _ = paced.generate(request("gpt-x")).await;
+        let second_start = tokio::time::Instant::now();
+        paced.generate(request("gpt-x")).await.expect("second call");
+
+        let waited = second_start.elapsed();
+        assert!(waited >= BASE, "waited only {waited:?}");
+        assert!(
+            waited <= CadenceSettings::default().max_backoff(),
+            "a reset-derived delay must be bounded by max_backoff; waited {waited:?}"
+        );
+        assert_eq!(
+            waited,
+            CadenceSettings::default().max_backoff(),
+            "the estimate is used, only bounded"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gate_of_exactly_max_wait_is_waited_out() {
+        let inner = error_then_ok(LlmError::rate_limited(Some(Duration::from_secs(300))));
+        let paced = with_cadence(inner.clone(), Some(&wiring()));
+
+        let _ = paced.generate(request("gpt-x")).await;
+        let second_start = tokio::time::Instant::now();
+        let response = paced.generate(request("gpt-x")).await.expect("waited out");
+
+        assert_eq!(response.content, "ok");
+        assert_eq!(second_start.elapsed(), Duration::from_secs(300));
+        assert_eq!(inner.call_count(), 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn gate_one_ms_beyond_max_wait_surfaces_immediately() {
+        let beyond = Duration::from_secs(300) + Duration::from_millis(1);
+        let inner = error_then_ok(LlmError::rate_limited(Some(beyond)));
+        let paced = with_cadence(inner.clone(), Some(&wiring()));
+
+        let _ = paced.generate(request("gpt-x")).await;
+        let second_start = tokio::time::Instant::now();
+        let refused = paced.generate(request("gpt-x")).await;
+
+        let error = refused.expect_err("a gate beyond max_wait must surface");
+        assert!(matches!(error, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(error.retry_after(), Some(beyond));
+        assert_eq!(second_start.elapsed(), Duration::ZERO, "no sleep");
+        assert_eq!(inner.call_count(), 1, "the provider is not called");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn surfaced_refusal_is_not_recorded_as_a_new_429() {
+        let wiring = wiring();
+        let beyond = Duration::from_secs(300) + Duration::from_millis(1);
+        let paced = with_cadence(
+            error_then_ok(LlmError::rate_limited(Some(beyond))),
+            Some(&wiring),
+        );
+        let key = CadenceKey::new("openai", "gpt-x");
+
+        let _ = paced.generate(request("gpt-x")).await;
+        let before = wiring.port().gate(&key).await.expect("gate");
+        assert_eq!(before.streak(), 1);
+
+        for _ in 0..3 {
+            let _ = paced.generate(request("gpt-x")).await;
+        }
+        let after = wiring.port().gate(&key).await.expect("gate");
+        assert_eq!(
+            after.streak(),
+            1,
+            "a self-generated refusal never escalates"
+        );
+        assert_eq!(after.wait(), before.wait(), "and never moves the gate");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn surfaced_provider_error_is_returned_unchanged() {
+        let hints = RateLimitHints::default()
+            .with_retry_after(Duration::from_secs(7), RetryDelaySource::RetryAfter)
+            .with_dimension(
+                RateLimitDimensionKind::Tokens,
+                RateLimitDimension::new(Some(1000), Some(0), Some(Duration::from_secs(40))),
+            );
+        let paced = with_cadence(
+            error_then_ok(LlmError::rate_limited_with_hints(hints.clone())),
+            Some(&wiring()),
+        );
+
+        let error = paced
+            .generate(request("gpt-x"))
+            .await
+            .expect_err("the provider's 429");
+        assert_eq!(error.retry_after(), Some(Duration::from_secs(7)));
+        assert_eq!(error.rate_limit_hints(), Some(&hints));
     }
 
     #[test]

@@ -601,7 +601,7 @@ Plans:
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 43-10-PLAN.md — Stampede lock primitives: CadencePort::try_lock/unlock, FencingToken (Distributed/Local), in-memory/Redis/resilient fail-open, defaulted NodeCachePort::put_fenced with the RedisNodeCache fenced write (wave 10)
+- [x] 43-10-PLAN.md — Stampede lock primitives: CadencePort::try_lock/unlock, FencingToken (Distributed/Local), in-memory/Redis/resilient fail-open, defaulted NodeCachePort::put_fenced with the RedisNodeCache fenced write (wave 10)
 
 **Wave 11** *(blocked on Wave 10 completion)*
 

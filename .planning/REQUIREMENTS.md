@@ -93,7 +93,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **PACE-03**: With Redis configured, pacing state is shared across worker instances through an
   atomic Lua script using the Redis server clock, so a 429 slows the whole fleet
 
-- [ ] **PACE-04**: A distributed cache-stampede lock (set-if-absent with expiry, fencing token,
+- [x] **PACE-04**: A distributed cache-stampede lock (set-if-absent with expiry, fencing token,
   delete-only-if-owner) stops concurrent workers from issuing the same cached request twice
 
 - [x] **PACE-05**: When Redis is unavailable, pacing degrades to conservative per-process pacing
@@ -226,7 +226,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PACE-01 | Phase 43 | Complete |
 | PACE-02 | Phase 43 | Complete |
 | PACE-03 | Phase 43 | Complete |
-| PACE-04 | Phase 43 | Pending |
+| PACE-04 | Phase 43 | Complete |
 | PACE-05 | Phase 43 | Complete |
 | LEGACY-01 | Phase 44 | Pending |
 | LEGACY-02 | Phase 44 | Pending |

@@ -26,7 +26,8 @@
 //!   time against a live server.
 //! * Waiting is `tokio::time::sleep`, so the same code runs instantly on a
 //!   paused clock (in-memory) and in real time (Redis). Clauses whose name ends
-//!   in `_paused` assert exact instants and may only run on a paused clock;
+//!   in `_paused` assert exact instants and may only run on a paused clock
+//!   (`#[tokio::test(start_paused = true)]`; the suite itself needs no `test-util` feature);
 //!   `run_all_paused` runs those, `run_all` runs the rest.
 //! * Every clause uses a key namespaced by its own name, so clauses never share
 //!   state and one port can serve the whole suite.
@@ -232,7 +233,10 @@ pub async fn gate_boundary_is_closed_at_not_before_paused(
         "a streak-1 delay-less gate is exactly the base"
     );
 
-    tokio::time::advance(base - tick).await;
+    // `sleep`, not `advance`: `advance` needs tokio's `test-util` feature, which a plain (non-test)
+    // module cannot assume. On a paused clock an idle `sleep` jumps the clock to exactly its
+    // deadline, and every duration here is a whole number of milliseconds.
+    tokio::time::sleep(base - tick).await;
     let before = port.gate(&k).await.expect("gate one tick early");
     assert_eq!(
         before.wait(),
@@ -241,7 +245,7 @@ pub async fn gate_boundary_is_closed_at_not_before_paused(
     );
     assert!(!before.is_clear());
 
-    tokio::time::advance(tick).await;
+    tokio::time::sleep(tick).await;
     let at = port.gate(&k).await.expect("gate at not_before");
     assert_eq!(
         at.wait(),

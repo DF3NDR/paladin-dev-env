@@ -15,7 +15,7 @@ use reqwest::{
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::PromptType;
@@ -24,7 +24,9 @@ use paladin_ports::output::llm_port::{
     StreamingResponse, TokenUsage,
 };
 
-use crate::http_status::map_http_status;
+use crate::http_status::map_http_status_with_hints;
+use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits.
@@ -39,6 +41,45 @@ const ANTHROPIC_PROVIDER: &str = "anthropic";
 /// T-41-01). Checked AFTER the pre-existing `max_tokens` branch in
 /// [`AnthropicAdapter::map_error`] so that branch is never shadowed.
 const ANTHROPIC_USAGE_CAP_SIGNATURE: &str = "You have reached your specified API usage limits";
+
+/// The `error.details.error_code` Anthropic documents on a workspace spend-cap `429`
+/// (`platform.claude.com/docs/en/api/rate-limits`): the response carries no `retry-after`, and
+/// "retrying, including the SDK's automatic retries, fails until access resumes" -- an account
+/// wall, not a rate limit, so pacing on it is futile (research Pitfall 6).
+const ENFORCED_SPEND_LIMIT_REACHED: &str = "enforced_spend_limit_reached";
+
+/// Whether a `429` body is the spend-cap response rather than a transient rate limit.
+///
+/// Compares only the short `error.details.error_code` identifier of the parsed JSON; it never
+/// renders or stores any body text, and a body that is not JSON (or lacks the field) is simply
+/// "not a spend cap".
+fn signals_enforced_spend_limit(body: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    value
+        .get("error")
+        .and_then(|error| error.get("details"))
+        .and_then(|details| details.get("error_code"))
+        .and_then(|code| code.as_str())
+        == Some(ENFORCED_SPEND_LIMIT_REACHED)
+}
+
+/// Parse a `429` response's rate-limit headers. Must run BEFORE `response.text()` consumes the
+/// response (research Pitfall 2). Only a 429 is parsed, and no credential header is read.
+fn snapshot_rate_limit_hints(
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+) -> Option<RateLimitHints> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    hints_from_headers(
+        RateLimitHeaderFamily::Anthropic,
+        SystemTime::now(),
+        |name| headers.get(name).and_then(|v| v.to_str().ok()),
+    )
+}
 
 /// Configuration for Anthropic Claude LLM adapter.
 #[derive(Debug, Clone)]
@@ -308,10 +349,20 @@ impl AnthropicAdapter {
         })
     }
 
-    /// Map a non-2xx Anthropic response to [`LlmError`].
+    /// Map a non-2xx Anthropic response to [`LlmError`] with no rate-limit headers.
+    ///
+    /// A thin wrapper over [`Self::map_error_with_hints`], kept so the status-mapping unit
+    /// tests read the same as before PACE-01. Production paths call the hints variant.
+    #[cfg(test)]
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
+        self.map_error_with_hints(status, body, None)
+    }
+
+    /// Map a non-2xx Anthropic response to [`LlmError`], carrying the parsed rate-limit
+    /// headers of a `429` (PACE-01).
     ///
     /// Two Anthropic-specific pre-checks run first; everything else is the
-    /// crate-wide [`map_http_status`] (Phase 25 D-03, FT-FR-01), which
+    /// crate-wide [`map_http_status_with_hints`] (Phase 25 D-03, FT-FR-01), which
     /// redacts the raw `body` before bounding it and emits a typed
     /// `ProviderError { status }` for every status without a dedicated
     /// variant.
@@ -331,8 +382,21 @@ impl AnthropicAdapter {
     ///   client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
     ///   response is never followed — it arrives here as an ordinary
     ///   non-success status instead.
-    fn map_error(&self, status: u16, body: &str) -> LlmError {
+    /// - a `429` whose body carries `error.details.error_code ==
+    ///   "enforced_spend_limit_reached"` is the workspace spend cap, not a rate limit
+    ///   (research Pitfall 6): it maps to the permanent [`LlmError::UsageLimitExceeded`], so it
+    ///   is neither retried nor paced. Any other `429` carries `hints` through the generic arm.
+    fn map_error_with_hints(
+        &self,
+        status: u16,
+        body: &str,
+        hints: Option<RateLimitHints>,
+    ) -> LlmError {
         match status {
+            429 if signals_enforced_spend_limit(body) => LlmError::UsageLimitExceeded {
+                provider: ANTHROPIC_PROVIDER.to_string(),
+                regain_hint: None,
+            },
             403 => LlmError::AuthenticationError(
                 "API key does not have permission for this resource.".to_string(),
             ),
@@ -366,7 +430,13 @@ impl AnthropicAdapter {
                     regain_hint: extract_regain_hint(&redacted),
                 }
             }
-            _ => map_http_status(ANTHROPIC_PROVIDER, status, body, &self.config.api_key),
+            _ => map_http_status_with_hints(
+                ANTHROPIC_PROVIDER,
+                status,
+                body,
+                &self.config.api_key,
+                hints,
+            ),
         }
     }
 
@@ -404,12 +474,18 @@ impl AnthropicAdapter {
                     // all; retrying here would burn retries before the breaker
                     // ever sees the error, defeating its "does not burn
                     // retries" guarantee.
+                    //
+                    // `RateLimitExceeded` is surfaced on the FIRST 429 (D-02, PACE-02): one
+                    // layer -- the Cadence -- sees every 429 the instant it happens, so
+                    // `Retry-After` is honoured on the first hit and no thrash hides below
+                    // the decorator. Network and 5xx failures are still retried here.
                     if matches!(
                         e,
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
                             | LlmError::EmptyCompletion(_)
                             | LlmError::UsageLimitExceeded { .. }
+                            | LlmError::RateLimitExceeded { .. }
                     ) {
                         return Err(e);
                     }
@@ -446,11 +522,14 @@ impl LlmPort for AnthropicAdapter {
             let status = response.status().as_u16();
 
             if !response.status().is_success() {
+                // Snapshot the 429 headers BEFORE `.text()` consumes the response
+                // (research Pitfall 2).
+                let hints = snapshot_rate_limit_hints(response.status(), response.headers());
                 let body = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status, &body));
+                return Err(self.map_error_with_hints(status, &body, hints));
             }
 
             let body = response.text().await.map_err(|e| {
@@ -497,11 +576,13 @@ impl LlmPort for AnthropicAdapter {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
+            // Same header snapshot as the generate path, taken before the body read.
+            let hints = snapshot_rate_limit_hints(response.status(), response.headers());
             let body = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(self.map_error(status, &body));
+            return Err(self.map_error_with_hints(status, &body, hints));
         }
 
         // D-14 terminal-chunk contract: Anthropic's wire has no `[DONE]`
@@ -1490,6 +1571,313 @@ stake, so an attacker donating to himself alone is a strict loss.";
             1,
             "a usage-cap error must not be retried — it will not clear on backoff"
         );
+    }
+
+    // ── Phase 43 (PACE-01, D-02, Pitfall 6): first-429 surfacing and header hints ──
+
+    #[tokio::test(start_paused = true)]
+    async fn test_execute_with_retry_invokes_operation_exactly_once_on_rate_limit_exceeded() {
+        let adapter = test_adapter();
+        let calls = Arc::new(AtomicU32::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        let result: Result<(), LlmError> = adapter
+            .execute_with_retry(
+                move || {
+                    let calls = Arc::clone(&calls_clone);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        Err(LlmError::rate_limited(None))
+                    }
+                },
+                3,
+            )
+            .await;
+
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "a 429 is surfaced on the first attempt (D-02): the Cadence above paces the next call"
+        );
+    }
+
+    mod rate_limit_wiring {
+        use super::*;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_ports::output::rate_limit_hints::{RateLimitDimensionKind, RetryDelaySource};
+
+        const SECS: fn(u64) -> Duration = Duration::from_secs;
+
+        /// A fixed response `Date` so every RFC 3339 reset below has an exact expected delta
+        /// (the resets are measured from the response `Date` when it parses).
+        const RESPONSE_DATE: &str = "Tue, 14 Nov 2023 22:11:40 GMT";
+
+        fn adapter_at(base_url: &str) -> AnthropicAdapter {
+            AnthropicAdapter::new(AnthropicConfig::new(
+                "sk-ant-test123".to_string(),
+                base_url.to_string(),
+                "claude-opus-4-8".to_string(),
+                4096,
+            ))
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "claude-opus-4-8",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        fn with_ratelimit_headers(mock: mockito::Mock, retry_after: Option<&str>) -> mockito::Mock {
+            let mock = mock
+                .with_header("date", RESPONSE_DATE)
+                .with_header("anthropic-ratelimit-requests-limit", "50")
+                .with_header("anthropic-ratelimit-requests-remaining", "0")
+                .with_header("anthropic-ratelimit-requests-reset", "2023-11-14T22:13:30Z")
+                .with_header("anthropic-ratelimit-tokens-limit", "40000")
+                .with_header("anthropic-ratelimit-tokens-remaining", "39000")
+                .with_header("anthropic-ratelimit-tokens-reset", "2023-11-14T22:13:25Z")
+                .with_header("anthropic-ratelimit-input-tokens-limit", "30000")
+                .with_header("anthropic-ratelimit-input-tokens-remaining", "29000")
+                .with_header(
+                    "anthropic-ratelimit-input-tokens-reset",
+                    "2023-11-14T22:13:21Z",
+                )
+                .with_header("anthropic-ratelimit-output-tokens-limit", "8000")
+                .with_header("anthropic-ratelimit-output-tokens-remaining", "0")
+                .with_header(
+                    "anthropic-ratelimit-output-tokens-reset",
+                    "2023-11-14T22:14:20Z",
+                );
+            match retry_after {
+                Some(v) => mock.with_header("retry-after", v),
+                None => mock,
+            }
+        }
+
+        fn assert_four_dimensions(err: &LlmError) {
+            let hints = err.rate_limit_hints().expect("the 429 headers were parsed");
+            for (kind, limit, remaining, reset) in [
+                (RateLimitDimensionKind::Requests, 50, 0, 110),
+                (RateLimitDimensionKind::Tokens, 40_000, 39_000, 105),
+                (RateLimitDimensionKind::InputTokens, 30_000, 29_000, 101),
+                (RateLimitDimensionKind::OutputTokens, 8_000, 0, 160),
+            ] {
+                let dim = hints.dimension(kind);
+                assert_eq!(dim.limit(), Some(limit), "{kind:?}");
+                assert_eq!(dim.remaining(), Some(remaining), "{kind:?}");
+                assert_eq!(dim.reset_after(), Some(SECS(reset)), "{kind:?}");
+            }
+        }
+
+        const RATE_LIMIT_BODY: &str = r#"{"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}"#;
+
+        #[tokio::test]
+        async fn anthropic_429_is_surfaced_once_with_its_retry_delay_and_four_dimensions() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/messages")
+                    .with_status(429)
+                    .with_body(RATE_LIMIT_BODY),
+                Some("7"),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            // `execute_with_retry(.., 3)`: three attempts are allowed; a 429 must use only one.
+            let started = std::time::Instant::now();
+            let err = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect_err("a 429 is an error");
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), Some(SECS(7)));
+            assert_eq!(
+                err.rate_limit_hints()
+                    .and_then(|h| h.explicit_retry_after()),
+                Some((SECS(7), RetryDelaySource::RetryAfter))
+            );
+            assert_four_dimensions(&err);
+            assert!(
+                started.elapsed() < Duration::from_millis(900),
+                "a surfaced 429 must not sleep through the retry back-off ({:?})",
+                started.elapsed()
+            );
+            // The raw RFC 3339 strings never reach a rendered error (T-43-10).
+            for rendered in [format!("{err}"), format!("{err:?}")] {
+                assert!(!rendered.contains("2023-11-14T"), "{rendered}");
+            }
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn anthropic_429_without_retry_after_uses_the_exhausted_reset() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/messages")
+                    .with_status(429)
+                    .with_body(RATE_LIMIT_BODY),
+                None,
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect_err("a 429 is an error");
+
+            // Requests (110 s) and output tokens (160 s) are exhausted: the larger stands in.
+            assert_eq!(err.retry_after(), Some(SECS(160)));
+            assert_eq!(
+                err.rate_limit_hints()
+                    .and_then(|h| h.effective_retry_after()),
+                Some((SECS(160), RetryDelaySource::ResetHeader))
+            );
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_429_carries_the_same_hints() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/messages")
+                    .with_status(429)
+                    .with_body(RATE_LIMIT_BODY),
+                Some("7"),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            let result = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await;
+            let err = match result {
+                Err(err) => err,
+                Ok(_) => panic!("expected Err(RateLimitExceeded), got Ok(<stream>)"),
+            };
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), Some(SECS(7)));
+            assert_four_dimensions(&err);
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn anthropic_429_with_no_rate_limit_header_carries_no_hints() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/messages")
+                .with_status(429)
+                .with_body(RATE_LIMIT_BODY)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect_err("a 429 is an error");
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), None);
+            assert!(err.rate_limit_hints().is_none());
+            mock.assert_async().await;
+        }
+
+        const SPEND_CAP_BODY: &str = r#"{"type":"error","error":{"type":"rate_limit_error","message":"You have reached your workspace spend limit.","details":{"error_code":"enforced_spend_limit_reached"}}}"#;
+
+        #[tokio::test]
+        async fn anthropic_spend_cap_429_maps_to_usage_limit_exceeded_once() {
+            let mut server = Server::new_async().await;
+            // No retry-after, exactly as Anthropic documents for the spend-cap 429.
+            let mock = server
+                .mock("POST", "/messages")
+                .with_status(429)
+                .with_body(SPEND_CAP_BODY)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect_err("a spend-cap 429 is an error");
+
+            match &err {
+                LlmError::UsageLimitExceeded {
+                    provider,
+                    regain_hint,
+                } => {
+                    assert_eq!(provider, "anthropic");
+                    assert_eq!(*regain_hint, None);
+                }
+                other => panic!("expected UsageLimitExceeded, got {other:?}"),
+            }
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_spend_cap_429_maps_to_usage_limit_exceeded() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/messages")
+                .with_status(429)
+                .with_body(SPEND_CAP_BODY)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await;
+            assert!(
+                matches!(&result, Err(LlmError::UsageLimitExceeded { .. })),
+                "expected UsageLimitExceeded, got {:?}",
+                result.as_ref().err()
+            );
+            mock.assert_async().await;
+        }
+
+        #[test]
+        fn map_error_distinguishes_the_spend_cap_from_ordinary_429_bodies() {
+            let adapter = adapter_at("http://127.0.0.1:1");
+            for body in [
+                RATE_LIMIT_BODY,
+                r#"{"error":{"details":{"error_code":"something_else"}}}"#,
+                r#"{"error":{"message":"mentions enforced_spend_limit_reached in prose only"}}"#,
+                r#"{"error":"enforced_spend_limit_reached"}"#,
+                "not json",
+                "",
+            ] {
+                assert!(
+                    matches!(
+                        adapter.map_error(429, body),
+                        LlmError::RateLimitExceeded { .. }
+                    ),
+                    "body {body:?}"
+                );
+            }
+            // The same body on another status is not a rate-limit error either way.
+            assert!(!matches!(
+                adapter.map_error(500, SPEND_CAP_BODY),
+                LlmError::UsageLimitExceeded { .. }
+            ));
+        }
     }
 
     // ── Phase 26 (RT-05, D-28): the documented no-native-mode path ─────────

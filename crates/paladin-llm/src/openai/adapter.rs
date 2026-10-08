@@ -18,14 +18,54 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use uuid::Uuid;
 
-use crate::http_status::map_http_status;
+use crate::http_status::map_http_status_with_hints;
+use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits.
 const OPENAI_PROVIDER: &str = "openai";
+
+/// The OpenAI error identifier of an account-level quota wall, carried as `error.code` (and, on
+/// some responses, `error.type`). Pending operator verification against OpenAI's error-code
+/// reference (plan 43-12 checkpoint): if the string is wrong the mapping simply never fires and
+/// the 429 is paced and bounded by `max_backoff_ms` instead.
+const INSUFFICIENT_QUOTA: &str = "insufficient_quota";
+
+/// Whether a `429` body identifies an exhausted quota rather than a transient rate limit.
+///
+/// Compares only the short `error.code` / `error.type` identifiers of the parsed JSON; it never
+/// renders or stores any body text, and a body that is not JSON (or has no such field) is simply
+/// "not a quota error".
+fn signals_insufficient_quota(body: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Some(error) = value.get("error") else {
+        return false;
+    };
+    ["code", "type"]
+        .iter()
+        .any(|field| error.get(field).and_then(|v| v.as_str()) == Some(INSUFFICIENT_QUOTA))
+}
+
+/// Parse a `429` response's rate-limit headers. Must run BEFORE `response.text()` consumes the
+/// response (research Pitfall 2). Only a 429 is parsed: no other status carries hints, and no
+/// credential header is read.
+fn snapshot_rate_limit_hints(
+    status: reqwest::StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> Option<RateLimitHints> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    hints_from_headers(RateLimitHeaderFamily::OpenAi, SystemTime::now(), |name| {
+        headers.get(name).and_then(|v| v.to_str().ok())
+    })
+}
 
 /// Configuration for the OpenAI adapter.
 #[derive(Debug, Clone)]
@@ -302,15 +342,34 @@ impl OpenAIAdapter {
         Ok(Self { config, client })
     }
 
-    /// Map a non-2xx OpenAI response to [`LlmError`].
+    /// Map a non-2xx OpenAI response to [`LlmError`] with no rate-limit headers.
+    ///
+    /// A thin wrapper over [`Self::map_error_with_hints`], kept so the status-mapping unit
+    /// tests read the same as before PACE-01. Production paths call the hints variant.
+    #[cfg(test)]
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
+        self.map_error_with_hints(status, body, None)
+    }
+
+    /// Map a non-2xx OpenAI response to [`LlmError`], carrying the parsed rate-limit headers
+    /// of a `429` (PACE-01).
     ///
     /// `300..=399` is named explicitly (mirroring
     /// `CompatEngine::map_error`/`GeminiAdapter::map_error`) because this
     /// client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
     /// response is never followed — it arrives here as an ordinary
-    /// non-success status instead. Everything else is the crate-wide
-    /// [`map_http_status`] (Phase 25 D-03, FT-FR-01).
-    fn map_error(&self, status: u16, body: &str) -> LlmError {
+    /// non-success status instead.
+    ///
+    /// A `429` whose body names `insufficient_quota` is an account-level quota wall, not a
+    /// rate limit (research Pitfall 6): it maps to the permanent
+    /// [`LlmError::UsageLimitExceeded`] so it is neither retried nor paced. Everything else is
+    /// the crate-wide [`map_http_status_with_hints`] (Phase 25 D-03, FT-FR-01).
+    fn map_error_with_hints(
+        &self,
+        status: u16,
+        body: &str,
+        hints: Option<RateLimitHints>,
+    ) -> LlmError {
         match status {
             300..=399 => LlmError::ProviderError {
                 provider: OPENAI_PROVIDER.to_string(),
@@ -324,7 +383,17 @@ impl OpenAIAdapter {
                     crate::redaction::diagnostic_excerpt(body, &self.config.api_key)
                 ),
             },
-            _ => map_http_status(OPENAI_PROVIDER, status, body, &self.config.api_key),
+            429 if signals_insufficient_quota(body) => LlmError::UsageLimitExceeded {
+                provider: OPENAI_PROVIDER.to_string(),
+                regain_hint: None,
+            },
+            _ => map_http_status_with_hints(
+                OPENAI_PROVIDER,
+                status,
+                body,
+                &self.config.api_key,
+                hints,
+            ),
         }
     }
 
@@ -544,6 +613,8 @@ impl OpenAIAdapter {
             .map_err(|e| LlmError::NetworkError(format!("Request failed: {}", e)))?;
 
         let status = response.status();
+        // Snapshot the 429 headers BEFORE `.text()` consumes the response (research Pitfall 2).
+        let hints = snapshot_rate_limit_hints(status, response.headers());
         let response_text = response
             .text()
             .await
@@ -553,7 +624,7 @@ impl OpenAIAdapter {
             // Shared status-to-variant mapping for every adapter (D-03,
             // FT-FR-01), with a `300..=399` pre-check (CR-02) since this
             // client refuses to follow redirects.
-            return Err(self.map_error(status.as_u16(), &response_text));
+            return Err(self.map_error_with_hints(status.as_u16(), &response_text, hints));
         }
 
         serde_json::from_str::<OpenAIResponse>(&response_text)
@@ -585,10 +656,13 @@ impl OpenAIAdapter {
 
         if !response.status().is_success() {
             let status = response.status();
+            // Same header snapshot as the generate path, taken before the body read consumes
+            // the response (research Pitfall 2).
+            let hints = snapshot_rate_limit_hints(status, response.headers());
             let error_text = response.text().await.unwrap_or_default();
             // Same shared mapping as the generate path, so a status yields
             // the same typed variant whether or not the call streams.
-            return Err(self.map_error(status.as_u16(), &error_text));
+            return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
         }
 
         // `flat_map` rather than `map`: a single network chunk can carry more
@@ -798,8 +872,9 @@ impl LlmPort for OpenAIAdapter {
 
         if !response.status().is_success() {
             let status = response.status();
+            let hints = snapshot_rate_limit_hints(status, response.headers());
             let error_text = response.text().await.unwrap_or_default();
-            return Err(self.map_error(status.as_u16(), &error_text));
+            return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
         }
 
         let response_text = response
@@ -1142,6 +1217,295 @@ mod tests {
                 Ok(_) => panic!("expected Err(ProviderError), got Ok(<stream>)"),
                 Err(other) => panic!("expected ProviderError {{ status: 503 }}, got {other:?}"),
             }
+        }
+    }
+
+    // ── Phase 43 (PACE-01, D-02, Pitfall 6): 429 headers and quota-class bodies ──
+
+    mod rate_limit_wiring {
+        use super::*;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_ports::output::rate_limit_hints::{RateLimitDimensionKind, RetryDelaySource};
+
+        /// `max_retries: 3` on purpose: a 429 mock with `.expect(1)` then proves the adapter's
+        /// own loop never re-asks, and the back-off would make a regression visibly slow.
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 3,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request(stream: bool) -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+            .with_stream(stream)
+        }
+
+        const SECS: fn(u64) -> Duration = Duration::from_secs;
+
+        fn with_ratelimit_headers(mock: mockito::Mock, retry_after: Option<&str>) -> mockito::Mock {
+            let mock = mock
+                .with_header("x-ratelimit-limit-requests", "60")
+                .with_header("x-ratelimit-remaining-requests", "0")
+                .with_header("x-ratelimit-reset-requests", "6m0s")
+                .with_header("x-ratelimit-limit-tokens", "150000")
+                .with_header("x-ratelimit-remaining-tokens", "149984")
+                .with_header("x-ratelimit-reset-tokens", "1s");
+            match retry_after {
+                Some(v) => mock.with_header("Retry-After", v),
+                None => mock,
+            }
+        }
+
+        fn assert_dimensions(err: &LlmError) {
+            let hints = err.rate_limit_hints().expect("the 429 headers were parsed");
+            let requests = hints.dimension(RateLimitDimensionKind::Requests);
+            assert_eq!(requests.limit(), Some(60));
+            assert_eq!(requests.remaining(), Some(0));
+            assert_eq!(requests.reset_after(), Some(SECS(360)));
+            let tokens = hints.dimension(RateLimitDimensionKind::Tokens);
+            assert_eq!(tokens.limit(), Some(150_000));
+            assert_eq!(tokens.remaining(), Some(149_984));
+            assert_eq!(tokens.reset_after(), Some(SECS(1)));
+        }
+
+        #[tokio::test]
+        async fn openai_429_carries_retry_after_and_ratelimit_dimensions() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/chat/completions")
+                    .with_status(429)
+                    .with_body(r#"{"error":{"message":"Rate limit reached","code":"rate_limit_exceeded"}}"#),
+                Some("7"),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await
+                .expect_err("a 429 is an error");
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), Some(SECS(7)));
+            assert_eq!(
+                err.rate_limit_hints()
+                    .and_then(|h| h.explicit_retry_after()),
+                Some((SECS(7), RetryDelaySource::RetryAfter))
+            );
+            assert_dimensions(&err);
+            // The raw header strings never reach a rendered error (T-43-10): only the parsed
+            // numbers do, so the Go-duration text `6m0s` must not appear anywhere.
+            for rendered in [format!("{err}"), format!("{err:?}")] {
+                assert!(!rendered.contains("6m0s"), "{rendered}");
+            }
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn openai_429_without_retry_after_falls_back_to_the_exhausted_reset() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/chat/completions")
+                    .with_status(429)
+                    .with_body(r#"{"error":{"message":"Rate limit reached"}}"#),
+                None,
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await
+                .expect_err("a 429 is an error");
+
+            // 6m0s on the exhausted requests dimension, tagged as derived from a reset.
+            assert_eq!(err.retry_after(), Some(SECS(360)));
+            let hints = err.rate_limit_hints().expect("hints");
+            assert_eq!(hints.explicit_retry_after(), None);
+            assert_eq!(
+                hints.effective_retry_after(),
+                Some((SECS(360), RetryDelaySource::ResetHeader))
+            );
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn openai_429_with_no_rate_limit_header_carries_no_hints() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/chat/completions")
+                .with_status(429)
+                .with_body(r#"{"error":{"message":"slow down"}}"#)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let err = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await
+                .expect_err("a 429 is an error");
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), None);
+            assert!(err.rate_limit_hints().is_none());
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn openai_stream_429_carries_the_same_hints() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/chat/completions")
+                    .with_status(429)
+                    .with_body(r#"{"error":{"message":"Rate limit reached"}}"#),
+                Some("7"),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+
+            let result = adapter_at(&server.url())
+                .generate_stream(build_request(true))
+                .await;
+            let err = match result {
+                Err(err) => err,
+                Ok(_) => panic!("expected Err(RateLimitExceeded), got Ok(<stream>)"),
+            };
+
+            assert!(matches!(err, LlmError::RateLimitExceeded { .. }), "{err:?}");
+            assert_eq!(err.retry_after(), Some(SECS(7)));
+            assert_dimensions(&err);
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn openai_insufficient_quota_429_maps_to_usage_limit_exceeded_once() {
+            // Both spellings OpenAI uses for the same condition: the `code` and the `type`.
+            for body in [
+                r#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota","code":"insufficient_quota"}}"#,
+                r#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}"#,
+                r#"{"error":{"message":"You exceeded your current quota","code":"insufficient_quota"}}"#,
+            ] {
+                let mut server = Server::new_async().await;
+                // A Retry-After on a quota error must not turn it into a paced rate limit.
+                let mock = server
+                    .mock("POST", "/chat/completions")
+                    .with_status(429)
+                    .with_header("Retry-After", "7")
+                    .with_body(body)
+                    .expect(1)
+                    .create_async()
+                    .await;
+
+                let err = adapter_at(&server.url())
+                    .generate(build_request(false))
+                    .await
+                    .expect_err("a quota 429 is an error");
+
+                match &err {
+                    LlmError::UsageLimitExceeded {
+                        provider,
+                        regain_hint,
+                    } => {
+                        assert_eq!(provider, "openai");
+                        assert_eq!(*regain_hint, None);
+                    }
+                    other => panic!("expected UsageLimitExceeded for {body}, got {other:?}"),
+                }
+                assert!(err.retry_after().is_none());
+                mock.assert_async().await;
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_stream_insufficient_quota_429_maps_to_usage_limit_exceeded() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/chat/completions")
+                .with_status(429)
+                .with_body(r#"{"error":{"type":"insufficient_quota","code":"insufficient_quota"}}"#)
+                .expect(1)
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url())
+                .generate_stream(build_request(true))
+                .await;
+            assert!(
+                matches!(&result, Err(LlmError::UsageLimitExceeded { .. })),
+                "expected UsageLimitExceeded, got {:?}",
+                result.as_ref().err()
+            );
+            mock.assert_async().await;
+        }
+
+        #[tokio::test]
+        async fn openai_ordinary_rate_limit_codes_are_not_mistaken_for_a_quota() {
+            for body in [
+                r#"{"error":{"code":"rate_limit_exceeded","type":"requests"}}"#,
+                r#"{"error":{"message":"mentions insufficient_quota in prose only"}}"#,
+                "not json at all",
+                "",
+                r#"{"error":"insufficient_quota"}"#,
+            ] {
+                let mut server = Server::new_async().await;
+                let mock = server
+                    .mock("POST", "/chat/completions")
+                    .with_status(429)
+                    .with_body(body)
+                    .expect(1)
+                    .create_async()
+                    .await;
+                let err = adapter_at(&server.url())
+                    .generate(build_request(false))
+                    .await
+                    .expect_err("a 429 is an error");
+                assert!(
+                    matches!(err, LlmError::RateLimitExceeded { .. }),
+                    "body {body:?}: {err:?}"
+                );
+                mock.assert_async().await;
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_non_429_errors_ignore_rate_limit_headers() {
+            let mut server = Server::new_async().await;
+            let mock = with_ratelimit_headers(
+                server
+                    .mock("POST", "/chat/completions")
+                    .with_status(401)
+                    .with_body(r#"{"error":"invalid key"}"#),
+                Some("7"),
+            )
+            .expect(1)
+            .create_async()
+            .await;
+            let err = adapter_at(&server.url())
+                .generate(build_request(false))
+                .await
+                .expect_err("a 401 is an error");
+            assert!(matches!(err, LlmError::AuthenticationError(_)), "{err:?}");
+            assert!(err.rate_limit_hints().is_none());
+            mock.assert_async().await;
         }
     }
 

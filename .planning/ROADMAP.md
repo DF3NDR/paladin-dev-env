@@ -581,7 +581,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 43-05-PLAN.md — Shared cadence contract suite, bounded in-process state, stream gating, waiter spread, cancellation safety (wave 5)
+- [x] 43-05-PLAN.md — Shared cadence contract suite, bounded in-process state, stream gating, waiter spread, cancellation safety (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

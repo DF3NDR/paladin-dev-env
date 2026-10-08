@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 43
 current_phase_name: Rate Pacing
 status: executing
-stopped_at: Completed 43-08-PLAN.md
-last_updated: "2026-10-08T22:25:27.971Z"
+stopped_at: Completed 43-09-PLAN.md
+last_updated: "2026-10-08T22:58:15.750Z"
 last_activity: 2026-10-08
 last_activity_desc: Phase 43 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 64
-  completed_plans: 59
+  completed_plans: 60
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 92%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([█████████░] 94%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 43 (Rate Pacing) — EXECUTING
-Plan: 9 of 13
+Plan: 10 of 13
 Status: Ready to execute
 Last activity: 2026-10-08 — Phase 43 execution started
 
@@ -249,6 +249,7 @@ Last activity: 2026-10-08 — Phase 43 execution started
 | Phase 43 P06 | 100min | 2 tasks | 7 files |
 | Phase 43 P07 | 75min | 2 tasks | 11 files |
 | Phase 43 P08 | 1h | 2 tasks | 8 files |
+| Phase 43 P09 | 90min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -403,6 +404,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 43-06: config-built fallback chains are paced by default via AgentRuntimeDeps.cadence (in-process, None opts out); with_cadence is a no-op on an already-paced chain
 - [Phase ?]: 43-07: Redis cadence gates computed in Lua on the server TIME with relative waits; connection lazy with explicit timeouts; provider half of the key escapes % and : so keys are injective
 - [Phase ?]: 43-08: the Redis-outage warning is a log::warn! under paladin::cadence (no TraceEvent variant); ResilientCadence latches on the first primary error, probes at most every 5 s, merges the fallback gate on recovery
+- [Phase ?]: 43-09: Redis URL never in config/Debug/logs -- CadenceConfig holds only url_env name; boot log names backend kind only
+- [Phase ?]: 43-09: one CadenceWiring built in paladin-server shared by registry, provisioner and run API; FacadeProvisioner rejects (not silently downgrades) a redis config on a binary without redis-cadence
 
 ### Pending Todos
 
@@ -617,8 +620,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-08T22:25:27.940Z
-**Stopped at:** Completed 43-08-PLAN.md
+**Last session:** 2026-10-08T22:58:15.719Z
+**Stopped at:** Completed 43-09-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

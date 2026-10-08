@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 43
 current_phase_name: Rate Pacing
 status: executing
-stopped_at: Completed 43-05-PLAN.md
-last_updated: "2026-10-08T15:10:56.587Z"
+stopped_at: Completed 43-04-PLAN.md
+last_updated: "2026-10-08T19:24:31.252Z"
 last_activity: 2026-10-08
 last_activity_desc: Phase 43 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 64
-  completed_plans: 55
+  completed_plans: 56
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 86%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([█████████░] 88%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 43 (Rate Pacing) — EXECUTING
-Plan: 5 of 13
+Plan: 6 of 13
 Status: Ready to execute
 Last activity: 2026-10-08 — Phase 43 execution started
 
@@ -245,6 +245,7 @@ Last activity: 2026-10-08 — Phase 43 execution started
 | Phase 43 P02 | ~35min | 3 tasks | 35 files |
 | Phase 43 P03 | ~25min | 3 tasks | 9 files |
 | Phase 43 P05 | 2h | 3 tasks | 7 files |
+| Phase 43 P04 | 1h | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -394,6 +395,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 43-03: an unusable Retry-After falls through to retry-after-ms then the exhausted reset; hints_from_headers returns None when nothing usable parsed; Go durations use exact saturating u128 nanosecond arithmetic
 - [Phase ?]: 43-03: quota-class 429s (OpenAI insufficient_quota, Anthropic enforced_spend_limit_reached) map to permanent UsageLimitExceeded before the generic arm; Anthropic surfaces its first 429 (D-02); OpenAI header names and the quota code string stay pending the 43-12 operator checkpoint
 - [Phase ?]: 43-05: contract paused clause uses tokio::time::sleep, not advance (test-util is dev-only); waiter spread is internal, additive, capped at min(wait/10, 1 s); InMemoryCadence bounded at 4096 keys
+- [Phase ?]: 43-04: D-02 (surface the first 429) extended to the compat engine presets, DeepSeek and Gemini (Open Question 1); reversible, to be recorded in ADR-0058
 
 ### Pending Todos
 
@@ -608,8 +610,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-08T15:10:56.552Z
-**Stopped at:** Completed 43-05-PLAN.md
+**Last session:** 2026-10-08T19:24:31.219Z
+**Stopped at:** Completed 43-04-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

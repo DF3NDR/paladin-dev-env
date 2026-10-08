@@ -585,7 +585,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 43-06-PLAN.md — Fallback chains pace first and hop last (D-03): FallbackLlmAdapter::with_cadence, ModelFallbackMiddleware::paced, AgentRuntimeDeps.cadence; success-criterion-2 tests (wave 6)
+- [x] 43-06-PLAN.md — Fallback chains pace first and hop last (D-03): FallbackLlmAdapter::with_cadence, ModelFallbackMiddleware::paced, AgentRuntimeDeps.cadence; success-criterion-2 tests (wave 6)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

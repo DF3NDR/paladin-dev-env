@@ -56,6 +56,14 @@
 //! [`VaultRecallConfig`], then the tool-call protocol middleware (built in
 //! plan 26-19, no config sub-struct of its own), and finally
 //! [`ModelRetryConfig`] / [`ModelFallbackConfig`] last.
+//!
+//! The resilience section is paced by default (PACE-02, D-03): when
+//! [`AgentRuntimeDeps::cadence`] is `Some` -- and [`AgentRuntimeDeps::default`] makes it
+//! `Some`, over an in-process gate -- the `model_fallback` chain is built with
+//! [`ModelFallbackMiddleware::paced`], so a provider `429` on a hop is retried on the same
+//! provider after its gate, for up to `treasurer.cadence.fallback_pace_budget_secs`, before the
+//! chain hops. A 5xx, timeout or network error still hops at once. Set
+//! [`AgentRuntimeDeps::cadence`] to `None` for the plain hop-on-error chain.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -65,12 +73,15 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::aegis::{RetryPolicy, RetryPredicate};
+use paladin_llm::cadence::CadenceWiring;
+use paladin_llm::fallback::FallbackChainError;
 use paladin_llm::provider_factory::LlmProviderFactory;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 use paladin_ports::output::vault_port::VaultPort;
+use paladin_storage::cadence::InMemoryCadence;
 
 use crate::application::services::paladin::middleware::{
     ExecutionMiddleware, Guardrail, HistoryTrimmer, ModelCallLimit, ModelFallbackMiddleware,
@@ -78,6 +89,7 @@ use crate::application::services::paladin::middleware::{
     VaultRecallMiddleware,
 };
 use crate::config::env_utils::{EnvOverridable, read_env};
+use crate::config::treasurer::CadenceConfig;
 
 /// The single X-09 config home for every built-in execution middleware
 /// (D-10). See the module-level documentation for the disabled-by-default
@@ -273,6 +285,43 @@ pub struct AgentRuntimeDeps {
     /// preset like [`crate::presets::reasoning_agent`], not config-driven,
     /// since it has no [`AgentRuntimeConfig`] sub-struct of its own.
     pub arsenal: Option<Arc<dyn ArsenalPort>>,
+    /// Paces every hop of a config-built `model_fallback` chain (PACE-02, D-03): a provider `429`
+    /// is retried on the same provider after its gate, for up to the wiring's
+    /// `fallback_pace_budget`, before the chain hops. A 5xx, timeout or network error still hops
+    /// at once.
+    ///
+    /// [`Default`] carries an in-process wiring built from `treasurer.cadence`'s own defaults, so
+    /// a chain built from configuration is paced unless the caller opts out by setting `None`.
+    /// Pass the server's shared wiring instead to share pacing state with the other ports in the
+    /// process; this field changes nothing while `model_fallback` is disabled.
+    pub cadence: Option<CadenceWiring>,
+}
+
+/// The in-process pacing wiring [`AgentRuntimeDeps::default`] carries: `treasurer.cadence`'s
+/// defaults over an [`InMemoryCadence`]. `None` only if those defaults somehow failed
+/// validation (a unit test proves they do not), in which case the chain is simply not paced.
+///
+/// Built here from the config value types rather than through `crate::infrastructure`: the
+/// configuration layer does not import infrastructure composition.
+fn default_cadence() -> Option<CadenceWiring> {
+    let config = CadenceConfig::default();
+    let policy = config.policy().ok()?;
+    Some(CadenceWiring::new(
+        Arc::new(InMemoryCadence::new(policy)),
+        config.settings(),
+    ))
+}
+
+/// The fallback middleware for `providers`: paced over `cadence` when it is present (PACE-02,
+/// D-03), otherwise the plain hop-on-error chain.
+fn fallback_middleware(
+    providers: Vec<Arc<dyn LlmPort>>,
+    cadence: Option<&CadenceWiring>,
+) -> Result<ModelFallbackMiddleware, FallbackChainError> {
+    match cadence {
+        Some(wiring) => ModelFallbackMiddleware::paced(providers, wiring),
+        None => ModelFallbackMiddleware::new(providers),
+    }
 }
 
 impl Default for AgentRuntimeDeps {
@@ -285,6 +334,7 @@ impl Default for AgentRuntimeDeps {
             summarizer_override: None,
             vault: None,
             arsenal: None,
+            cadence: default_cadence(),
         }
     }
 }
@@ -416,7 +466,7 @@ impl AgentRuntimeConfig {
                 .model_fallback
                 .resolve_chain(&deps.llm_provider_factory)
             {
-                Ok(providers) => match ModelFallbackMiddleware::new(providers) {
+                Ok(providers) => match fallback_middleware(providers, deps.cadence.as_ref()) {
                     Ok(middleware) => chain.push(Arc::new(middleware)),
                     Err(e) => problems.push(format!("agent_runtime.model_fallback: {e}")),
                 },
@@ -1582,6 +1632,155 @@ mod tests {
         assert!(VaultToolsConfig::default().validate().is_ok());
     }
 
+    // ── paced fallback chains (plan 43-06, PACE-02, D-03) ───────────────
+
+    /// A primary that answers a 429 (7 s) then a text, and a backup that answers at once.
+    fn rate_limited_primary_and_backup() -> (
+        Arc<paladin_llm::mock::MockLlmAdapter>,
+        Arc<paladin_llm::mock::MockLlmAdapter>,
+    ) {
+        use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
+        use paladin_ports::output::llm_port::LlmError;
+
+        let primary = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("primary")
+                .with_script(vec![
+                    MockScriptEntry::Error(LlmError::rate_limited(Some(Duration::from_secs(7)))),
+                    MockScriptEntry::Text("from primary".to_string()),
+                ]),
+        );
+        let backup = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("backup")
+                .with_response("from backup"),
+        );
+        (primary, backup)
+    }
+
+    /// Install `middleware`'s port the way a service would, call it once, and return the name of
+    /// the provider that served the response.
+    async fn served_by_through(middleware: &ModelFallbackMiddleware) -> String {
+        use crate::application::services::paladin::middleware::{ModelCallContext, PromptAssembly};
+        use crate::core::base::entity::node::Node;
+        use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
+        use paladin_ports::output::llm_port::LlmRequest;
+
+        let paladin = Node::new(
+            PaladinData {
+                system_prompt: "system".to_string(),
+                max_loops: MaxLoops::Fixed(1),
+                ..Default::default()
+            },
+            None,
+        );
+        let assembly = PromptAssembly::new("system", "input", "", vec![], None);
+        let mut cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
+        middleware
+            .before_model(&mut cx)
+            .await
+            .expect("installing the override cannot fail");
+        let port = cx.llm_override.take().expect("the chain is installed");
+        let prompt = PromptItem::new(PromptType::User(UserPrompt {
+            query: "quest".to_string(),
+            context: None,
+        }))
+        .expect("prompt");
+        let response = port
+            .generate(LlmRequest::new("mock-model", prompt))
+            .await
+            .expect("the chain serves");
+        response
+            .metadata
+            .get(SERVED_BY_METADATA_KEY)
+            .cloned()
+            .expect("a fallback chain stamps the serving provider")
+    }
+
+    /// Default dependencies carry an in-process wiring built from `treasurer.cadence`'s own
+    /// defaults, so a config-built chain is paced unless the caller opts out.
+    #[test]
+    fn default_deps_carry_an_in_process_cadence() {
+        let defaults = CadenceConfig::default();
+        assert!(
+            defaults.policy().is_ok(),
+            "the default cadence policy validates, so `default_cadence` never falls back to None"
+        );
+        let wiring = AgentRuntimeDeps::default()
+            .cadence
+            .expect("a default dependency set carries pacing");
+        assert_eq!(*wiring.settings(), defaults.settings());
+    }
+
+    /// With a wiring the chain paces: the 429 is retried on the primary after its gate and the
+    /// backup is never reached.
+    #[tokio::test(start_paused = true)]
+    async fn fallback_middleware_installs_the_paced_chain_when_cadence_is_present() {
+        let wiring = AgentRuntimeDeps::default().cadence.expect("default wiring");
+        let (primary, backup) = rate_limited_primary_and_backup();
+        let providers: Vec<Arc<dyn LlmPort>> = vec![primary.clone(), backup.clone()];
+        let middleware = fallback_middleware(providers, Some(&wiring)).expect("non-empty chain");
+
+        let start = tokio::time::Instant::now();
+        let served_by = served_by_through(&middleware).await;
+
+        assert_eq!(served_by, "primary");
+        assert_eq!(primary.call_count(), 2);
+        assert_eq!(backup.call_count(), 0);
+        assert!(
+            start.elapsed() >= Duration::from_secs(7),
+            "{:?}",
+            start.elapsed()
+        );
+    }
+
+    /// Without a wiring the chain is the plain one: a 429 hops at once, as before this phase.
+    #[tokio::test(start_paused = true)]
+    async fn fallback_middleware_without_cadence_hops_on_a_429() {
+        let (primary, backup) = rate_limited_primary_and_backup();
+        let providers: Vec<Arc<dyn LlmPort>> = vec![primary.clone(), backup.clone()];
+        let middleware = fallback_middleware(providers, None).expect("non-empty chain");
+
+        let start = tokio::time::Instant::now();
+        let served_by = served_by_through(&middleware).await;
+
+        assert_eq!(served_by, "backup");
+        assert_eq!(primary.call_count(), 1);
+        assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
+    /// Opting out through the dependencies reaches `build_chain`: a config-built chain with
+    /// `cadence: None` still builds, and so does one with the default wiring.
+    #[test]
+    #[serial]
+    fn build_chain_with_model_fallback_builds_paced_and_unpaced() {
+        let config = AgentRuntimeConfig {
+            model_fallback: ModelFallbackConfig {
+                enabled: true,
+                providers: vec!["openai".to_string()],
+            },
+            ..AgentRuntimeConfig::default()
+        };
+        unsafe {
+            env::set_var("OPENAI_API_KEY", "sk-test-key-for-paced-build-chain");
+        }
+        let paced = config.build_chain(&AgentRuntimeDeps::default());
+        let unpaced = config.build_chain(&AgentRuntimeDeps {
+            cadence: None,
+            ..AgentRuntimeDeps::default()
+        });
+        unsafe {
+            env::remove_var("OPENAI_API_KEY");
+        }
+        for chain in [paced, unpaced] {
+            let chain = chain.expect("a resolvable provider builds");
+            assert_eq!(chain.len(), 1);
+            assert_eq!(chain[0].name(), "model_fallback");
+        }
+    }
+
     // ── ModelFallbackConfig::resolve_chain (plan 26-10, D-12) ───────────
 
     /// Test 1: `{ enabled: true, providers: ["openai", "deepseek"] }`
@@ -1814,7 +2013,11 @@ mod tests {
     /// documented order's "protocol" position has no `AgentRuntimeConfig`
     /// sub-struct (D-36) and is therefore not part of `build_chain`'s own
     /// output -- see `build_chain`'s rustdoc.
+    ///
+    /// `#[serial]` (plan 43-06): it sets and removes `OPENAI_API_KEY`, which the other env tests in
+    /// this module also own, so an unserialised run could race them.
     #[test]
+    #[serial]
     fn build_chain_uses_the_documented_fixed_order() {
         let config = AgentRuntimeConfig {
             model_call_limit: ModelCallLimitConfig {

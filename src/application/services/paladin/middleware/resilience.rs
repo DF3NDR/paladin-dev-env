@@ -47,6 +47,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use paladin_core::platform::container::aegis::RetryPolicy;
+use paladin_llm::cadence::CadenceWiring;
 use paladin_llm::fallback::{FallbackChainError, FallbackLlmAdapter};
 use paladin_ports::output::llm_port::LlmPort;
 
@@ -80,6 +81,10 @@ use super::{ExecutionMiddleware, MiddlewareFlow, ModelCallContext};
 /// let middleware = ModelFallbackMiddleware::new(vec![primary, backup])?;
 /// # Ok::<(), paladin_llm::fallback::FallbackChainError>(())
 /// ```
+///
+/// [`ModelFallbackMiddleware::new`] hops on a provider `429` at once. To pace the same provider
+/// through its rate limit first (PACE-02, D-03) build the chain with
+/// [`ModelFallbackMiddleware::paced`].
 pub struct ModelFallbackMiddleware {
     adapter: Arc<dyn LlmPort>,
 }
@@ -96,6 +101,51 @@ impl ModelFallbackMiddleware {
     /// (`fallback_chain_construction_validates_up_front`).
     pub fn new(chain: Vec<Arc<dyn LlmPort>>) -> Result<Self, FallbackChainError> {
         let adapter = FallbackLlmAdapter::new(chain)?;
+        Ok(Self {
+            adapter: Arc::new(adapter),
+        })
+    }
+
+    /// As [`ModelFallbackMiddleware::new`], but every hop is paced (PACE-02, D-03): each hop is
+    /// wrapped in the Cadence decorator over `cadence`'s shared port, and a provider `429` is
+    /// retried on the same provider after its gate -- the provider's own retry delay is the
+    /// minimum -- for up to the wiring's `fallback_pace_budget` before the chain hops. A 5xx,
+    /// timeout or network error still hops at once. See
+    /// [`FallbackLlmAdapter::with_cadence`] for the full rule.
+    ///
+    /// Pass the process's shared wiring to share pacing state with every other port in the
+    /// process; a private wiring paces only this chain.
+    ///
+    /// # Errors
+    ///
+    /// [`FallbackChainError::EmptyChain`] if `chain` is empty, exactly as
+    /// [`ModelFallbackMiddleware::new`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::paladin::middleware::ModelFallbackMiddleware;
+    /// use paladin_llm::cadence::{CadenceSettings, CadenceWiring};
+    /// use paladin_llm::mock::MockLlmAdapter;
+    /// use paladin_ports::output::cadence_port::CadencePolicy;
+    /// use paladin_ports::output::llm_port::LlmPort;
+    /// use paladin_storage::cadence::InMemoryCadence;
+    ///
+    /// let cadence = CadenceWiring::new(
+    ///     Arc::new(InMemoryCadence::new(CadencePolicy::default())),
+    ///     CadenceSettings::default(),
+    /// );
+    /// let primary: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_provider_name("openai"));
+    /// let backup: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_provider_name("anthropic"));
+    /// let middleware = ModelFallbackMiddleware::paced(vec![primary, backup], &cadence)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn paced(
+        chain: Vec<Arc<dyn LlmPort>>,
+        cadence: &CadenceWiring,
+    ) -> Result<Self, FallbackChainError> {
+        let adapter = FallbackLlmAdapter::new(chain)?.with_cadence(cadence);
         Ok(Self {
             adapter: Arc::new(adapter),
         })
@@ -196,9 +246,12 @@ mod tests {
     use crate::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData};
     use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
     use paladin_core::platform::container::aegis::RetryPredicate;
+    use paladin_llm::cadence::CadenceSettings;
     use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
+    use paladin_ports::output::cadence_port::CadencePolicy;
     use paladin_ports::output::llm_port::LlmError;
     use paladin_ports::output::trace_sink_port::MiddlewareAction;
+    use paladin_storage::cadence::InMemoryCadence;
     use std::time::Duration;
 
     fn make_paladin(max_loops: u32) -> Paladin {
@@ -362,6 +415,58 @@ mod tests {
     #[test]
     fn fallback_chain_construction_validates_up_front() {
         let result = ModelFallbackMiddleware::new(Vec::new());
+        assert!(matches!(result, Err(FallbackChainError::EmptyChain)));
+    }
+
+    fn pacing_wiring() -> CadenceWiring {
+        CadenceWiring::new(
+            Arc::new(InMemoryCadence::new(CadencePolicy::default())),
+            CadenceSettings::default(),
+        )
+    }
+
+    /// PACE-02 / D-03 through the middleware: a paced chain answers a primary 429 by waiting out
+    /// the provider's own delay and serving from the SAME primary, never touching the backup.
+    #[tokio::test(start_paused = true)]
+    async fn paced_middleware_serves_from_the_primary_after_its_gate() {
+        let primary = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("primary")
+                .with_script(vec![
+                    MockScriptEntry::Error(LlmError::rate_limited(Some(Duration::from_secs(7)))),
+                    MockScriptEntry::Text("from primary".to_string()),
+                ]),
+        );
+        let backup = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("backup")
+                .with_response("from backup"),
+        );
+        let chain: Vec<Arc<dyn LlmPort>> = vec![primary.clone(), backup.clone()];
+        let middleware = Arc::new(ModelFallbackMiddleware::paced(chain, &pacing_wiring()).unwrap());
+        let service = make_service(Arc::new(MockLlmAdapter::new())).with_middleware(middleware);
+
+        let start = tokio::time::Instant::now();
+        let result = service.execute(&make_paladin(1), "hi").await.unwrap();
+
+        assert_eq!(result.served_by.as_deref(), Some("primary"));
+        assert_eq!(primary.call_count(), 2, "the same provider is retried once");
+        assert_eq!(
+            backup.call_count(),
+            0,
+            "a paced 429 never reaches the backup"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_secs(7),
+            "the provider's delay is honoured as a minimum, got {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// `paced` validates up front exactly like `new`.
+    #[test]
+    fn paced_rejects_an_empty_chain_like_new() {
+        let result = ModelFallbackMiddleware::paced(Vec::new(), &pacing_wiring());
         assert!(matches!(result, Err(FallbackChainError::EmptyChain)));
     }
 

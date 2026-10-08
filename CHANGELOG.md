@@ -28,7 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configurable with `InMemoryCadence::with_capacity`, evicting idle entries first and warning
   once under `paladin::cadence` when a live entry must go; and a shared contract suite,
   `paladin_storage::cadence::contract_tests`, holds every adapter to the same pacing rules.
-  `rand` is now a required dependency of `paladin-llm`. Later Phase 43 plans extend this entry.
+  `rand` is now a required dependency of `paladin-llm`.
+  Plan 43-06 makes fallback chains pace first and hop last: `FallbackLlmAdapter::with_cadence`
+  wraps every hop in the Cadence decorator, and a 429 on a hop is then retried on the same provider
+  after its gate, for up to `treasurer.cadence.fallback_pace_budget_secs` (default 60), before the
+  chain hops. A 5xx, timeout or network error still hops at once, and a chain built without
+  `with_cadence` is unchanged. `ModelFallbackMiddleware::paced` builds a paced middleware chain,
+  and `AgentRuntimeDeps.cadence` (an in-process wiring by default) paces every config-built
+  `model_fallback` chain; set it to `None` to opt out. Later Phase 43 plans extend this entry.
 - **Provider retry delay on a 429 (PACE-01, PACE-02; Phase 43 plan 43-02).**
   `LlmError::RateLimitExceeded` now carries the provider's own retry delay and a rate-limit header
   snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new

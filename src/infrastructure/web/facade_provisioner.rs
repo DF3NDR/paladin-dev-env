@@ -14,6 +14,7 @@ use paladin_core::platform::container::heartbeat::HeartbeatHandle;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::run_scope::RunScope;
+use paladin_llm::cadence::CadenceWiring;
 use paladin_llm::pricing::with_pricing;
 use paladin_llm::provider_factory::LlmProviderFactory;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
@@ -29,6 +30,7 @@ use crate::config::agent_runtime::TokenBudgetConfig;
 use crate::config::agents::AgentDefinition;
 use crate::config::settings::Settings;
 use crate::config::treasurer::TreasurerConfig;
+use crate::infrastructure::cadence::build_cadence;
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use crate::infrastructure::web::agent_host::{
     HostBuildError, build_agent, default_circuit_breaker, default_provider_name,
@@ -41,6 +43,10 @@ pub struct FacadeProvisioner {
     default_provider: String,
     breaker: Arc<CircuitBreaker>,
     treasurer: TreasurerConfig,
+    /// The rate-pacing wiring every runtime-provisioned agent shares (PACE-02, D-08). Rebuilt
+    /// from `treasurer.cadence` by [`FacadeProvisioner::with_treasurer`]; `None` when pacing is
+    /// disabled.
+    cadence: Option<CadenceWiring>,
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
     token_budget: TokenBudgetConfig,
 }
@@ -49,15 +55,20 @@ impl FacadeProvisioner {
     /// Create a provisioner with an explicit default provider and circuit breaker.
     ///
     /// The treasurer configuration defaults to [`TreasurerConfig::default()`] (empty pricing
-    /// table) -- use [`FacadeProvisioner::with_treasurer`] to price runtime-provisioned agents.
+    /// table, rate pacing on over a fresh in-process gate) -- use
+    /// [`FacadeProvisioner::with_treasurer`] to price runtime-provisioned agents.
     /// No treasury ledger writer is installed by default -- use
     /// [`FacadeProvisioner::with_treasury_ledger`] to settle runtime-provisioned agents' calls.
     pub fn new(default_provider: impl Into<String>, breaker: Arc<CircuitBreaker>) -> Self {
+        let treasurer = TreasurerConfig::default();
+        // The default `treasurer.cadence` is valid by construction, so this is `Some`.
+        let cadence = build_cadence(&treasurer.cadence).ok().flatten();
         Self {
             factory: LlmProviderFactory::new(),
             default_provider: default_provider.into(),
             breaker,
-            treasurer: TreasurerConfig::default(),
+            treasurer,
+            cadence,
             treasury_ledger: None,
             token_budget: TokenBudgetConfig::default(),
         }
@@ -85,7 +96,14 @@ impl FacadeProvisioner {
     /// Set the treasurer (pricing) configuration this provisioner's runtime-provisioned
     /// agents are priced from (D-09). An empty table (the default) installs no pricing
     /// decorator on any agent this provisioner builds.
+    ///
+    /// The rate-pacing wiring is rebuilt from `config.cadence` (PACE-02, D-08) when that
+    /// subtree validates; an invalid subtree keeps the previous wiring and is rejected by
+    /// `provision` instead, exactly like an invalid price table.
     pub fn with_treasurer(mut self, config: TreasurerConfig) -> Self {
+        if let Ok(cadence) = build_cadence(&config.cadence) {
+            self.cadence = cadence;
+        }
         self.treasurer = config;
         self
     }
@@ -271,6 +289,9 @@ impl AgentProvisioner for FacadeProvisioner {
         let price_table = Arc::new(self.treasurer.price_table().map_err(|reason| {
             ProvisionError::Failed(format!("invalid treasurer configuration: {reason}"))
         })?);
+        self.treasurer.cadence.validate().map_err(|reason| {
+            ProvisionError::Failed(format!("invalid treasurer configuration: {reason}"))
+        })?;
         let def = spec_to_definition(spec);
         let (paladin, executor, streamer) = build_agent(
             &def,
@@ -280,6 +301,7 @@ impl AgentProvisioner for FacadeProvisioner {
             &price_table,
             self.treasury_ledger.clone(),
             self.token_budget.clone(),
+            self.cadence.as_ref(),
         )
         .await
         .map_err(|err| match &err {
@@ -402,6 +424,46 @@ mod tests {
                 "got {msg:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn provisioner_rejects_invalid_cadence_naming_its_key() {
+        let mut treasurer = TreasurerConfig::default();
+        treasurer.cadence.max_wait_secs = 0;
+        let provisioner =
+            FacadeProvisioner::new("openai", default_circuit_breaker()).with_treasurer(treasurer);
+
+        let result = provisioner.provision(&sample_spec("x")).await;
+        assert!(
+            matches!(result, Err(ProvisionError::Failed(_))),
+            "invalid treasurer.cadence must map to ProvisionError::Failed"
+        );
+        if let Err(ProvisionError::Failed(msg)) = result {
+            assert!(
+                msg.contains("treasurer.cadence.max_wait_secs"),
+                "got {msg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn provisioner_paces_by_default_and_follows_the_treasurer_cadence() {
+        let default = FacadeProvisioner::new("openai", default_circuit_breaker());
+        assert!(default.cadence.is_some(), "pacing is on by default (D-08)");
+
+        let mut off = TreasurerConfig::default();
+        off.cadence.enabled = false;
+        let off = default.with_treasurer(off);
+        assert!(off.cadence.is_none(), "enabled: false installs nothing");
+
+        let mut invalid = TreasurerConfig::default();
+        invalid.cadence.lock_ttl_secs = 0;
+        let kept =
+            FacadeProvisioner::new("openai", default_circuit_breaker()).with_treasurer(invalid);
+        assert!(
+            kept.cadence.is_some(),
+            "an invalid subtree keeps the previous wiring; provision rejects it instead"
+        );
     }
 
     #[tokio::test]

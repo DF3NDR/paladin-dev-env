@@ -48,6 +48,11 @@
 #![warn(missing_docs)]
 #![allow(rustdoc::broken_intra_doc_links)]
 
+/// Rate pacing (PACE-02, D-01/D-07/D-08): [`cadence::CadenceLlmAdapter`] decorates an
+/// `Arc<dyn LlmPort>` with a per-(provider, model) gate that a provider 429 opens, over the shared
+/// [`paladin_ports::output::cadence_port::CadencePort`]. Not feature-gated -- it needs no provider
+/// adapter itself, mirroring [`pricing`] and [`fallback`].
+pub mod cadence;
 /// Shared configuration types for LLM providers and request behavior.
 #[allow(missing_docs)]
 pub mod config;

@@ -465,6 +465,14 @@ impl OpenAIAdapter {
         mapped
     }
 
+    /// Send `request`, retrying transient failures with jittered exponential back-off.
+    ///
+    /// Network, timeout and 5xx failures are retried up to `max_retries` times. An
+    /// authentication failure, a rate limit ([`LlmError::RateLimitExceeded`]) and a spend cap
+    /// ([`LlmError::UsageLimitExceeded`]) are NOT: they return on the first attempt, with no
+    /// sleep and no second request (D-02, PACE-02). Retrying a 429 inside this loop would
+    /// multiply the attempts `RetryPolicy` and `FallbackLlmAdapter` count above the adapter;
+    /// the Cadence decorator paces the next call instead.
     async fn make_request_with_retries(
         &self,
         request: &OpenAIRequest,
@@ -477,7 +485,17 @@ impl OpenAIAdapter {
                 Err(e) => {
                     last_error = Some(e.clone());
 
-                    if matches!(e, LlmError::AuthenticationError(_)) {
+                    // Surfaced on the first attempt, with no sleep and no further request
+                    // (D-02, PACE-02): a rate limit or a spend cap cannot be cured by
+                    // re-asking within seconds, and retrying it here would multiply the
+                    // attempts `RetryPolicy` and `FallbackLlmAdapter` count above this
+                    // adapter. The Cadence decorator paces the NEXT call instead.
+                    if matches!(
+                        e,
+                        LlmError::AuthenticationError(_)
+                            | LlmError::RateLimitExceeded
+                            | LlmError::UsageLimitExceeded { .. }
+                    ) {
                         return Err(e);
                     }
 
@@ -1021,6 +1039,42 @@ mod tests {
                 );
                 assert!(ok, "status {status}: expected {expect}, got {err:?}");
             }
+        }
+
+        /// D-02, PACE-02: with `max_retries: 3` a 429 is surfaced on the FIRST attempt -- the
+        /// mock is hit exactly once and no back-off sleep is spent.
+        #[tokio::test]
+        async fn openai_429_is_surfaced_on_the_first_attempt() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/chat/completions")
+                .with_status(429)
+                .with_body(r#"{"error":{"message":"slow down"}}"#)
+                .expect(1)
+                .create_async()
+                .await;
+            let adapter = OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: server.url(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 3,
+            })
+            .expect("test config must build a valid adapter");
+
+            let started = std::time::Instant::now();
+            let result = adapter.generate(build_request(false)).await;
+
+            assert!(
+                matches!(result, Err(LlmError::RateLimitExceeded)),
+                "expected RateLimitExceeded, got {result:?}"
+            );
+            assert!(
+                started.elapsed() < Duration::from_millis(900),
+                "a surfaced 429 must not sleep through the retry back-off ({:?})",
+                started.elapsed()
+            );
+            mock.assert_async().await;
         }
 
         #[tokio::test]

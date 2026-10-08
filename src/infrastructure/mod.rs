@@ -40,6 +40,10 @@
 // Internal modules (public for testing, not part of stable API)
 #[allow(missing_docs)]
 pub mod adapters;
+/// Rate-pacing composition (PACE-02, D-07, D-08): [`cadence::build_cadence`] builds the shared
+/// pacing wiring from `treasurer.cadence`, and [`cadence::compose_llm`] layers every provider as
+/// `Pricing(Cadence(provider))`.
+pub mod cadence;
 #[allow(missing_docs)]
 pub mod repositories;
 pub mod resilience;

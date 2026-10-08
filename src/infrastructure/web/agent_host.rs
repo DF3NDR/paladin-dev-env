@@ -18,7 +18,7 @@ use paladin_core::platform::container::cost::PriceTable;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::user::UserRole;
-use paladin_llm::pricing::with_pricing;
+use paladin_llm::cadence::CadenceWiring;
 use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError};
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
@@ -34,6 +34,7 @@ use crate::application::services::paladin::paladin_execution_service::{
 use crate::config::agent_runtime::TokenBudgetConfig;
 use crate::config::agents::AgentDefinition;
 use crate::config::settings::Settings;
+use crate::infrastructure::cadence::{build_cadence, compose_llm};
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 
 /// A built agent: the agent plus its buffered and (optional) streaming executors.
@@ -183,12 +184,17 @@ pub(crate) async fn build_agent_with_llm(
 /// Build a `(Paladin, executor)` pair from a definition, resolving the provider via the
 /// factory. Shared by config load and runtime provisioning.
 ///
-/// `price_table` wraps the resolved provider with [`with_pricing`] (D-09, ADR-0052) BEFORE
-/// `build_agent_with_llm` composes the execution service, outside any fallback composition --
-/// an empty table installs no extra layer at all. `treasury_ledger` is threaded straight
+/// The resolved provider is composed as `Pricing(Cadence(provider))` through [`compose_llm`]
+/// (D-09, ADR-0052; PACE-02, D-08) BEFORE `build_agent_with_llm` composes the execution service,
+/// outside any fallback composition. `price_table` drives the pricing layer -- an empty table
+/// installs none -- and `cadence` the rate-pacing layer: `Some` paces this agent's provider and
+/// model against the one shared gate state in the wiring, `None` installs nothing. Every caller
+/// in a process should pass clones of ONE [`CadenceWiring`] so pacing is process-wide.
+/// `treasury_ledger` is threaded straight
 /// through to `build_agent_with_llm` (D-08, 39-05), as is `token_budget` -- the operator's
 /// `agent_runtime.token_budget`, from which the one [`TokenBudget`] is installed on the agent's
 /// service (D-11, G12).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_agent(
     def: &AgentDefinition,
     factory: &LlmProviderFactory,
@@ -197,6 +203,7 @@ pub(crate) async fn build_agent(
     price_table: &Arc<PriceTable>,
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
     token_budget: TokenBudgetConfig,
+    cadence: Option<&CadenceWiring>,
 ) -> Result<BuiltAgent, HostBuildError> {
     let provider = resolve_provider(def, default_provider);
     let llm = factory
@@ -206,7 +213,7 @@ pub(crate) async fn build_agent(
             provider,
             source,
         })?;
-    let llm = with_pricing(llm, price_table);
+    let llm = compose_llm(llm, price_table, cadence);
     build_agent_with_llm(def, llm, breaker, treasury_ledger, token_budget).await
 }
 
@@ -352,6 +359,13 @@ pub async fn build_agent_registry_with_ledger(
             source: PaladinError::ConfigurationError(reason),
         },
     )?);
+    // One wiring for every agent built here, so the in-process gate state is shared (PACE-02).
+    let cadence = build_cadence(&settings.get_treasurer_config().cadence).map_err(|reason| {
+        HostBuildError::Build {
+            id: "treasurer".to_string(),
+            source: PaladinError::ConfigurationError(reason),
+        }
+    })?;
 
     let registry = AgentRegistry::new();
     for def in &settings.agents {
@@ -363,6 +377,7 @@ pub async fn build_agent_registry_with_ledger(
             &price_table,
             treasury_ledger.clone(),
             settings.agent_runtime.token_budget.clone(),
+            cadence.as_ref(),
         )
         .await?;
         register_built(
@@ -384,6 +399,7 @@ mod tests {
     use paladin_core::platform::container::cost::{CurrencyCode, PriceRow};
     use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_llm::mock::MockLlmAdapter;
+    use paladin_llm::pricing::with_pricing;
     use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
 
     fn empty_price_table() -> Arc<PriceTable> {
@@ -456,11 +472,51 @@ mod tests {
             &empty_price_table(),
             None,
             TokenBudgetConfig::default(),
+            None,
         )
         .await;
         assert!(
             matches!(result, Err(HostBuildError::Provider { .. })),
             "unknown provider must yield a Provider error"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_agent_registry_rejects_invalid_cadence_naming_its_key() {
+        let mut settings = Settings::default(); // agents is empty
+        settings.treasurer.cadence.base_backoff_ms = 0;
+
+        let err = build_agent_registry_with_ledger(&settings, None)
+            .await
+            .err()
+            .expect("an invalid treasurer.cadence must error");
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("treasurer.cadence.base_backoff_ms"),
+            "error must name the offending config path: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_agent_registry_accepts_pacing_on_and_off() {
+        let mut settings = Settings::default();
+        assert!(
+            settings.treasurer.cadence.enabled,
+            "pacing is on by default"
+        );
+        assert!(
+            build_agent_registry_with_ledger(&settings, None)
+                .await
+                .is_ok(),
+            "default pacing builds"
+        );
+        settings.treasurer.cadence.enabled = false;
+        assert!(
+            build_agent_registry_with_ledger(&settings, None)
+                .await
+                .is_ok(),
+            "pacing off builds"
         );
     }
 

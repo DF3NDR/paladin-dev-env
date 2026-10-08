@@ -50,6 +50,19 @@ base64 = { workspace = true, optional = true }
 tokio-test = "0.4"
 criterion = "0.5"
 mockito = "1.7.0"
+# `test-util` gives the Cadence decorator's paused-clock tests (`start_paused`) -- a feature of the
+# already-present tokio dependency, not a new crate.
+tokio = { workspace = true, features = ["test-util"] }
+# `InMemoryCadence` for the `CadenceLlmAdapter` decorator's own unit tests (PACE-02, plan 43-01).
+# Dev-only on purpose: D-09 keeps paladin-llm free of any normal edge to paladin-storage (and the
+# Redis client). No cycle: paladin-storage depends only on paladin-core + paladin-ports.
+# Path-only, no `version =` (plan 37.1-04, same v0.10.0 release-day defect as paladin-battalion's
+# dev-dependencies): paladin-llm publishes at CRATES position 5, before paladin-storage at
+# position 10, so a versioned dev-dependency here is unresolvable against the live registry at
+# publish time. Path-only means Cargo strips this entry from the published manifest entirely,
+# imposing no ordering constraint, while local tests keep resolving it by path.
+# `check-publish-order` (SC3) gates this edge.
+paladin-storage = { path = "../paladin-storage" }
 
 [[bench]]
 name = "llm_serialization_benchmarks"

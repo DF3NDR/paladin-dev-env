@@ -36,6 +36,14 @@
 //! credential-shaped field in this tree: it is redacted from `Debug`, skipped by `Serialize`,
 //! and supplied through `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` (a `${VAR}` placeholder in a
 //! YAML file is not expanded by the loader).
+//!
+//! Phase 43 adds the `cadence` subtree (PACE-02, D-08, D-10): rate pacing, **on by default**.
+//! After a provider answers `429`, later calls to that provider and model wait out a gate
+//! (exponential back-off with full jitter, `base_backoff_ms` to `max_backoff_ms`). Omitting the
+//! subtree therefore turns pacing on; `treasurer.cadence.enabled: false` installs nothing and
+//! restores the previous behaviour. Like every struct under `treasurer:`, [`CadenceConfig`]
+//! rejects an unknown key, so a typo fails to load rather than silently disabling pacing, and
+//! [`CadenceConfig::validate`] names the full key of whatever it rejects.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -45,6 +53,8 @@ use crate::application::services::treasurer::{AllowancePolicy, ScopeAllowance};
 use crate::config::env_utils::{EnvOverridable, read_env};
 use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
 use paladin_core::platform::container::principal::TenantId;
+use paladin_llm::cadence::CadenceSettings;
+use paladin_ports::output::cadence_port::CadencePolicy;
 
 /// The default global warn threshold, in whole percent of a ceiling (`treasurer.allowance.warn_at`).
 pub const DEFAULT_ALLOWANCE_WARN_AT: u8 = 80;
@@ -55,6 +65,133 @@ pub const MAX_ALLOWANCE_PERIOD_SECS: u64 = 31_622_400;
 
 /// The shortest allowance period, in seconds (one minute).
 const MIN_ALLOWANCE_PERIOD_SECS: u64 = 60;
+
+/// Where the pacing state lives (`treasurer.cadence.backend`).
+///
+/// Only the in-process backend exists so far (YAML `backend: in_process`); the shared Redis
+/// backend arrives with plan 43-09.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CadenceBackend {
+    /// Gate state held in this process (`InMemoryCadence`), the default (D-08).
+    InProcess,
+}
+
+/// The `treasurer.cadence` subtree: rate pacing (PACE-02, D-08, D-10).
+///
+/// On by default. Every duration is a positive integer; [`CadenceConfig::validate`] rejects zero
+/// and nonsense rather than clamping it.
+///
+/// # Examples
+///
+/// ```
+/// use paladin::config::treasurer::CadenceConfig;
+///
+/// let config = CadenceConfig::default();
+/// assert!(config.enabled);
+/// assert_eq!(config.base_backoff_ms, 500);
+/// assert!(config.validate().is_ok());
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CadenceConfig {
+    /// Whether pacing is installed at all. `false` installs nothing (default `true`).
+    pub enabled: bool,
+    /// Where the gate state lives (default `in_process`).
+    pub backend: CadenceBackend,
+    /// The gate length after the first delay-less 429, in milliseconds (default 500).
+    pub base_backoff_ms: u64,
+    /// The largest delay-less gate, in milliseconds (default 30000).
+    pub max_backoff_ms: u64,
+    /// The longest a single call waits on a gate before surfacing a rate limit, in seconds
+    /// (default 300).
+    pub max_wait_secs: u64,
+    /// The factor applied to delays while a shared backend is degraded (default 2.0, at least 1).
+    pub degraded_multiplier: f64,
+    /// How long a fallback hop is paced before the chain moves on, in seconds (default 60).
+    pub fallback_pace_budget_secs: u64,
+    /// The cache stampede lock lifetime, in seconds (default 120): long enough to outlive a
+    /// typical LLM node including its retries; no lock renewal is built.
+    pub lock_ttl_secs: u64,
+}
+
+impl Default for CadenceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            backend: CadenceBackend::InProcess,
+            base_backoff_ms: 500,
+            max_backoff_ms: 30_000,
+            max_wait_secs: 300,
+            degraded_multiplier: 2.0,
+            fallback_pace_budget_secs: 60,
+            lock_ttl_secs: 120,
+        }
+    }
+}
+
+impl CadenceConfig {
+    /// Reject a configuration that cannot pace anything, naming the full key.
+    ///
+    /// # Errors
+    ///
+    /// A `String` naming the first offending `treasurer.cadence.*` key: a zero duration,
+    /// `base_backoff_ms` above `max_backoff_ms`, or a `degraded_multiplier` that is not finite
+    /// or is below 1.0.
+    pub fn validate(&self) -> Result<(), String> {
+        for (key, value) in [
+            ("base_backoff_ms", self.base_backoff_ms),
+            ("max_backoff_ms", self.max_backoff_ms),
+            ("max_wait_secs", self.max_wait_secs),
+            ("fallback_pace_budget_secs", self.fallback_pace_budget_secs),
+            ("lock_ttl_secs", self.lock_ttl_secs),
+        ] {
+            if value == 0 {
+                return Err(format!(
+                    "treasurer.cadence.{key} must be greater than zero (got 0)"
+                ));
+            }
+        }
+        if self.base_backoff_ms > self.max_backoff_ms {
+            return Err(format!(
+                "treasurer.cadence.base_backoff_ms ({}) must not exceed \
+                 treasurer.cadence.max_backoff_ms ({})",
+                self.base_backoff_ms, self.max_backoff_ms
+            ));
+        }
+        if !self.degraded_multiplier.is_finite() || self.degraded_multiplier < 1.0 {
+            return Err(format!(
+                "treasurer.cadence.degraded_multiplier must be a finite number of at least 1.0 \
+                 (got {})",
+                self.degraded_multiplier
+            ));
+        }
+        Ok(())
+    }
+
+    /// The back-off policy this configuration describes.
+    ///
+    /// # Errors
+    ///
+    /// A `String` naming the offending key, as [`CadenceConfig::validate`].
+    pub fn policy(&self) -> Result<CadencePolicy, String> {
+        self.validate()?;
+        CadencePolicy::new(
+            std::time::Duration::from_millis(self.base_backoff_ms),
+            std::time::Duration::from_millis(self.max_backoff_ms),
+        )
+        .map_err(|e| format!("treasurer.cadence: {e}"))
+    }
+
+    /// The decorator settings this configuration describes.
+    pub fn settings(&self) -> CadenceSettings {
+        CadenceSettings::new(
+            std::time::Duration::from_secs(self.max_wait_secs),
+            std::time::Duration::from_millis(self.max_backoff_ms),
+            std::time::Duration::from_secs(self.fallback_pace_budget_secs),
+        )
+    }
+}
 
 /// The largest nano-units-per-1M-tokens price representable in a [`PriceRowConfig`] axis, as a
 /// decimal string, for use in error messages (`i64::MAX` nano-units = `9223372036.854775807`).
@@ -496,6 +633,8 @@ pub struct TreasurerConfig {
     pub pricing: BTreeMap<String, PriceRowConfig>,
     /// Operator-configured allowances (ALLOW-01, D-02). Omitted, the subtree is inert.
     pub allowance: AllowanceConfig,
+    /// Rate pacing (PACE-02, D-08). On by default; `cadence.enabled: false` installs nothing.
+    pub cadence: CadenceConfig,
 }
 
 impl Default for TreasurerConfig {
@@ -504,6 +643,7 @@ impl Default for TreasurerConfig {
             currency: "USD".to_string(),
             pricing: BTreeMap::new(),
             allowance: AllowanceConfig::default(),
+            cadence: CadenceConfig::default(),
         }
     }
 }
@@ -596,18 +736,20 @@ impl TreasurerConfig {
 
     /// Validate this configuration without discarding what it builds.
     ///
-    /// Checks the price table (`self.price_table()`) and the allowance policy
-    /// (`self.allowance_policy()`) -- validation and the values
+    /// Checks the price table (`self.price_table()`), the allowance policy
+    /// (`self.allowance_policy()`) and the cadence subtree (`self.cadence.validate()`) -- validation and the values
     /// `crate::infrastructure::web::agent_host` and
     /// `crate::infrastructure::web::facade_provisioner` build from this same configuration can
     /// never disagree.
     ///
     /// # Errors
     ///
-    /// See [`TreasurerConfig::price_table`] and [`TreasurerConfig::allowance_policy`].
+    /// See [`TreasurerConfig::price_table`], [`TreasurerConfig::allowance_policy`] and
+    /// [`CadenceConfig::validate`].
     pub fn validate(&self) -> Result<(), String> {
         self.price_table()?;
-        self.allowance_policy().map(|_| ())
+        self.allowance_policy().map(|_| ())?;
+        self.cadence.validate()
     }
 
     fn parse_axis(model: &str, axis: &str, raw: &str) -> Result<i64, String> {
@@ -736,6 +878,7 @@ mod tests {
                 currency: "USD".to_string(),
                 pricing: BTreeMap::from([("gpt-4".to_string(), row(bad, "1.00"))]),
                 allowance: AllowanceConfig::default(),
+                cadence: CadenceConfig::default(),
             };
             let err = config
                 .price_table()
@@ -757,6 +900,7 @@ mod tests {
             currency: "USD".to_string(),
             pricing: BTreeMap::from([("gpt-4".to_string(), row("0.0000000001", "1.00"))]),
             allowance: AllowanceConfig::default(),
+            cadence: CadenceConfig::default(),
         };
         let err = too_fine.price_table().expect_err("should be rejected");
         assert!(err.contains("9 decimal places"), "{err}");
@@ -765,6 +909,7 @@ mod tests {
             currency: "USD".to_string(),
             pricing: BTreeMap::from([("gpt-4".to_string(), row("9223372036.854775808", "1.00"))]),
             allowance: AllowanceConfig::default(),
+            cadence: CadenceConfig::default(),
         };
         let err = overflow.price_table().expect_err("should be rejected");
         assert!(err.contains("largest representable price"), "{err}");
@@ -777,6 +922,7 @@ mod tests {
                 currency: bad.to_string(),
                 pricing: BTreeMap::new(),
                 allowance: AllowanceConfig::default(),
+                cadence: CadenceConfig::default(),
             };
             let err = config
                 .price_table()
@@ -794,6 +940,7 @@ mod tests {
             currency: "USD".to_string(),
             pricing: BTreeMap::from([(String::new(), row("1.00", "1.00"))]),
             allowance: AllowanceConfig::default(),
+            cadence: CadenceConfig::default(),
         };
         let err = config
             .price_table()
@@ -812,6 +959,7 @@ mod tests {
             currency: "USD".to_string(),
             pricing: BTreeMap::from([("gpt-4".to_string(), with_cache)]),
             allowance: AllowanceConfig::default(),
+            cadence: CadenceConfig::default(),
         };
         let table = config.price_table().expect("should build");
         let price_row = table.row("gpt-4").expect("row should exist");
@@ -822,6 +970,7 @@ mod tests {
             currency: "USD".to_string(),
             pricing: BTreeMap::from([("gpt-4".to_string(), row("2.00", "5.00"))]),
             allowance: AllowanceConfig::default(),
+            cadence: CadenceConfig::default(),
         };
         let table = plain.price_table().expect("should build");
         let price_row = table.row("gpt-4").expect("row should exist");
@@ -1362,5 +1511,132 @@ mod tests {
                 .validate_against(&names(&[]), &names(&[]), true)
                 .is_ok()
         );
+    }
+
+    // ── Phase 43 (PACE-02, D-08, D-10): the `cadence` subtree ────────────────────────────────
+
+    fn treasurer_from_json(json: &str) -> Result<TreasurerConfig, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
+    #[test]
+    fn cadence_omitted_section_deserializes_to_the_defaults_with_pacing_on() {
+        let config = treasurer_from_json("{}").expect("empty section");
+        assert_eq!(config.cadence, CadenceConfig::default());
+        assert!(config.cadence.enabled, "pacing is on by default (D-08)");
+        assert_eq!(config.cadence.backend, CadenceBackend::InProcess);
+        assert_eq!(config.cadence.base_backoff_ms, 500);
+        assert_eq!(config.cadence.max_backoff_ms, 30_000);
+        assert_eq!(config.cadence.max_wait_secs, 300);
+        assert_eq!(config.cadence.degraded_multiplier, 2.0);
+        assert_eq!(config.cadence.fallback_pace_budget_secs, 60);
+        assert_eq!(config.cadence.lock_ttl_secs, 120);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn cadence_enabled_false_round_trips() {
+        let config = treasurer_from_json(r#"{"cadence":{"enabled":false}}"#).expect("parse");
+        assert!(!config.cadence.enabled);
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back = treasurer_from_json(&json).expect("round trip");
+        assert_eq!(back, config);
+        assert!(!back.cadence.enabled);
+    }
+
+    #[test]
+    fn cadence_backend_is_written_in_snake_case() {
+        let config = treasurer_from_json(r#"{"cadence":{"backend":"in_process"}}"#).expect("parse");
+        assert_eq!(config.cadence.backend, CadenceBackend::InProcess);
+        assert!(treasurer_from_json(r#"{"cadence":{"backend":"InProcess"}}"#).is_err());
+    }
+
+    #[test]
+    fn cadence_unknown_key_fails_to_deserialize() {
+        let err = treasurer_from_json(r#"{"cadence":{"base_backoff_msec":10}}"#)
+            .expect_err("a typo must not silently disable pacing");
+        assert!(err.to_string().contains("base_backoff_msec"), "{err}");
+    }
+
+    #[test]
+    fn cadence_validate_names_the_full_key_of_every_rule() {
+        for key in [
+            "base_backoff_ms",
+            "max_backoff_ms",
+            "max_wait_secs",
+            "fallback_pace_budget_secs",
+            "lock_ttl_secs",
+        ] {
+            let json = format!(r#"{{"cadence":{{"{key}":0}}}}"#);
+            let config = treasurer_from_json(&json).expect("parse");
+            let err = config.validate().expect_err("zero must be rejected");
+            assert!(
+                err.contains(&format!("treasurer.cadence.{key}")),
+                "{key}: {err}"
+            );
+        }
+
+        let inverted =
+            treasurer_from_json(r#"{"cadence":{"base_backoff_ms":900,"max_backoff_ms":100}}"#)
+                .expect("parse");
+        let err = inverted.validate().expect_err("base above max");
+        assert!(err.contains("treasurer.cadence.base_backoff_ms"), "{err}");
+        assert!(err.contains("treasurer.cadence.max_backoff_ms"), "{err}");
+
+        for bad in ["0.5", "-1.0", "1e999"] {
+            let json = format!(r#"{{"cadence":{{"degraded_multiplier":{bad}}}}}"#);
+            // 1e999 overflows f64 and is rejected at parse time by serde_json; the finite-range
+            // cases reach validate().
+            if let Ok(config) = treasurer_from_json(&json) {
+                let err = config
+                    .validate()
+                    .expect_err("multiplier below 1 or non-finite");
+                assert!(
+                    err.contains("treasurer.cadence.degraded_multiplier"),
+                    "{bad}: {err}"
+                );
+            }
+        }
+        let nan = CadenceConfig {
+            degraded_multiplier: f64::NAN,
+            ..CadenceConfig::default()
+        };
+        assert!(
+            nan.validate()
+                .expect_err("NaN")
+                .contains("treasurer.cadence.degraded_multiplier")
+        );
+    }
+
+    #[test]
+    fn cadence_policy_and_settings_follow_the_configured_values() {
+        let config = CadenceConfig {
+            base_backoff_ms: 200,
+            max_backoff_ms: 400,
+            max_wait_secs: 7,
+            fallback_pace_budget_secs: 9,
+            ..CadenceConfig::default()
+        };
+        let policy = config.policy().expect("policy");
+        assert_eq!(policy.base_backoff(), std::time::Duration::from_millis(200));
+        assert_eq!(policy.max_backoff(), std::time::Duration::from_millis(400));
+        let settings = config.settings();
+        assert_eq!(settings.max_wait(), std::time::Duration::from_secs(7));
+        assert_eq!(
+            settings.max_backoff(),
+            std::time::Duration::from_millis(400)
+        );
+        assert_eq!(
+            settings.fallback_pace_budget(),
+            std::time::Duration::from_secs(9)
+        );
+    }
+
+    #[test]
+    fn cadence_invalid_section_fails_treasurer_validate() {
+        let mut config = TreasurerConfig::default();
+        config.cadence.lock_ttl_secs = 0;
+        let err = config.validate().expect_err("cadence is validated");
+        assert!(err.contains("treasurer.cadence.lock_ttl_secs"), "{err}");
     }
 }

@@ -83,7 +83,8 @@ pub use crate::config::scheduler::SchedulerConfig;
 pub use crate::config::schedules::SchedulesConfig;
 pub use crate::config::trace::{OtelConfig, TraceConfig, TraceConfigError};
 pub use crate::config::treasurer::{
-    AllowanceConfig, AllowanceEntryConfig, AllowanceWebhookConfig, PriceRowConfig, TreasurerConfig,
+    AllowanceConfig, AllowanceEntryConfig, AllowanceWebhookConfig, CadenceBackend, CadenceConfig,
+    PriceRowConfig, TreasurerConfig,
 };
 pub use crate::config::waypoint_retention::WaypointRetentionConfig;
 pub use crate::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};

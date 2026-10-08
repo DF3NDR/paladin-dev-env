@@ -65,6 +65,8 @@ pub struct InMemoryCadence {
     policy: CadencePolicy,
     jitter: fn() -> f64,
     capacity: usize,
+    /// Factor applied to every delay this instance records; 1.0 unless `with_multiplier` ran.
+    multiplier: f64,
     /// Set the first time a live entry had to be evicted at the cap; gates the one-time warning.
     cap_announced: AtomicBool,
     state: Mutex<HashMap<CadenceKey, GateState>>,
@@ -78,6 +80,7 @@ impl InMemoryCadence {
             policy,
             jitter: rand::random::<f64>,
             capacity: DEFAULT_KEY_CAPACITY,
+            multiplier: 1.0,
             cap_announced: AtomicBool::new(false),
             state: Mutex::new(HashMap::new()),
         }
@@ -98,6 +101,58 @@ impl InMemoryCadence {
     pub fn with_capacity(mut self, capacity: usize) -> Self {
         self.capacity = capacity.max(1);
         self
+    }
+
+    /// Multiply every delay this instance records -- explicit (`Retry-After`) or computed -- by
+    /// `multiplier`, clamped at [`CADENCE_DELAY_CEILING`] (D-05: the degraded-mode fallback
+    /// paces more strictly because it cannot see the 429s other workers observe).
+    ///
+    /// The factor is applied exactly once, where a deadline is set, so a provider minimum is
+    /// only ever multiplied up, never reduced. A non-finite multiplier, or one below 1.0, is
+    /// treated as 1.0: this adapter must never pace *less* than the policy says. (Configuration
+    /// validation rejects such values before they reach here, 43-01.)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    /// use paladin_ports::output::cadence_port::{CadenceKey, CadencePolicy, CadencePort};
+    /// use paladin_storage::cadence::InMemoryCadence;
+    ///
+    /// # #[tokio::main(flavor = "current_thread")]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let cadence = InMemoryCadence::new(CadencePolicy::default()).with_multiplier(2.0);
+    /// let key = CadenceKey::new("openai", "gpt-4o");
+    /// let reading = cadence
+    ///     .record_rate_limited(&key, Some(Duration::from_secs(3)))
+    ///     .await?;
+    /// assert_eq!(reading.wait(), Duration::from_secs(6));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_multiplier(mut self, multiplier: f64) -> Self {
+        self.multiplier = if multiplier.is_finite() && multiplier >= 1.0 {
+            multiplier
+        } else {
+            1.0
+        };
+        self
+    }
+
+    /// The factor applied to every recorded delay (1.0 unless [`Self::with_multiplier`] ran).
+    pub fn multiplier(&self) -> f64 {
+        self.multiplier
+    }
+
+    /// `delay * multiplier`, clamped at the ceiling; never panics (`mul_f64` would on overflow).
+    fn scaled(&self, delay: Duration) -> Duration {
+        if self.multiplier == 1.0 {
+            return delay.min(CADENCE_DELAY_CEILING);
+        }
+        Duration::try_from_secs_f64(delay.as_secs_f64() * self.multiplier)
+            .unwrap_or(CADENCE_DELAY_CEILING)
+            .min(CADENCE_DELAY_CEILING)
     }
 
     /// Make room for one new key: reclaim entries that read as absent (gate elapsed, streak
@@ -175,7 +230,7 @@ impl CadencePort for InMemoryCadence {
             // sent before the gate opened. No escalation; only a later
             // provider-supplied deadline can extend the gate.
             if let Some(provided) = retry_after {
-                let candidate = deadline_after(now, provided);
+                let candidate = deadline_after(now, self.scaled(provided));
                 if candidate > entry.not_before {
                     entry.not_before = candidate;
                 }
@@ -185,7 +240,7 @@ impl CadencePort for InMemoryCadence {
             let delay = self
                 .policy
                 .delay_for(entry.streak, retry_after, (self.jitter)());
-            entry.not_before = deadline_after(now, delay);
+            entry.not_before = deadline_after(now, self.scaled(delay));
         }
         Ok(entry.reading(now))
     }
@@ -207,7 +262,7 @@ impl CadencePort for InMemoryCadence {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cadence::contract_tests;
+    use crate::cadence::{contract_tests, test_logger};
 
     /// Tens of milliseconds, per the contract suite's guidance; a maximum of
     /// at least eight times the base so the escalation clause sees growth.
@@ -425,7 +480,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn capacity_at_the_cap_with_live_entries_evicts_the_soonest_expiring_and_warns_once() {
-        install_capturing_logger();
+        test_logger::install();
         // A capacity no other test in this binary uses, so the capture below
         // (scoped to this OS thread as well) can only be this test's line.
         let cadence = adapter(|| 0.0).with_capacity(3);
@@ -468,7 +523,7 @@ mod tests {
             );
         }
 
-        let warnings = captured_warnings_for_this_thread();
+        let warnings = test_logger::warnings_for_this_thread();
         assert_eq!(
             warnings.len(),
             1,
@@ -509,46 +564,79 @@ mod tests {
         assert!(!cadence.cap_announced.load(Ordering::SeqCst));
     }
 
-    // A minimal in-process `log::Log` capturer, scoped by OS thread id so
-    // concurrently running `#[tokio::test]`s (each its own OS thread) never
-    // observe each other's lines. Installed at most once per process.
-    struct CapturingLogger;
+    // --- with_multiplier: the stricter degraded-mode delays (D-05).
 
-    static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
-    static CAPTURED: Mutex<Option<CapturedLines>> = Mutex::new(None);
-    type CapturedLines = HashMap<std::thread::ThreadId, Vec<String>>;
-
-    impl log::Log for CapturingLogger {
-        fn enabled(&self, _metadata: &log::Metadata) -> bool {
-            true
-        }
-        fn log(&self, record: &log::Record) {
-            if record.target() == CADENCE_LOG_TARGET {
-                let mut guard = CAPTURED.lock().unwrap_or_else(PoisonError::into_inner);
-                guard
-                    .get_or_insert_with(HashMap::new)
-                    .entry(std::thread::current().id())
-                    .or_default()
-                    .push(record.args().to_string());
-            }
-        }
-        fn flush(&self) {}
+    #[tokio::test(start_paused = true)]
+    async fn multiplier_scales_a_computed_delay() {
+        let cadence = adapter(|| 0.0).with_multiplier(2.0);
+        let reading = cadence
+            .record_rate_limited(&key("m"), None)
+            .await
+            .expect("record");
+        assert_eq!(
+            reading.wait(),
+            BASE * 2,
+            "a delay-less first 429 gates 2 x base"
+        );
     }
 
-    fn install_capturing_logger() {
-        static LOGGER: CapturingLogger = CapturingLogger;
-        LOGGER_INIT.call_once(|| {
-            log::set_logger(&LOGGER).expect("install the capturing test logger");
-            log::set_max_level(log::LevelFilter::Warn);
-        });
+    #[tokio::test(start_paused = true)]
+    async fn multiplier_scales_an_explicit_retry_after_up_never_down() {
+        let cadence = adapter(|| 0.0).with_multiplier(2.0);
+        let reading = cadence
+            .record_rate_limited(&key("m"), Some(Duration::from_secs(3)))
+            .await
+            .expect("record");
+        assert_eq!(reading.wait(), Duration::from_secs(6));
     }
 
-    fn captured_warnings_for_this_thread() -> Vec<String> {
-        CAPTURED
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .as_ref()
-            .and_then(|lines| lines.get(&std::thread::current().id()).cloned())
-            .unwrap_or_default()
+    #[tokio::test(start_paused = true)]
+    async fn multiplier_scales_an_in_flight_extension_once() {
+        let cadence = adapter(|| 0.0).with_multiplier(2.0);
+        cadence
+            .record_rate_limited(&key("m"), Some(Duration::from_secs(1)))
+            .await
+            .expect("first");
+        let reading = cadence
+            .record_rate_limited(&key("m"), Some(Duration::from_secs(5)))
+            .await
+            .expect("in flight");
+        assert_eq!(reading.streak(), 1, "an in-flight 429 does not escalate");
+        assert_eq!(
+            reading.wait(),
+            Duration::from_secs(10),
+            "scaled once, not twice"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn multiplier_is_clamped_at_the_delay_ceiling() {
+        let cadence = adapter(|| 0.0).with_multiplier(1_000_000.0);
+        let reading = cadence
+            .record_rate_limited(&key("m"), Some(CADENCE_DELAY_CEILING))
+            .await
+            .expect("record");
+        assert_eq!(reading.wait(), CADENCE_DELAY_CEILING);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn multiplier_below_one_or_non_finite_is_treated_as_one() {
+        for bad in [0.5, 0.0, -3.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let cadence = adapter(|| 0.0).with_multiplier(bad);
+            let reading = cadence
+                .record_rate_limited(&key("m"), Some(Duration::from_secs(3)))
+                .await
+                .expect("record");
+            assert_eq!(reading.wait(), Duration::from_secs(3), "multiplier {bad}");
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_default_multiplier_changes_nothing() {
+        let reading = adapter(|| 0.0)
+            .record_rate_limited(&key("m"), Some(Duration::from_secs(3)))
+            .await
+            .expect("record");
+        assert_eq!(reading.wait(), Duration::from_secs(3));
     }
 }

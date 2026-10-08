@@ -25,6 +25,13 @@
 //! backend CAN report what went wrong (for logging/metrics), not so a
 //! caller MUST fail on it -- see each method's own rustdoc.
 //!
+//! ## Fenced writes (PACE-04, D-14)
+//!
+//! [`NodeCachePort::put_fenced`] is the one provided (defaulted) method: it takes the
+//! [`FencingToken`] of the stampede lock that produced the value and, by default, just calls
+//! `put`. An adapter that can check the token overrides it so a stale lock holder's late write
+//! cannot replace a newer holder's entry. No other method, signature or implementor changes.
+//!
 //! ## Thread Safety
 //!
 //! All implementations must be `Send + Sync`: a cache may be read and
@@ -38,6 +45,8 @@ use thiserror::Error;
 
 use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_core::platform::container::node_cache::CachedDelta;
+
+use super::cadence_port::FencingToken;
 
 /// An opaque cache key (D-28).
 ///
@@ -215,6 +224,60 @@ pub trait NodeCachePort: Send + Sync {
         ttl: Duration,
     ) -> Result<(), NodeCacheError>;
 
+    /// Store `delta` under `key`, valid for `ttl`, on behalf of the holder of the lock
+    /// that produced it (PACE-04, D-14).
+    ///
+    /// A stampede lock can expire while its holder is still computing, so a *stale* holder may
+    /// finish after a newer holder has already written. `fence` is the holder's
+    /// [`FencingToken`]; an adapter that can check it refuses to let a lower token overwrite
+    /// what a higher one wrote.
+    ///
+    /// The default body ignores `fence` and calls [`put`](Self::put), so every existing
+    /// implementor compiles and behaves unchanged and the D-29 best-effort contract is
+    /// untouched: a failure is logged and never fails the node's run. Rules for an adapter that
+    /// overrides it:
+    ///
+    /// * Only a [`FencingToken::Distributed`] token carries cross-worker ordering. A
+    ///   [`FencingToken::Local`] token must be treated as a plain `put`; it is never compared
+    ///   with a distributed one.
+    /// * A token equal to the last one seen is accepted (the same holder writing again); a
+    ///   strictly lower one is ignored.
+    /// * An ignored stale write is `Ok(())`, never an error: losing the race is not a failure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::time::Duration;
+    ///
+    /// use paladin_core::platform::container::battlefield::StateDelta;
+    /// use paladin_ports::output::cadence_port::FencingToken;
+    /// use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
+    ///
+    /// # async fn run(cache: &dyn NodeCachePort) -> Result<(), Box<dyn std::error::Error>> {
+    /// let key = NodeCacheKey::new("graphA:node1:input-hash");
+    /// // Behaves exactly like `put` unless the adapter checks fences.
+    /// cache
+    ///     .put_fenced(
+    ///         &key,
+    ///         &StateDelta::new(),
+    ///         Duration::from_secs(60),
+    ///         &FencingToken::Distributed(7),
+    ///     )
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn put_fenced(
+        &self,
+        key: &NodeCacheKey,
+        delta: &StateDelta,
+        ttl: Duration,
+        fence: &FencingToken,
+    ) -> Result<(), NodeCacheError> {
+        let _ = fence;
+        self.put(key, delta, ttl).await
+    }
+
     /// Remove every stored entry whose key starts with `prefix`. Returns the
     /// number of entries removed.
     ///
@@ -264,6 +327,89 @@ mod tests {
                 .is_ok()
         );
         assert_eq!(cache.invalidate("prefix").await.unwrap(), 0);
+    }
+
+    /// Counts what reaches `put`, to prove the defaulted `put_fenced` delegates to it.
+    #[derive(Default)]
+    struct CountingCache {
+        puts: std::sync::atomic::AtomicUsize,
+        last_ttl: std::sync::Mutex<Option<Duration>>,
+    }
+
+    #[async_trait]
+    impl NodeCachePort for CountingCache {
+        async fn get(&self, _key: &NodeCacheKey) -> Result<Option<CachedDelta>, NodeCacheError> {
+            Ok(None)
+        }
+
+        async fn put(
+            &self,
+            _key: &NodeCacheKey,
+            _delta: &StateDelta,
+            ttl: Duration,
+        ) -> Result<(), NodeCacheError> {
+            self.puts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            *self.last_ttl.lock().unwrap() = Some(ttl);
+            Ok(())
+        }
+
+        async fn invalidate(&self, _prefix: &str) -> Result<u64, NodeCacheError> {
+            Ok(0)
+        }
+    }
+
+    #[tokio::test]
+    async fn put_fenced_default_delegates_to_put_for_either_token_source() {
+        let cache = CountingCache::default();
+        let key = NodeCacheKey::new("k");
+        let delta = StateDelta::new();
+        for token in [FencingToken::Distributed(3), FencingToken::Local(3)] {
+            cache
+                .put_fenced(&key, &delta, Duration::from_secs(9), &token)
+                .await
+                .unwrap();
+        }
+        assert_eq!(cache.puts.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(
+            *cache.last_ttl.lock().unwrap(),
+            Some(Duration::from_secs(9))
+        );
+    }
+
+    #[tokio::test]
+    async fn put_fenced_default_returns_the_error_of_put() {
+        struct Failing;
+
+        #[async_trait]
+        impl NodeCachePort for Failing {
+            async fn get(
+                &self,
+                _key: &NodeCacheKey,
+            ) -> Result<Option<CachedDelta>, NodeCacheError> {
+                Ok(None)
+            }
+            async fn put(
+                &self,
+                _key: &NodeCacheKey,
+                _delta: &StateDelta,
+                _ttl: Duration,
+            ) -> Result<(), NodeCacheError> {
+                Err(NodeCacheError::Serialization("boom".to_string()))
+            }
+            async fn invalidate(&self, _prefix: &str) -> Result<u64, NodeCacheError> {
+                Ok(0)
+            }
+        }
+
+        let outcome = Failing
+            .put_fenced(
+                &NodeCacheKey::new("k"),
+                &StateDelta::new(),
+                Duration::from_secs(1),
+                &FencingToken::Distributed(1),
+            )
+            .await;
+        assert!(matches!(outcome, Err(NodeCacheError::Serialization(_))));
     }
 
     #[test]

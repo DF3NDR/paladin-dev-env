@@ -63,8 +63,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   others (new: `build_agent_registry_with_cadence`, `paladin_port_from_settings_with_cadence`,
   `build_run_api_with_cadence`, `FacadeProvisioner::with_cadence`; the existing entry points keep
   their signatures and stay paced). Documented under Treasurer rate pacing in the configuration
-  guide and Fleet-wide pacing with Redis in the HTTP service host topology page. Later Phase 43
-  plans extend this entry.
+  guide and Fleet-wide pacing with Redis in the HTTP service host topology page.
+
+  Plan 43-10 adds the stampede lock primitives (PACE-04) to `CadencePort`: `try_lock` (set-if-absent
+  with expiry, one holder, not re-entrant) and `unlock` (owner-only), with `LockKey` and
+  `FencingToken`. Tokens increase strictly per key and carry their source: `Distributed` from Redis
+  (an `INCR` counter that outlives the lock by at least ten times and at least an hour), `Local`
+  from one process; the two are never compared. `ResilientCadence` fails the lock open onto the
+  in-process lock during an outage, so tasks in one worker still coalesce and no lock error can fail
+  a run. `NodeCachePort` gains one defaulted method, `put_fenced`, that delegates to `put`, so every
+  implementor is unchanged; `RedisNodeCache` overrides it with an atomic script that ignores a
+  lower distributed token, so a stale lock holder's late write cannot overwrite a newer entry. The
+  engine's use of the lock follows in plan 43-11. Later Phase 43 plans extend this entry.
 - **Provider retry delay on a 429 (PACE-01, PACE-02; Phase 43 plan 43-02).**
   `LlmError::RateLimitExceeded` now carries the provider's own retry delay and a rate-limit header
   snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new

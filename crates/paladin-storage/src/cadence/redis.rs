@@ -1007,6 +1007,270 @@ mod tests {
         assert_eq!(reading.streak(), 0, "the streak was reset");
     }
 
+    // ---- Live-server tests: the stampede lock (PACE-04, D-11, D-14) ---------------------------
+
+    #[tokio::test]
+    async fn redis_cadence_passes_the_lock_contract() {
+        let Some((cadence, _prefix)) = cadence_or_skip(floor) else {
+            return;
+        };
+        contract_tests::run_all_locks(&cadence, policy()).await;
+    }
+
+    #[tokio::test]
+    async fn redis_tokens_are_distributed_and_increase_across_two_instances() {
+        let Some((worker_a, prefix)) = cadence_or_skip(floor) else {
+            return;
+        };
+        let worker_b = worker(&prefix, floor);
+        let k = LockKey::new("graphA:node1:hash");
+        let ttl = Duration::from_secs(30);
+
+        let first = worker_a
+            .try_lock(&k, ttl)
+            .await
+            .expect("lock")
+            .expect("free");
+        assert!(first.is_distributed(), "Redis issues Distributed tokens");
+        assert_eq!(
+            worker_b.try_lock(&k, ttl).await.expect("contender"),
+            None,
+            "worker B sees worker A's lock"
+        );
+        // Ownership is the token, not the instance (the engine passes the token it was given):
+        // a token from another source never releases it, the exact token does.
+        assert!(
+            !worker_b
+                .unlock(&k, &FencingToken::Local(first.value()))
+                .await
+                .expect("unlock"),
+            "a Local token never releases a Distributed lock"
+        );
+        assert!(worker_b.unlock(&k, &first).await.expect("unlock"));
+
+        let second = worker_b
+            .try_lock(&k, ttl)
+            .await
+            .expect("lock")
+            .expect("free after the unlock");
+        assert!(second.is_distributed());
+        assert!(
+            second.value() > first.value(),
+            "{second:?} must exceed {first:?} across workers"
+        );
+        assert!(
+            !worker_a.unlock(&k, &first).await.expect("stale unlock"),
+            "worker A's stale token cannot release worker B's lock"
+        );
+        assert_eq!(worker_a.try_lock(&k, ttl).await.expect("held"), None);
+        assert!(worker_b.unlock(&k, &second).await.expect("unlock"));
+    }
+
+    #[tokio::test]
+    async fn every_lock_and_counter_key_carries_a_ttl_and_the_token_is_the_lock_value() {
+        let Some((cadence, prefix)) = cadence_or_skip(floor) else {
+            return;
+        };
+        let mut raw = raw_connection().await;
+        let k = LockKey::new("ttl-check");
+        let ttl = Duration::from_secs(120);
+
+        let token = cadence
+            .try_lock(&k, ttl)
+            .await
+            .expect("lock")
+            .expect("free");
+
+        let lock_pttl: i64 = redis::cmd("PTTL")
+            .arg(cadence.lock_key(&k))
+            .query_async(&mut raw)
+            .await
+            .expect("PTTL lock");
+        assert!(
+            lock_pttl > 0 && lock_pttl <= 120_000,
+            "the lock expires by itself within its ttl: {lock_pttl}"
+        );
+        let stored: String = redis::cmd("GET")
+            .arg(cadence.lock_key(&k))
+            .query_async(&mut raw)
+            .await
+            .expect("GET lock");
+        assert_eq!(
+            stored,
+            token.value().to_string(),
+            "the lock holds the token"
+        );
+
+        // T-43-40: the counter outlives the lock by ten times, never less than an hour. For a
+        // 120 s lock ten times is 20 min, so the one-hour floor wins.
+        let counter_pttl: i64 = redis::cmd("PTTL")
+            .arg(cadence.fence_key(&k))
+            .query_async(&mut raw)
+            .await
+            .expect("PTTL counter");
+        assert!(
+            counter_pttl > 3_590_000 && counter_pttl <= 3_600_000,
+            "the counter keeps at least an hour: {counter_pttl}"
+        );
+
+        // For a 2 h lock the ten-times rule (20 h) is above the floor.
+        let long = LockKey::new("ttl-check-long");
+        cadence
+            .try_lock(&long, Duration::from_secs(2 * 60 * 60))
+            .await
+            .expect("lock")
+            .expect("free");
+        let long_pttl: i64 = redis::cmd("PTTL")
+            .arg(cadence.fence_key(&long))
+            .query_async(&mut raw)
+            .await
+            .expect("PTTL counter");
+        assert!(
+            long_pttl > 71_990_000 && long_pttl <= 72_000_000,
+            "ten times the lock: {long_pttl}"
+        );
+
+        // A short lock gets the same floor.
+        let short = LockKey::new("ttl-check-short");
+        cadence
+            .try_lock(&short, Duration::from_millis(500))
+            .await
+            .expect("lock")
+            .expect("free");
+        let short_counter_pttl: i64 = redis::cmd("PTTL")
+            .arg(cadence.fence_key(&short))
+            .query_async(&mut raw)
+            .await
+            .expect("PTTL counter");
+        assert!(
+            short_counter_pttl > 3_590_000 && short_counter_pttl <= 3_600_000,
+            "the counter keeps at least an hour: {short_counter_pttl}"
+        );
+
+        let keys: Vec<String> = redis::cmd("KEYS")
+            .arg(format!("{prefix}:*"))
+            .query_async(&mut raw)
+            .await
+            .expect("KEYS");
+        assert_eq!(keys.len(), 6, "three locks and three counters: {keys:?}");
+        for key in keys {
+            let pttl: i64 = redis::cmd("PTTL")
+                .arg(&key)
+                .query_async(&mut raw)
+                .await
+                .expect("PTTL");
+            assert!(pttl > 0, "{key}: every key carries a TTL (PTTL = {pttl})");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_lock_expires_in_redis_and_the_stale_holder_cannot_release_the_new_one() {
+        let Some((cadence, _prefix)) = cadence_or_skip(floor) else {
+            return;
+        };
+        let k = LockKey::new("expiry");
+        let short = Duration::from_millis(150);
+
+        let stale = cadence
+            .try_lock(&k, short)
+            .await
+            .expect("lock")
+            .expect("free");
+        assert_eq!(
+            cadence.try_lock(&k, short).await.expect("held"),
+            None,
+            "held before the TTL"
+        );
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let fresh = cadence
+            .try_lock(&k, Duration::from_secs(30))
+            .await
+            .expect("lock")
+            .expect("free once the TTL elapsed");
+        assert!(fresh.value() > stale.value());
+        assert!(
+            !cadence.unlock(&k, &stale).await.expect("stale unlock"),
+            "the expired holder must not release the new holder's lock"
+        );
+        assert_eq!(cadence.try_lock(&k, short).await.expect("held"), None);
+        assert!(cadence.unlock(&k, &fresh).await.expect("unlock"));
+    }
+
+    #[tokio::test]
+    async fn a_lock_key_can_never_be_a_pacing_key() {
+        let Some((cadence, _prefix)) = cadence_or_skip(floor) else {
+            return;
+        };
+        // A provider literally named `lock` or `fence` would collide with a naive
+        // `{prefix}:lock:{key}` layout and turn the pacing scripts into WRONGTYPE errors.
+        for provider in ["lock", "fence", "%lock", "%fence"] {
+            let pace = CadenceKey::new(provider, "work");
+            let lock = LockKey::new("work");
+            cadence
+                .record_rate_limited(&pace, Some(Duration::from_secs(5)))
+                .await
+                .unwrap_or_else(|e| panic!("{provider}: pacing broke: {e}"));
+            let token = cadence
+                .try_lock(&lock, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|e| panic!("{provider}: locking broke: {e}"))
+                .unwrap_or_else(|| panic!("{provider}: the lock was held by a pacing key"));
+            assert!(cadence.unlock(&lock, &token).await.expect("unlock"));
+            assert!(
+                !cadence.gate(&pace).await.expect("gate").is_clear(),
+                "{provider}: the lock must not have disturbed the gate"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn hostile_lock_names_are_opaque_data_never_script_text() {
+        let Some((cadence, prefix)) = cadence_or_skip(floor) else {
+            return;
+        };
+        let mut raw = raw_connection().await;
+        let sentinel = format!("{prefix}:sentinel");
+        let _: () = redis::cmd("SET")
+            .arg(&sentinel)
+            .arg("alive")
+            .query_async(&mut raw)
+            .await
+            .expect("SET sentinel");
+
+        for name in [
+            "'); redis.call('FLUSHALL') --",
+            "\"]]; return redis.call('DEL', KEYS[1]) --",
+            "line\nbreak\r\n and spaces \u{0}nul",
+            "",
+        ] {
+            let k = LockKey::new(name);
+            let token = cadence
+                .try_lock(&k, Duration::from_secs(5))
+                .await
+                .expect("lock")
+                .expect("free");
+            assert_eq!(
+                cadence
+                    .try_lock(&k, Duration::from_secs(5))
+                    .await
+                    .expect("held"),
+                None
+            );
+            assert!(
+                cadence.unlock(&k, &token).await.expect("unlock"),
+                "{name:?}"
+            );
+        }
+
+        let alive: String = redis::cmd("GET")
+            .arg(&sentinel)
+            .query_async(&mut raw)
+            .await
+            .expect("GET sentinel");
+        assert_eq!(alive, "alive", "no lock name may execute as script text");
+    }
+
     // ---- Tests that need no server -----------------------------------------------------------
 
     #[test]
@@ -1293,5 +1557,94 @@ mod tests {
 
         stop.store(true, Ordering::SeqCst);
         holder.join().expect("the holder thread exits");
+    }
+
+    // ---- Lock helpers and layout (no server) ----------------------------------------------------
+
+    #[test]
+    fn lock_ttl_is_at_least_a_millisecond_and_at_most_the_delay_ceiling() {
+        assert_eq!(lock_ttl_ms(Duration::ZERO), 1, "Redis rejects PX 0");
+        assert_eq!(lock_ttl_ms(Duration::from_micros(10)), 1);
+        assert_eq!(lock_ttl_ms(Duration::from_secs(120)), 120_000);
+        assert_eq!(
+            lock_ttl_ms(Duration::MAX),
+            millis(CADENCE_DELAY_CEILING),
+            "an absurd ttl is clamped, never overflowing"
+        );
+    }
+
+    #[test]
+    fn fence_ttl_is_ten_times_the_lock_and_at_least_an_hour() {
+        // 10 x 120 s = 20 min, below the floor: the one-hour floor wins.
+        assert_eq!(fence_ttl_ms(120_000), 3_600_000);
+        assert_eq!(fence_ttl_ms(1), 3_600_000);
+        // 10 x 2 h = 20 h, above the floor.
+        assert_eq!(fence_ttl_ms(7_200_000), 72_000_000);
+        // Saturating, never overflowing.
+        assert_eq!(fence_ttl_ms(i64::MAX), i64::MAX);
+    }
+
+    #[test]
+    fn lock_and_fence_keys_are_injective_and_never_equal_a_pacing_key() {
+        let cadence = RedisCadence::new(RedisCadenceConfig::new("redis://127.0.0.1:1/0"), policy())
+            .expect("parsable");
+        let a = LockKey::new("a");
+        let b = LockKey::new("b");
+        assert_eq!(cadence.lock_key(&a), "paladin:cadence:%lock:a");
+        assert_eq!(cadence.fence_key(&a), "paladin:cadence:%fence:a");
+        assert_ne!(cadence.lock_key(&a), cadence.lock_key(&b));
+        assert_ne!(cadence.lock_key(&a), cadence.fence_key(&a));
+
+        // No (provider, model) pair renders as a lock or fence key: a provider half never
+        // contains `%l` or `%f`, because `%` is always escaped to `%25`.
+        for provider in ["lock", "fence", "%lock", "%fence", "%", "", "a:b", "%3A"] {
+            for model in ["a", "", "lock:a", ":a"] {
+                let state = cadence.state_key(&CadenceKey::new(provider, model));
+                assert_ne!(
+                    state,
+                    cadence.lock_key(&LockKey::new(model)),
+                    "{provider}/{model}"
+                );
+                assert_ne!(
+                    state,
+                    cadence.fence_key(&LockKey::new(model)),
+                    "{provider}/{model}"
+                );
+                assert!(
+                    !state.starts_with("paladin:cadence:%lock:")
+                        && !state.starts_with("paladin:cadence:%fence:"),
+                    "{state}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_local_token_never_reaches_redis() {
+        // Nothing listens on port 1: any round trip would surface as an error.
+        let cadence = RedisCadence::new(RedisCadenceConfig::new("redis://127.0.0.1:1/0"), policy())
+            .expect("parsable");
+        let released = cadence
+            .unlock(&LockKey::new("k"), &FencingToken::Local(7))
+            .await
+            .expect("a Local token is Ok(false) without a round trip");
+        assert!(!released);
+        assert!(
+            cadence
+                .unlock(&LockKey::new("k"), &FencingToken::Distributed(7))
+                .await
+                .is_err(),
+            "control: a Distributed token does try the (dead) server"
+        );
+    }
+
+    #[test]
+    fn lock_scripts_take_everything_as_keys_or_argv() {
+        for script in [CADENCE_TRY_LOCK_LUA, CADENCE_UNLOCK_LUA] {
+            assert!(!script.contains("%s") && !script.contains("{}"), "{script}");
+        }
+        assert!(CADENCE_TRY_LOCK_LUA.contains("INCR"));
+        assert!(CADENCE_TRY_LOCK_LUA.contains("'PX'"));
+        assert!(CADENCE_UNLOCK_LUA.contains("DEL"));
     }
 }

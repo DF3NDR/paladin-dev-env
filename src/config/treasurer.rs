@@ -43,7 +43,12 @@
 //! subtree therefore turns pacing on; `treasurer.cadence.enabled: false` installs nothing and
 //! restores the previous behaviour. Like every struct under `treasurer:`, [`CadenceConfig`]
 //! rejects an unknown key, so a typo fails to load rather than silently disabling pacing, and
-//! [`CadenceConfig::validate`] names the full key of whatever it rejects.
+//! [`CadenceConfig::validate`] names the full key of whatever it rejects. `backend` is either
+//! `in_process` or `{ redis: { url_env: NAME } }`; like `RunQueueConfig`, the `redis` form names
+//! the environment variable holding the URL (never the URL), and `validate()` rejects an empty
+//! name or one naming an unset variable at boot. The seven scalar keys have
+//! `APP_TREASURER_CADENCE_*` overrides ([`CadenceConfig`]'s `EnvOverridable` impl); `backend`
+//! has none.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -68,13 +73,35 @@ const MIN_ALLOWANCE_PERIOD_SECS: u64 = 60;
 
 /// Where the pacing state lives (`treasurer.cadence.backend`).
 ///
-/// Only the in-process backend exists so far (YAML `backend: in_process`); the shared Redis
-/// backend arrives with plan 43-09.
+/// Written in YAML as `backend: in_process` or
+/// `backend: { redis: { url_env: CADENCE_REDIS_URL } }` (externally tagged, snake_case). The
+/// `redis` form carries the NAME of the environment variable holding the connection URL --
+/// never the URL itself -- so a connection string (which may embed a password) never lands in a
+/// serialised config payload or a `Debug`/log line of this type. This is the same pattern as
+/// [`crate::config::run_queue::RunQueueBackend::Redis`].
+///
+/// # Examples
+///
+/// ```
+/// use paladin::config::treasurer::CadenceBackend;
+///
+/// let backend = CadenceBackend::Redis {
+///     url_env: "CADENCE_REDIS_URL".to_string(),
+/// };
+/// assert_ne!(backend, CadenceBackend::InProcess);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum CadenceBackend {
     /// Gate state held in this process (`InMemoryCadence`), the default (D-08).
     InProcess,
+    /// Gate state shared by a worker fleet through Redis, behind a resilient in-process
+    /// fallback (D-05). Needs a binary built with the `redis-cadence` feature.
+    Redis {
+        /// The NAME of the environment variable holding the Redis connection URL -- not the
+        /// URL itself. The variable is read once at boot.
+        url_env: String,
+    },
 }
 
 /// The `treasurer.cadence` subtree: rate pacing (PACE-02, D-08, D-10).
@@ -136,8 +163,9 @@ impl CadenceConfig {
     /// # Errors
     ///
     /// A `String` naming the first offending `treasurer.cadence.*` key: a zero duration,
-    /// `base_backoff_ms` above `max_backoff_ms`, or a `degraded_multiplier` that is not finite
-    /// or is below 1.0.
+    /// `base_backoff_ms` above `max_backoff_ms`, a `degraded_multiplier` that is not finite or
+    /// is below 1.0, or a `backend.redis.url_env` that is empty or names an unset environment
+    /// variable (the same rule as `RunQueueConfig::validate`).
     pub fn validate(&self) -> Result<(), String> {
         for (key, value) in [
             ("base_backoff_ms", self.base_backoff_ms),
@@ -166,6 +194,23 @@ impl CadenceConfig {
                 self.degraded_multiplier
             ));
         }
+        // Only the variable NAME is checked and echoed; its value (a URL that may carry a
+        // password) is never read into an error.
+        if let CadenceBackend::Redis { url_env } = &self.backend {
+            if url_env.trim().is_empty() {
+                return Err(
+                    "treasurer.cadence.backend.redis.url_env must name an environment variable \
+                     (got an empty name)"
+                        .to_string(),
+                );
+            }
+            if std::env::var_os(url_env).is_none() {
+                return Err(format!(
+                    "treasurer.cadence.backend.redis.url_env names env var '{url_env}', which is \
+                     not set"
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -190,6 +235,46 @@ impl CadenceConfig {
             std::time::Duration::from_millis(self.max_backoff_ms),
             std::time::Duration::from_secs(self.fallback_pace_budget_secs),
         )
+    }
+}
+
+/// Scalar environment overrides for `treasurer.cadence` (D-10). Each variable overrides its
+/// field when set and parseable; an unparseable value leaves the field unchanged. `backend` has
+/// no environment form: the Redis URL travels through the variable `backend.redis.url_env`
+/// names, never through an override.
+///
+/// | Variable | Field |
+/// |----------|-------|
+/// | `APP_TREASURER_CADENCE_ENABLED` | `enabled` |
+/// | `APP_TREASURER_CADENCE_BASE_BACKOFF_MS` | `base_backoff_ms` |
+/// | `APP_TREASURER_CADENCE_MAX_BACKOFF_MS` | `max_backoff_ms` |
+/// | `APP_TREASURER_CADENCE_MAX_WAIT_SECS` | `max_wait_secs` |
+/// | `APP_TREASURER_CADENCE_DEGRADED_MULTIPLIER` | `degraded_multiplier` |
+/// | `APP_TREASURER_CADENCE_FALLBACK_PACE_BUDGET_SECS` | `fallback_pace_budget_secs` |
+/// | `APP_TREASURER_CADENCE_LOCK_TTL_SECS` | `lock_ttl_secs` |
+impl EnvOverridable for CadenceConfig {
+    fn apply_env_overrides(&mut self) {
+        if let Some(v) = read_env::<bool>("APP_TREASURER_CADENCE_ENABLED") {
+            self.enabled = v;
+        }
+        if let Some(v) = read_env::<u64>("APP_TREASURER_CADENCE_BASE_BACKOFF_MS") {
+            self.base_backoff_ms = v;
+        }
+        if let Some(v) = read_env::<u64>("APP_TREASURER_CADENCE_MAX_BACKOFF_MS") {
+            self.max_backoff_ms = v;
+        }
+        if let Some(v) = read_env::<u64>("APP_TREASURER_CADENCE_MAX_WAIT_SECS") {
+            self.max_wait_secs = v;
+        }
+        if let Some(v) = read_env::<f64>("APP_TREASURER_CADENCE_DEGRADED_MULTIPLIER") {
+            self.degraded_multiplier = v;
+        }
+        if let Some(v) = read_env::<u64>("APP_TREASURER_CADENCE_FALLBACK_PACE_BUDGET_SECS") {
+            self.fallback_pace_budget_secs = v;
+        }
+        if let Some(v) = read_env::<u64>("APP_TREASURER_CADENCE_LOCK_TTL_SECS") {
+            self.lock_ttl_secs = v;
+        }
     }
 }
 
@@ -786,6 +871,7 @@ impl EnvOverridable for TreasurerConfig {
         {
             webhook.secret = Some(v);
         }
+        self.cadence.apply_env_overrides();
     }
 }
 
@@ -1638,5 +1724,189 @@ mod tests {
         config.cadence.lock_ttl_secs = 0;
         let err = config.validate().expect_err("cadence is validated");
         assert!(err.contains("treasurer.cadence.lock_ttl_secs"), "{err}");
+    }
+
+    // ── Phase 43 plan 09 (D-10): the `redis` backend and the scalar env overrides ────────────
+
+    const CADENCE_ENV_VARS: [&str; 7] = [
+        "APP_TREASURER_CADENCE_ENABLED",
+        "APP_TREASURER_CADENCE_BASE_BACKOFF_MS",
+        "APP_TREASURER_CADENCE_MAX_BACKOFF_MS",
+        "APP_TREASURER_CADENCE_MAX_WAIT_SECS",
+        "APP_TREASURER_CADENCE_DEGRADED_MULTIPLIER",
+        "APP_TREASURER_CADENCE_FALLBACK_PACE_BUDGET_SECS",
+        "APP_TREASURER_CADENCE_LOCK_TTL_SECS",
+    ];
+
+    fn clear_cadence_env() {
+        for var in CADENCE_ENV_VARS {
+            unsafe {
+                env::remove_var(var);
+            }
+        }
+    }
+
+    #[test]
+    fn redis_backend_deserializes_from_the_documented_yaml() {
+        let wrapper = deserialize_wrapper(
+            "treasurer:\n  cadence:\n    backend:\n      redis:\n        url_env: CADENCE_REDIS_URL\n",
+        );
+        assert_eq!(
+            wrapper.treasurer.cadence.backend,
+            CadenceBackend::Redis {
+                url_env: "CADENCE_REDIS_URL".to_string()
+            }
+        );
+        // The documented plain form still parses.
+        let plain = deserialize_wrapper("treasurer:\n  cadence:\n    backend: in_process\n");
+        assert_eq!(plain.treasurer.cadence.backend, CadenceBackend::InProcess);
+    }
+
+    #[test]
+    fn redis_backend_carries_the_variable_name_never_a_url() {
+        let config = CadenceConfig {
+            backend: CadenceBackend::Redis {
+                url_env: "CADENCE_REDIS_URL".to_string(),
+            },
+            ..CadenceConfig::default()
+        };
+        let json = serde_json::to_string(&config).expect("serialize");
+        assert!(json.contains("CADENCE_REDIS_URL"), "{json}");
+        assert!(!json.contains("redis://"), "{json}");
+        assert!(!format!("{config:?}").contains("redis://"));
+    }
+
+    #[test]
+    fn validate_rejects_an_empty_url_env_naming_the_key() {
+        for blank in ["", "   "] {
+            let config = CadenceConfig {
+                backend: CadenceBackend::Redis {
+                    url_env: blank.to_string(),
+                },
+                ..CadenceConfig::default()
+            };
+            let err = config.validate().expect_err("an empty name is rejected");
+            assert!(
+                err.contains("treasurer.cadence.backend.redis.url_env"),
+                "{err}"
+            );
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn validate_rejects_an_unset_url_env_naming_the_variable() {
+        let unset_var = "APP_TREASURER_CADENCE_TEST_UNSET_VAR";
+        unsafe {
+            env::remove_var(unset_var);
+        }
+        let config = CadenceConfig {
+            backend: CadenceBackend::Redis {
+                url_env: unset_var.to_string(),
+            },
+            ..CadenceConfig::default()
+        };
+        let err = config
+            .validate()
+            .expect_err("an unset variable is rejected");
+        assert!(
+            err.contains("treasurer.cadence.backend.redis.url_env"),
+            "{err}"
+        );
+        assert!(err.contains(unset_var), "{err}");
+
+        // Once the variable is set the config is valid, and the value never appears in an error.
+        unsafe {
+            env::set_var(unset_var, "redis://:hunter2@127.0.0.1:1/0");
+        }
+        assert!(config.validate().is_ok());
+        unsafe {
+            env::remove_var(unset_var);
+        }
+        let err = config.validate().expect_err("unset again");
+        assert!(!err.contains("hunter2"), "{err}");
+    }
+
+    #[test]
+    fn unknown_key_under_the_redis_backend_fails_to_load() {
+        let err = treasurer_from_json(
+            r#"{"cadence":{"backend":{"redis":{"url_env":"X","url":"redis://h"}}}}"#,
+        )
+        .expect_err("an inline url must not load");
+        assert!(err.to_string().contains("url"), "{err}");
+        // A missing url_env is also a load failure, not a default.
+        assert!(treasurer_from_json(r#"{"cadence":{"backend":{"redis":{}}}}"#).is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn each_scalar_env_override_applies() {
+        clear_cadence_env();
+        unsafe {
+            env::set_var("APP_TREASURER_CADENCE_ENABLED", "false");
+            env::set_var("APP_TREASURER_CADENCE_BASE_BACKOFF_MS", "111");
+            env::set_var("APP_TREASURER_CADENCE_MAX_BACKOFF_MS", "2222");
+            env::set_var("APP_TREASURER_CADENCE_MAX_WAIT_SECS", "33");
+            env::set_var("APP_TREASURER_CADENCE_DEGRADED_MULTIPLIER", "3.5");
+            env::set_var("APP_TREASURER_CADENCE_FALLBACK_PACE_BUDGET_SECS", "44");
+            env::set_var("APP_TREASURER_CADENCE_LOCK_TTL_SECS", "55");
+        }
+        let mut config = TreasurerConfig::default();
+        config.apply_env_overrides();
+        clear_cadence_env();
+
+        assert!(!config.cadence.enabled);
+        assert_eq!(config.cadence.base_backoff_ms, 111);
+        assert_eq!(config.cadence.max_backoff_ms, 2222);
+        assert_eq!(config.cadence.max_wait_secs, 33);
+        assert_eq!(config.cadence.degraded_multiplier, 3.5);
+        assert_eq!(config.cadence.fallback_pace_budget_secs, 44);
+        assert_eq!(config.cadence.lock_ttl_secs, 55);
+    }
+
+    #[test]
+    #[serial]
+    fn an_unparseable_override_leaves_the_field() {
+        clear_cadence_env();
+        unsafe {
+            env::set_var("APP_TREASURER_CADENCE_ENABLED", "maybe");
+            env::set_var("APP_TREASURER_CADENCE_BASE_BACKOFF_MS", "fast");
+            env::set_var("APP_TREASURER_CADENCE_MAX_BACKOFF_MS", "-5");
+            env::set_var("APP_TREASURER_CADENCE_MAX_WAIT_SECS", "");
+            env::set_var("APP_TREASURER_CADENCE_DEGRADED_MULTIPLIER", "twice");
+            env::set_var("APP_TREASURER_CADENCE_FALLBACK_PACE_BUDGET_SECS", "1.5");
+            env::set_var("APP_TREASURER_CADENCE_LOCK_TTL_SECS", "0x10");
+        }
+        let mut config = TreasurerConfig::default();
+        config.apply_env_overrides();
+        clear_cadence_env();
+        assert_eq!(config.cadence, CadenceConfig::default());
+    }
+
+    #[test]
+    #[serial]
+    fn backend_has_no_env_override() {
+        clear_cadence_env();
+        for var in [
+            "APP_TREASURER_CADENCE_BACKEND",
+            "APP_TREASURER_CADENCE_URL_ENV",
+            "APP_TREASURER_CADENCE_REDIS_URL_ENV",
+        ] {
+            unsafe {
+                env::set_var(var, "redis");
+            }
+        }
+        let mut config = TreasurerConfig::default();
+        config.apply_env_overrides();
+        for var in [
+            "APP_TREASURER_CADENCE_BACKEND",
+            "APP_TREASURER_CADENCE_URL_ENV",
+            "APP_TREASURER_CADENCE_REDIS_URL_ENV",
+        ] {
+            unsafe {
+                env::remove_var(var);
+            }
+        }
+        assert_eq!(config.cadence.backend, CadenceBackend::InProcess);
     }
 }

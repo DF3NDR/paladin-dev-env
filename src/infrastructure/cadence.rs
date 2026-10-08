@@ -16,13 +16,36 @@
 //!
 //! The in-process backend keeps its gate state inside the port instance, so ONE
 //! [`CadenceWiring`] must be shared by every composition root in a process for pacing to be
-//! process-wide. Building a wiring per call site would pace each site independently. Plan 43-09
-//! threads a single wiring through the whole server.
+//! process-wide. Building a wiring per call site would pace each site independently.
+//! `paladin-server` builds one at boot and hands clones to the agent host, the facade
+//! provisioner and the run engine's wiring.
 //!
 //! ## On by default
 //!
 //! A default `treasurer.cadence` section yields `Some(wiring)` over the in-process adapter (D-08);
 //! only `enabled: false` yields `None`, and then [`compose_llm`] installs no pacing layer at all.
+//!
+//! ## Backends
+//!
+//! | `treasurer.cadence.backend` | Port built | Needs |
+//! |-----------------------------|------------|-------|
+//! | `in_process` (default) | `InMemoryCadence` | nothing |
+//! | `{ redis: { url_env } }` | `ResilientCadence(RedisCadence, InMemoryCadence x degraded_multiplier)` | the `redis-cadence` feature and the named environment variable |
+//!
+//! The Redis backend is built **without connecting** (`RedisCadence::new` only parses the URL),
+//! so a worker boots while Redis is down and starts degraded on first use: the composite
+//! serves every call from the in-process fallback, with delays multiplied by
+//! `degraded_multiplier`, warns once per outage and recovers on its own (D-05). A binary built
+//! without `redis-cadence` refuses `backend: redis` at boot rather than quietly pacing
+//! in-process -- a fleet that believes it shares pacing state must never silently not.
+//!
+//! All Redis keys live under the fixed `paladin:cadence` namespace: two independent fleets
+//! pointed at one Redis server share pacing state for the same provider and model. Give each
+//! fleet its own Redis server or logical database.
+//!
+//! The Redis URL may carry a password. It is read from the named environment variable here, at
+//! boot, handed straight to `RedisCadence` (whose `Debug` and errors redact it) and never
+//! logged, stored on a config type or serialised.
 
 use std::sync::Arc;
 
@@ -31,18 +54,26 @@ use paladin_llm::cadence::{CadenceWiring, with_cadence};
 use paladin_llm::pricing::with_pricing;
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_storage::cadence::InMemoryCadence;
+#[cfg(feature = "redis-cadence")]
+use paladin_storage::cadence::{RedisCadence, RedisCadenceConfig, ResilientCadence};
 
 use crate::config::treasurer::{CadenceBackend, CadenceConfig};
 
 /// Build the shared pacing wiring from `config`.
 ///
 /// Returns `Ok(None)` when `config.enabled` is `false` (nothing is installed), and otherwise a
-/// wiring over the backend `config.backend` names.
+/// wiring over the backend `config.backend` names: `InMemoryCadence` for `in_process`, and for
+/// `redis { url_env }` a `ResilientCadence` over a `RedisCadence` with an
+/// `InMemoryCadence` fallback at `degraded_multiplier`. The Redis backend does not connect here:
+/// an unreachable server degrades pacing on first use, it does not fail boot (D-05).
 ///
 /// # Errors
 ///
 /// A `String` naming the offending `treasurer.cadence.*` key when `config` fails
-/// [`CadenceConfig::validate`].
+/// [`CadenceConfig::validate`] (which includes a `backend.redis.url_env` that is empty or names
+/// an unset variable), or when `backend: redis` is configured on a binary built without the
+/// `redis-cadence` feature -- the message names the feature and `backend: in_process` as the
+/// alternative. The Redis URL never appears in an error.
 ///
 /// # Examples
 ///
@@ -66,12 +97,45 @@ pub fn build_cadence(config: &CadenceConfig) -> Result<Option<CadenceWiring>, St
     if !config.enabled {
         return Ok(None);
     }
-    match config.backend {
+    match &config.backend {
         CadenceBackend::InProcess => {
             let port = InMemoryCadence::new(config.policy()?);
             Ok(Some(CadenceWiring::new(Arc::new(port), config.settings())))
         }
+        CadenceBackend::Redis { url_env } => build_redis_wiring(config, url_env).map(Some),
     }
+}
+
+/// The `redis` backend: `ResilientCadence(RedisCadence, InMemoryCadence x degraded_multiplier)`.
+#[cfg(feature = "redis-cadence")]
+fn build_redis_wiring(config: &CadenceConfig, url_env: &str) -> Result<CadenceWiring, String> {
+    // Only the variable NAME is ever put in a message; the value is the URL.
+    let url = std::env::var(url_env).map_err(|_| {
+        format!(
+            "treasurer.cadence.backend.redis.url_env names env var '{url_env}', which is not set \
+             (or is not valid unicode)"
+        )
+    })?;
+    let redis = RedisCadence::new(RedisCadenceConfig::new(url), config.policy()?)
+        .map_err(|e| format!("treasurer.cadence.backend.redis: {e}"))?;
+    let fallback =
+        InMemoryCadence::new(config.policy()?).with_multiplier(config.degraded_multiplier);
+    Ok(CadenceWiring::new(
+        Arc::new(ResilientCadence::new(Arc::new(redis), fallback)),
+        config.settings(),
+    ))
+}
+
+/// The `redis` backend on a binary built without `redis-cadence`: a boot error, never a silent
+/// in-process fallback.
+#[cfg(not(feature = "redis-cadence"))]
+fn build_redis_wiring(_config: &CadenceConfig, _url_env: &str) -> Result<CadenceWiring, String> {
+    Err(
+        "treasurer.cadence.backend is `redis`, but this binary was built without the \
+         `redis-cadence` feature; rebuild with `--features redis-cadence`, or set \
+         `treasurer.cadence.backend: in_process`"
+            .to_string(),
+    )
 }
 
 /// Compose a resolved provider as `Pricing(Cadence(provider))`.
@@ -141,6 +205,79 @@ mod tests {
         let composed = compose_llm(llm.clone(), &empty_price_table()?, wiring.as_ref());
         assert!(Arc::ptr_eq(&composed, &llm), "nothing installed");
         Ok(())
+    }
+
+    /// Wiring-building tests for `backend: redis`. They use a private variable name so they never
+    /// race the config tests' variables, and a URL on `127.0.0.1:1` (nothing listens there).
+    const REDIS_URL_VAR: &str = "PALADIN_TEST_CADENCE_BUILD_REDIS_URL";
+
+    fn redis_backend_config() -> CadenceConfig {
+        CadenceConfig {
+            backend: CadenceBackend::Redis {
+                url_env: REDIS_URL_VAR.to_string(),
+            },
+            ..CadenceConfig::default()
+        }
+    }
+
+    #[cfg(feature = "redis-cadence")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn build_cadence_redis_backend_builds_without_connecting()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::{Duration, Instant};
+
+        unsafe {
+            std::env::set_var(REDIS_URL_VAR, "redis://:hunter2@127.0.0.1:1/0");
+        }
+        let started = Instant::now();
+        let wiring = build_cadence(&redis_backend_config());
+        unsafe {
+            std::env::remove_var(REDIS_URL_VAR);
+        }
+        let wiring = wiring?.expect("redis backend builds a wiring");
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "construction must not wait on the (dead) server"
+        );
+
+        // A worker that boots while Redis is down still gets a working, degraded gate: the first
+        // use latches the fallback and nothing errors.
+        let key = paladin_ports::output::cadence_port::CadenceKey::new("openai", "gpt-4o");
+        let reading = wiring.port().record_rate_limited(&key, None).await?;
+        assert!(reading.wait() > Duration::ZERO, "the fallback paces");
+        Ok(())
+    }
+
+    #[cfg(not(feature = "redis-cadence"))]
+    #[test]
+    #[serial_test::serial]
+    fn build_cadence_redis_backend_without_the_feature_names_the_feature() {
+        unsafe {
+            std::env::set_var(REDIS_URL_VAR, "redis://:hunter2@127.0.0.1:1/0");
+        }
+        let result = build_cadence(&redis_backend_config());
+        unsafe {
+            std::env::remove_var(REDIS_URL_VAR);
+        }
+        let err = result.expect_err("never a silent in-process fallback");
+        assert!(err.contains("redis-cadence"), "{err}");
+        assert!(err.contains("in_process"), "{err}");
+        assert!(!err.contains("hunter2"), "{err}");
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn build_cadence_redis_backend_with_an_unset_variable_names_the_variable() {
+        unsafe {
+            std::env::remove_var(REDIS_URL_VAR);
+        }
+        let err = build_cadence(&redis_backend_config()).expect_err("unset variable");
+        assert!(err.contains(REDIS_URL_VAR), "{err}");
+        assert!(
+            err.contains("treasurer.cadence.backend.redis.url_env"),
+            "{err}"
+        );
     }
 
     #[test]

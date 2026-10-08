@@ -589,7 +589,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 43-07-PLAN.md — RedisCadence behind redis-cadence: server-clock Lua, lazy timed connection, live contract suite, two-worker fleet proof, CI job redis-cadence-integration (wave 7)
+- [x] 43-07-PLAN.md — RedisCadence behind redis-cadence: server-clock Lua, lazy timed connection, live contract suite, two-worker fleet proof, CI job redis-cadence-integration (wave 7)
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

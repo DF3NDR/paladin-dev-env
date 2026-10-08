@@ -90,7 +90,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
   off with jitter on a 429, treating the retry delay as a minimum; it wraps every
   `FallbackLlmAdapter` hop, and a mocked-429 test proves back-off rather than thrash
 
-- [ ] **PACE-03**: With Redis configured, pacing state is shared across worker instances through an
+- [x] **PACE-03**: With Redis configured, pacing state is shared across worker instances through an
   atomic Lua script using the Redis server clock, so a 429 slows the whole fleet
 
 - [ ] **PACE-04**: A distributed cache-stampede lock (set-if-absent with expiry, fencing token,
@@ -225,7 +225,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ALLOW-05 | Phase 42 | Complete |
 | PACE-01 | Phase 43 | Complete |
 | PACE-02 | Phase 43 | Complete |
-| PACE-03 | Phase 43 | Pending |
+| PACE-03 | Phase 43 | Complete |
 | PACE-04 | Phase 43 | Pending |
 | PACE-05 | Phase 43 | Pending |
 | LEGACY-01 | Phase 44 | Pending |

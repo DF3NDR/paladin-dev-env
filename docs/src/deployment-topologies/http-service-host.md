@@ -174,6 +174,40 @@ an operator webhook. Roll it out in this order:
    rather than writing the secret in YAML (a `${VAR}` placeholder is not expanded). It signs the
    notice with HMAC-SHA256 and is never stored on a delivery row or printed.
 
+## Fleet-wide pacing with Redis
+
+After a provider answers `429`, `paladin-server` paces its next calls to that provider and model
+(`treasurer.cadence`, see the [configuration guide](../getting-started/configuration.md#treasurer-rate-pacing-cadence)).
+By default the gate state lives in the process and is shared by every port the server composes: a
+429 seen by a resident agent also delays the run engine's next call to the same provider and
+model. That is enough for one replica. With several replicas calling one provider account, each
+replica only learns about 429s it received itself; share the state through Redis so one replica's
+429 slows the others:
+
+1. **Build with the feature.** `cargo build --bin paladin-server --features redis-cadence,web-server`
+   (or the same feature set in your image build). A binary built without `redis-cadence` refuses to
+   start with `backend: redis` configured, naming the feature -- it never silently falls back to
+   in-process pacing.
+2. **Name the variable, set the URL.** Configure
+   `treasurer.cadence.backend: { redis: { url_env: CADENCE_REDIS_URL } }` and set
+   `CADENCE_REDIS_URL=redis://:password@host:6379/2` in the environment (a Kubernetes `Secret` is
+   the natural home). Only the variable name is configuration; the URL is read once at boot and
+   is never logged, serialised or printed in an error. A missing variable stops the server at boot.
+3. **Roll out in any order.** Replicas without the Redis backend keep pacing in-process and simply
+   do not see the fleet's 429s.
+
+**When Redis is down.** Redis is never a dependency of a run. A replica boots while Redis is
+unreachable (the connection is made lazily, on first use). If Redis fails at runtime, the replica
+logs **one warning per outage** and paces in-process for the same provider and model, with every
+delay multiplied by `treasurer.cadence.degraded_multiplier` (default `2.0`) since it can no longer
+see the fleet. One call probes Redis at most every five seconds (the others never wait on the probe) and the
+replica returns to the shared state on its own when Redis answers; gates recorded locally during the outage are not
+released early on recovery. A run is never unpaced and an LLM call never fails because Redis did.
+
+**Namespace.** All keys live under the fixed prefix `paladin:cadence`, so two independent fleets
+sharing one Redis server share pacing state for the same provider and model. Use a separate Redis
+server or logical database per fleet.
+
 ## Versioning
 
 The agent API is versioned under `/v1`: only additive, backward-compatible changes are made

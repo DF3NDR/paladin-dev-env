@@ -51,7 +51,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (delays multiplied, default 2.0), so a 429 recorded during the outage still gates its key. It
   warns once per outage and logs one line on recovery under `paladin::cadence`, probes the backend
   at most every `DEFAULT_PROBE_INTERVAL` (5 s) without making concurrent callers wait, and honours
-  locally recorded gates after recovery. Later Phase 43 plans extend this entry.
+  locally recorded gates after recovery.
+  Plan 43-09 finishes the operator surface (PACE-02, PACE-03, PACE-05): `treasurer.cadence.backend`
+  accepts `{ redis: { url_env: NAME } }`, naming the environment variable that holds the Redis URL
+  (validated at boot; the URL itself is never stored, logged or serialised), and builds
+  `ResilientCadence` over `RedisCadence` without connecting, so a worker boots while Redis is down.
+  On a binary built without `redis-cadence` that backend is a boot error naming the feature. Seven
+  scalar keys gain `APP_TREASURER_CADENCE_*` environment overrides. The run engine's own port is now
+  paced, and `paladin-server` builds one wiring shared by the resident agents, the runtime
+  provisioner and the run engine, so a 429 seen through any of them delays the next call through the
+  others (new: `build_agent_registry_with_cadence`, `paladin_port_from_settings_with_cadence`,
+  `build_run_api_with_cadence`, `FacadeProvisioner::with_cadence`; the existing entry points keep
+  their signatures and stay paced). Documented under Treasurer rate pacing in the configuration
+  guide and Fleet-wide pacing with Redis in the HTTP service host topology page. Later Phase 43
+  plans extend this entry.
 - **Provider retry delay on a 429 (PACE-01, PACE-02; Phase 43 plan 43-02).**
   `LlmError::RateLimitExceeded` now carries the provider's own retry delay and a rate-limit header
   snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new

@@ -41,6 +41,7 @@ use paladin_core::platform::container::assistant::AssistantSource;
 use paladin_core::platform::container::principal::TenantId;
 use paladin_core::platform::container::run::AssistantRef;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
+use paladin_llm::cadence::CadenceWiring;
 use paladin_ports::input::allowance_admission_port::AllowanceAdmissionPort;
 use paladin_ports::input::assistant_admin_port::AssistantAdminPort;
 use paladin_ports::input::run_event_stream_port::RunEventStreamPort;
@@ -84,7 +85,8 @@ use crate::config::run_worker::RunWorkerConfig;
 use crate::config::schedules::SchedulesConfig;
 use crate::config::settings::Settings;
 use crate::config::webhooks::WebhooksConfig;
-use crate::infrastructure::web::facade_provisioner::paladin_port_from_settings_with_ledger;
+use crate::infrastructure::cadence::build_cadence;
+use crate::infrastructure::web::facade_provisioner::paladin_port_from_settings_with_cadence;
 
 /// The seven X-09 config structs `paladin-server.rs` reads (`Default` +
 /// `apply_env_overrides()` + `validate()`) and hands to [`build_run_api`] in one bundle.
@@ -600,7 +602,13 @@ async fn build_redis_run_queue(
 /// (an unresolvable default LLM provider); or `treasurer.allowance` is incoherent (D-11):
 /// it has entries while `run_store.backend` is `disabled`, an `api_keys.<name>` entry names
 /// no key in `http.auth.api_keys`, or a `tenants.<id>` entry names a tenant no key maps to.
-/// The coherence check runs first, so a disabled run store cannot hide it.
+/// The coherence check runs first, so a disabled run store cannot hide it. An invalid
+/// `treasurer.cadence` section, or `backend: redis` on a binary built without the
+/// `redis-cadence` feature (naming the feature), is also an error here.
+///
+/// The run engine's `PaladinPort` is paced (PACE-02, D-08) over a wiring built here from
+/// `settings.treasurer.cadence`. A server that also paces its agent registry and provisioner
+/// should call [`build_run_api_with_cadence`] with ONE shared wiring instead.
 pub async fn build_run_api(
     configs: RunApiConfigs,
     settings: &Settings,
@@ -608,6 +616,43 @@ pub async fn build_run_api(
     waypoint_store: Option<Arc<dyn WaypointPort>>,
     auth: AgentAuthConfig,
     code_registry: Arc<AgentRegistry>,
+) -> Result<RunApiHandles, Box<dyn std::error::Error>> {
+    let cadence = build_cadence(&settings.get_treasurer_config().cadence)
+        .map_err(|reason| format!("invalid treasurer.cadence configuration: {reason}"))?;
+    build_run_api_with_cadence(
+        configs,
+        settings,
+        coordinator,
+        waypoint_store,
+        auth,
+        code_registry,
+        cadence,
+    )
+    .await
+}
+
+/// [`build_run_api`] with the run engine's `PaladinPort` paced through the supplied `cadence`
+/// wiring (PACE-02, D-08).
+///
+/// Identical to [`build_run_api`] otherwise. Pass a clone of the ONE
+/// [`CadenceWiring`] the process built at boot (the one also given to
+/// [`build_agent_registry_with_cadence`](crate::infrastructure::web::agent_host::build_agent_registry_with_cadence)
+/// and [`FacadeProvisioner::with_cadence`](crate::infrastructure::web::facade_provisioner::FacadeProvisioner::with_cadence))
+/// so in-process pacing state is process-wide: a 429 seen by an agent-host call gates the run
+/// engine's next call to the same provider and model. `None` installs no pacing.
+///
+/// # Errors
+///
+/// As [`build_run_api`]; `settings.treasurer.cadence` is validated when the run engine's port is
+/// built even though the wiring is supplied.
+pub async fn build_run_api_with_cadence(
+    configs: RunApiConfigs,
+    settings: &Settings,
+    coordinator: ShutdownCoordinator,
+    waypoint_store: Option<Arc<dyn WaypointPort>>,
+    auth: AgentAuthConfig,
+    code_registry: Arc<AgentRegistry>,
+    cadence: Option<CadenceWiring>,
 ) -> Result<RunApiHandles, Box<dyn std::error::Error>> {
     // D-11: an allowance that would silently enforce nothing is a boot error, checked BEFORE
     // the disabled-store early return so a disabled store cannot hide a configured allowance.
@@ -698,8 +743,9 @@ pub async fn build_run_api(
     // `treasury_ledger` under `AgentLoopSettlement::PlatformRunsOnly` when `Some`, so an
     // agent-kind run's own dispatch (never the shared engine's own superstep settlements)
     // settles through this port.
-    let paladin_port = paladin_port_from_settings_with_ledger(settings, treasury_ledger.clone())
-        .map_err(|e| format!("failed to build the run engine's LLM port: {e}"))?;
+    let paladin_port =
+        paladin_port_from_settings_with_cadence(settings, treasury_ledger.clone(), cadence)
+            .map_err(|e| format!("failed to build the run engine's LLM port: {e}"))?;
 
     let mut engine_config = EngineConfig::default();
     engine_config.apply_env_overrides();
@@ -1051,6 +1097,55 @@ mod tests {
             err.to_string().contains("waypoint_store.backend"),
             "error must name the config key to set: {err}"
         );
+    }
+
+    /// PACE-02, D-08: `build_run_api` derives the run engine's pacing wiring from
+    /// `treasurer.cadence`, so an invalid section is a boot error naming the offending key.
+    #[tokio::test]
+    async fn build_run_api_rejects_an_invalid_cadence_section_naming_its_key() {
+        let mut settings = Settings::default();
+        settings.treasurer.cadence.base_backoff_ms = 0;
+
+        let err = build_run_api(
+            default_configs(),
+            &settings,
+            ShutdownCoordinator::new(),
+            None,
+            AgentAuthConfig::default(),
+            Arc::new(AgentRegistry::new()),
+        )
+        .await
+        .err()
+        .expect("an invalid treasurer.cadence must fail the build");
+        assert!(
+            err.to_string()
+                .contains("treasurer.cadence.base_backoff_ms"),
+            "error must name the offending key: {err}"
+        );
+    }
+
+    /// The `*_with_cadence` variant takes the caller's wiring (or none) and, with the run store
+    /// disabled, builds nothing -- it must accept either without touching a provider.
+    #[tokio::test]
+    async fn build_run_api_with_cadence_accepts_a_shared_wiring_or_none() {
+        let wiring = build_cadence(&Settings::default().get_treasurer_config().cadence)
+            .expect("default cadence builds");
+        assert!(wiring.is_some(), "pacing is on by default (D-08)");
+
+        for cadence in [wiring, None] {
+            let handles = build_run_api_with_cadence(
+                default_configs(),
+                &Settings::default(),
+                ShutdownCoordinator::new(),
+                None,
+                AgentAuthConfig::default(),
+                Arc::new(AgentRegistry::new()),
+                cadence,
+            )
+            .await
+            .expect("a disabled run store never fails to build");
+            assert!(handles.tasks.is_empty());
+        }
     }
 
     #[tokio::test]

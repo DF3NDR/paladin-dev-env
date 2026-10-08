@@ -533,6 +533,85 @@ notices](../api-reference/platform-api.md#operator-allowance-notices)). Enable `
 every replica runs the release that understands `allowance_warning` (see the [HTTP service
 host](../deployment-topologies/http-service-host.md#treasurer-allowances) rollout note).
 
+## Treasurer rate pacing (Cadence)
+
+`treasurer.cadence` paces every LLM call `paladin-server` makes after a provider answers
+`429 Too Many Requests`. It is **reactive**: nothing is gated until a provider says slow down.
+After a 429, later calls to the same provider and model wait out a gate -- the provider's own
+`Retry-After` when it sent one, otherwise exponential back-off with full jitter -- and the 429
+itself is surfaced to the caller unchanged, never retried inside the pacing layer. Pacing is
+**on by default**: omit the section and every agent port (config-loaded agents, runtime-provisioned
+agents and the run engine's port) is paced over one in-process gate state shared by the whole
+server process. `enabled: false` installs nothing and restores the previous behaviour.
+
+```yaml
+# Defaults, in process (what you get when the section is omitted):
+treasurer:
+  cadence:
+    backend: in_process
+    base_backoff_ms: 500
+    max_backoff_ms: 30000
+    max_wait_secs: 300
+```
+
+To share pacing state across a worker fleet, name the environment variable that holds the Redis
+URL (never the URL itself -- it may carry a password):
+
+```yaml
+treasurer:
+  cadence:
+    backend:
+      redis:
+        url_env: CADENCE_REDIS_URL   # export CADENCE_REDIS_URL=redis://:password@redis.internal:6379/2
+    degraded_multiplier: 2.0
+```
+
+The `redis` backend needs a binary built with `--features redis-cadence`; on a binary built
+without it `paladin-server` refuses to start, naming the feature, rather than quietly pacing
+in-process. See [Fleet-wide pacing with
+Redis](../deployment-topologies/http-service-host.md#fleet-wide-pacing-with-redis) for the
+rollout and outage behaviour.
+
+| Key | Type | Default | Env override |
+| --- | --- | --- | --- |
+| `treasurer.cadence.enabled` | bool | `true` | `APP_TREASURER_CADENCE_ENABLED` |
+| `treasurer.cadence.backend` | `in_process` or `{ redis: { url_env: NAME } }` | `in_process` | none (config file only) |
+| `treasurer.cadence.backend.redis.url_env` | non-empty name of an environment variable that is set at boot | none | none |
+| `treasurer.cadence.base_backoff_ms` | integer, greater than zero | `500` | `APP_TREASURER_CADENCE_BASE_BACKOFF_MS` |
+| `treasurer.cadence.max_backoff_ms` | integer, at least `base_backoff_ms` | `30000` | `APP_TREASURER_CADENCE_MAX_BACKOFF_MS` |
+| `treasurer.cadence.max_wait_secs` | integer, greater than zero | `300` | `APP_TREASURER_CADENCE_MAX_WAIT_SECS` |
+| `treasurer.cadence.degraded_multiplier` | finite number, at least `1.0` | `2.0` | `APP_TREASURER_CADENCE_DEGRADED_MULTIPLIER` |
+| `treasurer.cadence.fallback_pace_budget_secs` | integer, greater than zero | `60` | `APP_TREASURER_CADENCE_FALLBACK_PACE_BUDGET_SECS` |
+| `treasurer.cadence.lock_ttl_secs` | integer, greater than zero | `120` | `APP_TREASURER_CADENCE_LOCK_TTL_SECS` |
+
+- **`base_backoff_ms` / `max_backoff_ms`:** a 429 with no usable retry delay gates the key for a
+  random time up to `base_backoff_ms`, doubling per consecutive 429 on that key up to
+  `max_backoff_ms`; the first success resets it.
+- **`max_wait_secs`:** the longest a single call waits on a gate. A provider delay beyond it is
+  not slept on: the call surfaces the rate-limit error immediately, carrying the full delay, so a
+  worker lease is never held for an hour in silence.
+- **`degraded_multiplier`:** while a shared Redis is unreachable, each worker paces itself
+  in-process with every delay multiplied by this factor, because it can no longer see the fleet's
+  429s. It has no effect with `backend: in_process`.
+- **`fallback_pace_budget_secs`:** a provider fallback chain (`ModelFallbackMiddleware`) stays on
+  the same provider and waits out its gate for up to this long before a 429 moves the chain to the
+  next provider. Other failures (5xx, timeouts, network errors) hop immediately, as before.
+- **`lock_ttl_secs`:** the lifetime of the cache stampede lock a library-built `WarEngine` takes
+  around a cached node (`WarEngine::with_cadence`, shipped in the same release). `paladin-server` attaches no node cache, so
+  the key has no effect on the shipped server today.
+
+`backend` has no environment override: the Redis URL travels only through the variable
+`url_env` names, so it never appears in a config file, a serialised config or a log line. A
+misspelled key anywhere under `treasurer.cadence` -- including inside `redis:` -- is a load
+error, and an empty `url_env`, or one naming an unset variable, stops the server at boot naming
+`treasurer.cadence.backend.redis.url_env`. An unparseable environment value (for example
+`APP_TREASURER_CADENCE_BASE_BACKOFF_MS=fast`) is ignored and the file value stays.
+
+**Key namespace.** The Redis backend keeps its state under the fixed key prefix
+`paladin:cadence`. Two independent fleets pointed at one Redis server therefore share pacing
+state for the same provider and model: a 429 seen by one slows the other. Give each fleet its own
+Redis server or logical database (`redis://host:6379/2` selects database 2).
+
 ## Token Budget Terminology
 
 Paladin uses `max_tokens` in four independent, non-overlapping senses:

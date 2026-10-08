@@ -15,7 +15,6 @@ use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::run_scope::RunScope;
 use paladin_llm::cadence::CadenceWiring;
-use paladin_llm::pricing::with_pricing;
 use paladin_llm::provider_factory::LlmProviderFactory;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
@@ -30,7 +29,7 @@ use crate::config::agent_runtime::TokenBudgetConfig;
 use crate::config::agents::AgentDefinition;
 use crate::config::settings::Settings;
 use crate::config::treasurer::TreasurerConfig;
-use crate::infrastructure::cadence::build_cadence;
+use crate::infrastructure::cadence::{build_cadence, compose_llm};
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use crate::infrastructure::web::agent_host::{
     HostBuildError, build_agent, default_circuit_breaker, default_provider_name,
@@ -47,6 +46,10 @@ pub struct FacadeProvisioner {
     /// from `treasurer.cadence` by [`FacadeProvisioner::with_treasurer`]; `None` when pacing is
     /// disabled.
     cadence: Option<CadenceWiring>,
+    /// Why `with_treasurer` could not build the wiring (for example `backend: redis` on a binary
+    /// built without `redis-cadence`), reported by `provision` instead of silently pacing
+    /// in-process. Cleared by [`FacadeProvisioner::with_cadence`].
+    cadence_error: Option<String>,
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
     token_budget: TokenBudgetConfig,
 }
@@ -69,6 +72,7 @@ impl FacadeProvisioner {
             breaker,
             treasurer,
             cadence,
+            cadence_error: None,
             treasury_ledger: None,
             token_budget: TokenBudgetConfig::default(),
         }
@@ -98,13 +102,49 @@ impl FacadeProvisioner {
     /// decorator on any agent this provisioner builds.
     ///
     /// The rate-pacing wiring is rebuilt from `config.cadence` (PACE-02, D-08) when that
-    /// subtree validates; an invalid subtree keeps the previous wiring and is rejected by
-    /// `provision` instead, exactly like an invalid price table.
+    /// subtree builds; one that does not (invalid, or `backend: redis` without the
+    /// `redis-cadence` feature) keeps the previous wiring and is rejected by `provision`
+    /// instead, exactly like an invalid price table -- never a silent in-process fallback. A
+    /// server composing several ports should share one wiring across them with
+    /// [`FacadeProvisioner::with_cadence`] after this call.
     pub fn with_treasurer(mut self, config: TreasurerConfig) -> Self {
-        if let Ok(cadence) = build_cadence(&config.cadence) {
-            self.cadence = cadence;
+        match build_cadence(&config.cadence) {
+            Ok(cadence) => {
+                self.cadence = cadence;
+                self.cadence_error = None;
+            }
+            Err(reason) => self.cadence_error = Some(reason),
         }
         self.treasurer = config;
+        self
+    }
+
+    /// Pace every runtime-provisioned agent through the supplied `cadence` wiring (PACE-02,
+    /// D-08), replacing the wiring [`FacadeProvisioner::new`] or
+    /// [`FacadeProvisioner::with_treasurer`] built. `None` installs no pacing.
+    ///
+    /// Pass a clone of the ONE [`CadenceWiring`] the process built at boot -- the one handed to
+    /// the agent registry and the run engine's port -- so a 429 seen through any of them gates
+    /// the others. Call this after [`FacadeProvisioner::with_treasurer`], which would otherwise
+    /// rebuild a private wiring.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use paladin::config::settings::Settings;
+    /// use paladin::infrastructure::cadence::build_cadence;
+    /// use paladin::infrastructure::web::facade_provisioner::FacadeProvisioner;
+    ///
+    /// # fn demo(settings: &Settings) -> Result<(), Box<dyn std::error::Error>> {
+    /// let cadence = build_cadence(&settings.get_treasurer_config().cadence)?;
+    /// let provisioner = FacadeProvisioner::from_settings(settings).with_cadence(cadence.clone());
+    /// # let _ = provisioner;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_cadence(mut self, cadence: Option<CadenceWiring>) -> Self {
+        self.cadence = cadence;
+        self.cadence_error = None;
         self
     }
 
@@ -200,9 +240,10 @@ impl PaladinPort for EngineExecutionPort {
 /// # Errors
 ///
 /// Returns a [`HostBuildError::Build`] naming `treasurer.pricing` if the operator's
-/// `treasurer.pricing` table is invalid (checked FIRST, before any provider is resolved, so an
-/// invalid price fails hermetically). Returns a [`HostBuildError::Provider`] if the resolved
-/// default provider cannot be constructed (an unknown provider name, or a missing API key).
+/// `treasurer.pricing` table is invalid, or naming `treasurer.cadence` if that subtree is
+/// invalid (both checked FIRST, before any provider is resolved, so they fail hermetically).
+/// Returns a [`HostBuildError::Provider`] if the resolved default provider cannot be
+/// constructed (an unknown provider name, or a missing API key).
 ///
 /// Installs no treasury ledger writer -- see [`paladin_port_from_settings_with_ledger`] for
 /// the variant that does.
@@ -223,22 +264,83 @@ pub fn paladin_port_from_settings(
 /// engine node's own dispatch (no run id in its scope) never settles here, so engine spend is
 /// never double-charged.
 ///
+/// Rate pacing (PACE-02, D-08): the provider is composed as `Pricing(Cadence(provider))` over a
+/// wiring built here from `settings.treasurer.cadence`. A server that also paces other ports
+/// should build ONE wiring and call [`paladin_port_from_settings_with_cadence`] so this port
+/// shares gate state with them.
+///
 /// # Errors
 ///
 /// Returns a [`HostBuildError::Build`] naming `treasurer.pricing` if the operator's
-/// `treasurer.pricing` table is invalid (checked FIRST, before any provider is resolved, so an
-/// invalid price fails hermetically). Returns a [`HostBuildError::Provider`] if the resolved
-/// default provider cannot be constructed (an unknown provider name, or a missing API key).
+/// `treasurer.pricing` table is invalid, or naming `treasurer.cadence` if that subtree is
+/// invalid or `backend: redis` is configured on a binary built without the `redis-cadence`
+/// feature (both checked FIRST, before any provider is resolved, so they fail hermetically).
+/// Returns a [`HostBuildError::Provider`] if the resolved default provider cannot be
+/// constructed (an unknown provider name, or a missing API key).
 pub fn paladin_port_from_settings_with_ledger(
     settings: &Settings,
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
 ) -> Result<Arc<dyn PaladinPort>, HostBuildError> {
-    let price_table = Arc::new(settings.get_treasurer_config().price_table().map_err(
-        |reason| HostBuildError::Build {
+    let cadence = build_cadence(&settings.get_treasurer_config().cadence).map_err(|reason| {
+        HostBuildError::Build {
             id: "run-engine".to_string(),
             source: PaladinError::ConfigurationError(reason),
-        },
-    )?);
+        }
+    })?;
+    paladin_port_from_settings_with_cadence(settings, treasury_ledger, cadence)
+}
+
+/// Build the run engine's real [`PaladinPort`] from `settings`, pacing its provider through the
+/// supplied `cadence` wiring (PACE-02, D-08).
+///
+/// Identical to [`paladin_port_from_settings_with_ledger`] otherwise: the provider is composed
+/// through [`compose_llm`] as `Pricing(Cadence(provider))`. The caller owns the
+/// [`CadenceWiring`]; pass a clone of the ONE wiring the process built at boot (the one given
+/// to the agent registry and the provisioner) so a 429 seen through any of those ports gates the
+/// run engine's next call to the same provider and model, or `None` to install no pacing.
+///
+/// # Errors
+///
+/// As [`paladin_port_from_settings_with_ledger`], except that `settings.treasurer.cadence` is
+/// still validated here (hermetically, before any provider is resolved) even though the wiring
+/// is supplied, so the port never runs under a configuration the rest of the server rejects.
+///
+/// # Examples
+///
+/// ```no_run
+/// use paladin::config::settings::Settings;
+/// use paladin::infrastructure::cadence::build_cadence;
+/// use paladin::infrastructure::web::facade_provisioner::paladin_port_from_settings_with_cadence;
+///
+/// # fn demo(settings: &Settings) -> Result<(), Box<dyn std::error::Error>> {
+/// let cadence = build_cadence(&settings.get_treasurer_config().cadence)?;
+/// let port = paladin_port_from_settings_with_cadence(settings, None, cadence.clone())?;
+/// # let _ = port;
+/// # Ok(())
+/// # }
+/// ```
+pub fn paladin_port_from_settings_with_cadence(
+    settings: &Settings,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    cadence: Option<CadenceWiring>,
+) -> Result<Arc<dyn PaladinPort>, HostBuildError> {
+    let treasurer = settings.get_treasurer_config();
+    let price_table =
+        Arc::new(
+            treasurer
+                .price_table()
+                .map_err(|reason| HostBuildError::Build {
+                    id: "run-engine".to_string(),
+                    source: PaladinError::ConfigurationError(reason),
+                })?,
+        );
+    treasurer
+        .cadence
+        .validate()
+        .map_err(|reason| HostBuildError::Build {
+            id: "run-engine".to_string(),
+            source: PaladinError::ConfigurationError(reason),
+        })?;
 
     let factory = LlmProviderFactory::new();
     let provider = default_provider_name(settings);
@@ -249,7 +351,7 @@ pub fn paladin_port_from_settings_with_ledger(
             provider,
             source,
         })?;
-    let llm = with_pricing(llm, &price_table);
+    let llm = compose_llm(llm, &price_table, cadence.as_ref());
     let mut service = PaladinExecutionService::new(llm, default_circuit_breaker(), None, None);
     if let Some(ledger) = treasury_ledger {
         service = service.with_treasury_ledger(ledger, AgentLoopSettlement::PlatformRunsOnly);
@@ -292,6 +394,11 @@ impl AgentProvisioner for FacadeProvisioner {
         self.treasurer.cadence.validate().map_err(|reason| {
             ProvisionError::Failed(format!("invalid treasurer configuration: {reason}"))
         })?;
+        if let Some(reason) = &self.cadence_error {
+            return Err(ProvisionError::Failed(format!(
+                "invalid treasurer configuration: {reason}"
+            )));
+        }
         let def = spec_to_definition(spec);
         let (paladin, executor, streamer) = build_agent(
             &def,
@@ -466,6 +573,132 @@ mod tests {
         );
     }
 
+    #[test]
+    fn provisioner_with_cadence_uses_the_supplied_wiring() {
+        let shared = build_cadence(&TreasurerConfig::default().cadence)
+            .expect("default cadence builds")
+            .expect("pacing is on by default");
+
+        // The supplied wiring replaces the private one `new` built: same port instance.
+        let provisioner = FacadeProvisioner::new("openai", default_circuit_breaker())
+            .with_cadence(Some(shared.clone()));
+        let installed = provisioner.cadence.as_ref().expect("wiring installed");
+        assert!(Arc::ptr_eq(installed.port(), shared.port()));
+
+        // It also wins over the wiring `with_treasurer` rebuilds, when called after it.
+        let provisioner = FacadeProvisioner::new("openai", default_circuit_breaker())
+            .with_treasurer(TreasurerConfig::default())
+            .with_cadence(Some(shared.clone()));
+        let installed = provisioner.cadence.as_ref().expect("wiring installed");
+        assert!(Arc::ptr_eq(installed.port(), shared.port()));
+
+        // `None` installs nothing.
+        let provisioner =
+            FacadeProvisioner::new("openai", default_circuit_breaker()).with_cadence(None);
+        assert!(provisioner.cadence.is_none());
+    }
+
+    /// An invalid `treasurer.cadence` is rejected hermetically, before any provider is resolved,
+    /// by BOTH engine-port entry points -- naming the key, exactly like an invalid price.
+    #[test]
+    fn paladin_port_from_settings_with_ledger_rejects_an_invalid_cadence_config_before_resolving_a_provider()
+     {
+        let mut settings = Settings::default();
+        settings.treasurer.cadence.max_wait_secs = 0;
+
+        let err = paladin_port_from_settings_with_ledger(&settings, None)
+            .err()
+            .expect("an invalid treasurer.cadence must error");
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
+        assert!(
+            err.to_string().contains("treasurer.cadence.max_wait_secs"),
+            "error must name the offending config path: {err}"
+        );
+
+        // The supplied-wiring variant re-validates, so it never runs under a rejected config.
+        let err = paladin_port_from_settings_with_cadence(&settings, None, None)
+            .err()
+            .expect("an invalid treasurer.cadence must error");
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
+        assert!(
+            err.to_string().contains("treasurer.cadence.max_wait_secs"),
+            "got {err}"
+        );
+    }
+
+    /// `None` (pacing disabled) is a valid wiring: the build proceeds to resolving the provider,
+    /// which is where this hermetic settings fails -- proving the disabled path is not rejected
+    /// earlier and composes nothing but pricing.
+    #[test]
+    fn disabled_cadence_composes_pricing_only_at_every_site() {
+        let settings = Settings {
+            llm: Some(paladin_llm::config::llm::LlmConfig {
+                default_provider: Some("no-such-provider".to_string()),
+                ..Default::default()
+            }),
+            ..Settings::default()
+        };
+        let err = paladin_port_from_settings_with_cadence(&settings, None, None)
+            .err()
+            .expect("unknown provider must error");
+        assert!(
+            matches!(err, HostBuildError::Provider { .. }),
+            "got {err:?}"
+        );
+
+        let mut off = TreasurerConfig::default();
+        off.cadence.enabled = false;
+        assert!(
+            build_cadence(&off.cadence)
+                .expect("disabled builds")
+                .is_none()
+        );
+        let provisioner = FacadeProvisioner::new("openai", default_circuit_breaker())
+            .with_treasurer(off)
+            .with_cadence(None);
+        assert!(provisioner.cadence.is_none());
+
+        // The composition itself: no pricing rows and no wiring leaves the provider untouched.
+        let llm: Arc<dyn paladin_ports::output::llm_port::LlmPort> =
+            Arc::new(paladin_llm::mock::MockLlmAdapter::new());
+        let empty = Arc::new(paladin_core::platform::container::cost::PriceTable::new(
+            paladin_core::platform::container::cost::CurrencyCode::new("USD").expect("USD"),
+        ));
+        assert!(Arc::ptr_eq(&compose_llm(llm.clone(), &empty, None), &llm));
+    }
+
+    /// `backend: redis` on a binary without `redis-cadence` is never a silent in-process
+    /// fallback -- the provisioner (which cannot fail in `with_treasurer`) rejects every
+    /// `provision` instead.
+    #[cfg(not(feature = "redis-cadence"))]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn provisioner_without_the_feature_rejects_a_redis_backend_instead_of_pacing_in_process()
+    {
+        const VAR: &str = "PALADIN_TEST_PROVISIONER_CADENCE_URL";
+        unsafe {
+            std::env::set_var(VAR, "redis://:hunter2@127.0.0.1:1/0");
+        }
+        let mut treasurer = TreasurerConfig::default();
+        treasurer.cadence.backend = crate::config::treasurer::CadenceBackend::Redis {
+            url_env: VAR.to_string(),
+        };
+        let provisioner =
+            FacadeProvisioner::new("openai", default_circuit_breaker()).with_treasurer(treasurer);
+        let result = provisioner.provision(&sample_spec("x")).await;
+        unsafe {
+            std::env::remove_var(VAR);
+        }
+        match result {
+            Err(ProvisionError::Failed(msg)) => {
+                assert!(msg.contains("redis-cadence"), "got {msg:?}");
+                assert!(!msg.contains("hunter2"), "got {msg:?}");
+            }
+            Err(_) => panic!("expected ProvisionError::Failed"),
+            Ok(_) => panic!("a redis backend without the feature must not provision"),
+        }
+    }
+
     #[tokio::test]
     async fn provision_unknown_provider_maps_to_provision_error() {
         // Force the build to fail at provider resolution (hermetic — no API keys).
@@ -514,7 +747,7 @@ mod tests {
                 .with_response("hi there")
                 .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
         );
-        let llm = with_pricing(mock, &table);
+        let llm = compose_llm(mock, &table, None);
         let ledger = Arc::new(InMemoryTreasuryLedger::new());
         let service = PaladinExecutionService::new(llm, default_circuit_breaker(), None, None)
             .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::PlatformRunsOnly);

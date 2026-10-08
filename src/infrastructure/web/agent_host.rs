@@ -341,12 +341,65 @@ pub async fn build_agent_registry(settings: &Settings) -> Result<AgentRegistry, 
 /// appears only for a caller that passes no scope at all (embedded library use of the
 /// plain `execute`/`execute_stream` methods, D-10).
 ///
+/// Rate pacing (PACE-02, D-08): every agent's provider is composed as
+/// `Pricing(Cadence(provider))`, with ONE wiring built here from `settings.treasurer.cadence`.
+/// A server that also composes other ports (the run engine's, a runtime provisioner's) should
+/// build the wiring once and call [`build_agent_registry_with_cadence`] instead, so a 429 seen
+/// by one port gates the others.
+///
 /// # Errors
 ///
-/// Returns [`HostBuildError`] on the first problem encountered.
+/// Returns [`HostBuildError`] on the first problem encountered; an invalid
+/// `treasurer.cadence` section (or `backend: redis` on a binary built without the
+/// `redis-cadence` feature) is a [`HostBuildError::Build`] naming `treasurer`.
 pub async fn build_agent_registry_with_ledger(
     settings: &Settings,
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+) -> Result<AgentRegistry, HostBuildError> {
+    // Validate first (fail-fast), so a configuration error is reported before a wiring is built.
+    validate_config(settings)?;
+    let cadence = build_cadence(&settings.get_treasurer_config().cadence).map_err(|reason| {
+        HostBuildError::Build {
+            id: "treasurer".to_string(),
+            source: PaladinError::ConfigurationError(reason),
+        }
+    })?;
+    build_agent_registry_with_cadence(settings, treasury_ledger, cadence).await
+}
+
+/// Build a populated [`AgentRegistry`] from the `agents` section of `settings`, pacing every
+/// agent through the supplied `cadence` wiring (PACE-02, D-08).
+///
+/// Identical to [`build_agent_registry_with_ledger`] otherwise. The caller owns the
+/// [`CadenceWiring`]: pass clones of ONE wiring (from
+/// [`build_cadence`](crate::infrastructure::cadence::build_cadence)) to every composition root
+/// in the process so in-process gate state is process-wide, or `None` to install no pacing
+/// (`treasurer.cadence.enabled: false`). The wiring is not re-derived from `settings`, so this
+/// function does not validate `treasurer.cadence`; building the wiring does.
+///
+/// # Errors
+///
+/// Returns [`HostBuildError`] on the first problem encountered.
+///
+/// # Examples
+///
+/// ```no_run
+/// use paladin::config::settings::Settings;
+/// use paladin::infrastructure::cadence::build_cadence;
+/// use paladin::infrastructure::web::agent_host::build_agent_registry_with_cadence;
+///
+/// # async fn demo(settings: Settings) -> Result<(), Box<dyn std::error::Error>> {
+/// // One wiring for the whole process; clone it into every composition root.
+/// let cadence = build_cadence(&settings.get_treasurer_config().cadence)?;
+/// let registry = build_agent_registry_with_cadence(&settings, None, cadence.clone()).await?;
+/// # let _ = registry;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn build_agent_registry_with_cadence(
+    settings: &Settings,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    cadence: Option<CadenceWiring>,
 ) -> Result<AgentRegistry, HostBuildError> {
     validate_config(settings)?;
 
@@ -359,13 +412,6 @@ pub async fn build_agent_registry_with_ledger(
             source: PaladinError::ConfigurationError(reason),
         },
     )?);
-    // One wiring for every agent built here, so the in-process gate state is shared (PACE-02).
-    let cadence = build_cadence(&settings.get_treasurer_config().cadence).map_err(|reason| {
-        HostBuildError::Build {
-            id: "treasurer".to_string(),
-            source: PaladinError::ConfigurationError(reason),
-        }
-    })?;
 
     let registry = AgentRegistry::new();
     for def in &settings.agents {

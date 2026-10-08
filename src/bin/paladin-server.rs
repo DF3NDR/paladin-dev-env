@@ -31,13 +31,15 @@ use paladin::config::run_stream::RunStreamConfig;
 use paladin::config::run_worker::RunWorkerConfig;
 use paladin::config::schedules::SchedulesConfig;
 use paladin::config::settings::Settings;
+use paladin::config::treasurer::{CadenceBackend, CadenceConfig};
 use paladin::config::waypoint_store::{WaypointStoreBackend, WaypointStoreConfig};
 use paladin::config::webhooks::WebhooksConfig;
 use paladin::infrastructure::adapters::auth::InMemoryTokenAuthAdapter;
-use paladin::infrastructure::web::agent_host::{bind_address, build_agent_registry_with_ledger};
+use paladin::infrastructure::cadence::build_cadence;
+use paladin::infrastructure::web::agent_host::{bind_address, build_agent_registry_with_cadence};
 use paladin::infrastructure::web::facade_provisioner::FacadeProvisioner;
 use paladin::infrastructure::web::run_api_wiring::{
-    ErasedWaypointStore, RunApiConfigs, build_run_api, build_treasury_ledger,
+    ErasedWaypointStore, RunApiConfigs, build_run_api_with_cadence, build_treasury_ledger,
 };
 use paladin::infrastructure::web::{
     AgentApiState, AgentAuthConfig, HttpLayersConfig, Principal, RateLimitConfig, ThreadApiState,
@@ -71,6 +73,21 @@ async fn main() {
     }
 }
 
+/// One boot log line for the rate-pacing configuration: whether pacing is on and the backend
+/// KIND only. The Redis URL is read from the variable `backend.redis.url_env` names and never
+/// reaches this line -- not even the variable's name, which is operator-chosen config that has no
+/// business in a log.
+fn cadence_boot_summary(config: &CadenceConfig) -> String {
+    if !config.enabled {
+        return "Rate pacing disabled (treasurer.cadence.enabled: false)".to_string();
+    }
+    let backend = match config.backend {
+        CadenceBackend::InProcess => "in_process",
+        CadenceBackend::Redis { .. } => "redis",
+    };
+    format!("Rate pacing enabled (treasurer.cadence.backend: {backend})")
+}
+
 /// Load config, build the agent host, and serve until a shutdown signal.
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = config_path();
@@ -96,16 +113,28 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("invalid run store configuration: {e}"))?;
     let treasury_ledger = build_treasury_ledger(&run_store_config).await?;
 
+    // PACE-02, D-08: ONE rate-pacing wiring for the whole process, shared by the resident
+    // agents, the runtime provisioner and the run engine's port below, so a 429 seen through
+    // any of them gates the others' next call to the same provider and model. An invalid
+    // `treasurer.cadence`, or `backend: redis` on a binary without `redis-cadence`, stops the
+    // server here. A configured-but-unreachable Redis does not: construction never connects.
+    let cadence_config = settings.get_treasurer_config().cadence;
+    let cadence = build_cadence(&cadence_config)
+        .map_err(|e| format!("invalid treasurer.cadence configuration: {e}"))?;
+    info!("{}", cadence_boot_summary(&cadence_config));
+
     // Build the resident agents and the runtime provisioner from the same config.
-    // `build_agent_registry_with_ledger` validates the config first, so misconfiguration
+    // `build_agent_registry_with_cadence` validates the config first, so misconfiguration
     // fails here with a specific message rather than mid-serve.
-    let registry = build_agent_registry_with_ledger(&settings, treasury_ledger.clone()).await?;
+    let registry =
+        build_agent_registry_with_cadence(&settings, treasury_ledger.clone(), cadence.clone())
+            .await?;
     let mut agent_ids: Vec<String> = registry.list().into_iter().map(|(id, _)| id).collect();
     agent_ids.sort();
     // Shared with `build_run_api`'s `CodeAgentResolver` (D-32) below, so a code-registered
     // agent id is runnable through `POST /runs` without a second registry.
     let registry = Arc::new(registry);
-    let mut provisioner = FacadeProvisioner::from_settings(&settings);
+    let mut provisioner = FacadeProvisioner::from_settings(&settings).with_cadence(cadence.clone());
     if let Some(ledger) = &treasury_ledger {
         provisioner = provisioner.with_treasury_ledger(Arc::clone(ledger));
     }
@@ -197,13 +226,14 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // enabled but this is `None`.
     let waypoint_store = build_waypoint_store(&waypoint_store_config).await?;
 
-    let run_handles = build_run_api(
+    let run_handles = build_run_api_with_cadence(
         run_configs,
         &settings,
         shutdown_coordinator.clone(),
         waypoint_store.clone(),
         auth.clone(),
         Arc::clone(&registry),
+        cadence,
     )
     .await?;
 
@@ -1325,5 +1355,31 @@ mod tests {
             "paths: {:?}",
             spec.paths.paths.keys().collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn cadence_boot_summary_names_the_backend_kind_and_never_the_url_or_variable() {
+        let on = CadenceConfig::default();
+        assert_eq!(
+            cadence_boot_summary(&on),
+            "Rate pacing enabled (treasurer.cadence.backend: in_process)"
+        );
+
+        let off = CadenceConfig {
+            enabled: false,
+            ..CadenceConfig::default()
+        };
+        assert!(cadence_boot_summary(&off).contains("disabled"));
+
+        let redis = CadenceConfig {
+            backend: CadenceBackend::Redis {
+                url_env: "CADENCE_SECRET_URL_VAR".to_string(),
+            },
+            ..CadenceConfig::default()
+        };
+        let line = cadence_boot_summary(&redis);
+        assert!(line.contains("redis"), "{line}");
+        assert!(!line.contains("CADENCE_SECRET_URL_VAR"), "{line}");
+        assert!(!line.contains("://"), "{line}");
     }
 }

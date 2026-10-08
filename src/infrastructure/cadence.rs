@@ -280,6 +280,119 @@ mod tests {
         );
     }
 
+    /// D-08 / T-43-36: ONE wiring shared by two composed ports (the agent host's and the run
+    /// engine's, in the server) paces them together -- a 429 seen through the first delays the
+    /// second's next call to the same provider and model by at least the base back-off.
+    #[tokio::test(start_paused = true)]
+    async fn one_wiring_paces_the_agent_host_and_the_run_engine_together()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::Duration;
+
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
+        use paladin_ports::output::llm_port::{LlmError, LlmRequest};
+        use tokio::time::Instant;
+
+        let config = CadenceConfig::default();
+        let base = Duration::from_millis(config.base_backoff_ms);
+        let wiring = build_cadence(&config)?.expect("pacing is on by default");
+
+        // Two ports over two providers that both report the name "openai".
+        let agent_host_provider = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_script(vec![MockScriptEntry::Error(LlmError::rate_limited(None))]),
+        );
+        let run_engine_provider = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_script(vec![MockScriptEntry::Text("ok".to_string())]),
+        );
+        let agent_host = compose_llm(
+            agent_host_provider.clone(),
+            &empty_price_table()?,
+            Some(&wiring),
+        );
+        let run_engine = compose_llm(
+            run_engine_provider.clone(),
+            &empty_price_table()?,
+            Some(&wiring.clone()),
+        );
+
+        let request = || -> Result<LlmRequest, Box<dyn std::error::Error>> {
+            Ok(LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))?,
+            ))
+        };
+
+        let first = agent_host.generate(request()?).await;
+        let recorded_at = Instant::now();
+        assert!(
+            matches!(first, Err(LlmError::RateLimitExceeded { .. })),
+            "the 429 reaches the agent host's caller unchanged, got {first:?}"
+        );
+
+        let second = run_engine.generate(request()?).await?;
+        let gap = recorded_at.elapsed();
+        assert_eq!(second.content, "ok");
+        assert!(
+            gap >= base,
+            "the run engine's call reached its provider only {gap:?} after the agent host's \
+             429; one shared wiring must hold it for at least {base:?}"
+        );
+        Ok(())
+    }
+
+    /// The control for the test above: wirings built separately do NOT share state, which is
+    /// exactly why the server builds one and hands clones to every composition root.
+    #[tokio::test(start_paused = true)]
+    async fn separate_wirings_do_not_share_gate_state() -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::Duration;
+
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
+        use paladin_ports::output::llm_port::{LlmError, LlmRequest};
+        use tokio::time::Instant;
+
+        let config = CadenceConfig::default();
+        let wiring_a = build_cadence(&config)?.expect("on");
+        let wiring_b = build_cadence(&config)?.expect("on");
+        let provider_a = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_script(vec![MockScriptEntry::Error(LlmError::rate_limited(None))]),
+        );
+        let provider_b = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("openai")
+                .with_script(vec![MockScriptEntry::Text("ok".to_string())]),
+        );
+        let port_a = compose_llm(provider_a, &empty_price_table()?, Some(&wiring_a));
+        let port_b = compose_llm(provider_b, &empty_price_table()?, Some(&wiring_b));
+
+        let request = || -> Result<LlmRequest, Box<dyn std::error::Error>> {
+            Ok(LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))?,
+            ))
+        };
+        let _ = port_a.generate(request()?).await;
+        let recorded_at = Instant::now();
+        port_b.generate(request()?).await?;
+        assert!(
+            recorded_at.elapsed() < Duration::from_millis(50),
+            "an unshared wiring must not be gated by another wiring's 429"
+        );
+        Ok(())
+    }
+
     #[test]
     fn an_invalid_cadence_section_names_its_key() {
         let config = CadenceConfig {
@@ -525,6 +638,50 @@ mod tests {
              must hold it for about 1 s"
         );
         assert_eq!(provider_b.call_count(), 2);
+        Ok(())
+    }
+
+    /// D-10 end to end on a live server: two wirings built by `build_cadence` from the SAME
+    /// `backend: redis` config (two workers) share state, so a 429 recorded through one gates
+    /// the other. The default key prefix is the only one `build_cadence` can build, so the test
+    /// uses a unique provider name instead of a unique prefix.
+    #[cfg(feature = "redis-cadence")]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn build_cadence_redis_backend_shares_state_between_two_workers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::time::Duration;
+
+        use paladin_ports::output::cadence_port::CadenceKey;
+
+        let url = cadence_redis_test_url();
+        if !redis_reachable(&url) {
+            println!("SKIP: redis-test not reachable at {url}");
+            return Ok(());
+        }
+        unsafe {
+            std::env::set_var(REDIS_URL_VAR, url.as_str());
+        }
+        let config = redis_backend_config();
+        let worker_a = build_cadence(&config);
+        let worker_b = build_cadence(&config);
+        unsafe {
+            std::env::remove_var(REDIS_URL_VAR);
+        }
+        let worker_a = worker_a?.expect("redis backend builds a wiring");
+        let worker_b = worker_b?.expect("redis backend builds a wiring");
+
+        let key = CadenceKey::new(&format!("build-cadence-{}", uuid::Uuid::new_v4()), "m");
+        let recorded = worker_a
+            .port()
+            .record_rate_limited(&key, Some(Duration::from_secs(5)))
+            .await?;
+        assert!(recorded.wait() >= Duration::from_secs(4), "{recorded:?}");
+        let seen = worker_b.port().gate(&key).await?;
+        assert!(
+            seen.wait() >= Duration::from_secs(3),
+            "worker B must see worker A's gate through Redis, got {seen:?}"
+        );
         Ok(())
     }
 

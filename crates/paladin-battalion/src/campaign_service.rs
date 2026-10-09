@@ -25,7 +25,7 @@
 //! ```
 
 use chrono::Utc;
-use log::{debug, info};
+use log::{debug, info, warn};
 use petgraph::algo::toposort;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
@@ -201,6 +201,9 @@ impl CampaignExecutionService {
         campaign: &Campaign,
         initial_input: &str,
     ) -> Result<BattalionResult, BattalionError> {
+        // Reject Aegis policies Campaign cannot honour before any node runs.
+        campaign.config().validate_aegis()?;
+
         // Validate campaign structure
         campaign.validate()?;
 
@@ -232,6 +235,16 @@ impl CampaignExecutionService {
                  CampaignExecutionService::with_evaluator before calling execute",
                 unregistered.join(", ")
             )));
+        }
+
+        // Campaign has no continue mode: a failing node fails the run, so an
+        // `on_error` handler is never consulted. Say so once per execution.
+        if campaign.config().aegis.on_error.is_some() {
+            warn!(
+                "Campaign {} ignores aegis.on_error: Campaign has no continue mode, \
+                 a failing node fails the run",
+                campaign.config().name
+            );
         }
 
         let battalion_id = Uuid::new_v4();
@@ -914,5 +927,232 @@ mod tests {
             msg.contains("is_urgent"),
             "error should name the evaluator: {msg}"
         );
+    }
+
+    // ---- Aegis on Campaign (Phase 44) ----
+
+    use paladin_core::platform::container::aegis::{
+        Aegis, ErrorHandlerSpec, RetryPolicy as AegisRetryPolicy, RetryPredicate, TimeoutPolicy,
+    };
+    use paladin_core::platform::container::battlefield::StateDelta;
+    use paladin_core::platform::container::node_error::{NodeErrorSource, TimeoutKind};
+    use paladin_core::platform::container::paladin_error::PaladinError;
+    use paladin_core::platform::container::transience::Transience;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// Plays back per-call (delay, result) steps; an exhausted script succeeds.
+    /// Counts every call so a test can prove no node ran.
+    struct ScriptedPort {
+        script: Mutex<VecDeque<(Duration, Result<(), PaladinError>)>>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ScriptedPort {
+        fn new(steps: Vec<(Duration, Result<(), PaladinError>)>) -> Arc<Self> {
+            Arc::new(Self {
+                script: Mutex::new(steps.into()),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            })
+        }
+
+        fn calls(&self) -> usize {
+            self.calls.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PaladinPort for ScriptedPort {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let step = self.script.lock().ok().and_then(|mut s| s.pop_front());
+            let (delay, result) = step.unwrap_or((Duration::ZERO, Ok(())));
+            tokio::time::sleep(delay).await;
+            result.map(|()| PaladinResult {
+                output: "ok".to_string(),
+                usage: TokenUsage::new(0, 0),
+                execution_time_ms: 0,
+                loop_count: 1,
+                stop_reason: paladin_ports::output::paladin_port::StopReason::Completed,
+                ..Default::default()
+            })
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<paladin_ports::output::paladin_port::PaladinStream, PaladinError> {
+            Err(PaladinError::ExecutionError("not used".to_string()))
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// A linear chain `n0 -> n1 -> ...` of `count` nodes under `aegis`.
+    fn chain_campaign(count: usize, aegis: Aegis) -> Campaign {
+        let mut campaign = Campaign::new(BattalionConfig::new("aegis_campaign").with_aegis(aegis));
+        let ids: Vec<Uuid> = (0..count)
+            .map(|i| campaign.add_paladin(make_named_paladin(&format!("n{i}"))))
+            .collect();
+        campaign
+            .set_entry_point(ids[0])
+            .expect("first node is a valid entry point");
+        for pair in ids.windows(2) {
+            campaign
+                .add_edge(CampaignEdge::new(pair[0], pair[1], EdgeCondition::Always))
+                .expect("edge between declared nodes");
+        }
+        campaign
+    }
+
+    fn run_timeout(duration: Duration) -> Option<TimeoutPolicy> {
+        Some(TimeoutPolicy {
+            run_timeout: Some(duration),
+            idle_timeout: None,
+        })
+    }
+
+    fn transient_error() -> PaladinError {
+        PaladinError::LlmFailure {
+            transience: Transience::Transient,
+            status: Some(503),
+            provider: None,
+            message: "unavailable".to_string(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn campaign_bounds_each_attempt_not_the_run() {
+        let aegis = Aegis {
+            timeout: run_timeout(Duration::from_secs(1)),
+            ..Aegis::default()
+        };
+        let campaign = chain_campaign(3, aegis);
+        let delay = Duration::from_millis(600);
+        let port = ScriptedPort::new(vec![(delay, Ok(())), (delay, Ok(())), (delay, Ok(()))]);
+        let service = CampaignExecutionService::new(port.clone());
+
+        let started = tokio::time::Instant::now();
+        let result = service
+            .execute(&campaign, "go")
+            .await
+            .expect("each 600 ms node is inside its 1 s bound");
+        assert_eq!(result.paladin_results.len(), 3);
+        assert!(started.elapsed() >= Duration::from_millis(1800));
+        assert_eq!(port.calls(), 3);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn campaign_retries_a_transient_failure_under_aegis_retry() {
+        let aegis = Aegis {
+            retry: Some(AegisRetryPolicy {
+                max_attempts: 2,
+                jitter: false,
+                retry_on: RetryPredicate::TransientOnly,
+                ..AegisRetryPolicy::default()
+            }),
+            ..Aegis::default()
+        };
+        let expected =
+            crate::engine::retry::backoff_delay(aegis.retry.as_ref().expect("retry policy set"), 2);
+
+        // Transient on attempt 1 -> succeeds on attempt 2 after the backoff.
+        let campaign = chain_campaign(1, aegis.clone());
+        let port = ScriptedPort::new(vec![
+            (Duration::ZERO, Err(transient_error())),
+            (Duration::ZERO, Ok(())),
+        ]);
+        let service = CampaignExecutionService::new(port.clone());
+        let started = tokio::time::Instant::now();
+        service
+            .execute(&campaign, "go")
+            .await
+            .expect("attempt 2 succeeds");
+        assert_eq!(started.elapsed(), expected);
+        assert_eq!(port.calls(), 2);
+
+        // Permanent -> attempted once.
+        let campaign = chain_campaign(1, aegis);
+        let port = ScriptedPort::new(vec![(
+            Duration::ZERO,
+            Err(PaladinError::ConfigurationError("bad".to_string())),
+        )]);
+        let service = CampaignExecutionService::new(port.clone());
+        service
+            .execute(&campaign, "go")
+            .await
+            .expect_err("permanent failure fails the run");
+        assert_eq!(port.calls(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn campaign_ignores_on_error_and_fails_fast() {
+        let aegis = Aegis {
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..Aegis::default()
+        };
+        let campaign = chain_campaign(2, aegis);
+        let port = ScriptedPort::new(vec![(
+            Duration::ZERO,
+            Err(PaladinError::ExecutionError("boom".to_string())),
+        )]);
+        let service = CampaignExecutionService::new(port.clone());
+        let error = service
+            .execute(&campaign, "go")
+            .await
+            .expect_err("Campaign has no continue mode");
+        assert!(
+            matches!(error, BattalionError::PaladinError(_)),
+            "non-timeout failure keeps the v0.10 fail-fast shape, got {error:?}"
+        );
+        assert_eq!(port.calls(), 1, "the second node never runs");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn campaign_timeout_surfaces_a_structured_node_error() {
+        let aegis = Aegis {
+            timeout: run_timeout(Duration::from_secs(1)),
+            ..Aegis::default()
+        };
+        let campaign = chain_campaign(1, aegis);
+        let port = ScriptedPort::new(vec![(Duration::from_secs(5), Ok(()))]);
+        let service = CampaignExecutionService::new(port);
+        match service.execute(&campaign, "go").await {
+            Err(BattalionError::Node(e)) => {
+                assert_eq!(e.node_id.as_str(), "n0");
+                assert_eq!(e.source, NodeErrorSource::Timeout(TimeoutKind::Run));
+            }
+            other => panic!("expected BattalionError::Node, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn campaign_rejects_invalid_aegis_before_any_node_runs() {
+        let aegis = Aegis {
+            on_error: Some(ErrorHandlerSpec::Custom("escalate".to_string())),
+            ..Aegis::default()
+        };
+        let campaign = chain_campaign(1, aegis);
+        let port = ScriptedPort::new(Vec::new());
+        let service = CampaignExecutionService::new(port.clone());
+        let error = service
+            .execute(&campaign, "go")
+            .await
+            .expect_err("Custom handler is unsupported");
+        assert!(
+            matches!(error, BattalionError::ValidationError(_)),
+            "got {error:?}"
+        );
+        assert_eq!(port.calls(), 0, "validation runs before any port call");
     }
 }

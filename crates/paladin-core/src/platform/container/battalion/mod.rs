@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use uuid::Uuid;
 
-use crate::platform::container::aegis::Aegis;
+use crate::platform::container::aegis::{Aegis, ErrorHandlerSpec, RetryPredicate};
 use crate::platform::container::execution_result::PaladinResult;
 use crate::platform::container::paladin_error::PaladinError;
 use crate::platform::container::registry_error::RegistryError;
@@ -28,11 +28,29 @@ use crate::platform::container::registry_error::RegistryError;
 /// # Examples
 ///
 /// ```
-/// use paladin_core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
+/// use paladin_core::platform::container::aegis::{
+///     Aegis, ErrorHandlerSpec, RetryPolicy, TimeoutPolicy,
+/// };
+/// use paladin_core::platform::container::battalion::BattalionConfig;
+/// use paladin_core::platform::container::battlefield::StateDelta;
+/// use std::time::Duration;
 ///
-/// let config = BattalionConfig::new("research_battalion")
-///     .with_timeout(300)
-///     .with_error_strategy(ErrorStrategy::FailFast);
+/// let config = BattalionConfig::new("research_battalion").with_aegis(Aegis {
+///     retry: Some(RetryPolicy {
+///         max_attempts: 3,
+///         ..RetryPolicy::default()
+///     }),
+///     timeout: Some(TimeoutPolicy {
+///         run_timeout: Some(Duration::from_secs(300)),
+///         idle_timeout: None,
+///     }),
+///     on_error: Some(ErrorHandlerSpec::Absorb {
+///         fallback_delta: StateDelta::new(),
+///     }),
+///     ..Aegis::default()
+/// });
+/// config.validate_aegis()?;
+/// # Ok::<(), paladin_core::platform::container::battalion::BattalionError>(())
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BattalionConfig {
@@ -53,8 +71,41 @@ pub struct BattalionConfig {
 
     /// Per-attempt fault-tolerance policy (retry, timeout, error handler).
     ///
-    /// Absent from a serialized document means [`Aegis::default`], which arms
-    /// no timeout and no retry. See [`BattalionConfig::with_aegis`].
+    /// This is the contract every Battalion pattern implements. Absent from a
+    /// serialized document means [`Aegis::default`], which arms no timeout, no
+    /// retry and no error handler. Which fields each pattern honours:
+    ///
+    /// - **Formation, Phalanx and Campaign** honour `timeout`, applied *per
+    ///   attempt*: `run_timeout` is a per-attempt wall clock, `idle_timeout`
+    ///   degrades to one because `PaladinPort::execute` reports no progress,
+    ///   and the tighter of the two applies (a tie counts as `Run`).
+    /// - **Formation, Phalanx and Campaign** honour `retry`: `max_attempts`
+    ///   counts total attempts including the first, `retry_on` gates a retry by
+    ///   `PaladinError::transience()`, and the wait between attempts is the
+    ///   engine's `backoff_delay`.
+    /// - **Formation and Phalanx** honour `on_error`: `None` fails fast, and
+    ///   `Some(ErrorHandlerSpec::Absorb { .. })` continues and records each
+    ///   failure in `BattalionResult.node_errors` (its `fallback_delta` is a
+    ///   no-op for a string pipeline; a Formation continues with an empty
+    ///   input). Only `Absorb` and no handler are supported.
+    /// - **Campaign** ignores `on_error`: it has no continue mode, so a
+    ///   failing node fails the run.
+    /// - **Conclave** applies `timeout` to every expert and aggregator attempt,
+    ///   takes its retry count from `ConclaveConfig.retry_attempts` and only
+    ///   the backoff shape from `retry`, and retries `Transient` failures only
+    ///   regardless of `retry_on`.
+    /// - `cache` is ignored by every Battalion pattern.
+    /// - **ChainOfCommand, Grove and Council** do not read `aegis` at all and
+    ///   are not time-bounded by it.
+    ///
+    /// There is no whole-Battalion wall clock: a ten-step Formation may run ten
+    /// times `run_timeout`. A timed-out attempt surfaces as
+    /// `BattalionError::Node` with a `NodeErrorSource::Timeout(_)` source on
+    /// Formation and Campaign. [`BattalionConfig::new`] uses
+    /// [`Aegis::default`], which arms no timeout; a caller that wants a bound
+    /// sets one with [`BattalionConfig::with_aegis`]. Call
+    /// [`BattalionConfig::validate_aegis`] to reject unsupported policies
+    /// before any Paladin runs.
     #[serde(default)]
     pub aegis: Aegis,
 
@@ -144,6 +195,84 @@ impl BattalionConfig {
         self
     }
 
+    /// Reject Aegis policies the Battalion patterns cannot honour.
+    ///
+    /// Pure and dependency-free. Runs [`Aegis::validate`] and then rejects what
+    /// a Battalion pattern would otherwise silently ignore or mis-run: an
+    /// `on_error` of `Route` or `Custom` (only `Absorb`, or no handler, is
+    /// supported), a `RetryPredicate::Custom` (it would never retry outside the
+    /// graph engine), and a zero `run_timeout` or `idle_timeout`. `cache` is
+    /// accepted and ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BattalionError::ValidationError`] naming the offending policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec};
+    /// use paladin_core::platform::container::battalion::BattalionConfig;
+    ///
+    /// assert!(BattalionConfig::new("ok").validate_aegis().is_ok());
+    ///
+    /// let rejected = BattalionConfig::new("bad").with_aegis(Aegis {
+    ///     on_error: Some(ErrorHandlerSpec::Custom("escalate".to_string())),
+    ///     ..Aegis::default()
+    /// });
+    /// assert!(rejected.validate_aegis().is_err());
+    /// ```
+    pub fn validate_aegis(&self) -> Result<(), BattalionError> {
+        self.aegis
+            .validate()
+            .map_err(|e| BattalionError::ValidationError(format!("aegis: {e}")))?;
+
+        if let Some(handler) = &self.aegis.on_error {
+            match handler {
+                ErrorHandlerSpec::Absorb { .. } => {}
+                ErrorHandlerSpec::Route { to, .. } => {
+                    return Err(BattalionError::ValidationError(format!(
+                        "aegis.on_error: Route (to '{to}') is not supported on the Battalion \
+                         patterns; only Absorb or no handler is supported"
+                    )));
+                }
+                ErrorHandlerSpec::Custom(name) => {
+                    return Err(BattalionError::ValidationError(format!(
+                        "aegis.on_error: Custom handler '{name}' is not supported on the \
+                         Battalion patterns; only Absorb or no handler is supported"
+                    )));
+                }
+            }
+        }
+
+        if let Some(retry) = &self.aegis.retry {
+            match &retry.retry_on {
+                RetryPredicate::TransientOnly | RetryPredicate::TransientAndUnknown => {}
+                RetryPredicate::Custom(name) => {
+                    return Err(BattalionError::ValidationError(format!(
+                        "aegis.retry.retry_on: Custom predicate '{name}' is not supported on \
+                         the Battalion patterns (it would never retry)"
+                    )));
+                }
+            }
+        }
+
+        if let Some(timeout) = &self.aegis.timeout {
+            if timeout.run_timeout == Some(Duration::ZERO) {
+                return Err(BattalionError::ValidationError(
+                    "aegis.timeout.run_timeout must be greater than zero".to_string(),
+                ));
+            }
+            if timeout.idle_timeout == Some(Duration::ZERO) {
+                return Err(BattalionError::ValidationError(
+                    "aegis.timeout.idle_timeout must be greater than zero".to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     /// Set the metadata output directory
     pub fn with_metadata_dir(mut self, dir: PathBuf) -> Self {
         self.metadata_output_dir = Some(dir);
@@ -200,6 +329,7 @@ impl Default for BattalionConfig {
     /// - `timeout_seconds`: 300 (5 minutes)
     /// - `retry_policy`: RetryPolicy::default()
     /// - `error_strategy`: ErrorStrategy::FailFast
+    /// - `aegis`: `Aegis::default()` (no retry, no timeout, no error handler)
     fn default() -> Self {
         Self::new("default_battalion")
     }
@@ -912,6 +1042,159 @@ impl From<PaladinError> for BattalionError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Aegis (Phase 44) ----
+
+    fn aegis_config(aegis: Aegis) -> BattalionConfig {
+        BattalionConfig::new("aegis_test").with_aegis(aegis)
+    }
+
+    fn aegis_message(config: &BattalionConfig) -> String {
+        match config.validate_aegis() {
+            Err(BattalionError::ValidationError(msg)) => msg,
+            other => panic!("expected ValidationError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_aegis_accepts_supported_policies() {
+        use crate::platform::container::aegis::{
+            CacheKeySpec, CachePolicy, RetryPolicy as AegisRetry, TimeoutPolicy,
+        };
+        use crate::platform::container::battlefield::StateDelta;
+
+        assert!(BattalionConfig::default().validate_aegis().is_ok());
+
+        let config = aegis_config(Aegis {
+            retry: Some(AegisRetry {
+                max_attempts: 3,
+                retry_on: RetryPredicate::TransientAndUnknown,
+                ..AegisRetry::default()
+            }),
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(Duration::from_secs(10)),
+                idle_timeout: Some(Duration::from_secs(2)),
+            }),
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            cache: Some(CachePolicy {
+                ttl: Duration::from_secs(60),
+                key: CacheKeySpec::Default,
+            }),
+        });
+        assert!(config.validate_aegis().is_ok());
+    }
+
+    #[test]
+    fn validate_aegis_rejects_zero_max_attempts() {
+        use crate::platform::container::aegis::RetryPolicy as AegisRetry;
+
+        let config = aegis_config(Aegis {
+            retry: Some(AegisRetry {
+                max_attempts: 0,
+                ..AegisRetry::default()
+            }),
+            ..Aegis::default()
+        });
+        assert!(aegis_message(&config).contains("max_attempts"));
+    }
+
+    #[test]
+    fn validate_aegis_rejects_route_and_custom_handlers() {
+        use crate::platform::container::battlefield::FieldName;
+        use crate::platform::container::waypoint::NodeId;
+
+        let route = aegis_config(Aegis {
+            on_error: Some(ErrorHandlerSpec::Route {
+                to: NodeId::new("cancel"),
+                error_field: FieldName::new("booking_error").expect("valid field name"),
+            }),
+            ..Aegis::default()
+        });
+        assert!(aegis_message(&route).contains("Route"));
+
+        let custom = aegis_config(Aegis {
+            on_error: Some(ErrorHandlerSpec::Custom("h".to_string())),
+            ..Aegis::default()
+        });
+        let msg = aegis_message(&custom);
+        assert!(msg.contains("Custom"), "{msg}");
+        assert!(msg.contains("'h'"), "{msg}");
+    }
+
+    #[test]
+    fn validate_aegis_rejects_custom_retry_predicate() {
+        use crate::platform::container::aegis::RetryPolicy as AegisRetry;
+
+        let config = aegis_config(Aegis {
+            retry: Some(AegisRetry {
+                retry_on: RetryPredicate::Custom("p".to_string()),
+                ..AegisRetry::default()
+            }),
+            ..Aegis::default()
+        });
+        let msg = aegis_message(&config);
+        assert!(msg.contains("retry_on"), "{msg}");
+        assert!(msg.contains("'p'"), "{msg}");
+    }
+
+    #[test]
+    fn validate_aegis_rejects_zero_durations() {
+        use crate::platform::container::aegis::TimeoutPolicy;
+
+        let run = aegis_config(Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(Duration::ZERO),
+                idle_timeout: None,
+            }),
+            ..Aegis::default()
+        });
+        assert!(aegis_message(&run).contains("run_timeout"));
+
+        let idle = aegis_config(Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: None,
+                idle_timeout: Some(Duration::ZERO),
+            }),
+            ..Aegis::default()
+        });
+        assert!(aegis_message(&idle).contains("idle_timeout"));
+    }
+
+    #[test]
+    fn battalion_config_aegis_round_trips_through_serde() {
+        use crate::platform::container::aegis::{RetryPolicy as AegisRetry, TimeoutPolicy};
+        use crate::platform::container::battlefield::StateDelta;
+
+        let config = aegis_config(Aegis {
+            retry: Some(AegisRetry {
+                max_attempts: 4,
+                jitter: false,
+                ..AegisRetry::default()
+            }),
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(Duration::from_secs(5)),
+                idle_timeout: None,
+            }),
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            cache: None,
+        });
+        let json = serde_json::to_string(&config).expect("serialize");
+        let back: BattalionConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.aegis, config.aegis);
+    }
+
+    #[test]
+    fn battalion_config_without_aegis_key_deserializes_to_default() {
+        let mut value = serde_json::to_value(BattalionConfig::new("legacy")).expect("serialize");
+        let object = value.as_object_mut().expect("config is a JSON object");
+        assert!(object.remove("aegis").is_some());
+        let config: BattalionConfig = serde_json::from_value(value).expect("deserialize");
+        assert_eq!(config.aegis, Aegis::default());
+    }
 
     #[test]
     fn test_battalion_config_default() {

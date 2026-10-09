@@ -75,10 +75,10 @@ pub struct BattalionConfig {
     /// serialized document means [`Aegis::default`], which arms no timeout, no
     /// retry and no error handler. Which fields each pattern honours:
     ///
-    /// - **Formation, Phalanx and Campaign** honour `timeout`, applied *per
-    ///   attempt*: `run_timeout` is a per-attempt wall clock, `idle_timeout`
-    ///   degrades to one because `PaladinPort::execute` reports no progress,
-    ///   and the tighter of the two applies (a tie counts as `Run`).
+    /// - **Formation, Phalanx and Campaign** honour `timeout`, applied per attempt:
+    ///   `run_timeout` is a per-attempt wall clock, `idle_timeout` degrades to
+    ///   one because `PaladinPort::execute` reports no progress, and the
+    ///   tighter of the two applies (a tie counts as `Run`).
     /// - **Formation, Phalanx and Campaign** honour `retry`: `max_attempts`
     ///   counts total attempts including the first, `retry_on` gates a retry by
     ///   `PaladinError::transience()`, and the wait between attempts is the

@@ -13,5 +13,8 @@ Out-of-scope discoveries logged during execution. Not fixed by the plan that fou
   terminal status" (a 10 s poll on an agent-kind run driven by a `FailingExecutor` through the Run
   API worker and `WarEngine`). That path touches neither Campaign, `aegis_attempt` nor
   `BattalionConfig`, so it is not caused by 44-01's changes as far as could be reasoned from the
-  code, but it was NOT confirmed against the pre-phase baseline (a baseline build was not affordable
-  in the ~4 GB disk budget). Owner to confirm on a clean checkout of `061ee3dc`.
+  code. **Confirmed pre-existing by the orchestrator (2026-10-09):** with 44-01's five source files
+  restored to the pre-phase baseline `061ee3dc` (and `aegis_attempt.rs` removed), the same two tests
+  fail identically (`cargo test -p paladin-ai --lib --all-features run_api_wiring::tests::build_run_api_persists`,
+  0 passed / 2 failed at `run_api_wiring.rs:2369`). Not a Phase 44 regression; owner of the Run API
+  worker / `WarEngine` wiring to triage separately.

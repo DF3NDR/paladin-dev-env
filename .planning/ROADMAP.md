@@ -613,7 +613,7 @@ Plans:
 
 **Wave 13** *(blocked on Wave 12 completion)*
 
-- [ ] 43-13-PLAN.md — ADR-0058, Cadence in the ubiquitous language, crate CHANGELOGs, D-27 semver measurement, full phase gate and manual credential review (wave 13)
+- [x] 43-13-PLAN.md — ADR-0058, Cadence in the ubiquitous language, crate CHANGELOGs, D-27 semver measurement, full phase gate and manual credential review (wave 13)
 
 ### Phase 44: Legacy Clean-Break Removal
 

@@ -640,7 +640,7 @@ concurrently touched files)
 Plans:
 **Wave 1**
 
-- [ ] 44-01-PLAN.md — Tracer: BattalionConfig.aegis + validate_aegis, the one crate-private per-attempt runner (aegis_attempt), Campaign on it with its whole-run wrapper deleted, end-to-end Commander test; runner edge matrix (wave 1)
+- [x] 44-01-PLAN.md — Tracer: BattalionConfig.aegis + validate_aegis, the one crate-private per-attempt runner (aegis_attempt), Campaign on it with its whole-run wrapper deleted, end-to-end Commander test; runner edge matrix (wave 1)
 - [ ] 44-02-PLAN.md — ADR-0059 (Phase 44-only X-03 supersession + replacement design), ADR-0001/0002 Superseded, PROMOTION next free 0060, PROJECT.md rows (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*

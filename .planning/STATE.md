@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 44
 current_phase_name: Legacy Clean-Break Removal
 status: executing
-stopped_at: Phase 44 context gathered
-last_updated: "2026-10-09T21:39:25.583Z"
+stopped_at: Completed 44-01-PLAN.md
+last_updated: "2026-10-09T23:49:48.691Z"
 last_activity: 2026-10-09
 last_activity_desc: Phase 44 execution started
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 77
-  completed_plans: 64
+  completed_plans: 65
 ---
 
 # Project State
@@ -51,8 +51,8 @@ under `milestones/`.
 ## Current Position
 
 Phase: 44 (Legacy Clean-Break Removal) — EXECUTING
-Plan: 1 of 13
-Status: Executing Phase 44
+Plan: 2 of 13
+Status: Ready to execute
 Last activity: 2026-10-09 — Phase 44 execution started
 
 ## Performance Metrics
@@ -255,6 +255,7 @@ Last activity: 2026-10-09 — Phase 44 execution started
 | Phase 43 P11 | 1 h | 2 tasks | 7 files |
 | Phase 43 P12 | 2 sessions | 3 tasks | 3 files |
 | Phase 43 P13 | 40min | 2 tasks | 13 files |
+| Phase 44 P01 | 2h | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -419,6 +420,9 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 43]: 43-12: OpenAI provider header names recorded VERIFIED (operator, 2026-10-09) because sandbox egress blocked OpenAI hosts; Anthropic rows carry fetched verbatim quotes
 - [Phase ?]: Phase 43-13: ADR-0058 records the Cadence design; NodeCachePort::put_fenced (defaulted) is the one deliberate reading of D-00d/D-11, lock_ttl_secs defaults to 120, no lock renewal
 - [Phase ?]: Phase 43-13: AgentRuntimeDeps.cadence corrected from N to Y in the X-10 register (constructible_struct_adds_field, covered by the root crate-wide allow); allowlist entry added
+- [Phase ?]: [44-01] Campaign ignores aegis.on_error (no continue mode) and warns once per execution
+- [Phase ?]: [44-01] validate_aegis rejects Route/Custom handlers, Custom retry predicates and zero durations; cache ignored
+- [Phase ?]: [44-01] idle_timeout degrades to a per-attempt wall clock; tighter bound wins, tie is TimeoutKind::Run
 
 ### Pending Todos
 
@@ -633,9 +637,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-09T17:26:28.788Z
-**Stopped at:** Phase 44 context gathered
-**Resume file:** .planning/phases/44-legacy-clean-break-removal/44-CONTEXT.md
+**Last session:** 2026-10-09T23:49:48.649Z
+**Stopped at:** Completed 44-01-PLAN.md
+**Resume file:** None
 
 ## Operator Next Steps
 

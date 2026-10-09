@@ -166,6 +166,22 @@ resubmission), UAT 2/2, code review 13 findings fixed across two rounds (REVIEW-
 Open: `42-SECURITY.md` not yet run; WINDOWS.md rows 64-67 (D-01 race, G2 streamed call, G15
 unpriced engine nodes, D-08). Next: `/gsd-secure-phase 42`, then `/gsd-discuss-phase 43`.
 
+**Phase 43 complete (2026-10-09)** — rate-pacing, the pacing half of the Treasurer (PACE-01..PACE-05;
+13 plans in 10 sequential waves, 43 phase commits). In the tree: a `CadencePort` output port
+(pacing gate + stampede lock + fencing tokens) with in-process, Redis (one atomic Lua script per
+operation on the server clock) and resilient (degraded-mode, fail-open lock) adapters behind the
+shared contract suite; a gate-not-retry `CadenceLlmAdapter` composed as `Pricing(Cadence(provider))`
+at every server composition root, every provider adapter surfacing its first 429 with the typed
+`RateLimitExceeded { retry_after, hints }` carrier filled by one header parser (Anthropic names
+verified from the official page, OpenAI names by operator attestation, `43-PROVIDER-HEADER-EVIDENCE.md`);
+fallback chains pace first and hop last (D-03); `treasurer.cadence` with the `redis` backend and env
+overrides; and the `WarEngine` stampede lock around the cache miss-to-put window with a fenced
+cache write (ADR-0058). Verification `passed` (5/5 criteria, 0 gaps); two pre-existing
+`run_api_wiring` trace-persistence tests fail only in the sandbox and at the pre-phase commit.
+Open: `43-SECURITY.md` not yet run; the defaulted `NodeCachePort::put_fenced` reading of D-00d/D-11
+awaits operator confirmation (ADR-0058); no shipped composition root attaches the stampede lock.
+Next: `/gsd-secure-phase 43`, then `/gsd-discuss-phase 44`.
+
 **Phase 45 complete (2026-09-30)** — rustfs-swap-platform-observability-deviations, resequenced
 ahead of Phases 41-44 (D-01) because every later phase's Coverage / Integration / Docker
 Integration / Kubernetes Smoke evidence was red on the terminal MinIO pin (STORE-01..03, PLAT-08,
@@ -1785,6 +1801,7 @@ corpus:
 | [Dev/test and reference object store is RustFS](.planning/decisions/0055-dev-test-reference-object-store-rustfs.md) (ADR-0055) | Every live configuration (CI service containers, test and dev compose, devcontainer, contract-suite local mode, Kubernetes manifest) runs `rustfs/rustfs:1.0.0` with its manifest-list digest, replacing the community MinIO images Docker Hub deleted and quay.io then locked (D-03); the existing `rust-s3` adapter is reused and proven by the 11-case `FileStoragePort` contract suite (D-08), its own path-style bucket create replaces the `mc` bootstrap (D-05), and `MinioAdapter`/`MinioConfig`/`APP_MINIO_*` keep their names (D-10); `k8s/rustfs.yaml` is the one manifest for the smoke test and the reference deployment (single-node, `emptyDir`, console off, non-root), production pointing the same adapter at AWS S3, a managed endpoint or MinIO (D-11). | ✅ Implemented — Phase 45 (2026-09-30): `k8s/rustfs.yaml`, the `rustfs` compose services, the CI contract-suite steps, `file_storage_integration_tests` |
 | [Allowance admission model: tumbling UTC windows, check-only admission, every-limit composition, store-deduped notices](.planning/decisions/0056-allowance-admission-model.md) (ADR-0056) | Windows are tumbling and aligned to the UTC epoch, computed from the store clock only, with an accepted up-to-2x burst across one boundary (D-01); every configured limit must fit, evaluated key-window → key-lifetime → tenant-window → tenant-lifetime, and an absent entry is unlimited and never read (D-03); admission is a check only with no hold, and the same-instant over-admission race is accepted and accepted rather than closed — ADR-0057 (Phase 42) keeps the boundary check-only, bounding the race to one superstep per run (D-05, ADR-0052; ADR-0056's dated note records the supersession); no role bypass, the Treasurer receives an identity and no role (D-09); fail closed when an allowance applies (D-10); once-per-window notices are enforced by a unique index with `''`/epoch sentinels, claim-before-insert with abandon (D-16). The 41-01 checkpoint resolved option-b: the design as proposed plus the operator webhook payload amended to twelve keys (`tenant_id`, `api_key_id` names). | ✅ Implemented — Phase 41 (2026-10-04): `treasurer/`, `allowance.rs`, `TreasuryLedgerPort::balance`, migrations `010`/`011`/`012`, `429 allowance_exhausted`, `allowance_admission_tracer`, `allowance_warn_path_tracer` |
 | [Mid-run halt contract: check-only boundary, typed halt cause, fork-as-resume, derived agent budget](.planning/decisions/0057-mid-run-halt-contract.md) (ADR-0057) | The engine consults a `SpendGuard` port once per superstep boundary after the cancel signals (cancel wins at the same boundary) and halts fail-closed with `ledger_unavailable`; the halt reason is one `reason`-tagged wire object built once (`HaltReason::wire_json`) and persisted on the run row before the status flips; resume is a fork from the Halted Waypoint; the agent loop's budget is derived in `i128` from the tightest remaining allowance at the model's dearest price axis, tightest-wins against the operator figure, unpriced models refused 422; a drain emits no `done`; operator notices are once per window through the Phase 41 store. The 42-01 gate resolved option-b: the design as proposed plus an informational `halt_reason` on a true stream whose terminal usage crossed the figure. | ✅ Implemented — Phase 42 (2026-10-07): `spend_guard.rs`, `treasurer/{evaluate,guard,derive}.rs`, migrations `013`/`014`, `engine_spend_halt_tracer`, `agent_execute_halts_on_the_derived_budget`, `every_halt_cause_maps_to_one_status_on_every_leg` |
+| [Rate pacing (the Cadence): a gate-not-retry decorator, fleet pacing through Redis, a fail-open stampede lock](.planning/decisions/0058-rate-pacing-cadence.md) (ADR-0058) | Pacing is a stateless `LlmPort` decorator (`CadenceLlmAdapter`) composed as `Pricing(Cadence(provider))` that gates and never retries (D-00a/D-00c): every provider adapter surfaces its first 429 (D-02, extended to DeepSeek and Gemini) carrying the typed `RateLimitExceeded { retry_after, hints }` filled by one shared header parser, and the gate honours the provider delay as a minimum, refusing a wait beyond `max_wait_secs` (D-06); fallback chains pace first and hop last within `fallback_pace_budget_secs` (D-03); fleet pacing is `RedisCadence` with one atomic Lua script per operation on the Redis server clock (PACE-03) wrapped in `ResilientCadence`, which latches on the first backend error, falls back to the in-process gate at `degraded_multiplier`, warns once per outage under the `paladin::cadence` log target and recovers on its own (D-05, Open Question 5); the stampede lock is set-if-absent with expiry, `FencingToken::{Distributed, Local}` and delete-only-if-owner, fail-open (D-13), consumed by `WarEngine::with_cadence` around the cache miss-to-put window with a fenced write through one defaulted `NodeCachePort::put_fenced` — the one deliberate reading of D-00d/D-11, flagged for the operator (D-14). | ✅ Implemented — Phase 43 (2026-10-09): `cadence_port.rs`, `paladin-storage/src/cadence/{in_memory,redis,resilient,contract_tests}.rs`, `paladin-llm/src/{cadence,rate_limit_headers}.rs`, `src/infrastructure/cadence.rs`, `cadence_tracer_paces_a_real_openai_429_end_to_end`, `cadence_fleet_429_on_one_worker_slows_the_other`, `cadence_with_redis_down_still_paces`, `stampede_lock_tests` |
 
 **v0.9.0 (Phases 18-21) minted no new ADRs.** Its decisions were recorded as per-phase locked
 decisions (`D-xx`) in each phase's `CONTEXT.md`/`DISCUSSION-LOG.md`, now archived under
@@ -1951,14 +1968,13 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-07 after **Phase 42: Mid-Run Halt & SSE Terminal Status** completed and
-verified — the Treasurer's enforcement half: engine-path halt at the superstep boundary with the
-Halted Waypoint kept and resume by fork (ALLOW-03), the derived per-run `TokenBudget` composed
-with the existing limits and the Commissary plus the vocabulary guard (ALLOW-05), and the SSE
-`done` matching the persisted status for `cancelled` and `halted` with the Treasurer reason
-(PLAT-09); ADR-0057; migrations 013/014; verification `passed` with one accepted override (D-08),
-UAT 2/2, two code-review fix rounds; CI green on `e7b69850`. Next: `/gsd-secure-phase 42`, then
-`/gsd-discuss-phase 43`.*
+*Last updated: 2026-10-09 after **Phase 43: Rate Pacing** completed and verified — the Treasurer's
+pacing half: the `CadencePort` and its in-process, Redis and resilient adapters, the gate-not-retry
+`CadenceLlmAdapter` at every server composition root with every provider's first 429 surfaced and
+typed (PACE-01, PACE-02), fleet pacing through server-clock Lua (PACE-03), the stampede lock with
+fencing tokens in the `WarEngine` (PACE-04) and degraded-mode pacing that never leaves a run
+unpaced (PACE-05); ADR-0058; verification `passed` 5/5 with 0 gaps; OpenAI header names by
+operator attestation. Next: `/gsd-secure-phase 43`, then `/gsd-discuss-phase 44`.*
 
 ---
 *Last updated: 2026-09-30 after **Phase 40: Tenant Identity & Run-Read Scoping** verified and

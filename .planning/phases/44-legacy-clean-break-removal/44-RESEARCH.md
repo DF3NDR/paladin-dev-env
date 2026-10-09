@@ -741,28 +741,40 @@ Manual review checklist for the closeout (per `security.instructions.md`): respo
 
 **Missing with no fallback:** none. **Missing with fallback:** `cargo-semver-checks` (download prebuilt), `cargo-llvm-cov` (CI-only), `mdbook` (not needed).
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+All ten questions were resolved during planning (2026-10-09). Each carries an inline `RESOLVED` line naming the plan that implements the answer and the ADR-0059 Decision subsection that records it (ADR-0059 is written by plan 44-02).
 
 1. **Default timeout after the cut.** `BattalionConfig::new` loses its implicit 300 s bound; `CommanderBuilder`'s documented default config ("Timeout: 300 seconds") would become unbounded.
    - Known: D-01 says `#[serde(default)] aegis: Aegis` (default has no timeout).
    - Unclear: whether the builder default should keep a bound.
    - **Recommendation:** `BattalionConfig::new` uses `Aegis::default()` (follow D-01 literally; §9.1 states the default is now unbounded); `CommanderBuilder`'s default-config branch sets `run_timeout: Some(300 s)` so its documented default survives.
+   - **RESOLVED** (recommendation adopted): `BattalionConfig::new` keeps `Aegis::default()` with no timeout (plan 44-01); `CommanderBuilder`'s default config arms a 300 s per-attempt `run_timeout` (plan 44-07 Task 1, test `commander_builder_default_bounds_each_attempt`). Recorded in ADR-0059 Decision (c) as a planner resolution beside D-01, and in MIGRATION.md 9.1 row `M-B-06` (plan 44-11).
 2. **`ConclaveError::Timeout(u64)`.** CONTEXT retires `BattalionError::Timeout` only.
    - **Recommendation:** remove `ConclaveError::Timeout` (no producer remains) and give `ConclaveError` its own §9.2 row; the Conclave surfaces an expert attempt timeout as `PaladinError::Timeout` (Transient) so it is retried, and an aggregator timeout as `ConclaveError::AggregatorFailed`.
+   - **RESOLVED** (recommendation adopted; extends D-03): `ConclaveError::Timeout` and its `From` arm are removed (plan 44-10 Task 3); an expert attempt timeout is a retried `PaladinError::Timeout` and an aggregator timeout is `ConclaveError::AggregatorFailed` (plan 44-07 Task 2, tests `conclave_expert_attempt_times_out_and_retries`, `conclave_aggregator_timeout_is_aggregator_failed`); `ConclaveError` gets its own 9.2 row (plan 44-11 Task 2). Recorded in ADR-0059 Decision (d).
 3. **Non-timeout fail-fast errors on Formation / Phalanx / Campaign.**
    - **Recommendation:** keep `BattalionError::PaladinError(String)` (unchanged contract, minimal test churn); only the per-attempt timeout surfaces as `BattalionError::Node(NodeError)` (D-03). `AttemptFailure.node_error` still feeds `node_errors` under `Absorb`.
+   - **RESOLVED** (recommendation adopted): non-timeout fail-fast failures stay `BattalionError::PaladinError(String)`; a timed-out final attempt is `BattalionError::Node(NodeError)` with a `Timeout` source on Formation (plan 44-04) and Campaign (plan 44-01); Phalanx keeps its collect-then-fail `BattalionError::AggregationError` listing each failure's `NodeError` display (plan 44-05). Recorded in ADR-0059 Decision (d).
 4. **Campaign and `on_error`.** Campaign had no continue mode.
    - **Recommendation:** Campaign honours `timeout` and `retry` only and documents that `on_error` is ignored (parity with the old `error_strategy`, which it also ignored); do not invent skip-subgraph semantics.
+   - **RESOLVED** (recommendation adopted): Campaign honours `aegis.timeout` and `aegis.retry` and ignores `on_error` with a logged warning (plan 44-01, test `campaign_ignores_on_error_and_fails_fast`; documented by plan 44-09). Recorded in ADR-0059 Decision (f) and MIGRATION.md 9.1 row `M-B-07` (plan 44-11).
 5. **`RetryPredicate::Custom` on legacy patterns** always admits `false` (needs the engine registry).
    - **Recommendation:** reject it in `validate_aegis` alongside `Route` / `Custom` handlers rather than silently never retrying.
+   - **RESOLVED** (recommendation adopted): `validate_aegis` rejects `RetryPredicate::Custom` together with `Route` / `Custom` handlers (plan 44-01 Task 2, the `validate_aegis_*` tests; reused by the Commander in plan 44-07). Recorded in ADR-0059 Decision (b).
 6. **Commander to Conclave attempts when `aegis.retry` is `None`.** Today every Commander Conclave gets `max_attempts(3) - 1 = 2` retries.
    - **Recommendation:** `None` leaves `ConclaveConfig`'s default of 2; `Some(p)` sets `p.max_attempts.saturating_sub(1)` (clamped to 5 by `with_retry_attempts`).
+   - **RESOLVED** (recommendation adopted; refines D-04's literal mapping): `aegis.retry = None` keeps the default of 2; `Some(p)` sets `retry_attempts = p.max_attempts.saturating_sub(1)`, clamped to 5, because `max_attempts` counts total attempts (Finding 4) while `retry_attempts` counts retries after the first (plan 44-07 Task 1, test `commander_conclave_bridge_derives_retry_attempts`). The `- 1` refinement of D-04 is stated explicitly in ADR-0059 Decision (e) ("This refines D-04") and in MIGRATION.md 9.1 row `M-B-09` (plan 44-11).
 7. **D-10 literal versus `retry_on`.** D-10 fixes `is_retryable_error` to `transience() == Transient`; Aegis `retry_on` could admit `Unknown`.
    - **Recommendation:** follow D-10 literally for the Conclave (predicate is `Transient`-only; the policy supplies backoff shape), and note in the field docs that `retry_on` is honoured by Formation / Phalanx / Campaign but the Conclave is `Transient`-only. If the operator prefers one rule everywhere, use `retry_on.admits(err.transience())` in the Conclave too; identical under the default.
+   - **RESOLVED** (D-10 followed literally): the Conclave predicate is `transience() == Transient` regardless of `aegis.retry.retry_on` (plan 44-03 Task 1, test `conclave_retry_predicate_is_transient_only`; the retry loop in plan 44-07 Task 2); `retry_on` is honoured by Formation, Phalanx and Campaign (plans 44-01, 44-04, 44-05) and the split is documented in the `aegis` field rustdoc (plan 44-01) and the guides (plan 44-09). Recorded in ADR-0059 Decision (h).
 8. **CLI YAML key.** `src/application/cli/config/battalion_config.rs:284` (`ConclaveConfig.timeout_seconds`) and the CLI templates are the CLI's own schema.
    - **Recommendation:** keep the YAML keys, map to `Aegis.timeout.run_timeout`, and reword the template / docs comments to "per attempt".
+   - **RESOLVED** (recommendation adopted): the CLI keeps its YAML `timeout_seconds` keys and maps them to `aegis.timeout.run_timeout`, reworded as per attempt (plan 44-08 Task 1; CLI and Conclave pages in plan 44-09 Task 2). Recorded in ADR-0059 Decision (c) and MIGRATION.md 9.1 row `M-B-06` (plan 44-11).
 9. **`configuration.md` `battalion:` section** is fictional (Finding 9). **Recommendation:** replace with a pointer to `BattalionConfig.aegis`; do not add a YAML schema.
+   - **RESOLVED** (recommendation adopted): both fictional blocks go -- the `## Battalion (Multi-agent Orchestration)` section's `battalion:` YAML block (near line 358) and its env-var line are replaced by a pointer to `BattalionConfig.aegis`, and the `battalion:` stanza in the `## Complete Example (config.yml)` block (near line 706) is deleted; no YAML schema is added (plan 44-09 Task 1). Recorded in ADR-0059 Decision (j).
 10. **`paladin_battalion::retry` deletion** (Finding 1) is implied by D-12 but not stated; confirm it is in scope (it is unavoidable: the module cannot compile without the legacy type).
+   - **RESOLVED** (in scope): the legacy module, its `pub mod` line and the facade re-export are deleted and the API baseline is regenerated (plan 44-10 Task 1); its 9.2 row is `paladin-battalion | retry` (plan 44-11 Task 2). Recorded in ADR-0059 Decision (i).
 
 ## Assumptions Log
 

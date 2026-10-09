@@ -635,7 +635,7 @@ concurrently touched files)
 
   4. The X-03 supersession is recorded in an ADR, and every removal has a `MIGRATION.md` §9.2 row,
      a `cargo semver-checks` allowlist entry, and updated examples/docs.
-**Plans**: 12 plans
+**Plans**: 13 plans
 
 Plans:
 **Wave 1**
@@ -661,11 +661,12 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 44-10-PLAN.md — Legacy retry module and facade re-export deleted (API baseline refreshed), last legacy writers swept, legacy definitions deleted, tests/legacy_removal_guard.rs with positive controls (wave 5)
+- [ ] 44-10-PLAN.md — Legacy retry module and facade re-export deleted (API baseline refreshed), last legacy writers swept (incl. the two root Campaign / chain-of-command tests), legacy definitions deleted (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
 - [ ] 44-11-PLAN.md — MIGRATION.md 9.1 rows M-B-06.., 9.4 stored-JSON note, D-27 measurement, Phase 44 9.2 rows, allowlist block and crate allow lines (wave 6)
+- [ ] 44-13-PLAN.md — tests/legacy_removal_guard.rs: source-tree guard over every Phase 44 removal with two positive controls, repository scan clean (wave 6, split out of 44-10)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

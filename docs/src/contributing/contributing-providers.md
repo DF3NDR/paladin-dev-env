@@ -456,28 +456,38 @@ let response = self.client.post(&url)
     .map_err(|e| LlmError::NetworkError(e.to_string()))?;
 ```
 
-### 2. Missing Retry Logic
+### 2. Retrying a Rate Limit Inside the Adapter
 
-Implement exponential backoff for rate limits:
+Retry network errors and 5xx responses inside the adapter if you like, but surface the **first**
+`429` to the caller. The Cadence decorator (`CadenceLlmAdapter`) gates later calls to the same
+provider and model, and `RetryPolicy` and `FallbackLlmAdapter` own the retries, so an adapter that
+sleeps and retries a 429 itself hides the rate limit from all of them and multiplies attempt counts.
+
+Read the response headers before the body is consumed, so the provider's own `Retry-After` reaches
+the pacing layer:
 
 ```rust,ignore
-async fn make_request_with_retry(&self, request: Request) -> Result<Response, LlmError> {
-    let mut attempt = 0;
-    loop {
-        match self.client.execute(request.try_clone()?).await {
-            Ok(resp) if resp.status().is_success() => return Ok(resp),
-            Ok(resp) if resp.status() == 429 => {
-                attempt += 1;
-                if attempt >= 3 {
-                    return Err(LlmError::RateLimitExceeded { retry_after: 60 });
-                }
-                tokio::time::sleep(Duration::from_millis(1000 * 2u64.pow(attempt))).await;
-            }
-            Err(e) => return Err(LlmError::NetworkError(e.to_string())),
-        }
-    }
-}
+let status = response.status();
+// Snapshot the rate-limit headers first; `response.text()` consumes the response.
+let hints = if status == 429 {
+    paladin_llm::rate_limit_headers::hints_from_headers(
+        paladin_llm::rate_limit_headers::RateLimitHeaderFamily::Generic,
+        std::time::SystemTime::now(),
+        |name| response.headers().get(name).and_then(|v| v.to_str().ok()),
+    )
+} else {
+    None
+};
+let body = response.text().await.unwrap_or_default();
+// `map_http_status_with_hints` redacts the API key out of the body before it is bounded.
+return Err(paladin_llm::http_status::map_http_status_with_hints(
+    "my-provider", status.as_u16(), &body, &self.api_key, hints,
+));
 ```
+
+If you build the error by hand, use `LlmError::rate_limited(Some(Duration::from_secs(60)))` (or
+`rate_limited(None)` when the provider gave no delay); `RateLimitExceeded` is a `#[non_exhaustive]`
+struct variant, so match it as `LlmError::RateLimitExceeded { .. }`.
 
 ### 3. Hardcoded Values
 

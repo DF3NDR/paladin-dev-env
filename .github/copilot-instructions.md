@@ -34,6 +34,7 @@ All multi-agent constructs follow a consistent Medieval Military naming conventi
 | **Armament** | A single tool or capability | Part of Arsenal |
 | **Citadel** | State persistence and recovery system | `core/platform/container/citadel.rs` |
 | **Commissary** | Input-side, per-call window-rationing officer | `crates/paladin-llm/src/services/commissary.rs` |
+| **Cadence** | The one who sets the marching pace: per-(provider, model) rate pacing after provider 429s, in-process or fleet-wide through Redis | `crates/paladin-llm/src/cadence.rs` |
 | **Herald** | Output formatting system | `herald.rs` |
 | **Armory** | CLI tools for development | `bin/paladin-cli.rs` |
 | **Quest** | A task or mission assigned to Paladins | Part of execution |

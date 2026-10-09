@@ -8,6 +8,21 @@ and this project follows lockstep workspace versioning.
 ## [Unreleased]
 
 ### Added
+
+- Phase 43 (rate pacing, the Cadence; PACE-01, PACE-02; ADR-0058): `CadenceLlmAdapter`,
+  `CadenceSettings`, `CadenceWiring` and `with_cadence` (the `cadence` module), a stateless `LlmPort`
+  decorator that holds a call while its per-(provider, model) gate is closed and reports a provider
+  429 to the `CadencePort`; it never retries, refuses a wait beyond `max_wait` without calling the
+  provider, paces `generate_stream` like `generate`, and spreads the callers one gate releases. It
+  composes as `Pricing(Cadence(provider))`. The `rate_limit_headers` module
+  (`hints_from_headers`, `parse_retry_after`, `parse_go_duration`, `RateLimitHeaderFamily` and the
+  header-name constants) turns a 429's headers into `RateLimitHints`: `Retry-After` in
+  delta-seconds or HTTP-date, `retry-after-ms`, OpenAI's `x-ratelimit-*` and Anthropic's
+  `anthropic-ratelimit-*`, every name verified against the provider's own documentation. The
+  `map_http_status_with_hints` function carries those hints through the shared status mapping
+  (`map_http_status` is unchanged). `FallbackLlmAdapter::with_cadence` wraps every hop in the
+  decorator. Conformance case 10, `rate_limit_is_surfaced_once_with_its_retry_delay`, joins the
+  shared adapter suite. `httpdate` is now a direct dependency and `rand` a required one.
 - `Commissary` — a prompt-budgeting service that pre-flight-guards an assembled prompt
   against a provider's declared context window (`Commissary::verify_fits`) and
   bounded-allocates caller-prioritised material into a `Stockpile` (`Commissary::dispense`),
@@ -16,6 +31,18 @@ and this project follows lockstep workspace versioning.
   decorator that prices every call — streaming and non-streaming — at the served model's own
   usage, with a process-wide, capacity-bounded warn-once log line per unpriced model name
   (PRICE-02, PRICE-03).
+
+### Changed
+
+- Every adapter now surfaces its first 429 instead of retrying it inside its own loop (the OpenAI
+  adapter, the compat engine, the Anthropic adapter and, beyond the original scope, DeepSeek and
+  Gemini), carrying the provider's `Retry-After` and rate-limit headers on
+  `LlmError::RateLimitExceeded`; network, timeout and 5xx retries are unchanged. An OpenAI 429
+  coded `insufficient_quota` and an Anthropic 429 coded `enforced_spend_limit_reached` map to
+  `UsageLimitExceeded`, not to a rate limit. A `FallbackLlmAdapter` built with `with_cadence` now
+  retries a 429 on the same hop after its gate, for up to the pace budget, before hopping; a 5xx,
+  timeout or network error still hops at once, and a chain built without `with_cadence` is unchanged
+  (Cadence persona, ADR-0058).
 
 ## [0.10.1] - 2026-09-20
 

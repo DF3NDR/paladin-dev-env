@@ -9,6 +9,14 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 43 (rate pacing, the Cadence; PACE-04; ADR-0058): `WarEngine::with_cadence(port,
+  lock_ttl)`, which puts the Cadence stampede lock around the node cache's miss-to-store window.
+  With a node cache attached, concurrent identical cache misses execute a cache-policy node once and
+  the other dispatches serve the stored delta as a cache hit; the winner stores through
+  `NodeCachePort::put_fenced` and releases the lock on every exit, a waiter whose holder released
+  without writing takes over within one poll, and a lock error, an elapsed `lock_ttl` or a
+  cancelled run never fails a node. The engine depends on the `CadencePort` trait only.
+
 - `TraceDispatcher::with_seq_origin(origin)`, which starts the dispatcher's `seq` after `origin`
   (default `0`, so every existing caller is unchanged). The run worker seeds it from the thread's
   largest persisted `seq`, so a fork or a requeued drained run on the same thread numbers its trace

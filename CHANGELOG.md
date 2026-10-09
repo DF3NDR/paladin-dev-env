@@ -79,7 +79,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache-policy node once and the other dispatches serve the stored delta as a cache hit. The winner
   stores through `put_fenced` and releases the lock on every exit, a waiter whose holder released
   without writing takes over within one ~100 ms poll, and a lock error, an elapsed `lock_ttl` or a
-  cancelled run never fails a node. Later Phase 43 plans extend this entry.
+  cancelled run never fails a node.
+
+  Plan 43-12 records every provider header name and error code the parser depends on against the
+  provider's own documentation (Anthropic fetched and quoted, OpenAI confirmed by the operator), and
+  ADR-0058 (`.planning/decisions/0058-rate-pacing-cadence.md`) records the design, including the
+  places the plans read a locked decision. The `RateLimitExceeded` examples in the provider
+  contribution guides now show the real struct variant.
+
+  **Known limitations.** Pacing is reactive and bounded, not a guarantee that a provider never
+  refuses a call. (1) The Redis namespace is the fixed `paladin:cadence`, with no configuration key
+  for it in `treasurer.cadence`, so two independent fleets that point at one Redis server share
+  pacing state for the same provider and model. (2) During a Redis outage a worker paces from its
+  own `429`s only, with delays multiplied by `degraded_multiplier`; it cannot see other workers'
+  refusals, a gate written to Redis before the outage is invisible until recovery, and recovery is
+  detected within one probe interval (5 s) without copying local gates back. (3) Gemini's
+  body-level `RetryInfo` retry delay is not parsed; a Gemini 429 uses `Retry-After` when present and
+  the back-off estimate otherwise. (4) CLI one-shot commands are outside the composition roots that
+  install pacing (the agent host, the runtime provisioner and the run engine's port), so they are
+  not paced. (5) A `FallbackLlmAdapter` built by hand and never given `with_cadence` keeps hopping
+  immediately on a 429. (6) The stampede lock is not renewed: `lock_ttl_secs` must exceed the p99
+  node duration including retries, and the server attaches no node cache today, so it attaches no
+  lock.
 - **Provider retry delay on a 429 (PACE-01, PACE-02; Phase 43 plan 43-02).**
   `LlmError::RateLimitExceeded` now carries the provider's own retry delay and a rate-limit header
   snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new

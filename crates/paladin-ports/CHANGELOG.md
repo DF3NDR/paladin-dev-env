@@ -9,6 +9,16 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 43 (rate pacing, the Cadence; PACE-01..PACE-05; ADR-0058): the `CadencePort` output port
+  (`gate`, `record_rate_limited`, `record_success`, and the stampede-lock methods `try_lock` and
+  `unlock`) with `CadenceKey`, `GateReading`, `CadenceError`, `CadencePolicy` (exponential back-off
+  with full jitter), `LockKey`, `FencingToken` (`Distributed` or `Local`, `#[non_exhaustive]`, no
+  `Ord`), `CADENCE_LOG_TARGET` and `CADENCE_DELAY_CEILING`. `RateLimitHints`, `RateLimitDimension`,
+  `RateLimitDimensionKind` and `RetryDelaySource` carry a provider's parsed rate-limit numbers
+  (never a raw header string), read through `LlmError::retry_after()` and
+  `LlmError::rate_limit_hints()`. `NodeCachePort::put_fenced`, a defaulted method that delegates to
+  `put`, so no implementor breaks (see `MIGRATION.md` section 9.2).
+
 - `RunTracePort::max_seq(&self, &ThreadId)`, the largest persisted `seq` of a thread (`0` when it
   has none), with a defaulted implementation that pages through `read` so an existing implementor
   keeps compiling and stays correct. A run seeds its trace dispatcher from it so a second run on
@@ -51,6 +61,14 @@ and this project follows lockstep workspace versioning.
   existing implementor compiles unchanged (TENANT-02).
 
 ### Changed
+
+- `LlmError::RateLimitExceeded` is now the `#[non_exhaustive]` struct variant `{ retry_after:
+  Option<Duration>, hints: Option<Box<RateLimitHints>> }` (PACE-01; Phase 43 plan 43-02;
+  `MIGRATION.md` section 9.2). Construct it with `LlmError::rate_limited(None)` or
+  `rate_limited(Some(delay))` and match it as `LlmError::RateLimitExceeded { .. }`; `Display`
+  stays `Rate limit exceeded` and `transience()` stays `Transient`. `CadencePort` gained the
+  required methods `try_lock` and `unlock` in the same phase, before any release, so an
+  out-of-tree implementor sees the port only in its final shape.
 
 - **Breaking:** `SubmitRun.requested_by`, `ForkRun.requested_by` and `RunSubmissionPort::cancel`'s
   `requested_by` parameter are `Option<PrincipalRef>` (tenant, API key id and role travel together)

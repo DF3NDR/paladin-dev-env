@@ -472,8 +472,11 @@ let openai = OpenAIAdapter::new(OpenAIConfig::from_env()?)?;
 ```rust,ignore
 match provider.generate(&request).await {
     Ok(response) => // Handle response,
-    Err(LlmError::RateLimitExceeded { retry_after }) => {
-        tokio::time::sleep(Duration::from_secs(retry_after)).await;
+    Err(err @ LlmError::RateLimitExceeded { .. }) => {
+        // `retry_after()` is `None` when the provider gave no parseable delay.
+        if let Some(delay) = err.retry_after() {
+            tokio::time::sleep(delay).await;
+        }
         // Retry
     }
     Err(LlmError::AuthenticationError(_)) => {
@@ -513,7 +516,9 @@ println!("Total cost: ${}", calculate_cost(&response, provider_name));
 **Issue:** `LlmError::RateLimitExceeded`
 
 **Solutions:**
-1. Implement exponential backoff (built-in to adapters)
+1. Rely on the Cadence: with `treasurer.cadence` enabled (the default) a 429 gates later calls to that
+   provider and model, honouring the provider's `Retry-After` as a minimum. Adapters surface the first
+   429 rather than retrying it themselves.
 2. Consider upgrading API tier
 3. Implement request queuing
 4. Switch to provider with higher limits

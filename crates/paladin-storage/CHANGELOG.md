@@ -22,6 +22,19 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 43 (rate pacing, the Cadence; PACE-03..PACE-05; ADR-0058): the `cadence` module with
+  `InMemoryCadence` (bounded to `DEFAULT_KEY_CAPACITY` keys, `with_capacity`, `with_multiplier`), the
+  `ResilientCadence` composite (serves from a shared backend, degrades to an in-process fallback
+  with a stricter multiplier on the first error, never returns `Err`, warns once per outage) and a
+  shared `contract_tests` suite every adapter must pass. `RedisCadence` and `RedisCadenceConfig`
+  (behind the new `redis-cadence` feature, which shares the optional `redis` dependency and is in
+  neither `default` nor `full`) share pacing state across a worker fleet through atomic Lua scripts
+  that read the Redis server clock and return relative waits; the connection is lazy with explicit
+  timeouts and the URL is redacted in `Debug` and every error. The same adapters implement the
+  stampede lock (`try_lock` and `unlock`, with a strictly increasing fencing token), and
+  `RedisNodeCache` overrides `NodeCachePort::put_fenced` (behind `redis-cache`) so a write from a
+  stale lock holder is ignored. A CI job, `redis-cadence-integration`, runs the live suite.
+
 - `RunTracePort::max_seq` on the in-memory, SQLite and PostgreSQL run-trace stores (an index lookup
   on the `(thread_id, seq)` key), behind a new shared contract clause: a second run that numbers its
   records after the thread's maximum keeps every one of them (Phase 42 review WR-6). No migration.
@@ -90,6 +103,12 @@ and this project follows lockstep workspace versioning.
   a half-attributed row, and apply `RunQuery.scope` inside `list` (`WHERE tenant_id = ?`) so a
   tenant-scoped page and its cursor stay a correct keyset walk; the shared run contract suite gains
   the attribution and scoped-list clauses every adapter passes (TENANT-02, PLAT-07).
+
+### Changed
+
+- `redact_connection_url` moved from the Redis run queue to a shared `redis_url` module so the
+  queue and the Cadence redact a connection URL identically; the queue's behaviour is unchanged
+  (Phase 43 plan 43-07).
 
 ## [0.10.1] - 2026-09-20
 

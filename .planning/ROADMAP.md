@@ -232,7 +232,7 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 - [x] **Phase 40: Tenant Identity & Run-Read Scoping** - Map API keys to tenants on the `Principal`, attribute every run to its submitting principal, and scope every run-read route to the calling principal (completed 2026-09-30)
 - [ ] **Phase 41: Admission-Time Allowance Enforcement** - Rolling-period allowances with an optional lifetime cap, refused at admission when exhausted, with a non-blocking warn-threshold notice
 - [x] **Phase 42: Mid-Run Halt & SSE Terminal Status** - A resumable, checkpoint-preserving halt when an in-flight run's next draw would overspend, on both the engine and agent-loop paths, plus the SSE `done`/`Cancelled` fix (completed 2026-10-07)
-- [ ] **Phase 43: Rate Pacing** - In-process and Redis-shared 429 back-off with jitter, a distributed cache-stampede lock, and safe degradation when Redis is unavailable
+- [x] **Phase 43: Rate Pacing** - In-process and Redis-shared 429 back-off with jitter, a distributed cache-stampede lock, and safe degradation when Redis is unavailable (completed 2026-10-09)
 - [ ] **Phase 44: Legacy Clean-Break Removal** - Remove legacy Battalion `RetryPolicy`/`ErrorStrategy`/`NodeError`/timeouts and `PaladinError::LlmError(String)`, migrating the last string-matching retry check to the typed taxonomy
 - [x] **Phase 45: RustFS Swap & Platform/Observability Deviations** - Replace MinIO with RustFS across dev/test and CI, wire SSE/webhook emission for legacy `Runnable::Agent` runs, and close the tracing-overhead gap (completed 2026-09-30)
 - [ ] **Phase 46: Docs Currency & Hygiene** - Close the v0.10.0 audit's docs fixes, publish the Treasurer mdBook page and migration guide, reconcile Nyquist validation, and dispose of the three v2 debt lines
@@ -753,7 +753,7 @@ feature work)
 | 40. Tenant Identity & Run-Read Scoping | v0.11.0 | 6/6 | Complete    | 2026-09-30 |
 | 41. Admission-Time Allowance Enforcement | v0.11.0 | 0/TBD | Not started | - |
 | 42. Mid-Run Halt & SSE Terminal Status | v0.11.0 | 12/12 | Complete    | 2026-10-07 |
-| 43. Rate Pacing | v0.11.0 | 0/TBD | Not started | - |
+| 43. Rate Pacing | v0.11.0 | 13/13 | Complete    | 2026-10-09 |
 | 44. Legacy Clean-Break Removal | v0.11.0 | 0/TBD | Not started | - |
 | 45. RustFS Swap & Platform/Observability Deviations | v0.11.0 | 7/7 | Complete    | 2026-09-30 |
 | 46. Docs Currency & Hygiene | v0.11.0 | 0/TBD | Not started | - |

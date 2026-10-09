@@ -306,3 +306,10 @@ lint = "enum_variant_marked_non_exhaustive"
 migration_row = "paladin-ports | LlmError"
 requirement_id = "PACE-01"
 justification = "The reshaped LlmError::RateLimitExceeded variant is marked #[non_exhaustive] so a later field (a further parsed header, say) can be added without a break, in the same way the enclosing enum already is. Out-of-crate code can no longer build the variant with a literal; LlmError::rate_limited and LlmError::rate_limited_with_hints are the constructors."
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | AgentRuntimeDeps"
+requirement_id = "PACE-02"
+justification = "AgentRuntimeDeps gained the cadence: Option<CadenceWiring> field (D-03, 43-06) -- the Cadence wiring that paces every hop of a config-built model_fallback chain; Default carries an in-process wiring built from treasurer.cadence's defaults and None opts out. The struct stays constructible (not #[non_exhaustive]) because it implements Default and in-tree literals already use ..Default::default(); only a downstream full struct literal breaks. Found by the D-27 diagnostic at the Phase 43 closeout (43-13), which contradicted the row's earlier N; suppressed by the root Cargo.toml's crate-wide allow line."

@@ -93,6 +93,13 @@ include = [
 # Register/remove this suppression only in the same commit as the matching
 # MIGRATION.md §9.2 row and `.cargo/semver-checks-allowlist.toml` entry (kept
 # set-equal by CI's `semver` job).
+#
+# PACE-02 (MIGRATION.md §9.2, Phase 43 plan 43-06, measured at the closeout in 43-13):
+# `AgentRuntimeDeps` gained the additive `cadence: Option<CadenceWiring>` field. The D-27
+# diagnostic (cargo-semver-checks 0.50.0 vs 0.10.1, crate-wide allows disabled) fired
+# `constructible_struct_adds_field` for it, which the allow below already covers; the row is
+# therefore `Y` with a matching `.cargo/semver-checks-allowlist.toml` entry, and no new lint
+# line was needed.
 [package.metadata.cargo-semver-checks.lints]
 constructible_struct_adds_field = "allow"
 

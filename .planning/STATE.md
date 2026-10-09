@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 43
 current_phase_name: Rate Pacing
 status: executing
-stopped_at: Completed 43-10-PLAN.md
-last_updated: "2026-10-08T23:56:05.835Z"
+stopped_at: Completed 43-11-PLAN.md
+last_updated: "2026-10-09T00:13:03.378Z"
 last_activity: 2026-10-08
 last_activity_desc: Phase 43 execution started
 progress:
   total_phases: 7
   completed_phases: 6
   total_plans: 64
-  completed_plans: 61
+  completed_plans: 62
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([██████████] 95%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([██████████] 97%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 43 (Rate Pacing) — EXECUTING
-Plan: 11 of 13
+Plan: 12 of 13
 Status: Ready to execute
 Last activity: 2026-10-08 — Phase 43 execution started
 
@@ -251,6 +251,7 @@ Last activity: 2026-10-08 — Phase 43 execution started
 | Phase 43 P08 | 1h | 2 tasks | 8 files |
 | Phase 43 P09 | 90min | 2 tasks | 11 files |
 | Phase 43 P10 | 1h45m | 2 tasks | 14 files |
+| Phase 43 P11 | 1 h | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -410,6 +411,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 43-10: NodeCachePort gains one defaulted put_fenced (delegates to put) so D-14 fencing reaches the Redis cache without changing D-29 or any implementor; flagged reading of D-00d/D-11 for the operator and ADR-0058
 - [Phase ?]: 43-10: Redis lock/counter keys use the %lock and %fence segments so they can never equal a pacing key (a provider named lock would collide with the plan's literal layout)
 - [Phase ?]: 43-10: FencingToken carries its source (Distributed/Local) with no Ord; Local tokens are a plain put at the cache and never compared with Distributed ones
+- [Phase ?]: 43-11: the stampede-lock winner re-reads the node cache once after acquiring the lock (double-checked locking) and serves an entry that appeared between its first miss and its acquisition; engines without a lock keep exactly one get per miss
+- [Phase ?]: 43-11: a lock wait cancelled by the run returns Interrupted (attempt 1) so the run ends Halted and the node is re-listed for resume; a task aborted at the grace deadline cannot unlock and its lock expires by TTL
 
 ### Pending Todos
 
@@ -624,8 +627,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-08T23:56:05.804Z
-**Stopped at:** Completed 43-10-PLAN.md
+**Last session:** 2026-10-09T00:13:03.347Z
+**Stopped at:** Completed 43-11-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

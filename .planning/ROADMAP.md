@@ -605,7 +605,7 @@ Plans:
 
 **Wave 11** *(blocked on Wave 10 completion)*
 
-- [ ] 43-11-PLAN.md — Engine stampede lock: WarEngine::with_cadence, lock loop around the cache miss-to-put window, release on every exit, cancellation-aware waiting (wave 11)
+- [x] 43-11-PLAN.md — Engine stampede lock: WarEngine::with_cadence, lock loop around the cache miss-to-put window, release on every exit, cancellation-aware waiting (wave 11)
 
 **Wave 12** *(blocked on Wave 11 completion)*
 

@@ -74,7 +74,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a run. `NodeCachePort` gains one defaulted method, `put_fenced`, that delegates to `put`, so every
   implementor is unchanged; `RedisNodeCache` overrides it with an atomic script that ignores a
   lower distributed token, so a stale lock holder's late write cannot overwrite a newer entry. The
-  engine's use of the lock follows in plan 43-11. Later Phase 43 plans extend this entry.
+  `WarEngine::with_cadence(port, lock_ttl)` (plan 43-11) puts the lock around the node cache's
+  miss-to-store window: with a node cache attached, concurrent identical cache misses execute a
+  cache-policy node once and the other dispatches serve the stored delta as a cache hit. The winner
+  stores through `put_fenced` and releases the lock on every exit, a waiter whose holder released
+  without writing takes over within one ~100 ms poll, and a lock error, an elapsed `lock_ttl` or a
+  cancelled run never fails a node. Later Phase 43 plans extend this entry.
 - **Provider retry delay on a 429 (PACE-01, PACE-02; Phase 43 plan 43-02).**
   `LlmError::RateLimitExceeded` now carries the provider's own retry delay and a rate-limit header
   snapshot, read through `LlmError::retry_after()` and `LlmError::rate_limit_hints()`; the new

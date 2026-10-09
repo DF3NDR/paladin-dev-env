@@ -30,9 +30,12 @@ use paladin_ports::output::rate_limit_hints::RateLimitHints;
 const OPENAI_PROVIDER: &str = "openai";
 
 /// The OpenAI error identifier of an account-level quota wall, carried as `error.code` (and, on
-/// some responses, `error.type`). Pending operator verification against OpenAI's error-code
-/// reference (plan 43-12 checkpoint): if the string is wrong the mapping simply never fires and
-/// the 429 is paced and bounded by `max_backoff_ms` instead.
+/// some responses, `error.type`).
+///
+/// Verified against <https://platform.openai.com/docs/guides/error-codes> on 2026-10-09 (plan 43-12; evidence:
+/// .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md): the operator confirmed that a
+/// quota/billing 429 carries the code `insufficient_quota`. Were the string ever to change, the
+/// mapping would simply stop firing and the 429 would be paced and bounded by `max_backoff_ms`.
 const INSUFFICIENT_QUOTA: &str = "insufficient_quota";
 
 /// Whether a `429` body identifies an exhausted quota rather than a transient rate limit.

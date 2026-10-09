@@ -75,8 +75,12 @@ use paladin_ports::output::rate_limit_hints::{
 /// will fail." It is **not** sent with the spend-cap 429, which a retry cannot fix.
 ///
 /// OpenAI: "minimum number of seconds to wait before retrying a temporary rate-limit error, when
-/// present"; it can also arrive on a 503. Pending operator verification against the official
-/// OpenAI rate-limits guide (plan 43-12 checkpoint).
+/// present"; it can also arrive on a 503.
+///
+/// Verified against <https://platform.openai.com/docs/guides/rate-limits> and <https://platform.openai.com/docs/guides/error-codes> on 2026-10-09 (plan 43-12; evidence:
+/// .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md): Anthropic's wording was
+/// fetched verbatim from the Anthropic page; the OpenAI semantics (optional, in seconds) were
+/// confirmed by the operator against the official OpenAI pages.
 pub const RETRY_AFTER: &str = "retry-after";
 
 /// An optional millisecond-precision retry delay.
@@ -85,35 +89,43 @@ pub const RETRY_AFTER: &str = "retry-after";
 /// `openai-python` ahead of `retry-after`, so it is parsed as an optional extra for the
 /// OpenAI-compatible family (research assumption A3) and used only when `Retry-After` is absent
 /// or unusable.
+///
+/// Confirmed by the operator on 2026-10-09 (plan 43-12; evidence:
+/// .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md) as not documented on the
+/// official OpenAI rate-limits guide, so it stays an optional extra, never a required header.
 pub const RETRY_AFTER_MS: &str = "retry-after-ms";
 
 /// OpenAI: the maximum number of requests permitted before the limit is exhausted (example `60`).
-/// Pending operator verification against the official OpenAI rate-limits guide (plan 43-12
-/// checkpoint).
+///
+/// Verified against <https://platform.openai.com/docs/guides/rate-limits> ("Rate limits in headers") on 2026-10-09 (plan 43-12; evidence: .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md).
 pub const OPENAI_LIMIT_REQUESTS: &str = "x-ratelimit-limit-requests";
 
 /// OpenAI: the maximum number of tokens permitted before the limit is exhausted (example
-/// `150000`). Pending operator verification against the official OpenAI rate-limits guide (plan
-/// 43-12 checkpoint).
+/// `150000`).
+///
+/// Verified against <https://platform.openai.com/docs/guides/rate-limits> ("Rate limits in headers") on 2026-10-09 (plan 43-12; evidence: .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md).
 pub const OPENAI_LIMIT_TOKENS: &str = "x-ratelimit-limit-tokens";
 
 /// OpenAI: the number of requests remaining in the window (example `59`). `0` marks the
-/// dimension exhausted. Pending operator verification against the official OpenAI rate-limits
-/// guide (plan 43-12 checkpoint).
+/// dimension exhausted.
+///
+/// Verified against <https://platform.openai.com/docs/guides/rate-limits> ("Rate limits in headers") on 2026-10-09 (plan 43-12; evidence: .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md).
 pub const OPENAI_REMAINING_REQUESTS: &str = "x-ratelimit-remaining-requests";
 
-/// OpenAI: the number of tokens remaining in the window (example `149984`). Pending operator
-/// verification against the official OpenAI rate-limits guide (plan 43-12 checkpoint).
+/// OpenAI: the number of tokens remaining in the window (example `149984`).
+///
+/// Verified against <https://platform.openai.com/docs/guides/rate-limits> ("Rate limits in headers") on 2026-10-09 (plan 43-12; evidence: .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md).
 pub const OPENAI_REMAINING_TOKENS: &str = "x-ratelimit-remaining-tokens";
 
 /// OpenAI: the time until the request limit resets, as a Go-style duration string (`1s`, `6m0s`,
-/// `6ms`) -- see [`parse_go_duration`]. Pending operator verification against the official OpenAI
-/// rate-limits guide (plan 43-12 checkpoint).
+/// `6ms`) -- see [`parse_go_duration`].
+///
+/// Verified against <https://platform.openai.com/docs/guides/rate-limits> ("Rate limits in headers") on 2026-10-09 (plan 43-12; evidence: .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md).
 pub const OPENAI_RESET_REQUESTS: &str = "x-ratelimit-reset-requests";
 
 /// OpenAI: the time until the token limit resets, as a Go-style duration string (example `6m0s`).
-/// Pending operator verification against the official OpenAI rate-limits guide (plan 43-12
-/// checkpoint).
+///
+/// Verified against <https://platform.openai.com/docs/guides/rate-limits> ("Rate limits in headers") on 2026-10-09 (plan 43-12; evidence: .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md).
 pub const OPENAI_RESET_TOKENS: &str = "x-ratelimit-reset-tokens";
 
 /// The shared prefix of Anthropic's rate-limit headers:
@@ -127,6 +139,11 @@ pub const OPENAI_RESET_TOKENS: &str = "x-ratelimit-reset-tokens";
 /// wins. The `tokens` dimension reports the most restrictive token limit in effect, with
 /// `-remaining` rounded to the nearest thousand. The spend-cap 429
 /// (`error.details.error_code == "enforced_spend_limit_reached"`) carries no `retry-after`.
+///
+/// Verified against <https://platform.claude.com/docs/en/api/rate-limits> and
+/// <https://platform.claude.com/docs/en/api/errors> on 2026-10-09 (plan 43-12; evidence:
+/// .planning/phases/43-rate-pacing/43-PROVIDER-HEADER-EVIDENCE.md): all twelve
+/// `anthropic-ratelimit-*` names were fetched and quoted verbatim.
 pub const ANTHROPIC_RATELIMIT_PREFIX: &str = "anthropic-ratelimit-";
 
 /// The response `Date` header, the reference clock for HTTP-date delays and RFC 3339 resets.

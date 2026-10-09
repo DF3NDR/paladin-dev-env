@@ -6,9 +6,13 @@ Per-name verification record for every provider header and error code the Cadenc
 (threat T-43-46); search excerpts and third-party pages are never marked verified.
 
 Fetch date: 2026-10-09. Method: `curl -sL` through the session proxy (TLS verification on).
+OpenAI rows could not be fetched and were confirmed by the operator at the plan 43-12 checkpoint
+(see "For the operator").
 
 Statuses: `VERIFIED (quote)` - fetched by the executor, verbatim quote recorded;
-`BLOCKED (egress)` - the official page could not be fetched from the sandbox;
+`VERIFIED (operator, <date>)` - not fetchable from the sandbox; the operator confirmed it
+against the official page;
+`BLOCKED (egress)` - the official page could not be fetched from the sandbox and is unconfirmed;
 `MISMATCH` - the official page disagrees with the code.
 
 ## For the operator
@@ -36,20 +40,37 @@ https://platform.openai.com/docs/guides/error-codes, each of the following, or g
 
 Every Anthropic row below is `VERIFIED (quote)`; nothing is required from the operator there.
 
+### Operator confirmation (2026-10-09)
+
+The operator replied "Pass", approving all ten items above as matching the official pages
+(https://platform.openai.com/docs/guides/rate-limits, "Rate limits in headers" table, and
+https://platform.openai.com/docs/guides/error-codes) on 2026-10-09:
+
+1. The six `x-ratelimit-{limit,remaining,reset}-{requests,tokens}` header names - confirmed.
+2. The two reset values are Go-style duration strings (`1s`, `6m0s`, `6ms`) - confirmed.
+3. `Retry-After`: optional, in seconds, the minimum wait before retrying a temporary rate-limit
+   429 - confirmed.
+4. `retry-after-ms`: not documented by OpenAI (optional extra only) - confirmed.
+5. A quota/billing 429 carries the error code `insufficient_quota` - confirmed.
+
+No corrections were given, so no constant, parser test or quota branch was changed. The operator
+confirmation is a human attestation, not a fetched quote; it is recorded as such in the status
+column.
+
 ## OpenAI
 
 | Name | Official URL | Fetch date | Status | Quote |
 |------|--------------|------------|--------|-------|
-| `x-ratelimit-limit-requests` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | BLOCKED (egress) | - |
-| `x-ratelimit-limit-tokens` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | BLOCKED (egress) | - |
-| `x-ratelimit-remaining-requests` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | BLOCKED (egress) | - |
-| `x-ratelimit-remaining-tokens` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | BLOCKED (egress) | - |
-| `x-ratelimit-reset-requests` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | BLOCKED (egress) | - |
-| `x-ratelimit-reset-tokens` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | BLOCKED (egress) | - |
-| reset duration format (`1s`, `6m0s`, `6ms`) | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | BLOCKED (egress) | - |
-| `retry-after` (OpenAI semantics) | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | BLOCKED (egress) | - |
-| `retry-after-ms` (expected not documented, A3) | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | BLOCKED (egress) | - |
-| `insufficient_quota` | https://platform.openai.com/docs/guides/error-codes | 2026-10-09 | BLOCKED (egress) | - |
+| `x-ratelimit-limit-requests` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | VERIFIED (operator, 2026-10-09) | Operator confirmation ("Pass") against the official page; no verbatim quote fetched. |
+| `x-ratelimit-limit-tokens` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | VERIFIED (operator, 2026-10-09) | Operator confirmation ("Pass") against the official page; no verbatim quote fetched. |
+| `x-ratelimit-remaining-requests` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | VERIFIED (operator, 2026-10-09) | Operator confirmation ("Pass") against the official page; no verbatim quote fetched. |
+| `x-ratelimit-remaining-tokens` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | VERIFIED (operator, 2026-10-09) | Operator confirmation ("Pass") against the official page; no verbatim quote fetched. |
+| `x-ratelimit-reset-requests` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | VERIFIED (operator, 2026-10-09) | Operator confirmation ("Pass") against the official page; no verbatim quote fetched. |
+| `x-ratelimit-reset-tokens` | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | VERIFIED (operator, 2026-10-09) | Operator confirmation ("Pass") against the official page; no verbatim quote fetched. |
+| reset duration format (`1s`, `6m0s`, `6ms`) | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | VERIFIED (operator, 2026-10-09) | Operator confirmation ("Pass") against the official page; no verbatim quote fetched. |
+| `retry-after` (OpenAI semantics) | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | VERIFIED (operator, 2026-10-09) | Operator confirmation ("Pass") against the official page; no verbatim quote fetched. |
+| `retry-after-ms` (expected not documented, A3) | https://platform.openai.com/docs/guides/rate-limits | 2026-10-09 | VERIFIED (operator, 2026-10-09) | Operator confirmed: not documented by OpenAI (optional extra only). |
+| `insufficient_quota` | https://platform.openai.com/docs/guides/error-codes | 2026-10-09 | VERIFIED (operator, 2026-10-09) | Operator confirmation ("Pass") against the official page; no verbatim quote fetched. |
 
 Pages attempted and unreachable: `platform.openai.com/docs/guides/rate-limits`,
 `developers.openai.com/api/docs/guides/rate-limits`, `platform.openai.com/docs/guides/error-codes`,

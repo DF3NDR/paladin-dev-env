@@ -635,7 +635,41 @@ concurrently touched files)
 
   4. The X-03 supersession is recorded in an ADR, and every removal has a `MIGRATION.md` §9.2 row,
      a `cargo semver-checks` allowlist entry, and updated examples/docs.
-**Plans**: TBD
+**Plans**: 12 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 44-01-PLAN.md — Tracer: BattalionConfig.aegis + validate_aegis, the one crate-private per-attempt runner (aegis_attempt), Campaign on it with its whole-run wrapper deleted, end-to-end Commander test; runner edge matrix (wave 1)
+- [ ] 44-02-PLAN.md — ADR-0059 (Phase 44-only X-03 supersession + replacement design), ADR-0001/0002 Superseded, PROMOTION next free 0060, PROJECT.md rows (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 44-03-PLAN.md — Circuit breaker and Conclave predicate on transience() (Transient only); PaladinError::LlmError, is_retryable, is_terminal removed with every Rust site and rustdoc (wave 2)
+- [ ] 44-04-PLAN.md — Formation on the runner: per-attempt timeouts, Aegis retry, on_error Absorb / fail fast, structured timeout errors; Formation-routed tests migrated (wave 2)
+- [ ] 44-05-PLAN.md — Phalanx on the runner: typed failures in declaration order, independent per-Paladin retry, cancellation, no string parsing; Phalanx tests migrated (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 44-06-PLAN.md — One-way node_errors retype to the structured NodeError behind a checkpoint:decision, heralds' richer line, shape and deserialization-break tests (wave 3, non-autonomous)
+- [ ] 44-07-PLAN.md — Commander without its execute() wrapper, aegis-sourced Conclave/Maneuver bridges, 300 s per-attempt builder default; Conclave on the runner with the engine backoff (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 44-08-PLAN.md — CLI (YAML keys unchanged, per-attempt), the eight examples and the doc-examples anchor show the Aegis equivalents (wave 4)
+- [ ] 44-09-PLAN.md — mdBook pages and DEMOS.md on Aegis and the typed taxonomy; per-attempt consequences stated; fictional battalion: YAML section replaced (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 44-10-PLAN.md — Legacy retry module and facade re-export deleted (API baseline refreshed), last legacy writers swept, legacy definitions deleted, tests/legacy_removal_guard.rs with positive controls (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 44-11-PLAN.md — MIGRATION.md 9.1 rows M-B-06.., 9.4 stored-JSON note, D-27 measurement, Phase 44 9.2 rows, allowlist block and crate allow lines (wave 6)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 44-12-PLAN.md — CHANGELOG Removed/Changed (D-21), ADR-0059 conforms, full phase gate and manual credential review (wave 7)
 
 ### Phase 45: RustFS Swap & Platform/Observability Deviations
 

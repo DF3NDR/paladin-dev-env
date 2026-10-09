@@ -609,7 +609,7 @@ Plans:
 
 **Wave 12** *(blocked on Wave 11 completion)*
 
-- [ ] 43-12-PLAN.md — Provider header verification against official OpenAI/Anthropic docs with an operator checkpoint for what the sandbox cannot fetch; verified-source rustdoc (wave 12, non-autonomous)
+- [x] 43-12-PLAN.md — Provider header verification against official OpenAI/Anthropic docs with an operator checkpoint for what the sandbox cannot fetch; verified-source rustdoc (wave 12, non-autonomous)
 
 **Wave 13** *(blocked on Wave 12 completion)*
 

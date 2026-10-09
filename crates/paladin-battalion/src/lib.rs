@@ -24,8 +24,14 @@
 //! - [`error_aggregation`] — Collect and summarise errors across parallel agent runs
 //! - [`retry`] — Exponential back-off retry helper
 //! - [`llm_failure`] — Structured `LlmError` -> `PaladinError::LlmFailure` conversion
+//! - `aegis_attempt` (crate-private) — The one per-attempt runner the legacy patterns share:
+//!   per-attempt Aegis timeout, retry gated on `PaladinError::transience()`, and the engine's
+//!   backoff
 
 #![warn(missing_docs)]
+
+// Per-attempt Aegis runner shared by the legacy Battalion patterns (crate-private).
+mod aegis_attempt;
 
 // Execution services
 pub mod campaign_service;

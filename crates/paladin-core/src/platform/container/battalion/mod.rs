@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use uuid::Uuid;
 
+use crate::platform::container::aegis::Aegis;
 use crate::platform::container::execution_result::PaladinResult;
 use crate::platform::container::paladin_error::PaladinError;
 use crate::platform::container::registry_error::RegistryError;
@@ -50,6 +51,13 @@ pub struct BattalionConfig {
     /// Strategy for handling errors
     pub error_strategy: ErrorStrategy,
 
+    /// Per-attempt fault-tolerance policy (retry, timeout, error handler).
+    ///
+    /// Absent from a serialized document means [`Aegis::default`], which arms
+    /// no timeout and no retry. See [`BattalionConfig::with_aegis`].
+    #[serde(default)]
+    pub aegis: Aegis,
+
     /// Directory for saving metadata output
     pub metadata_output_dir: Option<PathBuf>,
 }
@@ -69,6 +77,7 @@ impl BattalionConfig {
             timeout_seconds: 300,
             retry_policy: RetryPolicy::default(),
             error_strategy: ErrorStrategy::default(),
+            aegis: Aegis::default(),
             metadata_output_dir: None,
         }
     }
@@ -102,6 +111,36 @@ impl BattalionConfig {
     /// Set the error strategy
     pub fn with_error_strategy(mut self, strategy: ErrorStrategy) -> Self {
         self.error_strategy = strategy;
+        self
+    }
+
+    /// Set the Aegis fault-tolerance policy (builder pattern).
+    ///
+    /// The `timeout` policy bounds each Paladin attempt (never the whole
+    /// Battalion run) and the `retry` policy governs re-attempts of a failed
+    /// Paladin.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
+    /// use paladin_core::platform::container::battalion::BattalionConfig;
+    /// use std::time::Duration;
+    ///
+    /// let config = BattalionConfig::new("bounded").with_aegis(Aegis {
+    ///     timeout: Some(TimeoutPolicy {
+    ///         run_timeout: Some(Duration::from_secs(30)),
+    ///         idle_timeout: None,
+    ///     }),
+    ///     ..Aegis::default()
+    /// });
+    /// assert_eq!(
+    ///     config.aegis.timeout.and_then(|t| t.run_timeout),
+    ///     Some(Duration::from_secs(30))
+    /// );
+    /// ```
+    pub fn with_aegis(mut self, aegis: Aegis) -> Self {
+        self.aegis = aegis;
         self
     }
 

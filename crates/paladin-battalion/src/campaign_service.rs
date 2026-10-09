@@ -25,14 +25,13 @@
 //! ```
 
 use chrono::Utc;
-use log::{debug, info, warn};
+use log::{debug, info};
 use petgraph::algo::toposort;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
 use paladin_core::platform::container::battalion::campaign::{Campaign, EdgeCondition};
@@ -41,6 +40,7 @@ use paladin_core::platform::container::herald::Herald;
 use paladin_core::platform::container::waypoint::NodeId;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult};
 
+use crate::aegis_attempt;
 use crate::edge_evaluator::{EdgeConditionEvaluator, EdgeContext, EdgeEvaluatorRegistry};
 
 /// Service for executing Campaign patterns
@@ -244,35 +244,21 @@ impl CampaignExecutionService {
             campaign.paladin_count()
         );
 
-        // Execute with timeout
-        let timeout_duration = Duration::from_secs(campaign.config().timeout_seconds);
-
-        match timeout(
-            timeout_duration,
-            self.execute_internal(campaign, initial_input, battalion_id),
-        )
-        .await
-        {
-            Ok(result) => {
-                let duration_ms = Utc::now()
-                    .signed_duration_since(started_at)
-                    .num_milliseconds() as u64;
-
-                info!("Campaign {} completed in {}ms", battalion_id, duration_ms);
-                result
-            }
-            Err(_) => {
-                warn!(
-                    "Campaign {} timed out after {} seconds",
-                    battalion_id,
-                    campaign.config().timeout_seconds
-                );
-                Err(BattalionError::Timeout(campaign.config().timeout_seconds))
-            }
+        // No whole-run wall clock: every Paladin attempt is bounded per
+        // attempt by `config().aegis.timeout` inside `execute_internal` (D-02).
+        let result = self
+            .execute_internal(campaign, initial_input, battalion_id)
+            .await;
+        let duration_ms = Utc::now()
+            .signed_duration_since(started_at)
+            .num_milliseconds() as u64;
+        if result.is_ok() {
+            info!("Campaign {} completed in {}ms", battalion_id, duration_ms);
         }
+        result
     }
 
-    /// Internal execution logic without timeout wrapper
+    /// Internal execution logic
     ///
     /// Implements the core Campaign execution algorithm:
     /// 1. Get entry points (explicit or auto-detected)
@@ -342,16 +328,22 @@ impl CampaignExecutionService {
 
             debug!("Executing Paladin: {} ({})", paladin.node.name, node_id);
 
-            // Execute Paladin
-            let result = self
-                .paladin_port
-                .execute(paladin, &input)
-                .await
-                .map_err(|e| BattalionError::PaladinError(e.to_string()))?;
+            // Execute Paladin through the one per-attempt runner
+            let outcome = aegis_attempt::run_with_aegis(
+                &self.paladin_port,
+                paladin,
+                &input,
+                &campaign.config().aegis,
+                &None,
+            )
+            .await
+            .map_err(aegis_attempt::AttemptFailure::into_fail_fast_error)?;
+            let attempts = outcome.attempts;
+            let result = outcome.result;
 
             debug!(
-                "Paladin {} completed: {} tokens, {} loops",
-                paladin.node.name, result.usage.total_tokens, result.loop_count
+                "Paladin {} completed: {} tokens, {} loops, {} attempt(s)",
+                paladin.node.name, result.usage.total_tokens, result.loop_count, attempts
             );
 
             // Store output for edge condition evaluation

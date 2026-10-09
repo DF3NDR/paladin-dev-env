@@ -1815,6 +1815,7 @@ mod tests {
     use paladin_llm::mock::MockLlmAdapter;
     use paladin_ports::output::llm_port::LlmError;
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream, StopReason};
+    use std::collections::HashMap;
 
     /// Mock PaladinPort for testing
     struct MockPaladinPort;
@@ -1931,6 +1932,7 @@ mod tests {
             timeout_seconds: 300,
             retry_policy: RetryPolicy::default(),
             error_strategy: ErrorStrategy::FailFast,
+            aegis: Default::default(),
             metadata_output_dir: None,
         }
     }
@@ -3716,5 +3718,122 @@ mod tests {
             commander_result.final_output,
             delegation_result.outputs.join("\n")
         );
+    }
+
+    /// Tracer (Phase 44 D-01, D-02, LEGACY-02): `BattalionConfig.aegis` bounds
+    /// each Paladin attempt on Campaign through the Commander -- never the run.
+    #[tokio::test(start_paused = true)]
+    async fn commander_campaign_honours_aegis_per_attempt_timeout_end_to_end() {
+        use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
+        use paladin_core::platform::container::node_error::{NodeErrorSource, TimeoutKind};
+        use paladin_core::platform::container::transience::Transience;
+
+        /// Sleeps a per-Paladin duration (keyed by Paladin name), then succeeds.
+        struct SleepyPaladinPort {
+            delays: HashMap<String, Duration>,
+        }
+
+        #[async_trait]
+        impl PaladinPort for SleepyPaladinPort {
+            async fn execute(
+                &self,
+                paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                let delay = self
+                    .delays
+                    .get(&paladin.node.name)
+                    .copied()
+                    .unwrap_or_default();
+                tokio::time::sleep(delay).await;
+                Ok(PaladinResult {
+                    output: format!("{} done", paladin.node.name),
+                    usage: TokenUsage::new(10, 0),
+                    execution_time_ms: delay.as_millis() as u64,
+                    loop_count: 1,
+                    stop_reason: StopReason::Completed,
+                    ..Default::default()
+                })
+            }
+
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                Err(PaladinError::ExecutionError("not used".to_string()))
+            }
+
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+        }
+
+        let bounded_config = || {
+            BattalionConfig::new("aegis_tracer").with_aegis(Aegis {
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(Duration::from_secs(1)),
+                    idle_timeout: None,
+                }),
+                ..Aegis::default()
+            })
+        };
+
+        // Case 1: three 600 ms Paladins finish in 1.8 s -- longer than the
+        // 1 s bound, so the bound is per attempt, not per run.
+        let names = ["scout_a", "scout_b", "scout_c"];
+        let port = Arc::new(SleepyPaladinPort {
+            delays: names
+                .iter()
+                .map(|n| (n.to_string(), Duration::from_millis(600)))
+                .collect(),
+        });
+        let commander = CommanderBuilder::new(port)
+            .strategy(BattalionStrategy::Campaign)
+            .paladins(
+                names
+                    .iter()
+                    .map(|n| create_test_paladin_with_name(n))
+                    .collect(),
+            )
+            .config(bounded_config())
+            .build()
+            .expect("commander builds");
+        let started = tokio::time::Instant::now();
+        let result = commander
+            .execute("go")
+            .await
+            .expect("each 600 ms attempt is inside its 1 s bound");
+        assert_eq!(result.status, BattalionStatus::Completed);
+        assert_eq!(result.paladin_results.len(), 3);
+        assert!(started.elapsed() >= Duration::from_millis(1800));
+
+        // Case 2: one 1.5 s Paladin exceeds the 1 s per-attempt bound.
+        let port = Arc::new(SleepyPaladinPort {
+            delays: HashMap::from([("laggard".to_string(), Duration::from_millis(1500))]),
+        });
+        let commander = CommanderBuilder::new(port)
+            .strategy(BattalionStrategy::Campaign)
+            .paladins(vec![create_test_paladin_with_name("laggard")])
+            .config(bounded_config())
+            .build()
+            .expect("commander builds");
+        let started = tokio::time::Instant::now();
+        let error = commander
+            .execute("go")
+            .await
+            .expect_err("a 1.5 s attempt exceeds the 1 s bound");
+        let elapsed = started.elapsed();
+        match error {
+            BattalionError::Node(e) => {
+                assert_eq!(e.node_id.as_str(), "laggard");
+                assert_eq!(e.attempt, 1);
+                assert_eq!(e.transience, Transience::Transient);
+                assert_eq!(e.source, NodeErrorSource::Timeout(TimeoutKind::Run));
+            }
+            other => panic!("expected BattalionError::Node, got {other:?}"),
+        }
+        assert!(elapsed >= Duration::from_secs(1));
+        assert!(elapsed < Duration::from_millis(1500));
     }
 }

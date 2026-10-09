@@ -1808,3 +1808,54 @@ impl NodeCachePort for RecordingNodeCache {
         Ok((before - entries.len()) as u64)
     }
 }
+
+// --- A minimal in-process `log::Log` capturer for the engine's unit tests
+// (moved here from `hooks.rs`'s test module so the stampede-lock tests can
+// share it: `log::set_logger` may be called only once per process, so exactly
+// one capturer may exist). Lines are keyed by OS thread id, so concurrently
+// running `#[tokio::test]`s (each its own thread under the default
+// per-test-thread `cargo test` harness, each on a current-thread runtime that
+// runs its spawned tasks on that same thread) never observe each other's
+// lines. Captures `Warn` and above from every target; a test filters by the
+// content it cares about.
+
+struct CapturingLogger;
+
+static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+static CAPTURED: Mutex<Option<CapturedWarnings>> = Mutex::new(None);
+type CapturedWarnings = HashMap<std::thread::ThreadId, Vec<String>>;
+
+impl log::Log for CapturingLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        if record.level() <= log::Level::Warn {
+            let mut guard = CAPTURED.lock().expect("captured warnings mutex poisoned");
+            let map = guard.get_or_insert_with(HashMap::new);
+            map.entry(std::thread::current().id())
+                .or_default()
+                .push(record.args().to_string());
+        }
+    }
+    fn flush(&self) {}
+}
+
+/// Install the capturing logger (idempotent; once per process).
+pub fn install_capturing_logger() {
+    static LOGGER: CapturingLogger = CapturingLogger;
+    LOGGER_INIT.call_once(|| {
+        log::set_logger(&LOGGER).expect("install the capturing test logger");
+        log::set_max_level(log::LevelFilter::Warn);
+    });
+}
+
+/// Every warning captured on this OS thread so far.
+pub fn captured_warnings_for_this_thread() -> Vec<String> {
+    CAPTURED
+        .lock()
+        .expect("captured warnings mutex poisoned")
+        .as_ref()
+        .and_then(|m| m.get(&std::thread::current().id()).cloned())
+        .unwrap_or_default()
+}

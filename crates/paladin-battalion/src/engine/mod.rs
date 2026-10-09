@@ -118,6 +118,7 @@ use paladin_core::platform::container::vault::Namespace;
 use paladin_core::platform::container::waypoint::{
     GraphFingerprint, NodeId, ThreadId, WaypointId, WaypointStatus,
 };
+use paladin_ports::output::cadence_port::CadencePort;
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::NodeCachePort;
 use paladin_ports::output::paladin_port::PaladinPort;
@@ -1577,6 +1578,13 @@ pub struct WarEngine<W: WaypointPort> {
     /// running uncached. Forwarded wholesale into every
     /// `NodeSpec::Battalion` child run, like every other engine resource.
     node_cache: Option<Arc<dyn NodeCachePort>>,
+    /// The Cadence stampede lock and its TTL (Phase 43, PACE-04, D-11), wired
+    /// via [`WarEngine::with_cadence`]. `None` by default: with no lock the
+    /// cache's miss path makes no `try_lock` call at all. Only consulted for
+    /// a node that has a cache policy on an engine that has a node cache, and
+    /// forwarded with the node cache into every `NodeSpec::Battalion` child
+    /// run.
+    cadence_lock: Option<(Arc<dyn CadencePort>, std::time::Duration)>,
     /// This engine's confined Vault handle (Doc 05 RT-04, D-21), wired via
     /// [`WarEngine::with_vault`]. `None` by default: an engine with no
     /// Vault store gives every node's `NodeContext::vault()` `None`, never
@@ -1658,6 +1666,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             spend_guard: None,
             shutdown_grace: std::time::Duration::from_secs(30),
             node_cache: None,
+            cadence_lock: None,
             vault: None,
             structured_executor: None,
             trace_dispatcher_cell: std::sync::Mutex::new(None),
@@ -2065,6 +2074,94 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
         self
     }
 
+    /// Guard the node cache's miss-to-store window with a distributed stampede
+    /// lock (Phase 43, PACE-04, D-11, D-12).
+    ///
+    /// Without a lock, two workers that miss the same cache entry at the same
+    /// moment both execute the node and both pay for the LLM call. With one,
+    /// a cache-policy node that misses first takes the lock through `port`
+    /// ([`CadencePort::try_lock`]): the winner executes and stores its result
+    /// through [`NodeCachePort::put_fenced`] with its fencing token, then
+    /// releases the lock. Every other dispatch waits, re-reading the cache
+    /// every ~100 ms (and trying the lock again, so a holder that released
+    /// without writing hands over within one poll), and serves the stored
+    /// delta as a cache hit (`NodeFinished { cache_hit: true }`).
+    ///
+    /// The lock is an optimisation, never a correctness dependency (D-13,
+    /// D-29): a lock error runs the node without the lock after one warning,
+    /// and a waiter whose `lock_ttl` elapses with no entry executes the node
+    /// itself. A run's cancellation interrupts a waiting dispatch promptly,
+    /// like a node cancelled mid-backoff. Child `NodeSpec::Battalion` runs
+    /// inherit the lock with the node cache.
+    ///
+    /// It only engages for a node with a cache policy on an engine that also
+    /// has a node cache ([`WarEngine::with_node_cache`]); an engine without a
+    /// lock, or a node without a cache policy, makes no lock call.
+    ///
+    /// `lock_ttl` should exceed the p99 node duration including Aegis retries
+    /// (`treasurer.cadence.lock_ttl_secs`, default 120): the lock is not
+    /// renewed, and a holder that outlives it can be overtaken -- its late
+    /// write is then refused by a fence-checking cache. The server attaches no
+    /// node cache today, so it attaches no lock either; this is a library
+    /// builder.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    /// use async_trait::async_trait;
+    /// use paladin_battalion::engine::WarEngine;
+    /// use paladin_core::platform::container::paladin::Paladin;
+    /// use paladin_core::platform::container::paladin_error::PaladinError;
+    /// use paladin_ports::output::cadence_port::CadencePolicy;
+    /// use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream};
+    /// use paladin_storage::cadence::in_memory::InMemoryCadence;
+    /// use paladin_storage::node_cache::in_memory::InMemoryNodeCache;
+    /// use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    ///
+    /// struct NoopPort;
+    /// #[async_trait]
+    /// impl PaladinPort for NoopPort {
+    ///     async fn execute(&self, _p: &Paladin, _i: &str) -> Result<PaladinResult, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     async fn execute_stream(&self, _p: &Paladin, _i: &str) -> Result<PaladinStream, PaladinError> {
+    ///         unreachable!()
+    ///     }
+    ///     fn validate(&self, _p: &Paladin) -> Result<(), PaladinError> { Ok(()) }
+    /// }
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let cadence = Arc::new(InMemoryCadence::new(CadencePolicy::default()));
+    /// let engine = WarEngine::new(Arc::new(NoopPort), Arc::new(InMemoryWaypointStore::new()))
+    ///     .with_node_cache(Arc::new(InMemoryNodeCache::new()))
+    ///     .with_cadence(cadence, Duration::from_secs(120));
+    /// # let _ = engine;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_cadence(
+        mut self,
+        port: Arc<dyn CadencePort>,
+        lock_ttl: std::time::Duration,
+    ) -> Self {
+        self.cadence_lock = Some((port, lock_ttl));
+        self
+    }
+
+    /// The node cache together with the stampede lock, as the superstep loop
+    /// consumes them (`None` without a node cache: a lock guards nothing
+    /// without one).
+    fn node_cache_wiring(&self) -> Option<superstep::NodeCacheWiring> {
+        self.node_cache
+            .as_ref()
+            .map(|cache| superstep::NodeCacheWiring {
+                cache: Arc::clone(cache),
+                lock: self.cadence_lock.clone(),
+            })
+    }
+
     /// Wire `executor` as this engine's structured-output executor (RT-05,
     /// RT-FR-19, D-29; plan 26-18), the shape `WarEngine::with_node_cache`
     /// establishes: a plain `Option<Arc<dyn _>>` field, checked separately
@@ -2297,7 +2394,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.spend_guard,
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
-            self.node_cache.clone(),
+            self.node_cache_wiring(),
             self.vault.clone(),
             self.structured_executor.clone(),
             // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
@@ -2548,7 +2645,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             &self.spend_guard,
             Some(Arc::clone(&self.waypoint_port)),
             self.shutdown_grace,
-            self.node_cache.clone(),
+            self.node_cache_wiring(),
             self.vault.clone(),
             self.structured_executor.clone(),
             // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
@@ -2911,7 +3008,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // --- FT-FR-09, D-19: a top-level resume has no parent node to
             // beat -- only a Battalion child dispatch passes `Some`.
             None,
-            self.node_cache.clone(),
+            self.node_cache_wiring(),
             self.vault.clone(),
             self.structured_executor.clone(),
             // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
@@ -3090,7 +3187,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
             // --- FT-FR-09, D-19: a top-level fork has no parent node to
             // beat -- only a Battalion child dispatch passes `Some`.
             None,
-            self.node_cache.clone(),
+            self.node_cache_wiring(),
             self.vault.clone(),
             self.structured_executor.clone(),
             // --- LEDGR-03, D-08 (plan 39-04): this call's own top-level
@@ -11415,6 +11512,661 @@ mod tests {
                 }
                 other => panic!("expected CacheKeyFieldUndeclared, got {other:?}"),
             }
+        }
+    }
+
+    // --- Phase 43 plan 11, PACE-04 (D-11, D-12, D-13, D-29): the Cadence
+    //     stampede lock around the node cache's miss-to-put window ----------
+    mod stampede_lock_tests {
+        use super::*;
+        use crate::engine::node::StateNode;
+        use crate::engine::superstep::STAMPEDE_POLL_INTERVAL;
+        use crate::engine::test_support::{
+            CountingFunctionNode, RecordingTraceSink, SlowFunctionNode,
+            captured_warnings_for_this_thread, install_capturing_logger,
+        };
+        use paladin_core::platform::container::aegis::{
+            CacheKeySpec, CachePolicy, ErrorHandlerSpec,
+        };
+        use paladin_core::platform::container::node_cache::CachedDelta;
+        use paladin_ports::output::cadence_port::{
+            CadenceError, CadenceKey, CadencePolicy, FencingToken, GateReading, LockKey,
+        };
+        use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey};
+        use paladin_storage::cadence::in_memory::InMemoryCadence;
+        use paladin_storage::node_cache::in_memory::InMemoryNodeCache;
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        use tokio::time::Instant;
+
+        /// How the scripted Cadence answers `try_lock`.
+        #[derive(Clone, Copy)]
+        enum LockMode {
+            /// Delegate to a real `InMemoryCadence` (the genuine lock).
+            Delegate,
+            /// Always `Ok(None)`: someone else always holds the lock.
+            AlwaysBusy,
+            /// Always `Err`: the backend is down.
+            Failing,
+        }
+
+        /// A `CadencePort` that counts the lock calls the engine makes and
+        /// can be scripted to be busy forever or to fail.
+        struct CountingCadence {
+            inner: InMemoryCadence,
+            mode: LockMode,
+            try_locks: AtomicUsize,
+            acquired: AtomicUsize,
+            unlocks: AtomicUsize,
+        }
+
+        impl CountingCadence {
+            fn new(mode: LockMode) -> Arc<Self> {
+                Arc::new(Self {
+                    inner: InMemoryCadence::new(CadencePolicy::default()),
+                    mode,
+                    try_locks: AtomicUsize::new(0),
+                    acquired: AtomicUsize::new(0),
+                    unlocks: AtomicUsize::new(0),
+                })
+            }
+            fn try_locks(&self) -> usize {
+                self.try_locks.load(Ordering::SeqCst)
+            }
+            fn acquired(&self) -> usize {
+                self.acquired.load(Ordering::SeqCst)
+            }
+            fn unlocks(&self) -> usize {
+                self.unlocks.load(Ordering::SeqCst)
+            }
+        }
+
+        #[async_trait]
+        impl CadencePort for CountingCadence {
+            async fn gate(&self, key: &CadenceKey) -> Result<GateReading, CadenceError> {
+                self.inner.gate(key).await
+            }
+            async fn record_rate_limited(
+                &self,
+                key: &CadenceKey,
+                retry_after: Option<Duration>,
+            ) -> Result<GateReading, CadenceError> {
+                self.inner.record_rate_limited(key, retry_after).await
+            }
+            async fn record_success(&self, key: &CadenceKey) -> Result<(), CadenceError> {
+                self.inner.record_success(key).await
+            }
+            async fn try_lock(
+                &self,
+                key: &LockKey,
+                ttl: Duration,
+            ) -> Result<Option<FencingToken>, CadenceError> {
+                self.try_locks.fetch_add(1, Ordering::SeqCst);
+                match self.mode {
+                    LockMode::Delegate => {
+                        let got = self.inner.try_lock(key, ttl).await?;
+                        if got.is_some() {
+                            self.acquired.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Ok(got)
+                    }
+                    LockMode::AlwaysBusy => Ok(None),
+                    LockMode::Failing => Err(CadenceError::Backend {
+                        message: "simulated lock backend failure".to_string(),
+                    }),
+                }
+            }
+            async fn unlock(
+                &self,
+                key: &LockKey,
+                token: &FencingToken,
+            ) -> Result<bool, CadenceError> {
+                self.unlocks.fetch_add(1, Ordering::SeqCst);
+                self.inner.unlock(key, token).await
+            }
+        }
+
+        /// An `InMemoryNodeCache` that records how it was written (plain vs
+        /// fenced, and with which token) and can make its entry appear right
+        /// after the first `get` answered "miss" -- the window in which the
+        /// previous lock holder stores and releases.
+        struct FencedCache {
+            inner: InMemoryNodeCache,
+            gets: AtomicUsize,
+            plain_puts: AtomicUsize,
+            fenced: Mutex<Vec<FencingToken>>,
+            appears_after_first_get: Mutex<Option<StateDelta>>,
+        }
+
+        impl FencedCache {
+            fn new() -> Arc<Self> {
+                Arc::new(Self {
+                    inner: InMemoryNodeCache::new(),
+                    gets: AtomicUsize::new(0),
+                    plain_puts: AtomicUsize::new(0),
+                    fenced: Mutex::new(Vec::new()),
+                    appears_after_first_get: Mutex::new(None),
+                })
+            }
+            fn gets(&self) -> usize {
+                self.gets.load(Ordering::SeqCst)
+            }
+            fn plain_puts(&self) -> usize {
+                self.plain_puts.load(Ordering::SeqCst)
+            }
+            fn fenced_tokens(&self) -> Vec<FencingToken> {
+                self.fenced.lock().unwrap().clone()
+            }
+        }
+
+        #[async_trait]
+        impl NodeCachePort for FencedCache {
+            async fn get(&self, key: &NodeCacheKey) -> Result<Option<CachedDelta>, NodeCacheError> {
+                self.gets.fetch_add(1, Ordering::SeqCst);
+                let answer = self.inner.get(key).await?;
+                let late = self.appears_after_first_get.lock().unwrap().take();
+                if let Some(delta) = late {
+                    self.inner.put(key, &delta, Duration::from_secs(60)).await?;
+                }
+                Ok(answer)
+            }
+            async fn put(
+                &self,
+                key: &NodeCacheKey,
+                delta: &StateDelta,
+                ttl: Duration,
+            ) -> Result<(), NodeCacheError> {
+                self.plain_puts.fetch_add(1, Ordering::SeqCst);
+                self.inner.put(key, delta, ttl).await
+            }
+            async fn put_fenced(
+                &self,
+                key: &NodeCacheKey,
+                delta: &StateDelta,
+                ttl: Duration,
+                fence: &FencingToken,
+            ) -> Result<(), NodeCacheError> {
+                self.fenced.lock().unwrap().push(*fence);
+                self.inner.put(key, delta, ttl).await
+            }
+            async fn invalidate(&self, prefix: &str) -> Result<u64, NodeCacheError> {
+                self.inner.invalidate(prefix).await
+            }
+        }
+
+        /// Sleeps `hold`, records when it failed, then fails.
+        struct SlowFailingNode {
+            hold: Duration,
+            failed_at: Arc<Mutex<Option<Instant>>>,
+        }
+
+        #[async_trait]
+        impl StateNode for SlowFailingNode {
+            async fn run(
+                &self,
+                _state: &Battlefield,
+                _ctx: &crate::engine::node::NodeContext,
+            ) -> Result<Directive, crate::engine::node::StateNodeError> {
+                tokio::time::sleep(self.hold).await;
+                *self.failed_at.lock().unwrap() = Some(Instant::now());
+                Err(crate::engine::node::StateNodeError("boom".to_string()))
+            }
+        }
+
+        fn result_field() -> FieldName {
+            FieldName::new("result").unwrap()
+        }
+
+        fn cache_aegis() -> Aegis {
+            Aegis {
+                cache: Some(CachePolicy {
+                    ttl: Duration::from_secs(60),
+                    key: CacheKeySpec::Default,
+                }),
+                ..Aegis::default()
+            }
+        }
+
+        /// The one-node graph every test starts from. Two graphs built with
+        /// different node implementations but the same shape share a cache
+        /// key (the key is the graph fingerprint, node id and input).
+        fn cached_graph(node: Arc<dyn StateNode>, aegis: Aegis) -> WarGraph {
+            let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+            let id = NodeId::new("cached");
+            graph.add_node(id.clone(), NodeSpec::Function(node));
+            graph.add_entry(id.clone());
+            graph.set_aegis(id, aegis);
+            graph
+        }
+
+        fn plain_graph(node: Arc<dyn StateNode>) -> WarGraph {
+            let mut graph = WarGraph::new(one_field_schema(), EngineLimits::default());
+            let id = NodeId::new("plain");
+            graph.add_node(id.clone(), NodeSpec::Function(node));
+            graph.add_entry(id);
+            graph
+        }
+
+        fn locked_engine(
+            cache: &Arc<FencedCache>,
+            cadence: &Arc<CountingCadence>,
+            lock_ttl: Duration,
+        ) -> WarEngine<InMemoryWaypointStore> {
+            engine()
+                .with_node_cache(cache.clone())
+                .with_cadence(cadence.clone(), lock_ttl)
+        }
+
+        fn thread(name: &str) -> ThreadId {
+            ThreadId::new(name).unwrap()
+        }
+
+        fn result_of(outcome: &RunOutcome) -> Option<String> {
+            match outcome {
+                RunOutcome::Completed { final_state, .. } => {
+                    final_state.get::<String>(&result_field()).unwrap()
+                }
+                other => panic!("expected Completed, got {other:?}"),
+            }
+        }
+
+        /// A node that writes `value` and records the (paused) clock at the
+        /// moment it executes.
+        fn stamping_node(
+            value: &'static str,
+            ran_at: Arc<Mutex<Option<Instant>>>,
+        ) -> Arc<CountingFunctionNode> {
+            CountingFunctionNode::new(move |_run, _state| {
+                *ran_at.lock().unwrap() = Some(Instant::now());
+                let mut delta = StateDelta::new();
+                delta.set_raw(result_field(), serde_json::json!(value));
+                delta
+            })
+        }
+
+        /// Success criterion 4 (D-11, D-12, PACE-04): two engines sharing one
+        /// cache and one Cadence run the same cache-policy node at once on a
+        /// miss; the handler runs exactly once and the other dispatch serves
+        /// the stored delta as a cache hit. The winner stored through
+        /// `put_fenced` with its token and released the lock.
+        #[tokio::test(start_paused = true)]
+        async fn concurrent_identical_cache_misses_execute_the_node_once() {
+            let runs = Arc::new(AtomicUsize::new(0));
+            let node = SlowFunctionNode::new(
+                result_field(),
+                serde_json::json!("computed"),
+                Duration::from_millis(500),
+                runs.clone(),
+            );
+            let graph = cached_graph(node, cache_aegis());
+            let cache = FencedCache::new();
+            let cadence = CountingCadence::new(LockMode::Delegate);
+            let sink = RecordingTraceSink::new();
+            let engine_a = locked_engine(&cache, &cadence, Duration::from_secs(60))
+                .with_trace_sink(sink.clone());
+            let engine_b = locked_engine(&cache, &cadence, Duration::from_secs(60))
+                .with_trace_sink(sink.clone());
+
+            let (a, b) = tokio::join!(
+                engine_a.start(&graph, thread("stampede-a"), StateDelta::new()),
+                engine_b.start(&graph, thread("stampede-b"), StateDelta::new()),
+            );
+
+            assert_eq!(result_of(&a.unwrap()).as_deref(), Some("computed"));
+            assert_eq!(result_of(&b.unwrap()).as_deref(), Some("computed"));
+            assert_eq!(
+                runs.load(Ordering::SeqCst),
+                1,
+                "the handler runs exactly once"
+            );
+            assert_eq!(cadence.acquired(), 1, "exactly one dispatch won the lock");
+            assert!(cadence.try_locks() >= 2, "the other dispatch tried too");
+            assert_eq!(cadence.unlocks(), 1, "the winner released its lock");
+            let tokens = cache.fenced_tokens();
+            assert_eq!(tokens.len(), 1, "the winner stored through put_fenced");
+            assert!(
+                matches!(tokens[0], FencingToken::Local(_)),
+                "the in-process Cadence issues Local tokens"
+            );
+            assert_eq!(cache.plain_puts(), 0, "no unfenced put under a lock");
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let mut finished: Vec<bool> = sink
+                .events()
+                .await
+                .iter()
+                .filter_map(|record| match &record.event {
+                    TraceEvent::NodeFinished { cache_hit, .. } => Some(*cache_hit),
+                    _ => None,
+                })
+                .collect();
+            finished.sort();
+            assert_eq!(
+                finished,
+                vec![false, true],
+                "one NodeFinished executed, one served as a cache hit"
+            );
+        }
+
+        /// D-12, research Pattern 6: a holder that fails and stores nothing
+        /// hands the lock to a waiter within one poll (not the TTL), because
+        /// the waiter re-tries the lock every round. Paused clock.
+        #[tokio::test(start_paused = true)]
+        async fn failed_holder_hands_the_lock_over_within_one_poll() {
+            let failed_at = Arc::new(Mutex::new(None));
+            let holder_graph = cached_graph(
+                Arc::new(SlowFailingNode {
+                    hold: Duration::from_millis(500),
+                    failed_at: failed_at.clone(),
+                }),
+                cache_aegis(),
+            );
+            let ran_at = Arc::new(Mutex::new(None));
+            let waiter_node = stamping_node("from-the-waiter", ran_at.clone());
+            let waiter_graph = cached_graph(waiter_node.clone(), cache_aegis());
+            let cache = FencedCache::new();
+            let cadence = CountingCadence::new(LockMode::Delegate);
+            let ttl = Duration::from_secs(60);
+            let holder = locked_engine(&cache, &cadence, ttl);
+            let waiter = locked_engine(&cache, &cadence, ttl);
+
+            let (holder_outcome, waiter_outcome) = tokio::join!(
+                holder.start(&holder_graph, thread("holder"), StateDelta::new()),
+                async {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    waiter
+                        .start(&waiter_graph, thread("waiter"), StateDelta::new())
+                        .await
+                },
+            );
+
+            assert!(
+                !matches!(holder_outcome, Ok(RunOutcome::Completed { .. })),
+                "the holder's node failed"
+            );
+            assert_eq!(
+                result_of(&waiter_outcome.unwrap()).as_deref(),
+                Some("from-the-waiter")
+            );
+            assert_eq!(waiter_node.run_count(), 1);
+            let handover = ran_at
+                .lock()
+                .unwrap()
+                .unwrap()
+                .duration_since(failed_at.lock().unwrap().unwrap());
+            assert!(
+                handover
+                    <= STAMPEDE_POLL_INTERVAL
+                        + STAMPEDE_POLL_INTERVAL / 2
+                        + Duration::from_millis(5),
+                "the waiter took over {handover:?} after the holder failed, expected within one poll \
+                 (the TTL is 60 s)"
+            );
+            assert_eq!(cadence.acquired(), 2);
+            assert_eq!(cadence.unlocks(), 2, "both holders released");
+        }
+
+        /// D-12: with the lock held by someone else for good, the loser waits
+        /// the TTL and then executes the node itself -- never stalls, never
+        /// errors. The store is a plain put (it holds no token).
+        #[tokio::test(start_paused = true)]
+        async fn ttl_elapsed_without_an_entry_executes_uncached() {
+            let ran_at = Arc::new(Mutex::new(None));
+            let node = stamping_node("ran-anyway", ran_at.clone());
+            let graph = cached_graph(node.clone(), cache_aegis());
+            let cache = FencedCache::new();
+            let cadence = CountingCadence::new(LockMode::AlwaysBusy);
+            let engine = locked_engine(&cache, &cadence, Duration::from_secs(1));
+
+            let started = Instant::now();
+            let outcome = engine
+                .start(&graph, thread("ttl-elapsed"), StateDelta::new())
+                .await
+                .unwrap();
+
+            assert_eq!(result_of(&outcome).as_deref(), Some("ran-anyway"));
+            assert_eq!(node.run_count(), 1);
+            let waited = ran_at.lock().unwrap().unwrap().duration_since(started);
+            assert!(waited >= Duration::from_secs(1), "waited only {waited:?}");
+            assert!(
+                waited <= Duration::from_secs(1) + Duration::from_millis(50),
+                "waited {waited:?}, expected about the 1 s TTL"
+            );
+            assert!(cadence.try_locks() >= 5, "it re-tried the lock each poll");
+            assert_eq!(cadence.unlocks(), 0, "it never held the lock");
+            assert!(cache.fenced_tokens().is_empty());
+            assert_eq!(cache.plain_puts(), 1);
+        }
+
+        /// D-13, D-29: a `try_lock` error never fails the node -- it runs
+        /// once, without the lock, after exactly one warning.
+        #[tokio::test(start_paused = true)]
+        async fn lock_error_executes_without_the_lock() {
+            install_capturing_logger();
+            let node = CountingFunctionNode::fixed(result_field(), serde_json::json!("unlocked"));
+            let graph = cached_graph(node.clone(), cache_aegis());
+            let cache = FencedCache::new();
+            let cadence = CountingCadence::new(LockMode::Failing);
+            let engine = locked_engine(&cache, &cadence, Duration::from_secs(60));
+
+            let outcome = engine
+                .start(&graph, thread("lock-error"), StateDelta::new())
+                .await
+                .unwrap();
+
+            assert_eq!(result_of(&outcome).as_deref(), Some("unlocked"));
+            assert_eq!(node.run_count(), 1);
+            assert_eq!(cadence.try_locks(), 1, "no retry loop on a lock error");
+            assert_eq!(cadence.unlocks(), 0);
+            let warnings: Vec<String> = captured_warnings_for_this_thread()
+                .into_iter()
+                .filter(|line| line.contains("stampede lock unavailable"))
+                .collect();
+            assert_eq!(warnings.len(), 1, "exactly one warning, got {warnings:?}");
+            assert!(
+                warnings[0].contains("cached"),
+                "names the node: {warnings:?}"
+            );
+            assert!(
+                !warnings[0].contains("node-cache:"),
+                "never the key material"
+            );
+            assert_eq!(cache.plain_puts(), 1, "stored without a fence");
+        }
+
+        /// Phase 42 halt contract, research Pitfall 15: a run cancelled while
+        /// a dispatch waits on the lock ends promptly (long before the TTL or
+        /// the holder), and the node never runs.
+        #[tokio::test(start_paused = true)]
+        async fn cancellation_interrupts_a_waiting_dispatch() {
+            let holder_runs = Arc::new(AtomicUsize::new(0));
+            let holder_graph = cached_graph(
+                SlowFunctionNode::new(
+                    result_field(),
+                    serde_json::json!("holder"),
+                    Duration::from_secs(5),
+                    holder_runs.clone(),
+                ),
+                cache_aegis(),
+            );
+            let waiter_node = CountingFunctionNode::fixed(result_field(), serde_json::json!("w"));
+            let waiter_graph = cached_graph(waiter_node.clone(), cache_aegis());
+            let cache = FencedCache::new();
+            let cadence = CountingCadence::new(LockMode::Delegate);
+            let ttl = Duration::from_secs(60);
+            let token = CancellationToken::new();
+            let holder = locked_engine(&cache, &cadence, ttl);
+            let waiter =
+                locked_engine(&cache, &cadence, ttl).with_cancellation_token(token.clone());
+
+            let started = Instant::now();
+            let (holder_outcome, (waiter_outcome, waiter_done_at), ()) = tokio::join!(
+                holder.start(&holder_graph, thread("cancel-holder"), StateDelta::new()),
+                async {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    let outcome = waiter
+                        .start(&waiter_graph, thread("cancel-waiter"), StateDelta::new())
+                        .await;
+                    (outcome, Instant::now())
+                },
+                async {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    token.cancel();
+                },
+            );
+
+            assert!(matches!(waiter_outcome.unwrap(), RunOutcome::Halted { .. }));
+            let elapsed = waiter_done_at.duration_since(started);
+            assert!(
+                elapsed <= Duration::from_millis(400),
+                "the waiting dispatch ended after {elapsed:?}; it should end at the cancel (300 ms), \
+                 not the holder (5 s) or the TTL (60 s)"
+            );
+            assert_eq!(
+                waiter_node.run_count(),
+                0,
+                "a cancelled waiter never executes"
+            );
+            assert!(matches!(
+                holder_outcome.unwrap(),
+                RunOutcome::Completed { .. }
+            ));
+            assert_eq!(holder_runs.load(Ordering::SeqCst), 1);
+        }
+
+        /// D-11: without `with_cadence`, or for a node without a cache policy,
+        /// the engine makes no lock call at all and behaves as before.
+        #[tokio::test(start_paused = true)]
+        async fn no_cadence_means_no_lock_calls() {
+            // A cache-policy node on an engine with a cache but no Cadence.
+            let cadence = CountingCadence::new(LockMode::Delegate);
+            let cache = FencedCache::new();
+            let node = CountingFunctionNode::fixed(result_field(), serde_json::json!("v"));
+            let graph = cached_graph(node.clone(), cache_aegis());
+            let no_lock = engine().with_node_cache(cache.clone());
+            no_lock
+                .start(&graph, thread("no-lock"), StateDelta::new())
+                .await
+                .unwrap();
+            assert_eq!(node.run_count(), 1);
+            assert_eq!(
+                cache.gets(),
+                1,
+                "exactly one lookup, as before the lock existed"
+            );
+            assert_eq!(cache.plain_puts(), 1, "a plain put");
+            assert!(cache.fenced_tokens().is_empty());
+            assert_eq!(cadence.try_locks(), 0);
+
+            // A node with NO cache policy on an engine WITH a Cadence.
+            let plain_node = CountingFunctionNode::fixed(result_field(), serde_json::json!("p"));
+            let plain = plain_graph(plain_node.clone());
+            let locked = locked_engine(&cache, &cadence, Duration::from_secs(60));
+            locked
+                .start(&plain, thread("no-policy"), StateDelta::new())
+                .await
+                .unwrap();
+            assert_eq!(plain_node.run_count(), 1);
+            assert_eq!(cadence.try_locks(), 0, "no cache policy, no lock");
+            assert_eq!(cache.gets(), 1, "the cache was not consulted for it either");
+
+            // A Cadence but no node cache at all: nothing for the lock to guard.
+            let cache_less = engine().with_cadence(cadence.clone(), Duration::from_secs(60));
+            cache_less
+                .start(&plain, thread("no-cache"), StateDelta::new())
+                .await
+                .unwrap();
+            assert_eq!(cadence.try_locks(), 0);
+        }
+
+        /// Research Pitfall 14: the lock is released on EVERY exit path of
+        /// the attempt loop -- success, a plain failure, a handler-
+        /// compensated failure, and a non-`Edges` directive that stores
+        /// nothing.
+        #[tokio::test(start_paused = true)]
+        async fn unlock_runs_on_every_exit() {
+            async fn run_once(
+                node: Arc<dyn StateNode>,
+                aegis: Aegis,
+                name: &str,
+            ) -> (usize, usize, usize) {
+                let cache = FencedCache::new();
+                let cadence = CountingCadence::new(LockMode::Delegate);
+                let engine = locked_engine(&cache, &cadence, Duration::from_secs(60));
+                let _ = engine
+                    .start(&cached_graph(node, aegis), thread(name), StateDelta::new())
+                    .await;
+                (
+                    cadence.acquired(),
+                    cadence.unlocks(),
+                    cache.fenced_tokens().len() + cache.plain_puts(),
+                )
+            }
+
+            // Success: stored with the token, then released.
+            let ok = CountingFunctionNode::fixed(result_field(), serde_json::json!("ok"));
+            assert_eq!(run_once(ok, cache_aegis(), "exit-ok").await, (1, 1, 1));
+
+            // A plain failure: nothing stored, still released.
+            let failing = crate::engine::test_support::FailingFunctionNode::new("nope");
+            assert_eq!(
+                run_once(failing, cache_aegis(), "exit-fail").await,
+                (1, 1, 0)
+            );
+
+            // A failure the node's own error handler compensates.
+            let compensated = Aegis {
+                on_error: Some(ErrorHandlerSpec::Absorb {
+                    fallback_delta: StateDelta::new(),
+                }),
+                ..cache_aegis()
+            };
+            let failing = crate::engine::test_support::FailingFunctionNode::new("absorbed");
+            assert_eq!(
+                run_once(failing, compensated, "exit-compensated").await,
+                (1, 1, 0)
+            );
+
+            // A directive that is not `Edges`: its delta is never cached.
+            let ends = CountingFunctionNode::with_directive(|_run, _state| Directive {
+                delta: StateDelta::new(),
+                next: NextStep::End,
+            });
+            assert_eq!(run_once(ends, cache_aegis(), "exit-end").await, (1, 1, 0));
+        }
+
+        /// The previous holder may store and release between a dispatch's
+        /// first miss and its own acquisition: the winner re-reads the cache
+        /// once it holds the lock and serves the entry rather than executing a
+        /// duplicate, releasing the lock it just took.
+        #[tokio::test(start_paused = true)]
+        async fn a_winner_that_finds_the_entry_after_acquiring_serves_it() {
+            let node = CountingFunctionNode::fixed(result_field(), serde_json::json!("computed"));
+            let graph = cached_graph(node.clone(), cache_aegis());
+            let cache = FencedCache::new();
+            let mut stored = StateDelta::new();
+            stored.set_raw(
+                result_field(),
+                serde_json::json!("stored-by-the-previous-holder"),
+            );
+            *cache.appears_after_first_get.lock().unwrap() = Some(stored);
+            let cadence = CountingCadence::new(LockMode::Delegate);
+            let engine = locked_engine(&cache, &cadence, Duration::from_secs(60));
+
+            let outcome = engine
+                .start(&graph, thread("late-hit"), StateDelta::new())
+                .await
+                .unwrap();
+
+            assert_eq!(
+                result_of(&outcome).as_deref(),
+                Some("stored-by-the-previous-holder")
+            );
+            assert_eq!(node.run_count(), 0, "served, not re-executed");
+            assert_eq!(cadence.acquired(), 1);
+            assert_eq!(cadence.unlocks(), 1, "the lock it took was released");
+            assert!(cache.fenced_tokens().is_empty(), "it stored nothing");
         }
     }
 

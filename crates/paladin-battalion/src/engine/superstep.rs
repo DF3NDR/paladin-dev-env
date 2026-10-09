@@ -62,6 +62,7 @@ use paladin_core::platform::container::waypoint::{
     NodeId, NodeOutcomeKind, ThreadId, Waypoint, WaypointId, WaypointStatus,
     canonical_edge_condition,
 };
+use paladin_ports::output::cadence_port::{CadencePort, FencingToken, LockKey};
 use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
@@ -142,7 +143,9 @@ struct ChildEngineResources<W: WaypointPort + 'static> {
     /// inherited by a nested `NodeSpec::Battalion` child run wholesale,
     /// like every other engine resource, so a child graph's own
     /// `CachePolicy` nodes are served by the same backend the parent's are.
-    node_cache: Option<Arc<dyn NodeCachePort>>,
+    /// Carries the stampede lock (PACE-04, D-11) with the cache, so a nested
+    /// `Battalion` run coalesces identical misses exactly as its parent does.
+    node_cache: Option<NodeCacheWiring>,
     /// THIS engine's confined Vault handle (RT-04, D-21; plan 26-13) --
     /// inherited by a nested `NodeSpec::Battalion` child run wholesale,
     /// like every other engine resource, so a child graph's own nodes
@@ -174,6 +177,158 @@ struct NodeCacheBinding {
     policy: CachePolicy,
     cache: Arc<dyn NodeCachePort>,
     graph_fingerprint: GraphFingerprint,
+    /// The Cadence stampede lock and its TTL (PACE-04, D-11), `Some` only
+    /// when the engine was given one via `WarEngine::with_cadence`. With
+    /// `None` this node's miss path is byte-identical to the pre-lock engine:
+    /// no `try_lock`, no `unlock`, a plain `put`.
+    lock: Option<StampedeLock>,
+}
+
+/// The stampede lock an engine was configured with: the Cadence port that
+/// issues it and the TTL every acquisition asks for (PACE-04, D-11).
+pub(crate) type StampedeLock = (Arc<dyn CadencePort>, std::time::Duration);
+
+/// The node cache backend together with the optional stampede lock that
+/// guards its miss-to-put window (PACE-04, D-11). Bundled so the lock travels
+/// wherever the cache does -- the four engine start sites and a nested
+/// `Battalion` child run -- as a type change rather than a new parameter at
+/// every call site.
+#[derive(Clone)]
+pub(crate) struct NodeCacheWiring {
+    /// The node cache backend (FT-FR-18, D-29).
+    pub(crate) cache: Arc<dyn NodeCachePort>,
+    /// The stampede lock and its TTL; `None` when `with_cadence` was never
+    /// called.
+    pub(crate) lock: Option<StampedeLock>,
+}
+
+/// The base interval between a stampede-lock loser's polls (D-12, research
+/// Pattern 6). Each wait adds up to 50 % jitter so a crowd of losers does not
+/// re-read the cache and re-try the lock in lockstep, and is capped at a tenth
+/// of the lock TTL so a short TTL is still polled several times.
+pub(crate) const STAMPEDE_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(100);
+
+/// The lock a dispatch won: released exactly once, after its attempt loop ends
+/// on any path (D-11, research Pitfall 14).
+struct HeldLock {
+    port: Arc<dyn CadencePort>,
+    key: LockKey,
+    token: FencingToken,
+}
+
+impl HeldLock {
+    /// Release the lock, only if this dispatch's token still owns it. A
+    /// release failure is logged and swallowed: the lock then simply expires by
+    /// its TTL, and a lock error must never fail a node (D-13, D-29).
+    async fn release(self, node_id: &NodeId) {
+        if let Err(err) = self.port.unlock(&self.key, &self.token).await {
+            warn!(
+                "node cache: stampede unlock failed for {node_id}: {err} -- the lock expires by \
+                 its TTL (D-13)"
+            );
+        }
+    }
+}
+
+/// What the lock phase of a cache miss decided (D-11, D-12).
+enum StampedeOutcome {
+    /// The entry appeared while waiting (or right after acquiring): serve it.
+    Served(CachedDelta),
+    /// This dispatch holds the lock and must execute, then store with the
+    /// token and release.
+    Held(HeldLock),
+    /// No lock is held and none will be: execute uncached-by-lock -- the TTL
+    /// elapsed with no entry, or `try_lock` failed. The node always executes
+    /// or is served; the lock never fails it.
+    Proceed,
+    /// The run's cancellation token fired during the wait.
+    Interrupted,
+}
+
+/// The wait between two polls: [`STAMPEDE_POLL_INTERVAL`] plus up to 50 %
+/// jitter, capped at a tenth of the lock TTL (and never zero). Synchronous so
+/// the thread-local RNG is never held across an `.await`.
+fn stampede_poll_delay(ttl: std::time::Duration) -> std::time::Duration {
+    use rand::Rng;
+    let base_millis = STAMPEDE_POLL_INTERVAL.as_millis() as u64;
+    let jitter = rand::thread_rng().gen_range(0..=base_millis / 2);
+    let wanted = std::time::Duration::from_millis(base_millis + jitter);
+    wanted
+        .min(ttl / 10)
+        .max(std::time::Duration::from_millis(1))
+}
+
+/// Coalesce identical cache misses (PACE-04, D-11, D-12): called after a miss
+/// when the binding carries a lock. Repeatedly try to take the lock; the
+/// winner returns [`StampedeOutcome::Held`] and executes; a loser sleeps one
+/// poll (cancellation-aware, like a backoff), re-reads the cache -- a hit is
+/// served -- and tries the lock again, so a holder that released without
+/// writing (a failed or non-`Edges` node) hands over within one poll rather
+/// than after the whole TTL. Past the TTL the loser stops waiting and
+/// executes itself. A winner re-reads the cache once before executing: the
+/// previous holder may have stored and released between this dispatch's
+/// first miss and its acquisition, and executing then would be the very
+/// duplicate spend the lock exists to prevent.
+async fn acquire_stampede_lock(
+    binding: &NodeCacheBinding,
+    key: &NodeCacheKey,
+    node_id: &NodeId,
+    cancellation: &Option<CancellationToken>,
+) -> StampedeOutcome {
+    let Some((port, ttl)) = &binding.lock else {
+        return StampedeOutcome::Proceed;
+    };
+    // The key is the existing node-cache key (graph fingerprint, node id,
+    // rendered input hash): no new trust is placed in it (T-43-45).
+    let lock_key = LockKey::new(format!("node-cache:{}", key.as_str()));
+    let deadline = tokio::time::Instant::now().checked_add(*ttl);
+    loop {
+        match port.try_lock(&lock_key, *ttl).await {
+            Ok(Some(token)) => {
+                let held = HeldLock {
+                    port: Arc::clone(port),
+                    key: lock_key,
+                    token,
+                };
+                if let Some(cached) = lookup_node_cache(binding, key, node_id).await {
+                    held.release(node_id).await;
+                    return StampedeOutcome::Served(cached);
+                }
+                return StampedeOutcome::Held(held);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                // Names the node, never the key (it embeds a rendered-input
+                // hash) -- best-effort, D-13, D-29.
+                warn!(
+                    "node cache: stampede lock unavailable for {node_id}: {err} -- executing \
+                     without the lock (D-13)"
+                );
+                return StampedeOutcome::Proceed;
+            }
+        }
+        let wait = match deadline {
+            Some(deadline) => {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    log::debug!(
+                        "node cache: stampede wait for {node_id} reached the lock TTL -- \
+                         executing without the lock (D-12)"
+                    );
+                    return StampedeOutcome::Proceed;
+                }
+                stampede_poll_delay(*ttl).min(remaining)
+            }
+            None => stampede_poll_delay(*ttl),
+        };
+        if !retry::wait_backoff(wait, cancellation).await {
+            return StampedeOutcome::Interrupted;
+        }
+        if let Some(cached) = lookup_node_cache(binding, key, node_id).await {
+            return StampedeOutcome::Served(cached);
+        }
+    }
 }
 
 /// Compose this dispatch's cache key (D-28, `engine::cache_key`): a
@@ -274,12 +429,18 @@ async fn lookup_node_cache(
 /// the `Function`-node half of the `Deny` guarantee, since a `StateNode`'s
 /// write set is only knowable here). A backend `Err` is logged and never
 /// fails the run.
+///
+/// With `fence` (the token of a stampede lock this dispatch holds, PACE-04,
+/// D-11, D-14) the write goes through `put_fenced`, so a backend that checks
+/// fences refuses a stale holder's late write over a newer holder's entry.
+/// Without one it is a plain `put`.
 async fn store_node_cache(
     binding: &NodeCacheBinding,
     key: &NodeCacheKey,
     delta: &StateDelta,
     schema: &BattlefieldSchema,
     node_id: &NodeId,
+    fence: Option<&FencingToken>,
 ) {
     let denied: Vec<&str> = delta
         .values
@@ -298,7 +459,16 @@ async fn store_node_cache(
         );
         return;
     }
-    if let Err(err) = binding.cache.put(key, delta, binding.policy.ttl).await {
+    let stored = match fence {
+        Some(token) => {
+            binding
+                .cache
+                .put_fenced(key, delta, binding.policy.ttl, token)
+                .await
+        }
+        None => binding.cache.put(key, delta, binding.policy.ttl).await,
+    };
+    if let Err(err) = stored {
         warn!("node cache: put failed for {node_id}: {err} -- ignored, the run continues (D-29)");
     }
 }
@@ -1864,8 +2034,9 @@ pub(crate) async fn run<W: WaypointPort + 'static>(
     // like `shutdown_grace` a real, always-present engine setting every
     // top-level caller forwards (`None` when no backend is wired --
     // `WarGraph::validate_node_cache_backend` has then already rejected
-    // any `CachePolicy` in the graph).
-    node_cache: Option<Arc<dyn NodeCachePort>>,
+    // any `CachePolicy` in the graph). Bundled with the optional stampede
+    // lock (PACE-04, D-11).
+    node_cache: Option<NodeCacheWiring>,
     // --- RT-04, D-21 (plan 26-13): the engine's confined Vault handle, if
     // any -- like `node_cache`, a real, always-present engine setting every
     // top-level caller forwards (`None` when `WarEngine::with_vault` was
@@ -2041,8 +2212,8 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
     parent_heartbeat: Option<HeartbeatHandle>,
     // --- FT-FR-18, D-29 (plan 25-13): this run's node cache backend, if
     // any; a nested `NodeSpec::Battalion` child run inherits the SAME
-    // backend via `ChildEngineResources::node_cache`.
-    node_cache: Option<Arc<dyn NodeCachePort>>,
+    // backend (and stampede lock) via `ChildEngineResources::node_cache`.
+    node_cache: Option<NodeCacheWiring>,
     // --- RT-04, D-21 (plan 26-13): this engine's confined Vault handle, if
     // any -- granted to every `NodeContext` this run builds, and inherited
     // wholesale by a nested `NodeSpec::Battalion` child run via
@@ -2691,10 +2862,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                 node_cache.as_ref(),
                 cache_graph_fingerprint.as_ref(),
             ) {
-                (Some(policy), Some(cache), Some(fingerprint)) => Some(NodeCacheBinding {
+                (Some(policy), Some(wiring), Some(fingerprint)) => Some(NodeCacheBinding {
                     policy: policy.clone(),
-                    cache: Arc::clone(cache),
+                    cache: Arc::clone(&wiring.cache),
                     graph_fingerprint: fingerprint.clone(),
+                    lock: wiring.lock.clone(),
                 }),
                 _ => None,
             };
@@ -2711,13 +2883,60 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     // `NodeStarted`/`NodeFinished { cache_hit: true }` pair,
                     // consumes no retry budget and calls no port. A `get`
                     // error is a miss (`lookup_node_cache`), never a failure.
+                    //
+                    // --- PACE-04, D-11, D-12: on a MISS, when the engine
+                    // has a Cadence stampede lock, this dispatch tries to
+                    // take it BEFORE executing. The winner executes (and
+                    // stores through `put_fenced` with its token); a loser
+                    // waits at `STAMPEDE_POLL_INTERVAL`, re-reading the cache
+                    // and re-trying the lock each round, and serves the hit
+                    // the winner stored -- so concurrent identical misses
+                    // issue the request once. Waiting honours the run's
+                    // cancellation (`Interrupted`, like a mid-backoff
+                    // cancel), a `try_lock` error or an elapsed TTL runs the
+                    // node anyway (the lock is an optimisation, never a
+                    // correctness dependency, D-13/D-29). With no lock
+                    // configured none of this runs and the path is unchanged.
                     let cache_key: Option<NodeCacheKey> =
                         node_cache_binding.as_ref().and_then(|binding| {
                             compose_node_cache_key(binding, &dispatch, &snap, &base_ctx)
                         });
-                    if let (Some(binding), Some(key)) = (&node_cache_binding, &cache_key)
-                        && let Some(cached) = lookup_node_cache(binding, key, &nid).await
-                    {
+                    let mut served: Option<CachedDelta> = None;
+                    let mut held_lock: Option<HeldLock> = None;
+                    if let (Some(binding), Some(key)) = (&node_cache_binding, &cache_key) {
+                        served = lookup_node_cache(binding, key, &nid).await;
+                        if served.is_none() && binding.lock.is_some() {
+                            match acquire_stampede_lock(binding, key, &nid, &node_cancellation)
+                                .await
+                            {
+                                StampedeOutcome::Served(cached) => served = Some(cached),
+                                StampedeOutcome::Held(held) => held_lock = Some(held),
+                                StampedeOutcome::Proceed => {}
+                                // --- Phase 42 halt contract, research
+                                // Pitfall 15: the run is shutting down while
+                                // this dispatch waited on the lock. Reported
+                                // exactly like a node cancelled mid-backoff:
+                                // no attempt ran, so the bookkeeping loop
+                                // records `Skipped { reason: "shutdown" }`
+                                // and re-lists the node for resume.
+                                StampedeOutcome::Interrupted => {
+                                    return NodeTaskOutput {
+                                        node_id: nid,
+                                        started_at: Utc::now(),
+                                        duration_ms: 0,
+                                        paladin_id: None,
+                                        usage: TokenUsage::default(),
+                                        outcome: NodeRunOutcome::Interrupted,
+                                        attempt: 1,
+                                        failed_attempts: Vec::new(),
+                                        node_error: None,
+                                        cache_hit: false,
+                                    };
+                                }
+                            }
+                        }
+                    }
+                    if let Some(cached) = served {
                         let started_at = Utc::now();
                         node_trace.emit(TraceEvent::NodeStarted {
                             superstep: base_ctx.superstep,
@@ -2774,7 +2993,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                     // attempt, pushed in attempt order as each retry is
                     // decided, so the vector is ascending by construction.
                     let mut failed_attempts: Vec<AttemptRecord> = Vec::new();
-                    loop {
+                    let output: NodeTaskOutput = loop {
                         attempt += 1;
                         // --- D-18: rebuilt per attempt with the CURRENT
                         // attempt number and a FRESH `HeartbeatHandle`, so a
@@ -2885,6 +3104,10 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                                     &directive.delta,
                                                     snap.schema(),
                                                     &nid,
+                                                    // --- PACE-04, D-14: the
+                                                    // winner's token fences
+                                                    // the write.
+                                                    held_lock.as_ref().map(|held| &held.token),
                                                 )
                                                 .await;
                                             }
@@ -3052,7 +3275,23 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             node_error,
                             cache_hit: false,
                         };
+                    };
+                    // --- PACE-04, D-11, research Pitfall 14: the lock is
+                    // released ONCE, here, after the attempt loop ends on
+                    // EVERY path -- success, exhausted or non-retryable
+                    // failure, a handler-compensated failure, a mid-backoff
+                    // cancel, and a non-`Edges` directive that stored
+                    // nothing -- so a holder that wrote nothing hands over
+                    // to a waiter within one poll rather than after the TTL.
+                    // A task ABORTED by the grace-deadline race is dropped
+                    // mid-await and cannot reach this line: its lock then
+                    // expires by its TTL (the backstop), and a late write it
+                    // might have made is refused by `put_fenced`'s token
+                    // check at a backend that enforces it.
+                    if let Some(held) = held_lock {
+                        held.release(&output.node_id).await;
                     }
+                    output
                 }),
             });
         }

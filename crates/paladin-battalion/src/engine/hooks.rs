@@ -1000,7 +1000,9 @@ mod tests {
 
     // --- D-06/D-07/D-08: ordering, drop accounting, panic isolation ----
 
-    use crate::engine::test_support::PanickingTraceSink;
+    use crate::engine::test_support::{
+        PanickingTraceSink, captured_warnings_for_this_thread, install_capturing_logger,
+    };
 
     /// Build the event sequence a `n`-superstep run emits, modelled the same
     /// way `full_queue_drops_the_oldest_event_not_the_newest` (above) models
@@ -1134,50 +1136,6 @@ mod tests {
             run_finished_count, 1,
             "exactly one RunFinished record must survive under saturation"
         );
-    }
-
-    // --- D-07: a minimal in-process `log::Log` capturer, scoped by OS
-    // thread id so concurrently running `#[tokio::test]`s (each its own OS
-    // thread under the default per-test-thread `cargo test` harness) never
-    // observe each other's captured lines. Installed at most once per
-    // process (`log::set_boxed_logger` may only be called once) via `Once`.
-    struct CapturingLogger;
-
-    static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
-    static CAPTURED: Mutex<Option<HashMapWarnings>> = Mutex::new(None);
-    type HashMapWarnings = std::collections::HashMap<std::thread::ThreadId, Vec<String>>;
-
-    impl log::Log for CapturingLogger {
-        fn enabled(&self, _metadata: &log::Metadata) -> bool {
-            true
-        }
-        fn log(&self, record: &log::Record) {
-            if record.target() == "paladin::trace" {
-                let mut guard = CAPTURED.lock().expect("captured warnings mutex poisoned");
-                let map = guard.get_or_insert_with(std::collections::HashMap::new);
-                map.entry(std::thread::current().id())
-                    .or_default()
-                    .push(record.args().to_string());
-            }
-        }
-        fn flush(&self) {}
-    }
-
-    fn install_capturing_logger() {
-        static LOGGER: CapturingLogger = CapturingLogger;
-        LOGGER_INIT.call_once(|| {
-            log::set_logger(&LOGGER).expect("install the capturing test logger");
-            log::set_max_level(log::LevelFilter::Warn);
-        });
-    }
-
-    fn captured_warnings_for_this_thread() -> Vec<String> {
-        CAPTURED
-            .lock()
-            .expect("captured warnings mutex poisoned")
-            .as_ref()
-            .and_then(|m| m.get(&std::thread::current().id()).cloned())
-            .unwrap_or_default()
     }
 
     #[tokio::test]

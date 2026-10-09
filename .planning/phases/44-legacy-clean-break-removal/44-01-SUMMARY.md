@@ -40,7 +40,8 @@ key-decisions:
 patterns-established:
   - "Paused-clock scripted PaladinPort mock (per-call delay + result) for runner and service retry/timeout tests"
 
-requirements-completed: [LEGACY-01, LEGACY-02]
+requirements-completed: []
+requirements-advanced: [LEGACY-01, LEGACY-02]  # Campaign slice only; REQUIREMENTS.md left unchecked until the removal plans (44-04..44-10) land
 
 duration: ~2h of wall clock across two executor sessions (tracer checkpoint in between)
 completed: 2026-10-09
@@ -120,6 +121,10 @@ None.
 ## Threat Flags
 
 None. No new network endpoint, auth path or file-access surface. Threat-model mitigations applied: T-44-01 (per-attempt bound through the runner), T-44-02 (`validate_aegis` rejects zero attempts, zero bounds and `Custom` predicates; default `TransientOnly`; backoff via `backoff_delay`), T-44-03 (retry `warn!` carries Paladin name, attempt, transience and delay only), T-44-04 (`validate_aegis` runs before any port call; tested by `campaign_rejects_invalid_aegis_before_any_node_runs`).
+
+## Requirements
+
+LEGACY-01 and LEGACY-02 are advanced, not completed: only Campaign moved to Aegis here, and the legacy `RetryPolicy` / `ErrorStrategy` / `NodeError` / timeout surfaces are still present. `requirements.mark-complete` was run by the state step and then reverted so REQUIREMENTS.md does not claim removal that has not happened.
 
 ## Next Phase Readiness
 

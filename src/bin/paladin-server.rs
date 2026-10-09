@@ -521,7 +521,7 @@ impl PaladinPort for NoRegisteredGraphsPaladinPort {
 }
 
 /// Build the durable waypoint store from [`WaypointStoreConfig`] (HITL-05, D-24/D-25/D-26;
-/// extended by Phase 27 to also feed [`build_run_api`]'s run engine): `Disabled` (the
+/// extended by Phase 27 to also feed [`build_run_api_with_cadence`]'s run engine): `Disabled` (the
 /// default) yields `None`; `Sqlite`/`Postgres` connect a real store, already erased to
 /// `Arc<dyn WaypointPort>` so ONE instance can be shared by both the thread surface's own
 /// `WarEngine` ([`thread_state_from_store`]) and the run engine `build_run_api` constructs.
@@ -582,7 +582,7 @@ async fn build_postgres_waypoint_store(
 /// spawning in-process (PLAT-FR-06, D-19..D-23) -- `None` (Phase 24's exact prior behavior)
 /// when the run store is disabled. [`ErasedWaypointStore`] lets this function build a
 /// concrete-typed `WarEngine`/`ParleyPortAdapter` over the SAME trait-object store
-/// [`build_run_api`]'s own run engine uses, without either function needing to know the
+/// [`build_run_api_with_cadence`]'s own run engine uses, without either function needing to know the
 /// other's concrete backend type.
 fn thread_state_from_store(
     waypoint_store: Option<Arc<dyn WaypointPort>>,

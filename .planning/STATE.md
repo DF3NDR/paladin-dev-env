@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 45
-current_phase_name: RustFS Swap & Platform/Observability Deviations
+current_phase: 44
+current_phase_name: Legacy Clean-Break Removal
 status: executing
 stopped_at: Phase 44 context gathered
-last_updated: "2026-10-09T21:27:34.937Z"
+last_updated: "2026-10-09T21:39:25.583Z"
 last_activity: 2026-10-09
-last_activity_desc: Phase 43 complete, transitioned to Phase 45
+last_activity_desc: Phase 44 execution started
 progress:
   total_phases: 8
   completed_phases: 7
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-30 after Phase 40)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 43 — Rate Pacing
+**Current focus:** Phase 44 — Legacy Clean-Break Removal
 Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 10 phases (38-47), 35/35
 requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-30 once Phase 45's
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
@@ -50,10 +50,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 45 — RustFS Swap & Platform/Observability Deviations
-Plan: Not started
-Status: Ready to execute
-Last activity: 2026-10-09 — Phase 43 complete, transitioned to Phase 45
+Phase: 44 (Legacy Clean-Break Removal) — EXECUTING
+Plan: 1 of 13
+Status: Executing Phase 44
+Last activity: 2026-10-09 — Phase 44 execution started
 
 ## Performance Metrics
 

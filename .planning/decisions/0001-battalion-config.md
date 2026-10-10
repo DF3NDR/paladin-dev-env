@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Superseded
+
+Superseded by ADR-0059 on 2026-10-09 (Phase 44): the `timeout_seconds`, `retry_policy` and `error_strategy` fields are replaced by one `aegis: Aegis` policy bundle; the rest of this record is history.
 
 **Date:** 2026-07-31
 

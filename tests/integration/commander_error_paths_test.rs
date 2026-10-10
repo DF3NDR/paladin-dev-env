@@ -10,13 +10,26 @@
 use crate::helpers::FaultyPaladinPort;
 use paladin::application::services::battalion::commander::CommanderBuilder;
 use paladin::core::base::entity::node::Node;
-use paladin::core::platform::container::battalion::{
-    BattalionConfig, BattalionStrategy, ErrorStrategy, RetryPolicy,
-};
+use paladin::core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{
+    Aegis, ErrorHandlerSpec, RetryPolicy, RetryPredicate,
+};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_ports::output::paladin_port::PaladinPort;
 use std::sync::Arc;
 use std::time::Duration;
+
+/// The Aegis equivalent of the v0.10 continue-on-error strategy: absorb a failed
+/// Paladin and keep going (`FailFast` is the default, `on_error: None`).
+fn absorb() -> Aegis {
+    Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        ..Aegis::default()
+    }
+}
 
 /// Helper to create test Paladins, matching the `Paladin-N` naming convention already
 /// used in `tests/integration/commander_integration_tests.rs`.
@@ -44,9 +57,7 @@ async fn test_fail_fast_stops_on_first_error() {
     let paladin2 = create_test_paladin("Paladin-2");
     let paladin3 = create_test_paladin("Paladin-3");
 
-    let config = BattalionConfig::new("fail_fast_error_paths")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::FailFast);
+    let config = BattalionConfig::new("fail_fast_error_paths");
 
     let commander = CommanderBuilder::new(port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -89,9 +100,7 @@ async fn test_continue_on_error_collects_all_errors() {
     let paladin2 = create_test_paladin("Paladin-2");
     let paladin3 = create_test_paladin("Paladin-3");
 
-    let config = BattalionConfig::new("continue_on_error_error_paths")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("continue_on_error_error_paths").with_aegis(absorb());
 
     let commander = CommanderBuilder::new(port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -148,18 +157,23 @@ async fn test_retry_then_continue_retries_failed_paladins() {
     let paladin2 = create_test_paladin("Paladin-2");
     let paladin3 = create_test_paladin("Paladin-3");
 
-    let retry_policy = RetryPolicy {
-        max_attempts: 3,
-        base_delay: Duration::from_millis(1),
-        max_delay: Duration::from_millis(5),
-        exponential_backoff: false,
+    // v0.10 `RetryPolicy { max_attempts: 3 }` is `max_attempts: 4` under Aegis (the count now
+    // includes the first attempt). `TransientAndUnknown` keeps the v0.10 "retry everything"
+    // meaning: `FaultyPaladinPort` fails with an Unknown `ExecutionError`, which the default
+    // `TransientOnly` would not retry.
+    let retry = RetryPolicy {
+        max_attempts: 4,
+        initial_interval: Duration::from_millis(1),
+        backoff_factor: 1.0,
+        max_interval: Duration::from_millis(5),
         jitter: false,
+        retry_on: RetryPredicate::TransientAndUnknown,
     };
 
-    let config = BattalionConfig::new("retry_then_continue_error_paths")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::RetryThenContinue)
-        .with_retry_policy(retry_policy);
+    let config = BattalionConfig::new("retry_then_continue_error_paths").with_aegis(Aegis {
+        retry: Some(retry),
+        ..absorb()
+    });
 
     let commander = CommanderBuilder::new(port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -208,9 +222,7 @@ async fn test_partial_results_returned_with_errors() {
     let paladin2 = create_test_paladin("Paladin-2");
     let paladin3 = create_test_paladin("Paladin-3");
 
-    let config = BattalionConfig::new("partial_results_error_paths")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("partial_results_error_paths").with_aegis(absorb());
 
     let commander = CommanderBuilder::new(port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)

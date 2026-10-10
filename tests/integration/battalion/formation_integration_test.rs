@@ -7,12 +7,39 @@ use paladin::application::services::battalion::formation_service::FormationExecu
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::core::base::entity::node::Node;
 use paladin::core::platform::container::battalion::formation::Formation;
-use paladin::core::platform::container::battalion::{BattalionConfig, ErrorStrategy, RetryPolicy};
+use paladin::core::platform::container::battalion::{BattalionConfig, BattalionError};
 use paladin::core::platform::container::paladin::MaxLoops;
 use paladin::core::platform::container::paladin::{Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{
+    Aegis, ErrorHandlerSpec, RetryPolicy, RetryPredicate, TimeoutPolicy,
+};
+use paladin_core::platform::container::battlefield::StateDelta;
+use paladin_core::platform::container::node_error::{NodeErrorSource, TimeoutKind};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, StopReason};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// The Aegis equivalent of the v0.10 continue-on-error strategy: absorb a failed
+/// Paladin and keep going (`FailFast` is the default, `on_error: None`).
+fn absorb() -> Aegis {
+    Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        ..Aegis::default()
+    }
+}
+
+/// An Aegis that bounds every Paladin attempt by `run_timeout`.
+fn run_bound(run_timeout: Duration) -> Aegis {
+    Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(run_timeout),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    }
+}
 
 /// Mock PaladinPort that simulates realistic Paladin behavior
 struct IntegrationMockPaladinPort {
@@ -127,7 +154,6 @@ async fn test_formation_end_to_end_success() {
     let summarizer = create_paladin("Summarizer", "You create summaries");
 
     let config = BattalionConfig::new("research_pipeline")
-        .with_timeout(10)
         .with_description("Research → Analysis → Summary pipeline");
 
     let formation = Formation::new(vec![researcher, analyst, summarizer], config)
@@ -192,7 +218,7 @@ async fn test_formation_failfast_error_handling() {
     let p2 = create_paladin("Step2", "Second"); // This will fail
     let p3 = create_paladin("Step3", "Third");
 
-    let config = BattalionConfig::new("failfast_test").with_error_strategy(ErrorStrategy::FailFast);
+    let config = BattalionConfig::new("failfast_test");
 
     let formation = Formation::new(vec![p1, p2, p3], config).unwrap();
 
@@ -219,8 +245,7 @@ async fn test_formation_continue_on_error() {
     let p2 = create_paladin("Step2", "Second"); // This will fail
     let p3 = create_paladin("Step3", "Third");
 
-    let config =
-        BattalionConfig::new("continue_test").with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("continue_test").with_aegis(absorb());
 
     let formation = Formation::new(vec![p1, p2, p3], config).unwrap();
 
@@ -248,15 +273,21 @@ async fn test_formation_retry_then_continue() {
     let p1 = create_paladin("Step1", "First");
     let p2 = create_paladin("Step2", "Second");
 
-    let mut retry_policy = RetryPolicy {
-        max_attempts: 3,
-        ..Default::default()
+    // v0.10 `RetryPolicy { max_attempts: 3 }` is `max_attempts: 4` under Aegis (the count now
+    // includes the first attempt), so Step2 keeps its four executions. `TransientAndUnknown`
+    // is used because the mock fails with an Unknown `ExecutionError`, which the default
+    // `TransientOnly` would not retry.
+    let retry = RetryPolicy {
+        max_attempts: 4,
+        initial_interval: Duration::from_millis(5),
+        retry_on: RetryPredicate::TransientAndUnknown,
+        ..RetryPolicy::default()
     };
-    retry_policy.base_delay = Duration::from_millis(5);
 
-    let config = BattalionConfig::new("retry_test")
-        .with_error_strategy(ErrorStrategy::RetryThenContinue)
-        .with_retry_policy(retry_policy);
+    let config = BattalionConfig::new("retry_test").with_aegis(Aegis {
+        retry: Some(retry),
+        ..absorb()
+    });
 
     let formation = Formation::new(vec![p1, p2], config).unwrap();
 
@@ -270,7 +301,7 @@ async fn test_formation_retry_then_continue() {
     assert!(result.is_ok());
 
     let log = mock_port.get_execution_log();
-    // Step1 executed once, Step2 attempted 3 times (initial + 2 retries)
+    // Step1 executed once, Step2 attempted 4 times (initial + 3 retries)
     assert!(
         log.len() >= 4,
         "Expected at least 4 executions (1 Step1 + 3 Step2 attempts), got {}",
@@ -278,31 +309,56 @@ async fn test_formation_retry_then_continue() {
     );
 }
 
-#[tokio::test]
-async fn test_formation_timeout_enforcement() {
+/// D-02: the bound is per attempt, not per run. Two 600 ms steps under a 1 s bound take
+/// 1.2 s in total and complete; the v0.10 whole-run timeout failed this run.
+#[tokio::test(start_paused = true)]
+async fn test_formation_bounds_each_attempt_not_the_run() {
     let p1 = create_paladin("Slow1", "First");
     let p2 = create_paladin("Slow2", "Second");
 
-    let config = BattalionConfig::new("timeout_test").with_timeout(1); // 1 second timeout
+    let config = BattalionConfig::new("timeout_test").with_aegis(run_bound(Duration::from_secs(1)));
 
     let formation = Formation::new(vec![p1, p2], config).unwrap();
 
-    // Use a mock with longer delays
+    // 600ms per Paladin = 1.2s total, but each attempt is inside its own 1 s bound.
     let mock_port = IntegrationMockPaladinPort::new();
-    mock_port.failure_config.lock().unwrap().delay_ms = 600; // 600ms per Paladin = 1.2s total
+    mock_port.failure_config.lock().unwrap().delay_ms = 600;
 
     let service = FormationExecutionService::new(Arc::new(mock_port));
 
-    let result = service.execute(&formation, "Test input").await;
+    let started = tokio::time::Instant::now();
+    let result = service
+        .execute(&formation, "Test input")
+        .await
+        .expect("each 600 ms attempt is inside the 1 s per-attempt bound");
 
-    // Should timeout
-    assert!(result.is_err());
+    assert_eq!(result.paladin_results.len(), 2);
+    assert!(started.elapsed() >= Duration::from_millis(1200));
+}
 
-    match result.unwrap_err() {
-        paladin::core::platform::container::battalion::BattalionError::Timeout(seconds) => {
-            assert_eq!(seconds, 1);
+/// D-03: an attempt that exceeds its bound ends a fail-fast Formation with the structured
+/// `BattalionError::Node`, not the v0.10 whole-run timeout variant.
+#[tokio::test(start_paused = true)]
+async fn test_formation_attempt_timeout_surfaces_structured_error() {
+    let p1 = create_paladin("Slow1", "First");
+
+    let config = BattalionConfig::new("timeout_test").with_aegis(run_bound(Duration::from_secs(1)));
+
+    let formation = Formation::new(vec![p1], config).unwrap();
+
+    // 1.5 s for the one Paladin: over the 1 s per-attempt bound.
+    let mock_port = IntegrationMockPaladinPort::new();
+    mock_port.failure_config.lock().unwrap().delay_ms = 1500;
+
+    let service = FormationExecutionService::new(Arc::new(mock_port));
+
+    match service.execute(&formation, "Test input").await {
+        Err(BattalionError::Node(error)) => {
+            assert_eq!(error.node_id.as_str(), "Slow1");
+            assert_eq!(error.attempt, 1);
+            assert_eq!(error.source, NodeErrorSource::Timeout(TimeoutKind::Run));
         }
-        _ => panic!("Expected Timeout error"),
+        other => panic!("Expected BattalionError::Node, got {other:?}"),
     }
 }
 
@@ -342,11 +398,7 @@ async fn test_formation_large_pipeline() {
         .map(|i| create_paladin(&format!("Stage{}", i), &format!("Process stage {}", i)))
         .collect();
 
-    let formation = Formation::new(
-        paladins,
-        BattalionConfig::new("large_pipeline").with_timeout(30),
-    )
-    .unwrap();
+    let formation = Formation::new(paladins, BattalionConfig::new("large_pipeline")).unwrap();
 
     let mock_port = Arc::new(IntegrationMockPaladinPort::new());
     let service = FormationExecutionService::new(mock_port.clone());
@@ -372,8 +424,7 @@ async fn test_formation_multiple_failures_continue_on_error() {
         .map(|i| create_paladin(&format!("Stage{}", i), &format!("Stage {}", i)))
         .collect();
 
-    let config = BattalionConfig::new("multi_failure_test")
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("multi_failure_test").with_aegis(absorb());
 
     let formation = Formation::new(paladins, config).unwrap();
 

@@ -1807,9 +1807,13 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use paladin_core::base::entity::node::Node;
+    use paladin_core::platform::container::aegis::{
+        Aegis, ErrorHandlerSpec, RetryPolicy as AegisRetryPolicy, RetryPredicate,
+    };
     use paladin_core::platform::container::battalion::{
         BattalionStatus, ErrorStrategy, RetryPolicy, TokenUsage,
     };
+    use paladin_core::platform::container::battlefield::StateDelta;
     use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_llm::mock::MockLlmAdapter;
@@ -3421,10 +3425,8 @@ mod tests {
         let paladin2 = create_test_paladin();
         let paladin3 = create_test_paladin();
 
-        // Configure fail-fast error strategy
-        let config = BattalionConfig::new("test-fail-fast")
-            .with_error_strategy(ErrorStrategy::FailFast)
-            .with_timeout(60);
+        // Fail fast is the default Aegis policy (`on_error: None`)
+        let config = BattalionConfig::new("test-fail-fast");
 
         let paladin_port = Arc::new(MockPaladinPort) as Arc<dyn PaladinPort>;
         let commander = CommanderBuilder::new(paladin_port)
@@ -3457,10 +3459,13 @@ mod tests {
         let paladin2 = create_test_paladin();
         let paladin3 = create_test_paladin();
 
-        // Configure continue-on-error strategy
-        let config = BattalionConfig::new("test-continue-on-error")
-            .with_error_strategy(ErrorStrategy::ContinueOnError)
-            .with_timeout(60);
+        // Continue past failures: the Aegis Absorb handler
+        let config = BattalionConfig::new("test-continue-on-error").with_aegis(Aegis {
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..Aegis::default()
+        });
 
         let paladin_port = Arc::new(MockPaladinPort) as Arc<dyn PaladinPort>;
         let commander = CommanderBuilder::new(paladin_port)
@@ -3489,19 +3494,26 @@ mod tests {
         let paladin1 = create_test_paladin();
         let paladin2 = create_test_paladin();
 
-        // Configure retry policy
-        let retry_policy = RetryPolicy {
-            max_attempts: 3,
-            base_delay: Duration::from_millis(10),
-            max_delay: Duration::from_millis(100),
-            exponential_backoff: true,
+        // v0.10 `RetryPolicy { max_attempts: 3 }` is `max_attempts: 4` under
+        // Aegis (the count now includes the first attempt). `TransientAndUnknown`
+        // keeps the v0.10 "retry everything" meaning: the default `TransientOnly`
+        // would not retry an Unknown failure.
+        let retry = AegisRetryPolicy {
+            max_attempts: 4,
+            initial_interval: Duration::from_millis(10),
+            backoff_factor: 2.0,
+            max_interval: Duration::from_millis(100),
             jitter: false,
+            retry_on: RetryPredicate::TransientAndUnknown,
         };
 
-        let config = BattalionConfig::new("test-retry-continue")
-            .with_error_strategy(ErrorStrategy::RetryThenContinue)
-            .with_retry_policy(retry_policy)
-            .with_timeout(60);
+        let config = BattalionConfig::new("test-retry-continue").with_aegis(Aegis {
+            retry: Some(retry),
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..Aegis::default()
+        });
 
         let paladin_port = Arc::new(MockPaladinPort) as Arc<dyn PaladinPort>;
         let commander = CommanderBuilder::new(paladin_port)

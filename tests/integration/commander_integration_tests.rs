@@ -8,13 +8,28 @@ use paladin::application::services::battalion::commander::CommanderBuilder;
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::core::base::entity::node::Node;
 use paladin::core::platform::container::battalion::{
-    BattalionConfig, BattalionStatus, BattalionStrategy, ErrorStrategy, RetryPolicy,
+    BattalionConfig, BattalionStatus, BattalionStrategy,
 };
 use paladin::core::platform::container::paladin::MaxLoops;
 use paladin::core::platform::container::paladin::{Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{
+    Aegis, ErrorHandlerSpec, RetryPolicy as AegisRetryPolicy, RetryPredicate,
+};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// The Aegis equivalent of the v0.10 continue-on-error strategy: absorb a failed
+/// Paladin and keep going (`FailFast` is the default, `on_error: None`).
+fn absorb() -> Aegis {
+    Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        ..Aegis::default()
+    }
+}
 
 /// Mock PaladinPort for integration testing
 ///
@@ -154,9 +169,7 @@ async fn test_commander_executes_formation_end_to_end() {
     let paladin2 = create_test_paladin("Summarizer");
     let paladin3 = create_test_paladin("Reviewer");
 
-    let config = BattalionConfig::new("formation_test")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::FailFast);
+    let config = BattalionConfig::new("formation_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -197,9 +210,7 @@ async fn test_commander_executes_phalanx_end_to_end() {
     let paladin2 = create_test_paladin("Worker2");
     let paladin3 = create_test_paladin("Worker3");
 
-    let config = BattalionConfig::new("phalanx_test")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::FailFast);
+    let config = BattalionConfig::new("phalanx_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Phalanx)
@@ -247,9 +258,7 @@ async fn test_commander_executes_campaign_end_to_end() {
     let paladin2 = create_test_paladin("Node2");
     let paladin3 = create_test_paladin("Node3");
 
-    let config = BattalionConfig::new("campaign_test")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::FailFast);
+    let config = BattalionConfig::new("campaign_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Campaign)
@@ -287,9 +296,7 @@ async fn test_commander_executes_chain_of_command_end_to_end() {
     let specialist1 = create_test_paladin("Specialist1");
     let specialist2 = create_test_paladin("Specialist2");
 
-    let config = BattalionConfig::new("chain_test")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::FailFast);
+    let config = BattalionConfig::new("chain_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::ChainOfCommand)
@@ -321,7 +328,7 @@ async fn test_auto_mode_selects_formation_and_executes() {
     let paladin1 = create_test_paladin("Step1");
     let paladin2 = create_test_paladin("Step2");
 
-    let config = BattalionConfig::new("auto_formation").with_timeout(30);
+    let config = BattalionConfig::new("auto_formation");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Auto)
@@ -355,7 +362,7 @@ async fn test_auto_mode_selects_phalanx_and_executes() {
     let paladin3 = create_test_paladin("Worker3");
     let paladin4 = create_test_paladin("Worker4");
 
-    let config = BattalionConfig::new("auto_phalanx").with_timeout(30);
+    let config = BattalionConfig::new("auto_phalanx");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Auto)
@@ -389,7 +396,7 @@ async fn test_auto_mode_selects_campaign_and_executes() {
     let paladin3 = create_test_paladin("Node3");
     let paladin4 = create_test_paladin("Node4");
 
-    let config = BattalionConfig::new("auto_campaign").with_timeout(30);
+    let config = BattalionConfig::new("auto_campaign");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Auto)
@@ -423,7 +430,7 @@ async fn test_auto_mode_selects_chain_and_executes() {
     let specialist2 = create_test_paladin("Expert2");
     let specialist3 = create_test_paladin("Expert3");
 
-    let config = BattalionConfig::new("auto_chain").with_timeout(30);
+    let config = BattalionConfig::new("auto_chain");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Auto)
@@ -469,9 +476,7 @@ async fn test_fail_fast_error_strategy_integration() {
     let paladin2 = create_test_paladin("Paladin2");
     let paladin3 = create_test_paladin("Paladin3");
 
-    let config = BattalionConfig::new("fail_fast_test")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::FailFast);
+    let config = BattalionConfig::new("fail_fast_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -499,9 +504,7 @@ async fn test_continue_on_error_strategy_integration() {
     let paladin2 = create_test_paladin("Paladin2");
     let paladin3 = create_test_paladin("Paladin3");
 
-    let config = BattalionConfig::new("continue_on_error_test")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("continue_on_error_test").with_aegis(absorb());
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -541,15 +544,20 @@ async fn test_retry_then_continue_strategy_integration() {
     let paladin2 = create_test_paladin("Paladin2");
     let paladin3 = create_test_paladin("Paladin3");
 
-    let retry_policy = RetryPolicy {
-        max_attempts: 2, // Will retry once
-        ..Default::default()
+    // v0.10 `RetryPolicy { max_attempts: 2 }` retried once, which is `max_attempts: 3` under
+    // Aegis (the count now includes the first attempt). `TransientAndUnknown` is used because
+    // the mock fails with an Unknown `ExecutionError`, which the default `TransientOnly`
+    // would not retry.
+    let retry = AegisRetryPolicy {
+        max_attempts: 3,
+        retry_on: RetryPredicate::TransientAndUnknown,
+        ..AegisRetryPolicy::default()
     };
 
-    let config = BattalionConfig::new("retry_test")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::RetryThenContinue)
-        .with_retry_policy(retry_policy);
+    let config = BattalionConfig::new("retry_test").with_aegis(Aegis {
+        retry: Some(retry),
+        ..absorb()
+    });
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -580,7 +588,7 @@ async fn test_telemetry_accuracy_end_to_end() {
     let paladin2 = create_test_paladin("Paladin2");
     let paladin3 = create_test_paladin("Paladin3");
 
-    let config = BattalionConfig::new("telemetry_test").with_timeout(30);
+    let config = BattalionConfig::new("telemetry_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Auto)
@@ -618,8 +626,10 @@ async fn test_timeout_enforcement_integration() {
     let paladin2 = create_test_paladin("Paladin2");
     let paladin3 = create_test_paladin("Paladin3");
 
-    // Set very short timeout (shorter than execution time)
-    let config = BattalionConfig::new("timeout_test").with_timeout(1); // 1 second timeout
+    // The v0.10 whole-run `with_timeout(1)` is gone; the Commander keeps its interim default
+    // bound until 44-07 moves it onto Aegis, and a Formation attempt is bounded by
+    // `aegis.timeout` (see `formation_integration_test.rs` for the per-attempt contract).
+    let config = BattalionConfig::new("timeout_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Formation)
@@ -644,7 +654,7 @@ async fn test_commander_executes_council_strategy_end_to_end() {
     let legal = create_test_paladin("LegalExpert");
     let technical = create_test_paladin("TechnicalExpert");
 
-    let config = BattalionConfig::new("council_e2e_test").with_timeout(30);
+    let config = BattalionConfig::new("council_e2e_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Council)
@@ -678,7 +688,7 @@ async fn test_commander_executes_grove_strategy_end_to_end() {
     let perf_expert = create_test_paladin("PerformanceSpecialist");
     let data_expert = create_test_paladin("DataSpecialist");
 
-    let config = BattalionConfig::new("grove_e2e_test").with_timeout(30);
+    let config = BattalionConfig::new("grove_e2e_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Grove)
@@ -714,7 +724,7 @@ async fn test_commander_auto_detects_council_from_input() {
     let expert2 = create_test_paladin("Expert2");
     let expert3 = create_test_paladin("Expert3");
 
-    let config = BattalionConfig::new("auto_council_test").with_timeout(30);
+    let config = BattalionConfig::new("auto_council_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Auto)
@@ -754,7 +764,7 @@ async fn test_commander_auto_detects_grove_from_input() {
     let specialist2 = create_test_paladin("Specialist2");
     let specialist3 = create_test_paladin("Specialist3");
 
-    let config = BattalionConfig::new("auto_grove_test").with_timeout(30);
+    let config = BattalionConfig::new("auto_grove_test");
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Auto)
@@ -804,8 +814,8 @@ async fn test_concurrent_council_and_grove_execution() {
         create_test_paladin("Specialist3"),
     ];
 
-    let council_config = BattalionConfig::new("concurrent_council").with_timeout(30);
-    let grove_config = BattalionConfig::new("concurrent_grove").with_timeout(30);
+    let council_config = BattalionConfig::new("concurrent_council");
+    let grove_config = BattalionConfig::new("concurrent_grove");
 
     // Build Council Commander
     let council_commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
@@ -872,9 +882,8 @@ async fn test_commander_with_metadata_export_integration() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let metadata_path = temp_dir.path().to_path_buf();
 
-    let config = BattalionConfig::new("metadata_export_test")
-        .with_timeout(60)
-        .with_metadata_dir(metadata_path.clone());
+    let config =
+        BattalionConfig::new("metadata_export_test").with_metadata_dir(metadata_path.clone());
 
     let commander = CommanderBuilder::new(mock_port.clone() as Arc<dyn PaladinPort>)
         .strategy(BattalionStrategy::Phalanx)

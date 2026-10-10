@@ -22,11 +22,13 @@ use chrono::Utc;
 use paladin::application::services::battalion::formation_service::FormationExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
+use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::formation::Formation;
-use paladin::core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
 use paladin::core::platform::container::herald::Herald;
 use paladin::core::platform::container::paladin::Paladin;
 use paladin::infrastructure::adapters::herald::{JsonHerald, MarkdownHerald, TableHerald};
+use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, TokenUsage as LlmTokenUsage,
 };
@@ -303,10 +305,14 @@ async fn test_formation_partial_results_through_all_three_heralds() {
             .with_failures(vec!["Skirmisher".to_string()]),
     );
 
-    // Continue-on-error is required: fail-fast returns Err and produces no partial result to
+    // The Absorb handler is required: fail-fast returns Err and produces no partial result to
     // render, which is not what this criterion is about.
-    let config = BattalionConfig::new("partial_formation")
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("partial_formation").with_aegis(Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        ..Aegis::default()
+    });
 
     let formation = Formation::new(vec![paladin1, paladin2, paladin3], config)
         .expect("Failed to create Formation");
@@ -316,7 +322,7 @@ async fn test_formation_partial_results_through_all_three_heralds() {
     let result = service
         .execute(&formation, "Hold the position")
         .await
-        .expect("ContinueOnError should return a partial result, not an Err");
+        .expect("Absorb should return a partial result, not an Err");
 
     assert_eq!(result.paladin_success_count, 2);
     assert_eq!(result.paladin_failure_count, 1);

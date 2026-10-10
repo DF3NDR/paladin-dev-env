@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 44
 current_phase_name: Legacy Clean-Break Removal
 status: executing
-stopped_at: Completed 44-03-PLAN.md
-last_updated: "2026-10-10T00:58:25.717Z"
+stopped_at: Completed 44-04-PLAN.md
+last_updated: "2026-10-10T01:22:03.682Z"
 last_activity: 2026-10-09
 last_activity_desc: Phase 44 execution started
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 77
-  completed_plans: 67
+  completed_plans: 68
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 87%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([█████████░] 88%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 44 (Legacy Clean-Break Removal) — EXECUTING
-Plan: 4 of 13
+Plan: 5 of 13
 Status: Ready to execute
 Last activity: 2026-10-09 — Phase 44 execution started
 
@@ -258,6 +258,7 @@ Last activity: 2026-10-09 — Phase 44 execution started
 | Phase 44 P01 | 2h | 2 tasks | 5 files |
 | Phase 44 P02 | ~30min | 2 tasks | 5 files |
 | Phase 44 P03 | ~1h30min | 3 tasks | 12 files |
+| Phase 44 P04 | 50min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -428,6 +429,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [44-02] ADR-0059 supersedes X-03 for Phase 44 only; ADR-0051 is a copied shape, not inherited
 - [Phase ?]: [44-02] ADR-0059 marks the planner refinements: retry_attempts = max_attempts - 1 (refines D-04), ConclaveError::Timeout removal (extends D-03), three separate 9.2 rows (Finding 10)
 - [Phase ?]: [44-03] Breaker and Conclave read transience() alone, Transient-only; Unknown is neither retried nor counted; the stringly LLM variant and both legacy predicates are removed with no bridge
+- [Phase ?]: 44-04: Formation Absorb keeps the v0.10 node_errors shape until 44-06; unsupported on_error variants fail closed with ValidationError
 
 ### Pending Todos
 
@@ -642,8 +644,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-10T00:58:25.675Z
-**Stopped at:** Completed 44-03-PLAN.md
+**Last session:** 2026-10-10T01:22:03.638Z
+**Stopped at:** Completed 44-04-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

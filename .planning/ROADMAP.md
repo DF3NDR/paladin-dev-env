@@ -645,7 +645,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 44-03-PLAN.md — Circuit breaker and Conclave predicate on transience() (Transient only); PaladinError::LlmError, is_retryable, is_terminal removed with every Rust site and rustdoc (wave 2)
+- [x] 44-03-PLAN.md — Circuit breaker and Conclave predicate on transience() (Transient only); PaladinError::LlmError, is_retryable, is_terminal removed with every Rust site and rustdoc (wave 2)
 - [ ] 44-04-PLAN.md — Formation on the runner: per-attempt timeouts, Aegis retry, on_error Absorb / fail fast, structured timeout errors; Formation-routed tests migrated (wave 2)
 - [ ] 44-05-PLAN.md — Phalanx on the runner: typed failures in declaration order, independent per-Paladin retry, cancellation, no string parsing; Phalanx tests migrated (wave 2)
 

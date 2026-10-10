@@ -126,7 +126,7 @@ impl PhalanxExecutionService {
     /// Execute a Phalanx with the given input
     ///
     /// Paladins are executed concurrently according to the aggregation strategy.
-    /// Every Paladin runs under the Phalanx's [`Aegis`](paladin_core::platform::container::aegis::Aegis)
+    /// Every Paladin runs under the Phalanx's [`Aegis`]
     /// (`BattalionConfig.aegis`):
     ///
     /// - **Timeout:** `aegis.timeout` bounds each attempt of each Paladin, not

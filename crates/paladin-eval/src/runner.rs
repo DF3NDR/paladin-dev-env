@@ -755,15 +755,14 @@ impl PaladinPort for ScenarioPaladinPort {
             }
             LlmSource::Live(provider) => provider.generate(request).await,
         }
-        // `paladin_battalion::llm_failure::to_paladin_error` (not the legacy
-        // `PaladinError::LlmError(source.to_string())` string erasure): a
-        // scripted `error:` entry's `LlmErrorKind::Transient` must survive as
-        // `Transience::Transient` so a scenario's Aegis retry policy under
-        // the DEFAULT `TransientOnly` predicate can actually retry it (D-34's
-        // E2E-3 dogfood scenario depends on this) -- the legacy erasure
-        // classifies EVERY `PaladinError::LlmError(_)` as `Transience::
-        // Unknown` (`paladin_core::platform::container::paladin_error::
-        // PaladinError::transience`), which `TransientOnly` never retries.
+        // The runner converts the real `LlmError` with
+        // `paladin_battalion::llm_failure::to_paladin_error`, which keeps the
+        // adapter's own transience: a scripted `error:` entry's
+        // `LlmErrorKind::Transient` survives as `Transience::Transient`, so a
+        // scenario's Aegis retry policy under the DEFAULT `TransientOnly`
+        // predicate can actually retry it (D-34's E2E-3 dogfood scenario
+        // depends on this). A string-only conversion would classify every
+        // failure `Transience::Unknown`, which `TransientOnly` never retries.
         .map_err(|source| paladin_battalion::llm_failure::to_paladin_error(&source))?;
 
         Ok(PaladinResult {

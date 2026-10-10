@@ -4,7 +4,7 @@
 //!
 //! Every site that holds a real
 //! [`LlmError`](paladin_ports::output::llm_port::LlmError) and needs to hand a
-//! failure to the engine converts it with [`to_paladin_error`] into the
+//! failure to the engine converts it with `to_paladin_error` into the
 //! structured
 //! [`PaladinError::LlmFailure`](paladin_core::platform::container::paladin_error::PaladinError::LlmFailure)
 //! variant, so `transience`, the HTTP `status` and the `provider` survive the

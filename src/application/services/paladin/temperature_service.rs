@@ -422,10 +422,9 @@ mod tests {
         LlmError::AuthenticationError("invalid API key".to_string())
     }
 
-    /// Plan 25-06 Test 4 (D-02, X-03): the temperature-detection site
-    /// surfaces a real `LlmError` as the structured `LlmFailure` -- typed
-    /// transience/status/provider intact -- while rendering exactly what the
-    /// legacy `PaladinError::LlmError(e.to_string())` rendered.
+    /// Plan 25-06 Test 4 (D-02): the temperature-detection site surfaces a
+    /// real `LlmError` as the structured `LlmFailure` -- typed
+    /// transience/status/provider intact -- rendering `LLM error: {e}`.
     #[tokio::test]
     async fn temperature_service_surfaces_structured_llm_failure() {
         use paladin_core::platform::container::transience::Transience;

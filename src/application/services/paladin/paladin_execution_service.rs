@@ -4678,7 +4678,7 @@ mod tests {
 
     /// Plan 25-06 Test 1 (D-02): a provider 503 reaching `execute_stream`'s
     /// open-stream site surfaces as the structured `LlmFailure`, carrying the
-    /// typed transience/status/provider -- not the stringly `LlmError(String)`.
+    /// typed transience/status/provider.
     #[tokio::test]
     async fn paladin_execution_service_surfaces_structured_llm_failure() {
         use paladin_core::platform::container::transience::Transience;
@@ -4749,15 +4749,14 @@ mod tests {
         );
     }
 
-    /// Plan 25-06 (T-25-25): the two buffered retry-loop sites feed the
-    /// converted failure to the circuit breaker, whose `is_retryable()`
-    /// accounting must not drift -- `LlmFailure` counts as a failure exactly
-    /// as the legacy `LlmError(_)` did. With a threshold of one failure, the
-    /// first attempt trips the breaker and the second attempt fails fast with
-    /// `CircuitBreakerOpen`, so the loop's control flow is observably unchanged
-    /// (one provider call, not two).
+    /// Plan 25-06 (T-25-25, D-14): the two buffered retry-loop sites feed the
+    /// converted failure to the circuit breaker, which counts a failure only
+    /// when its `transience()` is `Transient` -- the 503 used here is. With a
+    /// threshold of one failure, the first attempt trips the breaker and the
+    /// second attempt fails fast with `CircuitBreakerOpen` (one provider call,
+    /// not two).
     #[tokio::test]
-    async fn buffered_retry_sites_trip_the_circuit_breaker_like_the_legacy_variant() {
+    async fn buffered_retry_sites_trip_the_circuit_breaker_on_a_transient_failure() {
         use crate::core::platform::container::paladin::MaxLoops;
 
         let mut paladin = create_test_paladin();
@@ -4913,9 +4912,9 @@ mod tests {
         }
     }
 
-    /// Plan 25-06 Test 5 (X-03, T-25-27): for a fixed `LlmError`, what each
-    /// migrated site in this file returns renders exactly what the legacy
-    /// `PaladinError::LlmError(e.to_string())` rendered -- `LLM error: {e}`.
+    /// Plan 25-06 Test 5 (T-25-27): for a fixed `LlmError`, what each
+    /// migrated site in this file returns is a `PaladinError::LlmFailure`
+    /// rendering `LLM error: {e}`.
     ///
     /// The two buffered retry-loop sites never return the converted error to
     /// a caller (they log it and end in `MaxRetriesExceeded` or

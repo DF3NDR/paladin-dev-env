@@ -16,6 +16,7 @@ use paladin_core::platform::container::battalion::conclave::{
     Conclave, ConclaveError, ConclaveResult, ConclaveStatus, ObservabilityLevel,
 };
 use paladin_core::platform::container::paladin_error::PaladinError;
+use paladin_core::platform::container::transience::Transience;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult};
 
 /// Service for executing Conclave patterns
@@ -336,48 +337,17 @@ impl ConclaveExecutionService {
         }
     }
 
-    /// Check if an error is retryable
+    /// Check if an error is retryable.
     ///
-    /// Transient errors (network, timeout, rate limit) should be retried.
-    /// Permanent errors (invalid API key, invalid config) should not.
+    /// An expert failure is retried if and only if
+    /// [`PaladinError::transience`] classifies it as [`Transience::Transient`]
+    /// (D-10, D-11). This is parity with the engine's default `TransientOnly`
+    /// retry predicate: [`Transience::Unknown`] is **not** retried, and a
+    /// [`Transience::Permanent`] failure never is. The `transience()` table is
+    /// the only classification source -- the failure's message text is never
+    /// read, so a provider-controlled string cannot steer the decision.
     fn is_retryable_error(error: &PaladinError) -> bool {
-        match error {
-            // Retryable errors
-            PaladinError::Timeout(_) => true,
-            PaladinError::LlmError(msg) => {
-                // Check for rate limit indicators
-                let msg_lower = msg.to_lowercase();
-                msg_lower.contains("rate limit")
-                    || msg_lower.contains("timeout")
-                    || msg_lower.contains("network")
-                    || msg_lower.contains("connection")
-                    || msg_lower.contains("503")
-                    || msg_lower.contains("429")
-            }
-            // Non-retryable errors
-            PaladinError::ConfigurationError(_) => false,
-            PaladinError::ExecutionError(_) => false,
-            PaladinError::StopWordDetected(_) => false,
-            PaladinError::CircuitBreakerOpen => false,
-            PaladinError::MaxRetriesExceeded(_) => false,
-            PaladinError::GarrisonError(_) => false,
-            PaladinError::GarrisonRequired => false,
-            PaladinError::ArsenalError(_) => false,
-            // FT-01 (25-02 Task 1 landed the variant; D-02): classify by the carried
-            // transience instead of message sniffing.
-            PaladinError::LlmFailure { .. } => matches!(
-                error.transience(),
-                paladin_core::platform::container::transience::Transience::Transient
-            ),
-            // X-10.2 (D-04): `PaladinError` is `#[non_exhaustive]`; a future
-            // variant is classified by its own `transience()` rather than a
-            // silently-wrong `true`/`false` guess, mirroring the `LlmFailure`
-            // arm immediately above.
-            _ => matches!(
-                error.transience(),
-                paladin_core::platform::container::transience::Transience::Transient
-            ),
-        }
+        error.transience() == Transience::Transient
     }
 
     /// Calculate retry delay with exponential backoff and jitter
@@ -727,24 +697,83 @@ mod tests {
         assert!(delay2.as_secs() >= 3 && delay2.as_secs() <= 6); // 4s ± 20% with jitter
     }
 
+    /// D-10/D-11: the Conclave retries a failure if and only if
+    /// `transience()` says `Transient`. One row per behaviour, including the
+    /// variants whose answer changed against the v0.10 per-variant match.
     #[test]
-    fn test_is_retryable_error() {
-        assert!(ConclaveExecutionService::is_retryable_error(
-            &PaladinError::Timeout(10)
-        ));
-        assert!(ConclaveExecutionService::is_retryable_error(
-            &PaladinError::LlmError("Rate limit exceeded".to_string())
-        ));
-        assert!(ConclaveExecutionService::is_retryable_error(
-            &PaladinError::LlmError("503 Service Unavailable".to_string())
-        ));
+    fn conclave_retry_predicate_is_transient_only() {
+        use crate::llm_failure::to_paladin_error;
+        use paladin_core::platform::container::arsenal::ArsenalError;
+        use paladin_core::platform::container::garrison_error::GarrisonError;
+        use paladin_ports::output::llm_port::LlmError;
 
-        assert!(!ConclaveExecutionService::is_retryable_error(
-            &PaladinError::ConfigurationError("Invalid config".to_string())
-        ));
-        assert!(!ConclaveExecutionService::is_retryable_error(
-            &PaladinError::StopWordDetected("STOP".to_string())
-        ));
+        let cases: Vec<(PaladinError, bool)> = vec![
+            (PaladinError::Timeout(10), true),
+            (
+                to_paladin_error(&LlmError::ProviderError {
+                    provider: "openai".to_string(),
+                    status: 503,
+                    message: "upstream unavailable".to_string(),
+                }),
+                true,
+            ),
+            (
+                to_paladin_error(&LlmError::AuthenticationError(
+                    "invalid API key".to_string(),
+                )),
+                false,
+            ),
+            (
+                to_paladin_error(&LlmError::ProcessingError("opaque".to_string())),
+                false,
+            ),
+            (PaladinError::ExecutionError("boom".to_string()), false),
+            (
+                PaladinError::ConfigurationError("Invalid config".to_string()),
+                false,
+            ),
+            (PaladinError::StopWordDetected("STOP".to_string()), false),
+            // New retries versus v0.10 (recorded as MIGRATION.md 9.1 rows).
+            (PaladinError::CircuitBreakerOpen, true),
+            (
+                PaladinError::GarrisonError(GarrisonError::StorageError("db".to_string())),
+                true,
+            ),
+            (PaladinError::ArsenalError(ArsenalError::Timeout(5)), true),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(
+                ConclaveExecutionService::is_retryable_error(&error),
+                expected,
+                "retry decision for {error:?}"
+            );
+        }
+    }
+
+    /// Edge LEGACY-03/encoding: the predicate never reads message text.
+    #[test]
+    fn conclave_retry_predicate_ignores_message_text() {
+        let permanent_but_retryish = PaladinError::LlmFailure {
+            transience: Transience::Permanent,
+            status: None,
+            provider: Some("openai".to_string()),
+            message: "429 rate limit timeout 503 network connection".to_string(),
+        };
+        assert!(
+            !ConclaveExecutionService::is_retryable_error(&permanent_but_retryish),
+            "a Permanent failure is not retried whatever its message says: {permanent_but_retryish:?}"
+        );
+
+        let transient_empty = PaladinError::LlmFailure {
+            transience: Transience::Transient,
+            status: None,
+            provider: None,
+            message: String::new(),
+        };
+        assert!(
+            ConclaveExecutionService::is_retryable_error(&transient_empty),
+            "a Transient failure is retried even with an empty message: {transient_empty:?}"
+        );
     }
 
     /// Plan 25-06 Test 3 (D-02): the Conclave retry predicate classifies a
@@ -754,7 +783,6 @@ mod tests {
     #[test]
     fn conclave_execution_service_surfaces_structured_llm_failure() {
         use crate::llm_failure::to_paladin_error;
-        use paladin_core::platform::container::transience::Transience;
         use paladin_ports::output::llm_port::LlmError;
 
         // Transient by typed status: retried.
@@ -773,7 +801,7 @@ mod tests {
         ));
         assert!(ConclaveExecutionService::is_retryable_error(&transient));
 
-        // A 500 carries no substring the legacy sniff recognised; the typed
+        // A 500 carries no message text a sniffer would recognise; the typed
         // status classifies it Transient by value (FT-FR-01).
         let server_fault = to_paladin_error(&LlmError::ProviderError {
             provider: "openai".to_string(),
@@ -800,7 +828,7 @@ mod tests {
         let unknown = to_paladin_error(&LlmError::ProcessingError("opaque".to_string()));
         assert!(!ConclaveExecutionService::is_retryable_error(&unknown));
 
-        // Rendered text is byte-identical to the legacy erasure (X-03).
+        // Rendered text is `LLM error: {e}` (the source error's own display).
         let fixed = LlmError::rate_limited(None);
         assert_eq!(
             to_paladin_error(&fixed).to_string(),

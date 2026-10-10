@@ -184,6 +184,7 @@
 //!     PaladinPort, PaladinResult, StopReason
 //! };
 //! use paladin_core::platform::container::paladin_error::PaladinError;
+//! use paladin_core::platform::container::transience::Transience;
 //! use std::sync::Arc;
 //! use std::time::Duration;
 //! use tokio::time::sleep;
@@ -207,7 +208,7 @@
 //!             }
 //!             Ok(result) => return Ok(result), // Accept partial results after retries
 //!             Err(e) if attempts >= max_retries => return Err(e),
-//!             Err(PaladinError::LlmError(_)) => {
+//!             Err(e) if e.transience() == Transience::Transient => {
 //!                 sleep(backoff).await;
 //!                 backoff *= 2;
 //!                 attempts += 1;
@@ -227,7 +228,7 @@
 //! | ConfigurationError | No | Fix Paladin configuration (system prompt, model, etc.) |
 //! | ExecutionError | Maybe | Check error message, retry if transient |
 //! | Timeout | Yes | Increase timeout or reduce max_loops |
-//! | LlmError | Yes | Retry with exponential backoff |
+//! | LlmFailure | Per `transience()` | Retry with exponential backoff when `Transient`; fix credentials or the request when `Permanent` |
 //! | StopWordDetected | No | This is success, check stop word in result |
 //!
 //! ## Stop Reasons
@@ -822,7 +823,8 @@ pub trait PaladinPort: Send + Sync {
     /// - `PaladinError::ConfigurationError` - Invalid Paladin configuration
     /// - `PaladinError::ExecutionError` - Error during execution
     /// - `PaladinError::Timeout` - Execution exceeded timeout
-    /// - `PaladinError::LlmError` - LLM provider error
+    /// - `PaladinError::LlmFailure` - an LLM provider failure carrying its typed
+    ///   transience, status and provider
     ///
     /// # Examples
     ///

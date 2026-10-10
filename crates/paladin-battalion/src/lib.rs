@@ -56,8 +56,9 @@ pub mod grove_service;
 /// registers one in code.
 pub mod llm_decision;
 /// The one `LlmError` -> `PaladinError::LlmFailure` conversion (D-02, X-06),
-/// shared by the engine-side and application-side call sites that used to
-/// erase a real `LlmError` into the stringly `PaladinError::LlmError`.
+/// shared by the engine-side and application-side call sites that hold a real
+/// `LlmError`; the converted failure keeps the adapter's transience, status
+/// and provider.
 pub mod llm_failure;
 pub mod maneuver;
 pub mod phalanx_service;

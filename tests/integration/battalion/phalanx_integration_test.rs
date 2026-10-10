@@ -7,14 +7,38 @@ use paladin::application::services::battalion::phalanx_service::PhalanxExecution
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::core::base::entity::node::Node;
 use paladin::core::platform::container::battalion::phalanx::{AggregationStrategy, Phalanx};
-use paladin::core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
+use paladin::core::platform::container::battalion::{BattalionConfig, BattalionError};
 use paladin::core::platform::container::paladin::MaxLoops;
 use paladin::core::platform::container::paladin::{Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec, TimeoutPolicy};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, StopReason};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
+
+/// The Aegis equivalent of the v0.10 continue-on-error strategy: absorb a failed
+/// Paladin and keep going (`on_error: None` is the fail-fast default).
+fn absorb() -> Aegis {
+    Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        ..Aegis::default()
+    }
+}
+
+/// An Aegis that bounds every Paladin attempt by `run_timeout`.
+fn run_bound(run_timeout: Duration) -> Aegis {
+    Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(run_timeout),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    }
+}
 
 /// Mock PaladinPort that simulates realistic concurrent Paladin behavior
 struct IntegrationMockPaladinPort {
@@ -333,8 +357,7 @@ async fn test_phalanx_partial_failures_continue_on_error() {
         .map(|i| create_paladin(&format!("Agent{}", i), "Task"))
         .collect();
 
-    let config = BattalionConfig::new("partial_fail_test")
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("partial_fail_test").with_aegis(absorb());
 
     let phalanx = Phalanx::new(paladins, config).unwrap();
 
@@ -357,29 +380,51 @@ async fn test_phalanx_partial_failures_continue_on_error() {
     assert_eq!(battalion_result.paladin_results.len(), 3);
 }
 
-#[tokio::test]
-async fn test_phalanx_timeout_enforcement() {
+/// D-02: the bound is per attempt, not per run. Two 600 ms Paladins under a 1 s bound both
+/// complete; the v0.10 whole-run timeout is gone.
+#[tokio::test(start_paused = true)]
+async fn test_phalanx_bounds_each_attempt_not_the_run() {
+    let agent1 = create_paladin("Agent1", "Task");
+    let agent2 = create_paladin("Agent2", "Task");
+
+    let config = BattalionConfig::new("bounds_test").with_aegis(run_bound(Duration::from_secs(1)));
+    let phalanx = Phalanx::new(vec![agent1, agent2], config).unwrap();
+
+    let mock_port = Arc::new(IntegrationMockPaladinPort::new().with_delay(600));
+    let service = PhalanxExecutionService::new(mock_port);
+
+    let result = service
+        .execute(&phalanx, "Test")
+        .await
+        .expect("each 600 ms attempt is inside the 1 s per-attempt bound");
+
+    assert_eq!(result.paladin_results.len(), 2);
+    assert!(result.node_errors.is_empty());
+}
+
+/// D-03: with no handler, every attempt that exceeds its bound is collected and the run fails
+/// with an aggregate naming each structured timeout (`run timeout`), once per Paladin.
+#[tokio::test(start_paused = true)]
+async fn test_phalanx_attempt_timeout_is_aggregated() {
     let agent1 = create_paladin("SlowAgent1", "Slow task");
     let agent2 = create_paladin("SlowAgent2", "Slow task");
 
-    let config = BattalionConfig::new("timeout_test").with_timeout(1); // 1 second
-
+    let config = BattalionConfig::new("timeout_test").with_aegis(run_bound(Duration::from_secs(1)));
     let phalanx = Phalanx::new(vec![agent1, agent2], config).unwrap();
 
-    // Use mock with 2 second delay (exceeds timeout)
+    // 2 s per Paladin: over the 1 s per-attempt bound.
     let mock_port = Arc::new(IntegrationMockPaladinPort::new().with_delay(2000));
     let service = PhalanxExecutionService::new(mock_port);
 
-    let result = service.execute(&phalanx, "Test").await;
-
-    // Should timeout
-    assert!(result.is_err());
-
-    match result.unwrap_err() {
-        paladin::core::platform::container::battalion::BattalionError::Timeout(seconds) => {
-            assert_eq!(seconds, 1);
+    match service.execute(&phalanx, "Test").await {
+        Err(BattalionError::AggregationError(message)) => {
+            assert!(
+                message.starts_with("Phalanx execution failed with 2 errors"),
+                "got {message:?}"
+            );
+            assert_eq!(message.matches("run timeout").count(), 2, "got {message:?}");
         }
-        _ => panic!("Expected Timeout error"),
+        other => panic!("Expected BattalionError::AggregationError, got {other:?}"),
     }
 }
 
@@ -411,7 +456,7 @@ async fn test_phalanx_cancellation_support() {
     assert!(result.is_err());
 
     match result.unwrap_err() {
-        paladin::core::platform::container::battalion::BattalionError::Cancelled => {}
+        BattalionError::Cancelled => {}
         e => panic!("Expected Cancelled error, got: {:?}", e),
     }
 }
@@ -483,8 +528,7 @@ async fn test_phalanx_mixed_success_and_failure() {
         .map(|i| create_paladin(&format!("Agent{}", i), "Mixed"))
         .collect();
 
-    let config =
-        BattalionConfig::new("mixed_test").with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("mixed_test").with_aegis(absorb());
 
     let phalanx = Phalanx::new(paladins, config).unwrap();
 

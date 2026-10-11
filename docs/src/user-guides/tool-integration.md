@@ -839,15 +839,16 @@ async fn invoke_with_retry(&self, call: ArmamentCall) -> Result<ArmamentResult, 
     loop {
         attempts += 1;
 
-        // ArsenalError has no is_retryable() helper (unlike PaladinError) --
-        // match the variants worth retrying explicitly instead.
-        let is_retryable = |e: &ArsenalError| {
+        // ArsenalError carries no retry predicate of its own. Converted into a
+        // PaladinError it is classified by `transience()` (`ArsenalError::Timeout`
+        // and `TransportError` are Transient), so match those variants here.
+        let is_transient = |e: &ArsenalError| {
             matches!(e, ArsenalError::Timeout(_) | ArsenalError::TransportError(_))
         };
 
         match self.invoke(call.clone()).await {
             Ok(result) => return Ok(result),
-            Err(e) if attempts < max_attempts && is_retryable(&e) => {
+            Err(e) if attempts < max_attempts && is_transient(&e) => {
                 tokio::time::sleep(Duration::from_secs(2_u64.pow(attempts))).await;
                 continue;
             }

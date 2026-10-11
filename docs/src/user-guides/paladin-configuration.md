@@ -334,9 +334,10 @@ match paladin.execute(input).await {
         eprintln!("Request timed out after {} seconds", secs);
         // Increase timeout or simplify prompt
     }
-    Err(PaladinError::LlmError(msg)) => {
-        eprintln!("LLM error: {}", msg);
-        // Check API key, rate limits, model availability
+    Err(PaladinError::LlmFailure { transience, provider, message, .. }) => {
+        eprintln!("LLM error ({:?}, provider {:?}): {}", transience, provider, message);
+        // A `Transient` failure is worth retrying; for a `Permanent` one check
+        // the API key, rate limits and model availability
     }
     Err(e) => eprintln!("Other error: {}", e),
 }

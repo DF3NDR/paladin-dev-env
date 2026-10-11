@@ -14,8 +14,10 @@ use paladin::application::services::paladin::error::PaladinError;
 use paladin::core::base::entity::node::Node;
 use paladin::core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Mock PaladinPort for demonstration
 struct MockPaladinPort;
@@ -80,7 +82,14 @@ async fn run_auto_example(
     println!("{}", "=".repeat(70));
 
     let paladin_port = Arc::new(MockPaladinPort);
-    let config = BattalionConfig::new("auto_example").with_timeout(30);
+    // Each Paladin attempt is bounded at 30 seconds, not the whole run.
+    let config = BattalionConfig::new("auto_example").with_aegis(Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(30)),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    });
 
     // Build Commander with Auto strategy
     // The Commander will analyze the Paladins and select the best strategy

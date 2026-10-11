@@ -16,13 +16,14 @@ use async_trait::async_trait;
 use paladin::application::services::battalion::commander::CommanderBuilder;
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::core::base::entity::node::Node;
-use paladin::core::platform::container::battalion::{
-    BattalionConfig, BattalionStrategy, ErrorStrategy,
-};
+use paladin::core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec, TimeoutPolicy};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{fs, io};
 
 /// Mock PaladinPort that simulates realistic execution with metrics
@@ -139,14 +140,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 4: Create Battalion configuration with metadata export
     let config = BattalionConfig::new("metadata_export_demo")
-        .with_timeout(120)
-        .with_error_strategy(ErrorStrategy::ContinueOnError) // Continue on errors to capture all metrics
+        .with_aegis(Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(Duration::from_secs(120)), // bounds each Paladin attempt
+                idle_timeout: None,
+            }),
+            // Absorb failures to continue and capture every Paladin's metrics
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..Aegis::default()
+        })
         .with_metadata_dir(metadata_dir.clone()); // Enable metadata export
 
     println!("\n⚙️  Configuration:");
     println!("   • Strategy: Phalanx (concurrent execution)");
-    println!("   • Timeout: 120 seconds");
-    println!("   • Error Strategy: ContinueOnError");
+    println!("   • Per-attempt Timeout: 120 seconds");
+    println!("   • On Error: absorb the failure and continue");
     println!("   • Metadata Export: ENABLED ✓");
 
     // Step 5: Create Commander with Phalanx strategy

@@ -12,8 +12,10 @@ use paladin::application::services::paladin::error::PaladinError;
 use paladin::core::base::entity::node::Node;
 use paladin::core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Simple mock PaladinPort for demonstration
 /// In production, this would connect to real LLM APIs
@@ -93,16 +95,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   3. {} - Final review stage", reviewer.node.name);
 
     // Step 3: Create a Battalion configuration
-    // This defines behavior like timeouts and error handling
-    let config = BattalionConfig::new("basic_formation")
-        .with_timeout(60) // 60 second timeout
-        .with_error_strategy(
-            paladin::core::platform::container::battalion::ErrorStrategy::FailFast,
-        );
+    // This defines behavior like timeouts and error handling. With no on_error
+    // handler the first failure aborts the Formation (fail fast, the default).
+    let config = BattalionConfig::new("basic_formation").with_aegis(Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(60)), // bounds each Paladin attempt
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    });
 
     println!("\n⚙️  Configuration:");
     println!("   Battalion: {}", config.name);
-    println!("   Timeout: {} seconds", config.timeout_seconds);
+    println!(
+        "   Per-attempt Timeout: {} seconds",
+        config
+            .aegis
+            .timeout
+            .as_ref()
+            .and_then(|t| t.run_timeout)
+            .map_or(0, |d| d.as_secs())
+    );
     println!("   Strategy: Formation (sequential execution)");
 
     // Step 4: Build the Commander using the builder pattern

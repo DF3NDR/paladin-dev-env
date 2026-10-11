@@ -279,7 +279,7 @@ pub struct ConclaveConfig {
     /// Aggregator Paladin for synthesis
     pub aggregator: PaladinReference,
 
-    /// Timeout in seconds (optional, defaults to 300)
+    /// Per-attempt timeout in seconds for each expert and the aggregator (optional, defaults to 300)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
 

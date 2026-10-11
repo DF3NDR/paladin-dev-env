@@ -70,9 +70,29 @@ rand = { workspace = true }
 # covers this crate/type pair). Both lint ids were derived empirically via
 # `cargo semver-checks check-release --package paladin-ai-core
 # --default-features --baseline-version 0.9.0` (D-27), never guessed.
+#
+# LEGACY-01..04 (ADR-0059, D-00c, D-27, Phase 44 plan 44-11): the legacy
+# Battalion definitions were deleted outright, with no deprecated shim, and
+# the diagnostic (cargo-semver-checks 0.50.0 against the published 0.10.1,
+# `--release-type minor`, this table's allow lines disabled, restored
+# byte-for-byte) fired these lints for them. The three already-allowed lints
+# above cover the removed per-run timeout, retry and error-strategy fields and
+# their builders on the Battalion and Conclave configs (inherent_method_missing,
+# struct_pub_field_missing) and the added per-attempt policy field
+# (constructible_struct_adds_field). Three further lints are new here:
+# struct_missing (the legacy Battalion retry policy type and the legacy
+# node-error summary type), enum_missing (the legacy Battalion error-strategy
+# enum) and enum_variant_missing (the whole-run timeout variant of the
+# Battalion and Conclave error enums, and the string-carrying LLM variant of
+# the Paladin error enum). Each has a matching MIGRATION.md section 9.2 row
+# and `.cargo/semver-checks-allowlist.toml` entry, kept set-equal by CI's
+# `semver` job; every in-tree site migrated in the same commit series.
 [package.metadata.cargo-semver-checks.lints]
 enum_marked_non_exhaustive = "allow"
 constructible_struct_adds_field = "allow"
 inherent_method_missing = "allow"
 struct_pub_field_missing = "allow"
 struct_marked_non_exhaustive = "allow"
+struct_missing = "allow"
+enum_missing = "allow"
+enum_variant_missing = "allow"

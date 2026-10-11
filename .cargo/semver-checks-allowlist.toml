@@ -313,3 +313,116 @@ lint = "constructible_struct_adds_field"
 migration_row = "paladin-ai | AgentRuntimeDeps"
 requirement_id = "PACE-02"
 justification = "AgentRuntimeDeps gained the cadence: Option<CadenceWiring> field (D-03, 43-06) -- the Cadence wiring that paces every hop of a config-built model_fallback chain; Default carries an in-process wiring built from treasurer.cadence's defaults and None opts out. The struct stays constructible (not #[non_exhaustive]) because it implements Default and in-tree literals already use ..Default::default(); only a downstream full struct literal breaks. Found by the D-27 diagnostic at the Phase 43 closeout (43-13), which contradicted the row's earlier N; suppressed by the root Cargo.toml's crate-wide allow line."
+
+# --- Phase 44 (Legacy Clean-Break Removal, LEGACY-01..04) ---------------------
+# Entries below mirror the Phase 44 `Y` rows of MIGRATION.md section 9.2 (plan
+# 44-11). The D-27 diagnostic (cargo-semver-checks 0.50.0, the CI-pinned
+# version, against the published 0.10.1 with `--release-type minor` and
+# `--default-features`) ran once per crate with that crate's crate-wide allow
+# lines disabled; each manifest was restored byte-for-byte afterwards. Every
+# entry is a lint the tool fired for a Phase 44 item, in section 9.2 row order
+# with lint ids alphabetical inside a row. Lints it fired for earlier phases'
+# items (PaladinResult.cost, RunFinishStatus, RunEventKind, the TraceEvent
+# fields, RunOutcome::Halted.cause, the paladin-ports and paladin-ai fields)
+# belong to those phases' rows and are not repeated here. The BattalionResult
+# `node_errors` element retype fired no lint (the tool models no field type
+# change), so that row is `N` and has no entry. The paladin-ai facade's
+# re-export of the removed retry module fired nothing.
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai-core | BattalionConfig"
+requirement_id = "LEGACY-02"
+justification = "BattalionConfig gained the aegis: Aegis field (the one per-attempt fault-tolerance policy) in place of the three legacy fields. The field is #[serde(default)], so a v0.10 document still deserializes; a downstream full struct literal breaks. Every in-tree literal and builder call migrated to BattalionConfig::new(..).with_aegis(..) in the same commit series (44-01..44-10); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "inherent_method_missing"
+migration_row = "paladin-ai-core | BattalionConfig"
+requirement_id = "LEGACY-01, LEGACY-02"
+justification = "BattalionConfig::with_timeout, with_retry_policy and with_error_strategy are removed outright (ADR-0059, no deprecated shim, D-00c): the replacement is with_aegis(Aegis { timeout, retry, on_error, .. }), which bounds and retries each attempt. Every in-tree caller (Commander, CLI, examples, doc-examples, tests) migrated in the same commit series; suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_pub_field_missing"
+migration_row = "paladin-ai-core | BattalionConfig"
+requirement_id = "LEGACY-01, LEGACY-02"
+justification = "BattalionConfig's public fields timeout_seconds, retry_policy and error_strategy are removed (ADR-0059, D-00c); a v0.10 document carrying those keys still deserializes because serde ignores unknown keys, with aegis left at Aegis::default(). The replacement is the aegis field. Every in-tree reader migrated in the same commit series; suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_missing"
+migration_row = "paladin-ai-core | RetryPolicy"
+requirement_id = "LEGACY-01"
+justification = "The legacy Battalion RetryPolicy struct (paladin_core::platform::container::battalion::RetryPolicy) is deleted outright (ADR-0059, D-00c); the same-named Aegis RetryPolicy in the aegis module is a different type and is unaffected. The replacement is BattalionConfig.aegis.retry, where max_attempts counts total attempts (old retries + 1). Every in-tree use migrated in the same commit series; suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_missing"
+migration_row = "paladin-ai-core | ErrorStrategy"
+requirement_id = "LEGACY-01"
+justification = "The legacy Battalion ErrorStrategy enum (paladin_core::platform::container::battalion::ErrorStrategy) is deleted outright (ADR-0059, D-00c); the Maneuver's own ErrorStrategy in paladin-battalion is a different type and is unaffected. The replacement is BattalionConfig.aegis.on_error (Absorb continues past a failed Paladin, None fails fast). Every in-tree use migrated in the same commit series; suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_missing"
+migration_row = "paladin-ai-core | NodeError"
+requirement_id = "LEGACY-01"
+justification = "The legacy Battalion NodeError summary struct (paladin_core::platform::container::battalion::NodeError, a node name plus message text) is deleted outright (ADR-0059, D-00c); the structured node_error::NodeError is a different type and is unaffected. The replacement is that structured type, now the element of BattalionResult.node_errors. Every in-tree use migrated in the same commit series (44-06, 44-10); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_variant_missing"
+migration_row = "paladin-ai-core | BattalionError"
+requirement_id = "LEGACY-02"
+justification = "BattalionError::Timeout is removed (ADR-0059, D-00c): with a per-attempt bound there is no whole-Battalion timeout to report. A timed-out attempt surfaces as BattalionError::Node with a Timeout source (Formation, Campaign) or inside AggregationError (Phalanx). Every in-tree producer and match arm migrated in the same commit series; suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_variant_missing"
+migration_row = "paladin-ai-core | PaladinError"
+requirement_id = "LEGACY-03"
+justification = "PaladinError::LlmError(String), the stringly LLM variant, is removed (ADR-0059, D-00c); no first-party production code constructed it since Phase 25. The replacement is the structured LlmFailure variant, whose classification the engine, the Conclave and the circuit breaker read through transience(). Every in-tree site migrated in the same commit series (44-03); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "inherent_method_missing"
+migration_row = "paladin-ai-core | PaladinError"
+requirement_id = "LEGACY-03"
+justification = "PaladinError::is_retryable() and is_terminal() are removed (ADR-0059, D-00c): they decided by variant and by message substrings. The replacement is transience(), which classifies each variant once and never reads message text. Every in-tree caller (the circuit breaker, the Conclave, the eval runner) migrated in the same commit series (44-03); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "inherent_method_missing"
+migration_row = "paladin-ai-core | ConclaveConfig"
+requirement_id = "LEGACY-02"
+justification = "ConclaveConfig::with_timeout is removed (ADR-0059, D-00c). The replacement is BattalionConfig.aegis.timeout, applied to every expert and aggregator attempt. Every in-tree caller (Commander bridge, CLI, examples, tests) migrated in the same commit series (44-07, 44-08, 44-10); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_pub_field_missing"
+migration_row = "paladin-ai-core | ConclaveConfig"
+requirement_id = "LEGACY-02"
+justification = "ConclaveConfig's public timeout_seconds field is removed (ADR-0059, D-00c); a v0.10 document carrying it still deserializes because serde ignores unknown keys. The replacement is BattalionConfig.aegis.timeout. Every in-tree reader migrated in the same commit series (44-07, 44-10); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_variant_missing"
+migration_row = "paladin-ai-core | ConclaveError"
+requirement_id = "LEGACY-02"
+justification = "ConclaveError::Timeout is removed (ADR-0059, D-00c): with a per-attempt bound there is no whole-Conclave timeout. A timed-out expert attempt is a retried PaladinError::Timeout and a timed-out aggregator attempt surfaces as ConclaveError::AggregatorFailed. Every in-tree producer migrated in the same commit series (44-07, 44-10); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-battalion"
+lint = "function_missing"
+migration_row = "paladin-battalion | retry"
+requirement_id = "LEGACY-01"
+justification = "paladin_battalion::retry::should_retry and calculate_retry_delay, the legacy Battalion retry helpers, are removed with their module (ADR-0059, D-00c). The replacement is the engine's backoff_delay in paladin_battalion::engine::retry, driven by BattalionConfig.aegis.retry. Every in-tree caller (the Conclave) migrated in the same commit series (44-07, 44-10); suppressed by a new crate-wide allow line in a new [package.metadata.cargo-semver-checks.lints] table in crates/paladin-battalion/Cargo.toml."
+
+[[entry]]
+crate = "paladin-battalion"
+lint = "module_missing"
+migration_row = "paladin-battalion | retry"
+requirement_id = "LEGACY-01"
+justification = "The paladin_battalion::retry module is removed (ADR-0059, D-00c), together with the facade's pub use re-export of it (paladin::application::services::battalion::retry; the cargo-semver-checks run on the paladin-ai facade fired no lint for it). paladin_battalion::engine::retry is a different module and is unaffected. Every in-tree use migrated in the same commit series (44-07, 44-10); suppressed by a new crate-wide allow line in a new [package.metadata.cargo-semver-checks.lints] table in crates/paladin-battalion/Cargo.toml."

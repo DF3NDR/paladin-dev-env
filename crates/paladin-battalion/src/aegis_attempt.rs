@@ -535,6 +535,24 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn cancelled_before_the_first_attempt_makes_no_call() {
+        // A token that has already fired stops the runner before it calls
+        // the port at all: a Paladin queued behind a concurrency limit must
+        // not start an LLM call after its run was cancelled (review WR-01).
+        let port = ScriptedPort::new(vec![ok_after(Duration::ZERO)]);
+        let token = CancellationToken::new();
+        token.cancel();
+
+        let failure = run(&port, &Aegis::default(), &Some(token))
+            .await
+            .expect_err("a cancelled run makes no attempt");
+        assert_eq!(port.calls(), 0, "no LLM call after cancellation");
+        assert_eq!(failure.node_error.attempt, 1);
+        assert_eq!(failure.node_error.source, NodeErrorSource::Cancelled);
+        assert_eq!(failure.node_error.transience, Transience::Permanent);
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn timed_out_attempt_is_retried_like_any_transient_failure() {
         // Attempt 1 outlives the 1 s bound; attempt 2 is fast.
         let port = ScriptedPort::new(vec![

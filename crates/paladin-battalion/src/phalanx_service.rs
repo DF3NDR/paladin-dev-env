@@ -850,6 +850,81 @@ mod tests {
         }
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn cancelled_phalanx_does_not_start_queued_paladins() {
+        // Concurrency 1 queues Agent2 and Agent3 behind Agent1. Cancelling
+        // while Agent1 is in flight returns `Cancelled`; the queued Paladins
+        // must not start their LLM calls afterwards (review WR-01).
+        let paladins = vec![
+            create_paladin("Agent1"),
+            create_paladin("Agent2"),
+            create_paladin("Agent3"),
+        ];
+        let phalanx = Phalanx::new(paladins, BattalionConfig::new("queued_cancel"))
+            .unwrap()
+            .with_max_concurrency(1);
+
+        let mut mock_port = MockPaladinPort::new();
+        mock_port.delay_ms = 1000;
+        let calls = mock_port.call_count.clone();
+        let service = PhalanxExecutionService::new(Arc::new(mock_port));
+
+        let token = CancellationToken::new();
+        let canceller = token.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            canceller.cancel();
+        });
+
+        let result = service
+            .execute_with_cancellation(&phalanx, "in", token)
+            .await;
+        assert!(matches!(result, Err(BattalionError::Cancelled)));
+
+        // Let Agent1's in-flight attempt finish and release its permit.
+        tokio::time::sleep(Duration::from_secs(5)).await;
+        assert_eq!(
+            *calls.lock().unwrap(),
+            1,
+            "only the Paladin already in flight ran; the queued ones never started"
+        );
+    }
+
+    #[tokio::test]
+    async fn phalanx_rejects_zero_max_concurrency_before_any_paladin_runs() {
+        // A zero-permit limiter would block every Paladin forever, and no
+        // whole-run clock exists to end the wait (review WR-02).
+        let phalanx = Phalanx::new(
+            vec![create_paladin("Agent1"), create_paladin("Agent2")],
+            BattalionConfig::new("zero_concurrency"),
+        )
+        .unwrap()
+        .with_max_concurrency(0);
+
+        let mock_port = MockPaladinPort::new();
+        let calls = mock_port.call_count.clone();
+        let service = PhalanxExecutionService::new(Arc::new(mock_port));
+
+        let plain = tokio::time::timeout(Duration::from_secs(5), service.execute(&phalanx, "in"))
+            .await
+            .expect("execute must not hang on a zero concurrency limit");
+        assert!(
+            matches!(plain, Err(BattalionError::ValidationError(ref m)) if m.contains("max_concurrency"))
+        );
+
+        let cancellable = tokio::time::timeout(
+            Duration::from_secs(5),
+            service.execute_with_cancellation(&phalanx, "in", CancellationToken::new()),
+        )
+        .await
+        .expect("execute_with_cancellation must not hang on a zero concurrency limit");
+        assert!(
+            matches!(cancellable, Err(BattalionError::ValidationError(ref m)) if m.contains("max_concurrency"))
+        );
+
+        assert_eq!(*calls.lock().unwrap(), 0, "no Paladin runs");
+    }
+
     #[tokio::test]
     async fn test_phalanx_per_paladin_timing() {
         let p1 = create_paladin("Analyst");

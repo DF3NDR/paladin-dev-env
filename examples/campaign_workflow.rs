@@ -31,8 +31,10 @@ use paladin::core::platform::container::battalion::campaign::{
     Campaign, CampaignEdge, EdgeCondition,
 };
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, StopReason};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Example mock implementation of PaladinPort
 /// In a real application, this would call actual LLM APIs
@@ -153,6 +155,21 @@ fn create_paladin(name: &str, system_prompt: &str) -> Paladin {
     Node::new(data, Some(name.to_string()))
 }
 
+/// Bound each Paladin attempt in the Campaign at `secs` seconds, not the whole graph.
+///
+/// A Campaign has no continue mode: it ignores an `on_error` handler, so a
+/// failing node fails the run. Only the timeout (and, if set, a retry policy)
+/// applies to it.
+fn per_attempt_timeout(secs: u64) -> Aegis {
+    Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(secs)),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    }
+}
+
 /// Example 1: Quality Control Workflow with Conditional Routing
 async fn quality_control_workflow() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n📊 Example 1: Quality Control Workflow");
@@ -165,7 +182,7 @@ async fn quality_control_workflow() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = BattalionConfig::new("quality_control")
         .with_description("Quality control with conditional routing")
-        .with_timeout(30);
+        .with_aegis(per_attempt_timeout(30));
 
     let mut campaign = Campaign::new(config);
 
@@ -215,7 +232,7 @@ async fn data_processing_pipeline() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = BattalionConfig::new("data_pipeline")
         .with_description("Data processing with parallel cleaning")
-        .with_timeout(60);
+        .with_aegis(per_attempt_timeout(60));
 
     let mut campaign = Campaign::new(config);
 
@@ -278,7 +295,7 @@ async fn log_analysis_workflow() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = BattalionConfig::new("log_analysis")
         .with_description("Log analysis with regex-based routing")
-        .with_timeout(30);
+        .with_aegis(per_attempt_timeout(30));
 
     let mut campaign = Campaign::new(config);
 
@@ -326,7 +343,7 @@ async fn approval_chain_workflow() -> Result<(), Box<dyn std::error::Error>> {
 
     let config = BattalionConfig::new("approval_chain")
         .with_description("Sequential approval workflow")
-        .with_timeout(60);
+        .with_aegis(per_attempt_timeout(60));
 
     let mut campaign = Campaign::new(config);
 

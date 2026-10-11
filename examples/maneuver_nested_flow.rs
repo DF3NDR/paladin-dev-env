@@ -7,7 +7,7 @@
 //!
 //! - **Deep Nesting**: Multiple levels of nested flow expressions
 //! - **Complex Patterns**: Mixing sequential and parallel at multiple levels
-//! - **Error Handling**: ContinueOnError strategy for resilient workflows
+//! - **Error Handling**: IgnoreErrors strategy for resilient workflows
 //! - **Output Aggregation**: JSON format for structured results
 //! - **Real-World Workflow**: Multi-stage document review pipeline
 //!
@@ -266,7 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_timing_metrics(true)
         .with_detailed_observability(true);
 
-    println!("   ✓ Error strategy: ContinueOnError (resilient)");
+    println!("   ✓ Error strategy: IgnoreErrors (resilient)");
     println!("   ✓ Output format: JSON (structured)");
     println!("   ✓ Observability: Detailed");
 

@@ -64,8 +64,10 @@ use paladin::core::platform::container::battalion::conclave::{
 };
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin::core::platform::container::token_usage::TokenUsage;
+use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, StopReason};
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Example mock implementation of PaladinPort
 /// In a real application, this would call actual LLM APIs
@@ -219,6 +221,21 @@ impl PaladinPort for ExamplePaladinPort {
     }
 }
 
+/// Bound each expert attempt and the aggregator attempt at `secs` seconds.
+///
+/// The bound is per attempt, not for the whole Conclave. `retry_attempts` on
+/// the `ConclaveConfig` is the retry count; the `retry` field of the Aegis would
+/// only shape the wait between attempts, so none is set here.
+fn per_attempt_timeout(secs: u64) -> Aegis {
+    Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(secs)),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    }
+}
+
 /// Helper function to create a Paladin with specified configuration
 fn create_expert(name: &str, system_prompt: &str) -> Paladin {
     let data = PaladinData {
@@ -313,10 +330,11 @@ async fn example_1_basic_expert_panel() -> Result<(), Box<dyn std::error::Error>
 
     let battalion_config = BattalionConfig::new("expert_panel_conclave")
         .with_description("Multi-expert analysis with synthesis")
-        .with_timeout(300); // 5 minute timeout
+        .with_aegis(per_attempt_timeout(300)); // each attempt bounded at 5 minutes
 
+    // retry_attempts is the retry count; the aegis retry policy would only shape
+    // the backoff between attempts.
     let conclave_config = ConclaveConfig::new("expert_panel", battalion_config)
-        .with_timeout(300)
         .with_retry_attempts(2) // Retry failed experts up to 2 times
         .with_observability(ObservabilityLevel::Standard) // Standard logging
         .with_expert_names(true); // Include expert names in aggregator input
@@ -413,10 +431,10 @@ async fn example_2_custom_configuration() -> Result<(), Box<dyn std::error::Erro
     let aggregator = create_expert("SynthesisAggregator", "Synthesis expert");
 
     // Custom configuration with advanced options
-    let battalion_config = BattalionConfig::new("custom_conclave").with_timeout(600);
+    let battalion_config =
+        BattalionConfig::new("custom_conclave").with_aegis(per_attempt_timeout(600));
 
     let conclave_config = ConclaveConfig::new("custom", battalion_config)
-        .with_timeout(600)
         .with_retry_attempts(3) // More aggressive retry
         .with_observability(ObservabilityLevel::Verbose) // Detailed logging
         .with_expert_names(true)
@@ -473,10 +491,10 @@ async fn example_3_partial_failures() -> Result<(), Box<dyn std::error::Error>> 
 
     let aggregator = create_expert("SynthesisAggregator", "Aggregator with fallback");
 
-    let battalion_config = BattalionConfig::new("resilient_conclave").with_timeout(300);
+    let battalion_config =
+        BattalionConfig::new("resilient_conclave").with_aegis(per_attempt_timeout(300));
 
     let conclave_config = ConclaveConfig::new("resilient", battalion_config)
-        .with_timeout(300)
         .with_retry_attempts(2)
         .with_observability(ObservabilityLevel::Standard);
 

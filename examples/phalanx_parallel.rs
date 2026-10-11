@@ -11,7 +11,7 @@
 //!   - FirstSuccess: Return the first successful result
 //!   - Majority: Require consensus (≥50%)
 //! - **Concurrency Limiting**: Control max concurrent executions
-//! - **Error Handling**: Continue on partial failures
+//! - **Error Handling**: Continue on partial failures by absorbing them (`aegis.on_error`)
 //!
 //! # Use Cases
 //!
@@ -26,11 +26,38 @@ use async_trait::async_trait;
 use paladin::application::services::battalion::phalanx_service::PhalanxExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::core::base::entity::node::Node;
+use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::phalanx::{AggregationStrategy, Phalanx};
-use paladin::core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec, TimeoutPolicy};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, StopReason};
 use std::sync::Arc;
+use std::time::Duration;
+
+/// Bound each Paladin attempt at `secs` seconds. With no `on_error` handler the
+/// Phalanx fails fast: the first failed Paladin fails the run.
+fn fail_fast_aegis(secs: u64) -> Aegis {
+    Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(secs)),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    }
+}
+
+/// Bound each Paladin attempt at `secs` seconds and absorb a failed Paladin so
+/// the remaining Paladins still contribute. Each absorbed failure is recorded in
+/// `node_errors` on the result.
+fn absorbing_aegis(secs: u64) -> Aegis {
+    Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        ..fail_fast_aegis(secs)
+    }
+}
 
 /// Example mock implementation of PaladinPort
 /// In a real application, this would call actual LLM APIs
@@ -145,9 +172,7 @@ async fn example_1_collect_all(
     ];
 
     // Create Phalanx with CollectAll strategy (default)
-    let config = BattalionConfig::new("analysis_phalanx")
-        .with_timeout(10)
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("analysis_phalanx").with_aegis(absorbing_aegis(10));
 
     let phalanx = Phalanx::new(analysts, config)?;
 
@@ -169,6 +194,10 @@ async fn example_1_collect_all(
         println!("   Result {}: {}", i + 1, paladin_result.output);
     }
 
+    for node_error in &result.node_errors {
+        println!("   Recorded failure: {}", node_error);
+    }
+
     println!();
     Ok(())
 }
@@ -186,9 +215,7 @@ async fn example_2_first_success(
         create_paladin("Slow Worker", "You process requests slowly"),
     ];
 
-    let config = BattalionConfig::new("fast_response_phalanx")
-        .with_timeout(5)
-        .with_error_strategy(ErrorStrategy::FailFast);
+    let config = BattalionConfig::new("fast_response_phalanx").with_aegis(fail_fast_aegis(5));
 
     let phalanx =
         Phalanx::new(workers, config)?.with_aggregation(AggregationStrategy::FirstSuccess);
@@ -229,9 +256,7 @@ async fn example_3_majority_consensus(
         create_paladin("Voter 5", "You are voter 5"),
     ];
 
-    let config = BattalionConfig::new("consensus_phalanx")
-        .with_timeout(10)
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("consensus_phalanx").with_aegis(absorbing_aegis(10));
 
     let phalanx = Phalanx::new(voters, config)?.with_aggregation(AggregationStrategy::Majority);
 
@@ -264,9 +289,7 @@ async fn example_4_concurrency_limiting(
         .map(|i| create_paladin(&format!("Worker {}", i), "You process tasks"))
         .collect();
 
-    let config = BattalionConfig::new("batch_processing_phalanx")
-        .with_timeout(30)
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("batch_processing_phalanx").with_aegis(absorbing_aegis(30));
 
     let phalanx = Phalanx::new(workers, config)?.with_max_concurrency(3);
 

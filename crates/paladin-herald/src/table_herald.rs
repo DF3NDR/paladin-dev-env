@@ -634,6 +634,34 @@ mod tests {
     }
 
     #[test]
+    fn table_herald_renders_structured_node_error_line() {
+        use paladin_core::platform::container::node_error::{
+            NodeError, NodeErrorSource, TimeoutKind,
+        };
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_core::platform::container::waypoint::NodeId;
+
+        let herald = TableHerald::default();
+        let mut result = battalion_result_with_paladins(&["Scoutmaster"]);
+        result.node_errors = vec![NodeError {
+            node_id: NodeId::new("Scout"),
+            attempt: 2,
+            transience: Transience::Transient,
+            source: NodeErrorSource::Timeout(TimeoutKind::Run),
+        }];
+
+        let formatted = herald.format_battalion_result(&result).unwrap();
+
+        assert!(formatted.contains("\nFailures:\n"), "{formatted}");
+        assert!(
+            formatted
+                .lines()
+                .any(|line| line == "  Scout (attempt 2, Transient): run timeout"),
+            "{formatted}"
+        );
+    }
+
+    #[test]
     fn test_format_stream_chunk_returns_none() {
         let herald = TableHerald::default();
         let chunk = paladin_core::platform::container::herald::StreamChunk::builder()

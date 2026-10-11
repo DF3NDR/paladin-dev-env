@@ -836,6 +836,86 @@ mod tests {
     }
 
     #[test]
+    fn markdown_herald_renders_structured_node_error_line() {
+        use paladin_core::platform::container::node_error::{
+            NodeError, NodeErrorSource, TimeoutKind,
+        };
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_core::platform::container::waypoint::NodeId;
+
+        let herald = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        });
+        let mut result = create_test_battalion_result();
+        result.node_errors = vec![NodeError {
+            node_id: NodeId::new("Scout"),
+            attempt: 2,
+            transience: Transience::Transient,
+            source: NodeErrorSource::Timeout(TimeoutKind::Run),
+        }];
+
+        let formatted = herald.format_battalion_result(&result).unwrap();
+
+        assert!(formatted.contains("### Failures"), "{formatted}");
+        assert!(
+            formatted
+                .lines()
+                .any(|line| line == "**Scout:** attempt 2, Transient: run timeout"),
+            "{formatted}"
+        );
+    }
+
+    #[test]
+    fn herald_node_error_line_adds_no_provider_detail() {
+        use paladin_core::platform::container::node_error::{NodeError, NodeErrorSource};
+        use paladin_core::platform::container::transience::Transience;
+        use paladin_core::platform::container::waypoint::NodeId;
+
+        // T-44-15: the herald line adds only node id, attempt and transience to
+        // the source's own (already-redacted) display -- never the provider or
+        // the HTTP status the structured source also carries.
+        let mut result = create_test_battalion_result();
+        result.node_errors = vec![NodeError {
+            node_id: NodeId::new("Scout"),
+            attempt: 1,
+            transience: Transience::Permanent,
+            source: NodeErrorSource::Llm {
+                kind: "LlmFailure".to_string(),
+                status: Some(401),
+                provider: Some("openai".to_string()),
+                message: "[REDACTED] rejected".to_string(),
+            },
+        }];
+
+        let markdown = MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        })
+        .format_battalion_result(&result)
+        .unwrap();
+        #[cfg_attr(not(feature = "table"), allow(unused_mut))]
+        let mut rendered_by = vec![("markdown", markdown)];
+        // The Table herald is feature-gated; cover it whenever it is built.
+        #[cfg(feature = "table")]
+        rendered_by.push((
+            "table",
+            crate::table_herald::TableHerald::default()
+                .format_battalion_result(&result)
+                .unwrap(),
+        ));
+
+        for (label, rendered) in rendered_by {
+            let line = rendered
+                .lines()
+                .find(|line| line.contains("[REDACTED] rejected"))
+                .unwrap_or_else(|| panic!("{label} has no node-error line: {rendered}"));
+            assert!(!line.contains("openai"), "{label}: {line}");
+            assert!(!line.contains("401"), "{label}: {line}");
+        }
+    }
+
+    #[test]
     fn test_format_stream_chunk() {
         let herald = MarkdownHerald::new();
         let chunk = StreamChunk::builder()

@@ -1787,3 +1787,97 @@ fn legacy_battalion_node_error_summary_is_unchanged() {
     assert_eq!(round_tripped.node_name, legacy.node_name);
     assert_eq!(round_tripped.error, legacy.error);
 }
+
+/// A `BattalionResult` with no Paladin results, used to pin the persisted
+/// shape of `node_errors` (D-06).
+#[cfg(test)]
+fn empty_battalion_result() -> BattalionResult {
+    BattalionResult::new(
+        Uuid::new_v4(),
+        "Vanguard".to_string(),
+        Utc::now(),
+        String::new(),
+        Vec::new(),
+    )
+}
+
+#[test]
+fn battalion_result_node_errors_serialize_as_structured_node_errors() {
+    use crate::platform::container::node_error::{
+        NodeError as StructuredNodeError, NodeErrorSource, TimeoutKind,
+    };
+    use crate::platform::container::transience::Transience;
+    use crate::platform::container::waypoint::NodeId;
+
+    let mut result = empty_battalion_result();
+    result.node_errors = vec![
+        StructuredNodeError {
+            node_id: NodeId::new("Skirmisher"),
+            attempt: 2,
+            transience: Transience::Unknown,
+            source: NodeErrorSource::Paladin {
+                kind: "ExecutionError".to_string(),
+                status: None,
+                provider: None,
+                message: "Execution error: Skirmisher failed".to_string(),
+            },
+        },
+        StructuredNodeError {
+            node_id: NodeId::new("Scout"),
+            attempt: 1,
+            transience: Transience::Transient,
+            source: NodeErrorSource::Timeout(TimeoutKind::Run),
+        },
+    ];
+
+    // The raw string (not a `serde_json::Value`, which alphabetises keys) pins
+    // both the key set and the declaration order of each element.
+    let json = serde_json::to_string(&result).expect("serialize");
+    let expected = concat!(
+        "\"node_errors\":[",
+        "{\"node_id\":\"Skirmisher\",\"attempt\":2,\"transience\":\"Unknown\",",
+        "\"source\":{\"Paladin\":{\"kind\":\"ExecutionError\",\"status\":null,",
+        "\"provider\":null,\"message\":\"Execution error: Skirmisher failed\"}}},",
+        "{\"node_id\":\"Scout\",\"attempt\":1,\"transience\":\"Transient\",",
+        "\"source\":{\"Timeout\":\"Run\"}}",
+        "]"
+    );
+    assert!(
+        json.contains(expected),
+        "unexpected node_errors shape: {json}"
+    );
+
+    // A serialised result reads back with the same elements.
+    let round_tripped: BattalionResult = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(round_tripped.node_errors, result.node_errors);
+}
+
+#[test]
+fn battalion_result_rejects_v0_10_node_errors_shape() {
+    // A v0.10 document carries `{ "node_name": .., "error": .. }` elements.
+    // Deserialization is strict (D-00c): no compatibility path reads them.
+    let mut value = serde_json::to_value(empty_battalion_result()).expect("to_value");
+    value["node_errors"] = serde_json::json!([{ "node_name": "a", "error": "b" }]);
+
+    let parsed = serde_json::from_value::<BattalionResult>(value);
+    assert!(
+        parsed.is_err(),
+        "a v0.10 node_errors element must not deserialize"
+    );
+}
+
+#[test]
+fn battalion_result_accepts_empty_or_absent_node_errors() {
+    let mut value = serde_json::to_value(empty_battalion_result()).expect("to_value");
+
+    value["node_errors"] = serde_json::json!([]);
+    let empty: BattalionResult = serde_json::from_value(value.clone()).expect("empty list reads");
+    assert!(empty.node_errors.is_empty());
+
+    value
+        .as_object_mut()
+        .expect("a BattalionResult serialises as an object")
+        .remove("node_errors");
+    let absent: BattalionResult = serde_json::from_value(value).expect("absent key reads");
+    assert!(absent.node_errors.is_empty());
+}

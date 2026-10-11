@@ -472,6 +472,50 @@ mod tests {
     }
 
     #[test]
+    fn json_herald_serialises_structured_node_errors() {
+        use paladin_core::platform::container::node_error::TimeoutKind;
+
+        let herald = JsonHerald::new();
+        let mut result = create_test_battalion_result();
+        result.node_errors = vec![
+            NodeError {
+                node_id: NodeId::new("Scout"),
+                attempt: 2,
+                transience: Transience::Transient,
+                source: NodeErrorSource::Timeout(TimeoutKind::Run),
+            },
+            NodeError {
+                node_id: NodeId::new("Sentinel"),
+                attempt: 1,
+                transience: Transience::Permanent,
+                source: NodeErrorSource::Llm {
+                    kind: "LlmFailure".to_string(),
+                    status: Some(401),
+                    provider: Some("openai".to_string()),
+                    message: "[REDACTED] rejected".to_string(),
+                },
+            },
+        ];
+
+        let formatted = herald.format_battalion_result(&result).unwrap();
+        let parsed: Value = serde_json::from_str(&formatted).unwrap();
+
+        let errors = parsed["node_errors"].as_array().unwrap();
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0]["node_id"], "Scout");
+        assert_eq!(errors[0]["attempt"], 2);
+        assert_eq!(errors[0]["transience"], "Transient");
+        assert_eq!(errors[0]["source"]["Timeout"], "Run");
+        assert_eq!(errors[1]["node_id"], "Sentinel");
+        assert_eq!(errors[1]["transience"], "Permanent");
+        assert!(errors[1]["source"].is_object());
+        assert_eq!(errors[1]["source"]["Llm"]["status"], 401);
+        // The v0.10 keys are gone.
+        assert!(errors[0].get("node_name").is_none());
+        assert!(errors[0].get("error").is_none());
+    }
+
+    #[test]
     fn test_json_herald_battalion_empty_paladin_results_still_valid() {
         let herald = JsonHerald::new();
 

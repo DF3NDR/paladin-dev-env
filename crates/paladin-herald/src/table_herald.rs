@@ -241,10 +241,16 @@ impl Herald for TableHerald {
                 HeraldError::SerializationError(format!("Failed to write output: {}", e))
             })?;
             for node_error in &result.node_errors {
+                // Only the node id, attempt and transience are added to the
+                // source's own (already-redacted) display -- no provider or
+                // status (T-44-15).
                 writeln!(
                     &mut output,
-                    "  {}: {}",
-                    node_error.node_name, node_error.error
+                    "  {} (attempt {}, {:?}): {}",
+                    node_error.node_id.as_str(),
+                    node_error.attempt,
+                    node_error.transience,
+                    node_error.source
                 )
                 .map_err(|e| {
                     HeraldError::SerializationError(format!("Failed to write output: {}", e))
@@ -612,9 +618,13 @@ mod tests {
     fn test_table_herald_surfaces_node_error_names() {
         let herald = TableHerald::default();
         let mut result = battalion_result_with_paladins(&["Scoutmaster"]);
-        result.node_errors = vec![paladin_core::platform::container::battalion::NodeError {
-            node_name: "Herald".to_string(),
-            error: "connection refused".to_string(),
+        result.node_errors = vec![paladin_core::platform::container::node_error::NodeError {
+            node_id: paladin_core::platform::container::waypoint::NodeId::new("Herald"),
+            attempt: 1,
+            transience: paladin_core::platform::container::transience::Transience::Transient,
+            source: paladin_core::platform::container::node_error::NodeErrorSource::Function {
+                message: "connection refused".to_string(),
+            },
         }];
 
         let formatted = herald.format_battalion_result(&result).unwrap();

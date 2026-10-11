@@ -15,9 +15,10 @@ use crate::aegis_attempt::{self, AttemptFailure};
 use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec};
 use paladin_core::platform::container::battalion::phalanx::{AggregationStrategy, Phalanx};
 use paladin_core::platform::container::battalion::{
-    BattalionError, BattalionResult, BattalionStatus, BattalionStrategy, NodeError,
+    BattalionError, BattalionResult, BattalionStatus, BattalionStrategy,
 };
 use paladin_core::platform::container::herald::Herald;
+use paladin_core::platform::container::node_error::NodeError;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult};
@@ -263,14 +264,11 @@ impl PhalanxExecutionService {
             }
         }
 
-        // 44-06 replaces this v0.10 summary shape with the structured
-        // `failure.node_error`. Declaration order is preserved by the collector.
+        // Record each runner failure's structured `node_error` unchanged (D-06).
+        // Declaration order is preserved by the collector.
         let node_errors: Vec<NodeError> = failures
             .iter()
-            .map(|failure| NodeError {
-                node_name: failure.node_error.node_id.as_str().to_string(),
-                error: failure.error.to_string(),
-            })
+            .map(|failure| failure.node_error.clone())
             .collect();
 
         // Per-Paladin metrics are keyed by the Paladins that actually
@@ -809,11 +807,15 @@ mod tests {
 
         // node_errors carries the real failed node's name + error text (D-03 / MERGE-04)
         assert_eq!(battalion_result.node_errors.len(), 1);
-        assert_eq!(battalion_result.node_errors[0].node_name, "Agent2");
+        assert_eq!(battalion_result.node_errors[0].node_id.as_str(), "Agent2");
         assert!(
-            battalion_result.node_errors[0]
-                .error
-                .contains("Mock failure for Agent2")
+            matches!(
+                &battalion_result.node_errors[0].source,
+                NodeErrorSource::Paladin { message, .. }
+                    if message.contains("Mock failure for Agent2")
+            ),
+            "got {:?}",
+            battalion_result.node_errors[0].source
         );
     }
 
@@ -932,11 +934,15 @@ mod tests {
 
         // node_errors carries the real failed node's name + error text (D-03 / MERGE-04)
         assert_eq!(result.node_errors.len(), 1);
-        assert_eq!(result.node_errors[0].node_name, "Failure1");
+        assert_eq!(result.node_errors[0].node_id.as_str(), "Failure1");
         assert!(
-            result.node_errors[0]
-                .error
-                .contains("Mock failure for Failure1")
+            matches!(
+                &result.node_errors[0].source,
+                NodeErrorSource::Paladin { message, .. }
+                    if message.contains("Mock failure for Failure1")
+            ),
+            "got {:?}",
+            result.node_errors[0].source
         );
     }
 
@@ -1261,9 +1267,21 @@ mod tests {
         assert_eq!(result.paladin_success_count, 1);
         assert_eq!(result.paladin_failure_count, 2);
         assert_eq!(result.node_errors.len(), 2);
-        assert_eq!(result.node_errors[0].node_name, "Slow");
-        assert_eq!(result.node_errors[1].node_name, "Odd");
-        assert!(result.node_errors[1].error.contains("x: y: z"));
+        assert_eq!(result.node_errors[0].node_id.as_str(), "Slow");
+        assert_eq!(
+            result.node_errors[0].source,
+            NodeErrorSource::Timeout(TimeoutKind::Run)
+        );
+        assert_eq!(result.node_errors[0].attempt, 1);
+        assert_eq!(result.node_errors[1].node_id.as_str(), "Odd");
+        assert!(
+            matches!(
+                &result.node_errors[1].source,
+                NodeErrorSource::Paladin { message, .. } if message.contains("x: y: z")
+            ),
+            "got {:?}",
+            result.node_errors[1].source
+        );
 
         let mut timed: Vec<&String> = result.per_paladin_times.keys().collect();
         timed.sort();
@@ -1304,7 +1322,7 @@ mod tests {
         let failed: Vec<&str> = result
             .node_errors
             .iter()
-            .map(|e| e.node_name.as_str())
+            .map(|e| e.node_id.as_str())
             .collect();
         assert_eq!(failed, vec!["A", "C"]);
         let outputs: Vec<&str> = result

@@ -744,11 +744,28 @@ pub struct BattalionResult {
     /// Count of Paladins that failed
     pub paladin_failure_count: usize,
 
-    /// Per-node failure detail (name + error text) for any strategy that
-    /// continues past a failure. Empty for a fully-successful run and for
-    /// strategies that do not collect it.
+    /// Structured per-node failure record (D-06) for any strategy that
+    /// continues past a failure.
+    ///
+    /// Each element is the one
+    /// [`crate::platform::container::node_error::NodeError`] the Aegis runner
+    /// recorded for a Paladin that failed outright: `node_id` is the Paladin's
+    /// name, `attempt` is the (1-indexed) attempt that produced the final
+    /// failure, and `transience` and `source` are exactly as the runner
+    /// recorded them.
+    ///
+    /// Populated by Formation and Phalanx under `aegis.on_error = Absorb`;
+    /// empty for a fully-successful run and for patterns that do not continue
+    /// past a failure. A run that continued past failures still reports
+    /// [`BattalionStatus::Completed`], with a non-zero
+    /// [`paladin_failure_count`](Self::paladin_failure_count) (D-07).
+    ///
+    /// `#[serde(default)]` keeps an absent or empty list readable. Deserialization
+    /// of an element is strict: a v0.10 `{ "node_name": .., "error": .. }`
+    /// element is rejected, and no compatibility deserializer, untagged enum or
+    /// alias exists for it (D-00c).
     #[serde(default)]
-    pub node_errors: Vec<NodeError>,
+    pub node_errors: Vec<crate::platform::container::node_error::NodeError>,
 }
 
 impl BattalionResult {
@@ -998,12 +1015,10 @@ pub enum BattalionError {
     #[error("Execution error: {0}")]
     ExecutionError(String),
 
-    /// A structured node-execution failure from the superstep engine
-    /// (Doc 04 FT-FR-02, D-06). Path-qualified to the NEW structured
-    /// `paladin_core::platform::container::node_error::NodeError` -- never
-    /// this module's legacy `NodeError { node_name, error }` summary, which
-    /// is a different, pre-existing v0.9 type left untouched (see its own
-    /// rustdoc cross-link above).
+    /// A structured node-execution failure (Doc 04 FT-FR-02, D-06).
+    /// Path-qualified to
+    /// `paladin_core::platform::container::node_error::NodeError`, the same
+    /// type [`BattalionResult::node_errors`] carries per failed Paladin.
     #[error("Node error: {0}")]
     Node(crate::platform::container::node_error::NodeError),
 }

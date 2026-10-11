@@ -12,9 +12,10 @@ use crate::error_aggregation::AggregatedError;
 use paladin_core::platform::container::aegis::ErrorHandlerSpec;
 use paladin_core::platform::container::battalion::formation::Formation;
 use paladin_core::platform::container::battalion::{
-    BattalionError, BattalionResult, BattalionStatus, BattalionStrategy, NodeError, TokenUsage,
+    BattalionError, BattalionResult, BattalionStatus, BattalionStrategy, TokenUsage,
 };
 use paladin_core::platform::container::herald::Herald;
+use paladin_core::platform::container::node_error::NodeError;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult};
 use std::collections::HashMap;
 
@@ -252,12 +253,8 @@ impl FormationExecutionService {
                             paladin.node.name,
                             failure.node_error.attempt
                         );
-                        // 44-06 replaces this v0.10 summary shape with the
-                        // structured `failure.node_error`.
-                        node_errors.push(NodeError {
-                            node_name: paladin.node.name.clone(),
-                            error: failure.error.to_string(),
-                        });
+                        // Record the runner's structured failure unchanged (D-06).
+                        node_errors.push(failure.node_error.clone());
                         aggregated_error.add_error(BattalionError::Node(failure.node_error));
                         // The Absorb fallback_delta is a no-op for a string
                         // pipeline: the next Paladin gets an empty input.
@@ -713,8 +710,16 @@ mod tests {
         assert_eq!(result.status, BattalionStatus::Completed);
         assert_eq!(result.paladin_results.len(), 2);
         assert_eq!(result.node_errors.len(), 1);
-        assert_eq!(result.node_errors[0].node_name, "P2");
-        assert!(!result.node_errors[0].error.is_empty());
+        assert_eq!(result.node_errors[0].node_id.as_str(), "P2");
+        assert_eq!(result.node_errors[0].attempt, 1);
+        assert!(
+            matches!(
+                &result.node_errors[0].source,
+                NodeErrorSource::Paladin { message, .. } if message.contains("P2 exploded")
+            ),
+            "got {:?}",
+            result.node_errors[0].source
+        );
         assert_eq!(result.paladin_failure_count, 1);
         assert_eq!(result.paladin_success_count, 2);
         assert_eq!(

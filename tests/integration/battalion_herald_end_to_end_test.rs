@@ -327,8 +327,8 @@ async fn test_formation_partial_results_through_all_three_heralds() {
     assert_eq!(result.paladin_success_count, 2);
     assert_eq!(result.paladin_failure_count, 1);
     assert_eq!(result.node_errors.len(), 1);
-    assert_eq!(result.node_errors[0].node_name, "Skirmisher");
-    assert!(result.node_errors[0].error.contains("Skirmisher"));
+    assert_eq!(result.node_errors[0].node_id.as_str(), "Skirmisher");
+    assert!(result.node_errors[0].to_string().contains("Skirmisher"));
 
     // --- JSON Herald ---
     let json_herald = JsonHerald::new();
@@ -354,7 +354,7 @@ async fn test_formation_partial_results_through_all_three_heralds() {
         .as_array()
         .expect("node_errors should be an array");
     assert_eq!(node_errors_json.len(), 1);
-    assert_eq!(node_errors_json[0]["node_name"], "Skirmisher");
+    assert_eq!(node_errors_json[0]["node_id"], "Skirmisher");
 
     // --- Markdown Herald ---
     let markdown_herald = MarkdownHerald::new();

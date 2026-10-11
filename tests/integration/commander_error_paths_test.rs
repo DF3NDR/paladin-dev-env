@@ -132,7 +132,7 @@ async fn test_continue_on_error_collects_all_errors() {
     let failed_names: Vec<&str> = result
         .node_errors
         .iter()
-        .map(|e| e.node_name.as_str())
+        .map(|e| e.node_id.as_str())
         .collect();
     assert!(
         failed_names.contains(&"Paladin-1"),
@@ -259,7 +259,7 @@ async fn test_partial_results_returned_with_errors() {
     );
 
     assert_eq!(result.node_errors.len(), 1);
-    assert_eq!(result.node_errors[0].node_name, "Paladin-2");
+    assert_eq!(result.node_errors[0].node_id.as_str(), "Paladin-2");
 
     assert_eq!(result.paladin_success_count, 2);
     assert_eq!(result.paladin_failure_count, 1);

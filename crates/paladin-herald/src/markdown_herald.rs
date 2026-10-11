@@ -395,7 +395,16 @@ impl Herald for MarkdownHerald {
         if !result.node_errors.is_empty() {
             output.push_str(&self.heading(self.config.heading_level + 1, "Failures"));
             for node_error in &result.node_errors {
-                output.push_str(&self.format_field(&node_error.node_name, &node_error.error));
+                // Only the node id, attempt and transience are added to the
+                // source's own (already-redacted) display -- no provider or
+                // status (T-44-15).
+                output.push_str(&self.format_field(
+                    node_error.node_id.as_str(),
+                    &format!(
+                        "attempt {}, {:?}: {}",
+                        node_error.attempt, node_error.transience, node_error.source
+                    ),
+                ));
             }
             output.push('\n');
         }
@@ -743,9 +752,13 @@ mod tests {
             total_tokens: 400,
             paladin_success_count: 2,
             paladin_failure_count: 1,
-            node_errors: vec![paladin_core::platform::container::battalion::NodeError {
-                node_name: "Herald".to_string(),
-                error: "connection refused".to_string(),
+            node_errors: vec![paladin_core::platform::container::node_error::NodeError {
+                node_id: paladin_core::platform::container::waypoint::NodeId::new("Herald"),
+                attempt: 1,
+                transience: paladin_core::platform::container::transience::Transience::Transient,
+                source: paladin_core::platform::container::node_error::NodeErrorSource::Function {
+                    message: "connection refused".to_string(),
+                },
             }],
         };
 
@@ -758,7 +771,7 @@ mod tests {
 
         // Failure detail: each node error's name and text rendered.
         assert!(formatted.contains("**Herald:**"));
-        assert!(formatted.contains("connection refused"));
+        assert!(formatted.contains("function error: connection refused"));
 
         // paladin_results order is preserved.
         let scout_pos = formatted.find("Scout output").unwrap();

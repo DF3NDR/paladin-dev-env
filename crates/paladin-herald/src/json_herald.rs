@@ -257,8 +257,11 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use paladin_core::platform::container::battalion::{
-        BattalionStatus, BattalionStrategy, NodeError, TokenUsage,
+        BattalionStatus, BattalionStrategy, TokenUsage,
     };
+    use paladin_core::platform::container::node_error::{NodeError, NodeErrorSource};
+    use paladin_core::platform::container::transience::Transience;
+    use paladin_core::platform::container::waypoint::NodeId;
     use paladin_ports::output::paladin_port::StopReason;
     use uuid::Uuid;
 
@@ -441,8 +444,12 @@ mod tests {
             paladin_success_count: 2,
             paladin_failure_count: 1,
             node_errors: vec![NodeError {
-                node_name: "Herald".to_string(),
-                error: "connection refused".to_string(),
+                node_id: NodeId::new("Herald"),
+                attempt: 1,
+                transience: Transience::Transient,
+                source: NodeErrorSource::Function {
+                    message: "connection refused".to_string(),
+                },
             }],
         };
 
@@ -458,8 +465,10 @@ mod tests {
             263
         );
         assert_eq!(parsed["node_errors"].as_array().unwrap().len(), 1);
-        assert_eq!(parsed["node_errors"][0]["node_name"], "Herald");
-        assert_eq!(parsed["node_errors"][0]["error"], "connection refused");
+        assert_eq!(parsed["node_errors"][0]["node_id"], "Herald");
+        assert_eq!(parsed["node_errors"][0]["attempt"], 1);
+        assert_eq!(parsed["node_errors"][0]["transience"], "Transient");
+        assert!(parsed["node_errors"][0]["source"].is_object());
     }
 
     #[test]

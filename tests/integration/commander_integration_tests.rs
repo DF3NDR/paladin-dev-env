@@ -515,10 +515,10 @@ async fn test_continue_on_error_strategy_integration() {
 
     let result = commander.execute("Test continue on error").await;
 
-    // ContinueOnError should complete despite Paladin2 failure
+    // an Absorb handler should complete despite Paladin2 failure
     assert!(
         result.is_ok(),
-        "ContinueOnError should return result despite errors"
+        "an Absorb handler should return a result despite errors"
     );
 
     // Verify all 3 Paladins executed
@@ -526,7 +526,7 @@ async fn test_continue_on_error_strategy_integration() {
     assert_eq!(
         log.len(),
         3,
-        "All Paladins should execute with ContinueOnError"
+        "All Paladins should execute under an Absorb handler"
     );
 
     // Result should contain execution info
@@ -568,8 +568,8 @@ async fn test_retry_then_continue_strategy_integration() {
 
     let result = commander.execute("Test retry then continue").await;
 
-    // RetryThenContinue should complete after retries exhausted
-    assert!(result.is_ok(), "RetryThenContinue should return result");
+    // retry then Absorb should complete after retries are exhausted
+    assert!(result.is_ok(), "retry then Absorb should return a result");
 
     // Verify Paladin2 was retried (will show multiple attempts in log if retry logic works)
     let log = mock_port.get_execution_log();

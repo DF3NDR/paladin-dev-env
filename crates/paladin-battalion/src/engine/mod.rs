@@ -45,7 +45,7 @@
 //!   consumer yet (Docs 05, 07); ENG-FR-23's cancellation-to-`Halted` path
 //!   lives inline in `superstep`/`WarEngine` since it needs no dedicated
 //!   type beyond `tokio_util::sync::CancellationToken`.
-//! - [`retry`] — `backoff_delay`/`wait_backoff`/`should_retry` (Doc 04
+//! - [`retry`](crate::engine::retry) — `backoff_delay`/`wait_backoff`/`should_retry` (Doc 04
 //!   FT-FR-02, D-15): the Aegis retry loop's own backoff math and
 //!   cancellation-aware wait, wrapped around the whole per-node dispatch
 //!   closure in `superstep` -- OUTSIDE the `hooks` interceptor chain

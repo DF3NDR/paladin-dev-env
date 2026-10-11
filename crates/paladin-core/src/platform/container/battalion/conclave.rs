@@ -104,9 +104,6 @@ pub struct ConclaveConfig {
     /// Base Battalion configuration
     pub battalion_config: BattalionConfig,
 
-    /// Timeout for entire Conclave execution in seconds
-    pub timeout_seconds: u64,
-
     /// Number of retry attempts for failed experts (0-5)
     pub retry_attempts: u32,
 
@@ -138,7 +135,6 @@ impl ConclaveConfig {
     ///
     /// # Default Values
     ///
-    /// - `timeout_seconds`: 300 (5 minutes)
     /// - `retry_attempts`: 2
     /// - `synthesis_prompt`: None (uses default template)
     /// - `include_expert_names`: true
@@ -148,19 +144,12 @@ impl ConclaveConfig {
         Self {
             name: name.into(),
             battalion_config,
-            timeout_seconds: 300,
             retry_attempts: 2,
             synthesis_prompt: None,
             include_expert_names: true,
             max_expert_output_tokens: None,
             observability_level: ObservabilityLevel::default(),
         }
-    }
-
-    /// Set timeout in seconds (builder pattern)
-    pub fn with_timeout(mut self, seconds: u64) -> Self {
-        self.timeout_seconds = seconds;
-        self
     }
 
     /// Set retry attempts (builder pattern)
@@ -443,10 +432,6 @@ pub enum ConclaveError {
     #[error("Configuration error: {0}")]
     ConfigurationError(String),
 
-    /// Execution timed out
-    #[error("Execution timeout after {0} seconds")]
-    Timeout(u64),
-
     /// Specific expert failed
     #[error("Expert '{0}' failed: {1}")]
     ExpertError(String, String),
@@ -461,7 +446,6 @@ impl From<ConclaveError> for BattalionError {
             }
             ConclaveError::AggregatorFailed(msg) => BattalionError::AggregationError(msg),
             ConclaveError::ConfigurationError(msg) => BattalionError::ConfigurationError(msg),
-            ConclaveError::Timeout(seconds) => BattalionError::Timeout(seconds),
             ConclaveError::ExpertError(name, msg) => {
                 BattalionError::PaladinError(format!("Expert '{}': {}", name, msg))
             }
@@ -574,13 +558,11 @@ mod tests {
     fn test_conclave_config_builder() {
         let battalion_config = BattalionConfig::new("test");
         let config = ConclaveConfig::new("TestConclave", battalion_config)
-            .with_timeout(600)
             .with_retry_attempts(3)
             .with_expert_names(false)
             .with_observability(ObservabilityLevel::Verbose)
             .with_synthesis_prompt("Custom prompt");
 
-        assert_eq!(config.timeout_seconds, 600);
         assert_eq!(config.retry_attempts, 3);
         assert!(!config.include_expert_names);
         assert_eq!(config.observability_level, ObservabilityLevel::Verbose);

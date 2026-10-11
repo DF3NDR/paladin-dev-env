@@ -60,15 +60,6 @@ pub struct BattalionConfig {
     /// Optional description
     pub description: Option<String>,
 
-    /// Maximum execution time in seconds
-    pub timeout_seconds: u64,
-
-    /// Retry policy for failed operations
-    pub retry_policy: RetryPolicy,
-
-    /// Strategy for handling errors
-    pub error_strategy: ErrorStrategy,
-
     /// Per-attempt fault-tolerance policy (retry, timeout, error handler).
     ///
     /// This is the contract every Battalion pattern implements. Absent from a
@@ -125,9 +116,6 @@ impl BattalionConfig {
         Self {
             name: name.into(),
             description: None,
-            timeout_seconds: 300,
-            retry_policy: RetryPolicy::default(),
-            error_strategy: ErrorStrategy::default(),
             aegis: Aegis::default(),
             metadata_output_dir: None,
         }
@@ -140,28 +128,6 @@ impl BattalionConfig {
     /// * `description` - Human-readable description of the Battalion's purpose
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
-        self
-    }
-
-    /// Set the timeout in seconds (builder pattern).
-    ///
-    /// # Arguments
-    ///
-    /// * `seconds` - Maximum execution time before timing out
-    pub fn with_timeout(mut self, seconds: u64) -> Self {
-        self.timeout_seconds = seconds;
-        self
-    }
-
-    /// Set the retry policy
-    pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
-        self.retry_policy = policy;
-        self
-    }
-
-    /// Set the error strategy
-    pub fn with_error_strategy(mut self, strategy: ErrorStrategy) -> Self {
-        self.error_strategy = strategy;
         self
     }
 
@@ -326,96 +292,11 @@ impl Default for BattalionConfig {
     ///
     /// # Default Values
     /// - `name`: "default_battalion"
-    /// - `timeout_seconds`: 300 (5 minutes)
-    /// - `retry_policy`: RetryPolicy::default()
-    /// - `error_strategy`: ErrorStrategy::FailFast
+    /// - `description` and `metadata_output_dir`: `None`
     /// - `aegis`: `Aegis::default()` (no retry, no timeout, no error handler)
     fn default() -> Self {
         Self::new("default_battalion")
     }
-}
-
-/// Retry policy configuration for Battalion operations.
-///
-/// Defines how failed operations should be retried with exponential backoff
-/// and jitter to prevent thundering herd problems.
-///
-/// # Examples
-///
-/// ```
-/// use paladin_core::platform::container::battalion::RetryPolicy;
-/// use std::time::Duration;
-///
-/// let policy = RetryPolicy {
-///     max_attempts: 5,
-///     base_delay: Duration::from_millis(200),
-///     max_delay: Duration::from_secs(30),
-///     exponential_backoff: true,
-///     jitter: true,
-/// };
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RetryPolicy {
-    /// Maximum number of retry attempts
-    pub max_attempts: u32,
-
-    /// Base delay between retries
-    pub base_delay: Duration,
-
-    /// Maximum delay between retries
-    pub max_delay: Duration,
-
-    /// Whether to use exponential backoff
-    pub exponential_backoff: bool,
-
-    /// Whether to add jitter to prevent thundering herd
-    pub jitter: bool,
-}
-
-impl Default for RetryPolicy {
-    /// Creates a RetryPolicy with sensible defaults.
-    ///
-    /// # Default Values
-    /// - `max_attempts`: 3
-    /// - `base_delay`: 100ms
-    /// - `max_delay`: 10s
-    /// - `exponential_backoff`: true
-    /// - `jitter`: true
-    fn default() -> Self {
-        Self {
-            max_attempts: 3,
-            base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(10),
-            exponential_backoff: true,
-            jitter: true,
-        }
-    }
-}
-
-/// Strategy for handling errors during Battalion execution.
-///
-/// Determines how the Battalion should respond when individual Paladin executions fail.
-///
-/// # Examples
-///
-/// ```
-/// use paladin_core::platform::container::battalion::ErrorStrategy;
-///
-/// let fail_fast = ErrorStrategy::FailFast; // Stop on first error
-/// let continue_on_error = ErrorStrategy::ContinueOnError; // Collect all errors
-/// let retry = ErrorStrategy::RetryThenContinue; // Retry then proceed
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum ErrorStrategy {
-    /// Stop immediately on first error
-    #[default]
-    FailFast,
-
-    /// Continue execution despite errors, collect all at end
-    ContinueOnError,
-
-    /// Retry failed operations, then continue
-    RetryThenContinue,
 }
 
 /// Battalion orchestration strategy
@@ -661,37 +542,6 @@ pub enum BattalionStatus {
 // Token usage metrics for a single Paladin execution — re-exported from the
 // canonical definition (ADR-0016 / DEBT-05) so this path keeps resolving.
 pub use crate::platform::container::token_usage::TokenUsage;
-
-/// Per-node failure detail for a Battalion execution.
-///
-/// Carries the failed Paladin's name and its error text, so an operator can
-/// diagnose WHICH node failed and WHY, instead of only an aggregate
-/// success/failure count. Populated for any strategy that continues past a
-/// failure (`ContinueOnError`, `RetryThenContinue`) — see
-/// `FormationExecutionService::execute_internal` and
-/// `PhalanxExecutionService::execute_internal`; empty for a fully-successful
-/// run and for strategies that do not collect it.
-///
-/// A new plain-data struct (mirroring [`TokenUsage`]'s shape) rather than a
-/// reuse of [`BattalionError`], since `BattalionError` does not derive
-/// `Serialize`/`Deserialize` and `BattalionResult` does.
-///
-/// **Not the same type as [`crate::platform::container::node_error::NodeError`]
-/// (D-06):** this is the pre-existing v0.9 plain-data summary carried on
-/// [`BattalionResult`] (name + error text only) for the legacy
-/// Formation/Phalanx/Campaign patterns. The structured, engine-execution
-/// `NodeError` landed by Phase 25 for the superstep engine's per-node retry
-/// loop is a different, unrelated type in a different module -- it is never
-/// aliased here and this summary is never reshaped to match it (X-03).
-/// [`BattalionError::Node`] wraps the STRUCTURED type, path-qualified, never
-/// this summary.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeError {
-    /// Name of the Paladin node that failed
-    pub node_name: String,
-    /// The error text produced by that node's failure
-    pub error: String,
-}
 
 /// Result of a Battalion execution
 ///
@@ -995,10 +845,6 @@ pub enum BattalionError {
     #[error("Metadata export failed: {0}")]
     MetadataExportFailed(String),
 
-    /// Timeout error
-    #[error("Battalion execution timed out after {0} seconds")]
-    Timeout(u64),
-
     /// Validation error
     #[error("Validation error: {0}")]
     ValidationError(String),
@@ -1015,8 +861,11 @@ pub enum BattalionError {
     #[error("Execution error: {0}")]
     ExecutionError(String),
 
-    /// A structured node-execution failure (Doc 04 FT-FR-02, D-06).
-    /// Path-qualified to
+    /// A structured per-attempt failure (Doc 04 FT-FR-02, D-06): the node id,
+    /// the 1-indexed attempt, the failure's transience and its typed source.
+    /// A Battalion attempt that exceeds its `aegis.timeout` surfaces as this
+    /// variant with a `NodeErrorSource::Timeout(_)` source, and the superstep
+    /// engine reports its own node failures through it. The payload is
     /// `paladin_core::platform::container::node_error::NodeError`, the same
     /// type [`BattalionResult::node_errors`] carries per failed Paladin.
     #[error("Node error: {0}")]
@@ -1212,52 +1061,46 @@ mod tests {
     }
 
     #[test]
+    fn battalion_config_v0_10_document_deserializes_with_default_aegis() {
+        // A v0.10-shaped document: it carries the three keys this release
+        // removed. They are ignored, and `aegis`
+        // falls back to its default.
+        let document = serde_json::json!({
+            "name": "stored_battalion",
+            "description": "written by v0.10",
+            "timeout_seconds": 300,
+            "retry_policy": {
+                "max_attempts": 3,
+                "base_delay": { "secs": 0, "nanos": 100_000_000 },
+                "max_delay": { "secs": 10, "nanos": 0 },
+                "exponential_backoff": true,
+                "jitter": true
+            },
+            "error_strategy": "FailFast",
+            "metadata_output_dir": null
+        });
+        let config: BattalionConfig =
+            serde_json::from_value(document).expect("a v0.10 document still deserializes");
+        assert_eq!(config.name, "stored_battalion");
+        assert_eq!(config.description.as_deref(), Some("written by v0.10"));
+        assert_eq!(config.aegis, Aegis::default());
+        assert!(config.metadata_output_dir.is_none());
+    }
+
+    #[test]
     fn test_battalion_config_default() {
         let config = BattalionConfig::default();
         assert_eq!(config.name, "default_battalion");
-        assert_eq!(config.timeout_seconds, 300);
-        assert_eq!(config.error_strategy, ErrorStrategy::FailFast);
+        assert_eq!(config.aegis, Aegis::default());
     }
 
     #[test]
     fn test_battalion_config_builder() {
-        let config = BattalionConfig::new("test_battalion")
-            .with_description("Test description")
-            .with_timeout(600)
-            .with_error_strategy(ErrorStrategy::ContinueOnError);
+        let config = BattalionConfig::new("test_battalion").with_description("Test description");
 
         assert_eq!(config.name, "test_battalion");
         assert_eq!(config.description, Some("Test description".to_string()));
-        assert_eq!(config.timeout_seconds, 600);
-        assert_eq!(config.error_strategy, ErrorStrategy::ContinueOnError);
-    }
-
-    #[test]
-    fn test_retry_policy_default() {
-        let policy = RetryPolicy::default();
-        assert_eq!(policy.max_attempts, 3);
-        assert_eq!(policy.base_delay, Duration::from_millis(100));
-        assert_eq!(policy.max_delay, Duration::from_secs(10));
-        assert!(policy.exponential_backoff);
-        assert!(policy.jitter);
-    }
-
-    #[test]
-    fn test_error_strategy_variants() {
-        let fail_fast = ErrorStrategy::FailFast;
-        let continue_on_error = ErrorStrategy::ContinueOnError;
-        let retry_then_continue = ErrorStrategy::RetryThenContinue;
-
-        assert_eq!(fail_fast, ErrorStrategy::FailFast);
-        assert_eq!(continue_on_error, ErrorStrategy::ContinueOnError);
-        assert_eq!(retry_then_continue, ErrorStrategy::RetryThenContinue);
-        assert_ne!(fail_fast, continue_on_error);
-    }
-
-    #[test]
-    fn test_error_strategy_default() {
-        let strategy = ErrorStrategy::default();
-        assert_eq!(strategy, ErrorStrategy::FailFast);
+        assert_eq!(config.aegis, Aegis::default());
     }
 
     #[test]
@@ -1321,34 +1164,14 @@ mod tests {
 
     #[test]
     fn test_battalion_config_serialization() {
-        let config = BattalionConfig::new("test").with_timeout(120);
+        let config = BattalionConfig::new("test").with_description("round trip");
 
         let json = serde_json::to_string(&config).unwrap();
         let deserialized: BattalionConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(config.name, deserialized.name);
-        assert_eq!(config.timeout_seconds, deserialized.timeout_seconds);
-    }
-
-    #[test]
-    fn test_retry_policy_serialization() {
-        let policy = RetryPolicy::default();
-
-        let json = serde_json::to_string(&policy).unwrap();
-        let deserialized: RetryPolicy = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(policy.max_attempts, deserialized.max_attempts);
-        assert_eq!(policy.exponential_backoff, deserialized.exponential_backoff);
-    }
-
-    #[test]
-    fn test_error_strategy_serialization() {
-        let strategy = ErrorStrategy::ContinueOnError;
-
-        let json = serde_json::to_string(&strategy).unwrap();
-        let deserialized: ErrorStrategy = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(strategy, deserialized);
+        assert_eq!(config.description, deserialized.description);
+        assert_eq!(config.aegis, deserialized.aegis);
     }
 
     #[test]
@@ -1389,7 +1212,6 @@ mod tests {
             BattalionError::CampaignError("test".to_string()),
             BattalionError::InvalidGraph("test".to_string()),
             BattalionError::ChainOfCommandError("test".to_string()),
-            BattalionError::Timeout(300),
             BattalionError::ValidationError("test".to_string()),
             BattalionError::AggregationError("test".to_string()),
             BattalionError::PaladinNotFound("paladin123".to_string()),
@@ -1657,9 +1479,7 @@ fn test_battalion_strategy_serialization() {
 #[test]
 fn test_battalion_config_with_metadata_dir() {
     let dir = std::env::temp_dir().join("paladin_test_metadata_8_0");
-    let config = BattalionConfig::new("meta_test")
-        .with_timeout(120)
-        .with_metadata_dir(dir.clone());
+    let config = BattalionConfig::new("meta_test").with_metadata_dir(dir.clone());
 
     assert_eq!(config.metadata_output_dir, Some(dir.clone()));
     assert!(config.validate_metadata_dir().is_ok());
@@ -1670,7 +1490,7 @@ fn test_battalion_config_with_metadata_dir() {
 
 #[test]
 fn test_battalion_config_without_metadata_dir() {
-    let config = BattalionConfig::new("no_meta_test").with_timeout(120);
+    let config = BattalionConfig::new("no_meta_test");
 
     assert_eq!(config.metadata_output_dir, None);
     assert!(config.validate_metadata_dir().is_ok());
@@ -1682,9 +1502,7 @@ fn test_battalion_config_metadata_dir_not_a_directory() {
     // Create a file (not a directory)
     std::fs::write(&file_path, b"not a directory").unwrap();
 
-    let config = BattalionConfig::new("not_dir_test")
-        .with_timeout(120)
-        .with_metadata_dir(file_path.clone());
+    let config = BattalionConfig::new("not_dir_test").with_metadata_dir(file_path.clone());
 
     let result = config.validate_metadata_dir();
     assert!(result.is_err());
@@ -1701,9 +1519,7 @@ fn test_battalion_config_metadata_dir_auto_creates() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!dir.exists());
 
-    let config = BattalionConfig::new("auto_create_test")
-        .with_timeout(120)
-        .with_metadata_dir(dir.clone());
+    let config = BattalionConfig::new("auto_create_test").with_metadata_dir(dir.clone());
 
     // validate_metadata_dir should auto-create
     assert!(config.validate_metadata_dir().is_ok());
@@ -1759,8 +1575,7 @@ fn battalion_error_node_uses_the_core_node_error_not_the_legacy_summary() {
     let battalion_error = BattalionError::Node(node_error);
 
     // A typed binding proves the payload type is the structured
-    // `node_error::NodeError`, never this module's legacy summary struct
-    // (which has no `node_id`/`attempt`/`transience`/`source` fields).
+    // `node_error::NodeError` (`node_id`, `attempt`, `transience`, `source`).
     if let BattalionError::Node(payload) = battalion_error {
         let _typed: StructuredNodeError = payload;
         assert_eq!(_typed.node_id, NodeId::new("summarize"));
@@ -1768,24 +1583,6 @@ fn battalion_error_node_uses_the_core_node_error_not_the_legacy_summary() {
     } else {
         panic!("expected BattalionError::Node");
     }
-}
-
-#[test]
-fn legacy_battalion_node_error_summary_is_unchanged() {
-    let legacy = NodeError {
-        node_name: "researcher".to_string(),
-        error: "timed out".to_string(),
-    };
-    assert_eq!(legacy.node_name, "researcher");
-    assert_eq!(legacy.error, "timed out");
-
-    let json = serde_json::to_string(&legacy).expect("serialize");
-    assert!(json.contains("\"node_name\":\"researcher\""));
-    assert!(json.contains("\"error\":\"timed out\""));
-
-    let round_tripped: NodeError = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(round_tripped.node_name, legacy.node_name);
-    assert_eq!(round_tripped.error, legacy.error);
 }
 
 /// A `BattalionResult` with no Paladin results, used to pin the persisted

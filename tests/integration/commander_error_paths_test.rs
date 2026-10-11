@@ -112,13 +112,13 @@ async fn test_continue_on_error_collects_all_errors() {
     let result = commander
         .execute("Test continue on error")
         .await
-        .expect("ContinueOnError should return a result despite failures");
+        .expect("an Absorb handler should return a result despite failures");
 
     let log = port.execution_log();
     assert_eq!(
         log.len(),
         3,
-        "All Paladins should execute with ContinueOnError: {:?}",
+        "All Paladins should execute under an Absorb handler: {:?}",
         log
     );
 
@@ -185,7 +185,7 @@ async fn test_retry_then_continue_retries_failed_paladins() {
     let result = commander
         .execute("Test retry then continue")
         .await
-        .expect("RetryThenContinue should succeed once retries exhaust the configured failures");
+        .expect("retry then Absorb should succeed once retries exhaust the configured failures");
 
     // FaultyPaladinPort's invocation counter is shared across every Paladin, not scoped
     // per Paladin. `fail_until_attempt(2)` fails the first two calls globally: Paladin-1's
@@ -234,7 +234,7 @@ async fn test_partial_results_returned_with_errors() {
     let result = commander
         .execute("Test partial results")
         .await
-        .expect("ContinueOnError should return partial results despite one failure");
+        .expect("an Absorb handler should return partial results despite one failure");
 
     assert_eq!(
         result.paladin_results.len(),

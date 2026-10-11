@@ -71,8 +71,8 @@ impl PaladinPort for MockPaladinPort {
 /// independently-configurable fault modes — fail always, fail a named Paladin, fail until
 /// the Nth attempt (a GLOBAL invocation counter), fail a named Paladin until ITS OWN Nth
 /// call (a per-Paladin counter, Phase 25 D-31), and a controllable per-execution delay —
-/// so tests can exercise `ErrorStrategy::FailFast`, `ErrorStrategy::ContinueOnError` and
-/// `ErrorStrategy::RetryThenContinue` against a Commander without a real LLM, and a real
+/// so tests can exercise the fail-fast policy (no `on_error` handler), `ErrorHandlerSpec::Absorb`
+/// and retry-then-Absorb Aegis policies against a Commander without a real LLM, and a real
 /// Aegis per-task retry against the `WarEngine`.
 ///
 /// This is the mock D-09/D-10 asked for: a single shared home for Commander error-path

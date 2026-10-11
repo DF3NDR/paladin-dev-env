@@ -732,3 +732,16 @@ fn scanner_accepts_a_clean_tree() -> io::Result<()> {
     assert!(violations.is_empty(), "{violations:#?}");
     Ok(())
 }
+
+/// The guard: the repository itself names none of the removed Phase 44 items outside the history
+/// files, and the legacy-pattern service files have no whole-run timeout site.
+#[test]
+fn legacy_surfaces_are_gone_from_the_tree() {
+    let violations = scan(Path::new(env!("CARGO_MANIFEST_DIR")));
+
+    assert!(
+        violations.is_empty(),
+        "Phase 44 removed these legacy surfaces (LEGACY-01/02/03, ADR-0059); remove these uses:\n{}",
+        violations.join("\n")
+    );
+}

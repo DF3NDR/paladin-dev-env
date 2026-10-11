@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 44
 current_phase_name: Legacy Clean-Break Removal
 status: executing
-stopped_at: Completed 44-11-PLAN.md
-last_updated: "2026-10-11T16:20:11.544Z"
+stopped_at: Completed 44-13-PLAN.md
+last_updated: "2026-10-11T16:29:06.365Z"
 last_activity: 2026-10-09
 last_activity_desc: Phase 44 execution started
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 77
-  completed_plans: 75
+  completed_plans: 76
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([██████████] 97%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([██████████] 99%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 44 (Legacy Clean-Break Removal) — EXECUTING
-Plan: 12 of 13
+Plan: 13 of 13
 Status: Ready to execute
 Last activity: 2026-10-09 — Phase 44 execution started
 
@@ -266,6 +266,7 @@ Last activity: 2026-10-09 — Phase 44 execution started
 | Phase 44 P09 | 35min | 3 tasks | 13 files |
 | Phase 44 P10 | 55min | 3 tasks | 17 files |
 | Phase 44 P11 | ~1h30min | 2 tasks | 4 files |
+| Phase 44 P13 | 35min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -445,6 +446,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 44-09: docs point to programmatic BattalionConfig.aegis; no Aegis YAML schema invented, config.yml has no battalion: section
 - [Phase ?]: 44-10: v0.10 BattalionConfig documents stay readable by ignoring the removed keys (no deny_unknown_fields, alias or untagged shim); ChainOfCommand test drops its dead timeout assignment
 - [Phase ?]: 44-11: Phase 44 breaks registered from a measured cargo-semver-checks 0.50.0 run vs 0.10.1 (10 9.2 rows, 15 allowlist entries); BattalionResult node_errors retype is an N row (no lint modelled); paladin-ai facade retry re-export fired no lint
+- [Phase ?]: 44-13: legacy-removal guard skip set is exactly the declared history set; scoped-variant and missing-target controls live inside scanner_reports_planted_legacy_uses
 
 ### Pending Todos
 
@@ -659,8 +661,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-11T16:20:11.512Z
-**Stopped at:** Completed 44-11-PLAN.md
+**Last session:** 2026-10-11T16:29:06.331Z
+**Stopped at:** Completed 44-13-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

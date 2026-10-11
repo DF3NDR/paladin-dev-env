@@ -958,6 +958,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn phalanx_rejects_a_concurrency_limit_above_the_permit_maximum() {
+        // tokio's `Semaphore::new` panics above `Semaphore::MAX_PERMITS`; a
+        // library call must return an error instead (re-review WR-N1).
+        let phalanx = Phalanx::new(
+            vec![create_paladin("Agent1"), create_paladin("Agent2")],
+            BattalionConfig::new("huge_concurrency"),
+        )
+        .unwrap()
+        .with_max_concurrency(usize::MAX);
+
+        let mock_port = MockPaladinPort::new();
+        let calls = mock_port.call_count.clone();
+        let service = PhalanxExecutionService::new(Arc::new(mock_port));
+
+        let result = service.execute(&phalanx, "in").await;
+        assert!(
+            matches!(result, Err(BattalionError::ValidationError(ref m)) if m.contains("max_concurrency"))
+        );
+        assert_eq!(*calls.lock().unwrap(), 0, "no Paladin runs");
+    }
+
+    #[tokio::test]
     async fn test_phalanx_per_paladin_timing() {
         let p1 = create_paladin("Analyst");
         let p2 = create_paladin("Reviewer");

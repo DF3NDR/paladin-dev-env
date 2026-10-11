@@ -665,7 +665,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 44-11-PLAN.md — MIGRATION.md 9.1 rows M-B-06.., 9.4 stored-JSON note, D-27 measurement, Phase 44 9.2 rows, allowlist block and crate allow lines (wave 6)
+- [x] 44-11-PLAN.md — MIGRATION.md 9.1 rows M-B-06.., 9.4 stored-JSON note, D-27 measurement, Phase 44 9.2 rows, allowlist block and crate allow lines (wave 6)
 - [ ] 44-13-PLAN.md — tests/legacy_removal_guard.rs: source-tree guard over every Phase 44 removal with two positive controls, repository scan clean (wave 6, split out of 44-10)
 
 **Wave 7** *(blocked on Wave 6 completion)*

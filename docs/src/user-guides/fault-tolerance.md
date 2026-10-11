@@ -69,6 +69,25 @@ an undeclared node (`EngineError::AegisOnUndeclaredNode`), a `RetryPolicy` with
 not support it (`AegisUnsupportedForNodeKind`, see [the matrix](#the-node-kind-support-matrix))
 each list **every** offender in one error.
 
+### Aegis on the classic Battalion patterns
+
+The same `RetryPolicy` / `TimeoutPolicy` / `ErrorHandlerSpec` family is not limited to the
+`WarEngine`. `BattalionConfig.aegis` (set with `BattalionConfig::with_aegis`) carries it to the
+classic Battalion patterns: Formation, Phalanx, Campaign and the Conclave. Three differences from
+the graph engine apply there:
+
+- Only `ErrorHandlerSpec::Absorb`, or no handler, is accepted; `Route` and `Custom` handlers and
+  `RetryPredicate::Custom` are rejected by `BattalionConfig::validate_aegis`, and `cache` is
+  ignored.
+- A timeout bounds **each attempt**, never the whole Battalion, and ChainOfCommand, Grove and
+  Council are not bounded by `aegis`. A caller that needs a whole-run bound wraps
+  `Commander::execute()` in its own `tokio::time::timeout`.
+- A timed-out attempt records the same `NodeError` as the engine, with a `Timeout` source, in
+  `BattalionResult.node_errors` (Absorb) or as `BattalionError::Node` (fail fast).
+
+See [Orchestration](orchestration.md#configuration-reference) for the per-pattern contract and a
+configuration snippet.
+
 ## The Error Taxonomy: Why `transience()` Exists
 
 A configuration error and a `503 Service Unavailable` must not be retried identically: resending a

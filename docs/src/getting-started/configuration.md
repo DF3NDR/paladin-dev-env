@@ -354,32 +354,12 @@ citadel:
 
 ## Battalion (Multi-agent Orchestration)
 
-```yaml
-battalion:
-  default_timeout_seconds: 300     # Per-battalion execution timeout
-  error_strategy: "fail_fast"      # fail_fast | continue_on_error | retry_then_continue
-  max_concurrent_paladins: 10      # Phalanx concurrency limit
-  metadata_output_enabled: false   # Write execution metadata to files
-
-  retry:                           # Used when error_strategy = retry_then_continue
-    max_attempts: 3
-    exponential_backoff: true
-    jitter: true
-    base_delay_ms: 100
-    max_delay_seconds: 10
-
-  maneuver:                        # Flow DSL (Maneuver pattern)
-    error_strategy: "fail_fast"    # fail_fast | continue_parallel | ignore_errors
-    output_format: "combined_text" # combined_text | structured_json
-    pass_output_as_input: true
-    timeout_seconds: 300
-    collect_timing_metrics: true
-    max_agents: 30
-    max_depth: 5
-```
-
-**Env vars:** `APP_BATTALION_DEFAULT_TIMEOUT_SECONDS`, `APP_BATTALION_ERROR_STRATEGY`,
-`APP_BATTALION_MAX_CONCURRENT_PALADINS`, `APP_BATTALION_RETRY_MAX_ATTEMPTS`, etc.
+Battalion fault handling (retry, per-attempt timeout and error handler) is configured in code
+through `BattalionConfig.aegis`, set with `BattalionConfig::with_aegis`; see the
+[Configuration Reference](../user-guides/orchestration.md#configuration-reference) in the
+orchestration guide. `config.yml` has no `battalion:` section. The Maneuver flow DSL is
+configured through `ManeuverConfig`; see the [Maneuver Flow DSL](../user-guides/maneuver-flow-dsl.md)
+guide.
 
 See [Battalion Patterns](../user-guides/battalion-patterns.md) for Formation,
 Phalanx, Campaign, and Chain of Command details.
@@ -702,13 +682,6 @@ arsenal:
       server_type: "stdio"
       command: "uvx"
       args: ["mcp-web-search"]
-
-battalion:
-  error_strategy: "retry_then_continue"
-  max_concurrent_paladins: 10
-  retry:
-    max_attempts: 3
-    exponential_backoff: true
 
 herald:
   default_formatter: "markdown"

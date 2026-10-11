@@ -22,7 +22,6 @@
 //! ## Utilities
 //!
 //! - [`error_aggregation`] — Collect and summarise errors across parallel agent runs
-//! - [`retry`] — Exponential back-off retry helper
 //! - [`llm_failure`] — Structured `LlmError` -> `PaladinError::LlmFailure` conversion
 //! - `aegis_attempt` (crate-private) — The one per-attempt runner the legacy patterns share:
 //!   per-attempt Aegis timeout, retry gated on `PaladinError::transience()`, and the engine's
@@ -62,7 +61,6 @@ pub mod llm_decision;
 pub mod llm_failure;
 pub mod maneuver;
 pub mod phalanx_service;
-pub mod retry;
 /// Registered evaluators for `RetryPredicate::Custom` (D-13), resolved
 /// through `engine::registries::EngineRegistries` by `WarGraph::validate`.
 pub mod retry_predicate;

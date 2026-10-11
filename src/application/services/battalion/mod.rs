@@ -15,7 +15,6 @@ pub use paladin_battalion::formation_service;
 pub use paladin_battalion::grove_service;
 pub use paladin_battalion::maneuver;
 pub use paladin_battalion::phalanx_service;
-pub use paladin_battalion::retry;
 
 /// Compatibility shim: flow_visualizer is now at maneuver::visualizer
 pub use paladin_battalion::maneuver as flow_visualizer_compat;

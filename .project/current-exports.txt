@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-08 22:52:36 UTC
+# Public API Surface - Generated 2026-10-11 13:57:17 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -407,7 +407,6 @@ pub use paladin::application::services::battalion::formation_service
 pub use paladin::application::services::battalion::grove_service
 pub use paladin::application::services::battalion::maneuver
 pub use paladin::application::services::battalion::phalanx_service
-pub use paladin::application::services::battalion::retry
 pub mod paladin::application::services::battalion::flow_visualizer
 pub use paladin::application::services::battalion::flow_visualizer::<<paladin_battalion::maneuver::visualizer::*>>
 pub mod paladin::application::services::battalion::maneuver_service
@@ -8573,4 +8572,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4275
+Total public items: 4274

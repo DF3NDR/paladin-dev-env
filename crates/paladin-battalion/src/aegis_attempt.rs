@@ -124,6 +124,23 @@ impl AttemptFailure {
         }
     }
 
+    /// Record a run cancelled before `attempt` started: no port call was made.
+    ///
+    /// Permanent, so no retry predicate ever admits it.
+    pub(crate) fn cancelled(paladin_name: &str, attempt: u32) -> Self {
+        Self {
+            error: PaladinError::ExecutionError(format!(
+                "Paladin {paladin_name} was cancelled before attempt {attempt} started"
+            )),
+            node_error: NodeError {
+                node_id: NodeId::new(paladin_name),
+                attempt,
+                transience: Transience::Permanent,
+                source: NodeErrorSource::Cancelled,
+            },
+        }
+    }
+
     /// Whether this attempt failed by exceeding its bound.
     pub(crate) fn is_timeout(&self) -> bool {
         matches!(self.node_error.source, NodeErrorSource::Timeout(_))
@@ -172,7 +189,8 @@ pub(crate) async fn attempt_once(
 /// `aegis.retry.max_attempts` counts total attempts including the first. A
 /// failed attempt is retried only when a policy exists, attempts remain, the
 /// policy's predicate admits the failure's transience, and the backoff wait
-/// was not cancelled. Otherwise the last failure is returned.
+/// was not cancelled. Otherwise the last failure is returned. No attempt
+/// starts once `cancel` has fired; an attempt already in flight runs to its end.
 pub(crate) async fn run_with_aegis(
     port: &Arc<dyn PaladinPort>,
     paladin: &Paladin,
@@ -187,6 +205,13 @@ pub(crate) async fn run_with_aegis(
 
     let mut attempt: u32 = 1;
     loop {
+        // A cancelled run starts no further attempt. This also covers a
+        // Paladin that was queued behind a concurrency limit when the run was
+        // cancelled: its task outlives the cancelled call, so it must check the
+        // token itself before it makes an LLM call.
+        if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
+            return Err(AttemptFailure::cancelled(&paladin.node.name, attempt));
+        }
         let failure = match attempt_once(port, paladin, input, bound, attempt).await {
             Ok(result) => {
                 return Ok(AttemptOutcome {

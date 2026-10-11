@@ -157,6 +157,7 @@ impl PhalanxExecutionService {
     ) -> Result<BattalionResult, BattalionError> {
         // Reject Aegis policies a Phalanx cannot honour before any Paladin runs.
         phalanx.config().validate_aegis()?;
+        validate_concurrency_limit(phalanx)?;
 
         info!(
             "Starting Phalanx execution: {} with {} Paladins",
@@ -182,6 +183,7 @@ impl PhalanxExecutionService {
     ) -> Result<BattalionResult, BattalionError> {
         // Reject Aegis policies a Phalanx cannot honour before any Paladin runs.
         phalanx.config().validate_aegis()?;
+        validate_concurrency_limit(phalanx)?;
 
         let token = Some(cancellation_token.clone());
         // `biased` with the token first: once it fires, the run reports
@@ -496,6 +498,20 @@ impl PhalanxExecutionService {
     }
 }
 
+/// Reject a zero concurrency limit before any Paladin runs.
+///
+/// A zero-permit limiter would block every Paladin forever, and since
+/// ADR-0059 (D-02) no whole-run clock exists to end that wait.
+fn validate_concurrency_limit(phalanx: &Phalanx) -> Result<(), BattalionError> {
+    if phalanx.max_concurrency() == Some(0) {
+        return Err(BattalionError::ValidationError(format!(
+            "Phalanx '{}' max_concurrency must be at least 1; 0 would block every Paladin",
+            phalanx.config().name
+        )));
+    }
+    Ok(())
+}
+
 /// Run one Paladin to its final outcome inside its own task.
 ///
 /// Holds one concurrency permit (when the Phalanx is limited) across the
@@ -512,16 +528,32 @@ async fn run_paladin(
 ) -> Result<Success, AttemptFailure> {
     let name = paladin.node.name.clone();
     let _permit = match &semaphore {
-        Some(sem) => match sem.acquire().await {
-            Ok(permit) => Some(permit),
-            Err(e) => {
-                return Err(AttemptFailure::from_error(
-                    &name,
-                    1,
-                    PaladinError::ExecutionError(format!("Concurrency limiter closed: {e}")),
-                ));
+        Some(sem) => {
+            // Wait for a permit or for cancellation, whichever comes first, so
+            // a queued Paladin of a cancelled run gives up its place instead of
+            // starting an LLM call later. The runner re-checks the token before
+            // every attempt, which covers a permit granted as the token fires.
+            let acquired = match &cancel {
+                Some(token) => tokio::select! {
+                    biased;
+                    _ = token.cancelled() => {
+                        return Err(AttemptFailure::cancelled(&name, 1));
+                    }
+                    acquired = sem.acquire() => acquired,
+                },
+                None => sem.acquire().await,
+            };
+            match acquired {
+                Ok(permit) => Some(permit),
+                Err(e) => {
+                    return Err(AttemptFailure::from_error(
+                        &name,
+                        1,
+                        PaladinError::ExecutionError(format!("Concurrency limiter closed: {e}")),
+                    ));
+                }
             }
-        },
+        }
         None => None,
     };
 

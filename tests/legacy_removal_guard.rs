@@ -157,9 +157,225 @@ fn removed_fields() -> [String; 2] {
     ]
 }
 
-/// RED stub: the scanner is not implemented yet and reports nothing.
-fn scan(_root: &Path) -> Vec<String> {
-    Vec::new()
+/// `true` for characters that continue an identifier.
+fn is_identifier(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// `true` when `needle` occurs in `haystack` with the requested boundaries: `bound_start` demands a
+/// non-identifier character (or the line start) before it, `bound_end` one after it (or the end).
+fn occurs(haystack: &str, needle: &str, bound_start: bool, bound_end: bool) -> bool {
+    haystack.match_indices(needle).any(|(start, matched)| {
+        let before = haystack[..start].chars().next_back();
+        let after = haystack[start + matched.len()..].chars().next();
+        (!bound_start || !before.is_some_and(is_identifier))
+            && (!bound_end || !after.is_some_and(is_identifier))
+    })
+}
+
+/// Rules 1 to 4 for one line: every `(rule number, matched text)` it trips.
+fn generic_hits(line: &str) -> Vec<(u8, String)> {
+    let mut hits = Vec::new();
+    for variant in removed_variants() {
+        if occurs(line, &variant, true, true) {
+            hits.push((1, variant));
+        }
+    }
+    for path in removed_paths() {
+        if occurs(line, &path, false, true) {
+            hits.push((2, path));
+        }
+    }
+    let opener = brace_import();
+    for (start, _) in line.match_indices(&opener) {
+        let rest = &line[start + opener.len()..];
+        let listed = rest.split('}').next().unwrap_or(rest);
+        for removed in removed_types() {
+            if occurs(listed, &removed, true, true) {
+                hits.push((3, format!("{opener}.. {removed}")));
+            }
+        }
+    }
+    for call in removed_calls() {
+        if occurs(line, &call, false, false) {
+            hits.push((4, call));
+        }
+    }
+    let helper = removed_delay_helper();
+    if occurs(line, &helper, true, true) {
+        hits.push((4, helper));
+    }
+    for path in removed_module_paths() {
+        if occurs(line, &path, false, true) {
+            hits.push((4, path));
+        }
+    }
+    hits
+}
+
+/// Rule 5 for one production line of a legacy-pattern file.
+fn timeout_site_hits(line: &str) -> Vec<(u8, String)> {
+    let mut hits = Vec::new();
+    let call = timeout_call();
+    if occurs(line, &call, true, false) {
+        hits.push((5, call));
+    }
+    let field = timeout_field();
+    if occurs(line, &field, true, true) {
+        hits.push((5, field));
+    }
+    hits
+}
+
+/// Rule 6 for one production line of a core battalion file.
+fn core_redeclaration_hits(line: &str) -> Vec<(u8, String)> {
+    let mut hits = Vec::new();
+    let mut names = vec![timeout_field()];
+    names.extend(removed_fields());
+    for name in names {
+        if occurs(line, &name, true, true) {
+            hits.push((6, name));
+        }
+    }
+    let [retry_policy, error_strategy, node_error] = removed_types();
+    if occurs(line, &error_strategy, true, true) {
+        hits.push((6, error_strategy));
+    }
+    for removed in [retry_policy, node_error] {
+        for keyword in ["struct", "type", "as"] {
+            let declaration = format!("{keyword} {removed}");
+            if occurs(line, &declaration, true, true) {
+                hits.push((6, declaration));
+            }
+        }
+    }
+    hits
+}
+
+/// The non-comment lines of `content` before the first `mod tests`, with 1-based line numbers.
+fn production_lines(content: &str) -> impl Iterator<Item = (usize, &str)> {
+    content
+        .lines()
+        .enumerate()
+        .take_while(|(_, line)| !line.trim_start().starts_with("mod tests"))
+        .filter(|(_, line)| !line.trim_start().starts_with("//"))
+        .map(|(index, line)| (index + 1, line))
+}
+
+/// Apply a file-scoped `rule` to every file in `files` under `root`. A target that cannot be read
+/// is itself a violation: a guard that cannot find its target proves nothing.
+fn scan_scoped(
+    root: &Path,
+    files: &[&str],
+    rule: u8,
+    hits: fn(&str) -> Vec<(u8, String)>,
+    violations: &mut Vec<String>,
+) {
+    for relative in files {
+        match fs::read_to_string(root.join(relative)) {
+            Ok(content) => {
+                for (number, line) in production_lines(&content) {
+                    for (hit_rule, matched) in hits(line) {
+                        violations.push(format!(
+                            "{relative}:{number}: rule {hit_rule}: `{matched}` in production code"
+                        ));
+                    }
+                }
+            }
+            Err(error) => violations.push(format!(
+                "{relative}: rule {rule}: target file is missing or unreadable ({error}), \
+                 so the rule proves nothing"
+            )),
+        }
+    }
+}
+
+/// `true` for a directory the walk must not enter: build output, vendored packages and every
+/// dot-directory (version control, `.planning`, `.project`, tool caches).
+fn skip_directory(name: &str) -> bool {
+    matches!(name, "target" | "node_modules") || name.starts_with('.')
+}
+
+/// `true` for a file the scan must not read: every `CHANGELOG.md`, the history files and this guard.
+fn skip_file(relative: &str, name: &str) -> bool {
+    name == "CHANGELOG.md" || relative == GUARD_FILE || HISTORY_FILES.contains(&relative)
+}
+
+/// Walk `root` and report one `<path>:<line>: rule <n>: ...` line per violation, sorted.
+///
+/// Files that cannot be read, or that are not UTF-8, are skipped by the walk: a binary asset cannot
+/// carry the vocabulary this guard polices. The file-scoped rules read their targets directly and
+/// report one that is missing.
+fn scan(root: &Path) -> Vec<String> {
+    let mut violations = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // `DirEntry::file_type` does not follow symlinks, so a link can never loop the walk.
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if file_type.is_dir() {
+                if !skip_directory(&name) {
+                    pending.push(path);
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            let scanned = path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| SCANNED_EXTENSIONS.contains(&extension));
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
+            let relative = relative
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            if !scanned || skip_file(&relative, &name) {
+                continue;
+            }
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            for (number, line) in content.lines().enumerate() {
+                for (rule, matched) in generic_hits(line) {
+                    violations.push(format!(
+                        "{relative}:{}: rule {rule}: removed Phase 44 name `{matched}`",
+                        number + 1
+                    ));
+                }
+            }
+        }
+    }
+
+    scan_scoped(
+        root,
+        &LEGACY_PATTERN_FILES,
+        5,
+        timeout_site_hits,
+        &mut violations,
+    );
+    scan_scoped(
+        root,
+        &CORE_BATTALION_FILES,
+        6,
+        core_redeclaration_hits,
+        &mut violations,
+    );
+
+    violations.sort();
+    violations
 }
 
 /// A temporary directory under the system temp dir, removed on drop (also when a test panics).

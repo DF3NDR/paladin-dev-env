@@ -18,3 +18,14 @@ Out-of-scope discoveries logged during execution. Not fixed by the plan that fou
   fail identically (`cargo test -p paladin-ai --lib --all-features run_api_wiring::tests::build_run_api_persists`,
   0 passed / 2 failed at `run_api_wiring.rs:2369`). Not a Phase 44 regression; owner of the Run API
   worker / `WarEngine` wiring to triage separately.
+
+## Code review dispositions (44-REVIEW.md, 44-REVIEW-FIX.md), 2026-10-11
+
+- **WR-02** Phalanx `with_max_concurrency(0)` hang: **fixed** (`229a28a5` RED, `cf0be3db` GREEN).
+- **WR-01** cancelled Phalanx starting queued Paladins: **fixed** (`229a28a5` RED, `cf0be3db` GREEN).
+- **WR-N1** (re-review) panic above `Semaphore::MAX_PERMITS`: **fixed** (RED then `dc55f18e`).
+- **WR-03** removed v0.10 config keys silently ignored: **queued**, decision pending (operator leans to
+  rejecting with a named error) -- `.planning/todos/pending/2026-10-11-reject-removed-v0-10-battalion-config-keys.md`.
+- **WR-04, WR-05, IN-01..IN-05, IN-N1, IN-N2:** **queued** --
+  `.planning/todos/pending/2026-10-11-phase-44-review-follow-ups.md`. Both todos carry
+  `recheck_by: before the Phase 47 v0.11.0 publish`.

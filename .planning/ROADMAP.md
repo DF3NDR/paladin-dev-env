@@ -661,7 +661,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 44-10-PLAN.md — Legacy retry module and facade re-export deleted (API baseline refreshed), last legacy writers swept (incl. the two root Campaign / chain-of-command tests), legacy definitions deleted (wave 5)
+- [x] 44-10-PLAN.md — Legacy retry module and facade re-export deleted (API baseline refreshed), last legacy writers swept (incl. the two root Campaign / chain-of-command tests), legacy definitions deleted (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

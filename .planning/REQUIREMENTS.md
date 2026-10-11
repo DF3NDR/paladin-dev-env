@@ -101,13 +101,13 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 
 ### Legacy clean break (LEGACY)
 
-- [ ] **LEGACY-01**: Legacy `battalion::RetryPolicy`, `battalion::ErrorStrategy` and
+- [x] **LEGACY-01**: Legacy `battalion::RetryPolicy`, `battalion::ErrorStrategy` and
   `battalion::NodeError` are removed, while the same-named Aegis and Flow types stay untouched
 
-- [ ] **LEGACY-02**: Legacy Formation, Phalanx and Campaign timeout handling is removed in favour of
+- [x] **LEGACY-02**: Legacy Formation, Phalanx and Campaign timeout handling is removed in favour of
   Aegis timeouts
 
-- [ ] **LEGACY-03**: `PaladinError::LlmError(String)` is removed, and the message-matching retry
+- [x] **LEGACY-03**: `PaladinError::LlmError(String)` is removed, and the message-matching retry
   check in `conclave_execution_service.rs` moves to the typed `LlmFailure` / `Transience` taxonomy
 
 - [ ] **LEGACY-04**: The X-03 supersession is recorded in an ADR, and every removal has a
@@ -228,9 +228,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PACE-03 | Phase 43 | Complete |
 | PACE-04 | Phase 43 | Complete |
 | PACE-05 | Phase 43 | Complete |
-| LEGACY-01 | Phase 44 | Pending |
-| LEGACY-02 | Phase 44 | Pending |
-| LEGACY-03 | Phase 44 | Pending |
+| LEGACY-01 | Phase 44 | Complete |
+| LEGACY-02 | Phase 44 | Complete |
+| LEGACY-03 | Phase 44 | Complete |
 | LEGACY-04 | Phase 44 | Pending |
 | STORE-01 | Phase 45 | Complete |
 | STORE-02 | Phase 45 | Complete |

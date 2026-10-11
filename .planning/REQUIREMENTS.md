@@ -110,7 +110,7 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **LEGACY-03**: `PaladinError::LlmError(String)` is removed, and the message-matching retry
   check in `conclave_execution_service.rs` moves to the typed `LlmFailure` / `Transience` taxonomy
 
-- [ ] **LEGACY-04**: The X-03 supersession is recorded in an ADR, and every removal has a
+- [x] **LEGACY-04**: The X-03 supersession is recorded in an ADR, and every removal has a
   `MIGRATION.md` §9.2 row and a `cargo semver-checks` allowlist entry, with examples and docs updated
 
 ### Object storage (STORE)
@@ -231,7 +231,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | LEGACY-01 | Phase 44 | Complete |
 | LEGACY-02 | Phase 44 | Complete |
 | LEGACY-03 | Phase 44 | Complete |
-| LEGACY-04 | Phase 44 | Pending |
+| LEGACY-04 | Phase 44 | Complete |
 | STORE-01 | Phase 45 | Complete |
 | STORE-02 | Phase 45 | Complete |
 | STORE-03 | Phase 45 | Complete |

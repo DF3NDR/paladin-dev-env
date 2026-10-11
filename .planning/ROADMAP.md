@@ -670,7 +670,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 44-12-PLAN.md — CHANGELOG Removed/Changed (D-21), ADR-0059 conforms, full phase gate and manual credential review (wave 7)
+- [x] 44-12-PLAN.md — CHANGELOG Removed/Changed (D-21), ADR-0059 conforms, full phase gate and manual credential review (wave 7)
 
 ### Phase 45: RustFS Swap & Platform/Observability Deviations
 

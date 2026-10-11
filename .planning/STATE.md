@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 44
 current_phase_name: Legacy Clean-Break Removal
 status: executing
-stopped_at: Completed 44-07-PLAN.md
-last_updated: "2026-10-11T13:21:38.057Z"
+stopped_at: Completed 44-08-PLAN.md
+last_updated: "2026-10-11T13:40:33.114Z"
 last_activity: 2026-10-09
 last_activity_desc: Phase 44 execution started
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 77
-  completed_plans: 71
+  completed_plans: 72
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 92%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([█████████░] 94%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 44 (Legacy Clean-Break Removal) — EXECUTING
-Plan: 8 of 13
+Plan: 9 of 13
 Status: Ready to execute
 Last activity: 2026-10-09 — Phase 44 execution started
 
@@ -262,6 +262,7 @@ Last activity: 2026-10-09 — Phase 44 execution started
 | Phase 44 P05 | ~1h30min | 2 tasks | 2 files |
 | Phase 44 P06 | 1h | 3 tasks | 9 files |
 | Phase 44 P07 | 55min | 2 tasks | 3 files |
+| Phase 44 P08 | 50min | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -437,6 +438,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 44-06: node_errors element persisted as {node_id (Paladin name), attempt, transience, source}; operator chose option-a on 2026-10-11
 - [Phase ?]: 44-06 context: operator is considering a later phase 44.1 renaming the Node<T> entity envelope to Entity<T>; out of scope for phase 44
 - [Phase ?]: 44-07: Conclave retry_attempts stays the retry count; aegis.retry supplies only the backoff shape and the predicate stays Transient-only; aggregator is a single attempt
+- [Phase 44]: 44-08: Aegis types imported from paladin_core directly; CLI maps timeout_seconds onto aegis.timeout.run_timeout per attempt (schema unchanged)
 
 ### Pending Todos
 
@@ -651,8 +653,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-11T13:21:38.017Z
-**Stopped at:** Completed 44-07-PLAN.md
+**Last session:** 2026-10-11T13:40:33.087Z
+**Stopped at:** Completed 44-08-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

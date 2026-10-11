@@ -656,7 +656,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 44-08-PLAN.md — CLI (YAML keys unchanged, per-attempt), the eight examples and the doc-examples anchor show the Aegis equivalents (wave 4)
+- [x] 44-08-PLAN.md — CLI (YAML keys unchanged, per-attempt), the eight examples and the doc-examples anchor show the Aegis equivalents (wave 4)
 - [ ] 44-09-PLAN.md — mdBook pages and DEMOS.md on Aegis and the typed taxonomy; per-attempt consequences stated; fictional battalion: YAML section replaced (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*

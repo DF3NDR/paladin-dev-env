@@ -386,7 +386,7 @@ async fn test_concurrent_broadcasts() {
 }
 
 #[tokio::test]
-async fn test_chain_with_config_timeout() {
+async fn test_chain_with_default_config_completes() {
     let mock_port = Arc::new(MockPaladinPort::new());
 
     // Set commander output for automatic delegation
@@ -397,8 +397,8 @@ async fn test_chain_with_config_timeout() {
 
     let service = ChainOfCommandExecutionService::new(mock_port);
 
-    let mut config = BattalionConfig::new("timeout_chain");
-    config.timeout_seconds = 5; // 5 second timeout
+    // ChainOfCommand is not bounded by `aegis` (ADR-0059 (c)); the default config suffices.
+    let config = BattalionConfig::new("default_chain");
 
     let commander = create_test_paladin("Commander");
     let specialist = create_test_paladin("Specialist");
@@ -408,7 +408,7 @@ async fn test_chain_with_config_timeout() {
         .with_strategy(DelegationStrategy::Automatic);
 
     // Execute (should complete quickly with mock)
-    let result = service.execute(&chain, "test with timeout").await;
+    let result = service.execute(&chain, "test with default config").await;
 
     assert!(result.is_ok());
 }

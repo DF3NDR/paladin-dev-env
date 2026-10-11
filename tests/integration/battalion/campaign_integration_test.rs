@@ -115,9 +115,7 @@ fn create_paladin(name: &str) -> Paladin {
 }
 
 fn create_config() -> BattalionConfig {
-    BattalionConfig::new("integration_campaign")
-        .with_description("Integration Test Campaign")
-        .with_timeout(60)
+    BattalionConfig::new("integration_campaign").with_description("Integration Test Campaign")
 }
 
 // ============================================================================

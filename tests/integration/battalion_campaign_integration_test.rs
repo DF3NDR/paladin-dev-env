@@ -12,8 +12,10 @@ use paladin::core::platform::container::battalion::campaign::{
 use paladin::core::platform::container::battalion::{BattalionConfig, BattalionError};
 use paladin::core::platform::container::paladin::MaxLoops;
 use paladin::core::platform::container::paladin::{Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Mock Paladin port for testing
 #[derive(Clone)]
@@ -407,8 +409,14 @@ async fn test_campaign_execution_timeout() {
     let mock_port = Arc::new(MockPaladinPort::new());
     let service = CampaignExecutionService::new(mock_port);
 
-    let mut config = BattalionConfig::new("timeout_campaign");
-    config.timeout_seconds = 1; // 1 second timeout
+    // The bound applies to each Paladin attempt, not to the whole run.
+    let config = BattalionConfig::new("timeout_campaign").with_aegis(Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(1)),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    });
 
     let mut campaign = Campaign::new(config);
 
@@ -416,8 +424,8 @@ async fn test_campaign_execution_timeout() {
     let id = campaign.add_paladin(paladin);
     campaign.set_entry_point(id).unwrap();
 
-    // Note: This test passes because mock execution is fast
-    // In real scenario with slow Paladin, timeout would trigger
+    // Note: This test passes because the fast mock completes inside the
+    // 1 s per-attempt bound; a slow Paladin attempt would be cut off by it.
     let result = service.execute(&campaign, "input").await;
 
     // Should complete successfully with fast mock

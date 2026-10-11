@@ -131,9 +131,7 @@ fn create_test_paladin(name: &str) -> Paladin {
 }
 
 fn create_test_config() -> BattalionConfig {
-    BattalionConfig::new("test_campaign")
-        .with_description("Test Campaign")
-        .with_timeout(300)
+    BattalionConfig::new("test_campaign").with_description("Test Campaign")
 }
 
 // ============================================================================

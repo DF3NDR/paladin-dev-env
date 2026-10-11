@@ -11,10 +11,12 @@ use paladin::application::services::battalion::formation_service::FormationExecu
 use paladin::application::services::battalion::phalanx_service::PhalanxExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::core::base::entity::node::Node;
+use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::formation::Formation;
 use paladin::core::platform::container::battalion::phalanx::{AggregationStrategy, Phalanx};
-use paladin::core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
+use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_ports::output::paladin_port::{
     PaladinPort, PaladinResult, PaladinStreamChunk, StopReason,
 };
@@ -119,11 +121,8 @@ async fn test_load_formation_50_concurrent_battalions() {
                 .map(|i| create_test_paladin(&format!("paladin_{}_{}", battalion_id, i)))
                 .collect();
 
-            let config = BattalionConfig {
-                timeout_seconds: 30,
-                error_strategy: ErrorStrategy::FailFast,
-                ..Default::default()
-            };
+            // Default Aegis: a failed Paladin stops the Formation (fail-fast).
+            let config = BattalionConfig::new("load_formation");
 
             let formation = Formation::new(paladins, config).expect("Formation creation failed");
 
@@ -209,11 +208,13 @@ async fn test_load_phalanx_concurrent_execution() {
                 .map(|i| create_test_paladin(&format!("paladin_{}_{}", battalion_id, i)))
                 .collect();
 
-            let config = BattalionConfig {
-                timeout_seconds: 30,
-                error_strategy: ErrorStrategy::ContinueOnError,
-                ..Default::default()
-            };
+            // Absorb: a failed Paladin is recorded and the rest still contribute.
+            let config = BattalionConfig::new("load_phalanx").with_aegis(Aegis {
+                on_error: Some(ErrorHandlerSpec::Absorb {
+                    fallback_delta: StateDelta::new(),
+                }),
+                ..Aegis::default()
+            });
 
             let phalanx = Phalanx::new(paladins, config)
                 .expect("Phalanx creation failed")

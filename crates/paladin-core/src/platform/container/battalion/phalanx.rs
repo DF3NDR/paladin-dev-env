@@ -97,7 +97,8 @@ impl Phalanx {
     ///
     /// `max` must be at least 1: the Phalanx execution service rejects a limit
     /// of 0 with a validation error before any Paladin runs, because a
-    /// zero-permit limiter would block every Paladin forever.
+    /// zero-permit limiter would block every Paladin forever. It also rejects a
+    /// limit above tokio's `Semaphore::MAX_PERMITS`.
     ///
     /// # Example
     ///

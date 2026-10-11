@@ -498,18 +498,24 @@ impl PhalanxExecutionService {
     }
 }
 
-/// Reject a zero concurrency limit before any Paladin runs.
+/// Reject a concurrency limit the limiter cannot honour, before any Paladin runs.
 ///
 /// A zero-permit limiter would block every Paladin forever, and since
-/// ADR-0059 (D-02) no whole-run clock exists to end that wait.
+/// ADR-0059 (D-02) no whole-run clock exists to end that wait. A limit above
+/// [`Semaphore::MAX_PERMITS`] would make `Semaphore::new` panic.
 fn validate_concurrency_limit(phalanx: &Phalanx) -> Result<(), BattalionError> {
-    if phalanx.max_concurrency() == Some(0) {
-        return Err(BattalionError::ValidationError(format!(
+    match phalanx.max_concurrency() {
+        Some(0) => Err(BattalionError::ValidationError(format!(
             "Phalanx '{}' max_concurrency must be at least 1; 0 would block every Paladin",
             phalanx.config().name
-        )));
+        ))),
+        Some(max) if max > Semaphore::MAX_PERMITS => Err(BattalionError::ValidationError(format!(
+            "Phalanx '{}' max_concurrency must be at most {}; got {max}",
+            phalanx.config().name,
+            Semaphore::MAX_PERMITS
+        ))),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Run one Paladin to its final outcome inside its own task.

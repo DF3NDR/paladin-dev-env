@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 44
-current_phase_name: Legacy Clean-Break Removal
-status: verifying
+current_phase: 46
+current_phase_name: Docs Currency & Hygiene
+status: planning
 stopped_at: Completed 44-12-PLAN.md
-last_updated: "2026-10-11T17:12:29.945Z"
-last_activity: 2026-10-09
-last_activity_desc: Phase 44 execution started
+last_updated: "2026-10-11T17:25:41.862Z"
+last_activity: 2026-10-11
+last_activity_desc: Phase 44 complete, transitioned to Phase 46
 progress:
   total_phases: 8
   completed_phases: 8
@@ -50,16 +50,16 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 44 (Legacy Clean-Break Removal) — EXECUTING
-Plan: 13 of 13
-Status: Phase complete — ready for verification
-Last activity: 2026-10-09 — Phase 44 execution started
+Phase: 46 — Docs Currency & Hygiene
+Plan: Not started
+Status: Ready to discuss/plan (no CONTEXT.md yet)
+Last activity: 2026-10-11 — Phase 44 complete (verified, 13/13 plans); transitioned to Phase 46. Phase 45 was already sealed 2026-09-30. Phase 41 is executed (9/9) but awaits 4 human UAT tests (41-UAT.md, verification status human_needed).
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 470
+- Total plans completed: 483
 - Average duration: —
 - Total execution time: —
 
@@ -111,6 +111,7 @@ Last activity: 2026-10-09 — Phase 44 execution started
 | 40 | 6 | - | - |
 | 42 | 12 | - | - |
 | 43 | 13 | - | - |
+| 44 | 13 | - | - |
 
 *Updated after each plan completion*
 

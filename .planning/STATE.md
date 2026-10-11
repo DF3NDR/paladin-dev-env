@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 44
 current_phase_name: Legacy Clean-Break Removal
 status: executing
-stopped_at: Completed 44-05-PLAN.md
-last_updated: "2026-10-10T02:14:18.678Z"
+stopped_at: Completed 44-06-PLAN.md
+last_updated: "2026-10-11T02:16:17.762Z"
 last_activity: 2026-10-09
 last_activity_desc: Phase 44 execution started
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 77
-  completed_plans: 69
+  completed_plans: 70
 ---
 
 # Project State
@@ -31,7 +31,7 @@ requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([█████████░] 90%) of the phases planned so far (38, 39, 40, 45);
+**Progress:** [████████████████████] 30/30 plans ([█████████░] 91%) of the phases planned so far (38, 39, 40, 45);
 Phases 41-44, 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -51,7 +51,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 44 (Legacy Clean-Break Removal) — EXECUTING
-Plan: 6 of 13
+Plan: 7 of 13
 Status: Ready to execute
 Last activity: 2026-10-09 — Phase 44 execution started
 
@@ -260,6 +260,7 @@ Last activity: 2026-10-09 — Phase 44 execution started
 | Phase 44 P03 | ~1h30min | 3 tasks | 12 files |
 | Phase 44 P04 | 50min | 2 tasks | 6 files |
 | Phase 44 P05 | ~1h30min | 2 tasks | 2 files |
+| Phase 44 P06 | 1h | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -432,6 +433,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [44-03] Breaker and Conclave read transience() alone, Transient-only; Unknown is neither retried nor counted; the stringly LLM variant and both legacy predicates are removed with no bridge
 - [Phase ?]: 44-04: Formation Absorb keeps the v0.10 node_errors shape until 44-06; unsupported on_error variants fail closed with ValidationError
 - [Phase ?]: [44-05] Phalanx keeps collect-then-fail under on_error None; execute_with_cancellation polls the token first (biased) so Cancelled is deterministic
+- [Phase ?]: 44-06: node_errors element persisted as {node_id (Paladin name), attempt, transience, source}; operator chose option-a on 2026-10-11
+- [Phase ?]: 44-06 context: operator is considering a later phase 44.1 renaming the Node<T> entity envelope to Entity<T>; out of scope for phase 44
 
 ### Pending Todos
 
@@ -646,8 +649,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-10T02:14:18.638Z
-**Stopped at:** Completed 44-05-PLAN.md
+**Last session:** 2026-10-11T02:16:17.718Z
+**Stopped at:** Completed 44-06-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

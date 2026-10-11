@@ -651,7 +651,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 44-06-PLAN.md — One-way node_errors retype to the structured NodeError behind a checkpoint:decision, heralds' richer line, shape and deserialization-break tests (wave 3, non-autonomous)
+- [x] 44-06-PLAN.md — One-way node_errors retype to the structured NodeError behind a checkpoint:decision, heralds' richer line, shape and deserialization-break tests (wave 3, non-autonomous)
 - [ ] 44-07-PLAN.md — Commander without its execute() wrapper, aegis-sourced Conclave/Maneuver bridges, 300 s per-attempt builder default; Conclave on the runner with the engine backoff (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*

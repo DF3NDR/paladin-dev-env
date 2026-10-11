@@ -59,6 +59,28 @@ and this project follows lockstep workspace versioning.
   beside `usage: trace.total_usage()`, and each real Paladin-attempt `NodeFinished.cost` carries
   that attempt's own priced `PaladinResult.cost` — never a placeholder — so a run's total cost is
   a real, end-to-end figure (PRICE-03).
+- Phase 44 (legacy clean break, LEGACY-01, LEGACY-02; ADR-0059): Formation, Phalanx, Campaign and
+  the Conclave run every Paladin, expert or aggregator attempt through one crate-private runner
+  (`aegis_attempt`), bounded per attempt by `BattalionConfig.aegis.timeout` (no whole-Battalion
+  clock) and retried under `aegis.retry` with the engine's backoff. Formation and Phalanx continue
+  past a failure under `aegis.on_error = Absorb`, record the typed `NodeError` in
+  `BattalionResult.node_errors` and report `Completed`; a timed-out final attempt is a
+  `BattalionError::Node` (Formation, Campaign) or an entry in `AggregationError` (Phalanx).
+  Campaign has no continue mode and warns once when `on_error` is set. See `MIGRATION.md` 9.1
+  M-B-06 and M-B-07.
+- Phase 44 (LEGACY-01, LEGACY-03; ADR-0059): the Commander no longer wraps `execute()` in a
+  timeout; a bare `CommanderBuilder` bounds each attempt at 300 s; it bridges `aegis` into the
+  Conclave (`retry_attempts = max_attempts - 1`, clamped to 5) and defaults its Maneuver to
+  `maneuver::ErrorStrategy::FailFast`. The Conclave retries an expert only when
+  `PaladinError::transience()` is `Transient`, waits with `engine::retry::backoff_delay`, and
+  reports an aggregator timeout as `ConclaveError::AggregatorFailed`. See `MIGRATION.md` 9.1
+  M-B-09 and M-B-11.
+
+### Removed
+
+- Phase 44 (LEGACY-01; ADR-0059; a clean break with no shim, see `MIGRATION.md` 9.2): the public
+  `paladin_battalion::retry` module with its `should_retry` and `calculate_retry_delay`, and the
+  facade's matching re-export. Use `aegis.retry` and `engine::retry::backoff_delay`.
 
 ## [0.10.1] - 2026-09-20
 

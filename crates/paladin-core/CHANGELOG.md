@@ -70,6 +70,31 @@ and this project follows lockstep workspace versioning.
 
 - The `cost_estimate`/`total_cost()` rustdoc reserved-note on `ExecutionMetadata` now reads
   "produced by the Treasurer" instead of "no in-tree producer yet" (D-12).
+- Phase 44 (legacy clean break, LEGACY-01, LEGACY-02; ADR-0059): `BattalionConfig` gains
+  `#[serde(default)] aegis: Aegis`, `with_aegis` and `validate_aegis` (rejects `max_attempts == 0`,
+  `Route` and `Custom` handlers, `RetryPredicate::Custom` and zero-length durations, and ignores
+  `cache`). The `aegis` rustdoc is the per-pattern contract: a per-attempt timeout, a retry whose
+  `max_attempts` counts total attempts, and `Absorb` to continue past a failure. A v0.10
+  `BattalionConfig` document still deserializes; its removed keys are ignored and `aegis` is
+  `Aegis::default()`. `BattalionConfig::new` arms no timeout. See `MIGRATION.md` 9.1 M-B-06 and
+  M-B-07 and the Phase 44 9.2 rows.
+- Phase 44 (LEGACY-01; ADR-0059; one-way): `BattalionResult.node_errors` is retyped from
+  `Vec<battalion::NodeError>` to `Vec<node_error::NodeError>`, whose element is
+  `{ node_id, attempt, transience, source }`. A stored v0.10 document with a non-empty
+  `node_errors` no longer deserializes; an empty or absent array still does. See `MIGRATION.md`
+  9.1 M-B-08 and 9.4.
+
+### Removed
+
+- Phase 44 (LEGACY-01, LEGACY-02, LEGACY-03; ADR-0059; a clean break with no shim, see `MIGRATION.md`
+  9.2): the legacy Battalion `RetryPolicy`, `ErrorStrategy` and `NodeError`; `BattalionConfig`'s
+  `timeout_seconds`, `retry_policy` and `error_strategy` fields and its `with_timeout`,
+  `with_retry_policy` and `with_error_strategy` builders; `BattalionError::Timeout`;
+  `ConclaveError::Timeout`; `ConclaveConfig::timeout_seconds` and `ConclaveConfig::with_timeout`
+  (`Conclave::validate` now delegates the timeout and retry-policy checks to `validate_aegis`); and
+  `PaladinError::LlmError`, `PaladinError::is_retryable` and `PaladinError::is_terminal`. Use
+  `BattalionConfig.aegis`, the structured `node_error::NodeError`, `PaladinError::LlmFailure` and
+  `PaladinError::transience()`.
 
 ## [0.10.1] - 2026-09-20
 

@@ -645,6 +645,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LogTraceSink` skips JSON serialisation when the `paladin::trace` target is filtered and reuses
   a per-thread buffer when it is enabled; `CompositeSink` hands the record to its last child
   without cloning (OBS-05; Phase 45 plan 45-03; public API unchanged).
+- **Battalion fault handling moves onto `BattalionConfig.aegis` (Phase 44; LEGACY-01, LEGACY-02).**
+  `BattalionConfig` gains `#[serde(default)] pub aegis: Aegis`, the `with_aegis` builder and a pure
+  `validate_aegis` check (run at each service's entry, before any Paladin runs). Formation, Phalanx,
+  Campaign and the Conclave bound every Paladin, expert or aggregator attempt by `aegis.timeout`
+  (the tighter of `run_timeout` and `idle_timeout`) through one crate-private runner,
+  `aegis_attempt`: there is no whole-Battalion clock any more, so a ten-step Formation may run ten
+  times the bound. They retry under `aegis.retry` with the engine's backoff, where `max_attempts`
+  counts total attempts (a v0.10 policy of N retries is `max_attempts: N + 1`) and the default
+  `RetryPredicate::TransientOnly` no longer retries `Unknown` failures; continuing past a failed
+  Paladin is `aegis.on_error = Some(ErrorHandlerSpec::Absorb { .. })` (Formation and Phalanx; a
+  Formation that continues passes an empty input to the next Paladin; Campaign has no continue mode
+  and warns once). A timed-out final attempt is a `BattalionError::Node` with a `Timeout` source
+  (Formation, Campaign) or an entry inside `AggregationError` (Phalanx). `BattalionConfig::new`
+  arms no timeout. (ADR-0059; LEGACY-01..04; see MIGRATION.md 9.1 M-B-06..M-B-11 and the Phase 44
+  9.2 rows)
+- **`BattalionResult.node_errors` carries the structured `NodeError`, a one-way door (Phase 44;
+  LEGACY-01).** The element changes from the v0.10 `{ node_name, error }` summary to
+  `{ node_id, attempt, transience, source }` (`node_id` is the Paladin's name; `source` is an
+  externally tagged `Llm`, `Paladin` or `Timeout` object). A stored v0.10 `BattalionResult`
+  document whose `node_errors` is non-empty no longer deserializes; an empty or absent array still
+  does, and there is no compatibility deserializer. The JSON herald emits the new shape, and the
+  Markdown and Table heralds render `**<node id>:** attempt <n>, <Transience>: <source>` and
+  `  <node id> (attempt <n>, <Transience>): <source>`, with no provider or HTTP status. (ADR-0059;
+  LEGACY-01..04; see MIGRATION.md 9.1 M-B-08, section 9.4 and the Phase 44 9.2 rows)
+- **The Conclave and the circuit breaker classify by `transience()`, and the Conclave uses the
+  engine backoff (Phase 44; LEGACY-03).** The Conclave retries an expert only when
+  `PaladinError::transience()` is `Transient` (never by message text; `Unknown` is not retried),
+  with the engine's `backoff_delay` shape in place of its private 1, 2, 4, 8, 16 s ladder;
+  `CircuitBreakerOpen`, Garrison storage and tokenization failures and Arsenal timeout and
+  transport failures are now retried. The circuit breaker counts `Transient` failures only, so a
+  `Permanent` failure (a 401 from a bad key) or an `Unknown` one no longer trips it. (ADR-0059;
+  LEGACY-01..04; see MIGRATION.md 9.1 M-B-09, M-B-10 and the Phase 44 9.2 rows)
+- **The Commander's defaults (Phase 44; LEGACY-01, LEGACY-02).** A bare `CommanderBuilder` bounds
+  each attempt at 300 s (the `BattalionConfig` it builds on its own arms no timeout); the Commander
+  no longer wraps `execute()` in a whole-run timeout, so ChainOfCommand and Grove are unbounded
+  unless the caller wraps `Commander::execute()`; its Conclave bridge derives
+  `retry_attempts = max_attempts - 1` from `aegis.retry`; and its default Maneuver strategy is
+  `maneuver::ErrorStrategy::FailFast` (set `CommanderBuilder::error_strategy` to keep
+  `ContinueParallel`). The CLI keeps its `timeout_seconds` YAML keys, which now bound each attempt.
+  (ADR-0059; LEGACY-01..04; see MIGRATION.md 9.1 M-B-06, M-B-09, M-B-11 and the Phase 44 9.2 rows)
 
 ### Removed
 
@@ -655,6 +695,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `paladin-reports` and `paladin-backups` buckets from the dev compose.
 - The `testcontainers-modules` dev-dependency.
 - The `.github/actionlint.yaml` `services.command` suppression, which was dead configuration.
+- **The legacy Battalion fault-handling surfaces, a clean break with no shim (Phase 44; LEGACY-01,
+  LEGACY-02, LEGACY-03; ADR-0059; LEGACY-01..04; see MIGRATION.md 9.1 M-B-06..M-B-11 and the Phase
+  44 9.2 rows).** Each removal names its replacement:
+  - The legacy Battalion `RetryPolicy`, `ErrorStrategy` and `NodeError` types in `paladin-core`
+    (the same-named Aegis `RetryPolicy`, the Maneuver's `ErrorStrategy` and the structured
+    `node_error::NodeError` are different items and stay). Replacements: `BattalionConfig.aegis`
+    (`retry`, `on_error`) and the structured `NodeError`.
+  - `BattalionConfig`'s `timeout_seconds`, `retry_policy` and `error_strategy` fields and its
+    `with_timeout`, `with_retry_policy` and `with_error_strategy` builders. Replacement:
+    `BattalionConfig::with_aegis(Aegis { timeout, retry, on_error, .. })`; a v0.10 document still
+    deserializes, the removed keys are ignored and `aegis` is `Aegis::default()`.
+  - `BattalionError::Timeout` and `ConclaveError::Timeout`. Replacement: a per-attempt
+    `NodeErrorSource::Timeout` on `BattalionError::Node`, or `ConclaveError::AggregatorFailed` for
+    the aggregator.
+  - `ConclaveConfig::timeout_seconds` and `ConclaveConfig::with_timeout`. Replacement:
+    `BattalionConfig.aegis.timeout`, applied to every expert and aggregator attempt.
+  - `PaladinError::LlmError`, `PaladinError::is_retryable` and `PaladinError::is_terminal`.
+    Replacement: `PaladinError::LlmFailure` built by `llm_failure::to_paladin_error`, and
+    `PaladinError::transience()`, the single classification source (`transience() ==
+    Transience::Permanent` is the closest read for `is_terminal`; there is no equivalent for the
+    old retry set).
+  - The `paladin_battalion::retry` module (`should_retry`, `calculate_retry_delay`) and its facade
+    re-export `paladin::application::services::battalion::retry`. Replacement: `aegis.retry` with
+    `engine::retry::backoff_delay`. The API baseline `.project/current-exports.txt` loses that one
+    line.
 
 ### Fixed
 

@@ -30,6 +30,13 @@ and this project follows lockstep workspace versioning.
   errors, and a currency-coded cost row when priced) instead of four hard-coded placeholder rows.
 - `JsonHerald::finalize_stream` emits a `currency` field beside `cost_estimate` (`null` for both
   when the run was unpriced).
+- Phase 44 (LEGACY-01; ADR-0059; see `MIGRATION.md` 9.1 M-B-08): the per-node failure block renders
+  the structured `node_errors` element. The JSON herald emits
+  `{ node_id, attempt, transience, source }` with `source` an externally tagged object (the v0.10
+  `node_name` and `error` keys are gone); the Markdown herald line is
+  `**<node id>:** attempt <n>, <Transience>: <source>` and the Table herald line is
+  `  <node id> (attempt <n>, <Transience>): <source>`. The line adds the node id, attempt and
+  transience to the already-redacted source text and never the provider or HTTP status.
 
 ## [0.10.1] - 2026-09-20
 

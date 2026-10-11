@@ -3,10 +3,11 @@ phase: 44
 slug: legacy-clean-break-removal
 # status lifecycle: draft (seeded by plan-phase) → validated (set by validate-phase §6)
 # audit-milestone §5.5 distinguishes NOT-VALIDATED (draft) from PARTIAL (validated + nyquist_compliant: false) (#2117)
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: validated
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-10-09
+validated: 2026-10-11
 ---
 
 # Phase 44 — Validation Strategy
@@ -43,37 +44,37 @@ task is reproduced verbatim under "Automated commands (verbatim)" below.
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 44-01-01 | 01 | 1 | LEGACY-01, LEGACY-02 | T-44-01 | each Campaign attempt is bounded by `aegis.timeout`; a hung Paladin surfaces a structured timeout `NodeError` after the bound | tracer (end-to-end, paused clock) | `cargo test -p paladin-battalion --lib commander::tests::commander_campaign_honours_aegis_per_attempt_timeout_end_to_end` | ❌ new test + new `aegis_attempt.rs`, created in task | ⬜ pending |
-| 44-01-02 | 01 | 1 | LEGACY-01, LEGACY-02 | T-44-02, T-44-03, T-44-04 | `validate_aegis` rejects zero bounds, `max_attempts == 0`, Route / Custom handlers and the Custom predicate; retry logs carry name, attempt, transience and delay only | unit + doc | `cargo test -p paladin-battalion --lib aegis_attempt` | ❌ new tests, created TDD-first in task | ⬜ pending |
-| 44-02-01 | 02 | 1 | LEGACY-04 | T-44-05, T-44-06 | ADR-0059 licenses Phase 44 only and never cites ADR-0051 as licence; D-04 refinement and every Open Question resolution recorded | shell check | `grep` heading set + `This refines D-04` + Open Questions 1-10 in ADR-0059 | ❌ ADR created in task | ⬜ pending |
-| 44-02-02 | 02 | 1 | LEGACY-04 | T-44-05 | supersession of ADR-0001 / 0002 mechanically visible | shell check | `grep -q 'Next free ADR number: 0060' .planning/decisions/PROMOTION.md` + Status checks | ✅ | ⬜ pending |
-| 44-03-01 | 03 | 2 | LEGACY-03 | T-44-07, T-44-08 | breaker and Conclave decisions come from `transience()`, never provider message text; breaker counts Transient only | unit | `cargo test -p paladin-ai --lib circuit_breaker` + `cargo test -p paladin-battalion --lib conclave_execution_service` | ✅ (tests rewritten) | ⬜ pending |
-| 44-03-02 | 03 | 2 | LEGACY-03 | T-44-07 | the stringly variant and both legacy predicates are gone from every `*.rs` | compile + unit + grep | `cargo check --workspace --all-targets --all-features` + `cargo test -p paladin-ai-core --lib paladin_error` | ✅ | ⬜ pending |
-| 44-03-03 | 03 | 2 | LEGACY-03 | T-44-09 | rewritten rustdoc leaks nothing and holds the zero-warning bar | doc + clippy | `make doc-check` | ✅ | ⬜ pending |
-| 44-04-01 | 04 | 2 | LEGACY-01, LEGACY-02 | T-44-10, T-44-11 | each Formation attempt bounded; an unsupported handler is rejected, never treated as Absorb | unit (paused clock) | `cargo test -p paladin-battalion --lib formation_service` | ✅ (new tests in existing file) | ⬜ pending |
-| 44-04-02 | 04 | 2 | LEGACY-01, LEGACY-02 | T-44-10 | Commander-routed Formation tests on the Aegis contract | integration | `cargo test -p paladin-ai --test lib -- integration::commander_error_paths_test ...` | ✅ | ⬜ pending |
-| 44-05-01 | 05 | 2 | LEGACY-01, LEGACY-02 | T-44-12, T-44-13, T-44-14 | retries bounded per Paladin; `AggregationError` embeds only `NodeError` displays; no panicking `unwrap` | unit (paused clock) | `cargo test -p paladin-battalion --lib phalanx_service` | ✅ (new tests in existing file) | ⬜ pending |
-| 44-05-02 | 05 | 2 | LEGACY-01, LEGACY-02 | T-44-12 | root Phalanx tests on per-attempt and Absorb contracts | integration | `cargo test -p paladin-ai --test lib -- integration::battalion::phalanx_integration_test` | ✅ | ⬜ pending |
-| 44-06-01 | 06 | 3 | LEGACY-01 | T-44-17 | operator confirms the one-way persisted `node_errors` shape before any code change | checkpoint:decision (manual, blocking) | none by design -- gated by 44-06-03's outcome-marker grep | n/a | ⬜ pending |
-| 44-06-02 | 06 | 3 | LEGACY-01 | T-44-16 | strict typed deserialization; no untagged / alias compatibility path | compile + unit + integration | `cargo check --workspace --all-targets --all-features` + `cargo test -p paladin-herald` | ✅ | ⬜ pending |
-| 44-06-03 | 06 | 3 | LEGACY-01 | T-44-15, T-44-16, T-44-17 | herald lines add no provider or status; v0.10 element shape rejected; checkpoint outcome recorded | unit + shell check | `cargo test -p paladin-ai-core --lib battalion_result` + outcome-marker `grep -Eq` on ADR-0059 | ❌ new tests, created TDD-first in task | ⬜ pending |
-| 44-07-01 | 07 | 3 | LEGACY-02, LEGACY-03 | T-44-18, T-44-20 | Commander validates policy via `validate_aegis`; 300 s per-attempt builder default; `retry_attempts = max_attempts - 1` bridge | unit (paused clock) | `cargo test -p paladin-battalion --lib commander` | ✅ (tests replaced in existing file) | ⬜ pending |
-| 44-07-02 | 07 | 3 | LEGACY-02, LEGACY-03 | T-44-19, T-44-20 | Conclave retry Transient-only, clamped to 5 retries, engine backoff capped by `max_interval` | unit (paused clock) + doc | `cargo test -p paladin-battalion --lib conclave_execution_service` | ✅ (tests rewritten) | ⬜ pending |
-| 44-08-01 | 08 | 4 | LEGACY-04 | T-44-21, T-44-22 | CLI `timeout_seconds` maps per attempt; a zero value is rejected by validation | compile + doc-examples + unit | `cargo test -p paladin-ai --lib cli` + `make check-doc-examples` | ✅ | ⬜ pending |
-| 44-08-02 | 08 | 4 | LEGACY-04 | -- | N/A (examples) | build | `cargo check -p paladin-ai --examples --all-features` | ✅ | ⬜ pending |
-| 44-08-03 | 08 | 4 | LEGACY-04 | -- | N/A (examples) | build | `make check-examples` | ✅ | ⬜ pending |
-| 44-09-01 | 09 | 4 | LEGACY-02, LEGACY-04 | T-44-23, T-44-24 | docs state the per-attempt bound; both fictional `battalion:` YAML blocks in `configuration.md` gone; no removed API taught | doc gates + grep | `make check-doc-config` + `make check-doc-examples` + negative `git grep` / `grep` | ✅ | ⬜ pending |
-| 44-09-02 | 09 | 4 | LEGACY-03, LEGACY-04 | T-44-24 | Conclave / deployment / CLI pages teach no removed API | doc gates + grep | `make check-doc-config` + negative `git grep` | ✅ | ⬜ pending |
-| 44-09-03 | 09 | 4 | LEGACY-03, LEGACY-04 | T-44-24 | PaladinError pages describe `LlmFailure` / `transience()` | doc gate + grep | `make check-doc-examples` + negative `git grep` | ✅ | ⬜ pending |
-| 44-10-01 | 10 | 5 | LEGACY-01 | T-44-27 | legacy retry module and facade re-export removed; API baseline regenerated, nothing unregistered | compile + unit + API gate | `PUBLIC_API_TOOLCHAIN=nightly-2026-09-20 make api-surface` | ✅ | ⬜ pending |
-| 44-10-02 | 10 | 5 | LEGACY-01, LEGACY-02 | T-44-25 | no test (including the two root Campaign / chain-of-command tests) writes a removed field; uncommitted trial deletion proves it | integration + unit | `cargo test -p paladin-ai --test lib -- ... integration::battalion_campaign_integration_test integration::battalion_chain_of_command_integration_test` | ✅ | ⬜ pending |
-| 44-10-03 | 10 | 5 | LEGACY-01, LEGACY-02, LEGACY-03 | T-44-25, T-44-26 | no shim or alias; a v0.10 config document still loads with a default `aegis` | compile + unit + doc | `cargo test -p paladin-ai-core --lib battalion` + `make doc-check` | ❌ new test, created TDD-first in task | ⬜ pending |
-| 44-11-01 | 11 | 6 | LEGACY-04 | T-44-28 | every behaviour change is a 9.1 row (incl. the D-04 `max_attempts - 1` bridge in `M-B-09`) | shell check | `./scripts/check-migration-allowlist.sh` | ✅ | ⬜ pending |
-| 44-11-02 | 11 | 6 | LEGACY-04 | T-44-28, T-44-SC, T-44-29 | only measured lints registered; downloaded tool isolated in the scratchpad; manifests restored byte-for-byte | script + manual diagnostic | `./scripts/check-migration-allowlist.sh` + `bash tests/scripts/check-migration-allowlist_test.sh` | ✅ | ⬜ pending |
-| 44-13-01 | 13 | 6 | LEGACY-01, LEGACY-02, LEGACY-03 | T-44-33 | positive controls prove every guard rule can fire and every allowed look-alike passes | guard test (TDD) | `cargo test --test legacy_removal_guard -- scanner_` | ❌ `tests/legacy_removal_guard.rs` created in task (RED first) | ⬜ pending |
-| 44-13-02 | 13 | 6 | LEGACY-01, LEGACY-02, LEGACY-03 | T-44-33, T-44-34 | repository scan clean; skip list fixed to the declared history set | guard test | `cargo test --test legacy_removal_guard` | ✅ after 44-13-01 | ⬜ pending |
-| 44-12-01 | 12 | 7 | LEGACY-01..04 | T-44-32 | every change on record (CHANGELOGs, ADR-0059 `conforms`) | script + grep | `./scripts/check-changelogs.sh` | ✅ | ⬜ pending |
-| 44-12-02 | 12 | 7 | LEGACY-01..04 | T-44-30, T-44-31 | full gate green; manual credential-handling review recorded | full suite | the phase gate (see verbatim line) | ✅ | ⬜ pending |
+| 44-01-01 | 01 | 1 | LEGACY-01, LEGACY-02 | T-44-01 | each Campaign attempt is bounded by `aegis.timeout`; a hung Paladin surfaces a structured timeout `NodeError` after the bound | tracer (end-to-end, paused clock) | `cargo test -p paladin-battalion --lib commander::tests::commander_campaign_honours_aegis_per_attempt_timeout_end_to_end` | ❌ new test + new `aegis_attempt.rs`, created in task | ✅ green |
+| 44-01-02 | 01 | 1 | LEGACY-01, LEGACY-02 | T-44-02, T-44-03, T-44-04 | `validate_aegis` rejects zero bounds, `max_attempts == 0`, Route / Custom handlers and the Custom predicate; retry logs carry name, attempt, transience and delay only | unit + doc | `cargo test -p paladin-battalion --lib aegis_attempt` | ❌ new tests, created TDD-first in task | ✅ green |
+| 44-02-01 | 02 | 1 | LEGACY-04 | T-44-05, T-44-06 | ADR-0059 licenses Phase 44 only and never cites ADR-0051 as licence; D-04 refinement and every Open Question resolution recorded | shell check | `grep` heading set + `This refines D-04` + Open Questions 1-10 in ADR-0059 | ❌ ADR created in task | ✅ green |
+| 44-02-02 | 02 | 1 | LEGACY-04 | T-44-05 | supersession of ADR-0001 / 0002 mechanically visible | shell check | `grep -q 'Next free ADR number: 0060' .planning/decisions/PROMOTION.md` + Status checks | ✅ | ✅ green |
+| 44-03-01 | 03 | 2 | LEGACY-03 | T-44-07, T-44-08 | breaker and Conclave decisions come from `transience()`, never provider message text; breaker counts Transient only | unit | `cargo test -p paladin-ai --lib circuit_breaker` + `cargo test -p paladin-battalion --lib conclave_execution_service` | ✅ (tests rewritten) | ✅ green |
+| 44-03-02 | 03 | 2 | LEGACY-03 | T-44-07 | the stringly variant and both legacy predicates are gone from every `*.rs` | compile + unit + grep | `cargo check --workspace --all-targets --all-features` + `cargo test -p paladin-ai-core --lib paladin_error` | ✅ | ✅ green |
+| 44-03-03 | 03 | 2 | LEGACY-03 | T-44-09 | rewritten rustdoc leaks nothing and holds the zero-warning bar | doc + clippy | `make doc-check` | ✅ | ✅ green |
+| 44-04-01 | 04 | 2 | LEGACY-01, LEGACY-02 | T-44-10, T-44-11 | each Formation attempt bounded; an unsupported handler is rejected, never treated as Absorb | unit (paused clock) | `cargo test -p paladin-battalion --lib formation_service` | ✅ (new tests in existing file) | ✅ green |
+| 44-04-02 | 04 | 2 | LEGACY-01, LEGACY-02 | T-44-10 | Commander-routed Formation tests on the Aegis contract | integration | `cargo test -p paladin-ai --test lib -- integration::commander_error_paths_test ...` | ✅ | ✅ green |
+| 44-05-01 | 05 | 2 | LEGACY-01, LEGACY-02 | T-44-12, T-44-13, T-44-14 | retries bounded per Paladin; `AggregationError` embeds only `NodeError` displays; no panicking `unwrap` | unit (paused clock) | `cargo test -p paladin-battalion --lib phalanx_service` | ✅ (new tests in existing file) | ✅ green |
+| 44-05-02 | 05 | 2 | LEGACY-01, LEGACY-02 | T-44-12 | root Phalanx tests on per-attempt and Absorb contracts | integration | `cargo test -p paladin-ai --test lib -- integration::battalion::phalanx_integration_test` | ✅ | ✅ green |
+| 44-06-01 | 06 | 3 | LEGACY-01 | T-44-17 | operator confirms the one-way persisted `node_errors` shape before any code change | checkpoint:decision (manual, blocking) | none by design -- gated by 44-06-03's outcome-marker grep | n/a | ✅ green |
+| 44-06-02 | 06 | 3 | LEGACY-01 | T-44-16 | strict typed deserialization; no untagged / alias compatibility path | compile + unit + integration | `cargo check --workspace --all-targets --all-features` + `cargo test -p paladin-herald` | ✅ | ✅ green |
+| 44-06-03 | 06 | 3 | LEGACY-01 | T-44-15, T-44-16, T-44-17 | herald lines add no provider or status; v0.10 element shape rejected; checkpoint outcome recorded | unit + shell check | `cargo test -p paladin-ai-core --lib battalion_result` + outcome-marker `grep -Eq` on ADR-0059 | ❌ new tests, created TDD-first in task | ✅ green |
+| 44-07-01 | 07 | 3 | LEGACY-02, LEGACY-03 | T-44-18, T-44-20 | Commander validates policy via `validate_aegis`; 300 s per-attempt builder default; `retry_attempts = max_attempts - 1` bridge | unit (paused clock) | `cargo test -p paladin-battalion --lib commander` | ✅ (tests replaced in existing file) | ✅ green |
+| 44-07-02 | 07 | 3 | LEGACY-02, LEGACY-03 | T-44-19, T-44-20 | Conclave retry Transient-only, clamped to 5 retries, engine backoff capped by `max_interval` | unit (paused clock) + doc | `cargo test -p paladin-battalion --lib conclave_execution_service` | ✅ (tests rewritten) | ✅ green |
+| 44-08-01 | 08 | 4 | LEGACY-04 | T-44-21, T-44-22 | CLI `timeout_seconds` maps per attempt; a zero value is rejected by validation | compile + doc-examples + unit | `cargo test -p paladin-ai --lib cli` + `make check-doc-examples` | ✅ | ✅ green |
+| 44-08-02 | 08 | 4 | LEGACY-04 | -- | N/A (examples) | build | `cargo check -p paladin-ai --examples --all-features` | ✅ | ✅ green |
+| 44-08-03 | 08 | 4 | LEGACY-04 | -- | N/A (examples) | build | `make check-examples` | ✅ | ✅ green |
+| 44-09-01 | 09 | 4 | LEGACY-02, LEGACY-04 | T-44-23, T-44-24 | docs state the per-attempt bound; both fictional `battalion:` YAML blocks in `configuration.md` gone; no removed API taught | doc gates + grep | `make check-doc-config` + `make check-doc-examples` + negative `git grep` / `grep` | ✅ | ✅ green |
+| 44-09-02 | 09 | 4 | LEGACY-03, LEGACY-04 | T-44-24 | Conclave / deployment / CLI pages teach no removed API | doc gates + grep | `make check-doc-config` + negative `git grep` | ✅ | ✅ green |
+| 44-09-03 | 09 | 4 | LEGACY-03, LEGACY-04 | T-44-24 | PaladinError pages describe `LlmFailure` / `transience()` | doc gate + grep | `make check-doc-examples` + negative `git grep` | ✅ | ✅ green |
+| 44-10-01 | 10 | 5 | LEGACY-01 | T-44-27 | legacy retry module and facade re-export removed; API baseline regenerated, nothing unregistered | compile + unit + API gate | `PUBLIC_API_TOOLCHAIN=nightly-2026-09-20 make api-surface` | ✅ | ✅ green |
+| 44-10-02 | 10 | 5 | LEGACY-01, LEGACY-02 | T-44-25 | no test (including the two root Campaign / chain-of-command tests) writes a removed field; uncommitted trial deletion proves it | integration + unit | `cargo test -p paladin-ai --test lib -- ... integration::battalion_campaign_integration_test integration::battalion_chain_of_command_integration_test` | ✅ | ✅ green |
+| 44-10-03 | 10 | 5 | LEGACY-01, LEGACY-02, LEGACY-03 | T-44-25, T-44-26 | no shim or alias; a v0.10 config document still loads with a default `aegis` | compile + unit + doc | `cargo test -p paladin-ai-core --lib battalion` + `make doc-check` | ❌ new test, created TDD-first in task | ✅ green |
+| 44-11-01 | 11 | 6 | LEGACY-04 | T-44-28 | every behaviour change is a 9.1 row (incl. the D-04 `max_attempts - 1` bridge in `M-B-09`) | shell check | `./scripts/check-migration-allowlist.sh` | ✅ | ✅ green |
+| 44-11-02 | 11 | 6 | LEGACY-04 | T-44-28, T-44-SC, T-44-29 | only measured lints registered; downloaded tool isolated in the scratchpad; manifests restored byte-for-byte | script + manual diagnostic | `./scripts/check-migration-allowlist.sh` + `bash tests/scripts/check-migration-allowlist_test.sh` | ✅ | ✅ green |
+| 44-13-01 | 13 | 6 | LEGACY-01, LEGACY-02, LEGACY-03 | T-44-33 | positive controls prove every guard rule can fire and every allowed look-alike passes | guard test (TDD) | `cargo test --test legacy_removal_guard -- scanner_` | ❌ `tests/legacy_removal_guard.rs` created in task (RED first) | ✅ green |
+| 44-13-02 | 13 | 6 | LEGACY-01, LEGACY-02, LEGACY-03 | T-44-33, T-44-34 | repository scan clean; skip list fixed to the declared history set | guard test | `cargo test --test legacy_removal_guard` | ✅ after 44-13-01 | ✅ green |
+| 44-12-01 | 12 | 7 | LEGACY-01..04 | T-44-32 | every change on record (CHANGELOGs, ADR-0059 `conforms`) | script + grep | `./scripts/check-changelogs.sh` | ✅ | ✅ green |
+| 44-12-02 | 12 | 7 | LEGACY-01..04 | T-44-30, T-44-31 | full gate green; manual credential-handling review recorded | full suite | the phase gate (see verbatim line) | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -308,7 +309,70 @@ exceed 5 GB (43-13 precedent; delete that regenerable cache if space runs low).
 - [x] Sampling continuity: no 3 consecutive tasks without automated verify
 - [x] Wave 0 covers all MISSING references (there are none)
 - [x] No watch-mode flags
-- [ ] Feedback latency within the 20 min per-task budget (estimates except the two measured figures; confirm during execution)
-- [ ] `nyquist_compliant: true` set in frontmatter (set by validate-phase)
+- [x] Feedback latency within the 20 min per-task budget — confirmed 2026-10-11: the quick command runs in 2.1 s of test time warm (875 tests); every targeted suite in the map finished in under 4 s of test time; the executors' per-task gates in the SUMMARYs stayed within budget
+- [x] `nyquist_compliant: true` set in frontmatter — set by `/gsd-validate-phase 44` on 2026-10-11
 
-**Approval:** pending
+**Approval:** validated 2026-10-11 (`/gsd-validate-phase 44`)
+
+---
+
+## Validation Audit 2026-10-11
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+**Method.** State A audit (VALIDATION.md existed). All 13 SUMMARYs read `status: complete` and each
+records its `<automated>` line as run. Every one of the 30 task rows was cross-referenced against
+the tree on HEAD `1c53910c` (the tree after the 44-REVIEW-FIX commits `229a28a5`..`dc55f18e` and
+the 44-SECURITY commit, all later than `44-VERIFICATION.md`'s HEAD `8d05e975`): every named test
+file and script exists (`crates/paladin-battalion/src/aegis_attempt.rs`,
+`tests/legacy_removal_guard.rs`, `tests/scripts/check-migration-allowlist_test.sh`,
+`scripts/check-migration-allowlist.sh`, `scripts/check-changelogs.sh`, ADR-0059,
+`.cargo/semver-checks-allowlist.toml`), `crates/paladin-battalion/src/retry.rs` is absent, and
+every test named in a row or in ADR-0059's Code Conformance resolves to a `fn` in the tree.
+
+**Green evidence (re-executed in this session on `1c53910c`, not inherited).**
+
+| Suite | Result |
+|-------|--------|
+| `cargo test -p paladin-battalion --lib` (quick command) | 875 passed, 0 failed, 2.1 s |
+| `cargo test -p paladin-ai-core --lib battalion` / `paladin_error` / `conclave` | 109 / 5 / 10 passed |
+| `cargo test -p paladin-herald` | 60 passed |
+| `cargo test --test legacy_removal_guard` / `--test treasurer_vocabulary_guard` | 3 / 3 passed |
+| `cargo test -p paladin-ai --lib circuit_breaker` / `cli` | 5 / 8 passed |
+| `cargo test -p paladin-ai --test unit -- circuit_breaker_test paladin_execution_service_test paladin_error_test battalion` | 127 passed |
+| `cargo test -p paladin-ai --test lib -- integration::{commander_error_paths_test, commander_integration_tests, battalion::formation_integration_test, battalion::phalanx_integration_test, battalion::load_test, battalion::campaign_integration_test, battalion_campaign_integration_test, battalion_chain_of_command_integration_test}` | 81 passed |
+| `cargo test -p paladin-ai --features cli --test lib -- integration::battalion_herald_end_to_end_test` | 2 passed |
+| `./scripts/check-migration-allowlist.sh`, `./scripts/check-changelogs.sh`, `bash tests/scripts/check-migration-allowlist_test.sh` | all pass |
+| 44-02-01 / 44-02-02 ADR greps, 44-06-03 outcome marker, 44-11-01 / 44-11-02 MIGRATION and allowlist greps, 44-12-01 CHANGELOG + `conforms` grep, 44-03-02 and 44-09-01..03 negative `git grep`s | all pass |
+
+Not re-run here (recorded green on `e94394c6` in `44-12-SUMMARY.md` and unchanged by the later
+commits, which touch only `phalanx_service.rs`, `aegis_attempt.rs`, `phalanx.rs` and `.planning/`):
+`make doc-check`, `make check-doc-examples`, `make check-doc-config`, `make check-examples`,
+`make security`, `make check-gates`, `make api-surface`, and the full `cargo test --workspace`,
+whose only two failures are the pre-existing `run_api_wiring::tests::build_run_api_persists_*` pair
+in `deferred-items.md` (confirmed on the pre-phase baseline, not a Phase 44 regression). The
+sandbox ran out of disk once during this audit (the per-session allowance, 22 GB `target/`); 139
+stale duplicate test binaries under `target/debug/deps` were pruned (5.5 GB) and the chain re-run.
+
+**Post-review additions (not in the original map, covered).** The 44-REVIEW-FIX cycle added three
+RED-first tests that now run inside the quick command: `phalanx_rejects_zero_max_concurrency_before_any_paladin_runs`
+and `cancelled_phalanx_does_not_start_queued_paladins` (`phalanx_service.rs`, WR-02 / WR-01),
+`cancelled_before_the_first_attempt_makes_no_call` (`aegis_attempt.rs`), and
+`phalanx_rejects_a_concurrency_limit_above_the_permit_maximum` (WR-N1). WR-03..05 and IN-* are
+queued todos for Phase 46/47, not Phase 44 requirements.
+
+**Manual-only rows, resolution state.**
+
+| Behavior | State |
+|----------|-------|
+| Operator approval of the `node_errors` element shape | Resolved — option-a, dated marker present in ADR-0059 (g); 44-06-03 grep passes |
+| D-27 cargo-semver-checks diagnostic | Done — 44-11-SUMMARY per-package table with `RESTORED_CLEAN`; the automated half is set-equal today |
+| Manual credential-handling review | Done — 44-12-SUMMARY, four numbered findings, no redaction path changed, no new HTTP client |
+| 82 % coverage floor and MSRV 1.88 | Still CI-gated — `cargo-llvm-cov` not installed locally; MSRV checked once locally in 44-12 (`cargo +1.88 check`, exit 0) |
+| ADR-0059 scope wording | Done — 44-02-SUMMARY: both `ADR-0051` lines read as shape-copy / not-inherited |
+
+No test file was generated and no `gsd-nyquist-auditor` was spawned: no MISSING or PARTIAL requirement remained.

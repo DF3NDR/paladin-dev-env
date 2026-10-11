@@ -1969,6 +1969,20 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
+*Last updated: 2026-10-11 after **Phase 44: Legacy Clean-Break Removal** completed and verified --
+the legacy Battalion `RetryPolicy` / `ErrorStrategy` / name-plus-text `NodeError`, the per-pattern
+whole-run timeouts and `PaladinError::LlmError(String)` are gone (LEGACY-01..04). Formation, Phalanx,
+Campaign and Conclave bound each Paladin attempt through one crate-private Aegis runner;
+`BattalionResult.node_errors` is the structured `node_error::NodeError` (44-06 checkpoint option-a,
+node_id = Paladin name); the Conclave and the circuit breaker classify by `transience()` only.
+ADR-0059 supersedes X-03 for Phase 44 only and conforms; every break has a MIGRATION.md 9.1/9.2 row
+and measured allowlist entries; `tests/legacy_removal_guard.rs` pins the removals. Verification
+`passed` 4/4 with 0 gaps; code review 0 critical / 5 warnings, all advisory (notably WR-02:
+`Phalanx::with_max_concurrency(0)` can now hang, fix before the Phase 47 publish). A possible
+Phase 44.1 renaming the `Node<T>` entity envelope to `Entity<T>` is under consideration. Phase 41
+awaits 4 human UAT tests. Next: `/gsd-secure-phase 44`, then `/gsd-discuss-phase 46`.*
+
+---
 *Last updated: 2026-10-09 after **Phase 43: Rate Pacing** completed and verified — the Treasurer's
 pacing half: the `CadencePort` and its in-process, Redis and resilient adapters, the gate-not-retry
 `CadenceLlmAdapter` at every server composition root with every provider's first 429 surfaced and

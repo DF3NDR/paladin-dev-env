@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T18:26:23Z
+updated: 2026-10-12T18:27:23Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 12
-name: The mdBook pages teach Aegis and the typed taxonomy
+number: 13
+name: A stored v0.10 BattalionConfig document still loads
 expected: |
-  `docs/src/user-guides/orchestration.md` Configuration Reference shows a `with_aegis(Aegis { retry, timeout, on_error, .. })` snippet, a per-pattern table (Formation, Phalanx, Campaign, Conclave, ChainOfCommand/Grove/Council), states that timeouts apply per attempt with no whole-Battalion clock and that `Commander::execute()` can be wrapped in `tokio::time::timeout`, and says the next Paladin after an absorbed failure receives an empty input. `docs/src/getting-started/configuration.md` has no `battalion:` YAML stanza and no `APP_BATTALION_*` line. `docs/src/appendix/conclave-pattern.md` documents the engine backoff (500 ms doubling, 60 s cap) and an `AggregatorFailed` arm with no 2^n table. `make check-doc-config` and `make check-doc-examples` exit 0. `git grep -nw 'ContinueOnError\|RetryThenContinue' -- docs ':!docs/src/api-reference' ':!docs/assets'` prints nothing.
+  `cargo test -p paladin-ai-core --lib -- battalion_config_v0_10_document_deserializes_with_default_aegis` passes: a JSON document carrying the removed `timeout_seconds`, `retry_policy` and `error_strategy` keys deserializes without error with `aegis == Aegis::default()`. `BattalionConfig` has exactly four public fields (name, description, aegis, metadata_output_dir), and `battalion/mod.rs` and `conclave.rs` contain no `serde(alias`, `serde(untagged`, `deny_unknown_fields` or `#[deprecated`.
 awaiting: user response
 
 ## Tests
@@ -65,7 +65,7 @@ result: pass
 
 ### 12. The mdBook pages teach Aegis and the typed taxonomy
 expected: `docs/src/user-guides/orchestration.md` Configuration Reference shows a `with_aegis(Aegis { retry, timeout, on_error, .. })` snippet, a per-pattern table (Formation, Phalanx, Campaign, Conclave, ChainOfCommand/Grove/Council), states that timeouts apply per attempt with no whole-Battalion clock and that `Commander::execute()` can be wrapped in `tokio::time::timeout`, and says the next Paladin after an absorbed failure receives an empty input. `docs/src/getting-started/configuration.md` has no `battalion:` YAML stanza and no `APP_BATTALION_*` line. `docs/src/appendix/conclave-pattern.md` documents the engine backoff (500 ms doubling, 60 s cap) and an `AggregatorFailed` arm with no 2^n table. `make check-doc-config` and `make check-doc-examples` exit 0. `git grep -nw 'ContinueOnError\|RetryThenContinue' -- docs ':!docs/src/api-reference' ':!docs/assets'` prints nothing.
-result: [pending]
+result: pass
 
 ### 13. A stored v0.10 BattalionConfig document still loads
 expected: `cargo test -p paladin-ai-core --lib -- battalion_config_v0_10_document_deserializes_with_default_aegis` passes: a JSON document carrying the removed `timeout_seconds`, `retry_policy` and `error_strategy` keys deserializes without error with `aegis == Aegis::default()`. `BattalionConfig` has exactly four public fields (name, description, aegis, metadata_output_dir), and `battalion/mod.rs` and `conclave.rs` contain no `serde(alias`, `serde(untagged`, `deny_unknown_fields` or `#[deprecated`.
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 10
+passed: 11
 issues: 1
-pending: 4
+pending: 3
 skipped: 0
 blocked: 0
 

@@ -1,19 +1,14 @@
 ---
-status: testing
+status: complete
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T18:33:36Z
+updated: 2026-10-12T18:34:43Z
 ---
 
 ## Current Test
-<!-- OVERWRITE each test - shows where we are -->
 
-number: 15
-name: The full phase gate is green on the final tree
-expected: |
-  `cargo fmt --check` is clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` exits 0; `cargo test --workspace --doc` reports 0 failed; `cargo test --workspace --no-fail-fast` passes every target except the two known pre-phase baseline failures `run_api_wiring::tests::build_run_api_persists_*` (fail identically on baseline 061ee3dc, recorded in deferred-items.md); `PUBLIC_API_TOOLCHAIN=nightly-2026-09-20 make api-surface` reports "API surface unchanged" (4274 items); `make security` exits 0. CI-only on the phase PR: the 82 percent coverage floor and mdBook rendering are green (neither tool is installable in the sandbox).
-awaiting: user response
+[testing complete]
 
 ## Tests
 
@@ -77,14 +72,14 @@ result: pass
 
 ### 15. The full phase gate is green on the final tree
 expected: `cargo fmt --check` is clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` exits 0; `cargo test --workspace --doc` reports 0 failed; `cargo test --workspace --no-fail-fast` passes every target except the two known pre-phase baseline failures `run_api_wiring::tests::build_run_api_persists_*` (fail identically on baseline 061ee3dc, recorded in deferred-items.md); `PUBLIC_API_TOOLCHAIN=nightly-2026-09-20 make api-surface` reports "API surface unchanged" (4274 items); `make security` exits 0. CI-only on the phase PR: the 82 percent coverage floor and mdBook rendering are green (neither tool is installable in the sandbox).
-result: [pending]
+result: pass
 
 ## Summary
 
 total: 15
-passed: 13
-issues: 1
-pending: 1
+passed: 14
+issues: 1 (G-44-2, resolved by commit 1e93e1ce; pre-commit CI green on fd3d686e)
+pending: 0
 skipped: 0
 blocked: 0
 

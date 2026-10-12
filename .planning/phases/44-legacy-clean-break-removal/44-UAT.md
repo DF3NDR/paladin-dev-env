@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T01:42:32Z
+updated: 2026-10-12T01:54:11Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 2
-name: Campaign is bounded per attempt by Aegis; the whole-run clock is gone
+number: 3
+name: Invalid Aegis policies are rejected at entry, before any Paladin runs
 expected: |
-  `cargo test -p paladin-battalion --lib -- aegis_attempt campaign_service` passes (10 runner tests, 12 Campaign tests). `cargo test -p paladin-battalion --lib commander_campaign_honours_aegis_per_attempt_timeout_end_to_end` passes: three 600 ms Paladins complete under a 1 s per-attempt bound (a whole-run clock would have fired at 1 s), and a 1.5 s Paladin fails with `BattalionError::Node` carrying `Timeout(Run)`, attempt 1, Transient. Campaign ignores `aegis.on_error` and logs one warn per execution when it is set.
+  `cargo test -p paladin-battalion --lib -- rejects_invalid_aegis_before_any` passes for Campaign, Formation, Phalanx and Conclave. `cargo test -p paladin-ai-core --lib validate_aegis` reports 5 passed: Route/Custom error handlers, Custom retry predicates and zero durations are rejected; a cache policy is accepted and ignored. `commander_builder_rejects_zero_run_timeout` passes: a `CommanderBuilder` given `run_timeout = 0` fails to build with `CommanderValidation`.
 awaiting: user response
 
 ## Tests
@@ -23,7 +23,9 @@ result: pass
 
 ### 2. Campaign is bounded per attempt by Aegis; the whole-run clock is gone
 expected: `cargo test -p paladin-battalion --lib -- aegis_attempt campaign_service` passes (10 runner tests, 12 Campaign tests). `cargo test -p paladin-battalion --lib commander_campaign_honours_aegis_per_attempt_timeout_end_to_end` passes: three 600 ms Paladins complete under a 1 s per-attempt bound (a whole-run clock would have fired at 1 s), and a 1.5 s Paladin fails with `BattalionError::Node` carrying `Timeout(Run)`, attempt 1, Transient. Campaign ignores `aegis.on_error` and logs one warn per execution when it is set.
-result: [pending]
+result: issue
+reported: "Failure on CI pre-commit"
+severity: blocker
 
 ### 3. Invalid Aegis policies are rejected at entry, before any Paladin runs
 expected: `cargo test -p paladin-battalion --lib -- rejects_invalid_aegis_before_any` passes for Campaign, Formation, Phalanx and Conclave. `cargo test -p paladin-ai-core --lib validate_aegis` reports 5 passed: Route/Custom error handlers, Custom retry predicates and zero durations are rejected; a cache policy is accepted and ignored. `commander_builder_rejects_zero_run_timeout` passes: a `CommanderBuilder` given `run_timeout = 0` fails to build with `CommanderValidation`.
@@ -81,11 +83,30 @@ result: [pending]
 
 total: 15
 passed: 1
-issues: 0
-pending: 14
+issues: 1
+pending: 13
 skipped: 0
 blocked: 0
 
 ## Gaps
 
-[none yet]
+- gap_id: G-44-2
+  truth: "Campaign is bounded per attempt by Aegis with the whole-run clock gone, and the phase tree passes the pre-commit CI gate"
+  status: failed
+  reason: "User reported: Failure on CI pre-commit"
+  severity: blocker
+  test: 2
+  root_cause: ""     # Filled by diagnosis
+  artifacts: []      # Filled by diagnosis
+  missing: []        # Filled by diagnosis
+  debug_session: ""  # Filled by diagnosis
+  preliminary_findings: |
+    The `pre-commit` workflow (pre-commit run --all-files) is red on every commit of claude/laughing-dirac-e0h2ax
+    from bc57061b (2026-10-08 00:55 UTC, run 37710276127) through HEAD 299ff07b (run 38192977973); the last green
+    run on the branch is 1494e50e (run 37706434327). main is green (df24689c, 2026-09-23). The only commit between the
+    last green and first red runs is 4ddb048f "docs(43): create phase plan", which added
+    .planning/phases/43-rate-pacing/43-02-PLAN.md, 43-03-PLAN.md and 43-05-PLAN.md without a trailing newline;
+    the commit-stage `end-of-file-fixer` hook rejects exactly that. The failure therefore predates Phase 44
+    (phase base b362d6cb, 2026-10-09) and is not a Campaign/Aegis defect. Locally on HEAD: cargo fmt --check clean.
+    Job logs could not be fetched (GitHub serves them from a redirect host this session's gh does not contact);
+    the job annotation only records "Process completed with exit code 1" at step "Run pre-commit".

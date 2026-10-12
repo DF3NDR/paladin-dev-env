@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T18:04:01Z
+updated: 2026-10-12T18:22:16Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 10
-name: CLI battalion runs are configured through Aegis with the YAML schema unchanged
+number: 11
+name: The Battalion examples build and run on Aegis
 expected: |
-  `cargo test -p paladin-ai --lib cli` reports 8 passed. `src/application/cli/commands/battalion.rs` has 4 `per_attempt_timeout(` calls and 0 `with_timeout(` calls. `git diff b362d6cb -- src/application/cli/config/battalion_config.rs` touches rustdoc only (no key, type or default changed); that rustdoc and the battalion template comment say "Per-attempt timeout"; `timeout_seconds: 0` in a battalion YAML is still rejected by CLI validation.
+  `cargo run --example commander_full_config` exits 0 and prints three runs: fail fast, Absorb (one `node_errors` entry printed with its Display) and retry-then-Absorb succeeding on attempt 3. `cargo run --example` for commander_basic, commander_auto, commander_with_metadata_export, campaign_workflow and conclave_expert_panel each exit 0. `make check-examples` reports 62 of 62 example binaries present. `grep -l 'with_timeout(\|with_error_strategy(\|with_retry_policy(' examples/commander_*.rs examples/formation_sequential.rs examples/phalanx_parallel.rs examples/campaign_workflow.rs examples/conclave_expert_panel.rs` prints nothing (the Maneuver examples' own ManeuverConfig `with_error_strategy` is a separate API and stays).
 awaiting: user response
 
 ## Tests
@@ -57,7 +57,7 @@ result: pass
 
 ### 10. CLI battalion runs are configured through Aegis with the YAML schema unchanged
 expected: `cargo test -p paladin-ai --lib cli` reports 8 passed. `src/application/cli/commands/battalion.rs` has 4 `per_attempt_timeout(` calls and 0 `with_timeout(` calls. `git diff b362d6cb -- src/application/cli/config/battalion_config.rs` touches rustdoc only (no key, type or default changed); that rustdoc and the battalion template comment say "Per-attempt timeout"; `timeout_seconds: 0` in a battalion YAML is still rejected by CLI validation.
-result: [pending]
+result: pass
 
 ### 11. The Battalion examples build and run on Aegis
 expected: `cargo run --example commander_full_config` exits 0 and prints three runs: fail fast, Absorb (one `node_errors` entry printed with its Display) and retry-then-Absorb succeeding on attempt 3. `cargo run --example` for commander_basic, commander_auto, commander_with_metadata_export, campaign_workflow and conclave_expert_panel each exit 0. `make check-examples` reports 62 of 62 example binaries present. `grep -l 'with_timeout(\|with_error_strategy(\|with_retry_policy(' examples/commander_*.rs examples/formation_sequential.rs examples/phalanx_parallel.rs examples/campaign_workflow.rs examples/conclave_expert_panel.rs` prints nothing (the Maneuver examples' own ManeuverConfig `with_error_strategy` is a separate API and stays).
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 8
+passed: 9
 issues: 1
-pending: 6
+pending: 5
 skipped: 0
 blocked: 0
 

@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T14:21:49Z
+updated: 2026-10-12T15:02:51Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 8
-name: Circuit breaker and Conclave classify failures by transience() only
+number: 9
+name: Commander has no whole-run clock and a 300 s per-attempt default; the Conclave runs on the engine backoff
 expected: |
-  `cargo test -p paladin-ai --lib circuit_breaker` and `cargo test -p paladin-battalion --lib -- conclave_retry_predicate` pass. A Permanent `LlmFailure` whose message reads "429 rate limit timeout 503 network connection" is neither retried by the Conclave nor counted by the breaker; a Transient `LlmFailure` with an empty message is retried and counted. `git grep -n 'PaladinError::LlmError\|\.is_retryable()\|is_terminal' -- '*.rs'` prints nothing (the remaining `LlmError(String)` variants belong to HandoffError, PromptError and PlanningError, which are out of scope).
+  `cargo test -p paladin-battalion --lib -- commander conclave_execution_service` passes, including commander_bound_is_not_a_whole_run_clock (two 0.8 s Paladins under a 1 s bound complete in 1.6 s), commander_builder_default_bounds_each_attempt, commander_conclave_bridge_derives_retry_attempts (retry_attempts = max_attempts - 1), commander_maneuver_bridge_defaults_to_fail_fast, conclave_backoff_follows_engine_sequence (500 ms doubling, 60 s cap) and conclave_aggregator_timeout_is_aggregator_failed. The `Commander::execute` rustdoc has a `# Timeouts` section saying the bound is per attempt and that ChainOfCommand, Grove and Council are not bounded.
 awaiting: user response
 
 ## Tests
@@ -49,7 +49,7 @@ result: pass
 
 ### 8. Circuit breaker and Conclave classify failures by transience() only
 expected: `cargo test -p paladin-ai --lib circuit_breaker` and `cargo test -p paladin-battalion --lib -- conclave_retry_predicate` pass. A Permanent `LlmFailure` whose message reads "429 rate limit timeout 503 network connection" is neither retried by the Conclave nor counted by the breaker; a Transient `LlmFailure` with an empty message is retried and counted. `git grep -n 'PaladinError::LlmError\|\.is_retryable()\|is_terminal' -- '*.rs'` prints nothing (the remaining `LlmError(String)` variants belong to HandoffError, PromptError and PlanningError, which are out of scope).
-result: [pending]
+result: pass
 
 ### 9. Commander has no whole-run clock and a 300 s per-attempt default; the Conclave runs on the engine backoff
 expected: `cargo test -p paladin-battalion --lib -- commander conclave_execution_service` passes, including commander_bound_is_not_a_whole_run_clock (two 0.8 s Paladins under a 1 s bound complete in 1.6 s), commander_builder_default_bounds_each_attempt, commander_conclave_bridge_derives_retry_attempts (retry_attempts = max_attempts - 1), commander_maneuver_bridge_defaults_to_fail_fast, conclave_backoff_follows_engine_sequence (500 ms doubling, 60 s cap) and conclave_aggregator_timeout_is_aggregator_failed. The `Commander::execute` rustdoc has a `# Timeouts` section saying the bound is per attempt and that ChainOfCommand, Grove and Council are not bounded.
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 6
+passed: 7
 issues: 1
-pending: 8
+pending: 7
 skipped: 0
 blocked: 0
 

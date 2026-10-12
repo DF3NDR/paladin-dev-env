@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T12:44:45Z
+updated: 2026-10-12T13:59:06Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 5
-name: Phalanx bounds each attempt, retries Paladins independently and reports typed failures in declaration order
+number: 6
+name: Phalanx review fixes: a zero concurrency limit is rejected and no attempt starts after cancellation
 expected: |
-  `cargo test -p paladin-battalion --lib phalanx_service` passes, including phalanx_bounds_each_attempt_not_the_run, phalanx_paladins_retry_independently, phalanx_node_errors_follow_declaration_order and phalanx_fail_fast_aggregates_structured_failures. Under `on_error: None` every failure is listed in one `AggregationError` reading "Phalanx execution failed with <n> errors: ..." (a timeout reads `run timeout`); under Absorb the run completes with the failures in `node_errors`. `cargo run --example phalanx_parallel` exits 0 and prints `node_errors`.
+  `cargo test -p paladin-battalion --lib -- phalanx_rejects_zero_max_concurrency_before_any_paladin_runs phalanx_rejects_a_concurrency_limit_above_the_permit_maximum cancelled_phalanx_does_not_start_queued_paladins test_cancellation_support phalanx_cancellation_during_backoff_stops_retrying` all pass: `with_max_concurrency(0)` is rejected with a named error instead of hanging forever, a limit above `Semaphore::MAX_PERMITS` is rejected instead of panicking, and a cancelled Phalanx returns `Cancelled` without starting the Paladins still queued behind the concurrency limit (commits 229a28a5, cf0be3db, dc55f18e).
 awaiting: user response
 
 ## Tests
@@ -37,7 +37,7 @@ result: pass
 
 ### 5. Phalanx bounds each attempt, retries Paladins independently and reports typed failures in declaration order
 expected: `cargo test -p paladin-battalion --lib phalanx_service` passes, including phalanx_bounds_each_attempt_not_the_run, phalanx_paladins_retry_independently, phalanx_node_errors_follow_declaration_order and phalanx_fail_fast_aggregates_structured_failures. Under `on_error: None` every failure is listed in one `AggregationError` reading "Phalanx execution failed with <n> errors: ..." (a timeout reads `run timeout`); under Absorb the run completes with the failures in `node_errors`. `cargo run --example phalanx_parallel` exits 0 and prints `node_errors`.
-result: [pending]
+result: pass
 
 ### 6. Phalanx review fixes: a zero concurrency limit is rejected and no attempt starts after cancellation
 expected: `cargo test -p paladin-battalion --lib -- phalanx_rejects_zero_max_concurrency_before_any_paladin_runs phalanx_rejects_a_concurrency_limit_above_the_permit_maximum cancelled_phalanx_does_not_start_queued_paladins test_cancellation_support phalanx_cancellation_during_backoff_stops_retrying` all pass: `with_max_concurrency(0)` is rejected with a named error instead of hanging forever, a limit above `Semaphore::MAX_PERMITS` is rejected instead of panicking, and a cancelled Phalanx returns `Cancelled` without starting the Paladins still queued behind the concurrency limit (commits 229a28a5, cf0be3db, dc55f18e).
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 3
+passed: 4
 issues: 1
-pending: 11
+pending: 10
 skipped: 0
 blocked: 0
 

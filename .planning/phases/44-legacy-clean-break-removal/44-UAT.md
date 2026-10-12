@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T15:02:51Z
+updated: 2026-10-12T18:04:01Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 9
-name: Commander has no whole-run clock and a 300 s per-attempt default; the Conclave runs on the engine backoff
+number: 10
+name: CLI battalion runs are configured through Aegis with the YAML schema unchanged
 expected: |
-  `cargo test -p paladin-battalion --lib -- commander conclave_execution_service` passes, including commander_bound_is_not_a_whole_run_clock (two 0.8 s Paladins under a 1 s bound complete in 1.6 s), commander_builder_default_bounds_each_attempt, commander_conclave_bridge_derives_retry_attempts (retry_attempts = max_attempts - 1), commander_maneuver_bridge_defaults_to_fail_fast, conclave_backoff_follows_engine_sequence (500 ms doubling, 60 s cap) and conclave_aggregator_timeout_is_aggregator_failed. The `Commander::execute` rustdoc has a `# Timeouts` section saying the bound is per attempt and that ChainOfCommand, Grove and Council are not bounded.
+  `cargo test -p paladin-ai --lib cli` reports 8 passed. `src/application/cli/commands/battalion.rs` has 4 `per_attempt_timeout(` calls and 0 `with_timeout(` calls. `git diff b362d6cb -- src/application/cli/config/battalion_config.rs` touches rustdoc only (no key, type or default changed); that rustdoc and the battalion template comment say "Per-attempt timeout"; `timeout_seconds: 0` in a battalion YAML is still rejected by CLI validation.
 awaiting: user response
 
 ## Tests
@@ -53,7 +53,7 @@ result: pass
 
 ### 9. Commander has no whole-run clock and a 300 s per-attempt default; the Conclave runs on the engine backoff
 expected: `cargo test -p paladin-battalion --lib -- commander conclave_execution_service` passes, including commander_bound_is_not_a_whole_run_clock (two 0.8 s Paladins under a 1 s bound complete in 1.6 s), commander_builder_default_bounds_each_attempt, commander_conclave_bridge_derives_retry_attempts (retry_attempts = max_attempts - 1), commander_maneuver_bridge_defaults_to_fail_fast, conclave_backoff_follows_engine_sequence (500 ms doubling, 60 s cap) and conclave_aggregator_timeout_is_aggregator_failed. The `Commander::execute` rustdoc has a `# Timeouts` section saying the bound is per attempt and that ChainOfCommand, Grove and Council are not bounded.
-result: [pending]
+result: pass
 
 ### 10. CLI battalion runs are configured through Aegis with the YAML schema unchanged
 expected: `cargo test -p paladin-ai --lib cli` reports 8 passed. `src/application/cli/commands/battalion.rs` has 4 `per_attempt_timeout(` calls and 0 `with_timeout(` calls. `git diff b362d6cb -- src/application/cli/config/battalion_config.rs` touches rustdoc only (no key, type or default changed); that rustdoc and the battalion template comment say "Per-attempt timeout"; `timeout_seconds: 0` in a battalion YAML is still rejected by CLI validation.
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 7
+passed: 8
 issues: 1
-pending: 7
+pending: 6
 skipped: 0
 blocked: 0
 

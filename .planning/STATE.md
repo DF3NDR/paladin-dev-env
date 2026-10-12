@@ -6,9 +6,9 @@ current_phase: 46
 current_phase_name: Docs Currency & Hygiene
 status: planning
 stopped_at: Completed 44-12-PLAN.md
-last_updated: "2026-10-11T17:25:41.862Z"
-last_activity: 2026-10-11
-last_activity_desc: Phase 44 complete, transitioned to Phase 46
+last_updated: "2026-10-12T18:37:11.000Z"
+last_activity: 2026-10-12
+last_activity_desc: Phase 44 UAT complete (15/15) and sealed; pre-commit CI gate restored; Phase 46 ready to discuss
 progress:
   total_phases: 8
   completed_phases: 8
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-30 after Phase 40)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 44 — Legacy Clean-Break Removal
+**Current focus:** Phase 46 — Docs Currency & Hygiene
 Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 10 phases (38-47), 35/35
 requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-30 once Phase 45's
 RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
@@ -53,7 +53,7 @@ under `milestones/`.
 Phase: 46 — Docs Currency & Hygiene
 Plan: Not started
 Status: Ready to discuss/plan (no CONTEXT.md yet)
-Last activity: 2026-10-11 — Phase 44 complete (verified, 13/13 plans); transitioned to Phase 46. Phase 45 was already sealed 2026-09-30. Phase 41 is executed (9/9) but awaits 4 human UAT tests (41-UAT.md, verification status human_needed).
+Last activity: 2026-10-12 — Phase 44 sealed: 44-UAT.md complete (15/15 passed; the one reported issue, G-44-2, was the pre-commit CI gate red since Phase 43 planning, fixed in 1e93e1ce and green on run 38193792540), on top of the 2026-10-11 verification (13/13 plans); transitioned to Phase 46. Phase 45 was already sealed 2026-09-30. Phase 41 is executed (9/9) but awaits 4 human UAT tests (41-UAT.md, verification status human_needed).
 
 ## Performance Metrics
 
@@ -664,11 +664,23 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-11T17:12:29.915Z
-**Stopped at:** Completed 44-12-PLAN.md
+**Last session:** 2026-10-12T18:37:11.000Z
+**Stopped at:** Phase 44 UAT complete (15/15), phase sealed; ready to discuss Phase 46
 **Resume file:** None
 
 ## Operator Next Steps
+
+- **Phase 44 (Legacy Clean-Break Removal) is sealed 2026-10-12:** `44-VERIFICATION.md` passed (2026-10-11),
+  `44-UAT.md` complete (15/15 — source-tree guard, per-attempt Aegis bounds on Campaign/Formation/Phalanx,
+  validate_aegis at entry, Phalanx review fixes, structured node_errors and herald lines, transience-only
+  breaker/Conclave, Commander defaults, CLI, examples, mdBook pages, v0.10 config loading, ADR/MIGRATION/
+  allowlist/CHANGELOG records, full gate), `44-SECURITY.md` verified (threats_open 0), `44-VALIDATION.md`
+  validated. UAT surfaced one issue outside the phase: the `pre-commit` workflow had been red on every
+  push since Phase 43 planning (end-of-file-fixer on three 43-*-PLAN.md files); fixed in `1e93e1ce`,
+  green on run 38193792540. Queued follow-ups stay in `.planning/todos/pending/2026-10-11-*`.
+
+- **Next:** `/clear` then `/gsd-discuss-phase 46` (no `46-CONTEXT.md` yet) or `/gsd-plan-phase 46`.
+  Phase 41 still awaits its 4 human UAT tests (`41-UAT.md`, verification `human_needed`).
 
 - **Phase 45 (RustFS Swap & Platform/Observability Deviations) is sealed 2026-09-30:**
   `45-VERIFICATION.md` passed, `45-UAT.md` complete (5/5: CI run 36751442387 green with the 11-case
@@ -687,9 +699,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
   row 58 (owner Phase 41 planning if allowance enforcement needs thread ownership, else a v0.11
   hygiene phase).
 
-- **Next:** `/clear` then `/gsd-discuss-phase 41` (no `41-CONTEXT.md` yet) or `/gsd-plan-phase 41` —
-  Phases 41-44 run before 46 and 47 (Phase 45 D-01 resequencing). Phase 41 planning should decide
-  WINDOWS.md row 58's ownership.
+- *(superseded)* Phases 41-44 ran before 46 and 47 (Phase 45 D-01 resequencing); Phase 41 planning owned
+  WINDOWS.md row 58's disposition.
 
 - **Phase 39 (Spend Ledger) sealed 2026-09-28** (verification passed, UAT 49/49, VALIDATION and
   SECURITY verified); **Phase 38 sealed 2026-09-26.**

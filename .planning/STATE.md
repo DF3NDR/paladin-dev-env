@@ -6,9 +6,9 @@ current_phase: 46
 current_phase_name: Docs Currency & Hygiene
 status: planning
 stopped_at: Completed 44-12-PLAN.md
-last_updated: "2026-10-12T18:37:11.000Z"
+last_updated: "2026-10-12T18:50:00Z"
 last_activity: 2026-10-12
-last_activity_desc: Phase 44 UAT complete (15/15) and sealed; pre-commit CI gate restored; Phase 46 ready to discuss
+last_activity_desc: Phase 41 UAT signed off (4/4) and sealed; every phase 38-45 is now complete; Phase 46 ready to discuss
 progress:
   total_phases: 8
   completed_phases: 8
@@ -27,12 +27,13 @@ LLM provider through stable port abstractions — without their own domain code 
 provider, transport, or storage implementation.
 **Current focus:** Phase 46 — Docs Currency & Hygiene
 Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 10 phases (38-47), 35/35
-requirements mapped; Phases 38, 39, 40 and 45 sealed (Phase 40 verified 2026-09-30 once Phase 45's
-RustFS swap delivered the green CI run its UAT test 4 was blocked on). Source of truth:
+requirements mapped; Phases 38-45 all sealed (Phase 40 verified 2026-09-30 once Phase 45's
+RustFS swap delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-10-12
+when the operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 30/30 plans ([██████████] 100%) of the phases planned so far (38, 39, 40, 45);
-Phases 41-44, 46 and 47 are not yet planned.
+**Progress:** [████████████████████] 77/77 plans ([██████████] 100%) of the phases planned so far (38-45);
+Phases 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -53,13 +54,13 @@ under `milestones/`.
 Phase: 46 — Docs Currency & Hygiene
 Plan: Not started
 Status: Ready to discuss/plan (no CONTEXT.md yet)
-Last activity: 2026-10-12 — Phase 44 sealed: 44-UAT.md complete (15/15 passed; the one reported issue, G-44-2, was the pre-commit CI gate red since Phase 43 planning, fixed in 1e93e1ce and green on run 38193792540), on top of the 2026-10-11 verification (13/13 plans); transitioned to Phase 46. Phase 45 was already sealed 2026-09-30. Phase 41 is executed (9/9) but awaits 4 human UAT tests (41-UAT.md, verification status human_needed).
+Last activity: 2026-10-12 — Phase 41 sealed: the operator signed off the four human UAT items in 41-UAT.md (4/4 passed; verification status moved from human_needed to passed) and ROADMAP row 41 reads 9/9 Complete. Earlier the same day Phase 44 was sealed (44-UAT.md 15/15; G-44-2 pre-commit gate fixed in 1e93e1ce, green on run 38193792540). Every phase 38-45 is now complete; next is Phase 46.
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 483
+- Total plans completed: 492
 - Average duration: —
 - Total execution time: —
 
@@ -109,6 +110,7 @@ Last activity: 2026-10-12 — Phase 44 sealed: 44-UAT.md complete (15/15 passed;
 | 39 | 8 | - | - |
 | 45 | 7 | - | - |
 | 40 | 6 | - | - |
+| 41 | 9 | - | - |
 | 42 | 12 | - | - |
 | 43 | 13 | - | - |
 | 44 | 13 | - | - |
@@ -664,11 +666,18 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-12T18:37:11.000Z
-**Stopped at:** Phase 44 UAT complete (15/15), phase sealed; ready to discuss Phase 46
+**Last session:** 2026-10-12T18:50:00Z
+**Stopped at:** Phase 41 UAT signed off (4/4) and sealed; Phases 38-45 all complete; ready to discuss Phase 46
 **Resume file:** None
 
 ## Operator Next Steps
+
+- **Phase 41 (Admission-Time Allowance Enforcement) is sealed 2026-10-12:** `41-VERIFICATION.md`
+  (2026-10-04, 3/3 success criteria, 54/57 truths, 0 failed) now reads `passed`; `41-UAT.md`
+  complete (4/4 — the operator walkthrough observed 2026-10-05, the CI-only coverage and Postgres
+  gates on run 37363204486 at `bc9cdf00`, the ADR-0056 over-admission race acceptance and the two
+  backstop truths were all signed off by the operator on 2026-10-12). ROADMAP row 41 reads 9/9
+  Complete; ALLOW-01/02/04 were already ticked. With this, every phase 38-45 is sealed.
 
 - **Phase 44 (Legacy Clean-Break Removal) is sealed 2026-10-12:** `44-VERIFICATION.md` passed (2026-10-11),
   `44-UAT.md` complete (15/15 — source-tree guard, per-attempt Aegis bounds on Campaign/Formation/Phalanx,
@@ -680,7 +689,6 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
   green on run 38193792540. Queued follow-ups stay in `.planning/todos/pending/2026-10-11-*`.
 
 - **Next:** `/clear` then `/gsd-discuss-phase 46` (no `46-CONTEXT.md` yet) or `/gsd-plan-phase 46`.
-  Phase 41 still awaits its 4 human UAT tests (`41-UAT.md`, verification `human_needed`).
 
 - **Phase 45 (RustFS Swap & Platform/Observability Deviations) is sealed 2026-09-30:**
   `45-VERIFICATION.md` passed, `45-UAT.md` complete (5/5: CI run 36751442387 green with the 11-case

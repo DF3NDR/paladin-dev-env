@@ -1,11 +1,11 @@
 ---
 phase: 41-admission-time-allowance-enforcement
 verified: 2026-10-04T12:30:00Z
-status: human_needed
+status: passed
 score: 3/3 roadmap success criteria verified; 54/57 plan truths verified (3 backstop truths abstain by design, 0 failed)
 behavior_unverified: 0
 overrides_applied: 0
-re_verification: null
+re_verification: "human items signed off by the operator 2026-10-12 (41-UAT.md 4/4)"
 gaps: []
 deferred: []
 human_verification:
@@ -27,7 +27,7 @@ human_verification:
 
 **Phase Goal:** A tenant or API key that has exhausted its allowance is stopped before a run is ever persisted, and the operator gets an early warning before that happens.
 **Verified:** 2026-10-04T12:30:00Z
-**Status:** human_needed
+**Status:** passed (initially `human_needed` on 2026-10-04; the four human-verification items were recorded in `41-UAT.md` and signed off by the operator on 2026-10-12, 4/4 passed)
 **Re-verification:** No (initial verification; no previous 41-VERIFICATION.md existed)
 
 The phase goal is achieved in the code. Nothing failed. The status is `human_needed` only because the decision tree routes every human-verification item (operator UAT, CI-only gates, three `backstop` truths) to that status, not because anything is missing.

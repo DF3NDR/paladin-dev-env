@@ -3,23 +3,23 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T01:34:56Z
+updated: 2026-10-12T01:42:32Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 1
-name: Legacy surfaces are gone from the tree (source-tree guard)
+number: 2
+name: Campaign is bounded per attempt by Aegis; the whole-run clock is gone
 expected: |
-  `cargo test --test legacy_removal_guard` prints "3 passed; 0 failed" (legacy_surfaces_are_gone_from_the_tree plus the two positive controls scanner_reports_planted_legacy_uses and scanner_accepts_a_clean_tree). `git grep -nw 'ContinueOnError\|RetryThenContinue' -- '*.rs'` prints nothing and `crates/paladin-battalion/src/retry.rs` no longer exists. The same-named Aegis `RetryPolicy`, Flow `ErrorStrategy` and structured `node_error::NodeError` are untouched and `cargo check --workspace --all-targets --all-features` exits 0.
+  `cargo test -p paladin-battalion --lib -- aegis_attempt campaign_service` passes (10 runner tests, 12 Campaign tests). `cargo test -p paladin-battalion --lib commander_campaign_honours_aegis_per_attempt_timeout_end_to_end` passes: three 600 ms Paladins complete under a 1 s per-attempt bound (a whole-run clock would have fired at 1 s), and a 1.5 s Paladin fails with `BattalionError::Node` carrying `Timeout(Run)`, attempt 1, Transient. Campaign ignores `aegis.on_error` and logs one warn per execution when it is set.
 awaiting: user response
 
 ## Tests
 
 ### 1. Legacy surfaces are gone from the tree (source-tree guard)
 expected: `cargo test --test legacy_removal_guard` prints "3 passed; 0 failed" (legacy_surfaces_are_gone_from_the_tree plus the two positive controls scanner_reports_planted_legacy_uses and scanner_accepts_a_clean_tree). `git grep -nw 'ContinueOnError\|RetryThenContinue' -- '*.rs'` prints nothing and `crates/paladin-battalion/src/retry.rs` no longer exists. The same-named Aegis `RetryPolicy`, Flow `ErrorStrategy` and structured `node_error::NodeError` are untouched and `cargo check --workspace --all-targets --all-features` exits 0.
-result: [pending]
+result: pass
 
 ### 2. Campaign is bounded per attempt by Aegis; the whole-run clock is gone
 expected: `cargo test -p paladin-battalion --lib -- aegis_attempt campaign_service` passes (10 runner tests, 12 Campaign tests). `cargo test -p paladin-battalion --lib commander_campaign_honours_aegis_per_attempt_timeout_end_to_end` passes: three 600 ms Paladins complete under a 1 s per-attempt bound (a whole-run clock would have fired at 1 s), and a 1.5 s Paladin fails with `BattalionError::Node` carrying `Timeout(Run)`, attempt 1, Transient. Campaign ignores `aegis.on_error` and logs one warn per execution when it is set.
@@ -80,9 +80,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 0
+passed: 1
 issues: 0
-pending: 15
+pending: 14
 skipped: 0
 blocked: 0
 

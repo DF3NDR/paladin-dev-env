@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 46
-current_phase_name: Docs Currency & Hygiene
+current_phase: 48
+current_phase_name: Base Entity Rename
 status: planning
 stopped_at: Completed 44-12-PLAN.md
-last_updated: "2026-10-12T18:50:00Z"
+last_updated: "2026-10-12T20:30:00Z"
 last_activity: 2026-10-12
-last_activity_desc: Phase 41 UAT signed off (4/4) and sealed; every phase 38-45 is now complete; Phase 46 ready to discuss
+last_activity_desc: Phase 48 (Base Entity Rename) added and sequenced before 46-47; draft 48-CONTEXT.md from the code survey; ready to discuss or plan
 progress:
   total_phases: 8
   completed_phases: 8
@@ -25,15 +25,17 @@ See: .planning/PROJECT.md (updated 2026-09-30 after Phase 40)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 46 — Docs Currency & Hygiene
-Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 10 phases (38-47), 35/35
-requirements mapped; Phases 38-45 all sealed (Phase 40 verified 2026-09-30 once Phase 45's
-RustFS swap delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-10-12
-when the operator signed off its four human UAT items). Source of truth:
+**Current focus:** Phase 48 — Base Entity Rename (added 2026-10-12; runs before Phases 46-47)
+Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 11 phases (38-48; Phase 48
+added 2026-10-12 after a code survey of the two senses of "node", sequenced before 46-47 because
+it is a public-API break the v0.11 migration guide and tag must carry), 40/40 requirements
+mapped; Phases 38-45 all sealed (Phase 40 verified 2026-09-30 once Phase 45's RustFS swap
+delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-10-12 when the
+operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
 **Progress:** [████████████████████] 77/77 plans ([██████████] 100%) of the phases planned so far (38-45);
-Phases 46 and 47 are not yet planned.
+Phases 48, 46 and 47 (execution order) are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -51,7 +53,7 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 46 — Docs Currency & Hygiene
+Phase: 48 — Base Entity Rename (runs before 46 and 47)
 Plan: Not started
 Status: Ready to discuss/plan (no CONTEXT.md yet)
 Last activity: 2026-10-12 — Phase 41 sealed: the operator signed off the four human UAT items in 41-UAT.md (4/4 passed; verification status moved from human_needed to passed) and ROADMAP row 41 reads 9/9 Complete. Earlier the same day Phase 44 was sealed (44-UAT.md 15/15; G-44-2 pre-commit gate fixed in 1e93e1ce, green on run 38193792540). Every phase 38-45 is now complete; next is Phase 46.
@@ -553,6 +555,7 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
 - Phase 37 added: v0.10.0 Crate Release — re-seal the Phase 29 gates on the final commit, merge to `main`, `release.yml` tags `v0.10.0`, all publishable crates on crates.io at `0.10.0` (2026-09-17)
 - Phase 36.1 inserted after Phase 36: Deferred Items Closure — walk the Phase 31/32/34/35 deferred-items registers, WINDOWS.md #36-37 and the two pending todos; fix, waive with reason, or re-home each; bring WINDOWS.md back into agreement with the registers before Phase 37 tags v0.10.0 (URGENT)
 - Phase 37.1 inserted after Phase 37: v0.10.1 Patch Release — tag v0.10.0 published 3/12 crates (battalion versioned dev-dep vs CRATES order); maintainer chose recovery option A (URGENT)
+- Phase 48 added: Base Entity Rename — `base::entity::node::Node<T>` → `Entity<T>` (payload `node` → `data`, deprecated alias for one release, serde alias for persisted JSON), unused base-layer items dispositioned, "node" reserved for the graph sense; ENTITY-01..05 minted; **resequenced to run after Phase 44 and before Phases 46-47** (owner decision 2026-10-12 after the code survey in `48-CONTEXT.md`)
 
 ## Deferred Items
 
@@ -688,7 +691,17 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
   push since Phase 43 planning (end-of-file-fixer on three 43-*-PLAN.md files); fixed in `1e93e1ce`,
   green on run 38193792540. Queued follow-ups stay in `.planning/todos/pending/2026-10-11-*`.
 
-- **Next:** `/clear` then `/gsd-discuss-phase 46` (no `46-CONTEXT.md` yet) or `/gsd-plan-phase 46`.
+- **Phase 48 (Base Entity Rename) added 2026-10-12 and sequenced before Phases 46-47:** the
+  base-layer wrapper `base::entity::node::Node<T>` becomes `Entity<T>` (payload `node` → `data`,
+  deprecated alias for one release, serde alias for persisted JSON), the dormant base items are
+  dispositioned, and "node" is reserved for the graph sense (`NodeId`, `NodeSpec`, `StateNode`, …,
+  untouched). ENTITY-01..05 minted. `48-CONTEXT.md` is a **draft** from the code survey with
+  recommended decisions D-01..D-07 and four open questions (name, deprecation window, which base
+  items to keep, own PR or not).
+
+- **Next:** `/clear` then `/gsd-discuss-phase 48` (confirm or change the draft `48-CONTEXT.md`
+  decisions) or `/gsd-plan-phase 48` (accept them as written). Phase 46 follows 48; its migration
+  guide (CURR-23) must carry Phase 48's §9.2 rows.
 
 - **Phase 45 (RustFS Swap & Platform/Observability Deviations) is sealed 2026-09-30:**
   `45-VERIFICATION.md` passed, `45-UAT.md` complete (5/5: CI run 36751442387 green with the 11-case

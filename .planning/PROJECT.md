@@ -558,6 +558,13 @@ Phases 30-33. The PRD's open operator question is answered: **full governance** 
   legacy Formation/Phalanx/Campaign timeout handling, and `PaladinError::LlmError(String)`. This
   needs a recorded X-03 supersession, `MIGRATION.md` §9.2 rows and `cargo semver-checks` allowlist
   entries.
+- **Base entity rename (added 2026-10-12, Phase 48):** the pre-engine base-layer wrapper
+  `paladin_core::base::entity::node::Node<T>` becomes `Entity<T>` (payload field `node` → `data`),
+  with a deprecated alias for one release and a serde alias so persisted JSON still loads; the
+  unused base-layer items (`Field`, `Collection`, `Element`, two versioning services) are removed
+  or kept with a reason; "node" is reserved for the graph sense (`NodeId`, `NodeSpec`,
+  `StateNode`, …), which is untouched. Runs after Phase 44 and before Phases 46-47 because it is a
+  public-API break the v0.11 migration guide and tag must carry.
 - **RustFS (FUT-10):** replace the terminal quay.io MinIO pin in the dev/test stack, CI and the
   Kubernetes smoke test.
 - **Platform deviations:** scope `GET /runs*` per caller (`WINDOWS.md` row 32); SSE and webhook

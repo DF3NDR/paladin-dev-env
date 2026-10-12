@@ -113,6 +113,42 @@ Requirements for this milestone. Each maps to exactly one roadmap phase.
 - [x] **LEGACY-04**: The X-03 supersession is recorded in an ADR, and every removal has a
   `MIGRATION.md` §9.2 row and a `cargo semver-checks` allowlist entry, with examples and docs updated
 
+### Base entity rename (ENTITY)
+
+*Minted 2026-10-12 from the Phase 48 code survey (`48-CONTEXT.md`). The base-layer wrapper
+`paladin_core::base::entity::node::Node<T>` predates the v0.10.0 superstep engine, whose graph
+vocabulary (`NodeId`, `NodeSpec`, `StateNode`, …) now outnumbers it ~5:1 and lives in public wire
+formats; the two senses of "node" already collide inside the engine. The entity side is renamed,
+the graph side is kept.*
+
+- [ ] **ENTITY-01**: `paladin_core::base::entity::Entity<T>` replaces `Node<T>` with the payload
+  field renamed `node` → `data`; `Paladin`, `Council`, `Grove`, `User`, `Log`, `ContentItem` and
+  `PromptItem` are built on it; `#[serde(alias = "node")]` keeps every pre-rename persisted JSON
+  (Citadel snapshots, stored Paladins, SQLite/Postgres rows) deserializing, proven by a fixture test
+
+- [ ] **ENTITY-02**: A `#[deprecated(since = "0.11.0")]` `Node<T>` alias and the old
+  `base::entity::node` module path keep compiling for one minor release so the owned downstream
+  system can migrate at its own pace; removal is scheduled for v0.12.0 in `MIGRATION.md` §9.7
+
+- [ ] **ENTITY-03**: After Phases 44 and 48 the workspace has exactly one `NodeError` (the
+  structured `node_error::NodeError`) and exactly one `Paladin` alias (the `citadel.rs:48`
+  duplicate is removed); `NodeVersion`, `NodeVersionRepository`, `NodeVersionService` and
+  `InMemoryNodeVersionRepository` become `EntityVersion*`
+
+- [ ] **ENTITY-04**: `Field`, `Collection`, `Element`, `FieldVersionService` and
+  `CollectionVersioningService` (zero consumers outside `base/`) are each removed or kept with a
+  written reason, and `Entity<T>::version`'s contract is documented in rustdoc, including that only
+  `ContentItem` currently honours it through the version service
+
+- [ ] **ENTITY-05**: The graph vocabulary (`NodeId`, `NodeSpec`, `StateNode`, `NodeContext`,
+  `NodeCache*`, `TraceEvent::Node*`, `wargraph-doc.schema.json`, the `node_cache` config section) is
+  untouched; an ADR reserves "node" for the graph sense and "Entity" for the base wrapper; the
+  CLAUDE.md/copilot naming table and the mdBook domain-model, design-patterns and crate-map pages
+  agree; every rename has a `MIGRATION.md` §9.2 row with a set-equal
+  `.cargo/semver-checks-allowlist.toml` entry, `api_surface_current.txt` is refreshed with a
+  CHANGELOG entry, and `cargo doc`, `make check-api-examples`, `make clean-code` and the 82 %
+  coverage floor stay green
+
 ### Object storage (STORE)
 
 - [x] **STORE-01**: The dev/test compose stack and the Coverage, Integration Tests, Docker
@@ -244,14 +280,21 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CURR-24 | Phase 46 | Pending |
 | CURR-25 | Phase 46 | Pending |
 | SHIP-07 | Phase 47 | Pending |
+| ENTITY-01 | Phase 48 | Pending |
+| ENTITY-02 | Phase 48 | Pending |
+| ENTITY-03 | Phase 48 | Pending |
+| ENTITY-04 | Phase 48 | Pending |
+| ENTITY-05 | Phase 48 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 35 total
-- Mapped to phases: 35
+- v1 requirements: 40 total
+- Mapped to phases: 40
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-24*
-*Last updated: 2026-09-24 — roadmap created (`/gsd-new-project` roadmapper), Phases 38-47, 35/35
-requirements mapped, 100% coverage*
+*Last updated: 2026-10-12 — Phase 48 added (Base Entity Rename), ENTITY-01..05 minted from the
+code survey in `48-CONTEXT.md`; Phases 38-48, 40/40 requirements mapped, 100% coverage. Previous:
+2026-09-24 — roadmap created (`/gsd-new-project` roadmapper), Phases 38-47, 35/35 requirements
+mapped*

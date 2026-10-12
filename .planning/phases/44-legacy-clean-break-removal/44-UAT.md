@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T02:14:11Z
+updated: 2026-10-12T12:44:45Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 4
-name: Formation fails fast by default and continues past a failure only under Absorb
+number: 5
+name: Phalanx bounds each attempt, retries Paladins independently and reports typed failures in declaration order
 expected: |
-  `cargo test -p paladin-battalion --lib formation_service` reports 11 passed. With no `on_error` handler a failing Paladin stops the Formation (`BattalionError::Node` on a timeout, the v0.10 `BattalionError::PaladinError` text otherwise). With `on_error = Absorb` the failure is recorded in `node_errors`, the next Paladin receives an empty input, and the run reports `Completed`. `cargo run --example formation_sequential` exits 0 and shows the Absorb run.
+  `cargo test -p paladin-battalion --lib phalanx_service` passes, including phalanx_bounds_each_attempt_not_the_run, phalanx_paladins_retry_independently, phalanx_node_errors_follow_declaration_order and phalanx_fail_fast_aggregates_structured_failures. Under `on_error: None` every failure is listed in one `AggregationError` reading "Phalanx execution failed with <n> errors: ..." (a timeout reads `run timeout`); under Absorb the run completes with the failures in `node_errors`. `cargo run --example phalanx_parallel` exits 0 and prints `node_errors`.
 awaiting: user response
 
 ## Tests
@@ -33,7 +33,7 @@ result: pass
 
 ### 4. Formation fails fast by default and continues past a failure only under Absorb
 expected: `cargo test -p paladin-battalion --lib formation_service` reports 11 passed. With no `on_error` handler a failing Paladin stops the Formation (`BattalionError::Node` on a timeout, the v0.10 `BattalionError::PaladinError` text otherwise). With `on_error = Absorb` the failure is recorded in `node_errors`, the next Paladin receives an empty input, and the run reports `Completed`. `cargo run --example formation_sequential` exits 0 and shows the Absorb run.
-result: [pending]
+result: pass
 
 ### 5. Phalanx bounds each attempt, retries Paladins independently and reports typed failures in declaration order
 expected: `cargo test -p paladin-battalion --lib phalanx_service` passes, including phalanx_bounds_each_attempt_not_the_run, phalanx_paladins_retry_independently, phalanx_node_errors_follow_declaration_order and phalanx_fail_fast_aggregates_structured_failures. Under `on_error: None` every failure is listed in one `AggregationError` reading "Phalanx execution failed with <n> errors: ..." (a timeout reads `run timeout`); under Absorb the run completes with the failures in `node_errors`. `cargo run --example phalanx_parallel` exits 0 and prints `node_errors`.
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 2
+passed: 3
 issues: 1
-pending: 12
+pending: 11
 skipped: 0
 blocked: 0
 

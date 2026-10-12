@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T18:22:16Z
+updated: 2026-10-12T18:26:23Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 11
-name: The Battalion examples build and run on Aegis
+number: 12
+name: The mdBook pages teach Aegis and the typed taxonomy
 expected: |
-  `cargo run --example commander_full_config` exits 0 and prints three runs: fail fast, Absorb (one `node_errors` entry printed with its Display) and retry-then-Absorb succeeding on attempt 3. `cargo run --example` for commander_basic, commander_auto, commander_with_metadata_export, campaign_workflow and conclave_expert_panel each exit 0. `make check-examples` reports 62 of 62 example binaries present. `grep -l 'with_timeout(\|with_error_strategy(\|with_retry_policy(' examples/commander_*.rs examples/formation_sequential.rs examples/phalanx_parallel.rs examples/campaign_workflow.rs examples/conclave_expert_panel.rs` prints nothing (the Maneuver examples' own ManeuverConfig `with_error_strategy` is a separate API and stays).
+  `docs/src/user-guides/orchestration.md` Configuration Reference shows a `with_aegis(Aegis { retry, timeout, on_error, .. })` snippet, a per-pattern table (Formation, Phalanx, Campaign, Conclave, ChainOfCommand/Grove/Council), states that timeouts apply per attempt with no whole-Battalion clock and that `Commander::execute()` can be wrapped in `tokio::time::timeout`, and says the next Paladin after an absorbed failure receives an empty input. `docs/src/getting-started/configuration.md` has no `battalion:` YAML stanza and no `APP_BATTALION_*` line. `docs/src/appendix/conclave-pattern.md` documents the engine backoff (500 ms doubling, 60 s cap) and an `AggregatorFailed` arm with no 2^n table. `make check-doc-config` and `make check-doc-examples` exit 0. `git grep -nw 'ContinueOnError\|RetryThenContinue' -- docs ':!docs/src/api-reference' ':!docs/assets'` prints nothing.
 awaiting: user response
 
 ## Tests
@@ -61,7 +61,7 @@ result: pass
 
 ### 11. The Battalion examples build and run on Aegis
 expected: `cargo run --example commander_full_config` exits 0 and prints three runs: fail fast, Absorb (one `node_errors` entry printed with its Display) and retry-then-Absorb succeeding on attempt 3. `cargo run --example` for commander_basic, commander_auto, commander_with_metadata_export, campaign_workflow and conclave_expert_panel each exit 0. `make check-examples` reports 62 of 62 example binaries present. `grep -l 'with_timeout(\|with_error_strategy(\|with_retry_policy(' examples/commander_*.rs examples/formation_sequential.rs examples/phalanx_parallel.rs examples/campaign_workflow.rs examples/conclave_expert_panel.rs` prints nothing (the Maneuver examples' own ManeuverConfig `with_error_strategy` is a separate API and stays).
-result: [pending]
+result: pass
 
 ### 12. The mdBook pages teach Aegis and the typed taxonomy
 expected: `docs/src/user-guides/orchestration.md` Configuration Reference shows a `with_aegis(Aegis { retry, timeout, on_error, .. })` snippet, a per-pattern table (Formation, Phalanx, Campaign, Conclave, ChainOfCommand/Grove/Council), states that timeouts apply per attempt with no whole-Battalion clock and that `Commander::execute()` can be wrapped in `tokio::time::timeout`, and says the next Paladin after an absorbed failure receives an empty input. `docs/src/getting-started/configuration.md` has no `battalion:` YAML stanza and no `APP_BATTALION_*` line. `docs/src/appendix/conclave-pattern.md` documents the engine backoff (500 ms doubling, 60 s cap) and an `AggregatorFailed` arm with no 2^n table. `make check-doc-config` and `make check-doc-examples` exit 0. `git grep -nw 'ContinueOnError\|RetryThenContinue' -- docs ':!docs/src/api-reference' ':!docs/assets'` prints nothing.
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 9
+passed: 10
 issues: 1
-pending: 5
+pending: 4
 skipped: 0
 blocked: 0
 

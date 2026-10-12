@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T14:03:26Z
+updated: 2026-10-12T14:21:49Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 7
-name: node_errors is the structured NodeError on the wire and in all three heralds
+number: 8
+name: Circuit breaker and Conclave classify failures by transience() only
 expected: |
-  `cargo test -p paladin-ai-core --lib battalion_result` reports 9 passed: each element serialises as `{"node_id","attempt","transience","source"}` in that key order, the v0.10 `{"node_name","error"}` element fails to deserialize, and `[]` or an absent key reads as empty. `cargo test -p paladin-herald --all-features` passes: Markdown renders `**Scout:** attempt 2, Transient: run timeout`, Table renders `  Scout (attempt 2, Transient): run timeout`, JSON carries the four keys with an object-valued `source`, and an `Llm` source line shows neither the provider name nor the HTTP status.
+  `cargo test -p paladin-ai --lib circuit_breaker` and `cargo test -p paladin-battalion --lib -- conclave_retry_predicate` pass. A Permanent `LlmFailure` whose message reads "429 rate limit timeout 503 network connection" is neither retried by the Conclave nor counted by the breaker; a Transient `LlmFailure` with an empty message is retried and counted. `git grep -n 'PaladinError::LlmError\|\.is_retryable()\|is_terminal' -- '*.rs'` prints nothing (the remaining `LlmError(String)` variants belong to HandoffError, PromptError and PlanningError, which are out of scope).
 awaiting: user response
 
 ## Tests
@@ -45,7 +45,7 @@ result: pass
 
 ### 7. node_errors is the structured NodeError on the wire and in all three heralds
 expected: `cargo test -p paladin-ai-core --lib battalion_result` reports 9 passed: each element serialises as `{"node_id","attempt","transience","source"}` in that key order, the v0.10 `{"node_name","error"}` element fails to deserialize, and `[]` or an absent key reads as empty. `cargo test -p paladin-herald --all-features` passes: Markdown renders `**Scout:** attempt 2, Transient: run timeout`, Table renders `  Scout (attempt 2, Transient): run timeout`, JSON carries the four keys with an object-valued `source`, and an `Llm` source line shows neither the provider name nor the HTTP status.
-result: [pending]
+result: pass
 
 ### 8. Circuit breaker and Conclave classify failures by transience() only
 expected: `cargo test -p paladin-ai --lib circuit_breaker` and `cargo test -p paladin-battalion --lib -- conclave_retry_predicate` pass. A Permanent `LlmFailure` whose message reads "429 rate limit timeout 503 network connection" is neither retried by the Conclave nor counted by the breaker; a Transient `LlmFailure` with an empty message is retried and counted. `git grep -n 'PaladinError::LlmError\|\.is_retryable()\|is_terminal' -- '*.rs'` prints nothing (the remaining `LlmError(String)` variants belong to HandoffError, PromptError and PlanningError, which are out of scope).
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 5
+passed: 6
 issues: 1
-pending: 9
+pending: 8
 skipped: 0
 blocked: 0
 

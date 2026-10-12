@@ -1,10 +1,11 @@
 # Phase 48: Base Entity Rename - Context
 
 **Gathered:** 2026-10-10 (code survey) / 2026-10-12 (phase added)
-**Status:** Draft — ground truth is verified against the tree at `61de2de` (pre-Phase 44; the
-counts below predate it — on `846a5cf`, after 44 sealed, `base::entity::node` is still imported
-in 117 files, `Node::new` still 334, `NodeId` grew to 1,910 / 91 files, and the legacy
-`NodeError` is gone); the decisions marked
+**Status:** Draft — ground truth surveyed at `61de2de` on 2026-10-10 and **re-verified at
+`25dc267` on 2026-10-12, after Phase 44 sealed** (every count below is from the post-44 tree;
+Phase 44's 128-file change touched neither `crates/paladin-core/src/base/` nor any of the eight
+`Node<T>`-based container files — `git diff --stat 61de2de..HEAD` on them is empty). The
+decisions marked
 *recommended* below are the surveyor's proposal and have not been confirmed by the owner. Run
 `/gsd-discuss-phase 48` to confirm or change them, or `/gsd-plan-phase 48` to accept them as-is.
 **Mode:** owner-requested phase, created from a conversation rather than `--auto`
@@ -37,8 +38,10 @@ One rename, its fallout, and the cleanup it exposes:
 `NodeContext`, `NodeCache*`, `NodeInterceptor`, `NodeExecutionRecord`, `NodeOutcomeKind`,
 `NodeProgressKind`, `TraceEvent::Node*`, `docs/schemas/wargraph-doc.schema.json`, the
 `node_cache` config section, Redis node-cache keys); the legacy `battalion::NodeError`
-removal (that is Phase 44, LEGACY-01); migrating the owned downstream system (it compiles
-against the deprecated alias and moves on its own schedule); designing a general revisioning
+removal (already done — Phase 44, LEGACY-01, sealed 2026-10-11, pinned by
+`tests/legacy_removal_guard.rs`); migrating the owned downstream system (it adopts the milestone
+at once per the clean-break policy, or compiles against the alias if D-02's alternative is
+chosen); designing a general revisioning
 system for the platform (see Deferred); renaming `platform/container/` or splitting it.
 
 </domain>
@@ -89,13 +92,13 @@ The graph vocabulary arrived with the v0.10.0 superstep engine (`WarGraph`, Phas
 cache). The older `Campaign` already used petgraph's `NodeIndex`. Git history is squashed, so
 these dates come from `.planning/ROADMAP.md`.
 
-| Graph sense (workspace `.rs`, excluding `base/entity/node.rs`) | Occurrences | Files |
+| Graph sense (workspace `.rs` at `25dc267`, excluding `base/entity/node.rs`) | Occurrences | Files |
 |---|---|---|
-| `NodeId` | 1,885 | 85 |
-| `node_id` | 1,114 | 75 |
+| `NodeId` | 1,910 | 91 |
+| `node_id` | 1,151 | 85 |
 | `NodeSpec` | 1,034 | 64 |
-| `StateNode` | 411 | 43 |
-| `NodeError` (both types) | 383 | 54 |
+| `StateNode` | 410 | 42 |
+| `NodeError` (one type since Phase 44) | 396 | 56 |
 | `NodeCache` / `NodeCacheKey` / `NodeCachePort` | 378 / 96 / 65 | 20 / 8 / 12 |
 | `NodeOutcomeKind` | 208 | 27 |
 | `NodeContext` | 192 | 47 |
@@ -108,7 +111,7 @@ these dates come from `.planning/ROADMAP.md`.
 |---|---|---|
 | `use …base::entity::node` | 148 | 117 |
 | `Node::new` | 334 | 117 |
-| `.node` payload access (a handful are `graph.node(..)`) | ~730 | 106 |
+| `.node` payload access (a handful are `graph.node(..)`) | 739 | 107 |
 | `Node<` in signatures | 25 | 17 |
 | mdBook / README mentions of `Node<T>` | — | 9 (`docs/src/architecture/{domain-model,design-patterns,overview,crate-map}.md`, `docs/src/api-reference/{crate-map,stable-api}.md`, `docs/src/assets/LayerArchitecture.svg`, `README.md`, `crates/paladin-core/README.md`) |
 | `examples/`, `doc-examples`, `benches/` | — | 13 |
@@ -159,7 +162,19 @@ Public wire formats that carry the graph sense and must not move: `wargraph-doc.
 - **D-00b:** X-03 governs public API: every break needs a `MIGRATION.md` §9.2 row and, when
   marked `Y`, a `.cargo/semver-checks-allowlist.toml` entry naming one crate and one lint, kept
   set-equal by `make check-migration-allowlist`. This phase is a deliberate break and will have
-  several rows.
+  several rows. **X-03 as written says "deprecations allowed, removals are not, before
+  v0.11.0"** (PROJECT.md *X-03 supersession*); it has been superseded twice by the overview's
+  clean-break policy (§5.1) — for Phases 31-33, and for Phase 44 by ADR-0059 — on the recorded
+  grounds that the project is pre-1.0 with one coordinated downstream consumer that pins its
+  submodule pointer and adopts a whole milestone at once. `MIGRATION.md` §9.7 Deprecations is
+  deliberately empty: no phase has ever marked an item `#[deprecated]`. A Phase 48 clean break
+  therefore needs its own recorded, phase-scoped X-03 supersession (ADR-0060, the ADR-0059
+  shape); a deprecated alias instead would follow X-03 as written and make §9.7 non-empty for
+  the first time. See D-02.
+- **D-00e:** Phase 44 sealed 2026-10-11 (ADR-0059; `tests/legacy_removal_guard.rs`). It touched
+  none of this phase's files. Its guard bans a *declaration or alias* of `NodeError` in the core
+  battalion module and the `battalion::NodeError` path anywhere — nothing this phase does trips
+  it, but every push must keep `cargo test --test legacy_removal_guard` green.
 - **D-00c:** The two-officer model and the Treasurer vocabulary (ADR-0049/0050, Phase 30 VOCAB)
   are untouched; this phase adds a vocabulary rule, it does not revisit one.
 - **D-00d:** `paladin-core` has zero dependencies (ADR-0015); nothing in this phase may add one.
@@ -172,11 +187,17 @@ Public wire formats that carry the graph sense and must not move: `wargraph-doc.
   theme stays on domain concepts (Paladin, Battalion, …). Alternatives considered: `Record<T>`
   (collides with `VaultRecord` in prose), `Versioned<T>` (over-promises — see D-04),
   `Aggregate<T>` (DDD-loaded; `Paladin` is the aggregate root, the wrapper is not).
-- **D-02 (recommended): one-release deprecation.** `#[deprecated(since = "0.11.0", note =
-  "renamed to Entity<T>; removed in 0.12.0")] pub type Node<T> = Entity<T>;` plus a
-  `base::entity::node` module that re-exports it. The in-tree workspace migrates fully in this
-  phase (no in-tree use of the alias survives, so `-D warnings` stays clean); the alias exists
-  only for the owned downstream system. Removal recorded in `MIGRATION.md` §9.7 for v0.12.0.
+- **D-02 (recommended, revised 2026-10-12 after re-reading X-03): clean break, no alias.**
+  `Node<T>` and the `base::entity::node` module are removed outright, matching Phases 31-33 and
+  44 and the stated reason for both (one coordinated downstream consumer that adopts the whole
+  milestone at once). ADR-0060 records the Phase-48-only X-03 supersession in the ADR-0059 shape;
+  `MIGRATION.md` §9.7 stays empty. **Alternative (X-03 as written):**
+  `#[deprecated(since = "0.11.0", note = "renamed to Entity<T>; removed in 0.12.0")] pub type
+  Node<T> = Entity<T>;` plus a re-exporting `base::entity::node` module, no in-tree use surviving
+  (so `-D warnings` stays clean), removal scheduled in §9.7 for v0.12.0. Choose the alternative
+  only if the downstream system needs to straddle v0.11 and the rename rather than adopt the
+  milestone at once — that is the owner's call (open question 2). ENTITY-02 is written to accept
+  either.
 - **D-03 (recommended): serde compatibility by alias, not by version bump.** The payload field
   gets `#[serde(alias = "node")]` so pre-rename JSON (Citadel snapshots, stored Paladins,
   SQLite/Postgres rows) deserializes; new writes use `data`. A fixture test loads a captured
@@ -197,10 +218,16 @@ Public wire formats that carry the graph sense and must not move: `wargraph-doc.
   `NodeError` and the Battalion files are quiet) and before Phase 46 (so the v0.10 → v0.11
   migration guide, CURR-23, carries the rename) and Phase 47 (so v0.11.0 ships it). The duplicate
   `Paladin` alias in `citadel.rs:48` is removed here, not in 44.
-- **D-07 (recommended): graph side is frozen.** A test or `make` target greps the tree for the
-  graph identifiers listed under *Not in this phase* and fails if their definition sites moved;
-  the ADR names the rule: *"node" = a vertex in a WarGraph/Campaign; "Entity" = the base
-  wrapper.* CLAUDE.md's naming table and `.github/copilot-instructions.md` get an `Entity` row.
+- **D-07 (recommended): graph side is frozen, old names stay gone.** A repository-scan test in
+  the exact shape of Phase 44's `tests/legacy_removal_guard.rs` (std only; forbidden strings
+  assembled with `concat` so the file never contains one whole; two positive controls over
+  temporary trees; file-scoped rules report a missing target; skip set = dot-directories,
+  `CHANGELOG.md`s, root `MIGRATION.md`, the two upgrade guides, itself) with rules for: (a) no
+  `base::entity::node` path and no `Node::new`/`Node<` entity use outside the alias module if
+  D-02's alternative is chosen; (b) the graph identifiers under *Not in this phase* still defined
+  at their current files. The ADR names the rule: *"node" = a vertex in a WarGraph/Campaign;
+  "Entity" = the base wrapper.* CLAUDE.md's naming table and `.github/copilot-instructions.md`
+  get an `Entity` row.
 
 ### Mechanics the planner should expect
 
@@ -214,7 +241,12 @@ Public wire formats that carry the graph sense and must not move: `wargraph-doc.
 - `cargo semver-checks` lints expected: `struct_missing` / `struct_pub_field_missing` /
   `module_missing` / `trait_missing` on `paladin-core`; `function_signature_changed` on the root
   crate's `ContentItemService` (its signatures name `NodeVersion<…>`). Each is one §9.2 row + one
-  allowlist entry.
+  allowlist entry. §9.2 rows have **no row IDs** — columns are `Crate | Type / Trait | Change |
+  Mitigation | Deliberate-breaking? | Req`, and the Crate cell is the **published** name
+  (`paladin-ai-core` for `crates/paladin-core`). Allowlist entries are
+  `[[entry]] crate / lint / migration_row / requirement_id / justification` (48 entries today);
+  `make check-migration-allowlist` enforces row-level set equality. Precedent to copy: the
+  Phase 44 rows landed by plan 44-11 (`e767fc7`) and ADR-0059 (plan 44-02).
 - Docs: 9 mdBook/README files, `LayerArchitecture.svg` (text inside the SVG), `crates/paladin-core/
   README.md`, `src/core/mod.rs` module docs (still describes `Node<T>`), rustdoc on `paladin.rs`
   lines 4-11 and 140-229 and `council.rs:246`.
@@ -244,8 +276,9 @@ Public wire formats that carry the graph sense and must not move: `wargraph-doc.
 ## For the owner (answered in `/gsd-discuss-phase 48` or by editing D-01..D-07 above)
 
 1. Is `Entity<T>` / `.data` the name, or do you want a themed or different generic name?
-2. One-release deprecation (removal in v0.12.0), or keep the `Node<T>` alias longer for the
-   downstream system?
+2. Clean break (D-02 as recommended: no alias, ADR-0060 supersedes X-03 for this phase, §9.7
+   stays empty — the Phase 31-33 / 44 pattern), or a `#[deprecated]` `Node<T>` alias for one
+   release (X-03 as written) so the downstream system can straddle the rename?
 3. Remove all five dormant base items, or keep any of them for the downstream system?
 4. Should the rename land in the same PR as Phase 44's legacy removal, or as its own PR after
    44 merges? (D-06 assumes its own PR, after.)

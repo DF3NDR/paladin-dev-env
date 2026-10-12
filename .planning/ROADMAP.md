@@ -237,7 +237,7 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 - [x] **Phase 45: RustFS Swap & Platform/Observability Deviations** - Replace MinIO with RustFS across dev/test and CI, wire SSE/webhook emission for legacy `Runnable::Agent` runs, and close the tracing-overhead gap (completed 2026-09-30)
 - [ ] **Phase 46: Docs Currency & Hygiene** - Close the v0.10.0 audit's docs fixes, publish the Treasurer mdBook page and migration guide, reconcile Nyquist validation, and dispose of the three v2 debt lines
 - [ ] **Phase 47: v0.11.0 Crate Release** - Tag and publish v0.11.0: all 12 crates on crates.io, CHANGELOG and MIGRATION complete, publish-order gate green
-- [ ] **Phase 48: Base Entity Rename** - Rename the base-layer entity wrapper `Node<T>` → `Entity<T>` (payload field `node` → `data`, deprecated alias for one release, serde alias for persisted JSON), disposition the unused base-layer items, and reserve "node" for the graph sense only — **executes after Phase 44 and before Phases 46 and 47** (added 2026-10-12)
+- [ ] **Phase 48: Base Entity Rename** - Rename the base-layer entity wrapper `Node<T>` → `Entity<T>` (payload field `node` → `data`; clean break under a Phase-48-only X-03 supersession, or a one-release deprecated alias — decided at discuss; serde alias for persisted JSON), disposition the unused base-layer items, and reserve "node" for the graph sense only — **executes before Phases 46 and 47** (added 2026-10-12, after Phase 44 sealed)
 
 ## Phase Details
 
@@ -1050,15 +1050,17 @@ Battalion files are quiet). **Resequenced ahead of Phases 46 and 47** on 2026-10
 public-API break that must land before the v0.10 → v0.11 `MIGRATION.md` guide (Phase 46,
 CURR-23) is written and before v0.11.0 is tagged (Phase 47).
 **Requirements**: ENTITY-01, ENTITY-02, ENTITY-03, ENTITY-04, ENTITY-05
-**Ground truth** (code survey, 2026-10-10, recorded in `48-CONTEXT.md`): the graph sense of
-"node" arrived with the v0.10.0 superstep engine (Phases 22-25) and is now ~5× larger than the
-entity sense — `NodeId` 1,885 occurrences / 85 files, `NodeSpec` 1,034 / 64, `node_id` 1,114 / 75,
+**Ground truth** (code survey 2026-10-10, re-verified on the post-Phase-44 tree `25dc267` on
+2026-10-12, recorded in `48-CONTEXT.md`): the graph sense of "node" arrived with the v0.10.0
+superstep engine (Phases 22-25) and is now ~5× larger than the entity sense — `NodeId` 1,910
+occurrences / 91 files, `NodeSpec` 1,034 / 64, `node_id` 1,151 / 85,
 plus `StateNode`, `NodeContext`, `NodeCache*`, `NodeInterceptor`, `NodeExecutionRecord`,
 `NodeOutcomeKind`, `NodeProgressKind` — and it is in public wire formats
 (`docs/schemas/wargraph-doc.schema.json`, `TraceEvent::NodeStarted`/`NodeProgress`, persisted
 `Waypoint`s, Redis node-cache keys, the `node_cache` config section). The entity sense is
 `base::entity::node` imported in 117 `.rs` files, `Node::new` 334 occurrences, `.node` payload
-access ~730 occurrences / 106 files, 9 mdBook/README files, 13 example/doc-example/bench files.
+access 739 occurrences / 107 files, 9 mdBook/README files, 13 example/doc-example/bench files
+(Phase 44 touched none of the base layer or the eight `Node<T>`-based container files).
 Only 8 of the 70 files in `platform/container/` use `Node<T>`; everything newer (`Run`,
 `Assistant`, `Waypoint`, `VaultRecord`, `Battlefield`, traces, the treasury ledger) carries its own
 typed id and `schema_version`. The two senses already collide in `NodeSpec::Paladin { paladin:
@@ -1077,14 +1079,18 @@ was built independently. `Field`, `Collection`, `Element`, `FieldVersionService`
      (Citadel snapshots, stored Paladins, SQLite/Postgres rows) still deserializes, proven by a
      fixture test against pre-rename JSON.
 
-  2. A `#[deprecated(since = "0.11.0")]` `Node<T>` alias and the old `base::entity::node` module
-     path still compile (with warnings) so the owned downstream system migrates at its own pace;
-     their removal is scheduled for v0.12.0 in `MIGRATION.md` §9.7 Deprecations.
+  2. The old name's fate is decided and recorded, one of two ways: **(default)** `Node<T>` and
+     the `base::entity::node` module are removed outright and an ADR (0060) records the
+     Phase-48-only X-03 supersession in the ADR-0059 shape, with `MIGRATION.md` §9.7 still
+     empty; **or** a `#[deprecated(since = "0.11.0")]` `Node<T>` alias and re-exporting module
+     keep compiling with no in-tree use, and §9.7 schedules their removal for v0.12.0. Either way
+     the choice is in `48-CONTEXT.md` D-02 before planning.
 
-  3. After Phases 44 and 48 the workspace has exactly one type named `NodeError` (the structured
-     `platform::container::node_error::NodeError`), exactly one `Paladin` alias (the `citadel.rs`
-     duplicate is gone), and `NodeVersion`/`NodeVersionRepository`/`NodeVersionService`/
-     `InMemoryNodeVersionRepository` are renamed `EntityVersion*`.
+  3. Phase 44 (sealed 2026-10-11) left exactly one type named `NodeError` (the structured
+     `platform::container::node_error::NodeError`); after Phase 48 that is still true,
+     `tests/legacy_removal_guard.rs` is still green, there is exactly one `Paladin` alias (the
+     `citadel.rs:48` duplicate is gone), and `NodeVersion`/`NodeVersionRepository`/
+     `NodeVersionService`/`InMemoryNodeVersionRepository` are renamed `EntityVersion*`.
 
   4. Each of `Field`, `Collection`, `Element`, `FieldVersionService` and
      `CollectionVersioningService` is either removed or kept with a written reason, and the
@@ -1095,7 +1101,9 @@ was built independently. `Field`, `Collection`, `Element`, `FieldVersionService`
      `TraceEvent::Node*`, `wargraph-doc.schema.json`, `node_cache` config) is byte-for-byte
      untouched; an ADR records that "node" is reserved for the graph sense and "Entity" for the
      base wrapper, the CLAUDE.md/copilot-instructions naming table and the mdBook domain-model,
-     design-patterns and crate-map pages say the same; every rename has a `MIGRATION.md` §9.2 row
+     design-patterns and crate-map pages say the same; a repository-scan test in the
+     `tests/legacy_removal_guard.rs` shape (positive controls included) pins both that freeze and
+     the absence of the old entity paths; every rename has a `MIGRATION.md` §9.2 row
      and a set-equal `.cargo/semver-checks-allowlist.toml` entry, `api_surface_current.txt` is
      refreshed via `make api-surface-update` with a CHANGELOG entry, and `cargo doc`, `make
      check-api-examples`, `make clean-code` and the 82 % coverage floor stay green.

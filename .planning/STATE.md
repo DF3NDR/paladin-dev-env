@@ -555,7 +555,7 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
 - Phase 37 added: v0.10.0 Crate Release — re-seal the Phase 29 gates on the final commit, merge to `main`, `release.yml` tags `v0.10.0`, all publishable crates on crates.io at `0.10.0` (2026-09-17)
 - Phase 36.1 inserted after Phase 36: Deferred Items Closure — walk the Phase 31/32/34/35 deferred-items registers, WINDOWS.md #36-37 and the two pending todos; fix, waive with reason, or re-home each; bring WINDOWS.md back into agreement with the registers before Phase 37 tags v0.10.0 (URGENT)
 - Phase 37.1 inserted after Phase 37: v0.10.1 Patch Release — tag v0.10.0 published 3/12 crates (battalion versioned dev-dep vs CRATES order); maintainer chose recovery option A (URGENT)
-- Phase 48 added: Base Entity Rename — `base::entity::node::Node<T>` → `Entity<T>` (payload `node` → `data`, deprecated alias for one release, serde alias for persisted JSON), unused base-layer items dispositioned, "node" reserved for the graph sense; ENTITY-01..05 minted; **resequenced to run after Phase 44 and before Phases 46-47** (owner decision 2026-10-12 after the code survey in `48-CONTEXT.md`)
+- Phase 48 added: Base Entity Rename — `base::entity::node::Node<T>` → `Entity<T>` (payload `node` → `data`; clean break under a Phase-48-only X-03 supersession or a one-release deprecated alias, decided at discuss; serde alias for persisted JSON), unused base-layer items dispositioned, "node" reserved for the graph sense; ENTITY-01..05 minted; **sequenced before Phases 46-47**, added after Phase 44 sealed (owner decision 2026-10-12 after the code survey in `48-CONTEXT.md`, re-verified on the post-44 tree)
 
 ## Deferred Items
 
@@ -693,11 +693,13 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 - **Phase 48 (Base Entity Rename) added 2026-10-12 and sequenced before Phases 46-47:** the
   base-layer wrapper `base::entity::node::Node<T>` becomes `Entity<T>` (payload `node` → `data`,
-  deprecated alias for one release, serde alias for persisted JSON), the dormant base items are
-  dispositioned, and "node" is reserved for the graph sense (`NodeId`, `NodeSpec`, `StateNode`, …,
-  untouched). ENTITY-01..05 minted. `48-CONTEXT.md` is a **draft** from the code survey with
-  recommended decisions D-01..D-07 and four open questions (name, deprecation window, which base
-  items to keep, own PR or not).
+  serde alias for persisted JSON), the dormant base items are dispositioned, and "node" is
+  reserved for the graph sense (`NodeId`, `NodeSpec`, `StateNode`, …, untouched). ENTITY-01..05
+  minted. `48-CONTEXT.md` is a **draft** from the code survey, re-verified on the post-Phase-44
+  tree, with recommended decisions D-01..D-07 and four open questions — the main one being
+  **clean break (the X-03 supersession pattern of Phases 31-33 and 44, ADR-0060) vs a
+  one-release `#[deprecated]` alias (X-03 as written, which would make MIGRATION §9.7 non-empty
+  for the first time)** — plus name, which base items to keep, and own PR or not.
 
 - **Next:** `/clear` then `/gsd-discuss-phase 48` (confirm or change the draft `48-CONTEXT.md`
   decisions) or `/gsd-plan-phase 48` (accept them as written). Phase 46 follows 48; its migration

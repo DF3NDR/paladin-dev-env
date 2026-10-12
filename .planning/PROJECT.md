@@ -560,7 +560,9 @@ Phases 30-33. The PRD's open operator question is answered: **full governance** 
   entries.
 - **Base entity rename (added 2026-10-12, Phase 48):** the pre-engine base-layer wrapper
   `paladin_core::base::entity::node::Node<T>` becomes `Entity<T>` (payload field `node` → `data`),
-  with a deprecated alias for one release and a serde alias so persisted JSON still loads; the
+  as a clean break under a Phase-48-only X-03 supersession (the Phase 31-33 / 44 pattern) unless
+  the owner opts for a one-release deprecated alias, with a serde alias so persisted JSON still
+  loads; the
   unused base-layer items (`Field`, `Collection`, `Element`, two versioning services) are removed
   or kept with a reason; "node" is reserved for the graph sense (`NodeId`, `NodeSpec`,
   `StateNode`, …), which is untouched. Runs after Phase 44 and before Phases 46-47 because it is a

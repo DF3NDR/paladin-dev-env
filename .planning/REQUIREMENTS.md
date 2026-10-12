@@ -126,13 +126,17 @@ the graph side is kept.*
   `PromptItem` are built on it; `#[serde(alias = "node")]` keeps every pre-rename persisted JSON
   (Citadel snapshots, stored Paladins, SQLite/Postgres rows) deserializing, proven by a fixture test
 
-- [ ] **ENTITY-02**: A `#[deprecated(since = "0.11.0")]` `Node<T>` alias and the old
-  `base::entity::node` module path keep compiling for one minor release so the owned downstream
-  system can migrate at its own pace; removal is scheduled for v0.12.0 in `MIGRATION.md` §9.7
+- [ ] **ENTITY-02**: The old name's fate is decided before planning and recorded: by default
+  `Node<T>` and the `base::entity::node` module are removed outright under a Phase-48-only X-03
+  supersession recorded in an ADR (the ADR-0059 shape; `MIGRATION.md` §9.7 stays empty), or — if
+  the owner chooses X-03 as written — a `#[deprecated(since = "0.11.0")]` `Node<T>` alias and
+  re-exporting module keep compiling with no in-tree use and §9.7 schedules their removal for
+  v0.12.0
 
-- [ ] **ENTITY-03**: After Phases 44 and 48 the workspace has exactly one `NodeError` (the
-  structured `node_error::NodeError`) and exactly one `Paladin` alias (the `citadel.rs:48`
-  duplicate is removed); `NodeVersion`, `NodeVersionRepository`, `NodeVersionService` and
+- [ ] **ENTITY-03**: Phase 44 left exactly one `NodeError` (the structured
+  `node_error::NodeError`); after Phase 48 that still holds and `tests/legacy_removal_guard.rs`
+  is still green, there is exactly one `Paladin` alias (the `citadel.rs:48` duplicate is
+  removed), and `NodeVersion`, `NodeVersionRepository`, `NodeVersionService` and
   `InMemoryNodeVersionRepository` become `EntityVersion*`
 
 - [ ] **ENTITY-04**: `Field`, `Collection`, `Element`, `FieldVersionService` and
@@ -144,7 +148,9 @@ the graph side is kept.*
   `NodeCache*`, `TraceEvent::Node*`, `wargraph-doc.schema.json`, the `node_cache` config section) is
   untouched; an ADR reserves "node" for the graph sense and "Entity" for the base wrapper; the
   CLAUDE.md/copilot naming table and the mdBook domain-model, design-patterns and crate-map pages
-  agree; every rename has a `MIGRATION.md` §9.2 row with a set-equal
+  agree; a repository-scan test in the `tests/legacy_removal_guard.rs` shape (positive controls
+  included) pins the freeze and the absence of the old entity paths; every rename has a
+  `MIGRATION.md` §9.2 row with a set-equal
   `.cargo/semver-checks-allowlist.toml` entry, `api_surface_current.txt` is refreshed with a
   CHANGELOG entry, and `cargo doc`, `make check-api-examples`, `make clean-code` and the 82 %
   coverage floor stay green

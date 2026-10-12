@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T18:28:17Z
+updated: 2026-10-12T18:33:36Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 14
-name: Every removal is recorded: ADR-0059, MIGRATION rows, semver allowlist and CHANGELOGs
+number: 15
+name: The full phase gate is green on the final tree
 expected: |
-  `.planning/decisions/0059-legacy-clean-break-removal.md` is Accepted, carries `## Supersedes` naming ADR-0001 and ADR-0002, says the X-03 supersession is for Phase 44 only, reads Code Conformance `conforms`, and has the (g) checkpoint outcome line dated 2026-10-11; ADR-0001 and ADR-0002 `## Status` read `Superseded`; PROMOTION.md shows next free ADR number 0060. MIGRATION.md 9.1 has rows M-B-06 to M-B-11 and 9.2 has ten `plan 44-11` rows (nine Y, one N for the BattalionResult retype). `./scripts/check-migration-allowlist.sh` reports the allowlist set-equal to the 9.2 register and `make check-gates` exits 0. The root CHANGELOG `[Unreleased]` has a Phase 44 `### Removed` group with six sub-bullets and `### Changed` bullets citing ADR-0059 and the MIGRATION rows; the paladin-core, paladin-battalion and paladin-herald CHANGELOGs each carry their own Phase 44 entries.
+  `cargo fmt --check` is clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` exits 0; `cargo test --workspace --doc` reports 0 failed; `cargo test --workspace --no-fail-fast` passes every target except the two known pre-phase baseline failures `run_api_wiring::tests::build_run_api_persists_*` (fail identically on baseline 061ee3dc, recorded in deferred-items.md); `PUBLIC_API_TOOLCHAIN=nightly-2026-09-20 make api-surface` reports "API surface unchanged" (4274 items); `make security` exits 0. CI-only on the phase PR: the 82 percent coverage floor and mdBook rendering are green (neither tool is installable in the sandbox).
 awaiting: user response
 
 ## Tests
@@ -73,7 +73,7 @@ result: pass
 
 ### 14. Every removal is recorded: ADR-0059, MIGRATION rows, semver allowlist and CHANGELOGs
 expected: `.planning/decisions/0059-legacy-clean-break-removal.md` is Accepted, carries `## Supersedes` naming ADR-0001 and ADR-0002, says the X-03 supersession is for Phase 44 only, reads Code Conformance `conforms`, and has the (g) checkpoint outcome line dated 2026-10-11; ADR-0001 and ADR-0002 `## Status` read `Superseded`; PROMOTION.md shows next free ADR number 0060. MIGRATION.md 9.1 has rows M-B-06 to M-B-11 and 9.2 has ten `plan 44-11` rows (nine Y, one N for the BattalionResult retype). `./scripts/check-migration-allowlist.sh` reports the allowlist set-equal to the 9.2 register and `make check-gates` exits 0. The root CHANGELOG `[Unreleased]` has a Phase 44 `### Removed` group with six sub-bullets and `### Changed` bullets citing ADR-0059 and the MIGRATION rows; the paladin-core, paladin-battalion and paladin-herald CHANGELOGs each carry their own Phase 44 entries.
-result: [pending]
+result: pass
 
 ### 15. The full phase gate is green on the final tree
 expected: `cargo fmt --check` is clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` exits 0; `cargo test --workspace --doc` reports 0 failed; `cargo test --workspace --no-fail-fast` passes every target except the two known pre-phase baseline failures `run_api_wiring::tests::build_run_api_persists_*` (fail identically on baseline 061ee3dc, recorded in deferred-items.md); `PUBLIC_API_TOOLCHAIN=nightly-2026-09-20 make api-surface` reports "API surface unchanged" (4274 items); `make security` exits 0. CI-only on the phase PR: the 82 percent coverage floor and mdBook rendering are green (neither tool is installable in the sandbox).
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 12
+passed: 13
 issues: 1
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 

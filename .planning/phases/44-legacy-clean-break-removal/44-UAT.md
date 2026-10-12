@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T01:55:47Z
+updated: 2026-10-12T02:14:11Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 3
-name: Invalid Aegis policies are rejected at entry, before any Paladin runs
+number: 4
+name: Formation fails fast by default and continues past a failure only under Absorb
 expected: |
-  `cargo test -p paladin-battalion --lib -- rejects_invalid_aegis_before_any` passes for Campaign, Formation, Phalanx and Conclave. `cargo test -p paladin-ai-core --lib validate_aegis` reports 5 passed: Route/Custom error handlers, Custom retry predicates and zero durations are rejected; a cache policy is accepted and ignored. `commander_builder_rejects_zero_run_timeout` passes: a `CommanderBuilder` given `run_timeout = 0` fails to build with `CommanderValidation`.
+  `cargo test -p paladin-battalion --lib formation_service` reports 11 passed. With no `on_error` handler a failing Paladin stops the Formation (`BattalionError::Node` on a timeout, the v0.10 `BattalionError::PaladinError` text otherwise). With `on_error = Absorb` the failure is recorded in `node_errors`, the next Paladin receives an empty input, and the run reports `Completed`. `cargo run --example formation_sequential` exits 0 and shows the Absorb run.
 awaiting: user response
 
 ## Tests
@@ -29,7 +29,7 @@ severity: blocker
 
 ### 3. Invalid Aegis policies are rejected at entry, before any Paladin runs
 expected: `cargo test -p paladin-battalion --lib -- rejects_invalid_aegis_before_any` passes for Campaign, Formation, Phalanx and Conclave. `cargo test -p paladin-ai-core --lib validate_aegis` reports 5 passed: Route/Custom error handlers, Custom retry predicates and zero durations are rejected; a cache policy is accepted and ignored. `commander_builder_rejects_zero_run_timeout` passes: a `CommanderBuilder` given `run_timeout = 0` fails to build with `CommanderValidation`.
-result: [pending]
+result: pass
 
 ### 4. Formation fails fast by default and continues past a failure only under Absorb
 expected: `cargo test -p paladin-battalion --lib formation_service` reports 11 passed. With no `on_error` handler a failing Paladin stops the Formation (`BattalionError::Node` on a timeout, the v0.10 `BattalionError::PaladinError` text otherwise). With `on_error = Absorb` the failure is recorded in `node_errors`, the next Paladin receives an empty input, and the run reports `Completed`. `cargo run --example formation_sequential` exits 0 and shows the Absorb run.
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 1
+passed: 2
 issues: 1
-pending: 13
+pending: 12
 skipped: 0
 blocked: 0
 
@@ -109,7 +109,7 @@ blocked: 0
   missing:
     - "Trailing newline on the three files (added in 1e93e1ce; pre-commit run --all-files now exits 0 locally with only clippy skipped, and clippy was verified green separately)"
   debug_session: ""
-  evidence: "Local reproduction: pre-commit 4.6.2 run --all-files on 299ff07b -> 'fix end of files' Failed, all other hooks Passed; on 1e93e1ce -> all Passed. CI confirmation pending on the pre-commit workflow run for 1e93e1ce."
+  evidence: "Local reproduction: pre-commit 4.6.2 run --all-files on 299ff07b -> 'fix end of files' Failed, all other hooks Passed; on 1e93e1ce -> all Passed. CI confirmed: pre-commit workflow run 38193792540 on fd3d686e concluded success (first green run on the branch since 1494e50e, 2026-10-08)."
   preliminary_findings: |
     The `pre-commit` workflow (pre-commit run --all-files) is red on every commit of claude/laughing-dirac-e0h2ax
     from bc57061b (2026-10-08 00:55 UTC, run 37710276127) through HEAD 299ff07b (run 38192977973); the last green

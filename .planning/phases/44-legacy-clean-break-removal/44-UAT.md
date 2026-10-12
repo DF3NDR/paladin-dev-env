@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T13:59:06Z
+updated: 2026-10-12T14:03:26Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 6
-name: Phalanx review fixes: a zero concurrency limit is rejected and no attempt starts after cancellation
+number: 7
+name: node_errors is the structured NodeError on the wire and in all three heralds
 expected: |
-  `cargo test -p paladin-battalion --lib -- phalanx_rejects_zero_max_concurrency_before_any_paladin_runs phalanx_rejects_a_concurrency_limit_above_the_permit_maximum cancelled_phalanx_does_not_start_queued_paladins test_cancellation_support phalanx_cancellation_during_backoff_stops_retrying` all pass: `with_max_concurrency(0)` is rejected with a named error instead of hanging forever, a limit above `Semaphore::MAX_PERMITS` is rejected instead of panicking, and a cancelled Phalanx returns `Cancelled` without starting the Paladins still queued behind the concurrency limit (commits 229a28a5, cf0be3db, dc55f18e).
+  `cargo test -p paladin-ai-core --lib battalion_result` reports 9 passed: each element serialises as `{"node_id","attempt","transience","source"}` in that key order, the v0.10 `{"node_name","error"}` element fails to deserialize, and `[]` or an absent key reads as empty. `cargo test -p paladin-herald --all-features` passes: Markdown renders `**Scout:** attempt 2, Transient: run timeout`, Table renders `  Scout (attempt 2, Transient): run timeout`, JSON carries the four keys with an object-valued `source`, and an `Llm` source line shows neither the provider name nor the HTTP status.
 awaiting: user response
 
 ## Tests
@@ -41,7 +41,7 @@ result: pass
 
 ### 6. Phalanx review fixes: a zero concurrency limit is rejected and no attempt starts after cancellation
 expected: `cargo test -p paladin-battalion --lib -- phalanx_rejects_zero_max_concurrency_before_any_paladin_runs phalanx_rejects_a_concurrency_limit_above_the_permit_maximum cancelled_phalanx_does_not_start_queued_paladins test_cancellation_support phalanx_cancellation_during_backoff_stops_retrying` all pass: `with_max_concurrency(0)` is rejected with a named error instead of hanging forever, a limit above `Semaphore::MAX_PERMITS` is rejected instead of panicking, and a cancelled Phalanx returns `Cancelled` without starting the Paladins still queued behind the concurrency limit (commits 229a28a5, cf0be3db, dc55f18e).
-result: [pending]
+result: pass
 
 ### 7. node_errors is the structured NodeError on the wire and in all three heralds
 expected: `cargo test -p paladin-ai-core --lib battalion_result` reports 9 passed: each element serialises as `{"node_id","attempt","transience","source"}` in that key order, the v0.10 `{"node_name","error"}` element fails to deserialize, and `[]` or an absent key reads as empty. `cargo test -p paladin-herald --all-features` passes: Markdown renders `**Scout:** attempt 2, Transient: run timeout`, Table renders `  Scout (attempt 2, Transient): run timeout`, JSON carries the four keys with an object-valued `source`, and an `Llm` source line shows neither the provider name nor the HTTP status.
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 4
+passed: 5
 issues: 1
-pending: 10
+pending: 9
 skipped: 0
 blocked: 0
 

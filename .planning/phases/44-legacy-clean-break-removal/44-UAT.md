@@ -3,7 +3,7 @@ status: complete
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T18:34:43Z
+updated: 2026-10-12T18:35:42Z
 ---
 
 ## Current Test
@@ -18,9 +18,9 @@ result: pass
 
 ### 2. Campaign is bounded per attempt by Aegis; the whole-run clock is gone
 expected: `cargo test -p paladin-battalion --lib -- aegis_attempt campaign_service` passes (10 runner tests, 12 Campaign tests). `cargo test -p paladin-battalion --lib commander_campaign_honours_aegis_per_attempt_timeout_end_to_end` passes: three 600 ms Paladins complete under a 1 s per-attempt bound (a whole-run clock would have fired at 1 s), and a 1.5 s Paladin fails with `BattalionError::Node` carrying `Timeout(Run)`, attempt 1, Transient. Campaign ignores `aegis.on_error` and logs one warn per execution when it is set.
-result: issue
-reported: "Failure on CI pre-commit"
-severity: blocker
+result: pass
+reported: "Failure on CI pre-commit" (initial response; gap G-44-2)
+resolution: "Re-verified after fix 1e93e1ce: the reported pre-commit CI failure was the end-of-file-fixer hook on three Phase 43 plan files, unrelated to Campaign/Aegis; pre-commit workflow run 38193792540 on fd3d686e concluded success, and the Campaign tests in this checkpoint were not implicated."
 
 ### 3. Invalid Aegis policies are rejected at entry, before any Paladin runs
 expected: `cargo test -p paladin-battalion --lib -- rejects_invalid_aegis_before_any` passes for Campaign, Formation, Phalanx and Conclave. `cargo test -p paladin-ai-core --lib validate_aegis` reports 5 passed: Route/Custom error handlers, Custom retry predicates and zero durations are rejected; a cache policy is accepted and ignored. `commander_builder_rejects_zero_run_timeout` passes: a `CommanderBuilder` given `run_timeout = 0` fails to build with `CommanderValidation`.
@@ -77,8 +77,8 @@ result: pass
 ## Summary
 
 total: 15
-passed: 14
-issues: 1 (G-44-2, resolved by commit 1e93e1ce; pre-commit CI green on fd3d686e)
+passed: 15
+issues: 0 (1 reported on test 2, G-44-2, resolved by commit 1e93e1ce and re-verified in CI)
 pending: 0
 skipped: 0
 blocked: 0

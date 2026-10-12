@@ -3,7 +3,7 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T01:54:11Z
+updated: 2026-10-12T01:55:47Z
 ---
 
 ## Current Test
@@ -92,14 +92,24 @@ blocked: 0
 
 - gap_id: G-44-2
   truth: "Campaign is bounded per attempt by Aegis with the whole-run clock gone, and the phase tree passes the pre-commit CI gate"
-  status: failed
+  status: resolved
+  resolved_by: "commit 1e93e1ce (direct one-byte fix, no gap plan needed)"
+  resolved_at: 2026-10-12
   reason: "User reported: Failure on CI pre-commit"
   severity: blocker
   test: 2
-  root_cause: ""     # Filled by diagnosis
-  artifacts: []      # Filled by diagnosis
-  missing: []        # Filled by diagnosis
-  debug_session: ""  # Filled by diagnosis
+  root_cause: "end-of-file-fixer (commit-stage hook) rejects .planning/phases/43-rate-pacing/43-02-PLAN.md, 43-03-PLAN.md and 43-05-PLAN.md, which commit 4ddb048f (Phase 43 planning, 2026-10-08) added without a trailing newline; GSD executor commits bypass commit-stage hooks, so the pre-commit workflow has been red on every push since bc57061b. Not a Phase 44 defect: every other hook (check-toml, check-yaml, large-files, merge-conflict, trailing-whitespace, gitleaks, shellcheck, cargo fmt) passed and cargo clippy --workspace --all-targets --all-features -D warnings exits 0 on HEAD."
+  artifacts:
+    - path: ".planning/phases/43-rate-pacing/43-02-PLAN.md"
+      issue: "no newline at end of file (fixed in 1e93e1ce)"
+    - path: ".planning/phases/43-rate-pacing/43-03-PLAN.md"
+      issue: "no newline at end of file (fixed in 1e93e1ce)"
+    - path: ".planning/phases/43-rate-pacing/43-05-PLAN.md"
+      issue: "no newline at end of file (fixed in 1e93e1ce)"
+  missing:
+    - "Trailing newline on the three files (added in 1e93e1ce; pre-commit run --all-files now exits 0 locally with only clippy skipped, and clippy was verified green separately)"
+  debug_session: ""
+  evidence: "Local reproduction: pre-commit 4.6.2 run --all-files on 299ff07b -> 'fix end of files' Failed, all other hooks Passed; on 1e93e1ce -> all Passed. CI confirmation pending on the pre-commit workflow run for 1e93e1ce."
   preliminary_findings: |
     The `pre-commit` workflow (pre-commit run --all-files) is red on every commit of claude/laughing-dirac-e0h2ax
     from bc57061b (2026-10-08 00:55 UTC, run 37710276127) through HEAD 299ff07b (run 38192977973); the last green

@@ -3,16 +3,16 @@ status: testing
 phase: 44-legacy-clean-break-removal
 source: [44-01-SUMMARY.md, 44-02-SUMMARY.md, 44-03-SUMMARY.md, 44-04-SUMMARY.md, 44-05-SUMMARY.md, 44-06-SUMMARY.md, 44-07-SUMMARY.md, 44-08-SUMMARY.md, 44-09-SUMMARY.md, 44-10-SUMMARY.md, 44-11-SUMMARY.md, 44-12-SUMMARY.md, 44-13-SUMMARY.md]
 started: 2026-10-12T01:34:56Z
-updated: 2026-10-12T18:27:23Z
+updated: 2026-10-12T18:28:17Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 13
-name: A stored v0.10 BattalionConfig document still loads
+number: 14
+name: Every removal is recorded: ADR-0059, MIGRATION rows, semver allowlist and CHANGELOGs
 expected: |
-  `cargo test -p paladin-ai-core --lib -- battalion_config_v0_10_document_deserializes_with_default_aegis` passes: a JSON document carrying the removed `timeout_seconds`, `retry_policy` and `error_strategy` keys deserializes without error with `aegis == Aegis::default()`. `BattalionConfig` has exactly four public fields (name, description, aegis, metadata_output_dir), and `battalion/mod.rs` and `conclave.rs` contain no `serde(alias`, `serde(untagged`, `deny_unknown_fields` or `#[deprecated`.
+  `.planning/decisions/0059-legacy-clean-break-removal.md` is Accepted, carries `## Supersedes` naming ADR-0001 and ADR-0002, says the X-03 supersession is for Phase 44 only, reads Code Conformance `conforms`, and has the (g) checkpoint outcome line dated 2026-10-11; ADR-0001 and ADR-0002 `## Status` read `Superseded`; PROMOTION.md shows next free ADR number 0060. MIGRATION.md 9.1 has rows M-B-06 to M-B-11 and 9.2 has ten `plan 44-11` rows (nine Y, one N for the BattalionResult retype). `./scripts/check-migration-allowlist.sh` reports the allowlist set-equal to the 9.2 register and `make check-gates` exits 0. The root CHANGELOG `[Unreleased]` has a Phase 44 `### Removed` group with six sub-bullets and `### Changed` bullets citing ADR-0059 and the MIGRATION rows; the paladin-core, paladin-battalion and paladin-herald CHANGELOGs each carry their own Phase 44 entries.
 awaiting: user response
 
 ## Tests
@@ -69,7 +69,7 @@ result: pass
 
 ### 13. A stored v0.10 BattalionConfig document still loads
 expected: `cargo test -p paladin-ai-core --lib -- battalion_config_v0_10_document_deserializes_with_default_aegis` passes: a JSON document carrying the removed `timeout_seconds`, `retry_policy` and `error_strategy` keys deserializes without error with `aegis == Aegis::default()`. `BattalionConfig` has exactly four public fields (name, description, aegis, metadata_output_dir), and `battalion/mod.rs` and `conclave.rs` contain no `serde(alias`, `serde(untagged`, `deny_unknown_fields` or `#[deprecated`.
-result: [pending]
+result: pass
 
 ### 14. Every removal is recorded: ADR-0059, MIGRATION rows, semver allowlist and CHANGELOGs
 expected: `.planning/decisions/0059-legacy-clean-break-removal.md` is Accepted, carries `## Supersedes` naming ADR-0001 and ADR-0002, says the X-03 supersession is for Phase 44 only, reads Code Conformance `conforms`, and has the (g) checkpoint outcome line dated 2026-10-11; ADR-0001 and ADR-0002 `## Status` read `Superseded`; PROMOTION.md shows next free ADR number 0060. MIGRATION.md 9.1 has rows M-B-06 to M-B-11 and 9.2 has ten `plan 44-11` rows (nine Y, one N for the BattalionResult retype). `./scripts/check-migration-allowlist.sh` reports the allowlist set-equal to the 9.2 register and `make check-gates` exits 0. The root CHANGELOG `[Unreleased]` has a Phase 44 `### Removed` group with six sub-bullets and `### Changed` bullets citing ADR-0059 and the MIGRATION rows; the paladin-core, paladin-battalion and paladin-herald CHANGELOGs each carry their own Phase 44 entries.
@@ -82,9 +82,9 @@ result: [pending]
 ## Summary
 
 total: 15
-passed: 11
+passed: 12
 issues: 1
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

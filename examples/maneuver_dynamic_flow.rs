@@ -43,11 +43,11 @@ struct ExamplePaladinPort;
 #[async_trait]
 impl PaladinPort for ExamplePaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("   🤖 {} processing...", paladin.node.name);
+        println!("   🤖 {} processing...", paladin.data.name);
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        let output = match paladin.node.name.as_str() {
+        let output = match paladin.data.name.as_str() {
             "simple_processor" => format!("[Simple] Processed: {}", input),
             "quick_check" => "[Quick] Basic validation passed".to_string(),
             "validator" => "[Validator] Input validated and sanitized".to_string(),
@@ -58,7 +58,7 @@ impl PaladinPort for ExamplePaladinPort {
             "quality_check" => "[QA] Quality standards verified".to_string(),
             "optimizer" => "[Optimizer] Output optimized".to_string(),
             "finalizer" => "[Finalizer] Final output prepared".to_string(),
-            _ => format!("{} completed", paladin.node.name),
+            _ => format!("{} completed", paladin.data.name),
         };
 
         Ok(PaladinResult {

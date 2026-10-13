@@ -57,7 +57,7 @@ impl PaladinPort for LoadTestMockPort {
         tokio::time::sleep(Duration::from_millis(self.latency_ms)).await;
 
         Ok(PaladinResult {
-            output: format!("Processed: {} by {}", input, paladin.node.name),
+            output: format!("Processed: {} by {}", input, paladin.data.name),
             usage: paladin_ports::output::llm_port::TokenUsage::new(100, 0),
             execution_time_ms: self.latency_ms,
             loop_count: 1,

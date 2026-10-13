@@ -142,7 +142,7 @@ impl ExecutionMiddleware for HistoryTrimmer {
             return Ok(MiddlewareFlow::Continue);
         }
 
-        let model = cx.paladin().node.model.clone();
+        let model = cx.paladin().data.model.clone();
         let (limit, source) = self.resolve_limit(&model);
         let budget = limit.saturating_sub(self.config.reserve_for_response);
         debug!(

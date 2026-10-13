@@ -105,18 +105,18 @@ pub struct FaultyPaladinPort {
     execution_log: Arc<Mutex<Vec<String>>>,
     /// When `true`, every `execute` call fails regardless of which Paladin ran.
     fail_always: bool,
-    /// Paladin names that always fail when executed (checked by `paladin.node.name`).
+    /// Paladin names that always fail when executed (checked by `paladin.data.name`).
     fail_paladin_names: Arc<Mutex<Vec<String>>>,
     /// When `Some(n)`, `execute` fails while the invocation counter is at or below `n`,
     /// then succeeds on every call after that — the retry-count pattern.
     fail_until_attempt: Option<usize>,
-    /// Per-Paladin failure thresholds (Phase 25 D-31), keyed by `paladin.node.name`: a
+    /// Per-Paladin failure thresholds (Phase 25 D-31), keyed by `paladin.data.name`: a
     /// Paladin listed here fails while ITS OWN call counter is at or below the threshold
     /// and succeeds afterwards, with a Transient-classified `LlmFailure`. Purely
     /// additive beside `fail_until_attempt`, whose global semantics are unchanged.
     fail_paladin_until_attempt: Arc<Mutex<HashMap<String, usize>>>,
     /// Per-Paladin call counters backing `fail_paladin_until_attempt`, keyed by
-    /// `paladin.node.name` and advanced on EVERY call for that Paladin.
+    /// `paladin.data.name` and advanced on EVERY call for that Paladin.
     per_paladin_calls: Arc<Mutex<HashMap<String, usize>>>,
     /// Milliseconds `execute` sleeps before deciding success or failure.
     delay_ms: u64,
@@ -217,7 +217,7 @@ impl PaladinPort for FaultyPaladinPort {
         // Record the invocation before any await, in invocation order.
         {
             let mut log = self.execution_log.lock().unwrap();
-            log.push(format!("{}: {}", paladin.node.name, input));
+            log.push(format!("{}: {}", paladin.data.name, input));
         }
 
         // Increment and read the shared counter, dropping the guard before the sleep.
@@ -231,7 +231,7 @@ impl PaladinPort for FaultyPaladinPort {
         // global counter above and of whichever fault mode decides the call below.
         let paladin_attempt = {
             let mut per_paladin = self.per_paladin_calls.lock().unwrap();
-            let count = per_paladin.entry(paladin.node.name.clone()).or_insert(0);
+            let count = per_paladin.entry(paladin.data.name.clone()).or_insert(0);
             *count += 1;
             *count
         };
@@ -248,7 +248,7 @@ impl PaladinPort for FaultyPaladinPort {
         {
             return Err(PaladinError::ExecutionError(format!(
                 "FaultyPaladinPort: {} failed on attempt {} (fail_until_attempt={})",
-                paladin.node.name, current_attempt, threshold
+                paladin.data.name, current_attempt, threshold
             )));
         }
 
@@ -256,7 +256,7 @@ impl PaladinPort for FaultyPaladinPort {
             .fail_paladin_until_attempt
             .lock()
             .unwrap()
-            .get(&paladin.node.name)
+            .get(&paladin.data.name)
             .copied();
         if let Some(threshold) = per_paladin_threshold
             && paladin_attempt <= threshold
@@ -271,7 +271,7 @@ impl PaladinPort for FaultyPaladinPort {
                 message: format!(
                     "FaultyPaladinPort: {} failed on its own attempt {} \
                      (fail_paladin_until_attempt={})",
-                    paladin.node.name, paladin_attempt, threshold
+                    paladin.data.name, paladin_attempt, threshold
                 ),
             });
         }
@@ -279,7 +279,7 @@ impl PaladinPort for FaultyPaladinPort {
         if self.fail_always {
             return Err(PaladinError::ExecutionError(format!(
                 "FaultyPaladinPort: {} failed on attempt {} (fail_always)",
-                paladin.node.name, current_attempt
+                paladin.data.name, current_attempt
             )));
         }
 
@@ -287,18 +287,18 @@ impl PaladinPort for FaultyPaladinPort {
             .fail_paladin_names
             .lock()
             .unwrap()
-            .contains(&paladin.node.name)
+            .contains(&paladin.data.name)
         {
             return Err(PaladinError::ExecutionError(format!(
                 "FaultyPaladinPort: {} failed on attempt {} (fail_paladin)",
-                paladin.node.name, current_attempt
+                paladin.data.name, current_attempt
             )));
         }
 
         Ok(PaladinResult {
             output: format!(
                 "FaultyPaladinPort: {} processed {}",
-                paladin.node.name, input
+                paladin.data.name, input
             ),
             usage: paladin_ports::output::llm_port::TokenUsage::new(10, 0),
             execution_time_ms: self.delay_ms,

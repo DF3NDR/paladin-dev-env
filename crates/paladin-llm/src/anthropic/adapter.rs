@@ -226,7 +226,7 @@ impl AnthropicAdapter {
         let mut system_message = None;
         let mut messages = Vec::new();
 
-        match &request.prompt.node.node.prompt_type {
+        match &request.prompt.entity.data.prompt_type {
             PromptType::System(system_prompt) => {
                 system_message = Some(system_prompt.instructions.clone());
             }
@@ -246,8 +246,8 @@ impl AnthropicAdapter {
                             system: system_message,
                             max_tokens: request
                                 .prompt
-                                .node
-                                .node
+                                .entity
+                                .data
                                 .parameters
                                 .max_tokens
                                 .unwrap_or(self.config.max_tokens),
@@ -285,8 +285,8 @@ impl AnthropicAdapter {
 
         let max_tokens = request
             .prompt
-            .node
-            .node
+            .entity
+            .data
             .parameters
             .max_tokens
             .unwrap_or(self.config.max_tokens);

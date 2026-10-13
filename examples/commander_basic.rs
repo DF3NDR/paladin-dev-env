@@ -24,14 +24,14 @@ struct MockPaladinPort;
 #[async_trait]
 impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("\n🎯 {} executing...", paladin.node.name);
+        println!("\n🎯 {} executing...", paladin.data.name);
         println!("   📝 Input: {}", input);
 
         // Simulate processing delay
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
         // Generate mock output based on Paladin role
-        let output = format!("{} processed: {}", paladin.node.name, input);
+        let output = format!("{} processed: {}", paladin.data.name, input);
         println!("   ✅ Output: {}", output);
 
         Ok(PaladinResult {
@@ -90,9 +90,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reviewer = create_paladin("Reviewer");
 
     println!("\n📋 Created 3 Paladins:");
-    println!("   1. {} - First stage processing", analyzer.node.name);
-    println!("   2. {} - Enhancement stage", enhancer.node.name);
-    println!("   3. {} - Final review stage", reviewer.node.name);
+    println!("   1. {} - First stage processing", analyzer.data.name);
+    println!("   2. {} - Enhancement stage", enhancer.data.name);
+    println!("   3. {} - Final review stage", reviewer.data.name);
 
     // Step 3: Create a Battalion configuration
     // This defines behavior like timeouts and error handling. With no on_error

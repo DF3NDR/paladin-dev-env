@@ -75,7 +75,7 @@ impl CouncilMockPaladinPort {
 #[async_trait]
 impl PaladinPort for CouncilMockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        let paladin_name = paladin.node.name.clone();
+        let paladin_name = paladin.data.name.clone();
 
         // Check for configured error
         if let Some(error_msg) = self.errors.lock().unwrap().get(&paladin_name) {
@@ -207,7 +207,7 @@ async fn test_council_roundrobin_three_paladins_two_rounds() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -278,7 +278,7 @@ async fn test_council_moderator_directed_strategy() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -333,7 +333,7 @@ async fn test_council_consensus_termination() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -381,7 +381,7 @@ async fn test_council_error_handling() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -429,7 +429,7 @@ async fn test_council_timeout_enforcement() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 

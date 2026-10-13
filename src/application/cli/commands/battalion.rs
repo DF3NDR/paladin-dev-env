@@ -831,7 +831,7 @@ async fn execute_maneuver(
     let mut paladins_map = std::collections::HashMap::new();
     for (idx, paladin_ref) in config.paladins.iter().enumerate() {
         let paladin = build_paladin_from_reference(paladin_ref, verbose, idx + 1).await?;
-        let name = paladin.node.name.clone();
+        let name = paladin.data.name.clone();
         paladins_map.insert(name, paladin);
     }
 

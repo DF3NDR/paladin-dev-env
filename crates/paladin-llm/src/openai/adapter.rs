@@ -756,15 +756,15 @@ impl LlmPort for OpenAIAdapter {
 
         let temperature = request
             .prompt
-            .node
-            .node
+            .entity
+            .data
             .parameters
             .temperature
             .unwrap_or(0.7);
         let max_tokens = request
             .prompt
-            .node
-            .node
+            .entity
+            .data
             .parameters
             .max_tokens
             .unwrap_or(4096);
@@ -818,15 +818,15 @@ impl LlmPort for OpenAIAdapter {
 
         let temperature = request
             .prompt
-            .node
-            .node
+            .entity
+            .data
             .parameters
             .temperature
             .unwrap_or(0.7);
         let max_tokens = request
             .prompt
-            .node
-            .node
+            .entity
+            .data
             .parameters
             .max_tokens
             .unwrap_or(4096);

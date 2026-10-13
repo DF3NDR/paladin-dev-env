@@ -429,7 +429,7 @@ impl DeepSeekAdapter {
     /// Build DeepSeek API request from LlmRequest.
     fn build_request(&self, request: &LlmRequest) -> Result<DeepSeekRequest, LlmError> {
         let messages = self.convert_prompt_to_messages(&request.prompt)?;
-        let params = &request.prompt.node.node.parameters;
+        let params = &request.prompt.entity.data.parameters;
 
         // D-28: any `ResponseFormat` variant degrades to DeepSeek's plain
         // JSON-object form — see `DeepSeekResponseFormat`'s rustdoc.
@@ -466,7 +466,7 @@ impl DeepSeekAdapter {
     ) -> Result<Vec<DeepSeekMessage>, LlmError> {
         let mut messages = Vec::new();
 
-        match &prompt.node.node.prompt_type {
+        match &prompt.entity.data.prompt_type {
             PromptType::System(system_prompt) => {
                 messages.push(DeepSeekMessage {
                     role: "system".to_string(),

@@ -121,7 +121,7 @@ fn test_node_pattern_accessible_without_cli() {
     };
     // Paladin is Entity<PaladinData>; constructing it exercises the Entity pattern.
     let paladin = Entity::new(data, Some("NodeTest".to_string()));
-    assert_eq!(paladin.node.name, "NodeTest");
+    assert_eq!(paladin.data.name, "NodeTest");
 }
 
 // ============================================================================

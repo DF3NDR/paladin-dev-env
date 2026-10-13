@@ -663,7 +663,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            grove.node.config.routing_model,
+            grove.data.config.routing_model,
             Some("claude-3-5-sonnet-20241022".to_string())
         );
     }
@@ -680,8 +680,8 @@ mod tests {
 
         assert!(grove.is_ok());
         let grove = grove.unwrap();
-        assert_eq!(grove.node.name, "Test Grove");
-        assert_eq!(grove.node.trees.len(), 1);
+        assert_eq!(grove.data.name, "Test Grove");
+        assert_eq!(grove.data.trees.len(), 1);
     }
 
     #[test]
@@ -770,7 +770,7 @@ mod tests {
 
         assert!(grove.is_ok());
         let grove = grove.unwrap();
-        assert_eq!(grove.node.config.fallback_tree, Some("general".to_string()));
+        assert_eq!(grove.data.config.fallback_tree, Some("general".to_string()));
     }
 
     #[test]
@@ -794,14 +794,14 @@ mod tests {
 
         assert!(grove.is_ok());
         let grove = grove.unwrap();
-        assert_eq!(grove.node.name, "Advanced Grove");
-        assert_eq!(grove.node.trees.len(), 2);
+        assert_eq!(grove.data.name, "Advanced Grove");
+        assert_eq!(grove.data.trees.len(), 2);
         assert_eq!(
-            grove.node.config.routing_strategy,
+            grove.data.config.routing_strategy,
             RoutingStrategy::SemanticSimilarity
         );
-        assert_eq!(grove.node.config.similarity_threshold, 0.8);
-        assert_eq!(grove.node.config.fallback_tree, Some("general".to_string()));
+        assert_eq!(grove.data.config.similarity_threshold, 0.8);
+        assert_eq!(grove.data.config.fallback_tree, Some("general".to_string()));
     }
 
     #[test]
@@ -815,7 +815,7 @@ mod tests {
             .build()
             .unwrap();
 
-        let json = serde_json::to_string(&grove.node).unwrap();
+        let json = serde_json::to_string(&grove.data).unwrap();
         let deserialized: GroveData = serde_json::from_str(&json).unwrap();
 
         assert_eq!(deserialized.name, "Serialization Test");

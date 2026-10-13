@@ -209,7 +209,7 @@ impl FormationExecutionService {
                 "Executing Paladin {}/{}: {}",
                 index + 1,
                 formation.paladins.len(),
-                paladin.node.name
+                paladin.data.name
             );
 
             match aegis_attempt::run_with_aegis(
@@ -226,8 +226,8 @@ impl FormationExecutionService {
                     // Aggregate per-Paladin time/token metrics before the
                     // result is moved into paladin_results, mirroring
                     // PhalanxExecutionService::execute_internal.
-                    per_paladin_times.insert(paladin.node.name.clone(), result.execution_time_ms);
-                    per_paladin_tokens.insert(paladin.node.name.clone(), result.usage.clone());
+                    per_paladin_times.insert(paladin.data.name.clone(), result.execution_time_ms);
+                    per_paladin_tokens.insert(paladin.data.name.clone(), result.usage.clone());
                     total_tokens += u64::from(result.usage.total_tokens);
 
                     // Success: Update input for next Paladin
@@ -240,7 +240,7 @@ impl FormationExecutionService {
                         warn!(
                             "Fail fast: Formation failed at Paladin {} ({}) on attempt {}",
                             index + 1,
-                            paladin.node.name,
+                            paladin.data.name,
                             failure.node_error.attempt
                         );
                         return Err(failure.into_fail_fast_error());
@@ -250,7 +250,7 @@ impl FormationExecutionService {
                             "Absorb: Paladin {} ({}) failed on attempt {}, continuing with empty \
                              input",
                             index + 1,
-                            paladin.node.name,
+                            paladin.data.name,
                             failure.node_error.attempt
                         );
                         // Record the runner's structured failure unchanged (D-06).
@@ -412,7 +412,7 @@ mod tests {
             paladin: &Paladin,
             input: &str,
         ) -> Result<PaladinResult, PaladinError> {
-            let name = paladin.node.name.clone();
+            let name = paladin.data.name.clone();
             if let Ok(mut calls) = self.calls.lock() {
                 calls.push((name.clone(), input.to_string()));
             }

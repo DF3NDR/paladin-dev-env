@@ -32,16 +32,16 @@ fn create_test_content_item() -> ContentItem {
     let uuid = Uuid::new_v4();
     let now = Utc::now();
 
-    let node = Entity {
+    let entity = Entity {
         uuid,
         created: now,
         modified: now,
-        node: content_data,
+        data: content_data,
         name: Some("Test Content Item".to_string()),
         version: true,
     };
 
-    ContentItem { node }
+    ContentItem { entity }
 }
 
 // Helper function to create test MySQL config (using in-memory SQLite for testing)
@@ -160,16 +160,16 @@ mod tests {
             mod_date: None,
         };
 
-        let node = Entity {
+        let entity = Entity {
             uuid: Uuid::new_v4(),
             created: Utc::now(),
             modified: Utc::now(),
-            node: content_data,
+            data: content_data,
             name: None,
             version: true,
         };
 
-        let content_item = ContentItem { node };
+        let content_item = ContentItem { entity };
 
         match content_item.content() {
             ContentType::Text(text) => {
@@ -213,11 +213,11 @@ mod tests {
         let original_item = create_test_content_item();
 
         // Simulate extracting values (as repository would from database row)
-        let uuid = original_item.node.uuid;
-        let created = original_item.node.created;
-        let modified = original_item.node.modified;
-        let name = original_item.node.name.clone();
-        let version = original_item.node.version;
+        let uuid = original_item.entity.uuid;
+        let created = original_item.entity.created;
+        let modified = original_item.entity.modified;
+        let name = original_item.entity.name.clone();
+        let version = original_item.entity.version;
 
         // Simulate reconstructing ContentData
         let content_data = ContentData {
@@ -243,13 +243,13 @@ mod tests {
             uuid,
             created,
             modified,
-            node: content_data,
+            data: content_data,
             name,
             version,
         };
 
         let reconstructed_item = ContentItem {
-            node: reconstructed_node,
+            entity: reconstructed_node,
         };
 
         // Verify reconstruction preserves key identifiers

@@ -183,7 +183,7 @@ impl GroveExecutionService {
     /// println!("Result: {}", result.execution_result);
     /// ```
     pub async fn execute(&self, grove: &Grove, task: &str) -> Result<GroveResult, BattalionError> {
-        info!("Grove '{}' routing task: {}", grove.node.name, task);
+        info!("Grove '{}' routing task: {}", grove.data.name, task);
 
         // Route the task to the appropriate agent
         let routing_decision = self.route_task(grove, task).await?;
@@ -216,10 +216,10 @@ impl GroveExecutionService {
 
         // Build metadata
         let mut metadata = HashMap::new();
-        metadata.insert("grove_name".to_string(), grove.node.name.clone());
+        metadata.insert("grove_name".to_string(), grove.data.name.clone());
         metadata.insert(
             "routing_strategy".to_string(),
-            format!("{:?}", grove.node.config.routing_strategy),
+            format!("{:?}", grove.data.config.routing_strategy),
         );
         metadata.insert(
             "confidence".to_string(),
@@ -251,7 +251,7 @@ impl GroveExecutionService {
     /// `routing_model` is absent or blank.
     fn resolve_routing_model(grove: &Grove) -> Result<&str, BattalionError> {
         grove
-            .node
+            .data
             .config
             .routing_model
             .as_deref()
@@ -288,13 +288,13 @@ impl GroveExecutionService {
         grove: &Grove,
         task: &str,
     ) -> Result<RoutingDecision, BattalionError> {
-        let strategy = &grove.node.config.routing_strategy;
+        let strategy = &grove.data.config.routing_strategy;
 
         // D-02: a Grove selecting LLM routing with no configured routing_model is a
         // configuration error, not a routing failure. Resolve it here, above the dispatch
         // below, so the `?` propagates it directly to `execute()`'s caller before it can ever
         // enter the `match result { .. Err(e) => .. }` fallback arm. Neither `fallback_tree`
-        // nor the `grove.node.trees.first()` terminal fallback may absorb this case — every
+        // nor the `grove.data.trees.first()` terminal fallback may absorb this case — every
         // *other* routing failure (transient LLM call failure, unparseable JSON,
         // below-threshold confidence, an absent `llm_port`) deliberately keeps its existing
         // fallback behaviour and is unaffected by this check.
@@ -320,9 +320,9 @@ impl GroveExecutionService {
                 );
 
                 // Try fallback tree if configured
-                if let Some(ref fallback_tree_name) = grove.node.config.fallback_tree
+                if let Some(ref fallback_tree_name) = grove.data.config.fallback_tree
                     && let Some(fallback_tree) = grove
-                        .node
+                        .data
                         .trees
                         .iter()
                         .find(|t| &t.name == fallback_tree_name)
@@ -332,7 +332,7 @@ impl GroveExecutionService {
                 }
 
                 // Final fallback: use first agent in first tree
-                if let Some(first_tree) = grove.node.trees.first() {
+                if let Some(first_tree) = grove.data.trees.first() {
                     warn!(
                         "Using default fallback: first agent in tree '{}'",
                         first_tree.name
@@ -372,7 +372,7 @@ impl GroveExecutionService {
         let mut best_agent: Option<&TreeAgent> = None;
 
         // Score each agent in each tree
-        for tree in &grove.node.trees {
+        for tree in &grove.data.trees {
             for agent in &tree.agents {
                 let score = self.calculate_keyword_score(&task_tokens, agent);
 
@@ -456,13 +456,13 @@ impl GroveExecutionService {
             .await
             .map_err(|e| BattalionError::RoutingError(format!("Failed to embed task: {}", e)))?;
 
-        let threshold = grove.node.config.similarity_threshold;
+        let threshold = grove.data.config.similarity_threshold;
         let mut best_similarity = threshold; // Must meet minimum threshold
         let mut best_tree: Option<&Tree> = None;
         let mut best_agent: Option<&TreeAgent> = None;
 
         // Calculate similarity with each agent
-        for tree in &grove.node.trees {
+        for tree in &grove.data.trees {
             for agent in &tree.agents {
                 if let Some(ref agent_embedding) = agent.expertise_embedding {
                     let similarity =
@@ -566,7 +566,7 @@ impl GroveExecutionService {
             task
         );
 
-        for tree in &grove.node.trees {
+        for tree in &grove.data.trees {
             prompt.push_str(&format!("\nTree: {}\n", tree.name));
             for agent in &tree.agents {
                 prompt.push_str(&format!(
@@ -638,23 +638,23 @@ impl GroveExecutionService {
         );
 
         // Validate confidence threshold
-        if routing_response.confidence < grove.node.config.min_confidence {
+        if routing_response.confidence < grove.data.config.min_confidence {
             warn!(
                 "Confidence {} below threshold {}",
-                routing_response.confidence, grove.node.config.min_confidence
+                routing_response.confidence, grove.data.config.min_confidence
             );
             return self.handle_routing_failure(
                 grove,
                 task,
                 &format!(
                     "Confidence {} below threshold {}",
-                    routing_response.confidence, grove.node.config.min_confidence
+                    routing_response.confidence, grove.data.config.min_confidence
                 ),
             );
         }
 
         // Validate agent_id exists in Grove
-        let agent_exists = grove.node.trees.iter().any(|tree| {
+        let agent_exists = grove.data.trees.iter().any(|tree| {
             tree.agents
                 .iter()
                 .any(|agent| agent.paladin_id == routing_response.agent_id)
@@ -695,7 +695,7 @@ impl GroveExecutionService {
         task: &str,
         reason: &str,
     ) -> Result<RoutingDecision, BattalionError> {
-        match grove.node.config.routing_fallback.as_str() {
+        match grove.data.config.routing_fallback.as_str() {
             "keyword" => {
                 warn!("Falling back to keyword matching: {}", reason);
                 self.route_by_keywords(grove, task).map(|mut decision| {
@@ -770,7 +770,7 @@ impl GroveExecutionService {
     ) -> Result<String, BattalionError> {
         debug!(
             "Executing agent '{}' with task: {}",
-            paladin.node.name, task
+            paladin.data.name, task
         );
 
         // Execute the Paladin
@@ -781,7 +781,7 @@ impl GroveExecutionService {
             .map_err(|e| {
                 BattalionError::ExecutionError(format!(
                     "Paladin '{}' execution failed: {}",
-                    paladin.node.name, e
+                    paladin.data.name, e
                 ))
             })?;
 
@@ -979,7 +979,7 @@ mod tests {
             ) -> Result<PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
             {
                 Ok(PaladinResult {
-                    output: format!("[{}] Analyzed: {}", paladin.node.name, input),
+                    output: format!("[{}] Analyzed: {}", paladin.data.name, input),
                     usage: TokenUsage::new(100, 0),
                     execution_time_ms: 10,
                     loop_count: 1,
@@ -1265,7 +1265,7 @@ mod tests {
         );
 
         let mut grove = create_test_grove();
-        grove.node.config.routing_model = Some("mock-model".to_string());
+        grove.data.config.routing_model = Some("mock-model".to_string());
 
         let result = service
             .route_by_llm(&grove, "rust backend development task")
@@ -1360,9 +1360,9 @@ mod tests {
         let registry = HashMapPaladinRegistry::new();
         let mut grove = create_test_grove();
         // Set routing_fallback to "error" to test that low confidence triggers fallback logic
-        grove.node.config.routing_fallback = "error".to_string();
-        grove.node.config.min_confidence = 0.5;
-        grove.node.config.routing_model = Some("mock-model".to_string());
+        grove.data.config.routing_fallback = "error".to_string();
+        grove.data.config.min_confidence = 0.5;
+        grove.data.config.routing_model = Some("mock-model".to_string());
 
         let service = GroveExecutionService::new(
             Arc::new(MockPaladinPort),
@@ -1458,8 +1458,8 @@ mod tests {
         use crate::in_memory_registry::HashMapPaladinRegistry;
         let registry = HashMapPaladinRegistry::new();
         let mut grove = create_test_grove();
-        grove.node.config.routing_fallback = "error".to_string();
-        grove.node.config.routing_model = Some("mock-model".to_string());
+        grove.data.config.routing_fallback = "error".to_string();
+        grove.data.config.routing_model = Some("mock-model".to_string());
 
         let service = GroveExecutionService::new(
             Arc::new(MockPaladinPort),
@@ -1556,9 +1556,9 @@ mod tests {
         let registry = HashMapPaladinRegistry::new();
         let mut grove = create_test_grove();
         // Set routing_fallback to "keyword" to test fallback to keyword matching
-        grove.node.config.routing_fallback = "keyword".to_string();
-        grove.node.config.min_confidence = 0.5;
-        grove.node.config.routing_model = Some("mock-model".to_string());
+        grove.data.config.routing_fallback = "keyword".to_string();
+        grove.data.config.min_confidence = 0.5;
+        grove.data.config.routing_model = Some("mock-model".to_string());
 
         let service = GroveExecutionService::new(
             Arc::new(MockPaladinPort),
@@ -1692,8 +1692,8 @@ mod tests {
         let registry = HashMapPaladinRegistry::new();
 
         let mut grove = create_test_grove();
-        grove.node.config.routing_strategy = RoutingStrategy::LlmRouting;
-        grove.node.config.routing_model = Some("deepseek-chat".to_string());
+        grove.data.config.routing_strategy = RoutingStrategy::LlmRouting;
+        grove.data.config.routing_model = Some("deepseek-chat".to_string());
 
         let mock = Arc::new(RecordingLlmMock::new());
         let service = GroveExecutionService::new(
@@ -1721,7 +1721,7 @@ mod tests {
         let registry = HashMapPaladinRegistry::new();
 
         let mut grove = create_test_grove();
-        grove.node.config.routing_strategy = RoutingStrategy::LlmRouting;
+        grove.data.config.routing_strategy = RoutingStrategy::LlmRouting;
         // routing_model left unset (default None)
 
         let mock = Arc::new(RecordingLlmMock::new());
@@ -1762,8 +1762,8 @@ mod tests {
         for blank in ["", "   "] {
             let registry = HashMapPaladinRegistry::new();
             let mut grove = create_test_grove();
-            grove.node.config.routing_strategy = RoutingStrategy::LlmRouting;
-            grove.node.config.routing_model = Some(blank.to_string());
+            grove.data.config.routing_strategy = RoutingStrategy::LlmRouting;
+            grove.data.config.routing_model = Some(blank.to_string());
 
             let mock = Arc::new(RecordingLlmMock::new());
             let service = GroveExecutionService::new(
@@ -1806,8 +1806,8 @@ mod tests {
         // "api", "database") that would match this task under keyword routing, so a
         // successful keyword-fallback result would be a false pass for this test.
         let mut grove = create_test_grove();
-        grove.node.config.routing_strategy = RoutingStrategy::LlmRouting;
-        grove.node.config.routing_fallback = "keyword".to_string();
+        grove.data.config.routing_strategy = RoutingStrategy::LlmRouting;
+        grove.data.config.routing_fallback = "keyword".to_string();
         // routing_model left unset (default None)
 
         let mock = Arc::new(RecordingLlmMock::new());
@@ -1848,12 +1848,12 @@ mod tests {
         let mock = Arc::new(RecordingLlmMock::new());
 
         let mut grove_a = create_test_grove();
-        grove_a.node.config.routing_strategy = RoutingStrategy::LlmRouting;
-        grove_a.node.config.routing_model = Some("deepseek-chat".to_string());
+        grove_a.data.config.routing_strategy = RoutingStrategy::LlmRouting;
+        grove_a.data.config.routing_model = Some("deepseek-chat".to_string());
 
         let mut grove_b = create_test_grove();
-        grove_b.node.config.routing_strategy = RoutingStrategy::LlmRouting;
-        grove_b.node.config.routing_model = Some("claude-3-5-sonnet-20241022".to_string());
+        grove_b.data.config.routing_strategy = RoutingStrategy::LlmRouting;
+        grove_b.data.config.routing_model = Some("claude-3-5-sonnet-20241022".to_string());
 
         let service_a = GroveExecutionService::new(
             Arc::new(MockPaladinPort),
@@ -1900,7 +1900,7 @@ mod tests {
         let registry = HashMapPaladinRegistry::new();
 
         let mut grove = create_test_grove();
-        grove.node.config.routing_strategy = RoutingStrategy::LlmRouting;
+        grove.data.config.routing_strategy = RoutingStrategy::LlmRouting;
         // routing_model left unset (default None)
 
         let mock = Arc::new(RecordingLlmMock::new());
@@ -1939,8 +1939,8 @@ mod tests {
         for blank in ["", "   "] {
             let registry = HashMapPaladinRegistry::new();
             let mut grove = create_test_grove();
-            grove.node.config.routing_strategy = RoutingStrategy::LlmRouting;
-            grove.node.config.routing_model = Some(blank.to_string());
+            grove.data.config.routing_strategy = RoutingStrategy::LlmRouting;
+            grove.data.config.routing_model = Some(blank.to_string());
 
             let mock = Arc::new(RecordingLlmMock::new());
             let service = GroveExecutionService::new(
@@ -1983,8 +1983,8 @@ mod tests {
         // source rather than assumed, so this test proves a *configured and resolvable*
         // fallback tree is declined, not one that was never found.
         let mut grove = create_test_grove();
-        grove.node.config.routing_strategy = RoutingStrategy::LlmRouting;
-        grove.node.config.fallback_tree = Some("engineering".to_string());
+        grove.data.config.routing_strategy = RoutingStrategy::LlmRouting;
+        grove.data.config.fallback_tree = Some("engineering".to_string());
         // routing_model left unset (default None)
 
         let mock = Arc::new(RecordingLlmMock::new());

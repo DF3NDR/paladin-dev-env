@@ -237,7 +237,7 @@ fn push_snapshot_field(buf: &mut Vec<u8>, snapshot: &Battlefield, field: &FieldN
 /// rounded rendering), max loops (serde-canonical, so `Fixed(3)` and
 /// `Auto { .. }` never collide) and stop words (count-prefixed).
 fn push_paladin_config(buf: &mut Vec<u8>, paladin: &Paladin) {
-    let data = &paladin.node;
+    let data = &paladin.data;
     push_field(buf, data.model.as_bytes());
     push_field(buf, data.system_prompt.as_bytes());
     buf.extend_from_slice(&data.temperature.to_le_bytes());

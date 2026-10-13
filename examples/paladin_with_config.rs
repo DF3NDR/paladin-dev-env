@@ -192,12 +192,12 @@ async fn custom_config_example() -> Result<(), Box<dyn std::error::Error>> {
     let service = PaladinExecutionService::new(llm_port, circuit_breaker, None, None);
 
     println!("Configuration:");
-    println!("  Name: {}", paladin.node.name);
-    println!("  User: {}", paladin.node.user_name);
-    println!("  Model: {}", paladin.node.model);
-    println!("  Temperature: {}", paladin.node.temperature);
-    println!("  Max Loops: {}", paladin.node.max_loops);
-    println!("  Stop Words: {:?}", paladin.node.stop_words);
+    println!("  Name: {}", paladin.data.name);
+    println!("  User: {}", paladin.data.user_name);
+    println!("  Model: {}", paladin.data.model);
+    println!("  Temperature: {}", paladin.data.temperature);
+    println!("  Max Loops: {}", paladin.data.max_loops);
+    println!("  Stop Words: {:?}", paladin.data.stop_words);
     println!();
 
     let result = service

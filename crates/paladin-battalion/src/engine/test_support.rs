@@ -480,7 +480,7 @@ pub fn shuffle_seeded<T>(items: &mut [T], seed: u64) {
 /// prove non-re-execution: a repeat of an already-completed node's name in
 /// the log after a resume is a re-execution bug, not a coincidence.
 ///
-/// The "Paladin name" key is `paladin.node.name` (`PaladinData::name`),
+/// The "Paladin name" key is `paladin.data.name` (`PaladinData::name`),
 /// matching the convention `tests/helpers/mock_paladin_port.rs`'s
 /// `FaultyPaladinPort` already established.
 /// One configured Paladin's output: the text, its reported [`TokenUsage`],
@@ -566,7 +566,7 @@ impl RecordingPaladinPort {
 #[async_trait]
 impl PaladinPort for RecordingPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        let name = paladin.node.name.clone();
+        let name = paladin.data.name.clone();
         self.calls
             .lock()
             .unwrap()

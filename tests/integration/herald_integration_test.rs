@@ -406,7 +406,7 @@ impl PaladinPort for MockPaladinPort {
         Ok(PaladinResult {
             output: format!(
                 "{}: {} - {}",
-                paladin.node.name, input, self.response_suffix
+                paladin.data.name, input, self.response_suffix
             ),
             usage: paladin_ports::output::llm_port::TokenUsage::new(50, 0),
             execution_time_ms: 25,

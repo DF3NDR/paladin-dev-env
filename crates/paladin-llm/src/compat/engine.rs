@@ -471,7 +471,7 @@ impl CompatEngine {
     /// shared by all five, not per-vendor.
     fn build_request(&self, request: &LlmRequest) -> Result<CompatRequest, LlmError> {
         let messages = Self::convert_prompt_to_messages(&request.prompt)?;
-        let params = &request.prompt.node.node.parameters;
+        let params = &request.prompt.entity.data.parameters;
         let allowed = &self.config.request_parameters;
 
         let temperature = params.temperature.filter(|_| allowed.temperature);
@@ -570,7 +570,7 @@ impl CompatEngine {
     fn convert_prompt_to_messages(prompt: &PromptItem) -> Result<Vec<CompatMessage>, LlmError> {
         let mut messages = Vec::new();
 
-        match &prompt.node.node.prompt_type {
+        match &prompt.entity.data.prompt_type {
             PromptType::System(system_prompt) => {
                 messages.push(CompatMessage {
                     role: "system".to_string(),
@@ -1754,7 +1754,7 @@ mod tests {
 
     fn build_request_with_parameters(model: &str, parameters: PromptParameters) -> LlmRequest {
         let mut request = build_request(model);
-        request.prompt.node.node.parameters = parameters;
+        request.prompt.entity.data.parameters = parameters;
         request
     }
 

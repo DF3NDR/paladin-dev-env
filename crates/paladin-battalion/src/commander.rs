@@ -747,7 +747,7 @@ impl Commander {
 
                 // Add all Paladins as participants using their actual names as IDs
                 for paladin in &self.paladins {
-                    council_builder = council_builder.add_participant(paladin.node.name.clone());
+                    council_builder = council_builder.add_participant(paladin.data.name.clone());
                 }
 
                 let council = council_builder.build()?;
@@ -758,7 +758,7 @@ impl Commander {
                 let registry = HashMapPaladinRegistry::new();
                 for paladin in &self.paladins {
                     // Use paladin name as ID
-                    registry.register(paladin.node.name.clone(), Arc::new(paladin.clone()))?;
+                    registry.register(paladin.data.name.clone(), Arc::new(paladin.clone()))?;
                 }
 
                 // Execute Council (pass None for garrison_port - Commander doesn't have one)
@@ -822,18 +822,18 @@ impl Commander {
                 for paladin in &self.paladins {
                     // Register paladin in registry
                     registry
-                        .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+                        .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
                         .map_err(|e| {
                             BattalionError::ExecutionError(format!(
                                 "Failed to register paladin '{}': {}",
-                                paladin.node.name, e
+                                paladin.data.name, e
                             ))
                         })?;
 
                     // Create TreeAgent with paladin ID matching registry
                     let tree_agent =
                         paladin_core::platform::container::battalion::grove::TreeAgent::new(
-                            paladin.node.name.clone(),
+                            paladin.data.name.clone(),
                         );
                     tree = tree.add_agent(tree_agent);
                 }
@@ -1910,10 +1910,10 @@ mod tests {
             _input: &str,
         ) -> Result<PaladinResult, PaladinError> {
             // Commander returns specialist selection, others return normal output
-            let output = if paladin.node.name == "Commander" {
+            let output = if paladin.data.name == "Commander" {
                 "SELECT: Specialist_1, Specialist_2\nREASON: Both specialists are needed for this task".to_string()
             } else {
-                format!("{} completed the task", paladin.node.name)
+                format!("{} completed the task", paladin.data.name)
             };
 
             Ok(PaladinResult {
@@ -3884,12 +3884,12 @@ mod tests {
             ) -> Result<PaladinResult, PaladinError> {
                 let delay = self
                     .delays
-                    .get(&paladin.node.name)
+                    .get(&paladin.data.name)
                     .copied()
                     .unwrap_or_default();
                 tokio::time::sleep(delay).await;
                 Ok(PaladinResult {
-                    output: format!("{} done", paladin.node.name),
+                    output: format!("{} done", paladin.data.name),
                     usage: TokenUsage::new(10, 0),
                     execution_time_ms: delay.as_millis() as u64,
                     loop_count: 1,

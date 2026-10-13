@@ -32,11 +32,11 @@ struct MockPaladinPort;
 #[async_trait]
 impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("\n🎯 {} executing...", paladin.node.name);
+        println!("\n🎯 {} executing...", paladin.data.name);
         println!("   📝 Input: {}", input);
 
         // Simulate realistic processing delay (varies by Paladin)
-        let delay_ms = match paladin.node.name.as_str() {
+        let delay_ms = match paladin.data.name.as_str() {
             name if name.contains("Analyzer") => 500,
             name if name.contains("Processor") => 800,
             name if name.contains("Synthesizer") => 600,
@@ -45,8 +45,8 @@ impl PaladinPort for MockPaladinPort {
         tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
 
         // Generate output with realistic token counts
-        let output = format!("{} completed: {}", paladin.node.name, input);
-        let token_count = match paladin.node.name.as_str() {
+        let output = format!("{} completed: {}", paladin.data.name, input);
+        let token_count = match paladin.data.name.as_str() {
             name if name.contains("Analyzer") => 450,
             name if name.contains("Processor") => 650,
             name if name.contains("Synthesizer") => 550,
@@ -134,9 +134,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("📋 Created 3 Paladins for parallel execution:");
-    println!("   1. {} - Data analysis", analyzer.node.name);
-    println!("   2. {} - Data processing", processor.node.name);
-    println!("   3. {} - Report synthesis", synthesizer.node.name);
+    println!("   1. {} - Data analysis", analyzer.data.name);
+    println!("   2. {} - Data processing", processor.data.name);
+    println!("   3. {} - Report synthesis", synthesizer.data.name);
 
     // Step 4: Create Battalion configuration with metadata export
     let config = BattalionConfig::new("metadata_export_demo")

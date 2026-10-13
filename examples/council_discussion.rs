@@ -81,7 +81,7 @@ impl MockLlmAdapter {
 #[async_trait]
 impl PaladinPort for MockLlmAdapter {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        let paladin_name = paladin.node.name.clone();
+        let paladin_name = paladin.data.name.clone();
 
         // Get configured response based on paladin name
         let output = if let Some(responses) = self.responses.get(&paladin_name) {

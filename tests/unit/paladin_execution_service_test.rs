@@ -523,7 +523,7 @@ async fn test_layer2_dynamic_temperature_enabled() {
         .expect("Failed to build paladin");
 
     // Enable dynamic temperature
-    paladin.node.dynamic_temperature = true;
+    paladin.data.dynamic_temperature = true;
 
     let result = service.execute(&paladin, "Test input").await;
 
@@ -581,7 +581,7 @@ async fn test_graceful_degradation_no_planning_service() {
         .expect("Failed to build paladin");
 
     // Enable planning without service (graceful degradation test)
-    paladin.node.autonomous_planning = true;
+    paladin.data.autonomous_planning = true;
 
     let result = service.execute(&paladin, "Test input").await;
 
@@ -613,7 +613,7 @@ async fn test_graceful_degradation_no_prompt_service() {
         .expect("Failed to build paladin");
 
     // Enable prompt generation without service (graceful degradation test)
-    paladin.node.autonomous_prompts = true;
+    paladin.data.autonomous_prompts = true;
 
     let result = service.execute(&paladin, "Test input").await;
 
@@ -668,7 +668,7 @@ async fn test_mixed_autonomous_features() {
         .expect("Failed to build paladin");
 
     // Enable only dynamic_temperature (Layer 2)
-    paladin.node.dynamic_temperature = true;
+    paladin.data.dynamic_temperature = true;
 
     let result = service.execute(&paladin, "Test input").await;
 

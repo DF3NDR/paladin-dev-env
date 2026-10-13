@@ -474,7 +474,7 @@ impl RunSubmissionPort for RunSubmissionService {
         // unpriced model under a ceiling is refused here (422) and a zero derived budget is a
         // 429, instead of surfacing later as a run that cannot be metered.
         let agent_model = match &resolved.runnable {
-            Runnable::Agent(paladin) => Some(paladin.node.model.as_str()),
+            Runnable::Agent(paladin) => Some(paladin.data.model.as_str()),
             _ => None,
         };
         self.admit_and_persist(&mut run, use_latest, agent_model)

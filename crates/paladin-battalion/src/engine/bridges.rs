@@ -163,7 +163,7 @@ pub fn campaign_node_ids(campaign: &Campaign) -> HashMap<Uuid, NodeId> {
     let mut slug_counts: HashMap<String, usize> = HashMap::new();
     let mut slugs: HashMap<Uuid, String> = HashMap::new();
     for (uuid, paladin) in &entries {
-        let slug = slugify(&paladin.node.name);
+        let slug = slugify(&paladin.data.name);
         *slug_counts.entry(slug.clone()).or_insert(0) += 1;
         slugs.insert(*uuid, slug);
     }

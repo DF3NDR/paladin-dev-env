@@ -339,7 +339,7 @@ impl CampaignExecutionService {
                 self.aggregate_inputs_for_node(campaign, node_id, &node_outputs)?
             };
 
-            debug!("Executing Paladin: {} ({})", paladin.node.name, node_id);
+            debug!("Executing Paladin: {} ({})", paladin.data.name, node_id);
 
             // Execute Paladin through the one per-attempt runner
             let outcome = aegis_attempt::run_with_aegis(
@@ -356,7 +356,7 @@ impl CampaignExecutionService {
 
             debug!(
                 "Paladin {} completed: {} tokens, {} loops, {} attempt(s)",
-                paladin.node.name, result.usage.total_tokens, result.loop_count, attempts
+                paladin.data.name, result.usage.total_tokens, result.loop_count, attempts
             );
 
             // Store output for edge condition evaluation
@@ -753,7 +753,7 @@ mod tests {
             _input: &str,
         ) -> Result<PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
         {
-            self.calls.lock().unwrap().push(paladin.node.name.clone());
+            self.calls.lock().unwrap().push(paladin.data.name.clone());
             Ok(PaladinResult {
                 output: "the situation is urgent".to_string(),
                 usage: TokenUsage::new(0, 0),

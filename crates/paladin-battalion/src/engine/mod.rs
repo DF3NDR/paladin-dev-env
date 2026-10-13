@@ -2258,7 +2258,7 @@ impl<W: WaypointPort + 'static> WarEngine<W> {
     /// -- this engine never invents its own counter, so a caller building
     /// `context` for a real run must read it from that run's own record. The
     /// per-model breakdown is keyed on each dispatched `NodeSpec::Paladin`
-    /// node's *configured* model (`paladin.node.model`) -- when a
+    /// node's *configured* model (`paladin.data.model`) -- when a
     /// `FallbackLlmAdapter` hop serves a different model than configured,
     /// that hop's cost is still priced at the SERVED model's rate but
     /// attributed to the CONFIGURED model here (a deliberate simplification;
@@ -4372,7 +4372,7 @@ mod tests {
             paladin: &Paladin,
             input: &str,
         ) -> Result<PaladinResult, PaladinError> {
-            if paladin.node.name == self.flaky_name
+            if paladin.data.name == self.flaky_name
                 && self
                     .flaky_calls
                     .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
@@ -12713,7 +12713,7 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
                 let tokens = self
                     .tokens
-                    .get(paladin.node.name.as_str())
+                    .get(paladin.data.name.as_str())
                     .copied()
                     .unwrap_or(0);
                 Ok(PaladinResult {

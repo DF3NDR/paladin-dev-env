@@ -89,7 +89,7 @@ impl IntegrationMockPaladinPort {
 impl PaladinPort for IntegrationMockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
         // Log execution
-        let log_entry = format!("Executing {}: {}", paladin.node.name, input);
+        let log_entry = format!("Executing {}: {}", paladin.data.name, input);
         self.execution_log.lock().unwrap().push(log_entry);
 
         // Simulate processing delay
@@ -97,21 +97,21 @@ impl PaladinPort for IntegrationMockPaladinPort {
 
         // Check if this Paladin should fail
         let config = self.failure_config.lock().unwrap();
-        let should_fail = config.fail_paladin_names.contains(&paladin.node.name);
+        let should_fail = config.fail_paladin_names.contains(&paladin.data.name);
 
         if should_fail {
             return Err(PaladinError::ExecutionError(format!(
                 "Simulated failure for {}",
-                paladin.node.name
+                paladin.data.name
             )));
         }
 
         // Check for output override
-        let output = if let Some(override_output) = config.output_overrides.get(&paladin.node.name)
+        let output = if let Some(override_output) = config.output_overrides.get(&paladin.data.name)
         {
             override_output.clone()
         } else {
-            format!("[{}]: Processed: {}", paladin.node.name, input)
+            format!("[{}]: Processed: {}", paladin.data.name, input)
         };
 
         Ok(PaladinResult {

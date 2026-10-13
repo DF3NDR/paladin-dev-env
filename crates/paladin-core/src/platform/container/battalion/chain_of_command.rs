@@ -302,9 +302,9 @@ mod tests {
 
         let chain = ChainOfCommand::new(commander, vec![specialist], config).unwrap();
 
-        assert_eq!(chain.commander().node.name, "Commander");
+        assert_eq!(chain.commander().data.name, "Commander");
         assert_eq!(chain.specialists().len(), 1);
-        assert_eq!(chain.specialists()[0].node.name, "Specialist");
+        assert_eq!(chain.specialists()[0].data.name, "Specialist");
         assert_eq!(chain.config().name, "test_chain");
     }
 }

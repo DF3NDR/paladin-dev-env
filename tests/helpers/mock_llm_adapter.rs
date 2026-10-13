@@ -532,8 +532,8 @@ mod tests {
     fn test_create_test_paladin_with_mock() {
         let mock = Arc::new(MockLlmAdapter::new());
         let paladin = create_test_paladin_with_mock("test_paladin", mock);
-        // Access inner data via .node field
-        assert_eq!(paladin.node.name, "test_paladin");
-        assert_eq!(paladin.node.model, "mock-model");
+        // Access inner data via .data field
+        assert_eq!(paladin.data.name, "test_paladin");
+        assert_eq!(paladin.data.model, "mock-model");
     }
 }

@@ -624,7 +624,7 @@ mod tests {
         let adapter = GrokAdapter::new(config).unwrap();
 
         let mut request = build_request(GROK_DEFAULT_MODEL);
-        request.prompt.node.node.parameters =
+        request.prompt.entity.data.parameters =
             paladin_core::platform::container::prompt::PromptParameters {
                 max_tokens: Some(16),
                 temperature: Some(0.7),

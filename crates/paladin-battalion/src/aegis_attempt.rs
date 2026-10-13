@@ -168,7 +168,7 @@ pub(crate) async fn attempt_once(
     bound: Option<AttemptBound>,
     attempt: u32,
 ) -> Result<PaladinResult, AttemptFailure> {
-    let name = paladin.node.name.as_str();
+    let name = paladin.data.name.as_str();
     match bound {
         Some(bound) => {
             match tokio::time::timeout(bound.limit, port.execute(paladin, input)).await {
@@ -210,7 +210,7 @@ pub(crate) async fn run_with_aegis(
         // cancelled: its task outlives the cancelled call, so it must check the
         // token itself before it makes an LLM call.
         if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
-            return Err(AttemptFailure::cancelled(&paladin.node.name, attempt));
+            return Err(AttemptFailure::cancelled(&paladin.data.name, attempt));
         }
         let failure = match attempt_once(port, paladin, input, bound, attempt).await {
             Ok(result) => {
@@ -234,7 +234,7 @@ pub(crate) async fn run_with_aegis(
         // output or the error's message body (T-44-03).
         warn!(
             "Paladin {} attempt {} failed ({:?}); retrying in {:?}",
-            paladin.node.name, attempt, failure.node_error.transience, delay
+            paladin.data.name, attempt, failure.node_error.transience, delay
         );
         if !wait_backoff(delay, cancel).await {
             return Err(failure);

@@ -288,7 +288,7 @@ impl Conclave {
         // Check for duplicate names among experts
         let mut expert_names = std::collections::HashSet::new();
         for expert in &self.experts {
-            let name = &expert.node.name;
+            let name = &expert.data.name;
             if !expert_names.insert(name.clone()) {
                 return Err(BattalionError::ValidationError(format!(
                     "Duplicate expert name: '{}'",
@@ -298,7 +298,7 @@ impl Conclave {
         }
 
         // Check aggregator name doesn't conflict with expert names
-        let aggregator_name = &self.aggregator.node.name;
+        let aggregator_name = &self.aggregator.data.name;
         if expert_names.contains(aggregator_name) {
             return Err(BattalionError::ValidationError(format!(
                 "Aggregator name '{}' conflicts with an expert name",

@@ -232,17 +232,20 @@ mod functional_tests {
         .unwrap();
 
         // Test entity properties
-        assert_eq!(content_item.node.uuid, content_item.uuid());
-        assert_eq!(content_item.node.created, content_item.created());
-        assert_eq!(content_item.node.modified, content_item.modified());
-        assert_eq!(content_item.node.name, content_item.title().cloned());
-        assert_eq!(content_item.node.version, content_item.versioning_enabled());
+        assert_eq!(content_item.entity.uuid, content_item.uuid());
+        assert_eq!(content_item.entity.created, content_item.created());
+        assert_eq!(content_item.entity.modified, content_item.modified());
+        assert_eq!(content_item.entity.name, content_item.title().cloned());
+        assert_eq!(
+            content_item.entity.version,
+            content_item.versioning_enabled()
+        );
 
         // Test that the entity contains the content data
         match content_item.content() {
             ContentType::Text(text) => {
                 assert_eq!(text.content, Some("Testing entity integration".to_string()));
-                assert_eq!(content_item.node.node.content, *content_item.content());
+                assert_eq!(content_item.entity.data.content, *content_item.content());
             }
             _ => panic!("Expected text content"),
         }

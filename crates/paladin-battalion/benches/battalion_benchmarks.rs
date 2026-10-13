@@ -46,7 +46,7 @@ struct MockPaladinPort;
 impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
         Ok(PaladinResult {
-            output: format!("{}::{}", paladin.node.name, input),
+            output: format!("{}::{}", paladin.data.name, input),
             usage: TokenUsage::new(12, 0),
             execution_time_ms: 1,
             loop_count: 1,

@@ -214,7 +214,7 @@ impl ConclaveExecutionService {
         let mut expert_tasks = Vec::new();
 
         for expert in &conclave.experts {
-            let expert_name = expert.node.name.clone();
+            let expert_name = expert.data.name.clone();
             let expert_name_for_task = expert_name.clone();
             let expert_clone = expert.clone();
             let input_clone = input.to_string();
@@ -445,7 +445,7 @@ impl ConclaveExecutionService {
     ) -> Result<PaladinResult, PaladinError> {
         debug!(
             "Executing aggregator '{}' with {} chars of context",
-            conclave.aggregator.node.name,
+            conclave.aggregator.data.name,
             formatted_context.len()
         );
 
@@ -563,7 +563,7 @@ mod tests {
             let mut count = self.call_count.lock().unwrap();
             *count += 1;
 
-            let expert_name = &paladin.node.name;
+            let expert_name = &paladin.data.name;
 
             // Check if this expert should fail
             if let Some(fail_count) = self.fail_attempts.lock().unwrap().get_mut(expert_name)
@@ -968,7 +968,7 @@ mod tests {
             paladin: &paladin_core::platform::container::paladin::Paladin,
             input: &str,
         ) -> Result<PaladinResult, PaladinError> {
-            let name = paladin.node.name.clone();
+            let name = paladin.data.name.clone();
             self.calls.lock().unwrap().push((
                 name.clone(),
                 input.to_string(),

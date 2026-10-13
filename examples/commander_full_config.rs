@@ -45,10 +45,10 @@ impl ConfigurableMockPort {
 #[async_trait]
 impl PaladinPort for ConfigurableMockPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("   ⚙️  {} executing...", paladin.node.name);
+        println!("   ⚙️  {} executing...", paladin.data.name);
 
         // Simulate occasional failures for the second Paladin
-        if paladin.node.name == "ProcessorB" {
+        if paladin.data.name == "ProcessorB" {
             let count = self
                 .fail_count
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -63,7 +63,7 @@ impl PaladinPort for ConfigurableMockPort {
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
-        let output = format!("{} processed: {}", paladin.node.name, input);
+        let output = format!("{} processed: {}", paladin.data.name, input);
         println!("      ✅ Success: {}", output);
 
         Ok(PaladinResult {
@@ -162,7 +162,7 @@ async fn demonstrate_policy(label: &str, aegis: Aegis) -> Result<(), Box<dyn std
 
     println!("\n📋 Paladins: {}", paladins.len());
     for (i, p) in paladins.iter().enumerate() {
-        println!("   {}. {}", i + 1, p.node.name);
+        println!("   {}. {}", i + 1, p.data.name);
     }
 
     // Build Commander with full configuration

@@ -1075,13 +1075,13 @@ impl PaladinBuilder {
             })?;
 
         // Restore data from state
-        self.data.system_prompt = state.paladin.node.system_prompt.clone();
-        self.data.name = state.paladin.node.name.clone();
-        self.data.user_name = state.paladin.node.user_name.clone();
-        self.data.model = state.paladin.node.model.clone();
-        self.data.temperature = state.paladin.node.temperature;
-        self.data.max_loops = state.paladin.node.max_loops;
-        self.data.stop_words = state.paladin.node.stop_words.clone();
+        self.data.system_prompt = state.paladin.data.system_prompt.clone();
+        self.data.name = state.paladin.data.name.clone();
+        self.data.user_name = state.paladin.data.user_name.clone();
+        self.data.model = state.paladin.data.model.clone();
+        self.data.temperature = state.paladin.data.temperature;
+        self.data.max_loops = state.paladin.data.max_loops;
+        self.data.stop_words = state.paladin.data.stop_words.clone();
 
         // Note: Config fields (retry_attempts, timeout_seconds) are not part of PaladinData
         // They would need to be stored separately if we want to restore them
@@ -1208,7 +1208,7 @@ impl PaladinBuilder {
         let specialist_names: Vec<String> = self
             .specialist_agents
             .iter()
-            .map(|p| p.node.name.clone())
+            .map(|p| p.data.name.clone())
             .collect();
 
         // Create JSON schema for handoff tool with specialist names as enum

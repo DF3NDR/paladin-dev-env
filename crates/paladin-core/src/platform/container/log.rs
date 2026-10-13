@@ -418,7 +418,7 @@ impl LogExt for Log {
     }
 
     fn add_entry(&mut self, entry: LogEntry) -> bool {
-        let result = self.node.add_entry(entry);
+        let result = self.data.add_entry(entry);
         if result {
             self.modified = Utc::now();
         }
@@ -426,11 +426,11 @@ impl LogExt for Log {
     }
 
     fn destination(&self) -> &LogDestination {
-        &self.node.destination
+        &self.data.destination
     }
 
     fn min_level(&self) -> LogLevel {
-        self.node.min_level
+        self.data.min_level
     }
 }
 
@@ -523,6 +523,6 @@ mod tests {
         let initial_modified = log.modified;
         assert!(log.add_entry(entry));
         assert!(log.modified > initial_modified);
-        assert_eq!(log.node.entry_count(), 1);
+        assert_eq!(log.data.entry_count(), 1);
     }
 }

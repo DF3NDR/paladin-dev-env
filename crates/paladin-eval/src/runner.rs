@@ -739,15 +739,15 @@ impl PaladinPort for ScenarioPaladinPort {
             context: None,
         }))
         .map_err(|source| PaladinError::ConfigurationError(source.to_string()))?;
-        let request = LlmRequest::new(paladin.node.model.clone(), prompt);
+        let request = LlmRequest::new(paladin.data.model.clone(), prompt);
 
         let response = match &self.llm {
             LlmSource::Scripted(router) => {
-                let llm = router.get(&paladin.node.name).ok_or_else(|| {
+                let llm = router.get(&paladin.data.name).ok_or_else(|| {
                     PaladinError::ConfigurationError(format!(
                         "ScenarioPaladinPort: no ScenarioLlm registered for paladin {:?} \
                          (known: {:?})",
-                        paladin.node.name,
+                        paladin.data.name,
                         router.keys().collect::<Vec<_>>()
                     ))
                 })?;
@@ -820,7 +820,7 @@ fn build_llm_router(graph: &WarGraph, root: &ScenarioLlm) -> HashMap<String, Sce
     let mut router = HashMap::new();
     for node_id in graph.node_order() {
         if let Some(NodeSpec::Paladin { paladin, .. }) = graph.node(node_id) {
-            router.insert(paladin.node.name.clone(), root.for_node(node_id.as_str()));
+            router.insert(paladin.data.name.clone(), root.for_node(node_id.as_str()));
         }
     }
     router

@@ -339,12 +339,12 @@ async fn test_paladin_with_custom_configuration() {
     let paladin_result = result.unwrap();
 
     // Verify custom configuration was used
-    assert_eq!(paladin.node.name, "CodeHelper");
-    assert_eq!(paladin.node.user_name, "Developer");
-    assert_eq!(paladin.node.model, "mock-advanced-model");
-    assert_eq!(paladin.node.temperature, 0.3);
-    assert_eq!(paladin.node.max_loops, MaxLoops::Fixed(2));
-    assert_eq!(paladin.node.stop_words, vec!["END", "DONE"]);
+    assert_eq!(paladin.data.name, "CodeHelper");
+    assert_eq!(paladin.data.user_name, "Developer");
+    assert_eq!(paladin.data.model, "mock-advanced-model");
+    assert_eq!(paladin.data.temperature, 0.3);
+    assert_eq!(paladin.data.max_loops, MaxLoops::Fixed(2));
+    assert_eq!(paladin.data.stop_words, vec!["END", "DONE"]);
 
     // Verify execution result
     assert_eq!(paladin_result.output, "Custom configured response");

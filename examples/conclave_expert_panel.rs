@@ -80,7 +80,7 @@ impl PaladinPort for ExamplePaladinPort {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // Generate expert-specific analysis based on Paladin role
-        let output = match paladin.node.name.as_str() {
+        let output = match paladin.data.name.as_str() {
             "TechnicalExpert" => format!(
                 "TECHNICAL ANALYSIS:\n\
                  \n\
@@ -187,7 +187,7 @@ impl PaladinPort for ExamplePaladinPort {
                     input
                 )
             }
-            _ => format!("{} analysis of: {}", paladin.node.name, input),
+            _ => format!("{} analysis of: {}", paladin.data.name, input),
         };
 
         let token_estimate = (output.len() / 4) as u32; // Calculate before move

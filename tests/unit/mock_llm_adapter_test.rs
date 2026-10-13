@@ -310,7 +310,7 @@ fn create_test_request() -> LlmRequest {
     };
 
     let prompt_item = PromptItem {
-        node: Entity::new(prompt_data, Some("test-prompt".to_string())),
+        entity: Entity::new(prompt_data, Some("test-prompt".to_string())),
     };
 
     LlmRequest::new("mock-model", prompt_item)

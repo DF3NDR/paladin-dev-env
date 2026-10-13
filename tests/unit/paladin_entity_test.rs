@@ -106,8 +106,8 @@ fn test_paladin_node_creation() {
 
     // Verify Entity properties
     assert_eq!(paladin.name, Some("CodeReviewer".to_string()));
-    assert_eq!(paladin.node.name, "CodeReviewer");
-    assert_eq!(paladin.node.system_prompt, "You are a code reviewer");
+    assert_eq!(paladin.data.name, "CodeReviewer");
+    assert_eq!(paladin.data.system_prompt, "You are a code reviewer");
     assert!(paladin.version);
 }
 

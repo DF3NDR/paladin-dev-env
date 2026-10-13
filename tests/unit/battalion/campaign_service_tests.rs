@@ -57,7 +57,7 @@ impl MockPaladinPort {
 #[async_trait]
 impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        let name = paladin.node.name.clone();
+        let name = paladin.data.name.clone();
 
         // Record call order
         {

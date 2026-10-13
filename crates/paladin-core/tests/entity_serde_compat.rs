@@ -75,8 +75,11 @@ fn pre_rename_paladin_json_still_loads() -> TestResult {
         .pointer("/node/model")
         .and_then(serde_json::Value::as_str)
         .ok_or("fixture paladin.json has no string at /node/model")?;
-    assert_eq!(loaded.node.model, expected_model);
-    assert_eq!(reserialized(&loaded)?, captured);
+    assert_eq!(loaded.data.model, expected_model);
+    // Only the entity-sense key moved: the payload `node` is written as `data` (D-03).
+    let mut expected = captured;
+    rename_key(&mut expected, "", "node", "data")?;
+    assert_eq!(reserialized(&loaded)?, expected);
     Ok(())
 }
 
@@ -89,7 +92,9 @@ fn pre_rename_citadel_json_still_loads() -> TestResult {
     assert_eq!(loaded.schema_version, "1.0.0");
     assert!(loaded.garrison.is_empty());
     assert!(loaded.execution_history.is_empty());
-    assert_eq!(reserialized(&loaded)?, captured);
+    let mut expected = captured;
+    rename_key(&mut expected, "/paladin", "node", "data")?;
+    assert_eq!(reserialized(&loaded)?, expected);
     Ok(())
 }
 
@@ -98,12 +103,16 @@ fn pre_rename_content_item_json_still_loads() -> TestResult {
     let captured = fixture_value("content")?;
     let loaded: ContentItem = serde_json::from_str(&fixture("content")?)?;
 
-    match &loaded.node.node.content {
+    match &loaded.entity.data.content {
         ContentType::Text(text) => assert_eq!(text.content.as_deref(), Some("hello")),
         other => return Err(format!("expected ContentType::Text, found {other:?}").into()),
     }
-    assert!(loaded.node.version);
-    assert_eq!(reserialized(&loaded)?, captured);
+    assert!(loaded.entity.version);
+    // The wrapper field is written as `entity` (D-08), its payload as `data` (D-03).
+    let mut expected = captured;
+    rename_key(&mut expected, "", "node", "entity")?;
+    rename_key(&mut expected, "/entity", "node", "data")?;
+    assert_eq!(reserialized(&loaded)?, expected);
     Ok(())
 }
 
@@ -112,7 +121,7 @@ fn pre_rename_prompt_item_json_still_loads() -> TestResult {
     let captured = fixture_value("prompt")?;
     let loaded: PromptItem = serde_json::from_str(&fixture("prompt")?)?;
 
-    match &loaded.node.node.prompt_type {
+    match &loaded.entity.data.prompt_type {
         PromptType::Text(text) => assert_eq!(text.content, "hi"),
         other => return Err(format!("expected PromptType::Text, found {other:?}").into()),
     }
@@ -121,10 +130,13 @@ fn pre_rename_prompt_item_json_still_loads() -> TestResult {
         .and_then(serde_json::Value::as_u64)
         .ok_or("fixture prompt.json has no integer at /node/node/parameters/max_tokens")?;
     assert_eq!(
-        loaded.node.node.parameters.max_tokens.map(u64::from),
+        loaded.entity.data.parameters.max_tokens.map(u64::from),
         Some(expected_max_tokens)
     );
-    assert_eq!(reserialized(&loaded)?, captured);
+    let mut expected = captured;
+    rename_key(&mut expected, "", "node", "entity")?;
+    rename_key(&mut expected, "/entity", "node", "data")?;
+    assert_eq!(reserialized(&loaded)?, expected);
     Ok(())
 }
 
@@ -169,7 +181,7 @@ fn v0_10_citadel_statuses_load_into_the_unified_status() -> TestResult {
 
         let written = reserialized(&loaded)?;
         assert_eq!(
-            written.pointer("/paladin/node/status"),
+            written.pointer("/paladin/data/status"),
             Some(&encoding),
             "status {encoding} changed on the way through PaladinState"
         );
@@ -177,10 +189,10 @@ fn v0_10_citadel_statuses_load_into_the_unified_status() -> TestResult {
 
     // Reasoning exists only in the real status (v0.11 writes it, a v0.10 binary cannot read it).
     let mut loaded: PaladinState = serde_json::from_str(&fixture("citadel")?)?;
-    loaded.paladin.node.status = PaladinStatus::Reasoning;
+    loaded.paladin.data.status = PaladinStatus::Reasoning;
     let written = reserialized(&loaded)?;
     assert_eq!(
-        written.pointer("/paladin/node/status"),
+        written.pointer("/paladin/data/status"),
         Some(&serde_json::json!("Reasoning"))
     );
     assert!(serde_json::to_string(&loaded)?.contains("\"Reasoning\""));

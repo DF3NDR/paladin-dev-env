@@ -538,7 +538,7 @@ mod tests {
             _input: &str,
         ) -> Result<PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
         {
-            let agent_name = &paladin.node.name;
+            let agent_name = &paladin.data.name;
 
             // Increment call count
             let mut counts = self.call_count.lock().unwrap();
@@ -828,7 +828,7 @@ mod tests {
             _input: &str,
         ) -> Result<PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
         {
-            let agent_name = &paladin.node.name;
+            let agent_name = &paladin.data.name;
 
             // Fail on agent2
             if agent_name == "agent2" {
@@ -949,7 +949,7 @@ mod tests {
             input: &str,
         ) -> Result<PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
         {
-            let agent_name = &paladin.node.name;
+            let agent_name = &paladin.data.name;
 
             // Track input
             self.inputs

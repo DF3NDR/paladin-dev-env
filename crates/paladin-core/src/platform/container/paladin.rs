@@ -224,7 +224,7 @@ pub struct PaladinData {
 /// };
 ///
 /// let paladin: Paladin = Entity::new(data, Some("CodeReviewer".to_string()));
-/// assert_eq!(paladin.node.name, "CodeReviewer");
+/// assert_eq!(paladin.data.name, "CodeReviewer");
 /// ```
 pub type Paladin = Entity<PaladinData>;
 

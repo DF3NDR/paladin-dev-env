@@ -191,10 +191,10 @@ where
         };
 
         // Generate content hash
-        let content_hash = self.generate_content_hash(&entity.node)?;
+        let content_hash = self.generate_content_hash(&entity.data)?;
 
         // Calculate serialized size
-        let size_bytes = self.calculate_size(&entity.node)?;
+        let size_bytes = self.calculate_size(&entity.data)?;
 
         let metadata = EntityVersionMetadata {
             is_published: matches!(change_type, ChangeType::Created | ChangeType::Published),
@@ -209,7 +209,7 @@ where
             version_id: Uuid::new_v4(),
             entity_id: entity.uuid,
             version_number: current_version_number,
-            entity_data: entity.node.clone(),
+            entity_data: entity.data.clone(),
             metadata,
             created_at: Utc::now(),
             created_by,
@@ -282,7 +282,7 @@ where
             uuid: entity_id,
             created: Utc::now(), // This would normally come from the original entity
             modified: Utc::now(),
-            node: version_to_restore.entity_data,
+            data: version_to_restore.entity_data,
             name: None, // This would normally come from the original entity
             version: true,
         };
@@ -578,7 +578,7 @@ mod tests {
             number: 43,
         };
         let updated_entity = Entity {
-            node: updated_data,
+            data: updated_data,
             ..entity
         };
 
@@ -614,7 +614,7 @@ mod tests {
             number: 2,
         };
         let updated_entity = Entity {
-            node: updated_data,
+            data: updated_data,
             ..entity
         };
 

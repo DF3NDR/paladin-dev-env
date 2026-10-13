@@ -25,10 +25,10 @@ struct MockPaladinPort;
 #[async_trait]
 impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("   🤖 {} processing...", paladin.node.name);
+        println!("   🤖 {} processing...", paladin.data.name);
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-        let output = format!("[{}]: {}", paladin.node.name, input);
+        let output = format!("[{}]: {}", paladin.data.name, input);
 
         Ok(PaladinResult {
             output,
@@ -101,7 +101,7 @@ async fn run_auto_example(
 
     println!("\n📋 Paladins: {}", paladins.len());
     for (i, p) in paladins.iter().enumerate() {
-        println!("   {}. {}", i + 1, p.node.name);
+        println!("   {}. {}", i + 1, p.data.name);
     }
 
     println!("\n🚀 Executing with Auto mode...\n");

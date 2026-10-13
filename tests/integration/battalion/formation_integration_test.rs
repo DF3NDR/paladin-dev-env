@@ -78,7 +78,7 @@ impl IntegrationMockPaladinPort {
 impl PaladinPort for IntegrationMockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
         // Log execution
-        let log_entry = format!("Executing {}: {}", paladin.node.name, input);
+        let log_entry = format!("Executing {}: {}", paladin.data.name, input);
         self.execution_log.lock().unwrap().push(log_entry);
 
         // Simulate processing delay
@@ -91,18 +91,18 @@ impl PaladinPort for IntegrationMockPaladinPort {
             .lock()
             .unwrap()
             .fail_paladin_names
-            .contains(&paladin.node.name);
+            .contains(&paladin.data.name);
 
         if should_fail {
             return Err(PaladinError::ExecutionError(format!(
                 "Simulated failure for {}",
-                paladin.node.name
+                paladin.data.name
             )));
         }
 
         // Successful execution
         Ok(PaladinResult {
-            output: format!("[{}]: Processed: {}", paladin.node.name, input),
+            output: format!("[{}]: Processed: {}", paladin.data.name, input),
             usage: paladin_ports::output::llm_port::TokenUsage::new(50, 0),
             execution_time_ms: delay,
             loop_count: 1,

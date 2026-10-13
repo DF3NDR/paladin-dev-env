@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let paladin_id = paladin.uuid;
 
     println!("✅ Paladin created:");
-    println!("   Name: {}", paladin.node.name);
+    println!("   Name: {}", paladin.data.name);
     println!("   ID: {}", paladin_id);
     println!("   Autosave: enabled");
     println!();
@@ -131,9 +131,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("✅ Paladin restored successfully!");
-    println!("   Name: {}", restored_paladin.node.name);
+    println!("   Name: {}", restored_paladin.data.name);
     println!("   ID: {}", restored_paladin.uuid);
-    println!("   Status: {:?}", restored_paladin.node.status);
+    println!("   Status: {:?}", restored_paladin.data.status);
     println!();
 
     // Verify the restored state matches the original

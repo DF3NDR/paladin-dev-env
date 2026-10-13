@@ -833,13 +833,13 @@ impl<W: WaypointPort + 'static> Clone for NodeDispatch<W> {
 
 /// The model a `NodeDispatch::Paladin` entry's cost attaches to in a
 /// settlement's `model_breakdown` (LEDGR-04, D-02): the node's *configured*
-/// `paladin.node.model`, never the model an adapter actually served (D-08's
+/// `paladin.data.model`, never the model an adapter actually served (D-08's
 /// `WarEngine::with_treasury_ledger` rustdoc states the fallback-hop
 /// simplification this implies). `None` for every other dispatch kind --
 /// `SpendHook::record` folds that into the `"unknown"` breakdown key.
 fn dispatch_paladin_model<W: WaypointPort + 'static>(dispatch: &NodeDispatch<W>) -> Option<String> {
     match dispatch {
-        NodeDispatch::Paladin { paladin, .. } => Some(paladin.node.model.clone()),
+        NodeDispatch::Paladin { paladin, .. } => Some(paladin.data.model.clone()),
         NodeDispatch::Function(_) | NodeDispatch::Battalion { .. } => None,
     }
 }
@@ -2817,7 +2817,7 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
             // --- LEDGR-03, LEDGR-04, D-08 (plan 39-04): this dispatch's own
             // spend hook (cloned out of the outer scope, mirroring `port`/
             // `node_structured_executor` above) and its resolved
-            // `paladin.node.model` (or `None` for a `Function`/`Battalion`
+            // `paladin.data.model` (or `None` for a `Function`/`Battalion`
             // dispatch) -- computed here, once, from `dispatch` BEFORE it is
             // moved into the spawned task below.
             let node_spend = spend.clone();

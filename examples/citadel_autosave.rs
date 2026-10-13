@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("✅ Paladin created with autosave enabled!");
-    println!("   Name: {}", paladin.node.name);
+    println!("   Name: {}", paladin.data.name);
     println!("   ID: {}", paladin.uuid);
     println!("   Autosave: enabled");
     println!();
@@ -114,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("State should have been saved by autosave");
     println!("✅ State automatically saved!");
     println!("   File: paladin-{}.json", paladin_id);
-    println!("   Status: {:?}", saved_state.paladin.node.status);
+    println!("   Status: {:?}", saved_state.paladin.data.status);
     println!("   Last updated: {}", saved_state.updated_at);
     println!();
 

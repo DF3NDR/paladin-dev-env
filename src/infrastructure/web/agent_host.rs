@@ -497,8 +497,8 @@ mod tests {
         .await
         .expect("builds");
 
-        assert_eq!(paladin.node.name, "researcher");
-        assert_eq!(paladin.node.model, "gpt-4o");
+        assert_eq!(paladin.data.name, "researcher");
+        assert_eq!(paladin.data.model, "gpt-4o");
         assert!(streamer.is_some(), "execution service is streaming-capable");
     }
 

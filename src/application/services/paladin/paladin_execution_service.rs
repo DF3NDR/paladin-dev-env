@@ -1303,7 +1303,7 @@ impl PaladinExecutionService {
         info!(
             "Starting scoped Paladin execution: id={}, name={}, input_len={}, vault_namespace={}",
             execution_id,
-            paladin.node.name,
+            paladin.data.name,
             input.len(),
             confined_vault
                 .as_ref()
@@ -1340,7 +1340,7 @@ impl PaladinExecutionService {
         derived_token_budget: Option<DerivedTokenBudget>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
-        let timeout_duration = Duration::from_secs(paladin.node.max_loops.as_u32() as u64 * 60);
+        let timeout_duration = Duration::from_secs(paladin.data.max_loops.as_u32() as u64 * 60);
 
         // Wrap execution with timeout
         let execution_future = self.execute_internal(
@@ -1388,7 +1388,7 @@ impl PaladinExecutionService {
         images: Vec<VisionContent>,
     ) -> Result<PaladinResult, PaladinError> {
         // Step 1: Validate vision is enabled on the Paladin
-        if !paladin.node.vision_enabled {
+        if !paladin.data.vision_enabled {
             return Err(PaladinError::ConfigurationError(
                 "Vision execution requires vision_enabled=true. Use PaladinBuilder::enable_vision(true)".to_string(),
             ));
@@ -1404,7 +1404,7 @@ impl PaladinExecutionService {
         }
 
         // Step 3: Extract provider from model name
-        let model = paladin.node.model.as_str();
+        let model = paladin.data.model.as_str();
         let provider = self.extract_provider_from_model(model)?;
 
         // Step 4: Get vision adapter for provider
@@ -1417,7 +1417,7 @@ impl PaladinExecutionService {
         })?;
 
         // Step 5: Determine timeout from paladin config
-        let timeout_secs = paladin.node.max_loops.as_u32() as u64 * 60;
+        let timeout_secs = paladin.data.max_loops.as_u32() as u64 * 60;
         let timeout_duration = Duration::from_secs(timeout_secs);
 
         // Step 6: Execute vision analysis with timeout
@@ -1458,7 +1458,7 @@ impl PaladinExecutionService {
         })??;
 
         // Step 7: Check for stop words
-        for stop_word in &paladin.node.stop_words {
+        for stop_word in &paladin.data.stop_words {
             if vision_result.content.contains(stop_word) {
                 return Err(PaladinError::ExecutionError(format!(
                     "Stop word detected: {}",
@@ -1574,7 +1574,7 @@ impl PaladinExecutionService {
         // Use generated prompt if available, otherwise use configured prompt
         let effective_system_prompt = generated_prompt
             .as_ref()
-            .unwrap_or(&paladin.node.system_prompt);
+            .unwrap_or(&paladin.data.system_prompt);
 
         // =======================================================================
         // CORE LAYER 0: Standard Execution (Always Runs)
@@ -1692,10 +1692,10 @@ impl PaladinExecutionService {
         middleware_cx.set_derived_token_budget(derived_token_budget);
 
         // Execute reasoning loop
-        for loop_num in 1..=paladin.node.max_loops.as_u32() {
+        for loop_num in 1..=paladin.data.max_loops.as_u32() {
             debug!(
                 "Paladin loop iteration: id={}, loop={}/{}",
-                execution_id, loop_num, paladin.node.max_loops
+                execution_id, loop_num, paladin.data.max_loops
             );
 
             // =======================================================================
@@ -1812,7 +1812,7 @@ impl PaladinExecutionService {
             // matches the price that was actually computed from it (38-04).
             if let (Some(target), Some(cost)) = (ledger_target.as_ref(), response.cost.as_ref()) {
                 let model = if response.model.is_empty() {
-                    paladin.node.model.as_str()
+                    paladin.data.model.as_str()
                 } else {
                     response.model.as_str()
                 };
@@ -2111,10 +2111,10 @@ impl PaladinExecutionService {
             }
 
             // Check if we've reached max loops
-            if loop_num == paladin.node.max_loops.as_u32() {
+            if loop_num == paladin.data.max_loops.as_u32() {
                 debug!(
                     "Reached max loops: id={}, loops={}",
-                    execution_id, paladin.node.max_loops
+                    execution_id, paladin.data.max_loops
                 );
 
                 // Store assistant response in garrison if available
@@ -2168,7 +2168,7 @@ impl PaladinExecutionService {
             usage: usage.clone(),
             cost: cost_tally.total(),
             execution_time_ms: start_time.elapsed().as_millis() as u64,
-            loop_count: paladin.node.max_loops.as_u32(),
+            loop_count: paladin.data.max_loops.as_u32(),
             stop_reason: StopReason::Completed,
             plan: task_plan, // Layer 1 metadata
             handoff_history, // Layer 3 metadata
@@ -2190,7 +2190,7 @@ impl PaladinExecutionService {
         conversation_history: &[GarrisonEntry],
         rag_context: Option<&str>,
     ) -> String {
-        let mut prompt = format!("{}\n\n", paladin.node.system_prompt);
+        let mut prompt = format!("{}\n\n", paladin.data.system_prompt);
 
         // Inject RAG context if available
         if let Some(context) = rag_context
@@ -2382,7 +2382,7 @@ impl PaladinExecutionService {
     fn check_stop_words(&self, paladin: &Paladin, output: &str) -> Option<String> {
         let output_lower = output.to_lowercase();
 
-        for stop_word in paladin.node.stop_words.iter() {
+        for stop_word in paladin.data.stop_words.iter() {
             let stop_word_lower = stop_word.to_lowercase();
 
             // Check for exact word match (case-insensitive)
@@ -2425,7 +2425,7 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
     ) -> Option<crate::core::platform::container::planning::TaskPlan> {
         // Check if planning is enabled
-        if !paladin.node.autonomous_planning {
+        if !paladin.data.autonomous_planning {
             debug!(
                 "Planning disabled: execution_id={}, autonomous_planning=false",
                 execution_id
@@ -2452,7 +2452,7 @@ impl PaladinExecutionService {
         );
 
         // Use model from paladin config (Phase 1 enhancement)
-        let model = paladin.node.model.as_str();
+        let model = paladin.data.model.as_str();
 
         // Attempt to generate plan with graceful degradation
         match planning_service.create_plan(input, 10, model).await {
@@ -2493,7 +2493,7 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
     ) -> Option<String> {
         // Check if prompt generation is enabled
-        if !paladin.node.autonomous_prompts {
+        if !paladin.data.autonomous_prompts {
             debug!(
                 "Prompt generation disabled: execution_id={}, autonomous_prompts=false",
                 execution_id
@@ -2514,7 +2514,7 @@ impl PaladinExecutionService {
         };
 
         // Check if agent has a description (required for prompt generation)
-        if paladin.node.agent_description.is_empty() {
+        if paladin.data.agent_description.is_empty() {
             warn!(
                 "Prompt generation enabled but agent_description is empty: execution_id={}",
                 execution_id
@@ -2524,15 +2524,15 @@ impl PaladinExecutionService {
 
         info!(
             "Generating system prompt: execution_id={}, agent={}",
-            execution_id, paladin.node.name
+            execution_id, paladin.data.name
         );
 
         // Use model from paladin config (Phase 1 enhancement)
-        let model = paladin.node.model.as_str();
+        let model = paladin.data.model.as_str();
 
         // Attempt to generate prompt with graceful degradation
         match prompt_service
-            .generate_prompt(&paladin.node.name, &paladin.node.agent_description, model)
+            .generate_prompt(&paladin.data.name, &paladin.data.agent_description, model)
             .await
         {
             Ok(generated_prompt) => {
@@ -2568,12 +2568,12 @@ impl PaladinExecutionService {
     /// Adjusted temperature value (base_temp + progress * (1.0 - base_temp))
     fn apply_layer2_dynamic_temperature(&self, paladin: &Paladin, loop_num: u32) -> f32 {
         // If dynamic temperature is disabled, return configured temperature
-        if !paladin.node.dynamic_temperature {
-            return paladin.node.temperature;
+        if !paladin.data.dynamic_temperature {
+            return paladin.data.temperature;
         }
 
-        let base_temp = paladin.node.temperature;
-        let max_loops = paladin.node.max_loops.as_u32() as f32;
+        let base_temp = paladin.data.temperature;
+        let max_loops = paladin.data.max_loops.as_u32() as f32;
         let current_loop = loop_num as f32;
 
         // Linear interpolation: temp = base + progress * (1.0 - base)
@@ -2583,7 +2583,7 @@ impl PaladinExecutionService {
 
         debug!(
             "Dynamic temperature: loop={}/{}, base={}, adjusted={}",
-            loop_num, paladin.node.max_loops, base_temp, adjusted_temp
+            loop_num, paladin.data.max_loops, base_temp, adjusted_temp
         );
 
         adjusted_temp.clamp(0.0, 1.0)
@@ -2662,7 +2662,7 @@ impl PaladinExecutionService {
         // Create handoff context from the coordinator
         let context = crate::core::platform::container::handoff::HandoffContext::new(
             task_description.clone(),
-            paladin.node.name.clone(),
+            paladin.data.name.clone(),
         );
 
         // Execute the handoff via HandoffService with retry logic
@@ -2705,7 +2705,7 @@ impl PaladinExecutionService {
     /// Executes an LLM call with retry logic, circuit breaker, and custom temperature
     ///
     /// This variant supports Layer 2 (dynamic temperature) by accepting a temperature
-    /// parameter instead of using paladin.node.temperature.
+    /// parameter instead of using paladin.data.temperature.
     ///
     /// With no retry policy set on `cx`, implements today's exponential
     /// backoff unchanged: 100ms, 200ms, 400ms, etc. (D-11, X-03).
@@ -2769,7 +2769,7 @@ impl PaladinExecutionService {
         let max_attempts = retry_policy
             .as_ref()
             .map(|policy| policy.max_attempts)
-            .unwrap_or_else(|| paladin.node.max_loops.as_u32().min(10)); // Cap retries at 10 with no policy
+            .unwrap_or_else(|| paladin.data.max_loops.as_u32().min(10)); // Cap retries at 10 with no policy
 
         loop {
             attempt += 1;
@@ -2792,10 +2792,10 @@ impl PaladinExecutionService {
                     top_p: None,
                     frequency_penalty: None,
                     presence_penalty: None,
-                    stop_sequences: if paladin.node.stop_words.is_empty() {
+                    stop_sequences: if paladin.data.stop_words.is_empty() {
                         None
                     } else {
-                        Some(paladin.node.stop_words.clone())
+                        Some(paladin.data.stop_words.clone())
                     },
                 },
                 context: None,
@@ -2807,14 +2807,14 @@ impl PaladinExecutionService {
             };
 
             let prompt_item = PromptItem {
-                node: Entity::new(prompt_data, Some(format!("execution-{}", execution_id))),
+                entity: Entity::new(prompt_data, Some(format!("execution-{}", execution_id))),
             };
 
             // Create LLM request. `cx.response_format` (RT-05, D-27, D-28) is
             // set exactly once, by a structured run's `execute_json_schema` --
             // an ordinary run's context never sets it, so this call is a
             // no-op for every existing caller (X-03).
-            let mut request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
+            let mut request = LlmRequest::new(paladin.data.model.clone(), prompt_item);
             if let Some(response_format) = cx.response_format.clone() {
                 request = request.with_response_format(response_format);
             }
@@ -2958,7 +2958,7 @@ impl PaladinExecutionService {
         loop_num: u32,
     ) -> Result<paladin_ports::output::llm_port::LlmResponse, PaladinError> {
         let mut attempt = 0;
-        let max_attempts = paladin.node.max_loops.as_u32().min(10); // Cap retries at 10
+        let max_attempts = paladin.data.max_loops.as_u32().min(10); // Cap retries at 10
 
         loop {
             attempt += 1;
@@ -2977,14 +2977,14 @@ impl PaladinExecutionService {
                 content_attachments: vec![],
                 parameters: PromptParameters {
                     max_tokens: None,
-                    temperature: Some(paladin.node.temperature),
+                    temperature: Some(paladin.data.temperature),
                     top_p: None,
                     frequency_penalty: None,
                     presence_penalty: None,
-                    stop_sequences: if paladin.node.stop_words.is_empty() {
+                    stop_sequences: if paladin.data.stop_words.is_empty() {
                         None
                     } else {
-                        Some(paladin.node.stop_words.clone())
+                        Some(paladin.data.stop_words.clone())
                     },
                 },
                 context: None,
@@ -2996,11 +2996,11 @@ impl PaladinExecutionService {
             };
 
             let prompt_item = PromptItem {
-                node: Entity::new(prompt_data, Some(format!("execution-{}", execution_id))),
+                entity: Entity::new(prompt_data, Some(format!("execution-{}", execution_id))),
             };
 
             // Create LLM request
-            let request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
+            let request = LlmRequest::new(paladin.data.model.clone(), prompt_item);
 
             // Wrap LLM call with circuit breaker (async version)
             let llm_port = Arc::clone(&self.llm_port);
@@ -3432,7 +3432,7 @@ impl PaladinExecutionService {
             .execute_with_retry_and_temperature(
                 paladin,
                 prompt,
-                paladin.node.temperature,
+                paladin.data.temperature,
                 execution_id,
                 call_num,
                 &cx,
@@ -3523,9 +3523,9 @@ impl PaladinExecutionService {
         // attempted) so the streamed-completion producer has a real start
         // time and model name on every exit path.
         let started_at = chrono::Utc::now();
-        let model_used = paladin.node.model.clone();
+        let model_used = paladin.data.model.clone();
         let assembly =
-            PromptAssembly::new(paladin.node.system_prompt.clone(), input, "", vec![], None);
+            PromptAssembly::new(paladin.data.system_prompt.clone(), input, "", vec![], None);
         let mut middleware_cx = ModelCallContext::new(run_id, paladin, assembly);
         middleware_cx.trace_emitter = self.trace_emitter.clone();
         let before_outcome = run_before(&self.middleware, &mut middleware_cx).await?;
@@ -3565,14 +3565,14 @@ impl PaladinExecutionService {
             content_attachments: vec![],
             parameters: PromptParameters {
                 max_tokens: None,
-                temperature: Some(paladin.node.temperature),
+                temperature: Some(paladin.data.temperature),
                 top_p: None,
                 frequency_penalty: None,
                 presence_penalty: None,
-                stop_sequences: if paladin.node.stop_words.is_empty() {
+                stop_sequences: if paladin.data.stop_words.is_empty() {
                     None
                 } else {
-                    Some(paladin.node.stop_words.clone())
+                    Some(paladin.data.stop_words.clone())
                 },
             },
             context: None,
@@ -3586,7 +3586,7 @@ impl PaladinExecutionService {
         let request = LlmRequest::new(
             model_used.clone(),
             PromptItem {
-                node: Entity::new(prompt_data, Some("stream".to_string())),
+                entity: Entity::new(prompt_data, Some("stream".to_string())),
             },
         )
         .with_stream(true);
@@ -4402,7 +4402,7 @@ mod tests {
             Some(arsenal.clone() as Arc<dyn ArsenalPort>),
         );
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(2);
+        paladin.data.max_loops = MaxLoops::Fixed(2);
 
         // --- buffered path: 2 loops x (1 LLM completion + 1 Armament call)
         let heartbeat = HeartbeatHandle::new();
@@ -4507,7 +4507,7 @@ mod tests {
         )
         .with_trace_emitter(emitter.clone());
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(1);
+        paladin.data.max_loops = MaxLoops::Fixed(1);
         tool_service.execute(&paladin, "hello").await.unwrap();
 
         // --- StreamChunk progress: 2 content deltas plus the final marker.
@@ -4760,7 +4760,7 @@ mod tests {
         use crate::core::platform::container::paladin::MaxLoops;
 
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(2);
+        paladin.data.max_loops = MaxLoops::Fixed(2);
 
         // Site: execute_with_retry_and_temperature.
         let trips_after_one = Arc::new(CircuitBreaker::new(1, 1, Duration::from_secs(60)));
@@ -4814,7 +4814,7 @@ mod tests {
         use crate::core::platform::container::paladin::MaxLoops;
 
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(5);
+        paladin.data.max_loops = MaxLoops::Fixed(5);
 
         // Site: execute_with_retry_and_temperature.
         let (port, service) = failing_service(auth_failure, FailAt::Open, default_breaker());
@@ -4872,7 +4872,7 @@ mod tests {
         }
 
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(2);
+        paladin.data.max_loops = MaxLoops::Fixed(2);
 
         for make in [provider_503, processing_error] {
             let (port, service) = failing_service(make, FailAt::Open, default_breaker());
@@ -5269,7 +5269,7 @@ mod tests {
 
         // Verify paladin has vision_enabled
         assert!(
-            paladin.node.vision_enabled,
+            paladin.data.vision_enabled,
             "Paladin should have vision enabled"
         );
     }

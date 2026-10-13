@@ -56,7 +56,7 @@ impl ContentItemService {
     ) -> Result<(ContentItem, EntityVersion<ContentData>), ContentItemServiceError> {
         // Create initial version
         let version = self.version_service.create_version(
-            &content_item.node,
+            &content_item.entity,
             ChangeType::Created,
             created_by,
             change_summary,
@@ -74,7 +74,7 @@ impl ContentItemService {
     ) -> Result<(ContentItem, EntityVersion<ContentData>), ContentItemServiceError> {
         // Create new version
         let version = self.version_service.create_version(
-            &content_item.node,
+            &content_item.entity,
             ChangeType::Updated,
             updated_by,
             change_summary,
@@ -123,11 +123,11 @@ impl ContentItemService {
 
         // Reconstruct ContentItem from the restored version
         let content_item = ContentItem {
-            node: crate::core::base::entity::Entity {
+            entity: crate::core::base::entity::Entity {
                 uuid: content_id,
                 created: restored_version.created_at, // This should be the original creation time
                 modified: restored_version.created_at,
-                node: restored_version.entity_data.clone(),
+                data: restored_version.entity_data.clone(),
                 name: None, // This would need to be tracked in the version
                 version: true,
             },
@@ -143,7 +143,7 @@ impl ContentItemService {
         published_by: Option<String>,
     ) -> Result<EntityVersion<ContentData>, ContentItemServiceError> {
         let version = self.version_service.create_version(
-            &content_item.node,
+            &content_item.entity,
             ChangeType::Published,
             published_by,
             Some("Content published".to_string()),
@@ -159,7 +159,7 @@ impl ContentItemService {
         unpublished_by: Option<String>,
     ) -> Result<EntityVersion<ContentData>, ContentItemServiceError> {
         let version = self.version_service.create_version(
-            &content_item.node,
+            &content_item.entity,
             ChangeType::Unpublished,
             unpublished_by,
             Some("Content unpublished".to_string()),
@@ -175,7 +175,7 @@ impl ContentItemService {
         archived_by: Option<String>,
     ) -> Result<EntityVersion<ContentData>, ContentItemServiceError> {
         let version = self.version_service.create_version(
-            &content_item.node,
+            &content_item.entity,
             ChangeType::Archived,
             archived_by,
             Some("Content archived".to_string()),

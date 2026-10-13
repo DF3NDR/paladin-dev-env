@@ -70,7 +70,7 @@ impl PaladinPort for ExamplePaladinPort {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
         // Generate output based on Paladin role
-        let output = match paladin.node.name.as_str() {
+        let output = match paladin.data.name.as_str() {
             name if name.starts_with("Analyst") => {
                 "Analysis: Option A is optimal based on cost-benefit analysis".to_string()
             }
@@ -86,7 +86,7 @@ impl PaladinPort for ExamplePaladinPort {
                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;
                 "Delayed Result".to_string()
             }
-            _ => format!("{} processed: {}", paladin.node.name, input),
+            _ => format!("{} processed: {}", paladin.data.name, input),
         };
 
         Ok(PaladinResult {

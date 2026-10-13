@@ -486,7 +486,25 @@ mod tests {
         citadel.save_paladin(&state).await?;
         let written = std::fs::read_to_string(temp_dir.path().join(format!("paladin-{id}.json")))?;
         let written_value: serde_json::Value = serde_json::from_str(&written)?;
-        assert_eq!(written_value, fixture_value);
+
+        // The only wire change is the entity-sense key: the fixture's v0.10 `node` key under `paladin` is
+        // written as `paladin.data` (D-03), and no old key is emitted.
+        let mut expected = fixture_value;
+        let paladin = expected
+            .pointer_mut("/paladin")
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or("fixture has no paladin object")?;
+        let payload = paladin
+            .remove("node")
+            .ok_or("fixture paladin has no v0.10 node key")?;
+        paladin.insert("data".to_owned(), payload);
+        assert_eq!(written_value, expected);
+        let written_paladin = written_value
+            .pointer("/paladin")
+            .and_then(serde_json::Value::as_object)
+            .ok_or("written snapshot has no paladin object")?;
+        assert!(written_paladin.contains_key("data"));
+        assert!(!written_paladin.contains_key("node"));
         Ok(())
     }
 

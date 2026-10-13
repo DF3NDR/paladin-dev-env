@@ -348,7 +348,7 @@ impl PhalanxExecutionService {
         let mut tasks = Vec::with_capacity(phalanx.paladin_count());
 
         for paladin in phalanx.paladins() {
-            let name = paladin.node.name.clone();
+            let name = paladin.data.name.clone();
             let paladin_clone = paladin.clone();
             let input_clone = input.to_string();
             let port = self.paladin_port.clone();
@@ -413,7 +413,7 @@ impl PhalanxExecutionService {
                     &cancel_clone,
                 )
                 .await
-                .map(|outcome| (paladin_clone.node.name.clone(), outcome.result))
+                .map(|outcome| (paladin_clone.data.name.clone(), outcome.result))
             }
             .boxed();
 
@@ -532,7 +532,7 @@ async fn run_paladin(
     cancel: Option<CancellationToken>,
     semaphore: Option<Arc<Semaphore>>,
 ) -> Result<Success, AttemptFailure> {
-    let name = paladin.node.name.clone();
+    let name = paladin.data.name.clone();
     let _permit = match &semaphore {
         Some(sem) => {
             // Wait for a permit or for cancellation, whichever comes first, so
@@ -634,22 +634,22 @@ mod tests {
                 .fail_paladin_names
                 .lock()
                 .unwrap()
-                .contains(&paladin.node.name);
+                .contains(&paladin.data.name);
 
             if should_fail {
                 return Err(PaladinError::ExecutionError(format!(
                     "Mock failure for {}",
-                    paladin.node.name
+                    paladin.data.name
                 )));
             }
 
             // Check for output override
             let output = if let Some(override_output) =
-                self.output_override.lock().unwrap().get(&paladin.node.name)
+                self.output_override.lock().unwrap().get(&paladin.data.name)
             {
                 override_output.clone()
             } else {
-                format!("{}: {}", paladin.node.name, input)
+                format!("{}: {}", paladin.data.name, input)
             };
 
             Ok(PaladinResult {
@@ -1213,7 +1213,7 @@ mod tests {
             paladin: &Paladin,
             _input: &str,
         ) -> Result<PaladinResult, PaladinError> {
-            let name = paladin.node.name.clone();
+            let name = paladin.data.name.clone();
             self.record(format!("start {name}"));
             let step = self
                 .scripts

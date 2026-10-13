@@ -231,7 +231,7 @@ impl ExecutionMiddleware for SummarizationMiddleware {
             return Ok(MiddlewareFlow::Continue);
         }
 
-        let model = cx.paladin().node.model.clone();
+        let model = cx.paladin().data.model.clone();
 
         if !self.exceeds_threshold(&cx.assembly, &model) {
             return Ok(MiddlewareFlow::Continue);

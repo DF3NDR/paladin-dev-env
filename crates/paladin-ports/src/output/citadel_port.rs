@@ -102,7 +102,7 @@
 //! ) -> Result<(), Box<dyn std::error::Error>> {
 //!     // Attempt to load saved state
 //!     if let Some(state) = citadel.load_paladin(paladin_id).await? {
-//!         println!("Restored Paladin: {}", state.paladin.node.name);
+//!         println!("Restored Paladin: {}", state.paladin.data.name);
 //!         println!("  Created: {}", state.created_at);
 //!         println!("  Last updated: {}", state.updated_at);
 //!         println!("  Garrison size: {}", state.garrison.len());
@@ -341,7 +341,7 @@ use paladin_core::platform::container::citadel_error::CitadelError;
 ///
 ///     // Load it back
 ///     if let Some(loaded) = citadel.load_paladin(paladin.uuid).await? {
-///         println!("Loaded: {}", loaded.paladin.node.name);
+///         println!("Loaded: {}", loaded.paladin.data.name);
 ///         println!("  Created: {}", loaded.created_at);
 ///         println!("  Schema: v{}", loaded.schema_version);
 ///     }

@@ -141,7 +141,7 @@ impl TemperatureService {
         let request = LlmRequest::new(
             "gpt-4", // Use consistent model for classification
             PromptItem {
-                node: Entity::new(
+                entity: Entity::new(
                     PromptData {
                         prompt_type: PromptType::User(UserPrompt {
                             query: prompt.clone(),

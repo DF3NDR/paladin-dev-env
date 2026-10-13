@@ -26,14 +26,14 @@ struct ExamplePaladinPort;
 #[async_trait]
 impl PaladinPort for ExamplePaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        println!("\n🤖 {} executing...", paladin.node.name);
+        println!("\n🤖 {} executing...", paladin.data.name);
         println!("   Input: {}", input);
 
         // Simulate processing
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         // Generate output based on Paladin role
-        let output = match paladin.node.name.as_str() {
+        let output = match paladin.data.name.as_str() {
             "Researcher" => format!(
                 "Research findings on: {}\n- Key concept identified\n- Multiple perspectives explored",
                 input
@@ -46,7 +46,7 @@ impl PaladinPort for ExamplePaladinPort {
                 "Summary: {}\n- Concise overview prepared\n- Key takeaways highlighted",
                 input
             ),
-            _ => format!("{} processed: {}", paladin.node.name, input),
+            _ => format!("{} processed: {}", paladin.data.name, input),
         };
 
         println!("   Output: {}", output);

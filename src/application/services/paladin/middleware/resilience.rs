@@ -385,7 +385,7 @@ mod tests {
         let llm = Arc::new(MockLlmAdapter::new().with_error(transient("p")));
         let service = make_service(llm.clone());
         let mut paladin = make_paladin(1);
-        paladin.node.max_loops = MaxLoops::Fixed(3);
+        paladin.data.max_loops = MaxLoops::Fixed(3);
 
         let start = tokio::time::Instant::now();
         let result = service.execute(&paladin, "hi").await;

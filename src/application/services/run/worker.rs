@@ -108,7 +108,7 @@ async fn with_run_trace_scope<F: std::future::Future>(
 }
 
 /// This run's model label for [`HeraldTraceSink`] (D-12, the `model_used`
-/// discretion item): the distinct `paladin.node.model` values of every
+/// discretion item): the distinct `paladin.data.model` values of every
 /// [`NodeSpec::Paladin`] node in `graph.node_order()` order -- `"none"` when
 /// the graph has no Paladin node, the bare model name when every Paladin
 /// node declares the SAME model, `"mixed"` when they declare more than one
@@ -120,7 +120,7 @@ fn run_model_label(graph: &WarGraph) -> String {
     let mut models: Vec<&str> = Vec::new();
     for node_id in graph.node_order() {
         if let Some(NodeSpec::Paladin { paladin, .. }) = graph.node(node_id) {
-            let model = paladin.node.model.as_str();
+            let model = paladin.data.model.as_str();
             if !models.contains(&model) {
                 models.push(model);
             }
@@ -144,7 +144,7 @@ const AGENT_RUN_FINGERPRINT: &str = "agent";
 /// `model_used` discretion item): the paladin's own model string, or
 /// `"none"` when it is empty -- the agent-path twin of [`run_model_label`].
 fn agent_model_label(paladin: &Paladin) -> String {
-    let model = paladin.node.model.as_str();
+    let model = paladin.data.model.as_str();
     if model.is_empty() {
         "none".to_string()
     } else {
@@ -1641,7 +1641,7 @@ impl<W: WaypointPort + 'static> RunWorkerPool<W> {
         // the run sat in the queue. The three no-call outcomes (a zero or exhausted figure, an
         // unreadable ledger, a model that lost its price row) are decided before the LLM is
         // reached, and each is recorded through the same one-terminal-event path as a call.
-        let derived_budget = self.derive_dispatch_budget(run, &paladin.node.model).await;
+        let derived_budget = self.derive_dispatch_budget(run, &paladin.data.model).await;
         dispatcher.emit(TraceEvent::RunStarted {
             run_id: Some(run.run_id.clone()),
             graph_fingerprint: AGENT_RUN_FINGERPRINT.to_string(),

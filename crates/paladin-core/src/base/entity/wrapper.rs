@@ -8,7 +8,9 @@ pub struct Entity<T> {
     pub uuid: Uuid,
     pub created: DateTime<Utc>,
     pub modified: DateTime<Utc>,
-    pub node: T,
+    /// The payload; read under its v0.10 key `node` too.
+    #[serde(alias = "node")]
+    pub data: T,
     pub name: Option<String>,
     pub version: bool,
 }
@@ -20,37 +22,37 @@ where
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.uuid.hash(state);
         self.name.hash(state);
-        self.node.hash(state);
+        self.data.hash(state);
     }
 }
 
 impl<T> Entity<T> {
-    pub fn new(node: T, name: Option<String>) -> Self {
+    pub fn new(data: T, name: Option<String>) -> Self {
         let now = Utc::now();
         Self {
             uuid: Uuid::new_v4(),
             created: now,
             modified: now,
-            node,
+            data,
             name,
             version: true,
         }
     }
 
-    pub fn new_with_uuid(uuid: Uuid, node: T, name: Option<String>) -> Self {
+    pub fn new_with_uuid(uuid: Uuid, data: T, name: Option<String>) -> Self {
         let now = Utc::now();
         Self {
             uuid,
             created: now,
             modified: now,
-            node,
+            data,
             name,
             version: true,
         }
     }
 
     pub fn update(&mut self, new_data: T) {
-        self.node = new_data;
+        self.data = new_data;
         self.modified = Utc::now();
     }
 
@@ -94,7 +96,7 @@ mod tests {
 
         let entity = Entity::new(test_data.clone(), Some("Test Entity".to_string()));
 
-        assert_eq!(entity.node, test_data);
+        assert_eq!(entity.data, test_data);
         assert_eq!(entity.name, Some("Test Entity".to_string()));
         assert!(entity.version);
         assert_eq!(entity.created, entity.modified);
@@ -119,7 +121,7 @@ mod tests {
 
         entity.update(new_data.clone());
 
-        assert_eq!(entity.node, new_data);
+        assert_eq!(entity.data, new_data);
         assert!(entity.modified > initial_modified);
     }
 

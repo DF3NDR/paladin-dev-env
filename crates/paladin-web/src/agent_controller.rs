@@ -275,9 +275,9 @@ impl AgentSummary {
     pub fn from_agent(id: impl Into<String>, paladin: &Paladin) -> Self {
         Self {
             id: id.into(),
-            name: paladin.node.name.clone(),
-            model: paladin.node.model.clone(),
-            description: prompt_preview(&paladin.node.system_prompt),
+            name: paladin.data.name.clone(),
+            model: paladin.data.model.clone(),
+            description: prompt_preview(&paladin.data.system_prompt),
         }
     }
 }
@@ -318,7 +318,7 @@ pub(crate) fn ok_body<T: Serialize>(value: &T) -> JsonValue {
 /// Ask the Treasurer whether `principal` may start spend on `model` (D-06, D-07, D-10, C4).
 ///
 /// The one gate shared by `execute`, `execute/stream` and `jobs`. `model` is the REGISTERED
-/// agent's model (`entry.paladin.node.model`), never anything from the request:
+/// agent's model (`entry.paladin.data.model`), never anything from the request:
 ///
 /// - no Treasurer attached (no allowances configured) -> `Ok(Admission::none())`;
 /// - the principal is mapped to its [`RunAttribution`](paladin_core::platform::container::principal::RunAttribution)
@@ -418,7 +418,7 @@ pub async fn execute_agent(
 
     // D-06/D-07: an exhausted (or unverifiable) caller is refused before any work starts, and
     // D-10: so is a ceilinged caller of an unpriced model.
-    let admission = admit_principal(&state, &principal, &entry.paladin.node.model).await?;
+    let admission = admit_principal(&state, &principal, &entry.paladin.data.model).await?;
 
     // D-16: spend is attributed to the authenticated caller -- the scope is
     // built from the `Principal` only, never from the request body. D-18: the
@@ -747,7 +747,7 @@ pub async fn execute_agent_stream(
         };
 
     // D-06/D-07: refuse before either the streaming or the buffered branch starts work.
-    let admission = match admit_principal(&state, &principal, &entry.paladin.node.model).await {
+    let admission = match admit_principal(&state, &principal, &entry.paladin.data.model).await {
         Ok(admission) => admission,
         Err(error) => return error.into_response(),
     };
@@ -848,7 +848,7 @@ pub async fn enqueue_job(
         .map_err(|_| ApiError::bad_request("timeout_seconds must be a positive integer"))?;
 
     // C4: refuse before `jobs.create()` and before the spawn -- never a job id for refused work.
-    let admission = admit_principal(&state, &principal, &entry.paladin.node.model).await?;
+    let admission = admit_principal(&state, &principal, &entry.paladin.data.model).await?;
 
     let job_id = state.jobs.create();
     let jobs = Arc::clone(&state.jobs);

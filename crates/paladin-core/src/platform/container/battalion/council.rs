@@ -515,8 +515,8 @@ mod tests {
 
         assert!(result.is_ok());
         let council = result.unwrap();
-        assert_eq!(council.node.name, "Test Council");
-        assert_eq!(council.node.participant_ids.len(), 2);
+        assert_eq!(council.data.name, "Test Council");
+        assert_eq!(council.data.participant_ids.len(), 2);
     }
 
     #[test]
@@ -581,7 +581,7 @@ mod tests {
 
         assert!(result.is_ok());
         let council = result.unwrap();
-        assert_eq!(council.node.moderator_id, Some("mod1".to_string()));
+        assert_eq!(council.data.moderator_id, Some("mod1".to_string()));
     }
 
     #[test]
@@ -599,15 +599,15 @@ mod tests {
 
         assert!(result.is_ok());
         let council = result.unwrap();
-        assert_eq!(council.node.name, "Expert Panel");
-        assert_eq!(council.node.participant_ids.len(), 3);
-        assert_eq!(council.node.config.max_rounds, 5);
-        assert_eq!(council.node.config.turn_strategy, TurnStrategy::RoundRobin);
+        assert_eq!(council.data.name, "Expert Panel");
+        assert_eq!(council.data.participant_ids.len(), 3);
+        assert_eq!(council.data.config.max_rounds, 5);
+        assert_eq!(council.data.config.turn_strategy, TurnStrategy::RoundRobin);
         assert_eq!(
-            council.node.config.termination_condition,
+            council.data.config.termination_condition,
             TerminationCondition::Consensus
         );
-        assert!(!council.node.config.include_history);
+        assert!(!council.data.config.include_history);
     }
 
     #[test]

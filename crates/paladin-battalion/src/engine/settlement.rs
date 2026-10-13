@@ -41,7 +41,7 @@ use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 /// Resolve a per-attempt model label to the key a settlement's
 /// `model_breakdown` records it under: `None` or an empty string both fold
 /// into the literal `"unknown"` key (an attempt with no resolvable model --
-/// today, a `NodeSpec::Paladin` node's own `paladin.node.model` is never
+/// today, a `NodeSpec::Paladin` node's own `paladin.data.model` is never
 /// empty, but a future dispatch kind might not carry one).
 fn resolve_model_key(model: Option<&str>) -> &str {
     match model {

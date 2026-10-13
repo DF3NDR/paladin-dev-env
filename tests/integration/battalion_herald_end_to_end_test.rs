@@ -136,20 +136,20 @@ impl PaladinPort for FormationMockPaladinPort {
         self.execution_log
             .lock()
             .unwrap()
-            .push(paladin.node.name.clone());
+            .push(paladin.data.name.clone());
 
-        if self.fail_names.lock().unwrap().contains(&paladin.node.name) {
+        if self.fail_names.lock().unwrap().contains(&paladin.data.name) {
             return Err(PaladinError::ExecutionError(format!(
                 "Simulated failure for {}",
-                paladin.node.name
+                paladin.data.name
             )));
         }
 
         let (output, token_count, execution_time_ms) = self
             .responses
-            .get(&paladin.node.name)
+            .get(&paladin.data.name)
             .cloned()
-            .unwrap_or_else(|| panic!("No mock response configured for {}", paladin.node.name));
+            .unwrap_or_else(|| panic!("No mock response configured for {}", paladin.data.name));
 
         Ok(PaladinResult {
             output,

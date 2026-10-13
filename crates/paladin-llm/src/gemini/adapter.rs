@@ -358,7 +358,7 @@ impl GeminiAdapter {
         let mut system_instruction = None;
         let mut contents = Vec::new();
 
-        match &request.prompt.node.node.prompt_type {
+        match &request.prompt.entity.data.prompt_type {
             PromptType::System(system_prompt) => {
                 system_instruction = Some(GeminiSystemInstruction {
                     parts: vec![GeminiPart {
@@ -423,7 +423,7 @@ impl GeminiAdapter {
             }
         }
 
-        let params = &request.prompt.node.node.parameters;
+        let params = &request.prompt.entity.data.parameters;
         // RT-FR-17, D-28: `responseMimeType` is set for either
         // `ResponseFormat` variant; `responseSchema` carries the schema
         // value only for `JsonSchema`. `ResponseFormat` is

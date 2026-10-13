@@ -8,10 +8,10 @@ use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
 use paladin::core::base::entity::node::Node;
 use paladin::core::platform::container::citadel::{
     BattalionCheckpointConfig, BattalionState, CheckpointData, ExecutionRecord, ExecutionStatus,
-    PaladinData, PaladinState, PaladinStatus,
+    PaladinState,
 };
 use paladin::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
-use paladin::core::platform::container::paladin::MaxLoops;
+use paladin::core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 use paladin::infrastructure::adapters::citadel::file_citadel::FileCitadel;
 use paladin_ports::output::citadel_port::CitadelPort;
 use paladin_ports::output::llm_port::LlmPort;

@@ -345,10 +345,8 @@ impl CitadelPort for FileCitadel {
 mod tests {
     use super::*;
     use paladin_core::base::entity::node::Node;
-    use paladin_core::platform::container::citadel::{
-        BattalionCheckpointConfig, CheckpointData, PaladinData, PaladinStatus,
-    };
-    use paladin_core::platform::container::paladin::MaxLoops;
+    use paladin_core::platform::container::citadel::{BattalionCheckpointConfig, CheckpointData};
+    use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
     use tempfile::TempDir;
 
     fn create_test_paladin_state() -> PaladinState {

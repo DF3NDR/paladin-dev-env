@@ -15,6 +15,7 @@ use paladin_core::base::service::entity_version_service::{ChangeType, EntityVers
 use paladin_core::platform::container::citadel::PaladinState;
 use paladin_core::platform::container::content::{ContentData, ContentItem, ContentType};
 use paladin_core::platform::container::paladin::Paladin;
+use paladin_core::platform::container::paladin::PaladinStatus;
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -144,5 +145,44 @@ fn pre_rename_version_json_still_loads() -> TestResult {
         .ok_or("fixture content.json has no string at /node/uuid")?;
     assert_eq!(loaded.entity_id.to_string(), content_uuid);
     assert_eq!(reserialized(&loaded)?, expected);
+    Ok(())
+}
+
+/// D-10: the Citadel stores the real `PaladinStatus` now. Every status encoding v0.10 wrote
+/// (`Idle`, `Executing`, `Completed`, `Failed`) must load into it and write back unchanged,
+/// and the v0.11-only `Reasoning` status must serialize under its own name.
+#[test]
+fn v0_10_citadel_statuses_load_into_the_unified_status() -> TestResult {
+    let encodings = [
+        serde_json::json!("Idle"),
+        serde_json::json!("Executing"),
+        serde_json::json!("Completed"),
+        serde_json::json!({ "Failed": "boom" }),
+    ];
+    for encoding in encodings {
+        let mut snapshot = fixture_value("citadel")?;
+        *snapshot
+            .pointer_mut("/paladin/node/status")
+            .ok_or("fixture citadel.json has no value at /paladin/node/status")? = encoding.clone();
+
+        let loaded: PaladinState = serde_json::from_str(&snapshot.to_string())?;
+
+        let written = reserialized(&loaded)?;
+        assert_eq!(
+            written.pointer("/paladin/node/status"),
+            Some(&encoding),
+            "status {encoding} changed on the way through PaladinState"
+        );
+    }
+
+    // Reasoning exists only in the real status (v0.11 writes it, a v0.10 binary cannot read it).
+    let mut loaded: PaladinState = serde_json::from_str(&fixture("citadel")?)?;
+    loaded.paladin.node.status = PaladinStatus::Reasoning;
+    let written = reserialized(&loaded)?;
+    assert_eq!(
+        written.pointer("/paladin/node/status"),
+        Some(&serde_json::json!("Reasoning"))
+    );
+    assert!(serde_json::to_string(&loaded)?.contains("\"Reasoning\""));
     Ok(())
 }

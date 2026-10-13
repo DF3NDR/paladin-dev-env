@@ -2138,7 +2138,7 @@ mod tests {
         > {
             if state_id == Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap() {
                 // Create PaladinData
-                let data = crate::core::platform::container::citadel::PaladinData {
+                let data = crate::core::platform::container::paladin::PaladinData {
                     system_prompt: "Restored prompt".to_string(),
                     name: "RestoredPaladin".to_string(),
                     user_name: "User".to_string(),
@@ -2146,7 +2146,7 @@ mod tests {
                     temperature: 0.8,
                     max_loops: MaxLoops::Fixed(5),
                     stop_words: vec![],
-                    status: crate::core::platform::container::citadel::PaladinStatus::Idle,
+                    status: crate::core::platform::container::paladin::PaladinStatus::Idle,
                     vision_enabled: false,
                     ..Default::default()
                 };

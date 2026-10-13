@@ -313,8 +313,7 @@ use paladin_core::platform::container::citadel_error::CitadelError;
 /// use paladin_ports::output::citadel_port::CitadelPort;
 /// use paladin_core::platform::container::citadel::PaladinState;
 /// use paladin_core::base::entity::node::Node;
-/// use paladin_core::platform::container::citadel::PaladinData;
-/// use paladin_core::platform::container::paladin::MaxLoops;
+/// use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 ///
 /// async fn save_and_load(
 ///     citadel: &dyn CitadelPort,
@@ -328,7 +327,7 @@ use paladin_core::platform::container::citadel_error::CitadelError;
 ///         temperature: 0.7,
 ///         max_loops: MaxLoops::Fixed(3),
 ///         stop_words: vec![],
-///         status: paladin_core::platform::container::citadel::PaladinStatus::Idle,
+///         status: PaladinStatus::Idle,
 ///         vision_enabled: false,
 ///         ..Default::default()
 ///     };
@@ -589,10 +588,8 @@ pub trait CitadelPort: Send + Sync {
 mod tests {
     use super::*;
     use paladin_core::base::entity::node::Node;
-    use paladin_core::platform::container::citadel::{
-        BattalionCheckpointConfig, CheckpointData, PaladinData, PaladinStatus,
-    };
-    use paladin_core::platform::container::paladin::MaxLoops;
+    use paladin_core::platform::container::citadel::{BattalionCheckpointConfig, CheckpointData};
+    use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 
     // Mock implementation for testing trait bounds
     struct MockCitadel;

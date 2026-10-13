@@ -20,7 +20,7 @@ This is a Cargo **workspace** with crates under `crates/`:
 
 | Crate | Responsibility |
 |-------|----------------|
-| `paladin-core` | Core domain primitives (`Node<T>`, base types, platform container) |
+| `paladin-core` | Core domain primitives (`Entity<T>` base wrapper -- "node" means only a WarGraph/Campaign vertex, ADR-0060 -- base types, platform container) |
 | `paladin-ports` | Application-layer port traits (input/output interfaces) |
 | `paladin-battalion` | Multi-agent orchestration (Formation, Phalanx, Campaign, Chain of Command) |
 | `paladin-llm` | LLM provider adapters (OpenAI, DeepSeek, Anthropic) |
@@ -64,6 +64,8 @@ make health               # Service status
   adapters → core + ports. Never import infrastructure from core or application.
 - **Ubiquitous language**: always use the Medieval Military terms (Paladin, Battalion, Garrison,
   Arsenal, Citadel, Herald, Quest, …) consistently in code, docs, and comments.
+  `Entity<T>` (the base wrapper) is deliberately generic, not a Medieval Military term; "node" means
+  only a WarGraph/Campaign vertex (ADR-0060).
 - **Before committing a parent task**: `cargo test` → `cargo fmt --check` → `cargo clippy` →
   `make api-surface` (an intentional public-surface change is refreshed with
   `make api-surface-update` plus a CHANGELOG entry), then conventional-commit message. Stop after

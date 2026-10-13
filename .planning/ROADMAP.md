@@ -1122,7 +1122,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 48-04-PLAN.md — Citadel placeholder PaladinData/PaladinStatus unified with the real ones (D-10); Stage A: Node<T> -> Entity<T> at base::entity::Entity (D-01, D-02, D-13); entity-sense Rust prose finished
+- [x] 48-04-PLAN.md — Citadel placeholder PaladinData/PaladinStatus unified with the real ones (D-10); Stage A: Node<T> -> Entity<T> at base::entity::Entity (D-01, D-02, D-13); entity-sense Rust prose finished
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

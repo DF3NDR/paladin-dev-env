@@ -126,7 +126,7 @@ the graph side is kept.*
   `PromptItem` are built on it; `#[serde(alias = "node")]` keeps every pre-rename persisted JSON
   (Citadel snapshots, stored Paladins, SQLite/Postgres rows) deserializing, proven by a fixture test
 
-- [ ] **ENTITY-02**: The old name's fate is decided before planning and recorded: by default
+- [x] **ENTITY-02**: The old name's fate is decided before planning and recorded: by default
   `Node<T>` and the `base::entity::node` module are removed outright under a Phase-48-only X-03
   supersession recorded in an ADR (the ADR-0059 shape; `MIGRATION.md` §9.7 stays empty), or — if
   the owner chooses X-03 as written — a `#[deprecated(since = "0.11.0")]` `Node<T>` alias and
@@ -287,7 +287,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CURR-25 | Phase 46 | Pending |
 | SHIP-07 | Phase 47 | Pending |
 | ENTITY-01 | Phase 48 | Complete |
-| ENTITY-02 | Phase 48 | Pending |
+| ENTITY-02 | Phase 48 | Complete |
 | ENTITY-03 | Phase 48 | Complete |
 | ENTITY-04 | Phase 48 | Complete |
 | ENTITY-05 | Phase 48 | Pending |

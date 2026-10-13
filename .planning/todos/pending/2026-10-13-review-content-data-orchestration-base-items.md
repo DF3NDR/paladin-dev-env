@@ -58,3 +58,23 @@ sweep touches.
 ## Operator position (2026-10-13)
 
 Keep everything until the review has been done; do not let a consumer count decide it.
+
+## Residual entity-sense identifiers (Phase 48 planning note)
+
+*Dated 2026-10-13 (plan 48-02, ADR-0060).* Phase 48 renames the base wrapper to `Entity<T>` and reserves
+"node" for the graph sense (ADR-0060), but D-05 keeps the five items unchanged beyond the rename sweep, so
+these entity-sense identifiers survive inside them and are this review's to decide:
+
+- `Field.nid` (`crates/paladin-core/src/base/entity/field.rs`)
+- `FieldVersion.node_id`, `FieldVersionHistory.node_id` and `FieldVersionComparison.node_id`
+  (`crates/paladin-core/src/base/service/field_version_service.rs`)
+- `FieldVersionRepository::get_node_field_versions` and `FieldVersionService::get_node_field_versions`
+  (`crates/paladin-core/src/base/service/field_version_service.rs`)
+
+ADR-0060 lists the same set as the one bounded exception to its vocabulary rule, and
+`tests/entity_rename_guard.rs` deliberately does not ban these names. Renaming any of them is a public break on
+`paladin-ai-core` with its own `MIGRATION.md` 9.2 rows, so it belongs to the review's outcome (options A to C
+above), not to Phase 48.
+
+Also note that the two retained services now import `ChangeType`, `HashAlgorithm` and `VersioningError` from
+`entity_version_service` (plan 48-03), so the review should read that dependency when it weighs the options.

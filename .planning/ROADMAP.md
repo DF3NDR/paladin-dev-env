@@ -1135,7 +1135,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 48-08-PLAN.md — tests/entity_rename_guard.rs: old entity paths absent, one Paladin/PaladinData/PaladinStatus/NodeError/Entity, graph definitions pinned, retained paths not banned (D-07); byte-identical graph freeze
+- [x] 48-08-PLAN.md — tests/entity_rename_guard.rs: old entity paths absent, one Paladin/PaladinData/PaladinStatus/NodeError/Entity, graph definitions pinned, retained paths not banned (D-07); byte-identical graph freeze
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

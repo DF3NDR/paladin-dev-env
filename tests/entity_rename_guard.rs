@@ -1056,3 +1056,19 @@ fn scanner_accepts_a_clean_tree() -> io::Result<()> {
     assert!(violations.is_empty(), "{violations:#?}");
     Ok(())
 }
+
+/// The guard: the repository itself names none of the old Phase 48 entity names outside the history
+/// files, declares `Paladin`, `PaladinData`, `PaladinStatus`, `NodeError` and `Entity` exactly
+/// once each, and still declares every graph definition in its current file.
+#[test]
+fn entity_surfaces_are_renamed_in_the_tree() -> io::Result<()> {
+    let violations = scan(Path::new(env!("CARGO_MANIFEST_DIR")));
+
+    assert!(
+        violations.is_empty(),
+        "Phase 48 renamed the base entity wrapper and froze the graph vocabulary \
+         (ENTITY-01..05, ADR-0060); fix these at their source:\n{}",
+        violations.join("\n")
+    );
+    Ok(())
+}

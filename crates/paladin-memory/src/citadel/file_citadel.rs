@@ -448,6 +448,50 @@ mod tests {
         assert!(FileCitadel::parse_filename("paladin-123.txt").is_none());
     }
 
+    /// Tracer for the Phase 48 base-entity rename (ENTITY-01, D-03, D-10): the
+    /// bytes a v0.10 Citadel wrote -- captured by plan 48-01 from the unmodified
+    /// tree and never hand-edited -- load through the real `FileCitadel` adapter
+    /// into a `PaladinState` and save back to an identical JSON document.
+    #[tokio::test]
+    async fn pre_rename_citadel_snapshot_loads_through_file_citadel()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Runtime read (never `include_str!`) so crate packaging is unaffected.
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../paladin-core/tests/fixtures/pre_rename/citadel.json");
+        let fixture_bytes = std::fs::read(&fixture_path)?;
+        let fixture_value: serde_json::Value = serde_json::from_slice(&fixture_bytes)?;
+
+        let id_text = fixture_value["paladin"]["uuid"]
+            .as_str()
+            .ok_or("fixture has no paladin.uuid string")?;
+        let id = Uuid::parse_str(id_text)?;
+
+        // The fixture bytes are copied unchanged into the Citadel's state dir.
+        let temp_dir = TempDir::new()?;
+        std::fs::write(
+            temp_dir.path().join(format!("paladin-{id}.json")),
+            &fixture_bytes,
+        )?;
+
+        let citadel = FileCitadel::new(temp_dir.path())?;
+        let state = citadel
+            .load_paladin(id)
+            .await?
+            .ok_or("pre-rename snapshot was not found by load_paladin")?;
+
+        assert_eq!(state.paladin.uuid, id);
+        assert_eq!(state.paladin.name.as_deref(), Some("fixture"));
+        assert_eq!(state.schema_version, "1.0.0");
+
+        // Saving overwrites the same path; the written document must equal the
+        // fixture (`serde_json::Value` equality ignores key order).
+        citadel.save_paladin(&state).await?;
+        let written = std::fs::read_to_string(temp_dir.path().join(format!("paladin-{id}.json")))?;
+        let written_value: serde_json::Value = serde_json::from_str(&written)?;
+        assert_eq!(written_value, fixture_value);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_save_and_load_paladin() {
         let temp_dir = TempDir::new().unwrap();

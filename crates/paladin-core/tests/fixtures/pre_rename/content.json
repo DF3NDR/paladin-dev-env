@@ -1,0 +1,28 @@
+{
+  "node": {
+    "uuid": "2c40a8ae-edc0-447f-b336-7ac0161f8191",
+    "created": "2026-10-13T19:25:41.220874283Z",
+    "modified": "2026-10-13T19:25:41.220874283Z",
+    "node": {
+      "content": {
+        "Text": {
+          "path": null,
+          "content": "hello",
+          "filesize": 5
+        }
+      },
+      "url": null,
+      "hash": null,
+      "source_id": null,
+      "source_url": null,
+      "description": null,
+      "tags": null,
+      "source": null,
+      "author": null,
+      "pub_date": null,
+      "mod_date": null
+    },
+    "name": null,
+    "version": true
+  }
+}

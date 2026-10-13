@@ -4,15 +4,15 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 48
 current_phase_name: Base Entity Rename
-status: planning
+status: executing
 stopped_at: Phase 48 planned (9 plans, 7 waves) — ready to execute
-last_updated: "2026-10-13T17:56:41.886Z"
+last_updated: "2026-10-13T18:13:31.179Z"
 last_activity: 2026-10-13
-last_activity_desc: "Phase 48 planned: nine plans in seven waves regenerated from the owner-updated 48-CONTEXT.md (D-15); plan-checker passed on iteration 2; requirements 5/5 and decisions 19/19 covered. Next: /gsd-execute-phase 48."
+last_activity_desc: Phase 48 execution started
 progress:
   total_phases: 9
   completed_phases: 8
-  total_plans: 95
+  total_plans: 86
   completed_plans: 77
 ---
 
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-09-30 after Phase 40)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 48 — Base Entity Rename (added 2026-10-12; runs before Phases 46-47)
+**Current focus:** Phase 48 — Base Entity Rename
 Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 11 phases (38-48; Phase 48
 added 2026-10-12 after a code survey of the two senses of "node", sequenced before 46-47 because
 it is a public-API break the v0.11 migration guide and tag must carry), 40/40 requirements
@@ -53,10 +53,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 48 — Base Entity Rename (runs before 46 and 47)
-Plan: 0 of 9 (9 plans in 7 waves, 48-01 .. 48-09)
-Status: Ready to execute
-Last activity: 2026-10-13 — Phase 48 replanned from the owner-updated 48-CONTEXT.md (D-15): nine plans in seven waves, plan-checker passed on iteration 2 (1 blocker + 3 warnings fixed in 9b5d2ae), requirements 5/5 and decisions 19/19 covered. Previous: Phase 41 sealed: the operator signed off the four human UAT items in 41-UAT.md (4/4 passed; verification status moved from human_needed to passed) and ROADMAP row 41 reads 9/9 Complete. Earlier the same day Phase 44 was sealed (44-UAT.md 15/15; G-44-2 pre-commit gate fixed in 1e93e1ce, green on run 38193792540). Every phase 38-45 is now complete; next is Phase 46.
+Phase: 48 (Base Entity Rename) — EXECUTING
+Plan: 1 of 9
+Status: Executing Phase 48
+Last activity: 2026-10-13 — Phase 48 execution started
 
 ## Performance Metrics
 

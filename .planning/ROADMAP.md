@@ -1131,7 +1131,7 @@ Plans:
 **Wave 5** *(blocked on Wave 4 completion)*
 
 - [x] 48-06-PLAN.md — Docs agree: mdBook domain-model/design-patterns/crate-map/overview/stable-api, LayerArchitecture.svg, READMEs, CLAUDE.md and copilot naming-table Entity row (D-07)
-- [ ] 48-07-PLAN.md — Register once, measured (D-14): D-27 semver diagnostic, MIGRATION 9.2 rows + set-equal allowlist + new allow lines in one commit; 9.1 M-B-12, 9.4, 9.7 sentence; CHANGELOGs
+- [x] 48-07-PLAN.md — Register once, measured (D-14): D-27 semver diagnostic, MIGRATION 9.2 rows + set-equal allowlist + new allow lines in one commit; 9.1 M-B-12, 9.4, 9.7 sentence; CHANGELOGs
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

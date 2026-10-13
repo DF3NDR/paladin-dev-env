@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 48
 current_phase_name: Base Entity Rename
 status: executing
-stopped_at: Completed 48-06-PLAN.md
-last_updated: "2026-10-13T23:16:04.930Z"
+stopped_at: Completed 48-07-PLAN.md
+last_updated: "2026-10-13T23:45:21.928Z"
 last_activity: 2026-10-13
 last_activity_desc: Phase 48 execution resumed (wave continue)
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 86
-  completed_plans: 83
+  completed_plans: 84
 ---
 
 # Project State
@@ -34,7 +34,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████░░░░] 77/86 plans ([██████████] 97%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████░░░░] 77/86 plans ([██████████] 98%) of the phases planned so far (38-45, 48);
 Phase 48 is planned (9 plans, 7 waves, ready to execute); Phases 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -54,7 +54,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 48 (Base Entity Rename) — EXECUTING
-Plan: 6 of 9
+Plan: 7 of 9
 Status: Ready to execute
 Last activity: 2026-10-13 — Phase 48 execution resumed (wave continue)
 
@@ -279,6 +279,7 @@ Last activity: 2026-10-13 — Phase 48 execution resumed (wave continue)
 | Phase 48 P04 | 1h | 3 tasks | 140 files |
 | Phase 48 P05 | 75m | 2 tasks | 110 files |
 | Phase 48 P06 | 25m | 2 tasks | 12 files |
+| Phase 48 P07 | 30min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -468,6 +469,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 48-04: base module rustdoc links Entity<T> via crate::base::entity::Entity (relative entity::Entity does not resolve in a module's inner doc)
 - [Phase ?]: 48-05: Stage B landed as one commit (cafc93b); Entity.data / ContentItem.entity / PromptItem.entity are read-aliased to node, alias edge cases pinned by six tests (D-03, D-08)
 - [Phase ?]: [Phase 48-06] SVG closed with a missing </svg>; README usage snippet uses PaladinStatus::Idle because TaskStatus does not exist
+- [Phase 48]: Phase 48-07: register only the lints the D-27 diagnostic fired (11 on paladin-ai-core, 1 on paladin-ai); ContentItem/PromptItem register both the removed node field and the added entity field; ContentItemService is a register-only N row
 
 ### Pending Todos
 
@@ -683,8 +685,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-13T23:16:04.874Z
-**Stopped at:** Completed 48-06-PLAN.md
+**Last session:** 2026-10-13T23:45:21.892Z
+**Stopped at:** Completed 48-07-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

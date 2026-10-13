@@ -1050,6 +1050,7 @@ Battalion files are quiet). **Resequenced ahead of Phases 46 and 47** on 2026-10
 public-API break that must land before the v0.10 → v0.11 `MIGRATION.md` guide (Phase 46,
 CURR-23) is written and before v0.11.0 is tagged (Phase 47).
 **Requirements**: ENTITY-01, ENTITY-02, ENTITY-03, ENTITY-04, ENTITY-05
+**UI hint**: no
 **Ground truth** (code survey 2026-10-10, re-verified on the post-Phase-44 tree `25dc267` on
 2026-10-12, recorded in `48-CONTEXT.md`): the graph sense of "node" arrived with the v0.10.0
 superstep engine (Phases 22-25) and is now ~5× larger than the entity sense — `NodeId` 1,910

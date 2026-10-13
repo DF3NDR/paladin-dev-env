@@ -553,6 +553,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ContentItemServiceError`. The unused `Field`, `CollectionType` / `Item`, `element`,
   `FieldVersionService` and `CollectionVersionService` stay, pending the content / general data
   orchestration review (D-05); only their import path moved.
+- **Persisted entity JSON is written with new keys and still reads the old ones (Phase 48;
+  ENTITY-01; ADR-0060; see `MIGRATION.md` 9.1 M-B-12 and 9.4).** The entity payload key `node`
+  becomes `data`, `ContentItem` and `PromptItem` store their entity under `entity` instead of
+  `node`, and a version record stores `entity_id` / `entity_data`. v0.11 reads both spellings and
+  writes only the new ones; a document carrying both spellings of one key is rejected. This is
+  one-way: a v0.10 binary cannot read what v0.11 wrote, and it cannot read a Citadel snapshot whose
+  Paladin status is `Reasoning` (the Citadel now stores the real `PaladinStatus`, which has that
+  variant). Back up before upgrading, upgrade readers and queue consumers before writers, and
+  downgrade only by restoring the backup. The read-aliases stay for the whole 0.x line; removing
+  them needs its own ADR. Vocabulary rule: "node" means a WarGraph or Campaign vertex, and "Entity"
+  means the base wrapper every Paladin, Council, Grove, User, Log, `ContentItem` and `PromptItem`
+  is built on.
 - `LlmError::RateLimitExceeded` is now a struct variant `{ retry_after, hints }`, marked
   `#[non_exhaustive]` (PACE-01; Phase 43 plan 43-02; `MIGRATION.md` section 9.2). Construct it with
   `LlmError::rate_limited(None)` (or `rate_limited(Some(delay))` /
@@ -736,6 +748,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     re-export `paladin::application::services::battalion::retry`. Replacement: `aegis.retry` with
     `engine::retry::backoff_delay`. The API baseline `.project/current-exports.txt` loses that one
     line.
+- **The base entity wrapper's old name, a clean break with no shim (Phase 48; ENTITY-01..05;
+  ADR-0060; see `MIGRATION.md` 9.1 M-B-12 and the Phase 48 9.2 rows).** Each removal names its
+  replacement:
+  - The generic base wrapper `Node<T>` and its module `base::entity::node`. Replacement:
+    `paladin_core::base::entity::Entity<T>`, with the payload field renamed from `node` to `data`.
+  - The base version family `NodeVersion`, `NodeVersionMetadata`, `NodeVersionRepository`,
+    `NodeVersionService` and `InMemoryNodeVersionRepository`, and the module
+    `base::service::node_version_service`. Replacement: the `EntityVersion*` family in
+    `base::service::entity_version_service` (described under Changed). `VersionHistory`,
+    `VersionComparison`, `VersioningConfig`, `ChangeType`, `HashAlgorithm` and `VersioningError`
+    keep their names and moved with the module.
+  - The Citadel module's placeholder `PaladinData` and `PaladinStatus` and its duplicate `Paladin`
+    alias. Replacement: the real types in `platform::container::paladin`; `PaladinState.paladin` is
+    now the real `Paladin`. The real `PaladinStatus` adds `Reasoning`.
+  - `ContentItem.node` and `PromptItem.node`. Replacement: `.entity`, so a content item's payload is
+    read as `item.entity.data`.
+  - `NodeId`, `NodeSpec`, `StateNode`, the structured `NodeError` and every other graph item are
+    different items and are unchanged. `Field`, `CollectionType` / `Item`, `element`,
+    `FieldVersionService` and `CollectionVersionService` are retained pending review and are not
+    removed.
 
 ### Fixed
 
@@ -815,6 +847,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absent from `GET /runs`; `/stream`, `/cancel` and `/webhook-deliveries` also answer `501` without
   a run store. Cross-tenant operator reads need an `admin`-role key (PLAT-07; 40-01, 40-05;
   `MIGRATION.md` §9.6).
+- **BREAKING (`paladin-ai-core`): the base wrapper is `Entity<T>` with payload `data`, and
+  persisted entity JSON is written with the new keys** -- `Node<T>` and `base::entity::node` are
+  gone, `ContentItem.node` and `PromptItem.node` are `.entity`, the version family is
+  `EntityVersion*`, and the Citadel stores the real `PaladinData` and `PaladinStatus`. v0.11 reads
+  the v0.10 keys but a v0.10 binary cannot read v0.11 output (ENTITY-01..05; ADR-0060;
+  `MIGRATION.md` 9.1 M-B-12, 9.2 Phase 48 rows, 9.4).
 
 ### Known limitations
 

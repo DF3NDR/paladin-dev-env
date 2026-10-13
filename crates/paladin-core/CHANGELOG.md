@@ -78,6 +78,11 @@ and this project follows lockstep workspace versioning.
   version records still load. The unused `Field`, `CollectionType` / `Item`, `element`,
   `FieldVersionService` and `CollectionVersionService` are retained pending review (D-05); the
   `base` module rustdoc says why.
+- Phase 48 (base entity rename, ENTITY-01; ADR-0060): persisted entity JSON is written with the
+  new keys and still reads the v0.10 ones. `Entity<T>` stores its payload under `data` (read-alias
+  `node`), `ContentItem` and `PromptItem` store their entity under `entity` (read-alias `node`), and
+  `EntityVersion` stores `entity_id` / `entity_data`. A document carrying both spellings is
+  rejected; a v0.10 binary cannot read v0.11 output. See `MIGRATION.md` 9.1 M-B-12 and 9.4.
 - The `cost_estimate`/`total_cost()` rustdoc reserved-note on `ExecutionMetadata` now reads
   "produced by the Treasurer" instead of "no in-tree producer yet" (D-12).
 - Phase 44 (legacy clean break, LEGACY-01, LEGACY-02; ADR-0059): `BattalionConfig` gains
@@ -105,6 +110,14 @@ and this project follows lockstep workspace versioning.
   `PaladinError::LlmError`, `PaladinError::is_retryable` and `PaladinError::is_terminal`. Use
   `BattalionConfig.aegis`, the structured `node_error::NodeError`, `PaladinError::LlmFailure` and
   `PaladinError::transience()`.
+- Phase 48 (ENTITY-01..05; ADR-0060; a clean break with no shim, see `MIGRATION.md` 9.2): the
+  generic base wrapper `Node<T>` and `base::entity::node`, replaced by `base::entity::Entity<T>` with
+  payload `data`; the `NodeVersion*` family and `base::service::node_version_service`, replaced by
+  `EntityVersion*` in `entity_version_service`; the Citadel module's placeholder `PaladinData`,
+  `PaladinStatus` and `Paladin` alias, replaced by the real `platform::container::paladin` types
+  (`PaladinState.paladin` is the real `Paladin`; the real `PaladinStatus` adds `Reasoning`); and
+  `ContentItem.node` / `PromptItem.node`, replaced by `.entity`. Graph items such as `NodeId`,
+  `NodeSpec`, `StateNode` and the structured `NodeError` are different and unchanged.
 
 ## [0.10.1] - 2026-09-20
 

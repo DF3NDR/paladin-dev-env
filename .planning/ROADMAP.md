@@ -1111,32 +1111,15 @@ was built independently. `Field`, `Collection`, `Element`, `FieldVersionService`
 **Plans**: 9 plans
 
 Plans:
-**Wave 1**
-
-- [ ] 48-01-PLAN.md — Tracer: capture the four pre-rename JSON fixtures from the unmodified tree; a v0.10 Citadel snapshot loads through FileCitadel end to end; the compat harness over Paladin, PaladinState, ContentItem, PromptItem
-- [ ] 48-02-PLAN.md — ADR-0060 (Phase 48-only X-03 supersession, Entity design, node/Entity vocabulary rule), PROMOTION next free 0061, PROJECT.md rows, 48-CONTEXT.md acceptance + D-08..D-14
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [ ] 48-03-PLAN.md — Remove Field, Collection, Element and the two dormant version services; rename the version family to EntityVersion* (serde aliases), carry ContentItemService, refresh .project/current-exports.txt
-
-**Wave 3** *(blocked on Wave 2 completion)*
-
-- [ ] 48-04-PLAN.md — Stage A: Node<T> -> Entity<T> at paladin_core::base::entity::Entity (private wrapper module), citadel alias removed, Entity revisioning-contract rustdoc, entity-sense prose sweep
-
-**Wave 4** *(blocked on Wave 3 completion)*
-
-- [ ] 48-05-PLAN.md — Stage B: payload field node -> data and ContentItem/PromptItem node -> entity with #[serde(alias = "node")]; graph-sense lines byte-identical; alias edge-case tests and # Serialization rustdoc
-- [ ] 48-06-PLAN.md — mdBook domain-model/design-patterns/crate-map/stable-api rewrites, LayerArchitecture.svg, READMEs, CLAUDE.md and copilot naming-table Entity row
-
-**Wave 5** *(blocked on Wave 4 completion)*
-
-- [ ] 48-07-PLAN.md — Measured D-27 semver diagnostic; MIGRATION 9.2 rows + allowlist block + trait_missing/module_missing allow lines in one commit; 9.1 M-B-12, 9.4, 9.7; CHANGELOGs
-- [ ] 48-08-PLAN.md — tests/entity_rename_guard.rs (old paths/identifiers absent, payload access, exactly-one counts, graph freeze) with positive controls; byte-identical frozen files
-
-**Wave 6** *(blocked on Wave 5 completion)*
-
-- [ ] 48-09-PLAN.md — Full phase gate incl. coverage and make security; ADR-0060 conforms; PROJECT.md row implemented; ENTITY-01/04/05 and success-criteria wording corrected (IDs unchanged)
+- [ ] 48-01-PLAN.md — Tracer: capture the five v0.10 fixtures (Paladin, Citadel snapshot, ContentItem, PromptItem, version record) from the unmodified tree; a pre-rename snapshot loads through FileCitadel; the compat harness over all five shapes
+- [ ] 48-02-PLAN.md — ADR-0060 (Phase-48-only X-03 supersession, Entity design, citadel unification, five base items retained pending review, node/Entity vocabulary rule); PROMOTION next free 0061; PROJECT.md rows; residual note in the content-system review todo
+- [ ] 48-03-PLAN.md — Version family renamed EntityVersion* with node_id/node_data read-aliases (D-09); retained-items reason in base/mod.rs rustdoc (D-05); API baseline refreshed (14 lines)
+- [ ] 48-04-PLAN.md — Citadel placeholder PaladinData/PaladinStatus unified with the real ones (D-10); Stage A: Node<T> -> Entity<T> at base::entity::Entity (D-01, D-02, D-13); entity-sense Rust prose finished
+- [ ] 48-05-PLAN.md — Stage B: payload node -> data and ContentItem/PromptItem node -> entity with read-aliases (D-03, D-08); alias edge-case tests; Entity<T> revisioning and serialization rustdoc (D-04, D-11)
+- [ ] 48-06-PLAN.md — Docs agree: mdBook domain-model/design-patterns/crate-map/overview/stable-api, LayerArchitecture.svg, READMEs, CLAUDE.md and copilot naming-table Entity row (D-07)
+- [ ] 48-07-PLAN.md — Register once, measured (D-14): D-27 semver diagnostic, MIGRATION 9.2 rows + set-equal allowlist + new allow lines in one commit; 9.1 M-B-12, 9.4, 9.7 sentence; CHANGELOGs
+- [ ] 48-08-PLAN.md — tests/entity_rename_guard.rs: old entity paths absent, one Paladin/PaladinData/PaladinStatus/NodeError/Entity, graph definitions pinned, retained paths not banned (D-07); byte-identical graph freeze
+- [ ] 48-09-PLAN.md — Closeout: full gate run with measured coverage; ADR-0060 conforms; ENTITY-01/04/05 and ROADMAP wording corrected (ENTITY-04 retained pending review), IDs unchanged
 
 ---
 *Roadmap created: 2026-07-30 (ingest run 1 of 5 — `.project/Milestone_1-MVP`, 36 docs)*

@@ -1118,7 +1118,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 48-03-PLAN.md — Version family renamed EntityVersion* with node_id/node_data read-aliases (D-09); retained-items reason in base/mod.rs rustdoc (D-05); API baseline refreshed (14 lines)
+- [x] 48-03-PLAN.md — Version family renamed EntityVersion* with node_id/node_data read-aliases (D-09); retained-items reason in base/mod.rs rustdoc (D-05); API baseline refreshed (14 lines)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

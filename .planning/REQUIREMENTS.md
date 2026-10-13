@@ -139,7 +139,7 @@ the graph side is kept.*
   removed), and `NodeVersion`, `NodeVersionRepository`, `NodeVersionService` and
   `InMemoryNodeVersionRepository` become `EntityVersion*`
 
-- [ ] **ENTITY-04**: `Field`, `Collection`, `Element`, `FieldVersionService` and
+- [x] **ENTITY-04**: `Field`, `Collection`, `Element`, `FieldVersionService` and
   `CollectionVersioningService` (zero consumers outside `base/`) are each removed or kept with a
   written reason, and `Entity<T>::version`'s contract is documented in rustdoc, including that only
   `ContentItem` currently honours it through the version service
@@ -289,7 +289,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ENTITY-01 | Phase 48 | Complete |
 | ENTITY-02 | Phase 48 | Pending |
 | ENTITY-03 | Phase 48 | Complete |
-| ENTITY-04 | Phase 48 | Pending |
+| ENTITY-04 | Phase 48 | Complete |
 | ENTITY-05 | Phase 48 | Pending |
 
 **Coverage:**

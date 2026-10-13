@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 48
 current_phase_name: Base Entity Rename
 status: executing
-stopped_at: Completed 48-01-PLAN.md
-last_updated: "2026-10-13T21:36:16.929Z"
+stopped_at: Completed 48-03-PLAN.md
+last_updated: "2026-10-13T21:54:36.585Z"
 last_activity: 2026-10-13
 last_activity_desc: Phase 48 execution resumed (wave continue)
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 86
-  completed_plans: 79
+  completed_plans: 80
 ---
 
 # Project State
@@ -34,7 +34,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████░░░░] 77/86 plans ([█████████░] 92%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████░░░░] 77/86 plans ([█████████░] 93%) of the phases planned so far (38-45, 48);
 Phase 48 is planned (9 plans, 7 waves, ready to execute); Phases 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -54,7 +54,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 48 (Base Entity Rename) — EXECUTING
-Plan: 2 of 9
+Plan: 3 of 9
 Status: Ready to execute
 Last activity: 2026-10-13 — Phase 48 execution resumed (wave continue)
 
@@ -275,6 +275,7 @@ Last activity: 2026-10-13 — Phase 48 execution resumed (wave continue)
 | Phase 44 P12 | ~1h | 2 tasks | 6 files |
 | Phase 48 P02 | 20min | 2 tasks | 4 files |
 | Phase 48 P01 | split (container restart) | 2 tasks | 7 files |
+| Phase 48 P03 | 25min | 2 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -458,6 +459,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 44]: Phase 44-12: ADR-0059 Code Conformance is conforms; LEGACY-04 ticked after the full phase gate (workspace tests green apart from the 2 baseline run_api_wiring failures, doctests, clippy, fmt, clean-code, security, check-gates, api-surface, examples, MSRV 1.88, both guards)
 - [Phase 48]: 48-02: ADR-0060 supersedes X-03 for Phase 48 only; serde read-aliases are data compatibility, not an API shim; the five unused base items are retained pending the content / general data orchestration review with a bounded list of residual entity-sense identifiers
 - [Phase ?]: Phase 48-01: harness reads today's names; later plans rewrite keys; tests avoid naming the citadel placeholder types
+- [Phase 48]: 48-03: serde read-aliases node_id/node_data sit on EntityVersion only, no serde(default); both spellings rejected as duplicate field (D-09, D-11)
+- [Phase 48]: 48-03: regenerated API baseline diff is 14 ContentItemService content lines plus the generated-at header line; header kept truthful
 
 ### Pending Todos
 
@@ -673,8 +676,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-13T21:36:16.873Z
-**Stopped at:** Completed 48-01-PLAN.md
+**Last session:** 2026-10-13T21:54:36.555Z
+**Stopped at:** Completed 48-03-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

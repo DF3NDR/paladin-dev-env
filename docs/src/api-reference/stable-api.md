@@ -528,7 +528,7 @@ Core business domain types that represent the framework's entities. Located in `
 
 | Type | Fully Qualified Path | Tier | Description | Documentation |
 |------|---------------------|------|-------------|---------------|
-| `Paladin` | `paladin_core::platform::container::paladin::Paladin` | 🟢 Stable | Autonomous AI agent entity (Node<PaladinData>) | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/paladin/type.Paladin.html) |
+| `Paladin` | `paladin_core::platform::container::paladin::Paladin` | 🟢 Stable | Autonomous AI agent entity (Entity<PaladinData>) | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/paladin/type.Paladin.html) |
 | `PaladinData` | `paladin_core::platform::container::paladin::PaladinData` | 🟢 Stable | Paladin configuration and state data | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/paladin/struct.PaladinData.html) |
 | `PaladinConfig` | `paladin_core::platform::container::paladin::PaladinConfig` | 🟢 Stable | Runtime execution configuration | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/paladin/struct.PaladinConfig.html) |
 | `PaladinStatus` | `paladin_core::platform::container::paladin::PaladinStatus` | 🟢 Stable | Agent execution status enum | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/platform/container/paladin/enum.PaladinStatus.html) |
@@ -611,9 +611,9 @@ Generic framework primitives and patterns. Located in `crates/paladin-core/src/b
 
 | Type | Fully Qualified Path | Tier | Description | Documentation |
 |------|---------------------|------|-------------|---------------|
-| `Node<T>` | `paladin_core::base::entity::node::Node` | 🟢 Stable | Generic entity wrapper with UUID and metadata | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/node/struct.Node.html) |
-| `Collection<T>` | `paladin_core::base::entity::collection::Collection` | 🟢 Stable | Generic collection type with metadata | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/collection/struct.Collection.html) |
-| `Field` | `paladin_core::base::entity::field::Field` | 🟢 Stable | Field definition with type information | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/field/struct.Field.html) |
+| `Entity<T>` | `paladin_core::base::entity::Entity` | 🟢 Stable | Generic base-layer wrapper: UUID, timestamps, optional name, payload `data`, `version` flag | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/struct.Entity.html) |
+| `CollectionType<T>` | `paladin_core::base::entity::collection::CollectionType` | 🟢 Stable | Generic collection type with metadata; retained pending review (ADR-0060) | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/collection/struct.CollectionType.html) |
+| `Field<T>` | `paladin_core::base::entity::field::Field` | 🟢 Stable | Field definition with type information; retained pending review (ADR-0060) | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/field/struct.Field.html) |
 | `Message<T>` | `paladin_core::base::entity::message::Message` | 🟢 Stable | Generic message wrapper for events | [Docs](https://docs.rs/paladin-ai-core/latest/paladin_core/base/entity/message/struct.Message.html) |
 
 ### Resilience Types

@@ -77,7 +77,7 @@ Pure domain types — zero infrastructure dependencies.
 ```
 src/
 ├── base/
-│   ├── node.rs          # Node<T> entity wrapper
+│   ├── entity/wrapper.rs  # Entity<T> (re-exported as base::entity::Entity)
 │   ├── collection.rs    # Paginated collections
 │   ├── field.rs         # Dynamic field definitions
 │   └── message.rs       # Inter-agent messages

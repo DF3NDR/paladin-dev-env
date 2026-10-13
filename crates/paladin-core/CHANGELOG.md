@@ -68,6 +68,16 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- Phase 48 (base entity rename, ENTITY-03; ADR-0060): `base::service::node_version_service`
+  becomes `entity_version_service` and its family becomes `EntityVersion`,
+  `EntityVersionMetadata`, `EntityVersionRepository`, `EntityVersionService` and
+  `InMemoryEntityVersionRepository`; `VersioningError::NodeNotFound` becomes `EntityNotFound`; the
+  record's `node_id` / `node_data` become `entity_id` / `entity_data` (also on `VersionHistory` and
+  `VersionComparison`), and `VersioningConfig.max_versions_per_node` becomes
+  `max_versions_per_entity`. `EntityVersion` keeps serde read-aliases for the v0.10 keys so stored
+  version records still load. The unused `Field`, `CollectionType` / `Item`, `element`,
+  `FieldVersionService` and `CollectionVersionService` are retained pending review (D-05); the
+  `base` module rustdoc says why.
 - The `cost_estimate`/`total_cost()` rustdoc reserved-note on `ExecutionMetadata` now reads
   "produced by the Treasurer" instead of "no in-tree producer yet" (D-12).
 - Phase 44 (legacy clean break, LEGACY-01, LEGACY-02; ADR-0059): `BattalionConfig` gains

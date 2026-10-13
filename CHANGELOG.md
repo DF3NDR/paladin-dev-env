@@ -537,6 +537,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The base version family is renamed to the Entity vocabulary** (Phase 48; ENTITY-03; ADR-0060;
+  see the Phase 48 rows in `MIGRATION.md` 9.2). `base::service::node_version_service` becomes
+  `base::service::entity_version_service`, and `NodeVersion`, `NodeVersionMetadata`,
+  `NodeVersionRepository`, `NodeVersionService` and `InMemoryNodeVersionRepository` become
+  `EntityVersion`, `EntityVersionMetadata`, `EntityVersionRepository`, `EntityVersionService` and
+  `InMemoryEntityVersionRepository`. `VersioningError::NodeNotFound` becomes `EntityNotFound`; the
+  version record's `node_id` / `node_data` fields become `entity_id` / `entity_data`, as does
+  `node_id` on `VersionHistory` and `VersionComparison`, and `VersioningConfig.max_versions_per_node`
+  becomes `max_versions_per_entity`. `EntityVersion` carries serde read-aliases for the v0.10 keys,
+  so a version record written by v0.10 still loads; new writes emit only `entity_id` /
+  `entity_data`, and a record carrying both spellings of one key is rejected as a duplicate field.
+  `ContentItemService`'s signatures now name the new types, so
+  `.project/current-exports.txt` changes by 14 lines, all of them `ContentItemService` /
+  `ContentItemServiceError`. The unused `Field`, `CollectionType` / `Item`, `element`,
+  `FieldVersionService` and `CollectionVersionService` stay, pending the content / general data
+  orchestration review (D-05); only their import path moved.
 - `LlmError::RateLimitExceeded` is now a struct variant `{ retry_after, hints }`, marked
   `#[non_exhaustive]` (PACE-01; Phase 43 plan 43-02; `MIGRATION.md` section 9.2). Construct it with
   `LlmError::rate_limited(None)` (or `rate_limited(Some(delay))` /

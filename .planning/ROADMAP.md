@@ -795,7 +795,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 | 45. RustFS Swap & Platform/Observability Deviations | v0.11.0 | 7/7 | Complete    | 2026-09-30 |
 | 46. Docs Currency & Hygiene | v0.11.0 | 0/TBD | Not started | - |
 | 47. v0.11.0 Crate Release | v0.11.0 | 0/TBD | Not started | - |
-| 48. Base Entity Rename (runs after 44, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
+| 48. Base Entity Rename (runs after 44, before 46-47) | v0.11.0 | 0/9 | Planned | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see
@@ -1108,7 +1108,35 @@ was built independently. `Field`, `Collection`, `Element`, `FieldVersionService`
      and a set-equal `.cargo/semver-checks-allowlist.toml` entry, `api_surface_current.txt` is
      refreshed via `make api-surface-update` with a CHANGELOG entry, and `cargo doc`, `make
      check-api-examples`, `make clean-code` and the 82 % coverage floor stay green.
-**Plans**: TBD
+**Plans**: 9 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 48-01-PLAN.md — Tracer: capture the four pre-rename JSON fixtures from the unmodified tree; a v0.10 Citadel snapshot loads through FileCitadel end to end; the compat harness over Paladin, PaladinState, ContentItem, PromptItem
+- [ ] 48-02-PLAN.md — ADR-0060 (Phase 48-only X-03 supersession, Entity design, node/Entity vocabulary rule), PROMOTION next free 0061, PROJECT.md rows, 48-CONTEXT.md acceptance + D-08..D-14
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 48-03-PLAN.md — Remove Field, Collection, Element and the two dormant version services; rename the version family to EntityVersion* (serde aliases), carry ContentItemService, refresh .project/current-exports.txt
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 48-04-PLAN.md — Stage A: Node<T> -> Entity<T> at paladin_core::base::entity::Entity (private wrapper module), citadel alias removed, Entity revisioning-contract rustdoc, entity-sense prose sweep
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 48-05-PLAN.md — Stage B: payload field node -> data and ContentItem/PromptItem node -> entity with #[serde(alias = "node")]; graph-sense lines byte-identical; alias edge-case tests and # Serialization rustdoc
+- [ ] 48-06-PLAN.md — mdBook domain-model/design-patterns/crate-map/stable-api rewrites, LayerArchitecture.svg, READMEs, CLAUDE.md and copilot naming-table Entity row
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 48-07-PLAN.md — Measured D-27 semver diagnostic; MIGRATION 9.2 rows + allowlist block + trait_missing/module_missing allow lines in one commit; 9.1 M-B-12, 9.4, 9.7; CHANGELOGs
+- [ ] 48-08-PLAN.md — tests/entity_rename_guard.rs (old paths/identifiers absent, payload access, exactly-one counts, graph freeze) with positive controls; byte-identical frozen files
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 48-09-PLAN.md — Full phase gate incl. coverage and make security; ADR-0060 conforms; PROJECT.md row implemented; ENTITY-01/04/05 and success-criteria wording corrected (IDs unchanged)
 
 ---
 *Roadmap created: 2026-07-30 (ingest run 1 of 5 — `.project/Milestone_1-MVP`, 36 docs)*

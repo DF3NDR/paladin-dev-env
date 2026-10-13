@@ -203,7 +203,7 @@ Public wire formats that carry the graph sense and must not move: `wargraph-doc.
   SQLite/Postgres rows) deserializes; new writes use `data`. A fixture test loads a captured
   pre-rename `Paladin` and `ContentItem` JSON. No `schema_version` is added to `Entity<T>` —
   the wrapper never had one and the newer records version themselves.
-- **D-04 (recommended): `version: bool` keeps its name and gets a contract, not a feature.**
+- **D-04 (recommended):** `version: bool` keeps its name and gets a contract, not a feature.
   Rustdoc states: the flag declares that an entity *wants* revision history; it is honoured only
   by a caller that routes writes through `EntityVersionService` (today: `ContentItem` via the
   root crate's `ContentItemService`). Designing platform-wide revisioning is deferred (see

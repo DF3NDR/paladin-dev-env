@@ -243,7 +243,7 @@ pub struct CouncilData {
 ///
 /// # Architecture
 ///
-/// Council uses the `Node<CouncilData>` pattern for consistency with other
+/// Council uses the `Entity<CouncilData>` pattern for consistency with other
 /// domain entities. The actual execution logic is in the application layer.
 ///
 /// # Validation Rules
@@ -265,7 +265,7 @@ pub struct CouncilData {
 ///     .max_rounds(5)
 ///     .build()?;
 /// ```
-pub type Council = crate::base::entity::node::Node<CouncilData>;
+pub type Council = crate::base::entity::Entity<CouncilData>;
 
 /// Builder for creating Council instances
 ///
@@ -450,7 +450,7 @@ impl CouncilBuilder {
         };
 
         // Create Node
-        Ok(crate::base::entity::node::Node::new(data, Some(name)))
+        Ok(crate::base::entity::Entity::new(data, Some(name)))
     }
 }
 

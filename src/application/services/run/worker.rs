@@ -2907,7 +2907,7 @@ mod tests {
     // --- run_model_label (D-12, model_used discretion item) ---------
 
     fn labeled_paladin(name: &str, model: &str) -> Paladin {
-        use paladin_core::base::entity::node::Node;
+        use paladin_core::base::entity::Entity;
         use paladin_core::platform::container::paladin::PaladinData;
 
         let data = PaladinData {
@@ -2915,7 +2915,7 @@ mod tests {
             model: model.to_string(),
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     #[test]

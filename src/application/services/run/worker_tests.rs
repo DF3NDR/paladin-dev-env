@@ -1079,7 +1079,7 @@ impl AssistantResolver for AgentOnlyResolver {
         assistant_id: &str,
         version: Option<u32>,
     ) -> Result<super::resolver::ResolvedAssistant, super::resolver::ResolveError> {
-        use paladin_core::base::entity::node::Node;
+        use paladin_core::base::entity::Entity;
         use paladin_core::platform::container::paladin::PaladinData;
 
         Ok(super::resolver::ResolvedAssistant {
@@ -1087,7 +1087,7 @@ impl AssistantResolver for AgentOnlyResolver {
                 assistant_id: assistant_id.to_string(),
                 version: version.unwrap_or(1),
             },
-            runnable: super::resolver::Runnable::Agent(Arc::new(Node::new(
+            runnable: super::resolver::Runnable::Agent(Arc::new(Entity::new(
                 PaladinData::default(),
                 Some(assistant_id.to_string()),
             ))),
@@ -2335,7 +2335,7 @@ pub(super) mod agent_budget {
     use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
     use crate::application::services::treasurer::{AllowancePolicy, ScopeAllowance, Treasurer};
     use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::cost::{Cost, CurrencyCode, PriceRow, PriceTable};
     use paladin_core::platform::container::paladin::{MaxLoops, PaladinData};
     use paladin_core::platform::container::principal::{RunAttribution, TenantId};
@@ -2369,7 +2369,7 @@ pub(super) mod agent_budget {
                     assistant_id: assistant_id.to_string(),
                     version: version.unwrap_or(1),
                 },
-                runnable: super::super::resolver::Runnable::Agent(Arc::new(Node::new(
+                runnable: super::super::resolver::Runnable::Agent(Arc::new(Entity::new(
                     PaladinData {
                         system_prompt: "system".to_string(),
                         model: self.model.clone(),

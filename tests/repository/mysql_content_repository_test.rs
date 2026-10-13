@@ -1,5 +1,5 @@
 use chrono::Utc;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::content::{
     ContentData, ContentItem, ContentType, TextContent,
 };
@@ -32,7 +32,7 @@ fn create_test_content_item() -> ContentItem {
     let uuid = Uuid::new_v4();
     let now = Utc::now();
 
-    let node = Node {
+    let node = Entity {
         uuid,
         created: now,
         modified: now,
@@ -160,7 +160,7 @@ mod tests {
             mod_date: None,
         };
 
-        let node = Node {
+        let node = Entity {
             uuid: Uuid::new_v4(),
             created: Utc::now(),
             modified: Utc::now(),
@@ -239,7 +239,7 @@ mod tests {
         };
 
         // Reconstruct Node (as repository does)
-        let reconstructed_node = Node {
+        let reconstructed_node = Entity {
             uuid,
             created,
             modified,

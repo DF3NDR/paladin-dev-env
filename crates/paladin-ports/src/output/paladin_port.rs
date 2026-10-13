@@ -1169,10 +1169,8 @@ mod tests {
         }
 
         let port = ExecuteOnlyPort;
-        let paladin: Paladin = paladin_core::base::entity::node::Node::new(
-            PaladinData::default(),
-            Some("p".to_string()),
-        );
+        let paladin: Paladin =
+            paladin_core::base::entity::Entity::new(PaladinData::default(), Some("p".to_string()));
         let heartbeat = HeartbeatHandle::new();
 
         let direct = port.execute(&paladin, "hi").await.unwrap();
@@ -1231,10 +1229,8 @@ mod tests {
         }
 
         let port = ExecuteOnlyPort;
-        let paladin: Paladin = paladin_core::base::entity::node::Node::new(
-            PaladinData::default(),
-            Some("p".to_string()),
-        );
+        let paladin: Paladin =
+            paladin_core::base::entity::Entity::new(PaladinData::default(), Some("p".to_string()));
         let heartbeat = HeartbeatHandle::new();
 
         let observed = port

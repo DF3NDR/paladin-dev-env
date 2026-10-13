@@ -14,8 +14,8 @@ log message, the log level, and the timestamp when the log entry was created.
 
 The Config Service Settings requires at least one log location to be defined.
 */
+use crate::base::entity::Entity;
 use crate::base::entity::message::{Location, Message, MessagePriority};
-use crate::base::entity::node::Node;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
@@ -394,7 +394,7 @@ impl LogContainer {
 }
 
 /// Type alias for Log as a Node containing LogContainer
-pub type Log = Node<LogContainer>;
+pub type Log = Entity<LogContainer>;
 
 /// Extension trait for Log to add log-specific functionality
 pub trait LogExt {
@@ -414,7 +414,7 @@ pub trait LogExt {
 impl LogExt for Log {
     fn new_log(name: String, destination: LogDestination, min_level: LogLevel) -> Self {
         let container = LogContainer::new(name.clone(), destination, min_level);
-        Node::new(container, Some(name))
+        Entity::new(container, Some(name))
     }
 
     fn add_entry(&mut self, entry: LogEntry) -> bool {

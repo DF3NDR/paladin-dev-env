@@ -5,7 +5,7 @@
 
 use paladin::application::errors::citadel_error::CitadelError;
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::citadel::{
     BattalionCheckpointConfig, BattalionState, CheckpointData, ExecutionRecord, ExecutionStatus,
     PaladinState,
@@ -41,8 +41,8 @@ fn create_test_paladin_data() -> PaladinData {
 }
 
 /// Helper to create test Paladin node
-fn create_test_paladin() -> Node<PaladinData> {
-    Node::new(create_test_paladin_data(), Some("TestPaladin".to_string()))
+fn create_test_paladin() -> Entity<PaladinData> {
+    Entity::new(create_test_paladin_data(), Some("TestPaladin".to_string()))
 }
 
 /// Helper to create test PaladinState

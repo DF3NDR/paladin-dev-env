@@ -5,7 +5,7 @@
 
 use async_trait::async_trait;
 use paladin::application::services::battalion::chain_of_command_service::ChainOfCommandExecutionService;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::chain_of_command::{
     ChainOfCommand, DelegationStrategy,
@@ -111,7 +111,7 @@ fn create_test_paladin(name: &str) -> Paladin {
         ..Default::default()
     };
 
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[tokio::test]

@@ -329,7 +329,7 @@ impl PaladinPort for FaultyPaladinPort {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paladin::core::base::entity::node::Node;
+    use paladin::core::base::entity::Entity;
     use paladin::core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 
     fn assert_send_sync<T: Send + Sync>() {}
@@ -347,7 +347,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     #[test]

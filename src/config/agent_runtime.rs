@@ -1662,13 +1662,13 @@ mod tests {
     /// the provider that served the response.
     async fn served_by_through(middleware: &ModelFallbackMiddleware) -> String {
         use crate::application::services::paladin::middleware::{ModelCallContext, PromptAssembly};
-        use crate::core::base::entity::node::Node;
+        use crate::core::base::entity::Entity;
         use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
         use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
         use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
         use paladin_ports::output::llm_port::LlmRequest;
 
-        let paladin = Node::new(
+        let paladin = Entity::new(
             PaladinData {
                 system_prompt: "system".to_string(),
                 max_loops: MaxLoops::Fixed(1),

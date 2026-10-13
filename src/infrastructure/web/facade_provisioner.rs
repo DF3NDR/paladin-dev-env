@@ -713,7 +713,7 @@ mod tests {
     }
 
     fn make_engine_paladin() -> Paladin {
-        use paladin_core::base::entity::node::Node;
+        use paladin_core::base::entity::Entity;
         use paladin_core::platform::container::paladin::{MaxLoops, PaladinData};
 
         let data = PaladinData {
@@ -722,7 +722,7 @@ mod tests {
             max_loops: MaxLoops::Fixed(1),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     /// D-07 (39-05): `EngineExecutionPort::execute_scoped` forwards `scope` to the wrapped
@@ -791,10 +791,10 @@ mod tests {
         );
     }
     fn looping_engine_paladin() -> Paladin {
-        use paladin_core::base::entity::node::Node;
+        use paladin_core::base::entity::Entity;
         use paladin_core::platform::container::paladin::{MaxLoops, PaladinData};
 
-        Node::new(
+        Entity::new(
             PaladinData {
                 system_prompt: "system".to_string(),
                 model: "gpt-4".to_string(),

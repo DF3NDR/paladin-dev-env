@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use paladin::application::services::battalion::formation_service::FormationExecutionService;
 use paladin::application::services::battalion::phalanx_service::PhalanxExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::formation::Formation;
 use paladin::core::platform::container::battalion::phalanx::{AggregationStrategy, Phalanx};
@@ -83,7 +83,7 @@ impl PaladinPort for LoadTestMockPort {
 
 /// Helper to create a test Paladin
 fn create_test_paladin(name: &str) -> Paladin {
-    Node::new(
+    Entity::new(
         PaladinData {
             system_prompt: format!("You are {}", name),
             name: name.to_string(),

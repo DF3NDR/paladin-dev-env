@@ -123,7 +123,7 @@ impl ContentItemService {
 
         // Reconstruct ContentItem from the restored version
         let content_item = ContentItem {
-            node: crate::core::base::entity::node::Node {
+            node: crate::core::base::entity::Entity {
                 uuid: content_id,
                 created: restored_version.created_at, // This should be the original creation time
                 modified: restored_version.created_at,

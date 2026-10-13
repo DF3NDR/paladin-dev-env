@@ -21,7 +21,7 @@ use paladin_battalion::engine::{
     EngineLimits, InputMapping, NodeContext, NodeSpec, StateNode, StateNodeError, WarEngine,
     WarGraph,
 };
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
 };
@@ -98,7 +98,7 @@ fn make_paladin(name: &str) -> Paladin {
         name: name.to_string(),
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 /// A single-node, single-superstep workflow: a Paladin renders its input,
@@ -175,7 +175,7 @@ fn build_priced_graph() -> Arc<WarGraph> {
         model: "gpt-4".to_string(),
         ..Default::default()
     };
-    let paladin = Node::new(data, Some("summarizer".to_string()));
+    let paladin = Entity::new(data, Some("summarizer".to_string()));
     graph.add_node(
         node_id.clone(),
         NodeSpec::paladin(

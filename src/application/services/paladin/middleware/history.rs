@@ -195,7 +195,7 @@ mod tests {
     use crate::application::services::paladin::middleware::{
         ModelCallContext, PromptAssembly, PromptSection, SectionPlacement,
     };
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
     use crate::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData};
     use paladin_ports::output::llm_port::{
@@ -259,7 +259,7 @@ mod tests {
             max_loops: MaxLoops::Fixed(1),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn make_counter() -> Arc<dyn TokenCounterPort> {

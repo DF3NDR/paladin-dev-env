@@ -35,7 +35,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::base::entity::node::Node;
+use crate::base::entity::Entity;
 
 use super::{BattalionError, GroveError};
 
@@ -288,7 +288,7 @@ pub struct GroveData {
 ///
 /// A Grove is a tree-based multi-agent routing system that intelligently
 /// directs requests to specialized agents based on expertise and content.
-pub type Grove = Node<GroveData>;
+pub type Grove = Entity<GroveData>;
 
 /// Builder for constructing Grove instances
 ///
@@ -596,7 +596,7 @@ impl GroveBuilder {
             },
         };
 
-        Ok(Node::new(data, Some(name)))
+        Ok(Entity::new(data, Some(name)))
     }
 }
 

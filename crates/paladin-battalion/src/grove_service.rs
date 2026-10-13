@@ -940,13 +940,13 @@ mod tests {
     async fn test_grove_resolves_routed_agent() {
         // Task 4.1: Grove resolves routed agent from registry
         use crate::in_memory_registry::HashMapPaladinRegistry;
-        use paladin_core::base::entity::node::Node;
+        use paladin_core::base::entity::Entity;
         use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
         use paladin_ports::output::paladin_port::PaladinResult;
         use paladin_ports::output::paladin_registry::PaladinRegistry;
 
         // Create test Paladins with names matching TreeAgent paladin_ids
-        let backend_paladin = Node::new(
+        let backend_paladin = Entity::new(
             PaladinData {
                 system_prompt: "Backend expert".to_string(),
                 name: "backend_expert".to_string(),

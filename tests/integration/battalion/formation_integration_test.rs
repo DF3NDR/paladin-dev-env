@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::formation_service::FormationExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::formation::Formation;
 use paladin::core::platform::container::battalion::{BattalionConfig, BattalionError};
 use paladin::core::platform::container::paladin::MaxLoops;
@@ -143,7 +143,7 @@ fn create_paladin(name: &str, system_prompt: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[tokio::test]

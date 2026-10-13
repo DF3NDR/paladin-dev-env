@@ -514,7 +514,7 @@ impl AssistantResolver for MockResolver {
                 assistant_id: assistant_id.to_string(),
                 version: resolved_version,
             },
-            runnable: Runnable::Agent(Arc::new(paladin_core::base::entity::node::Node::new(
+            runnable: Runnable::Agent(Arc::new(paladin_core::base::entity::Entity::new(
                 paladin_core::platform::container::paladin::PaladinData::default(),
                 Some(assistant_id.to_string()),
             ))),

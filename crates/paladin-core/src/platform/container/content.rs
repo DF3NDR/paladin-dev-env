@@ -1,4 +1,4 @@
-use crate::base::entity::node::Node;
+use crate::base::entity::Entity;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ContentItem {
-    pub node: Node<ContentData>,
+    pub node: Entity<ContentData>,
 }
 
 impl Hash for ContentItem {
@@ -54,7 +54,7 @@ impl ContentItem {
             mod_date: None,
         };
 
-        let node = Node::new(content_data, None);
+        let node = Entity::new(content_data, None);
 
         Ok(ContentItem { node })
     }
@@ -79,7 +79,7 @@ impl ContentItem {
             mod_date: None,
         };
 
-        let node = Node::new(content_data, Some(title));
+        let node = Entity::new(content_data, Some(title));
 
         Ok(ContentItem { node })
     }

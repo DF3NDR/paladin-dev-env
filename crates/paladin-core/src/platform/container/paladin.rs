@@ -1,14 +1,14 @@
 //! Paladin Domain Entity
 //!
 //! This module defines the core domain entity representing an autonomous AI agent
-//! capable of reasoning and executing actions. The Paladin follows the `Node<T>` pattern
+//! capable of reasoning and executing actions. The Paladin follows the `Entity<T>` pattern
 //! for consistency with other domain entities in the system.
 //!
 //! # Example
 //!
 //! ```
 //! use paladin_core::platform::container::paladin::{PaladinData, PaladinStatus, MaxLoops};
-//! use paladin_core::base::entity::node::Node;
+//! use paladin_core::base::entity::Entity;
 //!
 //! let data = PaladinData {
 //!     system_prompt: "You are a helpful assistant".to_string(),
@@ -26,10 +26,10 @@
 //!     dynamic_temperature: false,
 //! };
 //!
-//! let paladin = Node::new(data, Some("MyPaladin".to_string()));
+//! let paladin = Entity::new(data, Some("MyPaladin".to_string()));
 //! ```
 
-use crate::base::entity::node::Node;
+use crate::base::entity::Entity;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Maximum iteration control for Paladin execution
@@ -137,7 +137,7 @@ pub enum PaladinStatus {
 /// Core data payload for a Paladin entity
 ///
 /// Contains all configuration and state information for an autonomous AI agent.
-/// This struct is wrapped in a `Node<T>` to provide UUID, timestamps, and versioning.
+/// This struct is wrapped in an `Entity<T>` to provide UUID, timestamps, and versioning.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PaladinData {
     /// System prompt defining the Paladin's behavior and personality
@@ -199,13 +199,13 @@ pub struct PaladinData {
     pub dynamic_temperature: bool,
 }
 
-/// Type alias for a Paladin entity following the `Node<T>` pattern
+/// Type alias for a Paladin entity following the `Entity<T>` pattern
 ///
 /// # Example
 ///
 /// ```
 /// use paladin_core::platform::container::paladin::{Paladin, PaladinData, PaladinStatus, MaxLoops};
-/// use paladin_core::base::entity::node::Node;
+/// use paladin_core::base::entity::Entity;
 ///
 /// let data = PaladinData {
 ///     system_prompt: "You are a code reviewer".to_string(),
@@ -223,10 +223,10 @@ pub struct PaladinData {
 ///     dynamic_temperature: false,
 /// };
 ///
-/// let paladin: Paladin = Node::new(data, Some("CodeReviewer".to_string()));
+/// let paladin: Paladin = Entity::new(data, Some("CodeReviewer".to_string()));
 /// assert_eq!(paladin.node.name, "CodeReviewer");
 /// ```
-pub type Paladin = Node<PaladinData>;
+pub type Paladin = Entity<PaladinData>;
 
 impl Default for PaladinData {
     /// Creates a PaladinData instance with sensible defaults.

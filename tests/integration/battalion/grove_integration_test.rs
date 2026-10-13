@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::grove_service::GroveExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::grove::{
     GroveBuilder, RoutingStrategy, Tree, TreeAgent,
 };
@@ -86,7 +86,7 @@ fn create_specialist_paladin(name: &str, expertise: &str, _keywords: Vec<&str>) 
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 /// Helper to create TreeAgent

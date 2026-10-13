@@ -1157,7 +1157,7 @@ mod tests {
     async fn mutating_a_code_registered_id_is_409() {
         let (mut state, _repo) = admin_state();
         let registry = Arc::new(AgentRegistry::new());
-        let paladin = Arc::new(paladin_core::base::entity::node::Node::new(
+        let paladin = Arc::new(paladin_core::base::entity::Entity::new(
             paladin_core::platform::container::paladin::PaladinData {
                 system_prompt: "hi".to_string(),
                 name: "CodeAgent".to_string(),

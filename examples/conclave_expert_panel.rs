@@ -57,7 +57,7 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::conclave_execution_service::ConclaveExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::conclave::{
     Conclave, ConclaveConfig, ObservabilityLevel,
@@ -250,7 +250,7 @@ fn create_expert(name: &str, system_prompt: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[tokio::main]

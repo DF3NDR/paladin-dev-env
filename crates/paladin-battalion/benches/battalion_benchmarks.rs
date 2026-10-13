@@ -4,7 +4,7 @@ use paladin_battalion::campaign_service::CampaignExecutionService;
 use paladin_battalion::chain_of_command_service::ChainOfCommandExecutionService;
 use paladin_battalion::formation_service::FormationExecutionService;
 use paladin_battalion::phalanx_service::PhalanxExecutionService;
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::battalion::BattalionConfig;
 use paladin_core::platform::container::battalion::TokenUsage;
 use paladin_core::platform::container::battalion::campaign::{
@@ -37,7 +37,7 @@ fn create_test_paladin(name: &str) -> Paladin {
         ..Default::default()
     };
 
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 struct MockPaladinPort;

@@ -685,7 +685,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_council_resolves_participants() {
-        use paladin_core::base::entity::node::Node;
+        use paladin_core::base::entity::Entity;
         use paladin_core::platform::container::battalion::council::CouncilConfig;
 
         // Create test Paladins and registry
@@ -709,7 +709,7 @@ mod tests {
             moderator_id: None,
             config,
         };
-        let council = Node::new(council_data, Some("test_council".to_string()));
+        let council = Entity::new(council_data, Some("test_council".to_string()));
 
         // Execute Council - should resolve participant IDs from registry
         let result = service.convene(&council, "Test topic").await;
@@ -722,7 +722,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_council_paladin_not_found_error() {
-        use paladin_core::base::entity::node::Node;
+        use paladin_core::base::entity::Entity;
         use paladin_core::platform::container::battalion::council::CouncilConfig;
 
         // Create registry with limited Paladins
@@ -747,7 +747,7 @@ mod tests {
             moderator_id: None,
             config,
         };
-        let council = Node::new(council_data, Some("test_council".to_string()));
+        let council = Entity::new(council_data, Some("test_council".to_string()));
 
         // Execute Council - should fail with PaladinNotFound error
         let result = service.convene(&council, "Test topic").await;
@@ -801,7 +801,7 @@ mod tests {
 
     impl MockPaladinRegistry {
         fn new() -> Self {
-            use paladin_core::base::entity::node::Node;
+            use paladin_core::base::entity::Entity;
             use paladin_core::platform::container::paladin::{
                 MaxLoops, PaladinData, PaladinStatus,
             };
@@ -825,7 +825,7 @@ mod tests {
                     agent_description: String::new(),
                     dynamic_temperature: false,
                 };
-                let paladin = Node::new(data, Some(format!("paladin_{}", i)));
+                let paladin = Entity::new(data, Some(format!("paladin_{}", i)));
                 paladins.insert(format!("paladin_{}", i), Arc::new(paladin));
             }
 

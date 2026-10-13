@@ -125,7 +125,7 @@ impl LogOrchestrator {
             )
             .with_max_entries(self.config.max_memory_entries);
 
-            let log = crate::core::base::entity::node::Node::new(container, Some(name.to_string()));
+            let log = crate::core::base::entity::Entity::new(container, Some(name.to_string()));
             logs.insert(destination, log);
         }
 

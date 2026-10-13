@@ -11,7 +11,7 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::commander::CommanderBuilder;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
@@ -54,7 +54,7 @@ impl PaladinPort for MockPaladinPort {
 }
 
 fn create_paladin(name: &str) -> Paladin {
-    Node::new(
+    Entity::new(
         PaladinData {
             system_prompt: format!("You are {}", name),
             name: name.to_string(),

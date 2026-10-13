@@ -64,7 +64,7 @@ use crate::application::services::sanctum::rag_retrieval_service::{
     RagRetrievalResult, RagRetrievalService, rag_omission_marker,
 };
 use crate::config::agent_runtime::{ToolErrorConfig, ToolErrorMode};
-use crate::core::base::entity::node::Node;
+use crate::core::base::entity::Entity;
 use crate::core::platform::container::arsenal::{ArmamentCall, ArsenalError};
 use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
 use crate::core::platform::container::heartbeat::HeartbeatHandle;
@@ -2807,7 +2807,7 @@ impl PaladinExecutionService {
             };
 
             let prompt_item = PromptItem {
-                node: Node::new(prompt_data, Some(format!("execution-{}", execution_id))),
+                node: Entity::new(prompt_data, Some(format!("execution-{}", execution_id))),
             };
 
             // Create LLM request. `cx.response_format` (RT-05, D-27, D-28) is
@@ -2996,7 +2996,7 @@ impl PaladinExecutionService {
             };
 
             let prompt_item = PromptItem {
-                node: Node::new(prompt_data, Some(format!("execution-{}", execution_id))),
+                node: Entity::new(prompt_data, Some(format!("execution-{}", execution_id))),
             };
 
             // Create LLM request
@@ -3586,7 +3586,7 @@ impl PaladinExecutionService {
         let request = LlmRequest::new(
             model_used.clone(),
             PromptItem {
-                node: Node::new(prompt_data, Some("stream".to_string())),
+                node: Entity::new(prompt_data, Some("stream".to_string())),
             },
         )
         .with_stream(true);
@@ -3831,7 +3831,7 @@ impl PaladinExecutionService {
 mod tests {
     use super::*;
     use crate::application::services::sanctum::MemoryExtractionStrategy;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     #[cfg(feature = "vision")]
     use crate::core::platform::container::vision::{ImageDetail, VisionContent};
     use crate::core::platform::container::{
@@ -3887,7 +3887,7 @@ mod tests {
             ..Default::default()
         };
 
-        Node::new(data, Some("TestPaladin".to_string()))
+        Entity::new(data, Some("TestPaladin".to_string()))
     }
 
     // --- Plan 26-13, D-21: RunScope / execute_scoped / with_vault --------
@@ -5258,7 +5258,7 @@ mod tests {
             vision_enabled: true,
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         // Verify that the MockLlmPort doesn't support vision
         let caps = llm_port.get_capabilities();
@@ -5287,7 +5287,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("NormalPaladin".to_string()));
+        let paladin = Entity::new(data, Some("NormalPaladin".to_string()));
 
         // Try to execute with vision - should fail
         let images = vec![VisionContent::ImageUrl {
@@ -5324,7 +5324,7 @@ mod tests {
             vision_enabled: true,
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5580,7 +5580,7 @@ mod tests {
             stop_words: vec!["STOP".to_string()],
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5665,7 +5665,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5752,7 +5752,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5784,7 +5784,7 @@ mod middleware_wiring_tests {
         ExecutionMiddleware, FinalResult, LlmResponseView, MiddlewareFlow, ModelCallContext,
         PromptSection, SectionPlacement, ToolCallContext, ToolCallKind, ToolFlow,
     };
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use async_trait::async_trait;
     use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
@@ -5796,7 +5796,7 @@ mod middleware_wiring_tests {
             max_loops: MaxLoops::Fixed(max_loops),
             ..Default::default()
         };
-        Node::new(data, Some("TestPaladin".to_string()))
+        Entity::new(data, Some("TestPaladin".to_string()))
     }
 
     fn make_service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
@@ -6607,7 +6607,7 @@ mod token_counter_and_recall_limit_tests {
     use crate::application::services::paladin::middleware::{
         ExecutionMiddleware, MiddlewareFlow, ModelCallContext,
     };
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use async_trait::async_trait;
     use paladin_core::platform::container::garrison::GarrisonConfig;
@@ -6622,7 +6622,7 @@ mod token_counter_and_recall_limit_tests {
             max_loops: MaxLoops::Fixed(max_loops),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     /// Records `cx.assembly.history.len()` observed on the FIRST loop
@@ -6752,7 +6752,7 @@ mod token_counter_and_recall_limit_tests {
 #[cfg(test)]
 mod streamed_usage_tests {
     use super::*;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_llm::mock::MockLlmAdapter;
@@ -6764,7 +6764,7 @@ mod streamed_usage_tests {
             max_loops: MaxLoops::Fixed(1),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn make_service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
@@ -6915,7 +6915,7 @@ mod streamed_usage_tests {
 #[cfg(test)]
 mod structured_output_tests {
     use super::*;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use paladin_core::platform::container::heartbeat::HeartbeatHandle;
     use paladin_core::platform::container::prompt::PromptType;
@@ -6927,7 +6927,7 @@ mod structured_output_tests {
             max_loops: MaxLoops::Fixed(3),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn weather_schema() -> Value {
@@ -7230,7 +7230,7 @@ mod structured_output_tests {
 #[cfg(test)]
 mod streamed_cost_tests {
     use super::*;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
     use paladin_core::platform::container::token_usage::TokenUsage;
@@ -7248,7 +7248,7 @@ mod streamed_cost_tests {
             max_loops: MaxLoops::Fixed(1),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn plain_markdown_herald() -> Arc<dyn Herald> {
@@ -7474,7 +7474,7 @@ mod streamed_cost_tests {
 #[cfg(test)]
 mod agent_loop_cost_tests {
     use super::*;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use async_trait::async_trait;
     use chrono::{DateTime, Utc};
@@ -7499,7 +7499,7 @@ mod agent_loop_cost_tests {
             max_loops: MaxLoops::Fixed(max_loops),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn make_service(llm: Arc<dyn LlmPort>) -> PaladinExecutionService {
@@ -8075,7 +8075,7 @@ mod derived_budget_tests {
     use crate::application::services::paladin::middleware::TokenBudget;
     use crate::application::services::sanctum::RagConfig;
     use crate::config::agent_runtime::TokenBudgetConfig;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use crate::core::platform::container::sanctum::{MemoryBuilder, MemoryType, SanctumEntry};
     use crate::infrastructure::adapters::sanctum::InMemorySanctum;
@@ -8179,7 +8179,7 @@ mod derived_budget_tests {
             max_loops: MaxLoops::Fixed(max_loops),
             ..Default::default()
         };
-        Node::new(data, Some("BudgetPaladin".to_string()))
+        Entity::new(data, Some("BudgetPaladin".to_string()))
     }
 
     fn derived(max_tokens: u32) -> DerivedTokenBudget {
@@ -8292,7 +8292,7 @@ mod derived_budget_tests {
         );
         let plain_agent = paladin(1);
         // Same paladin identity so the memories (keyed by it) retrieve identically.
-        let plain_agent = Node {
+        let plain_agent = Entity {
             uuid: agent.uuid,
             ..plain_agent
         };
@@ -8318,7 +8318,7 @@ mod derived_budget_tests {
 #[cfg(test)]
 mod allowance_warning_tests {
     use super::*;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use paladin_core::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
     use paladin_core::platform::container::cost::CurrencyCode;
@@ -8375,7 +8375,7 @@ mod allowance_warning_tests {
             max_loops: MaxLoops::Fixed(1),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn service() -> PaladinExecutionService {

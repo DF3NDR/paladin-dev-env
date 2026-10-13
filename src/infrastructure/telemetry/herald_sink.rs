@@ -136,7 +136,7 @@ mod tests {
     use paladin_battalion::engine::{
         EngineLimits, InputMapping, NodeSpec, RunOutcome, WarEngine, WarGraph,
     };
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::allowance::HaltReason;
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
@@ -476,7 +476,7 @@ mod tests {
             max_loops: MaxLoops::Fixed(1),
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     fn build_single_paladin_graph(model: &str) -> Arc<WarGraph> {

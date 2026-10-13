@@ -1692,7 +1692,7 @@ mod tests {
         let (wp_path, wp_url) = temp_sqlite_url("wired_treasurer_wp");
 
         let registry = Arc::new(AgentRegistry::new());
-        let paladin = Arc::new(paladin_core::base::entity::node::Node::new(
+        let paladin = Arc::new(paladin_core::base::entity::Entity::new(
             PaladinData {
                 system_prompt: "hi".to_string(),
                 name: "AllowanceAgent".to_string(),
@@ -1828,7 +1828,7 @@ mod tests {
         let (wp_path, wp_url) = temp_sqlite_url("wired_notice_wp");
 
         let registry = Arc::new(AgentRegistry::new());
-        let paladin = Arc::new(paladin_core::base::entity::node::Node::new(
+        let paladin = Arc::new(paladin_core::base::entity::Entity::new(
             PaladinData {
                 system_prompt: "hi".to_string(),
                 name: "NoticeAgent".to_string(),
@@ -2145,7 +2145,7 @@ mod tests {
         let (wp_path, wp_url) = temp_sqlite_url("wired_operator_wp");
 
         let registry = Arc::new(AgentRegistry::new());
-        let paladin = Arc::new(paladin_core::base::entity::node::Node::new(
+        let paladin = Arc::new(paladin_core::base::entity::Entity::new(
             PaladinData {
                 system_prompt: "hi".to_string(),
                 name: "OperatorAgent".to_string(),
@@ -2310,7 +2310,7 @@ mod tests {
         let (wp_path, wp_url) = temp_sqlite_url(&format!("{label}_wp"));
 
         let registry = Arc::new(AgentRegistry::new());
-        let paladin = Arc::new(paladin_core::base::entity::node::Node::new(
+        let paladin = Arc::new(paladin_core::base::entity::Entity::new(
             PaladinData {
                 system_prompt: "hi".to_string(),
                 name: "TracedAgent".to_string(),

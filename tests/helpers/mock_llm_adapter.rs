@@ -311,7 +311,7 @@ pub fn create_test_paladin_with_mock(
     name: impl Into<String>,
     _mock: Arc<MockLlmAdapter>,
 ) -> paladin::core::platform::container::paladin::Paladin {
-    use paladin::core::base::entity::node::Node;
+    use paladin::core::base::entity::Entity;
     use paladin::core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 
     let data = PaladinData {
@@ -326,7 +326,7 @@ pub fn create_test_paladin_with_mock(
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, None)
+    Entity::new(data, None)
 }
 
 /// Helper function to create a mock pre-configured with success responses

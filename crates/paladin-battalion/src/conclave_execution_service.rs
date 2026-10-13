@@ -513,7 +513,7 @@ impl ConclaveExecutionService {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::aegis::{
         ErrorHandlerSpec, RetryPolicy as AegisRetryPolicy, TimeoutPolicy,
     };
@@ -614,7 +614,7 @@ mod tests {
             ..Default::default()
         };
 
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     fn create_test_conclave() -> Conclave {

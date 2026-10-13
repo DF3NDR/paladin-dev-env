@@ -5206,7 +5206,7 @@ mod tests {
             name: name.to_string(),
             ..Default::default()
         };
-        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
+        paladin_core::base::entity::Entity::new(data, Some(name.to_string()))
     }
 
     fn schema(fields: Vec<FieldSpec>) -> BattlefieldSchema {
@@ -15141,8 +15141,7 @@ mod tests {
                 system_prompt: prompt.to_string(),
                 ..Default::default()
             };
-            let paladin =
-                paladin_core::base::entity::node::Node::new(data, Some("writer".to_string()));
+            let paladin = paladin_core::base::entity::Entity::new(data, Some("writer".to_string()));
             graph.add_node(
                 id.clone(),
                 NodeSpec::paladin(

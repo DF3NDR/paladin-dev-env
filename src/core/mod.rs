@@ -17,7 +17,7 @@
 //! ## [base]
 //!
 //! Foundation types and patterns used throughout the core domain:
-//! - [`Node<T>`](crate::core::base::entity::node::Node) - Entity wrapper with UUID, timestamps, versioning
+//! - [`Entity<T>`](crate::core::base::entity::Entity) - Entity wrapper with UUID, timestamps, versioning
 //! - Collection management utilities
 //! - Field definitions and message types
 //!
@@ -68,7 +68,7 @@
 //!
 //! ```
 //! use paladin::core::platform::container::paladin::{Paladin, PaladinData, PaladinStatus, MaxLoops};
-//! use paladin::core::base::entity::node::Node;
+//! use paladin::core::base::entity::Entity;
 //!
 //! let data = PaladinData {
 //!     system_prompt: "You are a helpful assistant".to_string(),
@@ -86,7 +86,7 @@
 //!     dynamic_temperature: false,
 //! };
 //!
-//! let paladin: Paladin = Node::new(data, Some("Assistant".to_string()));
+//! let paladin: Paladin = Entity::new(data, Some("Assistant".to_string()));
 //! ```
 //!
 //! ## Using Garrison Memory

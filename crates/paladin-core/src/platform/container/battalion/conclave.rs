@@ -456,7 +456,7 @@ impl From<ConclaveError> for BattalionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::entity::node::Node;
+    use crate::base::entity::Entity;
     use crate::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 
     fn create_test_paladin(name: &str) -> Paladin {
@@ -473,7 +473,7 @@ mod tests {
             ..Default::default()
         };
 
-        Node::new(paladin_data, Some(name.to_string()))
+        Entity::new(paladin_data, Some(name.to_string()))
     }
 
     fn create_test_config() -> ConclaveConfig {

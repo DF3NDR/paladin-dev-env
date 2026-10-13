@@ -327,7 +327,7 @@ pub enum StateType {
 mod tests {
     use super::super::paladin::{MaxLoops, PaladinData, PaladinStatus};
     use super::*;
-    use crate::base::entity::node::Node;
+    use crate::base::entity::Entity;
 
     fn create_test_paladin_data() -> PaladinData {
         PaladinData {
@@ -345,7 +345,7 @@ mod tests {
     }
 
     fn create_test_paladin() -> Paladin {
-        Node::new(create_test_paladin_data(), Some("TestPaladin".to_string()))
+        Entity::new(create_test_paladin_data(), Some("TestPaladin".to_string()))
     }
 
     #[test]

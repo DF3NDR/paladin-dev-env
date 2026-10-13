@@ -38,7 +38,7 @@ use paladin::application::services::battalion::flow_visualizer::{
 };
 use paladin::application::services::battalion::maneuver_service::ManeuverExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::maneuver::{
     ErrorStrategy, Maneuver, ManeuverConfig, OutputFormat,
 };
@@ -129,7 +129,7 @@ fn create_paladin(name: &str, system_prompt: &str) -> Paladin {
         ..Default::default()
     };
 
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[tokio::main]

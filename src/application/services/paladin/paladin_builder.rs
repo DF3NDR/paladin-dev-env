@@ -32,7 +32,7 @@
 use crate::application::services::paladin::error::PaladinError;
 use crate::application::services::sanctum::memory_extraction_service::MemoryExtractionStrategy;
 use crate::config::arsenal::MCPServerConfig;
-use crate::core::base::entity::node::Node;
+use crate::core::base::entity::Entity;
 use crate::core::platform::container::arsenal::Armament;
 use crate::core::platform::container::herald::Herald;
 use crate::core::platform::container::paladin::MaxLoops;
@@ -1398,7 +1398,7 @@ impl PaladinBuilder {
             Some(self.data.name.clone())
         };
 
-        Ok(Node::new(self.data, name))
+        Ok(Entity::new(self.data, name))
     }
 }
 
@@ -2151,8 +2151,8 @@ mod tests {
                     ..Default::default()
                 };
 
-                // Create Paladin (Node<PaladinData>)
-                let paladin = Node::new(data, Some("RestoredPaladin".to_string()));
+                // Create Paladin (Entity<PaladinData>)
+                let paladin = Entity::new(data, Some("RestoredPaladin".to_string()));
 
                 Ok(Some(
                     crate::core::platform::container::citadel::PaladinState {

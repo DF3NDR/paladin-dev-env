@@ -1,4 +1,4 @@
-use crate::base::entity::node::Node;
+use crate::base::entity::Entity;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PromptItem {
-    pub node: Node<PromptData>,
+    pub node: Entity<PromptData>,
 }
 
 impl Hash for PromptItem {
@@ -211,7 +211,7 @@ impl PromptItem {
             metadata: BTreeMap::new(),
         };
 
-        let node = Node::new(prompt_data, None);
+        let node = Entity::new(prompt_data, None);
         Ok(PromptItem { node })
     }
 
@@ -228,7 +228,7 @@ impl PromptItem {
             metadata: BTreeMap::new(),
         };
 
-        let node = Node::new(prompt_data, Some(title));
+        let node = Entity::new(prompt_data, Some(title));
         Ok(PromptItem { node })
     }
 

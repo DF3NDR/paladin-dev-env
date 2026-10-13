@@ -1850,7 +1850,7 @@ impl CommanderBuilder {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::aegis::{
         Aegis, ErrorHandlerSpec, RetryPolicy as AegisRetryPolicy, RetryPredicate,
     };
@@ -1953,7 +1953,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some("TestPaladin".to_string()))
+        Entity::new(data, Some("TestPaladin".to_string()))
     }
 
     fn create_test_paladin_with_name(name: &str) -> Paladin {
@@ -1969,7 +1969,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     fn create_test_config() -> BattalionConfig {
@@ -2895,7 +2895,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -2968,7 +2968,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -3170,7 +3170,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -3208,7 +3208,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -3272,7 +3272,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -3309,7 +3309,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 

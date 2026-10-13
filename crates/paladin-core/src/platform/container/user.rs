@@ -9,7 +9,7 @@ including username, email, and password hash.
 This follows Domain-Driven Design principles and leverages the existing Node infrastructure.
 */
 
-use crate::base::entity::node::Node;
+use crate::base::entity::Entity;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
@@ -162,7 +162,7 @@ impl Hash for UserData {
 }
 
 /// User type built on Node for versioning and consistency
-pub type User = Node<UserData>;
+pub type User = Entity<UserData>;
 
 impl User {
     /// Creates a new User with UserData
@@ -183,7 +183,7 @@ impl User {
         };
 
         let name = Some(format!("User: {}", user_data.username.clone()));
-        Node::new(user_data, name)
+        Entity::new(user_data, name)
     }
 
     /// Gets the username

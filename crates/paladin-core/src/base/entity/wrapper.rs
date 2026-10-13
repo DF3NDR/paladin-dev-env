@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct Node<T> {
+pub struct Entity<T> {
     pub uuid: Uuid,
     pub created: DateTime<Utc>,
     pub modified: DateTime<Utc>,
@@ -13,7 +13,7 @@ pub struct Node<T> {
     pub version: bool,
 }
 
-impl<T> Hash for Node<T>
+impl<T> Hash for Entity<T>
 where
     T: Hash,
 {
@@ -24,7 +24,7 @@ where
     }
 }
 
-impl<T> Node<T> {
+impl<T> Entity<T> {
     pub fn new(node: T, name: Option<String>) -> Self {
         let now = Utc::now();
         Self {
@@ -86,29 +86,29 @@ mod tests {
     }
 
     #[test]
-    fn test_node_creation() {
+    fn test_entity_creation() {
         let test_data = TestData {
             value: "test".to_string(),
             number: 42,
         };
 
-        let node = Node::new(test_data.clone(), Some("Test Node".to_string()));
+        let entity = Entity::new(test_data.clone(), Some("Test Entity".to_string()));
 
-        assert_eq!(node.node, test_data);
-        assert_eq!(node.name, Some("Test Node".to_string()));
-        assert!(node.version);
-        assert_eq!(node.created, node.modified);
+        assert_eq!(entity.node, test_data);
+        assert_eq!(entity.name, Some("Test Entity".to_string()));
+        assert!(entity.version);
+        assert_eq!(entity.created, entity.modified);
     }
 
     #[test]
-    fn test_node_update() {
+    fn test_entity_update() {
         let initial_data = TestData {
             value: "initial".to_string(),
             number: 1,
         };
 
-        let mut node = Node::new(initial_data, None);
-        let initial_modified = node.modified;
+        let mut entity = Entity::new(initial_data, None);
+        let initial_modified = entity.modified;
 
         std::thread::sleep(std::time::Duration::from_millis(1));
 
@@ -117,10 +117,10 @@ mod tests {
             number: 2,
         };
 
-        node.update(new_data.clone());
+        entity.update(new_data.clone());
 
-        assert_eq!(node.node, new_data);
-        assert!(node.modified > initial_modified);
+        assert_eq!(entity.node, new_data);
+        assert!(entity.modified > initial_modified);
     }
 
     #[test]
@@ -130,19 +130,19 @@ mod tests {
             number: 42,
         };
 
-        let mut node = Node::new(test_data, None);
+        let mut entity = Entity::new(test_data, None);
 
-        assert!(node.is_versioning_enabled());
+        assert!(entity.is_versioning_enabled());
 
-        node.disable_versioning();
-        assert!(!node.is_versioning_enabled());
+        entity.disable_versioning();
+        assert!(!entity.is_versioning_enabled());
 
-        node.enable_versioning();
-        assert!(node.is_versioning_enabled());
+        entity.enable_versioning();
+        assert!(entity.is_versioning_enabled());
     }
 
     #[test]
-    fn test_node_hash() {
+    fn test_entity_hash() {
         let test_data1 = TestData {
             value: "test1".to_string(),
             number: 1,
@@ -153,35 +153,35 @@ mod tests {
             number: 2,
         };
 
-        let node1 = Node::new(test_data1, Some("Node 1".to_string()));
-        let node2 = Node::new(test_data2, Some("Node 2".to_string()));
+        let entity1 = Entity::new(test_data1, Some("Entity 1".to_string()));
+        let entity2 = Entity::new(test_data2, Some("Entity 2".to_string()));
 
         // Different nodes should have different hashes
         let mut hasher1 = std::collections::hash_map::DefaultHasher::new();
         let mut hasher2 = std::collections::hash_map::DefaultHasher::new();
 
-        node1.hash(&mut hasher1);
-        node2.hash(&mut hasher2);
+        entity1.hash(&mut hasher1);
+        entity2.hash(&mut hasher2);
 
         assert_ne!(hasher1.finish(), hasher2.finish());
     }
 
     #[test]
-    fn test_node_serialization() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_entity_serialization() -> Result<(), Box<dyn std::error::Error>> {
         let test_data = TestData {
             value: "serialize_test".to_string(),
             number: 100,
         };
 
-        let node = Node::new(test_data, Some("Serialization Test".to_string()));
+        let entity = Entity::new(test_data, Some("Serialization Test".to_string()));
 
         // Test serialization
-        let serialized = serde_json::to_string(&node)?;
+        let serialized = serde_json::to_string(&entity)?;
         assert!(!serialized.is_empty());
 
         // Test deserialization
-        let deserialized: Node<TestData> = serde_json::from_str(&serialized)?;
-        assert_eq!(node, deserialized);
+        let deserialized: Entity<TestData> = serde_json::from_str(&serialized)?;
+        assert_eq!(entity, deserialized);
 
         Ok(())
     }

@@ -2167,7 +2167,7 @@ mod agent_model_admission_tests {
     };
     use crate::application::services::treasurer::{AllowancePolicy, ScopeAllowance, Treasurer};
     use paladin_battalion::engine::{EngineLimits, WarGraph};
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::allowance::Admission;
     use paladin_core::platform::container::battlefield::BattlefieldSchema;
     use paladin_core::platform::container::cost::{Cost, CurrencyCode, PriceRow, PriceTable};
@@ -2209,7 +2209,7 @@ mod agent_model_admission_tests {
                     assistant_id: assistant_id.to_string(),
                     version: version.unwrap_or(1),
                 },
-                runnable: Runnable::Agent(Arc::new(Node::new(
+                runnable: Runnable::Agent(Arc::new(Entity::new(
                     PaladinData {
                         system_prompt: "system".to_string(),
                         model: self.model.to_string(),

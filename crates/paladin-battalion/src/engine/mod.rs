@@ -3608,7 +3608,7 @@ mod tests {
             name: name.to_string(),
             ..Default::default()
         };
-        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
+        paladin_core::base::entity::Entity::new(data, Some(name.to_string()))
     }
 
     /// Plan 39-04: like [`make_paladin`], but with an explicit `model` --
@@ -3620,7 +3620,7 @@ mod tests {
             model: model.to_string(),
             ..Default::default()
         };
-        paladin_core::base::entity::node::Node::new(data, Some(name.to_string()))
+        paladin_core::base::entity::Entity::new(data, Some(name.to_string()))
     }
 
     fn engine_with_port(

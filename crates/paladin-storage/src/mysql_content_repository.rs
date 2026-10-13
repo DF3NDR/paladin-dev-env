@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::content::{
     AudioContent, ContentData, ContentItem, ContentType, ImageContent, TextContent, VideoContent,
 };
@@ -296,7 +296,7 @@ impl MySqlContentRepository {
         };
 
         // Reconstruct Node with database values
-        let node = Node {
+        let node = Entity {
             uuid,
             created,
             modified,
@@ -762,7 +762,7 @@ mod tests {
         let uuid = Uuid::new_v4();
         let now = Utc::now();
 
-        let node = Node {
+        let node = Entity {
             uuid,
             created: now,
             modified: now,

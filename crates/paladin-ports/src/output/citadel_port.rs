@@ -312,7 +312,7 @@ use paladin_core::platform::container::citadel_error::CitadelError;
 /// ```rust,no_run
 /// use paladin_ports::output::citadel_port::CitadelPort;
 /// use paladin_core::platform::container::citadel::PaladinState;
-/// use paladin_core::base::entity::node::Node;
+/// use paladin_core::base::entity::Entity;
 /// use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 ///
 /// async fn save_and_load(
@@ -332,7 +332,7 @@ use paladin_core::platform::container::citadel_error::CitadelError;
 ///         ..Default::default()
 ///     };
 ///
-///     let paladin = Node::new(paladin_data, Some("test".to_string()));
+///     let paladin = Entity::new(paladin_data, Some("test".to_string()));
 ///     let state = PaladinState::new(paladin.clone(), vec![], vec![]);
 ///
 ///     // Save the state
@@ -587,7 +587,7 @@ pub trait CitadelPort: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::citadel::{BattalionCheckpointConfig, CheckpointData};
     use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 
@@ -633,7 +633,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        let paladin = Node::new(paladin_data, Some("test".to_string()));
+        let paladin = Entity::new(paladin_data, Some("test".to_string()));
         let state = PaladinState::new(paladin, vec![], vec![]);
 
         assert!(citadel.save_paladin(&state).await.is_ok());

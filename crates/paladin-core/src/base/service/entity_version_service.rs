@@ -18,7 +18,7 @@
 //! (ADR-0060). New writes only ever emit the new keys, and a record carrying both spellings of
 //! one key is rejected as a duplicate field.
 
-use crate::base::entity::node::Node;
+use crate::base::entity::Entity;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -175,7 +175,7 @@ where
     /// Create a new version when an entity is created or modified
     pub fn create_version(
         &self,
-        entity: &Node<T>,
+        entity: &Entity<T>,
         change_type: ChangeType,
         created_by: Option<String>,
         change_summary: Option<String>,
@@ -278,7 +278,7 @@ where
             })?;
 
         // Create a new version based on the restored data
-        let entity = Node {
+        let entity = Entity {
             uuid: entity_id,
             created: Utc::now(), // This would normally come from the original entity
             modified: Utc::now(),
@@ -538,7 +538,7 @@ mod tests {
             number: 42,
         };
 
-        let entity = Node::new(test_data, Some("test_node".to_string()));
+        let entity = Entity::new(test_data, Some("test_node".to_string()));
 
         let version = service
             .create_version(
@@ -565,7 +565,7 @@ mod tests {
             number: 42,
         };
 
-        let entity = Node::new(test_data.clone(), Some("test_node".to_string()));
+        let entity = Entity::new(test_data.clone(), Some("test_node".to_string()));
 
         // Create initial version
         service
@@ -577,7 +577,7 @@ mod tests {
             value: "updated".to_string(),
             number: 43,
         };
-        let updated_entity = Node {
+        let updated_entity = Entity {
             node: updated_data,
             ..entity
         };
@@ -601,7 +601,7 @@ mod tests {
             number: 1,
         };
 
-        let entity = Node::new(test_data.clone(), Some("test_node".to_string()));
+        let entity = Entity::new(test_data.clone(), Some("test_node".to_string()));
 
         // Create initial version
         service
@@ -613,7 +613,7 @@ mod tests {
             value: "updated".to_string(),
             number: 2,
         };
-        let updated_entity = Node {
+        let updated_entity = Entity {
             node: updated_data,
             ..entity
         };
@@ -635,7 +635,7 @@ mod tests {
     fn entity_version_rejects_both_key_spellings() -> Result<(), Box<dyn std::error::Error>> {
         let repository = Arc::new(InMemoryEntityVersionRepository::new());
         let service = EntityVersionService::new(repository, None);
-        let entity = Node::new(
+        let entity = Entity::new(
             TestData {
                 value: "test".to_string(),
                 number: 42,

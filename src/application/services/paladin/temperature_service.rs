@@ -1,5 +1,5 @@
 use crate::application::services::paladin::error::PaladinError;
-use crate::core::base::entity::node::Node;
+use crate::core::base::entity::Entity;
 use crate::core::platform::container::prompt::{
     PromptData, PromptItem, PromptParameters, PromptType, UserPrompt,
 };
@@ -141,7 +141,7 @@ impl TemperatureService {
         let request = LlmRequest::new(
             "gpt-4", // Use consistent model for classification
             PromptItem {
-                node: Node::new(
+                node: Entity::new(
                     PromptData {
                         prompt_type: PromptType::User(UserPrompt {
                             query: prompt.clone(),

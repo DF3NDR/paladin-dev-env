@@ -3,7 +3,7 @@
 // Comprehensive unit tests for MockLlmAdapter following TDD methodology
 
 use paladin::MockLlmAdapter;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::prompt::{
     PromptData, PromptItem, PromptParameters, PromptType, UserPrompt,
 };
@@ -310,7 +310,7 @@ fn create_test_request() -> LlmRequest {
     };
 
     let prompt_item = PromptItem {
-        node: Node::new(prompt_data, Some("test-prompt".to_string())),
+        node: Entity::new(prompt_data, Some("test-prompt".to_string())),
     };
 
     LlmRequest::new("mock-model", prompt_item)

@@ -279,7 +279,7 @@ mod tests {
     }
 
     fn make_paladin(data: PaladinData) -> Paladin {
-        paladin_core::base::entity::node::Node::new(data, Some("p".to_string()))
+        paladin_core::base::entity::Entity::new(data, Some("p".to_string()))
     }
 
     fn graph_with_function(node: &str) -> WarGraph {

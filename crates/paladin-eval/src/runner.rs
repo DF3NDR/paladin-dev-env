@@ -1260,7 +1260,7 @@ mod tests {
     use paladin_battalion::engine::graph::{EdgeSpec, EngineLimits};
     use paladin_battalion::engine::node::{NodeContext, StateNode, StateNodeError};
     use paladin_battalion::engine::{InputMapping, NodeSpec as EngineNodeSpec};
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldSpec,
     };
@@ -1286,7 +1286,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     fn minimal_scenario(

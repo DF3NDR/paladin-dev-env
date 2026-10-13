@@ -11,7 +11,7 @@
 use paladin::application::errors::handoff_error::HandoffError;
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::application::services::paladin::handoff_service::HandoffService;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::autonomous_config::{HandoffConfig, HandoffRetryConfig};
 use paladin::core::platform::container::handoff::{HandoffContext, HandoffStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
@@ -514,7 +514,7 @@ impl PaladinExecutorPort for AlwaysTransientFailExecutor {
 
 /// Helper: create a test Paladin
 fn create_test_paladin(name: &str) -> Paladin {
-    Node::new(
+    Entity::new(
         PaladinData {
             system_prompt: format!("You are {name}"),
             name: name.to_string(),

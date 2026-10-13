@@ -305,7 +305,7 @@ impl Campaign {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::entity::node::Node;
+    use crate::base::entity::Entity;
     use crate::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 
     fn create_test_paladin(name: &str) -> Paladin {
@@ -321,7 +321,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     #[test]

@@ -353,10 +353,10 @@ impl<'p> ModelCallContext<'p> {
     ///
     /// ```
     /// use paladin::application::services::paladin::middleware::{ModelCallContext, PromptAssembly};
-    /// # use paladin::core::base::entity::node::Node;
+    /// # use paladin::core::base::entity::Entity;
     /// # use paladin::core::platform::container::paladin::PaladinData;
     ///
-    /// let paladin = Node::new(PaladinData::default(), None);
+    /// let paladin = Entity::new(PaladinData::default(), None);
     /// let assembly = PromptAssembly::new("system", "input", "", vec![], None);
     /// let cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
     ///
@@ -409,10 +409,10 @@ impl<'p> ModelCallContext<'p> {
     /// use paladin::application::services::paladin::middleware::{ModelCallContext, PromptAssembly};
     /// use paladin_llm::mock::MockLlmAdapter;
     /// use paladin_ports::output::llm_port::LlmPort;
-    /// # use paladin::core::base::entity::node::Node;
+    /// # use paladin::core::base::entity::Entity;
     /// # use paladin::core::platform::container::paladin::PaladinData;
     ///
-    /// let paladin = Node::new(PaladinData::default(), None);
+    /// let paladin = Entity::new(PaladinData::default(), None);
     /// let assembly = PromptAssembly::new("system", "input", "", vec![], None);
     /// let cx = ModelCallContext::new(uuid::Uuid::new_v4(), &paladin, assembly);
     /// let service_default: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new());

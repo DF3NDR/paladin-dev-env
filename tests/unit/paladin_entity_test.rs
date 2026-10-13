@@ -1,4 +1,4 @@
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 
 #[test]
@@ -102,7 +102,7 @@ fn test_paladin_node_creation() {
         ..Default::default()
     };
 
-    let paladin: Paladin = Node::new(data.clone(), Some("CodeReviewer".to_string()));
+    let paladin: Paladin = Entity::new(data.clone(), Some("CodeReviewer".to_string()));
 
     // Verify Node properties
     assert_eq!(paladin.name, Some("CodeReviewer".to_string()));

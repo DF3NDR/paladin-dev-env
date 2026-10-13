@@ -1,7 +1,7 @@
 /*
 Logging Container
 
-The Log Container is a type of Node that has a UUID with a vector of LogEntry items.
+The Log Container is a type of Entity that has a UUID with a vector of LogEntry items.
 The Log can be abstracted in the application layer so that multiple Logs may exist.
 
 By defining only the most fundamental requirements within the Core we allow the application
@@ -393,12 +393,12 @@ impl LogContainer {
     }
 }
 
-/// Type alias for Log as a Node containing LogContainer
+/// Type alias for Log as an Entity containing LogContainer
 pub type Log = Entity<LogContainer>;
 
 /// Extension trait for Log to add log-specific functionality
 pub trait LogExt {
-    /// Create a new log node
+    /// Create a new log entity
     fn new_log(name: String, destination: LogDestination, min_level: LogLevel) -> Self;
 
     /// Add an entry to this log

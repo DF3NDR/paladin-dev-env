@@ -119,7 +119,7 @@ fn test_node_pattern_accessible_without_cli() {
         agent_description: String::new(),
         dynamic_temperature: false,
     };
-    // Paladin is Entity<PaladinData>; constructing it exercises the Node pattern.
+    // Paladin is Entity<PaladinData>; constructing it exercises the Entity pattern.
     let paladin = Entity::new(data, Some("NodeTest".to_string()));
     assert_eq!(paladin.node.name, "NodeTest");
 }

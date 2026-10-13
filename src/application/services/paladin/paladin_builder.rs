@@ -1391,7 +1391,7 @@ impl PaladinBuilder {
             self.citadel_port = Some(Arc::new(file_citadel));
         }
 
-        // Create Paladin using Node pattern with name
+        // Create Paladin using Entity pattern with name
         let name = if self.data.name.is_empty() {
             None
         } else {

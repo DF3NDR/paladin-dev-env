@@ -284,7 +284,7 @@ pub struct GroveData {
     pub config: GroveConfig,
 }
 
-/// Grove aggregate root using the Node pattern
+/// Grove aggregate root using the Entity pattern
 ///
 /// A Grove is a tree-based multi-agent routing system that intelligently
 /// directs requests to specialized agents based on expertise and content.

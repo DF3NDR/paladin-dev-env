@@ -291,7 +291,7 @@ impl SqliteStore {
             mod_date,
         };
 
-        // Reconstruct Node with database values
+        // Reconstruct Entity with database values
         let node = Entity {
             uuid,
             created,

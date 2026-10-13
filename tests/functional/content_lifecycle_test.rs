@@ -221,33 +221,33 @@ mod functional_tests {
 
     #[test]
     fn test_content_node_integration() {
-        // Test that ContentItem properly integrates with Node structure
+        // Test that ContentItem properly integrates with Entity structure
         let text_content =
-            TextContent::new(None, Some("Testing node integration".to_string())).unwrap();
+            TextContent::new(None, Some("Testing entity integration".to_string())).unwrap();
 
         let content_item = ContentItem::new_with_title(
             ContentType::Text(text_content),
-            "Node Integration Test".to_string(),
+            "Entity Integration Test".to_string(),
         )
         .unwrap();
 
-        // Test node properties
+        // Test entity properties
         assert_eq!(content_item.node.uuid, content_item.uuid());
         assert_eq!(content_item.node.created, content_item.created());
         assert_eq!(content_item.node.modified, content_item.modified());
         assert_eq!(content_item.node.name, content_item.title().cloned());
         assert_eq!(content_item.node.version, content_item.versioning_enabled());
 
-        // Test that the node contains the content data
+        // Test that the entity contains the content data
         match content_item.content() {
             ContentType::Text(text) => {
-                assert_eq!(text.content, Some("Testing node integration".to_string()));
+                assert_eq!(text.content, Some("Testing entity integration".to_string()));
                 assert_eq!(content_item.node.node.content, *content_item.content());
             }
             _ => panic!("Expected text content"),
         }
 
-        println!("✅ Node integration test passed");
+        println!("✅ Entity integration test passed");
     }
 
     #[test]

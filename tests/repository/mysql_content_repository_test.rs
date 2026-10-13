@@ -83,7 +83,7 @@ mod tests {
     fn test_content_item_node_structure() {
         let content_item = create_test_content_item();
 
-        // Test that we can access Node fields properly
+        // Test that we can access Entity fields properly
         assert!(content_item.uuid() != Uuid::nil());
         assert!(content_item.created() <= Utc::now());
         assert!(content_item.modified() <= Utc::now());
@@ -238,7 +238,7 @@ mod tests {
             mod_date: None,
         };
 
-        // Reconstruct Node (as repository does)
+        // Reconstruct Entity (as repository does)
         let reconstructed_node = Entity {
             uuid,
             created,
@@ -276,7 +276,7 @@ mod tests {
             Some(&"Reconstructed description".to_string())
         );
 
-        println!("Node reconstruction pattern verified");
+        println!("Entity reconstruction pattern verified");
     }
 
     // Integration test placeholder (requires actual database)

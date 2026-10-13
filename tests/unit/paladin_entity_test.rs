@@ -104,7 +104,7 @@ fn test_paladin_node_creation() {
 
     let paladin: Paladin = Entity::new(data.clone(), Some("CodeReviewer".to_string()));
 
-    // Verify Node properties
+    // Verify Entity properties
     assert_eq!(paladin.name, Some("CodeReviewer".to_string()));
     assert_eq!(paladin.node.name, "CodeReviewer");
     assert_eq!(paladin.node.system_prompt, "You are a code reviewer");

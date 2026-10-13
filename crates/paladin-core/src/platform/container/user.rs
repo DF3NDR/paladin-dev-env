@@ -2,11 +2,11 @@
 /*
 User Container
 
-User type built on the core base entity Node type to utilize the versioning system
+User type built on the core base Entity type to utilize the versioning system
 through composition. It represents a user entity in the system with all needed values
 including username, email, and password hash.
 
-This follows Domain-Driven Design principles and leverages the existing Node infrastructure.
+This follows Domain-Driven Design principles and leverages the existing Entity infrastructure.
 */
 
 use crate::base::entity::Entity;
@@ -114,7 +114,7 @@ impl std::fmt::Display for UserRole {
     }
 }
 
-/// User data structure that will be wrapped by Node
+/// User data structure that will be wrapped by Entity
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserData {
     pub username: String,
@@ -161,7 +161,7 @@ impl Hash for UserData {
     }
 }
 
-/// User type built on Node for versioning and consistency
+/// User type built on Entity for versioning and consistency
 pub type User = Entity<UserData>;
 
 impl User {

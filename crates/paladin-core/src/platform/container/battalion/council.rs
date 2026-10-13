@@ -218,7 +218,7 @@ impl Default for CouncilConfig {
 
 /// Council domain entity data
 ///
-/// Contains the core data for a Council without the Node wrapper.
+/// Contains the core data for a Council without the Entity wrapper.
 /// This follows the pattern used by other domain entities in the system.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CouncilData {
@@ -449,7 +449,7 @@ impl CouncilBuilder {
             config: self.config,
         };
 
-        // Create Node
+        // Create the Council entity
         Ok(crate::base::entity::Entity::new(data, Some(name)))
     }
 }

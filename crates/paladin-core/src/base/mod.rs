@@ -1,7 +1,7 @@
 //! Base layer: generic infrastructure that predates the Medieval Military vocabulary.
 //!
-//! - `entity` holds the base entity wrapper and `Message`, plus `Field` and
-//!   `CollectionType` / `Item`.
+//! - `entity` holds the base entity wrapper [`Entity<T>`](crate::base::entity::Entity) and
+//!   `Message`, plus `Field` and `CollectionType` / `Item`.
 //! - `component` holds `Action`, `Event` and the comment-only `element` module.
 //! - `service` holds `AnalysisService`, `EntityVersionService`, `MessageService`,
 //!   `FieldVersionService` and `CollectionVersionService`.

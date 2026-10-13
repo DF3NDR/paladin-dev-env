@@ -156,7 +156,7 @@ mod tests {
         let entity1 = Entity::new(test_data1, Some("Entity 1".to_string()));
         let entity2 = Entity::new(test_data2, Some("Entity 2".to_string()));
 
-        // Different nodes should have different hashes
+        // Different entities should have different hashes
         let mut hasher1 = std::collections::hash_map::DefaultHasher::new();
         let mut hasher2 = std::collections::hash_map::DefaultHasher::new();
 

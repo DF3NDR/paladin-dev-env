@@ -96,7 +96,7 @@ impl ContentItem {
         self.node.node.hash = new_hash;
         self.node.node.mod_date = Some(Utc::now());
 
-        // Update the node's modified timestamp
+        // Update the entity's modified timestamp
         self.node.modified = Utc::now();
 
         Ok(())

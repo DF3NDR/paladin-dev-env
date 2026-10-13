@@ -5,14 +5,14 @@ milestone_name: Crate Release
 current_phase: 48
 current_phase_name: Base Entity Rename
 status: planning
-stopped_at: Phase 48 context gathered
-last_updated: "2026-10-13T16:44:28.830Z"
-last_activity: 2026-10-12
-last_activity_desc: "Phase 41 sealed: the operator signed off the four human UAT items in 41-UAT.md (4/4 passed; verification status moved from human_needed to passed) and ROADMAP row 41 reads 9/9 Complete. Earlier the same day Phase 44 was sealed (44-UAT.md 15/15; G-44-2 pre-commit gate fixed in 1e93e1ce, green on run 38193792540). Every phase 38-45 is now complete; next is Phase 46."
+stopped_at: Phase 48 planned (9 plans, 7 waves) — ready to execute
+last_updated: "2026-10-13T17:56:41.886Z"
+last_activity: 2026-10-13
+last_activity_desc: "Phase 48 planned: nine plans in seven waves regenerated from the owner-updated 48-CONTEXT.md (D-15); plan-checker passed on iteration 2; requirements 5/5 and decisions 19/19 covered. Next: /gsd-execute-phase 48."
 progress:
   total_phases: 9
   completed_phases: 8
-  total_plans: 86
+  total_plans: 95
   completed_plans: 77
 ---
 
@@ -34,8 +34,8 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 77/77 plans ([██████████] 100%) of the phases planned so far (38-45);
-Phases 48, 46 and 47 (execution order) are not yet planned.
+**Progress:** [████████████████░░░░] 77/86 plans ([█████████░] 90%) of the phases planned so far (38-45, 48);
+Phase 48 is planned (9 plans, 7 waves, ready to execute); Phases 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -54,9 +54,9 @@ under `milestones/`.
 ## Current Position
 
 Phase: 48 — Base Entity Rename (runs before 46 and 47)
-Plan: Not started
-Status: Ready to discuss/plan (no CONTEXT.md yet)
-Last activity: 2026-10-12 — Phase 41 sealed: the operator signed off the four human UAT items in 41-UAT.md (4/4 passed; verification status moved from human_needed to passed) and ROADMAP row 41 reads 9/9 Complete. Earlier the same day Phase 44 was sealed (44-UAT.md 15/15; G-44-2 pre-commit gate fixed in 1e93e1ce, green on run 38193792540). Every phase 38-45 is now complete; next is Phase 46.
+Plan: 0 of 9 (9 plans in 7 waves, 48-01 .. 48-09)
+Status: Ready to execute
+Last activity: 2026-10-13 — Phase 48 replanned from the owner-updated 48-CONTEXT.md (D-15): nine plans in seven waves, plan-checker passed on iteration 2 (1 blocker + 3 warnings fixed in 9b5d2ae), requirements 5/5 and decisions 19/19 covered. Previous: Phase 41 sealed: the operator signed off the four human UAT items in 41-UAT.md (4/4 passed; verification status moved from human_needed to passed) and ROADMAP row 41 reads 9/9 Complete. Earlier the same day Phase 44 was sealed (44-UAT.md 15/15; G-44-2 pre-commit gate fixed in 1e93e1ce, green on run 38193792540). Every phase 38-45 is now complete; next is Phase 46.
 
 ## Performance Metrics
 

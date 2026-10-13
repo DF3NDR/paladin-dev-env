@@ -1111,14 +1111,34 @@ was built independently. `Field`, `Collection`, `Element`, `FieldVersionService`
 **Plans**: 9 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 48-01-PLAN.md — Tracer: capture the five v0.10 fixtures (Paladin, Citadel snapshot, ContentItem, PromptItem, version record) from the unmodified tree; a pre-rename snapshot loads through FileCitadel; the compat harness over all five shapes
 - [ ] 48-02-PLAN.md — ADR-0060 (Phase-48-only X-03 supersession, Entity design, citadel unification, five base items retained pending review, node/Entity vocabulary rule); PROMOTION next free 0061; PROJECT.md rows; residual note in the content-system review todo
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 48-03-PLAN.md — Version family renamed EntityVersion* with node_id/node_data read-aliases (D-09); retained-items reason in base/mod.rs rustdoc (D-05); API baseline refreshed (14 lines)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 48-04-PLAN.md — Citadel placeholder PaladinData/PaladinStatus unified with the real ones (D-10); Stage A: Node<T> -> Entity<T> at base::entity::Entity (D-01, D-02, D-13); entity-sense Rust prose finished
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 48-05-PLAN.md — Stage B: payload node -> data and ContentItem/PromptItem node -> entity with read-aliases (D-03, D-08); alias edge-case tests; Entity<T> revisioning and serialization rustdoc (D-04, D-11)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 48-06-PLAN.md — Docs agree: mdBook domain-model/design-patterns/crate-map/overview/stable-api, LayerArchitecture.svg, READMEs, CLAUDE.md and copilot naming-table Entity row (D-07)
 - [ ] 48-07-PLAN.md — Register once, measured (D-14): D-27 semver diagnostic, MIGRATION 9.2 rows + set-equal allowlist + new allow lines in one commit; 9.1 M-B-12, 9.4, 9.7 sentence; CHANGELOGs
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 48-08-PLAN.md — tests/entity_rename_guard.rs: old entity paths absent, one Paladin/PaladinData/PaladinStatus/NodeError/Entity, graph definitions pinned, retained paths not banned (D-07); byte-identical graph freeze
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
 - [ ] 48-09-PLAN.md — Closeout: full gate run with measured coverage; ADR-0060 conforms; ENTITY-01/04/05 and ROADMAP wording corrected (ENTITY-04 retained pending review), IDs unchanged
 
 ---

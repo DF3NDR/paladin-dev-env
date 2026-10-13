@@ -1114,7 +1114,7 @@ Plans:
 **Wave 1**
 
 - [ ] 48-01-PLAN.md — Tracer: capture the five v0.10 fixtures (Paladin, Citadel snapshot, ContentItem, PromptItem, version record) from the unmodified tree; a pre-rename snapshot loads through FileCitadel; the compat harness over all five shapes
-- [ ] 48-02-PLAN.md — ADR-0060 (Phase-48-only X-03 supersession, Entity design, citadel unification, five base items retained pending review, node/Entity vocabulary rule); PROMOTION next free 0061; PROJECT.md rows; residual note in the content-system review todo
+- [x] 48-02-PLAN.md — ADR-0060 (Phase-48-only X-03 supersession, Entity design, citadel unification, five base items retained pending review, node/Entity vocabulary rule); PROMOTION next free 0061; PROJECT.md rows; residual note in the content-system review todo
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

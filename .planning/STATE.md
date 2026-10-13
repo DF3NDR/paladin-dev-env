@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 48
 current_phase_name: Base Entity Rename
 status: executing
-stopped_at: Phase 48 planned (9 plans, 7 waves) — ready to execute
-last_updated: "2026-10-13T18:13:31.179Z"
+stopped_at: Completed 48-02-PLAN.md
+last_updated: "2026-10-13T18:19:16.881Z"
 last_activity: 2026-10-13
 last_activity_desc: Phase 48 execution started
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 86
-  completed_plans: 77
+  completed_plans: 78
 ---
 
 # Project State
@@ -34,7 +34,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████░░░░] 77/86 plans ([█████████░] 90%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████░░░░] 77/86 plans ([█████████░] 91%) of the phases planned so far (38-45, 48);
 Phase 48 is planned (9 plans, 7 waves, ready to execute); Phases 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -54,8 +54,8 @@ under `milestones/`.
 ## Current Position
 
 Phase: 48 (Base Entity Rename) — EXECUTING
-Plan: 1 of 9
-Status: Executing Phase 48
+Plan: 2 of 9
+Status: Ready to execute
 Last activity: 2026-10-13 — Phase 48 execution started
 
 ## Performance Metrics
@@ -273,6 +273,7 @@ Last activity: 2026-10-13 — Phase 48 execution started
 | Phase 44 P11 | ~1h30min | 2 tasks | 4 files |
 | Phase 44 P13 | 35min | 2 tasks | 2 files |
 | Phase 44 P12 | ~1h | 2 tasks | 6 files |
+| Phase 48 P02 | 20min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -454,6 +455,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 44-11: Phase 44 breaks registered from a measured cargo-semver-checks 0.50.0 run vs 0.10.1 (10 9.2 rows, 15 allowlist entries); BattalionResult node_errors retype is an N row (no lint modelled); paladin-ai facade retry re-export fired no lint
 - [Phase ?]: 44-13: legacy-removal guard skip set is exactly the declared history set; scoped-variant and missing-target controls live inside scanner_reports_planted_legacy_uses
 - [Phase 44]: Phase 44-12: ADR-0059 Code Conformance is conforms; LEGACY-04 ticked after the full phase gate (workspace tests green apart from the 2 baseline run_api_wiring failures, doctests, clippy, fmt, clean-code, security, check-gates, api-surface, examples, MSRV 1.88, both guards)
+- [Phase 48]: 48-02: ADR-0060 supersedes X-03 for Phase 48 only; serde read-aliases are data compatibility, not an API shim; the five unused base items are retained pending the content / general data orchestration review with a bounded list of residual entity-sense identifiers
 
 ### Pending Todos
 
@@ -669,9 +671,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-13T16:44:28.733Z
-**Stopped at:** Phase 48 context gathered
-**Resume file:** .planning/phases/48-base-entity-rename/48-CONTEXT.md
+**Last session:** 2026-10-13T18:19:16.854Z
+**Stopped at:** Completed 48-02-PLAN.md
+**Resume file:** None
 
 ## Operator Next Steps
 

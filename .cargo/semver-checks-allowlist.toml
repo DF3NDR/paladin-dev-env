@@ -426,3 +426,105 @@ lint = "module_missing"
 migration_row = "paladin-battalion | retry"
 requirement_id = "LEGACY-01"
 justification = "The paladin_battalion::retry module is removed (ADR-0059, D-00c), together with the facade's pub use re-export of it (paladin::application::services::battalion::retry; the cargo-semver-checks run on the paladin-ai facade fired no lint for it). paladin_battalion::engine::retry is a different module and is unaffected. Every in-tree use migrated in the same commit series (44-07, 44-10); suppressed by a new crate-wide allow line in a new [package.metadata.cargo-semver-checks.lints] table in crates/paladin-battalion/Cargo.toml."
+
+# --- Phase 48 (Base Entity Rename, ENTITY-01..05) ----------------------------
+# Entries below mirror the Phase 48 `Y` rows of MIGRATION.md section 9.2 (plan
+# 48-07). The D-27 diagnostic (cargo-semver-checks 0.50.0, the CI-pinned
+# version, against the published 0.10.1 with `--release-type minor` and
+# `--default-features`) ran once per crate with that crate's crate-wide allow
+# lines disabled; each manifest was restored byte-for-byte afterwards (checked
+# with cmp). Every entry is a lint the tool fired for a Phase 48 item, in
+# section 9.2 row order with lint ids alphabetical inside a row. Lints it fired
+# for earlier phases' items (PaladinResult.cost, RunFinishStatus, RunEventKind,
+# the TraceEvent fields, the Phase 44 Battalion and Conclave removals, and the
+# paladin-ai fields) belong to those phases' rows and are not repeated here.
+# The register-only rows have no entry because no lint models them: the citadel
+# module's removed Paladin type alias, PaladinState.paladin's type change, and
+# the paladin-ai ContentItemService signatures (the tool fired nothing for the
+# facade beyond earlier phases' fields). The five retained base items (Field,
+# CollectionType, Item, FieldVersionService, CollectionVersionService) have no
+# row and no entry because nothing about them breaks in this phase (D-05).
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "module_missing"
+migration_row = "paladin-ai-core | Node"
+requirement_id = "ENTITY-01, ENTITY-02"
+justification = "The base entity wrapper's module paladin_core::base::entity::node is removed outright (ADR-0060, no deprecated shim): the wrapper now lives at paladin_core::base::entity::Entity, re-exported from a private module. Every in-tree import migrated in the same commit series (48-04); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_missing"
+migration_row = "paladin-ai-core | Node"
+requirement_id = "ENTITY-01, ENTITY-02"
+justification = "The generic base entity wrapper struct Node<T> is renamed Entity<T> with its payload field renamed from node to data (ADR-0060, clean break, no alias). NodeId, NodeSpec, StateNode and the structured NodeError are graph items and are unaffected. Every in-tree use migrated in the same commit series (48-04, 48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_missing"
+migration_row = "paladin-ai-core | NodeVersionService"
+requirement_id = "ENTITY-03"
+justification = "The version family's enums VersioningError, ChangeType and HashAlgorithm keep their names but moved with their module to paladin_core::base::service::entity_version_service (ADR-0060, D-09), so their old import path no longer resolves. Every in-tree use migrated in the same commit series (48-03); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "module_missing"
+migration_row = "paladin-ai-core | NodeVersionService"
+requirement_id = "ENTITY-03"
+justification = "The version-service module paladin_core::base::service::node_version_service is renamed paladin_core::base::service::entity_version_service (ADR-0060, D-09), with no re-export under the old path. Every in-tree import migrated in the same commit series (48-03); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_missing"
+migration_row = "paladin-ai-core | NodeVersionService"
+requirement_id = "ENTITY-03"
+justification = "NodeVersion, NodeVersionMetadata, NodeVersionService and InMemoryNodeVersionRepository are renamed EntityVersion, EntityVersionMetadata, EntityVersionService and InMemoryEntityVersionRepository, and VersionHistory, VersionComparison and VersioningConfig moved with the module (ADR-0060, D-09). EntityVersion still reads the v0.10 node_id and node_data keys. Every in-tree use migrated in the same commit series (48-03); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "trait_missing"
+migration_row = "paladin-ai-core | NodeVersionService"
+requirement_id = "ENTITY-03"
+justification = "The NodeVersionRepository trait is renamed EntityVersionRepository (ADR-0060, D-09), with no alias under the old name. Every in-tree implementor and consumer migrated in the same commit series (48-03); suppressed by a new crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_missing"
+migration_row = "paladin-ai-core | PaladinData"
+requirement_id = "ENTITY-03"
+justification = "The citadel module's placeholder PaladinData struct is deleted outright (ADR-0060, D-10); the same-named real type in platform::container::paladin already existed, has the same 13 fields and is unaffected, so a v0.10 Citadel snapshot still loads. Every in-tree importer migrated in the same commit series (48-04); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "enum_missing"
+migration_row = "paladin-ai-core | PaladinStatus"
+requirement_id = "ENTITY-03"
+justification = "The citadel module's placeholder PaladinStatus enum is deleted outright (ADR-0060, D-10); the same-named real enum in platform::container::paladin is the only one now and adds the Reasoning status, so a v0.11 snapshot taken mid-reasoning is unreadable by v0.10. Every in-tree importer migrated in the same commit series (48-04); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai-core | ContentItem"
+requirement_id = "ENTITY-01"
+justification = "ContentItem's wrapper field is now named entity (ADR-0060, D-08), which the tool sees as a new field on a constructible struct; a downstream full struct literal breaks. The JSON key reads node or entity and writes entity. Every in-tree literal migrated in the same commit series (48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_pub_field_missing"
+migration_row = "paladin-ai-core | ContentItem"
+requirement_id = "ENTITY-01"
+justification = "ContentItem's public field node is renamed entity (ADR-0060, D-08): the content item's payload is read as item.entity.data. The v0.10 node key is still read for stored documents. Every in-tree reader migrated in the same commit series (48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai-core | PromptItem"
+requirement_id = "ENTITY-01"
+justification = "PromptItem's wrapper field is now named entity (ADR-0060, D-08), which the tool sees as a new field on a constructible struct; a downstream full struct literal breaks. The JSON key reads node or entity and writes entity. Every in-tree literal migrated in the same commit series (48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+[[entry]]
+crate = "paladin-ai-core"
+lint = "struct_pub_field_missing"
+migration_row = "paladin-ai-core | PromptItem"
+requirement_id = "ENTITY-01"
+justification = "PromptItem's public field node is renamed entity (ADR-0060, D-08): the prompt item's payload is read as item.entity.data. The v0.10 node key is still read for stored documents. Every in-tree reader migrated in the same commit series (48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."

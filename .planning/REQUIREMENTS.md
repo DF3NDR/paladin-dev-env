@@ -121,7 +121,7 @@ vocabulary (`NodeId`, `NodeSpec`, `StateNode`, …) now outnumbers it ~5:1 and l
 formats; the two senses of "node" already collide inside the engine. The entity side is renamed,
 the graph side is kept.*
 
-- [ ] **ENTITY-01**: `paladin_core::base::entity::Entity<T>` replaces `Node<T>` with the payload
+- [x] **ENTITY-01**: `paladin_core::base::entity::Entity<T>` replaces `Node<T>` with the payload
   field renamed `node` → `data`; `Paladin`, `Council`, `Grove`, `User`, `Log`, `ContentItem` and
   `PromptItem` are built on it; `#[serde(alias = "node")]` keeps every pre-rename persisted JSON
   (Citadel snapshots, stored Paladins, SQLite/Postgres rows) deserializing, proven by a fixture test
@@ -133,7 +133,7 @@ the graph side is kept.*
   re-exporting module keep compiling with no in-tree use and §9.7 schedules their removal for
   v0.12.0
 
-- [ ] **ENTITY-03**: Phase 44 left exactly one `NodeError` (the structured
+- [x] **ENTITY-03**: Phase 44 left exactly one `NodeError` (the structured
   `node_error::NodeError`); after Phase 48 that still holds and `tests/legacy_removal_guard.rs`
   is still green, there is exactly one `Paladin` alias (the `citadel.rs:48` duplicate is
   removed), and `NodeVersion`, `NodeVersionRepository`, `NodeVersionService` and
@@ -286,9 +286,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CURR-24 | Phase 46 | Pending |
 | CURR-25 | Phase 46 | Pending |
 | SHIP-07 | Phase 47 | Pending |
-| ENTITY-01 | Phase 48 | Pending |
+| ENTITY-01 | Phase 48 | Complete |
 | ENTITY-02 | Phase 48 | Pending |
-| ENTITY-03 | Phase 48 | Pending |
+| ENTITY-03 | Phase 48 | Complete |
 | ENTITY-04 | Phase 48 | Pending |
 | ENTITY-05 | Phase 48 | Pending |
 

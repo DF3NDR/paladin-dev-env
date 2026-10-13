@@ -1126,7 +1126,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 48-05-PLAN.md — Stage B: payload node -> data and ContentItem/PromptItem node -> entity with read-aliases (D-03, D-08); alias edge-case tests; Entity<T> revisioning and serialization rustdoc (D-04, D-11)
+- [x] 48-05-PLAN.md — Stage B: payload node -> data and ContentItem/PromptItem node -> entity with read-aliases (D-03, D-08); alias edge-case tests; Entity<T> revisioning and serialization rustdoc (D-04, D-11)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

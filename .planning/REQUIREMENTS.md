@@ -144,7 +144,7 @@ the graph side is kept.*
   written reason, and `Entity<T>::version`'s contract is documented in rustdoc, including that only
   `ContentItem` currently honours it through the version service
 
-- [ ] **ENTITY-05**: The graph vocabulary (`NodeId`, `NodeSpec`, `StateNode`, `NodeContext`,
+- [x] **ENTITY-05**: The graph vocabulary (`NodeId`, `NodeSpec`, `StateNode`, `NodeContext`,
   `NodeCache*`, `TraceEvent::Node*`, `wargraph-doc.schema.json`, the `node_cache` config section) is
   untouched; an ADR reserves "node" for the graph sense and "Entity" for the base wrapper; the
   CLAUDE.md/copilot naming table and the mdBook domain-model, design-patterns and crate-map pages
@@ -290,7 +290,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ENTITY-02 | Phase 48 | Complete |
 | ENTITY-03 | Phase 48 | Complete |
 | ENTITY-04 | Phase 48 | Complete |
-| ENTITY-05 | Phase 48 | Pending |
+| ENTITY-05 | Phase 48 | Complete |
 
 **Coverage:**
 

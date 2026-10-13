@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod functional_tests {
     use chrono::Utc;
-    use paladin::core::base::service::node_version_service::{
-        ChangeType, InMemoryNodeVersionRepository, NodeVersionRepository, VersioningError,
+    use paladin::core::base::service::entity_version_service::{
+        ChangeType, EntityVersionRepository, InMemoryEntityVersionRepository, VersioningError,
     };
     use paladin::core::platform::container::content::{ContentItem, ContentType, TextContent};
     use paladin::core::platform::manager::content_service::{
@@ -14,8 +14,8 @@ mod functional_tests {
     #[test]
     fn test_functional_content_item_lifecycle() {
         // Setup
-        let repository: Arc<dyn NodeVersionRepository<_> + Send + Sync> =
-            Arc::new(InMemoryNodeVersionRepository::new());
+        let repository: Arc<dyn EntityVersionRepository<_> + Send + Sync> =
+            Arc::new(InMemoryEntityVersionRepository::new());
         let service = ContentItemService::new(repository.clone());
 
         // Create initial content
@@ -110,7 +110,7 @@ mod functional_tests {
 
         assert_eq!(history.total_versions, 4);
         assert_eq!(history.current_version, 4);
-        assert_eq!(history.node_id, content_id);
+        assert_eq!(history.entity_id, content_id);
 
         // Verify all versions are tracked
         let version_types: Vec<ChangeType> = history
@@ -141,8 +141,8 @@ mod functional_tests {
         let comparison = service.compare_versions(content_id, 1, 3).unwrap();
         assert!(comparison.hash_changed);
         assert_ne!(
-            comparison.version1.node_data.content,
-            comparison.version2.node_data.content
+            comparison.version1.entity_data.content,
+            comparison.version2.entity_data.content
         );
 
         // Test 8: Restore to previous version
@@ -184,7 +184,7 @@ mod functional_tests {
 
     #[test]
     fn test_versioning_disabled_content() {
-        let repository = Arc::new(InMemoryNodeVersionRepository::new());
+        let repository = Arc::new(InMemoryEntityVersionRepository::new());
         let service = ContentItemService::new(repository.clone());
 
         let text_content = TextContent::new(

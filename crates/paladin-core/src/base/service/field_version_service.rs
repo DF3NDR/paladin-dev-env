@@ -10,7 +10,7 @@ are versioned, similar to Drupal's field-level revision system.
 */
 
 use crate::base::entity::field::Field;
-use crate::base::service::node_version_service::{ChangeType, HashAlgorithm, VersioningError};
+use crate::base::service::entity_version_service::{ChangeType, HashAlgorithm, VersioningError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -97,7 +97,7 @@ pub trait FieldVersionRepository<T> {
 /// use paladin_core::base::service::field_version_service::{
 ///     FieldVersion, FieldVersionRepository, FieldVersionService,
 /// };
-/// use paladin_core::base::service::node_version_service::VersioningError;
+/// use paladin_core::base::service::entity_version_service::VersioningError;
 /// use std::sync::Arc;
 /// use uuid::Uuid;
 ///

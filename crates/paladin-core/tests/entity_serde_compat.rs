@@ -6,10 +6,12 @@
 //! document (ENTITY-01, D-03; the version record per D-09; the Citadel snapshot per D-10).
 //!
 //! Later plans update the lossless comparison to the renamed keys and add the alias edge
-//! cases (both keys present, neither key present). A failure here means the persisted wire
+//! cases (both keys present, neither key present). The version record (plan 48-03) already
+//! compares against the fixture with `node_id` / `node_data` renamed to `entity_id` /
+//! `entity_data`. A failure here means the persisted wire
 //! shape changed, which is a regression to report, not an assertion to relax.
 
-use paladin_core::base::service::node_version_service::{ChangeType, NodeVersion};
+use paladin_core::base::service::entity_version_service::{ChangeType, EntityVersion};
 use paladin_core::platform::container::citadel::PaladinState;
 use paladin_core::platform::container::content::{ContentData, ContentItem, ContentType};
 use paladin_core::platform::container::paladin::Paladin;
@@ -35,6 +37,30 @@ fn fixture_value(name: &str) -> Result<serde_json::Value, Box<dyn std::error::Er
 /// example `temperature`) to `f64` artefacts and make an honest round trip compare unequal.
 fn reserialized<T: serde::Serialize>(value: &T) -> Result<serde_json::Value, serde_json::Error> {
     serde_json::from_str(&serde_json::to_string(value)?)
+}
+
+/// Moves one key inside the object found at the JSON `pointer`, keeping its value.
+///
+/// Errors if the pointer does not resolve to an object, if `from` is absent, or if `to` is
+/// already present (a rename must never silently overwrite).
+fn rename_key(
+    value: &mut serde_json::Value,
+    pointer: &str,
+    from: &str,
+    to: &str,
+) -> Result<(), String> {
+    let object = value
+        .pointer_mut(pointer)
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| format!("no JSON object at pointer {pointer:?}"))?;
+    if object.contains_key(to) {
+        return Err(format!("key {to:?} already present at pointer {pointer:?}"));
+    }
+    let moved = object
+        .remove(from)
+        .ok_or_else(|| format!("key {from:?} absent at pointer {pointer:?}"))?;
+    object.insert(to.to_owned(), moved);
+    Ok(())
 }
 
 #[test]
@@ -103,8 +129,10 @@ fn pre_rename_prompt_item_json_still_loads() -> TestResult {
 
 #[test]
 fn pre_rename_version_json_still_loads() -> TestResult {
-    let captured = fixture_value("version")?;
-    let loaded: NodeVersion<ContentData> = serde_json::from_str(&fixture("version")?)?;
+    let mut expected = fixture_value("version")?;
+    rename_key(&mut expected, "", "node_id", "entity_id")?;
+    rename_key(&mut expected, "", "node_data", "entity_data")?;
+    let loaded: EntityVersion<ContentData> = serde_json::from_str(&fixture("version")?)?;
 
     assert_eq!(loaded.version_number, 1);
     assert_eq!(loaded.created_by.as_deref(), Some("fixture"));
@@ -114,7 +142,7 @@ fn pre_rename_version_json_still_loads() -> TestResult {
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned)
         .ok_or("fixture content.json has no string at /node/uuid")?;
-    assert_eq!(loaded.node_id.to_string(), content_uuid);
-    assert_eq!(reserialized(&loaded)?, captured);
+    assert_eq!(loaded.entity_id.to_string(), content_uuid);
+    assert_eq!(reserialized(&loaded)?, expected);
     Ok(())
 }

@@ -1,5 +1,5 @@
-use crate::core::base::service::node_version_service::{
-    ChangeType, NodeVersion, NodeVersionRepository, NodeVersionService, VersionHistory,
+use crate::core::base::service::entity_version_service::{
+    ChangeType, EntityVersion, EntityVersionRepository, EntityVersionService, VersionHistory,
     VersioningError,
 };
 use crate::core::platform::container::content::{ContentData, ContentItem, ContentItemError};
@@ -17,33 +17,33 @@ pub enum ContentItemServiceError {
     ContentItemNotFound(Uuid),
 }
 
-/// Content item service — wraps [`NodeVersionService`] with content-specific
+/// Content item service — wraps [`EntityVersionService`] with content-specific
 /// error mapping and version-history helpers.
 ///
 /// # Examples
 ///
 /// ```
-/// use paladin::core::base::service::node_version_service::NodeVersionRepository;
+/// use paladin::core::base::service::entity_version_service::EntityVersionRepository;
 /// use paladin::core::platform::container::content::ContentData;
 /// use paladin::core::platform::manager::content_service::ContentItemService;
 /// use std::sync::Arc;
 ///
 /// fn build(
-///     version_repository: Arc<dyn NodeVersionRepository<ContentData> + Send + Sync>,
+///     version_repository: Arc<dyn EntityVersionRepository<ContentData> + Send + Sync>,
 /// ) -> ContentItemService {
 ///     ContentItemService::new(version_repository)
 /// }
 /// ```
 pub struct ContentItemService {
-    version_service: NodeVersionService<ContentData>,
+    version_service: EntityVersionService<ContentData>,
 }
 
 impl ContentItemService {
     pub fn new(
-        version_repository: Arc<dyn NodeVersionRepository<ContentData> + Send + Sync>,
+        version_repository: Arc<dyn EntityVersionRepository<ContentData> + Send + Sync>,
     ) -> Self {
         Self {
-            version_service: NodeVersionService::new(version_repository, None),
+            version_service: EntityVersionService::new(version_repository, None),
         }
     }
 
@@ -53,7 +53,7 @@ impl ContentItemService {
         content_item: ContentItem,
         created_by: Option<String>,
         change_summary: Option<String>,
-    ) -> Result<(ContentItem, NodeVersion<ContentData>), ContentItemServiceError> {
+    ) -> Result<(ContentItem, EntityVersion<ContentData>), ContentItemServiceError> {
         // Create initial version
         let version = self.version_service.create_version(
             &content_item.node,
@@ -71,7 +71,7 @@ impl ContentItemService {
         content_item: ContentItem,
         updated_by: Option<String>,
         change_summary: Option<String>,
-    ) -> Result<(ContentItem, NodeVersion<ContentData>), ContentItemServiceError> {
+    ) -> Result<(ContentItem, EntityVersion<ContentData>), ContentItemServiceError> {
         // Create new version
         let version = self.version_service.create_version(
             &content_item.node,
@@ -87,7 +87,7 @@ impl ContentItemService {
     pub fn get_current_version(
         &self,
         content_id: Uuid,
-    ) -> Result<Option<NodeVersion<ContentData>>, ContentItemServiceError> {
+    ) -> Result<Option<EntityVersion<ContentData>>, ContentItemServiceError> {
         Ok(self.version_service.get_current_version(content_id)?)
     }
 
@@ -96,7 +96,7 @@ impl ContentItemService {
         &self,
         content_id: Uuid,
         version_number: u32,
-    ) -> Result<Option<NodeVersion<ContentData>>, ContentItemServiceError> {
+    ) -> Result<Option<EntityVersion<ContentData>>, ContentItemServiceError> {
         Ok(self
             .version_service
             .get_version(content_id, version_number)?)
@@ -116,7 +116,7 @@ impl ContentItemService {
         content_id: Uuid,
         version_number: u32,
         restored_by: Option<String>,
-    ) -> Result<(ContentItem, NodeVersion<ContentData>), ContentItemServiceError> {
+    ) -> Result<(ContentItem, EntityVersion<ContentData>), ContentItemServiceError> {
         let restored_version =
             self.version_service
                 .restore_version(content_id, version_number, restored_by)?;
@@ -127,7 +127,7 @@ impl ContentItemService {
                 uuid: content_id,
                 created: restored_version.created_at, // This should be the original creation time
                 modified: restored_version.created_at,
-                node: restored_version.node_data.clone(),
+                node: restored_version.entity_data.clone(),
                 name: None, // This would need to be tracked in the version
                 version: true,
             },
@@ -141,7 +141,7 @@ impl ContentItemService {
         &self,
         content_item: &ContentItem,
         published_by: Option<String>,
-    ) -> Result<NodeVersion<ContentData>, ContentItemServiceError> {
+    ) -> Result<EntityVersion<ContentData>, ContentItemServiceError> {
         let version = self.version_service.create_version(
             &content_item.node,
             ChangeType::Published,
@@ -157,7 +157,7 @@ impl ContentItemService {
         &self,
         content_item: &ContentItem,
         unpublished_by: Option<String>,
-    ) -> Result<NodeVersion<ContentData>, ContentItemServiceError> {
+    ) -> Result<EntityVersion<ContentData>, ContentItemServiceError> {
         let version = self.version_service.create_version(
             &content_item.node,
             ChangeType::Unpublished,
@@ -173,7 +173,7 @@ impl ContentItemService {
         &self,
         content_item: &ContentItem,
         archived_by: Option<String>,
-    ) -> Result<NodeVersion<ContentData>, ContentItemServiceError> {
+    ) -> Result<EntityVersion<ContentData>, ContentItemServiceError> {
         let version = self.version_service.create_version(
             &content_item.node,
             ChangeType::Archived,
@@ -191,7 +191,7 @@ impl ContentItemService {
         version1: u32,
         version2: u32,
     ) -> Result<
-        crate::core::base::service::node_version_service::VersionComparison<ContentData>,
+        crate::core::base::service::entity_version_service::VersionComparison<ContentData>,
         ContentItemServiceError,
     > {
         Ok(self
@@ -214,12 +214,12 @@ impl ContentItemService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::base::service::node_version_service::InMemoryNodeVersionRepository;
+    use crate::core::base::service::entity_version_service::InMemoryEntityVersionRepository;
     use crate::core::platform::container::content::{ContentType, TextContent};
     use std::sync::Arc;
 
     fn create_test_service() -> ContentItemService {
-        let repository = Arc::new(InMemoryNodeVersionRepository::new());
+        let repository = Arc::new(InMemoryEntityVersionRepository::new());
         ContentItemService::new(repository)
     }
 
@@ -245,7 +245,7 @@ mod tests {
 
         assert_eq!(returned_item.uuid(), content_item.uuid());
         assert_eq!(version.version_number, 1);
-        assert_eq!(version.node_id, content_item.uuid());
+        assert_eq!(version.entity_id, content_item.uuid());
         assert_eq!(version.metadata.change_type, ChangeType::Created);
     }
 

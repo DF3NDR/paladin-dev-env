@@ -56,8 +56,10 @@
 //! over temporary trees: one with a planted violation per rule variant (each must be reported,
 //! naming its rule), one with each file-scoped target removed in turn (each removal must be
 //! reported, never skipped), one full of look-alikes, retained-item paths and history files
-//! (nothing may be reported) and one with no `docs/` directory at all, the shape of the Docker
-//! test image's build context (the graph schema is not demanded there; nothing may be reported).
+//! (nothing may be reported) and one with none of the directories `.dockerignore` excludes
+//! (`docs/`, `notes/`, `k8s/`, `.github/`), the shape of the Docker test image's build context (the
+//! graph schema is not demanded there, and the skip prints a notice; nothing may be reported). A
+//! tree that lacks only `docs/` is not that image, and its missing schema is reported.
 //!
 //! ```bash
 //! cargo test --test entity_rename_guard
@@ -149,6 +151,10 @@ const SCHEMA_KEYS: [&str; 2] = [
     "/properties/nodes",
     "/$defs/LimitsDoc/properties/max_node_visits",
 ];
+
+/// The directories `.dockerignore` keeps out of the Docker test image's build context that this
+/// repository also has. Only a tree with none of them is treated as that image.
+const DOCKER_EXCLUDED_DIRS: [&str; 4] = ["docs", "notes", "k8s", ".github"];
 
 /// The rule 5 table: each file and the graph declarations it must still begin a production line
 /// with.
@@ -451,16 +457,29 @@ fn scan_declared(root: &Path, violations: &mut Vec<String>) {
     }
 }
 
+/// `true` when `root` holds none of `DOCKER_EXCLUDED_DIRS`: the shape of the Docker test image.
+fn is_docker_build_context(root: &Path) -> bool {
+    DOCKER_EXCLUDED_DIRS
+        .iter()
+        .all(|directory| !root.join(directory).exists())
+}
+
 /// Rule 5 for the graph schema: the parsed document must still define each key in `SCHEMA_KEYS`.
 /// A key that only appears elsewhere in the file (an example, the `required` list) does not count.
 ///
-/// The one exception is a tree with no `docs/` directory at all: the Docker test image copies no
-/// documentation (`.dockerignore` excludes `docs/`), so the schema cannot be there and demanding it
-/// fails `cargo test` in that image for a reason unrelated to the freeze. A tree whose `docs/`
-/// exists but lacks the schema is still reported, and the byte-identical freeze is also checked
-/// against the phase base by `git diff` at the closeout.
+/// The one exception is the Docker test image's build context. `.dockerignore` excludes `docs/`,
+/// `notes/`, `k8s/` and `.github/` from it, so the schema cannot be there and demanding it fails
+/// `cargo test` in that image for a reason unrelated to the freeze. Only a tree holding none of
+/// `DOCKER_EXCLUDED_DIRS` is treated as that image, so a checkout that merely lacks `docs/` (a
+/// sparse checkout, a packaged tree) is still reported. The skip prints a notice (shown with
+/// `--nocapture`, or when any test fails) rather than passing silently. In that image the schema
+/// freeze is not pinned at all; it is enforced by the workspace test run in the checkout.
 fn scan_schema(root: &Path, violations: &mut Vec<String>) {
-    if !root.join("docs").is_dir() {
+    if is_docker_build_context(root) {
+        eprintln!(
+            "rule 5: schema check skipped, no {DOCKER_EXCLUDED_DIRS:?} directory in this build \
+             context (the Docker test image); {SCHEMA_FILE} is not checked here"
+        );
         return;
     }
     let content = match fs::read_to_string(root.join(SCHEMA_FILE)) {
@@ -1210,19 +1229,41 @@ fn scanner_accepts_a_clean_tree() -> io::Result<()> {
     Ok(())
 }
 
-/// Positive control: a build context that carries no `docs/` directory at all (the Docker test
-/// image copies only `Cargo.toml`, `src`, `crates`, `benches` and `tests`, and `.dockerignore`
-/// excludes `docs/`) cannot hold the graph schema, so the schema is not demanded there. A tree
-/// whose `docs/` directory exists but lacks the schema is still reported
-/// (`scanner_reports_missing_scoped_targets`), so the freeze stays pinned wherever it can be read.
+/// Positive control: the Docker test image's build context carries none of the directories
+/// `.dockerignore` excludes (`docs/`, `notes/`, `k8s/`, `.github/`), so it cannot hold the graph
+/// schema and the schema is not demanded there.
 #[test]
 fn scanner_accepts_a_build_context_without_docs() -> io::Result<()> {
     let tree = clean_tree("no_docs")?;
-    fs::remove_dir_all(tree.root.join("docs"))?;
+    for directory in DOCKER_EXCLUDED_DIRS {
+        let path = tree.root.join(directory);
+        if path.exists() {
+            fs::remove_dir_all(path)?;
+        }
+    }
 
     let violations = scan(&tree.root);
 
     assert!(violations.is_empty(), "{violations:#?}");
+    Ok(())
+}
+
+/// Positive control: a tree that lacks only `docs/` is not the Docker image, so the missing schema
+/// is reported. The skip must not hide a sparse checkout or a packaged source tree.
+#[test]
+fn scanner_reports_a_missing_schema_when_only_docs_is_absent() -> io::Result<()> {
+    let tree = clean_tree("only_docs_absent")?;
+    fs::remove_dir_all(tree.root.join("docs"))?;
+    tree.write("notes/design.md", "design notes\n")?;
+
+    let violations = scan(&tree.root);
+
+    assert_eq!(violations.len(), 1, "{violations:#?}");
+    assert!(
+        violations[0].starts_with(&format!("{SCHEMA_FILE}:"))
+            && violations[0].contains("missing or unreadable"),
+        "{violations:#?}"
+    );
     Ok(())
 }
 

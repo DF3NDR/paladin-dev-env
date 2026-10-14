@@ -1077,7 +1077,8 @@ was built independently. `Field`, `Collection`, `Element`, `FieldVersionService`
   1. `paladin_core::base::entity::Entity<T>` exists with the payload field named `data`, and
      `Paladin`, `Council`, `Grove`, `User`, `Log`, `ContentItem` and `PromptItem` are built on it;
      `#[serde(alias = "node")]` on the payload field means every JSON persisted before the rename
-     (Citadel snapshots, stored Paladins, SQLite/Postgres rows) still deserializes, proven by a
+     (Citadel snapshot files, stored Paladins, and any caller-owned store of entity JSON -- no in-tree
+     SQL table stores entity JSON) still deserializes, proven by a
      fixture test against pre-rename JSON.
 
   2. The old name's fate is decided and recorded, one of two ways: **(default)** `Node<T>` and
@@ -1094,9 +1095,10 @@ was built independently. `Field`, `Collection`, `Element`, `FieldVersionService`
      `NodeVersionService`/`InMemoryNodeVersionRepository` are renamed `EntityVersion*`.
 
   4. Each of `Field`, `Collection`, `Element`, `FieldVersionService` and
-     `CollectionVersioningService` is either removed or kept with a written reason, and the
-     `Entity<T>::version` flag's contract is stated in rustdoc (what revisioning it promises, and
-     that only `ContentItem` currently honours it).
+     `CollectionVersionService` (module `collection_versioning_service`) is either removed or kept with
+     a written reason, and the `Entity<T>::version` flag's contract is stated in rustdoc (what
+     revisioning it promises, and that only `ContentItem` currently honours it). Phase 48 outcome:
+     all five retained pending review, the reason written in `base/mod.rs` rustdoc (D-05, ADR-0060).
 
   5. The graph vocabulary (`NodeId`, `NodeSpec`, `StateNode`, `NodeContext`, `NodeCache*`,
      `TraceEvent::Node*`, `wargraph-doc.schema.json`, `node_cache` config) is byte-for-byte
@@ -1105,9 +1107,12 @@ was built independently. `Field`, `Collection`, `Element`, `FieldVersionService`
      design-patterns and crate-map pages say the same; a repository-scan test in the
      `tests/legacy_removal_guard.rs` shape (positive controls included) pins both that freeze and
      the absence of the old entity paths; every rename has a `MIGRATION.md` §9.2 row
-     and a set-equal `.cargo/semver-checks-allowlist.toml` entry, `api_surface_current.txt` is
-     refreshed via `make api-surface-update` with a CHANGELOG entry, and `cargo doc`, `make
+     and a set-equal `.cargo/semver-checks-allowlist.toml` entry, the gated public-API baseline
+     `.project/current-exports.txt` is refreshed via `make api-surface-update` with a CHANGELOG entry,
+     and `cargo doc`, `make
      check-api-examples`, `make clean-code` and the 82 % coverage floor stay green.
+
+  *Corrected 2026-10-14 (plan 48-09): criteria 1, 4 and 5 named a storage list, a type name and a baseline file that the shipped tree and 48-CONTEXT.md D-05/D-15 settle differently. No requirement ID changed.*
 **Plans**: 9 plans
 
 Plans:

@@ -121,10 +121,14 @@ vocabulary (`NodeId`, `NodeSpec`, `StateNode`, …) now outnumbers it ~5:1 and l
 formats; the two senses of "node" already collide inside the engine. The entity side is renamed,
 the graph side is kept.*
 
+*Corrected 2026-10-14 (plan 48-09): ENTITY-01's storage list, ENTITY-04's type name and outcome, and ENTITY-05's baseline file were wrong or open in the survey; the shipped tree and 48-CONTEXT.md D-05/D-15 settle them. No requirement ID changed.*
+
 - [x] **ENTITY-01**: `paladin_core::base::entity::Entity<T>` replaces `Node<T>` with the payload
   field renamed `node` → `data`; `Paladin`, `Council`, `Grove`, `User`, `Log`, `ContentItem` and
   `PromptItem` are built on it; `#[serde(alias = "node")]` keeps every pre-rename persisted JSON
-  (Citadel snapshots, stored Paladins, SQLite/Postgres rows) deserializing, proven by a fixture test
+  (Citadel snapshot files, stored Paladins, and any caller-owned store of entity JSON -- no
+  in-tree SQLite/MySQL table stores entity JSON; those repositories store columns and rebuild the
+  entity) deserializing, proven by a fixture test
 
 - [x] **ENTITY-02**: The old name's fate is decided before planning and recorded: by default
   `Node<T>` and the `base::entity::node` module are removed outright under a Phase-48-only X-03
@@ -140,9 +144,11 @@ the graph side is kept.*
   `InMemoryNodeVersionRepository` become `EntityVersion*`
 
 - [x] **ENTITY-04**: `Field`, `Collection`, `Element`, `FieldVersionService` and
-  `CollectionVersioningService` (zero consumers outside `base/`) are each removed or kept with a
-  written reason, and `Entity<T>::version`'s contract is documented in rustdoc, including that only
-  `ContentItem` currently honours it through the version service
+  `CollectionVersionService` (module `collection_versioning_service`) (zero consumers outside
+  `base/`) are each removed or kept with a written reason, and `Entity<T>::version`'s contract is
+  documented in rustdoc, including that only `ContentItem` currently honours it through the version
+  service -- Phase 48 outcome: all five retained pending review, the reason written in `base/mod.rs`
+  rustdoc (D-05, ADR-0060)
 
 - [x] **ENTITY-05**: The graph vocabulary (`NodeId`, `NodeSpec`, `StateNode`, `NodeContext`,
   `NodeCache*`, `TraceEvent::Node*`, `wargraph-doc.schema.json`, the `node_cache` config section) is
@@ -151,8 +157,9 @@ the graph side is kept.*
   agree; a repository-scan test in the `tests/legacy_removal_guard.rs` shape (positive controls
   included) pins the freeze and the absence of the old entity paths; every rename has a
   `MIGRATION.md` §9.2 row with a set-equal
-  `.cargo/semver-checks-allowlist.toml` entry, `api_surface_current.txt` is refreshed with a
-  CHANGELOG entry, and `cargo doc`, `make check-api-examples`, `make clean-code` and the 82 %
+  `.cargo/semver-checks-allowlist.toml` entry, the gated public-API baseline
+  `.project/current-exports.txt` is refreshed via `make api-surface-update` with a CHANGELOG entry,
+  and `cargo doc`, `make check-api-examples`, `make clean-code` and the 82 %
   coverage floor stay green
 
 ### Object storage (STORE)
@@ -304,3 +311,4 @@ Which phases cover which requirements. Updated during roadmap creation.
 code survey in `48-CONTEXT.md`; Phases 38-48, 40/40 requirements mapped, 100% coverage. Previous:
 2026-09-24 — roadmap created (`/gsd-new-project` roadmapper), Phases 38-47, 35/35 requirements
 mapped*
+*Corrected 2026-10-14 (plan 48-09): ENTITY-01's storage list, ENTITY-04's type name and outcome, and ENTITY-05's baseline file were wrong or open in the survey; the shipped tree and 48-CONTEXT.md D-05/D-15 settle them. No requirement ID changed.*

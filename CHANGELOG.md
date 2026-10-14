@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Consumer-surface muster and library-consumer upgrade note (ADOPT-04, ADOPT-05; Phase 49 plans
+  49-01, 49-02).** `tests/consumer_surface_muster.rs`, a compile-only integration test declared as
+  `[[test]] consumer_surface_muster` with `required-features = ["llm-anthropic", "llm-deepseek"]`,
+  imports every path and pins every signature, struct shape and trait that the downstream consumer
+  takes from Paladin, so a change that breaks that surface fails `make check`, `make lint` and CI
+  before a consumer bump finds it. `make check-consumer-surface` runs it and is not part of
+  `check-gates`. MIGRATION.md section 9.8 gains `### Library consumers: v0.10.1 → v0.11.0`, with
+  the no-total-only-`TokenUsage` pitfall and an eleven-item break list, each item pointing at its
+  existing §9.2 row. No library API, §9.2 row or semver-checks allowlist entry changes.
 - **Rate pacing, the Cadence (PACE-02; Phase 43 plan 43-01).** A new `CadencePort` output port
   (`paladin-ports`) with an in-process adapter, `InMemoryCadence` (`paladin-storage`), and a
   `CadenceLlmAdapter` decorator (`paladin-llm`) composed as `Pricing(Cadence(provider))` on every

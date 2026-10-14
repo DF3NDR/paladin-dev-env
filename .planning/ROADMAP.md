@@ -1237,7 +1237,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 49-03-PLAN.md — Proven red: `bool` re-added to `Commissary::new` (callers patched) and a dropped facade re-export each fail only the muster; tree restored; 49-MUSTER-RED-EVIDENCE.md
+- [x] 49-03-PLAN.md — Proven red: `bool` re-added to `Commissary::new` (callers patched) and a dropped facade re-export each fail only the muster; tree restored; 49-MUSTER-RED-EVIDENCE.md
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

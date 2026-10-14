@@ -347,12 +347,26 @@ fn version_service_hits(line: &str) -> Vec<(u8, String)> {
     hits
 }
 
-/// The non-comment lines of `content` before the first `mod tests`, with 1-based line numbers.
+/// `true` for the line that opens an inline test module: `mod tests {` or `mod test {`, with an
+/// optional visibility qualifier. Matching the whole item (not a prefix) keeps `mod tests_support {`
+/// and the out-of-line `mod tests;` from ending the scan early and leaving the rest of the file
+/// unread.
+fn opens_test_module(line: &str) -> bool {
+    let item = line.trim();
+    let item = ["pub(crate) ", "pub(super) ", "pub "]
+        .iter()
+        .find_map(|visibility| item.strip_prefix(visibility))
+        .unwrap_or(item);
+    item == "mod tests {" || item == "mod test {"
+}
+
+/// The non-comment lines of `content` before the first inline test module, with 1-based line
+/// numbers.
 fn production_lines(content: &str) -> impl Iterator<Item = (usize, &str)> {
     content
         .lines()
         .enumerate()
-        .take_while(|(_, line)| !line.trim_start().starts_with("mod tests"))
+        .take_while(|(_, line)| !opens_test_module(line))
         .filter(|(_, line)| !line.trim_start().starts_with("//"))
         .map(|(index, line)| (index + 1, line))
 }
@@ -1081,6 +1095,43 @@ fn scanner_accepts_a_build_context_without_docs() -> io::Result<()> {
     let violations = scan(&tree.root);
 
     assert!(violations.is_empty(), "{violations:#?}");
+    Ok(())
+}
+
+/// Positive control: only an inline test module ends the production scan. A module whose name
+/// merely starts with `tests`, or the out-of-line `mod tests;`, must not hide the code after it,
+/// while a visibility-qualified test module is still recognised as test code.
+#[test]
+fn production_scan_stops_only_at_an_inline_test_module() -> io::Result<()> {
+    for lookalike in [
+        "mod tests_support {",
+        "mod testsuite {",
+        "mod tests;",
+        "mod tester {",
+    ] {
+        let relative = "crates/paladin-core/src/platform/container/user.rs";
+        let tree = clean_tree("lookalike_test_module")?;
+        let extra = format!("{lookalike}\n}}\nlet x = self.node.x;");
+        tree.write(relative, &clean_content(relative, &extra))?;
+        let violations = scan(&tree.root);
+        assert_eq!(violations.len(), 1, "after `{lookalike}`: {violations:#?}");
+        assert!(
+            violations[0].starts_with(&format!("{relative}:"))
+                && violations[0].contains(": rule 3:"),
+            "after `{lookalike}`: {violations:#?}"
+        );
+    }
+
+    for opener in [
+        "mod tests {",
+        "pub(crate) mod tests {",
+        "pub mod test {",
+        "  mod tests {",
+    ] {
+        let content = format!("let kept = 1;\n{opener}\n    let dropped = old.node;\n}}\n");
+        let lines: Vec<&str> = production_lines(&content).map(|(_, line)| line).collect();
+        assert_eq!(lines, ["let kept = 1;"], "opener `{opener}`");
+    }
     Ok(())
 }
 

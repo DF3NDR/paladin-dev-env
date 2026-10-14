@@ -574,6 +574,16 @@ Phases 30-33. The PRD's open operator question is answered: **full governance** 
   note, so the next downstream break — already four items on this tree: `ErrorStrategy`, the
   legacy `NodeError`, `Node<T>` → `Entity<T>`, `PaladinResult.cost` — is red upstream first. The
   first of a series of consumer-driven phases that run before Phases 46-47.
+- **Provider parity (added 2026-10-14, Phase 50):** any agent can be moved between the nine LLM
+  providers by changing configuration only, or the build fails early naming the provider, model
+  and parameter. Fixes the OpenAI adapter's empty user message on the execution-service path,
+  models parameter support per provider *and* per model (an ADR amending 0004), adds
+  config-driven provider construction as a library API with all nine adapter/config pairs on the
+  facade, a dated per-model profile registry that Commissary rations against, response/error
+  parity across the adapters (empty output, typed refusal, usage cap, cache-write, reasoning
+  text, stop sequences), per-step models in fallback chains, and all nine adapters in the
+  conformance suite and live smoke. The second consumer-driven phase before Phases 46-47; the
+  companion reasoning-effort handoff is the next.
 - **RustFS (FUT-10):** replace the terminal quay.io MinIO pin in the dev/test stack, CI and the
   Kubernetes smoke test.
 - **Platform deviations:** scope `GET /runs*` per caller (`WINDOWS.md` row 32); SSE and webhook

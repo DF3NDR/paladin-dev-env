@@ -103,7 +103,7 @@ frozen at 311 lines that two milestones made invisible.
 | **Provider Expansion** | 17 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-15 per *Roadmap Extension Protocol* item 1. |
 | **Security Tooling** | 18-21 | ✅ **Shipped v0.9.0 (2026-09-01)** — [archive](milestones/v0.9.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-24 per *Roadmap Extension Protocol* item 1, closing the Rust-SAST gap the v0.8.0 milestone audit left as its one genuinely open item; extended 2026-08-25 with Phases 19-21 (publish credential, publish operations, release artifacts). |
 | **Durable Agent Execution Runtime** | 22-37.1 | ✅ **Shipped v0.10.0 (2026-09-23)** — [archive](milestones/v0.10.0-ROADMAP.md). Released to crates.io as `0.10.1` (tag `v0.10.1` on merge commit `f7dae267`, 2026-09-21) after the `v0.10.0` tag published 3 of 12 crates — see MILESTONES.md. Phases 22-29 complete 2026-09-10; Phases 30-33 added 2026-09-14, complete 2026-09-16; Phases 34-37 added 2026-09-17, Phase 36.1 and 37.1 inserted; all 19 phases complete 2026-09-23 | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. **Extended 2026-09-14** with Phases 30-33 (Token Economy — Commissary anchoring, lossless accounting, primitive unification, Commissary adoption), sourced from `.project/Milestone_13-Token-Economy/` (overview + Epics 1-4). Milestone 14 (Treasurer, `.project/Milestone_14-Treasurer/`) is reserved, not roadmapped. **Extended 2026-09-17** with Phases 34-37 (Release Readiness — documentation currency audit, mdBook currency, rustdoc zero-warning bar & examples currency, the crate release) — operator-instructed pre-tag work, not corpus-sourced. |
-| **Treasurer Spend Governance** | 38-49 | 🚧 **In progress** | Forward work — not ingest-derived. Sourced from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD `prd-treasurer-spend-governance.md`, R1-R6), the supporting scope in PROJECT.md *Current Milestone*, and `.planning/research/SUMMARY.md` (2026-09-24). Operator-confirmed full governance (per-tenant + per-API-key), 2026-09-24. Extended 2026-10-12 with Phase 48 (Base Entity Rename) and 2026-10-14 with Phase 49 (Downstream Adoption of v0.10.1, from the web3sec handoff), both sequenced before Phases 46-47. |
+| **Treasurer Spend Governance** | 38-50 | 🚧 **In progress** | Forward work — not ingest-derived. Sourced from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD `prd-treasurer-spend-governance.md`, R1-R6), the supporting scope in PROJECT.md *Current Milestone*, and `.planning/research/SUMMARY.md` (2026-09-24). Operator-confirmed full governance (per-tenant + per-API-key), 2026-09-24. Extended 2026-10-12 with Phase 48 (Base Entity Rename) and 2026-10-14 with Phase 49 (Downstream Adoption of v0.10.1, from the web3sec handoff), both sequenced before Phases 46-47; extended again 2026-10-14 with Phase 50 (Provider Parity & Configuration-Driven Model Swap, from the second web3sec handoff), also sequenced before Phases 46-47. |
 
 **The ingest is complete.** All 263 documents in `.project/` are covered — 199 classified across
 five runs and 64 `tasks-*.md` measured deterministically by `intel/task-completion-state.md`. There
@@ -223,7 +223,7 @@ Phase artifacts: `milestones/v0.10.0-phases/`
 
 </details>
 
-**Treasurer Spend Governance (Phases 38-49)** — in progress, not yet shipped. Forward work sourced
+**Treasurer Spend Governance (Phases 38-50)** — in progress, not yet shipped. Forward work sourced
 from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 `.planning/research/SUMMARY.md`; requirements minted in `.planning/REQUIREMENTS.md`.
 
@@ -239,6 +239,7 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 - [ ] **Phase 47: v0.11.0 Crate Release** - Tag and publish v0.11.0: all 12 crates on crates.io, CHANGELOG and MIGRATION complete, publish-order gate green
 - [x] **Phase 48: Base Entity Rename** - Rename the base-layer entity wrapper `Node<T>` → `Entity<T>` (payload field `node` → `data`; clean break under a Phase-48-only X-03 supersession, or a one-release deprecated alias — decided at discuss; serde alias for persisted JSON), disposition the unused base-layer items, and reserve "node" for the graph sense only — **executes before Phases 46 and 47** (added 2026-10-12, after Phase 44 sealed) (completed 2026-10-14)
 - [ ] **Phase 49: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)** - Move the sole consumer onto the `v0.10.1` tag in one coordinated step (B-1/B-2/B-3 adopted consumer-side, the D-2 token-usage mapping decided, no Paladin shims) and add a compile-only consumer-surface muster plus a `MIGRATION.md` consumer note so the next downstream break is red upstream first — **executes before Phases 46 and 47** (added 2026-10-14 from the web3sec handoff)
+- [ ] **Phase 50: Provider Parity & Configuration-Driven Model Swap** - Make any Paladin agent movable between the nine LLM providers by changing configuration only, or fail the build early naming the provider, model and parameter: fix the OpenAI adapter's empty user message, model parameter support per provider *and* per model (ADR amending 0004), config-driven provider construction through a public library API with all nine adapter/config pairs exported from the facade, a dated per-model profile registry feeding Commissary, response/error parity (empty output, typed refusal, usage cap, cache-write, reasoning text, stop sequences), per-step models in fallback chains, and all nine adapters in the conformance suite, live smoke and an mdBook "Switching providers" page — **executes after Phase 49, before Phases 46 and 47** (added 2026-10-14 from the second web3sec handoff)
 
 ## Phase Details
 
@@ -732,7 +733,7 @@ format) is MEDIUM-confidence only; the phase's first work item should close this
 milestone's validation/tech-debt bookkeeping is current.
 **Depends on**: Phase 45 and Phase 48 (documents everything the milestone shipped, so it runs
 last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48's
-`Node<T>` → `Entity<T>` rows — added 2026-10-12), and Phase 49 (the consumer-surface muster and its `MIGRATION.md` consumer note are inputs to the v0.10 → v0.11 migration guide — added 2026-10-14)
+`Node<T>` → `Entity<T>` rows — added 2026-10-12), and Phase 49 (the consumer-surface muster and its `MIGRATION.md` consumer note are inputs to the v0.10 → v0.11 migration guide — added 2026-10-14), and Phase 50 (the ADR amending 0004, the facade re-exports, the typed refusal and the "Switching providers" mdBook page are inputs to the docs pass and the migration guide — added 2026-10-14)
 **Requirements**: CURR-22, CURR-23, CURR-24, CURR-25
 **Success Criteria** (what must be TRUE):
 
@@ -755,7 +756,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 ### Phase 47: v0.11.0 Crate Release
 
 **Goal**: v0.11.0 ships to crates.io with every gate green.
-**Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release); Phase 49 (the consumer is on a release tag and the consumer-surface muster is green before v0.11.0 is tagged — added 2026-10-14)
+**Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release); Phase 49 (the consumer is on a release tag and the consumer-surface muster is green before v0.11.0 is tagged — added 2026-10-14); Phase 50 (the provider-swap matrix, the `api-surface` refresh for the nine facade exports and their CHANGELOG/MIGRATION entries land before the tag — added 2026-10-14)
 **Requirements**: SHIP-07
 **Success Criteria** (what must be TRUE):
 
@@ -798,6 +799,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 | 47. v0.11.0 Crate Release | v0.11.0 | 0/TBD | Not started | - |
 | 48. Base Entity Rename (runs after 44, before 46-47) | v0.11.0 | 9/9 | Complete    | 2026-10-14 |
 | 49. Downstream Adoption of v0.10.1 (web3sec Consumer Bump) (runs after 48, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
+| 50. Provider Parity & Configuration-Driven Model Swap (runs after 49, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see
@@ -1223,6 +1225,132 @@ section.
      is changed, shimmed or deprecated** for the consumer: zero new §9.2 rows and zero
      `semver-checks` allowlist changes from this phase; `make clean-code`, `make check-gates`,
      `make api-surface` and the 82 % coverage floor stay green. No `v0.10.2` is cut.
+**Plans**: TBD
+
+### Phase 50: Provider Parity & Configuration-Driven Model Swap
+
+**Goal**: Any Paladin agent can be moved from one LLM provider/model to another (Anthropic ⇄
+OpenAI ⇄ DeepSeek ⇄ Kimi ⇄ Qwen ⇄ Grok ⇄ Gemini ⇄ Ollama ⇄ OpenAI-compatible) by **changing
+configuration only**: the behaviour is equivalent, or the build fails early with an error naming
+the provider, model and parameter. Today neither is true — web3sec's attempt to run its
+Anthropic-backed agents on Moonshot `kimi-k3` fails or silently degrades in five blocking and
+eleven degrading ways (handoff §5). The headline finding is that most blockers are cross-cutting
+(capability modelling, configuration plumbing, fallback semantics) and several are defects in the
+three original adapters, the worst being an OpenAI adapter that sends an **empty user message** on
+the main execution path. This phase lands the red provider-swap matrix test and the OpenAI defect
+first, then models parameter support per provider *and* per model under one documented policy (an
+ADR amending ADR-0004), makes provider construction honour the `llm.<provider>` config blocks
+through a public library API and exports all nine adapter/config pairs from the facade, seeds a
+dated per-model profile registry that Commissary rations against, brings every adapter to the same
+response/error mapping (empty output, typed refusal, usage cap, cache read/write, reasoning tokens
+and text, stop sequences) with per-step models in fallback chains, and closes with all nine
+adapters in the shared conformance suite and the credential-gated live smoke plus an mdBook
+"Switching providers" page. Library-level APIs matter as much as server config: the consumer
+builds adapters directly from their `*Config` types and never touches `agent_host`.
+**Depends on**: Phase 49 (the consumer is on `v0.10.1` and the consumer-surface muster is green
+before this phase changes the surface it musters; the muster then catches this phase's own
+breaks). **Sequenced ahead of Phases 46 and 47** (owner decision 2026-10-14): the second of the
+consumer-driven phases that must land in v0.11.0, because the ADR amending 0004, the facade
+exports, the typed refusal and the "Switching providers" page change what Phase 46's docs pass and
+migration guide must say. The companion reasoning-effort handoff (not yet filed in this repository)
+is the natural next phase and depends on this one's parameter-support model and profile registry
+(handoff §8), so Plans 2 and 4 are prerequisites for it.
+**Requirements**: PARITY-01, PARITY-02, PARITY-03, PARITY-04, PARITY-05, PARITY-06, PARITY-07,
+PARITY-08
+**UI hint**: no
+**Source**: the second web3sec handoff of 2026-10-13, filed verbatim as
+`50-HANDOFF-web3sec-parity.md` — a read-only audit of `origin/main` @ `df24689c` (post-`v0.10.1`)
+with live Moonshot vendor facts dated 2026-10-07 and 2026-10-13 (`kimi-k3` 1,048,576-token window;
+`thinking.effort` validated but top-level `reasoning_effort` silently ignored; unconfigured effort
+`max` reasons for 492 s on a one-line question and returns empty content at `finish_reason:
+length`; `temperature` must be omitted or exactly `1`). The handoff proposed "Phase 38" against
+its own roadmap snapshot; it is Phase 50 here. Its §6 decisions **D-1** (policy for a configured
+parameter the target does not accept — recommendation (b): refuse only an *explicit* value, skip
+auto-selected ones with a `warn!` and a run-metadata entry), **D-2** (typed refusal — a new
+`LlmError::Refusal` variant, `Permanent`, distinct from `ContentFilter`), **D-3** (per-model limits
+— a static dated table plus config overrides now, live `/models` discovery optional later) and
+**D-4** (facade default features stay `openai + anthropic + deepseek` per ADR-0046, the other six
+behind their existing opt-in features) are settled at discuss. The handoff's §7 shape — one
+phase, about six plans in the order red tests + OpenAI defect → parameter modelling → config-driven
+construction → profile registry → response/error parity → conformance/smoke/docs — is the
+starting point for planning, not a constraint.
+**Ground truth** (verified 2026-10-14 on `83a16bfa`, 181 commits past `v0.10.1`, workspace still
+`version = "0.10.1"`; the handoff's line numbers have drifted but every claim re-checked holds):
+**B-4** — `crates/paladin-llm/src/openai/adapter.rs:435` builds the user turn from
+`user_prompt.context.clone().unwrap_or_default()` while the execution service sets `query` and
+`context: None` (`paladin_execution_service.rs:2785-2786`, `:2801`, `:2974`), so every OpenAI
+call through `PaladinExecutionService` sends an empty user message. **B-1** — Kimi declares
+`temperature_range: Some((1.0, 1.0))` (`kimi/adapter.rs:210`) and never sends `temperature`;
+Anthropic declares `Some((0.0, 1.0))` (`anthropic/adapter.rs:711`) and also never sends it
+(`temperature: None` at `:259`, `:303`, "deprecated for this model"); `PaladinBuilder` checks
+both the manual and the auto-selected value against `temperature_range`
+(`paladin_builder.rs:1141`, `:1332`), so an original adapter already discards a validated value
+silently, against ADR-0004's own "no undiscoverable substitution" principle. **B-2** —
+`LlmProviderFactory::create(&self, provider_name)` (`provider_factory.rs:356`) is env-only and
+takes no model; `agent_host.rs` reads only `default_provider` (`:111-116`); the conversion
+bridges in `crates/paladin-llm/src/config/bridge.rs` have no production caller (the only
+`bridge::` hit outside the module is the unrelated `OrchestratorBridgeAdapter`). **B-3** —
+`FallbackLlmAdapter` resends `request.clone()`, model included, to every hop (`fallback.rs:425`),
+now wrapped by Phase 43's Cadence pacing keyed on `(provider, model)` — a chain step's own model
+must feed that key too. **B-5** — `src/lib.rs:181-190` re-exports only the OpenAI, Anthropic and
+DeepSeek adapter/config pairs. **G-2** — `CompatEngine::detect_empty_completion`
+(`compat/engine.rs:651`) fires only on `finish_reason == length`. **G-1/G-11** — Kimi's single
+window is `131_072` (`kimi/adapter.rs:196`) against 1,048,576 live for k3; DeepSeek declares
+`64000` and defaults to `deepseek-chat`; `bridge.rs:96` still defaults Anthropic to
+`claude-3-5-sonnet-20241022`. **G-7** — no `Refusal` variant exists in `llm_port.rs` or any
+adapter. **H-1/H-2** — `conformance.rs` and `examples/live_vendor_smoke.rs` cover none of the
+three originals. **Constraint** — `ProviderCapabilities` gaining a field is blocked by the
+compile-time guard `provider_capabilities_gained_no_field` (`llm_port.rs:1977`, D-28 of Phase
+26); the handoff's additive `ModelProfile` returned by a defaulted new `LlmPort` method is
+non-breaking, and no such type exists on the tree yet. A clean break of `ProviderCapabilities`
+instead is an explicit X-03 supersession event to be recorded as ADR-0051/0059/0060 were.
+Precedent: the shared conformance suite (`crates/paladin-llm/src/conformance.rs`), the compat
+preset engine, Phase 17-19's live temperature probes, and ADR-0004's ports-boundary validation.
+Live checks (quota-error shapes, `json_object` under thinking, cache-read field names) run under
+the existing credential gate with the env vars Paladin already reads.
+**Success Criteria** (what must be TRUE):
+
+  1. A provider-swap matrix test with mock transports runs the same agent definition with the
+     provider switched only through config across all nine providers, asserting on the wire body
+     and the outcome: each build-and-run either succeeds with equivalent behaviour or fails at
+     build time with an error naming the provider, model and parameter. It covers manual and
+     auto temperature on a `(1,1)` provider, the user prompt present on the wire, the per-step
+     model in a fallback chain, and an empty `stop` completion — and it was red before the fixes.
+
+  2. The OpenAI adapter sends the prompt text (`query`, with `context` appended when present) on
+     the execution-service path, with a mock-transport regression test that fails on the current
+     tree; and parameter support is modelled per provider and per model (`Range` / `Fixed` /
+     `NotSent` for temperature, top_p, penalties, stop sequences) under one documented policy
+     recorded as an ADR amending ADR-0004 that governs every adapter, the originals included — a
+     Kimi swap with the default `auto_temperature` builds, an explicit out-of-range value is
+     refused, and nothing is substituted undiscoverably.
+
+  3. Provider construction honours `llm.<provider>` config blocks (model, base_url, timeout,
+     max_retries, default max_tokens, context-window override) through a public library API
+     routed through `config/bridge.rs`, per-agent `provider` + `model` resolve through the same
+     path in `agent_host`, existing YAML files load unchanged (PROV-03), reasoning-capable
+     defaults are 300 s not 60 s, and the facade exports all nine adapter/config pairs behind
+     ADR-0046's features with `make api-surface-update` and a CHANGELOG entry.
+
+  4. Per-model limits (context window, max output, reasoning support, fixed sampling values,
+     JSON-mode support) come from a dated registry with config overrides; Commissary and
+     `resolve_context_window` read it, so `kimi-k3` is rationed against 1,048,576 tokens and
+     the stale Anthropic/DeepSeek defaults and model lists are replaced with dated entries.
+
+  5. Every adapter maps empty output (`EmptyCompletion` on any stop reason, OpenAI included),
+     refusal (a typed `LlmError::Refusal`, `Permanent`), usage cap (live-verified per compat
+     vendor), cache read/write and reasoning tokens the same way, surfaces reasoning text on the
+     normal and streaming paths, and puts stop sequences on the wire where the vendor accepts
+     them; fallback chains send each hop its own model, key Cadence on it, and record the served
+     model beside `SERVED_BY_METADATA_KEY`.
+
+  6. All nine adapters are in the shared conformance suite (extended with capability
+     truthfulness, `response_format` wire shape, empty completion, refusal, usage fields and the
+     parameter-drop policy) and the credential-gated live smoke; the mdBook has a "Switching
+     providers" page with the per-provider/per-model behaviour table; MIGRATION/CHANGELOG carry
+     every intentional break; `make clean-code`, `make check-gates`, `make api-surface`,
+     `make security` and the 82 % coverage floor stay green, with no `unwrap`/`expect`/`panic!`
+     added to library code.
 **Plans**: TBD
 
 ---

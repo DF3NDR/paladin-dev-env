@@ -6,11 +6,11 @@ current_phase: 49
 current_phase_name: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)
 status: planning
 stopped_at: Completed 48-09-PLAN.md
-last_updated: "2026-10-14T16:08:17.459Z"
+last_updated: "2026-10-14T16:20:03.433Z"
 last_activity: 2026-10-14
 last_activity_desc: Phase 49 added from the web3sec handoff, sequenced before Phases 46-47
 progress:
-  total_phases: 10
+  total_phases: 11
   completed_phases: 9
   total_plans: 86
   completed_plans: 86
@@ -27,18 +27,22 @@ LLM provider through stable port abstractions — without their own domain code 
 provider, transport, or storage implementation.
 **Current focus:** Phase 49 — Downstream Adoption of v0.10.1 (web3sec Consumer Bump) — added
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
-consumer-driven phases). Phase 46 (Docs Currency & Hygiene) resumes after it.
-Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 12 phases (38-49; Phase 49 added 2026-10-14 from the web3sec
+consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
+2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then at
+least one more consumer-driven phase (the reasoning-effort companion handoff, not yet filed),
+before Phase 46 (Docs Currency & Hygiene) resumes.
+Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 13 phases (38-50; Phase 50 added 2026-10-14 from the second web3sec
+handoff, `50-HANDOFF-web3sec-parity.md`, sequenced after 49 and before 46-47; Phase 49 added 2026-10-14 from the web3sec
 handoff, `49-HANDOFF-web3sec.md`, sequenced before 46-47; Phase 48
 added 2026-10-12 after a code survey of the two senses of "node", sequenced before 46-47 because
-it is a public-API break the v0.11 migration guide and tag must carry), 45/45 requirements
-mapped (ADOPT-01..05 minted 2026-10-14); Phases 38-45 and 48 all sealed (Phase 48 sealed 2026-10-14: 9/9 plans, verification `passed`, UAT 3/3, security verified, Nyquist validated; Phase 40 verified 2026-09-30 once Phase 45's RustFS swap
+it is a public-API break the v0.11 migration guide and tag must carry), 53/53 requirements
+mapped (PARITY-01..08 and ADOPT-01..05 minted 2026-10-14); Phases 38-45 and 48 all sealed (Phase 48 sealed 2026-10-14: 9/9 plans, verification `passed`, UAT 3/3, security verified, Nyquist validated; Phase 40 verified 2026-09-30 once Phase 45's RustFS swap
 delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-10-12 when the
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
 **Progress:** [████████████████████] 86/86 plans (100%) of the phases planned so far (38-45, 48);
-Phases 46, 47 and 49 are not yet planned; Phase 49 is next.
+Phases 46, 47, 49 and 50 are not yet planned; Phase 49 is next, then Phase 50.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -590,6 +594,7 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
 - Phase 37.1 inserted after Phase 37: v0.10.1 Patch Release — tag v0.10.0 published 3/12 crates (battalion versioned dev-dep vs CRATES order); maintainer chose recovery option A (URGENT)
 - Phase 48 added: Base Entity Rename — `base::entity::node::Node<T>` → `Entity<T>` (payload `node` → `data`; clean break under a Phase-48-only X-03 supersession or a one-release deprecated alias, decided at discuss; serde alias for persisted JSON), unused base-layer items dispositioned, "node" reserved for the graph sense; ENTITY-01..05 minted; **sequenced before Phases 46-47**, added after Phase 44 sealed (owner decision 2026-10-12 after the code survey in `48-CONTEXT.md`, re-verified on the post-44 tree)
 - Phase 49 added: Downstream Adoption of v0.10.1 (web3sec Consumer Bump) — Paladin's only consumer moves from pin 35fd839 onto the v0.10.1 tag in one coordinated step (Milestone 13 §5, no shims); B-1/B-2/B-3 adopted consumer-side with the D-2 token-usage mapping decided; Paladin gains a compile-only consumer-surface muster and a MIGRATION.md consumer note (ADOPT-01..05 minted, from the web3sec handoff filed as 49-HANDOFF-web3sec.md); **sequenced before Phases 46-47**, the first of a series of consumer-driven phases (owner decision 2026-10-14)
+- Phase 50 added: Provider Parity & Configuration-Driven Model Swap — any agent movable between the nine LLM providers by config only, or an early build error naming provider/model/parameter: OpenAI empty-user-message defect fixed first, parameter support per provider and per model (ADR amending 0004), config-driven provider construction as a library API with all nine adapter/config pairs on the facade, dated per-model profile registry feeding Commissary, response/error parity (empty output, typed refusal, usage cap, cache-write, reasoning text, stop sequences), per-step fallback models, nine-adapter conformance + live smoke + mdBook "Switching providers" page (PARITY-01..08 minted, from the second web3sec handoff filed as 50-HANDOFF-web3sec-parity.md; D-1..D-4 settled at discuss); **sequenced after Phase 49 and before Phases 46-47** (owner decision 2026-10-14)
 
 ## Deferred Items
 

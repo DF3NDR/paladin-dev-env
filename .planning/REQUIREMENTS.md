@@ -197,6 +197,57 @@ in web3sec, closed here by the handoff's §9 return report); ADOPT-04..05 are Pa
   `PaladinResult.cost`) — while no Paladin library API is changed, shimmed or deprecated for the
   consumer: zero new §9.2 rows and zero `semver-checks` allowlist changes from this phase
 
+### Provider parity (PARITY)
+
+*Added 2026-10-14 (Phase 50) from the second web3sec handoff of 2026-10-13
+(`50-HANDOFF-web3sec-parity.md`). The consumer's config-only swap of its Anthropic agents onto
+Moonshot `kimi-k3` fails or silently degrades in five blocking and eleven degrading ways; most are
+cross-cutting, and several are defects in the three original adapters. `PROV-*` is spent (Phase
+17), so a new prefix. Decisions D-1..D-4 of the handoff are settled at discuss.*
+
+- [ ] **PARITY-01**: A provider-swap matrix test with mock transports passes for all nine
+  providers — the same agent definition switched only through config builds and runs with
+  equivalent behaviour, or fails at build time with an error naming the provider, model and
+  parameter — covering manual and auto temperature on a `(1,1)` provider, the user prompt on the
+  wire, the per-step model in a fallback chain, and an empty `stop` completion
+
+- [ ] **PARITY-02**: Parameter support is modelled per provider and per model (`Range` / `Fixed`
+  / `NotSent` for temperature, top_p, penalties and stop sequences), additive to
+  `ProviderCapabilities` unless an explicit X-03 supersession is recorded, and one documented
+  policy for a configured value the target does not accept — an ADR amending ADR-0004 — governs
+  every adapter, the originals included, with nothing substituted undiscoverably
+
+- [ ] **PARITY-03**: Provider construction honours `llm.<provider>` config blocks (model,
+  base_url, timeout, max_retries, default max_tokens, context-window override) through a public
+  library API routed through `config/bridge.rs`; per-agent `provider` + `model` resolve through
+  the same path in `agent_host`; existing YAML loads unchanged; and the facade exports all nine
+  adapter/config pairs behind ADR-0046's features, with the public-API baseline refreshed and a
+  CHANGELOG entry
+
+- [ ] **PARITY-04**: Per-model limits (context window, max output, reasoning support, fixed
+  sampling values, JSON-mode support) come from a dated registry with config overrides that
+  Commissary and `resolve_context_window` read, so `kimi-k3` is rationed against its real
+  1,048,576-token window and the stale Anthropic/DeepSeek defaults and model lists are replaced
+
+- [ ] **PARITY-05**: Every adapter maps empty output (`EmptyCompletion` on any stop reason,
+  OpenAI included), refusal (a typed `LlmError::Refusal`, classified `Permanent`), usage cap
+  (live-verified per compat vendor), cache read/write and reasoning tokens the same way,
+  surfaces reasoning text on the normal and streaming paths, and sends stop sequences where the
+  vendor accepts them
+
+- [ ] **PARITY-06**: Fallback chains send each hop its own model, key Cadence pacing on it, and
+  record the served model beside `SERVED_BY_METADATA_KEY`
+
+- [ ] **PARITY-07**: All nine adapters are in the shared conformance suite (extended with
+  capability truthfulness, `response_format` wire shape, empty completion, refusal, usage fields
+  and the parameter-drop policy) and the credential-gated live smoke, and the mdBook has a
+  "Switching providers" page with the per-provider/per-model behaviour table plus
+  MIGRATION/CHANGELOG entries for every intentional break
+
+- [ ] **PARITY-08**: The OpenAI adapter sends the prompt text (`query`, with `context` appended
+  when present) on the execution-service path, with a mock-transport regression test that is red
+  on the current tree and green after the fix
+
 ### Object storage (STORE)
 
 - [x] **STORE-01**: The dev/test compose stack and the Coverage, Integration Tests, Docker
@@ -338,16 +389,26 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ADOPT-03 | Phase 49 | Pending |
 | ADOPT-04 | Phase 49 | Pending |
 | ADOPT-05 | Phase 49 | Pending |
+| PARITY-01 | Phase 50 | Pending |
+| PARITY-02 | Phase 50 | Pending |
+| PARITY-03 | Phase 50 | Pending |
+| PARITY-04 | Phase 50 | Pending |
+| PARITY-05 | Phase 50 | Pending |
+| PARITY-06 | Phase 50 | Pending |
+| PARITY-07 | Phase 50 | Pending |
+| PARITY-08 | Phase 50 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 45 total
-- Mapped to phases: 45
+- v1 requirements: 53 total
+- Mapped to phases: 53
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-24*
-*Last updated: 2026-10-14 — Phase 49 added (Downstream Adoption of v0.10.1), ADOPT-01..05 minted
+*Last updated: 2026-10-14 — Phase 50 added (Provider Parity & Configuration-Driven Model Swap),
+PARITY-01..08 minted from the second web3sec handoff (`50-HANDOFF-web3sec-parity.md`); Phases 38-50,
+53/53 requirements mapped, 100% coverage. Previous: 2026-10-14 — Phase 49 added (Downstream Adoption of v0.10.1), ADOPT-01..05 minted
 from the web3sec handoff (`49-HANDOFF-web3sec.md`); Phases 38-49, 45/45 requirements mapped, 100%
 coverage. Previous: 2026-10-12 — Phase 48 added (Base Entity Rename), ENTITY-01..05 minted from the
 code survey in `48-CONTEXT.md`; Phases 38-48, 40/40 requirements mapped, 100% coverage. Previous:

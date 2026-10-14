@@ -1233,7 +1233,7 @@ Plans:
 **Wave 1**
 
 - [x] 49-01-PLAN.md — Tracer: the compile-only consumer-surface muster (`tests/consumer_surface_muster.rs`) green under `cargo test` as one `[[test]]` target with `required-features`; gate wiring proved (`make check`/`make lint`/`api-surface`), `make check-consumer-surface` alias outside check-gates; 49-VALIDATION.md map filled
-- [ ] 49-02-PLAN.md — MIGRATION.md §9.8 `### Library consumers: v0.10.1 → v0.11.0` (D-2 no-total-only-`TokenUsage` pitfall, DR-1..DR-11 break table, insulation advice) + CHANGELOG [Unreleased] entry; zero §9.2 rows, zero allowlist changes
+- [x] 49-02-PLAN.md — MIGRATION.md §9.8 `### Library consumers: v0.10.1 → v0.11.0` (D-2 no-total-only-`TokenUsage` pitfall, DR-1..DR-11 break table, insulation advice) + CHANGELOG [Unreleased] entry; zero §9.2 rows, zero allowlist changes
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

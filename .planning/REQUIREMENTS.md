@@ -191,7 +191,7 @@ in web3sec, closed here by the handoff's §9 return report); ADOPT-04..05 are Pa
   existing gates, and proven red against a deliberately broken signature (e.g. a `bool` re-added
   to `Commissary::new`)
 
-- [ ] **ADOPT-05**: `MIGRATION.md` gains a consumer-facing upgrade note — the "no total-only
+- [x] **ADOPT-05**: `MIGRATION.md` gains a consumer-facing upgrade note — the "no total-only
   `TokenUsage` constructor" pitfall and the `v0.10.1` → `v0.11.0` break list the muster exposes
   (`battalion::ErrorStrategy`, the legacy `battalion::NodeError`, `Node<T>` → `Entity<T>`,
   `PaladinResult.cost`) — while no Paladin library API is changed, shimmed or deprecated for the
@@ -450,7 +450,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ADOPT-02 | Phase 49 | Pending |
 | ADOPT-03 | Phase 49 | Pending |
 | ADOPT-04 | Phase 49 | Complete |
-| ADOPT-05 | Phase 49 | Pending |
+| ADOPT-05 | Phase 49 | Complete |
 | PARITY-01 | Phase 50 | Pending |
 | PARITY-02 | Phase 50 | Pending |
 | PARITY-03 | Phase 50 | Pending |

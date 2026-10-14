@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 49
 current_phase_name: downstream-adoption-of-v0-10-1-web3sec-consumer-bump
 status: executing
-stopped_at: Completed 49-01-PLAN.md
-last_updated: "2026-10-14T21:12:54.032Z"
+stopped_at: Completed 49-02-PLAN.md
+last_updated: "2026-10-14T21:16:53.474Z"
 last_activity: 2026-10-14
 last_activity_desc: Phase 49 execution started
 progress:
   total_phases: 12
   completed_phases: 9
   total_plans: 92
-  completed_plans: 87
+  completed_plans: 88
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([██████████] 95%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([██████████] 96%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 49, 50 and 51 are not yet planned; Phase 49 is next, then Phase 50, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 49 (downstream-adoption-of-v0-10-1-web3sec-consumer-bump) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-10-14 — Phase 49 execution started
 
@@ -293,6 +293,7 @@ Last activity: 2026-10-14 — Phase 49 execution started
 | Phase 48 P08 | 25 min | 2 tasks | 1 files |
 | Phase 48 P09 | 1h | 2 tasks | 6 files |
 | Phase 49 P01 | 125min | 3 tasks | 4 files |
+| Phase 49 P02 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -496,6 +497,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 48]: Phase 48-09: entity rename guard skips the graph schema only when the tree has no docs/ directory (Docker test image context)
 - [Phase 49]: check-consumer-surface stays outside check-gates (it builds the facade crate; check-gates members are offline script guards)
 - [Phase 49]: muster [[test]] uses required-features so --no-default-features fails loudly instead of skipping
+- [Phase ?]: Phase 49-02: library-consumer note is a ### subsection after MIGRATION.md 9.8 step 7 (no new ## 9.9); rows labelled DR-n so the allowlist guard never reads them; section 9.2 wording wins over the research drift register
 
 ### Pending Todos
 
@@ -714,8 +716,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-14T21:12:54.008Z
-**Stopped at:** Completed 49-01-PLAN.md
+**Last session:** 2026-10-14T21:16:53.449Z
+**Stopped at:** Completed 49-02-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

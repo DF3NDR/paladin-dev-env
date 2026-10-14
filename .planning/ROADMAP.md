@@ -1144,7 +1144,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 48-09-PLAN.md — Closeout: full gate run with measured coverage; ADR-0060 conforms; ENTITY-01/04/05 and ROADMAP wording corrected (ENTITY-04 retained pending review), IDs unchanged
+- [x] 48-09-PLAN.md — Closeout: full gate run with measured coverage; ADR-0060 conforms; ENTITY-01/04/05 and ROADMAP wording corrected (ENTITY-04 retained pending review), IDs unchanged
 
 ---
 *Roadmap created: 2026-07-30 (ingest run 1 of 5 — `.project/Milestone_1-MVP`, 36 docs)*

@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 8
+open_count: 10
 waived_count: 37
 fixed_count: 22
-total_count: 67
-last_updated: 2026-10-07T02:02:08.278Z
+total_count: 69
+last_updated: 2026-10-14T00:14:54.479Z
 ---
 
 # Broken Windows Ledger
@@ -82,6 +82,8 @@ last_updated: 2026-10-07T02:02:08.278Z
 | 65 | 42 | deviation | src/application/services/treasurer/guard.rs |  | D-01 (ADR-0057): the mid-run boundary check is a check-only balance read with no reservation, so runs admitted in the same instant can all start and each one halts at its first boundary after the allowance is exhausted; overshoot is bounded to one superstep's spend per run (not per principal). Owner: the Treasurer maintainers; rationale: a reservation hold per superstep would need an estimate rule ADR-0057 records as missing, so the race is accepted and bounded rather than prevented. Closing condition: the deferred per-superstep reservation hold ships, or an operator sizes each ceiling with headroom for concurrent runs times one superstep. | open |  | 2026-10-07T02:02:07.590Z |  |
 | 66 | 42 | deviation | src/application/services/paladin/paladin_execution_service.rs |  | G2 (ADR-0057 group e, D-12, 42-01 option-b gate): a true streamed execute/stream call is one provider call with no after_model, so the derived budget cannot cut it mid-flight; admission (including the model_unpriced and zero-budget refusals) is its only gate and its overshoot is that one streamed call. Under the recorded option-b its terminal done carries an informational halt_reason when the terminal usage crossed the derived figure (a crossing report, not a halt: the call had already finished; implemented in 42-08), and is otherwise unchanged, so the done is NOT byte-identical in all cases; D-12's 'the agent stream's terminal done carries the same object' holds for the buffered fallback always and for a true stream when its terminal usage crossed the figure. Owner: the Treasurer maintainers; closing condition: mid-stream usage accounting that can cut a single streamed call. | open |  | 2026-10-07T02:02:07.736Z |  |
 | 67 | 42 | deviation | crates/paladin-battalion/src/engine/settlement.rs |  | G15: a graph Paladin node on a model with no treasurer.pricing row settles nothing (an unpriced call has no cost and nothing is fabricated, D-00c), so the superstep-boundary check cannot see that node's spend and an allowance cannot bound it; workflow assistants are not refused at admission for an unpriced model (only agent routes and agent-kind runs are, 422 model_unpriced). Owner: the operator; rationale: pricing is operator-supplied configuration and the engine has no source for a price it was not given. Operators must price every model a metered principal can reach; closing condition: a pricing-coverage check at graph registration, deferred. | open |  | 2026-10-07T02:02:08.278Z |  |
+| 68 | 48 | unrun-verify | Makefile |  | 48-09: make security (cargo-audit, cargo-deny) not run locally, tools absent; CI Security Audit and License & Dependency Policy jobs are red on the branch before and after Phase 48 with Cargo.lock unchanged | open |  | 2026-10-14T00:14:54.346Z |  |
+| 69 | 48 | unrun-verify | scripts/coverage.sh |  | 48-09: workspace coverage percentage not measured locally (no Docker daemon, no object store, 3 GB free); CI Coverage job passed the 82 percent gate on dcbcb63 but its figure was not retrievable (artifact download denied) | open |  | 2026-10-14T00:14:54.479Z |  |
 
 ````json
 [
@@ -887,6 +889,30 @@ last_updated: 2026-10-07T02:02:08.278Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-07T02:02:08.278Z",
+    "resolved_at": null
+  },
+  {
+    "id": 68,
+    "kind": "unrun-verify",
+    "phase": "48",
+    "file": "Makefile",
+    "line": null,
+    "description": "48-09: make security (cargo-audit, cargo-deny) not run locally, tools absent; CI Security Audit and License & Dependency Policy jobs are red on the branch before and after Phase 48 with Cargo.lock unchanged",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-14T00:14:54.346Z",
+    "resolved_at": null
+  },
+  {
+    "id": 69,
+    "kind": "unrun-verify",
+    "phase": "48",
+    "file": "scripts/coverage.sh",
+    "line": null,
+    "description": "48-09: workspace coverage percentage not measured locally (no Docker daemon, no object store, 3 GB free); CI Coverage job passed the 82 percent gate on dcbcb63 but its figure was not retrievable (artifact download denied)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-14T00:14:54.479Z",
     "resolved_at": null
   }
 ]

@@ -41,10 +41,10 @@ and security-advisory UI, aimed at a security researcher disclosing a *new* find
 developer auditing an *existing* suppression — is a separate deliverable for a different audience,
 and is deliberately not addressed by this file.
 
-## The eleven live suppressions
+## The twelve live suppressions
 
 Five vulnerability-class advisories (mirrored exactly between `.cargo/audit.toml` and `deny.toml`)
-and six unmaintained-class advisories (`deny.toml` only). This is the tree-verified live set, not
+and seven unmaintained-class advisories (`deny.toml` only). This is the tree-verified live set, not
 the fifteen the corpus's own record remembers — see the note immediately below the payload for why
 four advisories that appear in `deny.toml`'s history are absent from this register on purpose.
 
@@ -57,6 +57,12 @@ its own D-11, updating the machine-readable payload below but not this prose abo
 `deny.toml` and `.cargo/audit.toml` directly and never reads these words, and it reports "11
 register row(s) checked against 11 deny.toml and 5 .cargo/audit.toml ignore entries; all clauses
 satisfied", exit 0. Only the register's account of itself was stale.)*
+
+*(Twelfth row added 2026-10-14: `RUSTSEC-2024-0449` (`unsafe-libyaml`, the parser behind
+`serde_yaml` 0.9 in `paladin-eval` and the facade's optional `cli` feature), an unmaintained-class
+advisory that newly failed CI's `License & Dependency Policy` job on every branch. The heading and
+the paragraph above were updated in the same commit, so this time the prose and the payload agree:
+12 rows, 12 `deny.toml` entries, 5 `.cargo/audit.toml` entries.)*
 
 <!-- BEGIN MACHINE-READABLE REGISTER -->
 ```toml
@@ -202,6 +208,19 @@ review_date = "2026-12-31"
 scope = "paladin-web's compile-time OpenAPI schema generation via utoipa's derive macros"
 compensating_control = "paste is a compile-time proc-macro token-pasting helper with no runtime behaviour whatsoever; it cannot process any request-time or attacker-supplied input."
 revisit_condition = "utoipa releases a version that no longer depends on paste"
+
+[[exception]]
+id = "RUSTSEC-2024-0449"
+class = "unmaintained"
+crate = "unsafe-libyaml"
+path = "unsafe-libyaml -> serde_yaml 0.9 -> paladin-eval (scenario and graph-document YAML loaders) and the facade's optional cli feature (config loader, Paladin/Battalion templates, graph commands)"
+why_present = "serde_yaml 0.9 is the YAML (de)serializer behind paladin-eval's scenario and graph-document loaders and behind the facade's optional cli feature (config loader, Paladin and Battalion templates, graph commands); unsafe-libyaml is serde_yaml's only parser backend."
+why_not_fixable = "unsafe-libyaml's repository was archived on 2024-03-25 and serde_yaml 0.9.34 is itself published as deprecated, so there is no upgrade that drops the crate; the published serde_yaml forks carry the same c2rust-translated libyaml under other names. The advisory's own remedy is a different, safe-Rust parser (serde-saphyr), which is a migration of 53 call sites across 15 files rather than a lockfile bump; this exception defers that migration, it does not hide it."
+owner = "DF3NDR"
+review_date = "2026-12-31"
+scope = "YAML read from the local filesystem or from string literals by the CLI (off by default) and by the eval runner: operator-authored scenario, graph-document, config and template files; no network- or request-facing path in paladin-web or any LLM adapter parses YAML"
+compensating_control = "Every serde_yaml call site parses a file path the operator names on the command line, a file in the checked-in eval corpus, or a literal; paladin-web and the LLM adapters never deserialise YAML, so no attacker-supplied bytes reach the parser, and the cli feature that pulls serde_yaml into the facade is not in the default feature set."
+revisit_condition = "the workspace migrates serde_yaml to a safe-Rust YAML parser (serde-saphyr), or a maintained serde_yaml successor that does not depend on unsafe-libyaml is released"
 ```
 <!-- END MACHINE-READABLE REGISTER -->
 

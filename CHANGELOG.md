@@ -829,7 +829,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Paladin crate enables, so no first-party code path was exposed; the bump keeps `cargo audit`
   and `cargo deny` green without adding an exception. The yanked `spin` 0.9.8 and `chacha20`
   0.10.0 releases were replaced with 0.9.9 and 0.10.2 at the same time. No `.cargo/audit.toml`,
-  `deny.toml` or `SECURITY-EXCEPTIONS.md` change. Public API unchanged.
+  `deny.toml` or `SECURITY-EXCEPTIONS.md` change for these. Public API unchanged.
+- A governed `unmaintained`-class exception for RUSTSEC-2024-0449 (`unsafe-libyaml`, the parser
+  behind `serde_yaml` 0.9 in `paladin-eval` and the facade's optional `cli` feature), which newly
+  failed `cargo deny check` on every branch. `serde_yaml` is deprecated upstream with no upgrade
+  that drops the crate; the register row (`SECURITY-EXCEPTIONS.md`, mirrored in `deny.toml`)
+  records the local-file-only scope and names the migration to a safe-Rust parser
+  (`serde-saphyr`) as the revisit condition. YAML is never parsed from a network or request path.
 
 ### Breaking Changes
 

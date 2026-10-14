@@ -1,17 +1,20 @@
 ---
 phase: 48-base-entity-rename
 verified: 2026-10-14T00:45:00Z
-status: human_needed
+status: passed
 score: 5/5 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
 human_verification:
+
   - test: "Read the CI result for HEAD f092886 (or any commit at or after 2ad9fa6): Docker Integration Tests, Coverage, pre-commit"
     expected: "Docker Integration Tests green (the 2ad9fa6 guard fix lets tests/entity_rename_guard.rs run in a build context with no docs/); Coverage green with --fail-under-lines 82"
     why_human: "The CI run for f092886 was still queued when verified. The only CI evidence is run 38487208284 on dcbcb63: Coverage success, Docker Integration Tests failure (the guard regression that 2ad9fa6 fixes), ci.yml overall cancelled. The fix was reproduced by plan 48-09 and by the positive control scanner_accepts_a_build_context_without_docs (which passes here), but CI has not yet confirmed it."
+
   - test: "Run `make security` (cargo-audit and cargo-deny) in an environment that has them, and read the Security Audit and License and Dependency Policy CI job logs"
     expected: "Pass, or a failure that is already present on the pre-phase tree"
     why_human: "cargo-audit and cargo-deny are not installed here. Both CI jobs are red on dcbcb63. 48-09-SUMMARY says they were red before any Phase 48 code, and Cargo.lock is byte-identical to the phase base, which I confirmed. Which advisory or licence rule fires is unknown. ROADMAP SC5 does not name make security, but the project's security.instructions.md requires it before a phase is sealed."
+
   - test: "Measure the workspace line-coverage percentage (cargo llvm-cov --fail-under-lines 82) or read it from the CI Coverage log"
     expected: ">= 82 %"
     why_human: "No cargo-llvm-cov, no Docker daemon and low disk here. The only evidence is the CI Coverage job conclusion on dcbcb63 (success), not a number."
@@ -136,3 +139,14 @@ There are no code gaps. All five success criteria are met by what is in the tree
 
 _Verified: 2026-10-14_
 _Verifier: Claude (gsd-verifier)_
+
+## Human verification closure (2026-10-14)
+
+All three `human_verification` items were resolved by `/gsd-verify-work 48` on 2026-10-14 (see
+`48-UAT.md`, 3/3 pass). In short: the Docker Integration Tests and Coverage jobs are green on
+c73476eb, 440896a6 and 2388fc13 (all after the 2ad9fa6 guard fix) and the pre-commit workflow is
+green on every commit since 0a20e7ba; `make security` exits 0 locally on HEAD e3075023 and the
+Security Audit and License & Dependency Policy jobs are green on 2388fc13 (run 38585690891); the
+Coverage job passes `--fail-under-lines 82` on the same run, so workspace line coverage is at or
+above 82 % (the exact figure is in that run's "Coverage summary" step; the artifact host is not
+reachable from the sandbox). Frontmatter `status` moved `human_needed` → `passed`.

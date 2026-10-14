@@ -933,3 +933,51 @@ subcommand that does not exist.
    against a representative scenario glob for a behavioral post-deploy check. `GraphCommands`
    exposes exactly one subcommand, `export` (`paladin-cli graph export --format mermaid|dot`), for
    inspecting a graph's structure — there is no separate command for a runtime probe.
+
+### Library consumers: v0.10.1 → v0.11.0
+
+This subsection is for a library consumer that depends on the facade `paladin-ai` (plus
+`paladin-ports` / `paladin-memory`) by path or submodule and moves from the `v0.10.1` tag to
+`v0.11.0`. The operator checklist above is separate and does not apply to a consumer that only
+links the libraries. Every item below already has its entry in section 9.2 (and, where relevant,
+section 9.1); this subsection is a consumer-shaped index over those entries, not a new register
+row.
+
+**No total-only `TokenUsage` constructor (applies at `v0.10.1` already).** `TokenUsage::from_total`
+was removed outright in Phase 31 (the `TokenUsage` row of section 9.2), and nothing replaced it. The
+shape `TokenUsage { total_tokens: n, ..Default::default() }` compiles, but it has two defects. It
+violates the documented invariants (`total_tokens == prompt_tokens + completion_tokens`; cache read
+and cache write each at most `prompt_tokens`; reasoning at most `completion_tokens`). And it is not
+additive: `impl Add for TokenUsage`, and `AddAssign` and `Sum`, which go through it, recompute
+`total_tokens` from prompt plus completion with saturating addition, so such a value contributes 0
+to any `+`, `+=` or `.sum()`. The lossless route is to carry the provider's full per-call
+`TokenUsage` and accumulate it with `usage += response.usage.clone()` or `.sum::<TokenUsage>()`
+(both saturating, both present at `v0.10.1`). Build values with `TokenUsage::new(prompt,
+completion)` plus the chainable `with_cache_read` / `with_cache_write` / `with_reasoning`, or with
+`..Default::default()` for the three optional fields, where `None` means the provider did not
+report the figure.
+
+| # | Item | What changed | Replacement | Register |
+|---|---|---|---|---|
+| DR-1 | Battalion error-strategy enum (`battalion::ErrorStrategy`) | removed outright, with no alias | `aegis.on_error` on `BattalionConfig`: `Some(ErrorHandlerSpec::Absorb { .. })` continues past a failed Paladin and records it in `node_errors`, `None` fails fast; honoured by Formation and Phalanx, ignored by Campaign | 9.2 `ErrorStrategy` row (Phase 44); 9.1 M-B-07, M-B-11 |
+| DR-2 | Legacy battalion `NodeError` summary (`{node_name, error}`) | removed; `BattalionResult.node_errors` changes element type | `BattalionResult.node_errors: Vec<node_error::NodeError>` with `node_id`, `attempt`, `transience`, `source` | 9.2 `NodeError` and `BattalionResult` rows (Phase 44); 9.1 M-B-08 |
+| DR-3 | Base wrapper `Node<T>` and its module | renamed; the payload field `node` becomes `data`; no alias or re-export under the old path | `Entity<T>` (`paladin_core::base::entity::Entity<T>`) with payload `.data`; `Paladin = Entity<PaladinData>`; `Entity::new(data, name)` keeps its two-argument signature | 9.2 `Node` row (Phase 48); 9.1 M-B-12 |
+| DR-4 | `PromptItem` and `ContentItem` wrapper field `node` | renamed `entity`; a full struct literal naming the field breaks | read the payload as `item.entity.data` | 9.2 `PromptItem` and `ContentItem` rows (Phase 48); 9.1 M-B-12 |
+| DR-5 | `PaladinResult` | new field `cost: Option<Cost>` (`#[serde(default)]`); a full struct literal breaks | `..Default::default()` or `PaladinResult::new(..)`, neither of which names the field | 9.2 `PaladinResult` row (Phase 38 extension) |
+| DR-6 | `LlmResponse` | new field `cost: Option<Cost>`, directly after `usage`; every full `LlmResponse` literal breaks a second time | name the field (`cost: None`); route mock responses through one helper (see below) | 9.2 `LlmResponse` row (Phase 38) |
+| DR-7 | `LlmError::RateLimitExceeded` | unit variant becomes a `#[non_exhaustive]` struct variant `{ retry_after, hints }` | build with `LlmError::rate_limited(..)`; match with `LlmError::RateLimitExceeded { .. }` | 9.2 `LlmError` row (PACE-01) |
+| DR-8 | `BattalionConfig` | `timeout_seconds`, `retry_policy`, `error_strategy` and the builders `with_timeout`, `with_retry_policy`, `with_error_strategy` removed; `aegis` and `with_aegis` added | `with_aegis(Aegis { timeout, retry, on_error, .. })` | 9.2 `BattalionConfig` row (Phase 44); 9.1 M-B-06, M-B-07 |
+| DR-9 | `BattalionError::Timeout` | variant removed | a timed-out attempt surfaces as `BattalionError::Node` with a `Timeout` source (Formation and Campaign) or inside `AggregationError` (Phalanx) | 9.2 `BattalionError` row (Phase 44); 9.1 M-B-06 |
+| DR-10 | `PaladinError::LlmError(String)`, `is_retryable()`, `is_terminal()` | removed | `PaladinError::LlmFailure { transience, status, provider, message }` and `transience()`; message text is never inspected | 9.2 `PaladinError` rows (Phase 44 removals); 9.1 M-B-09, M-B-10 |
+| DR-11 | `StopReason` | new variants `CallLimit`, `TokenBudget`, `AllowanceHalted(..)`; the enum is `#[non_exhaustive]` | none needed behind the wildcard arm the enum already requires | 9.2 `StopReason` rows |
+
+**Insulating the next bump (consumer-side; no Paladin change).** Prefer
+`PaladinResult { .., ..Default::default() }` or `PaladinResult::new(..)` over a full struct literal;
+both exist at `v0.10.1`, and neither names a field a later phase may add. `LlmResponse` has no
+`Default` and no constructor, so route mock responses through one consumer-owned test helper (for
+example `fn mock_response(usage: TokenUsage) -> LlmResponse`); the next added field is then a
+one-site change instead of one edit per literal.
+
+`tests/consumer_surface_muster.rs` is the executable form of this list (`make
+check-consumer-surface` runs it). A red muster means the next bump needs a row here and its section
+9.2 row in the same commit.

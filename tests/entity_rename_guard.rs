@@ -25,11 +25,14 @@
 //!    production code of the renamed version module no old not-found variant and no old
 //!    identifier or payload field read or declaration. The serde read-alias strings do not match
 //!    these needles.
-//! 4. **Single declarations.** Among scanned `.rs` files, outside comment lines, the Paladin alias,
-//!    the Paladin data struct and the Paladin status enum each occur exactly once, in
-//!    `paladin.rs`; the structured `NodeError` exactly once, in `node_error.rs`; the `Entity`
-//!    wrapper exactly once, in `base/entity/wrapper.rs`. Zero is a violation just like two, or a
-//!    wrong file.
+//! 4. **Single declarations.** Among scanned `.rs` files, in code only (comments, string literals
+//!    and character literals are blanked first, so a block comment or a raw string cannot hold
+//!    one), the Paladin alias, the Paladin data struct and the Paladin status enum each occur
+//!    exactly once, in `paladin.rs`; the structured `NodeError` exactly once, in `node_error.rs`;
+//!    the `Entity` wrapper exactly once, in `base/entity/wrapper.rs`. A line is normalized before
+//!    it is compared (whitespace collapsed, `pub(crate)` and the other restricted visibilities
+//!    read as `pub`, no space before `<`), so a respelled duplicate still counts. Zero is a
+//!    violation just like two, or a wrong file.
 //! 5. **Graph freeze.** Every graph definition (`NodeId`, `NodeSpec`, `StateNode`, `NodeContext`,
 //!    `NodeInterceptor`, `NodeDoc`, `NodeExecutionRecord`, `NodeOutcomeKind`, `NodeProgressKind`,
 //!    the `TraceEvent::Node*` variants, the node-cache port, key, error, in-memory and Redis
@@ -340,6 +343,119 @@ fn generic_hits(line: &str) -> Vec<(u8, String)> {
     hits
 }
 
+/// A declaration line in a canonical spelling, so formatting and restricted visibility cannot hide
+/// it from rule 4: whitespace collapsed, `pub(crate)`, `pub(super)`, `pub(self)` and `pub(in ..)`
+/// read as `pub`, no space before `<`, and exactly one space before `=`.
+fn normalize_declaration(line: &str) -> String {
+    let mut text = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    while let Some(start) = text.find("pub(") {
+        let Some(length) = text[start..].find(')') else {
+            break;
+        };
+        text.replace_range(start + 3..=start + length, "");
+    }
+    text.replace(" <", "<")
+        .replace(" =", "=")
+        .replace('=', " =")
+}
+
+/// The end (exclusive, in chars) of the raw string literal starting at `start`, if one does.
+fn raw_string_end(chars: &[char], start: usize) -> Option<usize> {
+    if start > 0 && is_identifier(chars[start - 1]) {
+        return None;
+    }
+    let mut at = start;
+    if chars.get(at) == Some(&'b') {
+        at += 1;
+    }
+    if chars.get(at) != Some(&'r') {
+        return None;
+    }
+    at += 1;
+    let hashes = chars[at..].iter().take_while(|c| **c == '#').count();
+    at += hashes;
+    if chars.get(at) != Some(&'"') {
+        return None;
+    }
+    at += 1;
+    while at < chars.len() {
+        if chars[at] == '"' && chars[at + 1..].iter().take_while(|c| **c == '#').count() >= hashes {
+            return Some(at + 1 + hashes);
+        }
+        at += 1;
+    }
+    Some(chars.len())
+}
+
+/// `content` with comments removed and string and character literals emptied, newlines kept, so
+/// line `n` of the result is line `n` of the input. It lets rule 4 see only code: a declaration
+/// inside a block comment, a doc example, or a raw or ordinary string is not a declaration.
+fn blank_non_code(content: &str) -> String {
+    let chars: Vec<char> = content.chars().collect();
+    let mut out = String::with_capacity(content.len());
+    let mut at = 0;
+    while at < chars.len() {
+        let current = chars[at];
+        let next = chars.get(at + 1).copied();
+        if current == '/' && next == Some('/') {
+            while at < chars.len() && chars[at] != '\n' {
+                at += 1;
+            }
+        } else if current == '/' && next == Some('*') {
+            let mut depth = 0_usize;
+            while at < chars.len() {
+                if chars[at] == '/' && chars.get(at + 1) == Some(&'*') {
+                    depth += 1;
+                    at += 2;
+                } else if chars[at] == '*' && chars.get(at + 1) == Some(&'/') {
+                    depth -= 1;
+                    at += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    if chars[at] == '\n' {
+                        out.push('\n');
+                    }
+                    at += 1;
+                }
+            }
+            out.push(' ');
+        } else if let Some(end) = raw_string_end(&chars, at) {
+            out.extend(chars[at..end].iter().filter(|c| **c == '\n'));
+            out.push_str("\"\"");
+            at = end;
+        } else if current == '"' {
+            at += 1;
+            while at < chars.len() && chars[at] != '"' {
+                if chars[at] == '\\' {
+                    at += 1;
+                }
+                if chars.get(at) == Some(&'\n') {
+                    out.push('\n');
+                }
+                at += 1;
+            }
+            at += 1;
+            out.push_str("\"\"");
+        } else if current == '\'' && next == Some('\\') {
+            at += 3;
+            while at < chars.len() && chars[at] != '\'' {
+                at += 1;
+            }
+            at += 1;
+            out.push_str("''");
+        } else if current == '\'' && chars.get(at + 2) == Some(&'\'') {
+            at += 3;
+            out.push_str("''");
+        } else {
+            out.push(current);
+            at += 1;
+        }
+    }
+    out
+}
+
 /// Rule 3 for one production line of the wrapper file or a container file.
 fn entity_field_hits(line: &str) -> Vec<(u8, String)> {
     let mut hits = Vec::new();
@@ -605,16 +721,24 @@ fn scan(root: &Path) -> Vec<String> {
             let Ok(content) = fs::read_to_string(&path) else {
                 continue;
             };
+            let code = if is_rust {
+                blank_non_code(&content)
+            } else {
+                String::new()
+            };
+            let mut code_lines = code.lines();
             for (index, line) in content.lines().enumerate() {
+                let code_line = code_lines.next().unwrap_or_default();
                 let number = index + 1;
                 for (rule, matched) in generic_hits(line) {
                     violations.push(format!(
                         "{relative}:{number}: rule {rule}: removed Phase 48 name `{matched}`"
                     ));
                 }
-                if is_rust && !line.trim_start().starts_with("//") {
+                if is_rust {
+                    let normalized = normalize_declaration(code_line);
                     for (declaration, locations) in SINGLE_DECLARATIONS.iter().zip(&mut found) {
-                        if occurs(line, declaration.needle, true, declaration.bound_end) {
+                        if occurs(&normalized, declaration.needle, true, declaration.bound_end) {
                             locations.push((relative.clone(), number));
                         }
                     }
@@ -857,6 +981,10 @@ fn look_alikes() -> String {
         "// Node-cache reads and a bare `Node` in prose are graph-sense vocabulary.",
         "// pub type Paladin = Other; and pub struct Entity<T> are only commented here.",
         "/// pub struct NodeError {} in a doc comment is not a declaration.",
+        "/* a block comment\npub struct NodeError {}\n/* nested */ pub enum PaladinStatus {}\n*/",
+        "let _ = r#\"\npub struct Entity<T> { pub data: T }\npub type Paladin = X;\n\"#;",
+        "let _ = \"pub struct PaladinData {}\";",
+        "fn lifetimes<'a>(x: &'a str) -> char { let _ = '\"'; let _ = '\\''; 'x' }",
     ]
     .join("\n")
         + "\n"
@@ -1059,6 +1187,19 @@ fn assert_scoped_variants_are_caught() -> io::Result<()> {
     Ok(())
 }
 
+/// The same declaration respelled the ways Rust allows: restricted visibility, extra whitespace,
+/// a space before the generic opener.
+fn respelled(line: &str) -> Vec<String> {
+    vec![
+        line.replacen("pub ", "pub(crate) ", 1),
+        line.replacen("pub ", "pub(super) ", 1),
+        line.replacen("pub ", "pub(in crate::base) ", 1),
+        line.replace(' ', "   "),
+        line.replacen('<', " <", 1),
+        line.replacen(" =", "=", 1),
+    ]
+}
+
 /// Rule 4's exact counts: a repeat in the home file, a second declaration elsewhere, and a
 /// declaration moved to the wrong file are each reported; a moved one reports twice (zero here,
 /// one elsewhere).
@@ -1078,6 +1219,39 @@ fn assert_declaration_counts_are_exact() -> io::Result<()> {
         assert!(
             violations[0].starts_with(&format!("{home}:")) && violations[0].contains(": rule 4:"),
             "{violations:#?}"
+        );
+
+        for variant in respelled(declaration.line) {
+            let tree = clean_tree("declaration_respelled")?;
+            tree.write("src/respelled.rs", &format!("{variant}\n"))?;
+            let violations = scan(&tree.root);
+            assert_eq!(
+                violations.len(),
+                1,
+                "respelling `{variant}`: {violations:#?}"
+            );
+            assert!(
+                violations[0].starts_with("src/respelled.rs:")
+                    && violations[0].contains(": rule 4:"),
+                "respelling `{variant}`: {violations:#?}"
+            );
+        }
+
+        // A literal that looks like the start of a string or lifetime must not hide what follows.
+        let tree = clean_tree("declaration_after_literals")?;
+        tree.write(
+            "src/after_literals.rs",
+            &format!(
+                "fn f<'a>(x: &'a str) -> char {{ let _ = '\"'; let _ = '\\''; 'x' }}\n{}\n",
+                declaration.line
+            ),
+        )?;
+        let violations = scan(&tree.root);
+        assert_eq!(violations.len(), 1, "after literals: {violations:#?}");
+        assert!(
+            violations[0].starts_with("src/after_literals.rs:2:")
+                && violations[0].contains(": rule 4:"),
+            "after literals: {violations:#?}"
         );
 
         let tree = clean_tree("declaration_moved")?;

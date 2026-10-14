@@ -185,7 +185,7 @@ in web3sec, closed here by the handoff's §9 return report); ADOPT-04..05 are Pa
   `panic!` added to library code, and no stale `is_exact_counter` / `token_count: report` call
   site
 
-- [ ] **ADOPT-04**: Paladin carries a compile-only consumer-surface muster — a test that imports
+- [x] **ADOPT-04**: Paladin carries a compile-only consumer-surface muster — a test that imports
   every path and takes every signature the consumer uses (handoff Appendix A, re-verified against
   the consumer's actual `use` lines and the current tree) — green on `cargo test`, wired into the
   existing gates, and proven red against a deliberately broken signature (e.g. a `bool` re-added
@@ -449,7 +449,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ADOPT-01 | Phase 49 | Pending |
 | ADOPT-02 | Phase 49 | Pending |
 | ADOPT-03 | Phase 49 | Pending |
-| ADOPT-04 | Phase 49 | Pending |
+| ADOPT-04 | Phase 49 | Complete |
 | ADOPT-05 | Phase 49 | Pending |
 | PARITY-01 | Phase 50 | Pending |
 | PARITY-02 | Phase 50 | Pending |

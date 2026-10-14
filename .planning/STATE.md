@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 49
-current_phase_name: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)
-status: planning
-stopped_at: Completed 48-09-PLAN.md
-last_updated: "2026-10-14T16:35:48.000Z"
+current_phase_name: downstream-adoption-of-v0-10-1-web3sec-consumer-bump
+status: executing
+stopped_at: Completed 49-01-PLAN.md
+last_updated: "2026-10-14T21:12:54.032Z"
 last_activity: 2026-10-14
-last_activity_desc: Phase 51 added from the third web3sec handoff (reasoning effort), sequenced after 50 and before Phases 46-47
+last_activity_desc: Phase 49 execution started
 progress:
   total_phases: 12
   completed_phases: 9
-  total_plans: 86
-  completed_plans: 86
+  total_plans: 92
+  completed_plans: 87
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-10-14 after Phase 48)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 49 — Downstream Adoption of v0.10.1 (web3sec Consumer Bump) — added
+**Current focus:** Phase 49 — downstream-adoption-of-v0-10-1-web3sec-consumer-bump
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
 2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans (100%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([██████████] 95%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 49, 50 and 51 are not yet planned; Phase 49 is next, then Phase 50, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -62,10 +62,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 49 — Downstream Adoption of v0.10.1 (web3sec Consumer Bump)
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-10-14 — Phase 49 added from the web3sec handoff, sequenced before Phases 46-47
+Phase: 49 (downstream-adoption-of-v0-10-1-web3sec-consumer-bump) — EXECUTING
+Plan: 2 of 6
+Status: Ready to execute
+Last activity: 2026-10-14 — Phase 49 execution started
 
 ## Performance Metrics
 
@@ -292,6 +292,7 @@ Last activity: 2026-10-14 — Phase 49 added from the web3sec handoff, sequenced
 | Phase 48 P07 | 30min | 2 tasks | 5 files |
 | Phase 48 P08 | 25 min | 2 tasks | 1 files |
 | Phase 48 P09 | 1h | 2 tasks | 6 files |
+| Phase 49 P01 | 125min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -493,6 +494,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 48-08: entity rename guard pins five rules and the graph freeze; skip set copied from Phase 44 unchanged, real tree needed no source fix
 - [Phase 48]: Phase 48-09: ADR-0060 Code Conformance conforms; make security and the numeric coverage figure recorded as gaps (tools/artifact unavailable in sandbox; CI security jobs red before Phase 48)
 - [Phase 48]: Phase 48-09: entity rename guard skips the graph schema only when the tree has no docs/ directory (Docker test image context)
+- [Phase 49]: check-consumer-surface stays outside check-gates (it builds the facade crate; check-gates members are offline script guards)
+- [Phase 49]: muster [[test]] uses required-features so --no-default-features fails loudly instead of skipping
 
 ### Pending Todos
 
@@ -711,8 +714,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-14T15:29:54Z
-**Stopped at:** Phase 48 complete (verified, UAT 3/3), ready to plan Phase 46
+**Last session:** 2026-10-14T21:12:54.008Z
+**Stopped at:** Completed 49-01-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

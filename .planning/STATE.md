@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 48
-current_phase_name: Base Entity Rename
-status: executing
+current_phase: 46
+current_phase_name: Docs Currency & Hygiene
+status: planning
 stopped_at: Completed 48-09-PLAN.md
-last_updated: "2026-10-14T00:15:47.697Z"
-last_activity: 2026-10-13
-last_activity_desc: Phase 48 execution resumed (wave continue)
+last_updated: "2026-10-14T15:28:15.034Z"
+last_activity: 2026-10-14
+last_activity_desc: Phase 48 complete, transitioned to Phase 46
 progress:
   total_phases: 9
   completed_phases: 9
@@ -20,22 +20,22 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-09-30 after Phase 40)
+See: .planning/PROJECT.md (updated 2026-10-14 after Phase 48)
 
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 48 — Base Entity Rename
+**Current focus:** Phase 46 — Docs Currency & Hygiene
 Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 11 phases (38-48; Phase 48
 added 2026-10-12 after a code survey of the two senses of "node", sequenced before 46-47 because
 it is a public-API break the v0.11 migration guide and tag must carry), 40/40 requirements
-mapped; Phases 38-45 all sealed (Phase 40 verified 2026-09-30 once Phase 45's RustFS swap
+mapped; Phases 38-45 and 48 all sealed (Phase 48 sealed 2026-10-14: 9/9 plans, verification `passed`, UAT 3/3, security verified, Nyquist validated; Phase 40 verified 2026-09-30 once Phase 45's RustFS swap
 delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-10-12 when the
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████░░░░] 77/86 plans ([██████████] 100%) of the phases planned so far (38-45, 48);
-Phase 48 is planned (9 plans, 7 waves, ready to execute); Phases 46 and 47 are not yet planned.
+**Progress:** [████████████████████] 86/86 plans (100%) of the phases planned so far (38-45, 48);
+Phases 46 and 47 are not yet planned.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -53,16 +53,16 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 48 (Base Entity Rename) — EXECUTING
-Plan: 9 of 9
-Status: Ready to execute
-Last activity: 2026-10-13 — Phase 48 execution resumed (wave continue)
+Phase: 46 — Docs Currency & Hygiene
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-14 — Phase 48 complete, transitioned to Phase 46
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 492
+- Total plans completed: 501
 - Average duration: —
 - Total execution time: —
 
@@ -116,6 +116,7 @@ Last activity: 2026-10-13 — Phase 48 execution resumed (wave continue)
 | 42 | 12 | - | - |
 | 43 | 13 | - | - |
 | 44 | 13 | - | - |
+| 48 | 9 | - | - |
 
 *Updated after each plan completion*
 
@@ -297,7 +298,15 @@ Phases 22-37.1 is recorded in its own `NN-CONTEXT.md` (and the SUMMARY decision 
   ADR-0050). `TokenBudget`, `TokenCounterPort`, `TokenUsage`, `max_tokens` are not renamed.
 
 - **X-03 supersession is scoped** — clean breaks were allowed for Phases 31-33 only (ADR-0051); any
-  further removal before v0.11.0 needs its own recorded supersession.
+  further removal before v0.11.0 needs its own recorded supersession. Phase 44 (ADR-0059) and
+  Phase 48 (ADR-0060) each recorded their own.
+
+- **Base-layer wrapper is `Entity<T>`, "node" means a graph vertex** (Phase 48, ADR-0060) —
+  `paladin_core::base::entity::Entity<T>` with payload field `data` replaced `Node<T>` as a clean
+  break; serde read-aliases keep pre-rename JSON loading (data compatibility, not an API shim);
+  `NodeId`/`NodeSpec`/`StateNode`/`TraceEvent::Node*` and the wire schemas are untouched and the
+  freeze is pinned by `tests/entity_rename_guard.rs`. Phase 46's v0.10 → v0.11 `MIGRATION.md`
+  guide (CURR-23) must carry the Phase 48 §9.2 rows.
 
 - **`paladin-memory` → `paladin-llm`** (`default-features = false`) is the workspace's one lateral
   adapter-to-adapter edge (Phase 33 D-01/D-03); `reqwest` never enters the normal graph through it.
@@ -690,8 +699,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-14T00:15:47.674Z
-**Stopped at:** Completed 48-09-PLAN.md
+**Last session:** 2026-10-14T15:29:54Z
+**Stopped at:** Phase 48 complete (verified, UAT 3/3), ready to plan Phase 46
 **Resume file:** None
 
 ## Operator Next Steps
@@ -722,9 +731,19 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
   one-release `#[deprecated]` alias (X-03 as written, which would make MIGRATION §9.7 non-empty
   for the first time)** — plus name, which base items to keep, and own PR or not.
 
-- **Next:** `/clear` then `/gsd-discuss-phase 48` (confirm or change the draft `48-CONTEXT.md`
-  decisions) or `/gsd-plan-phase 48` (accept them as written). Phase 46 follows 48; its migration
-  guide (CURR-23) must carry Phase 48's §9.2 rows.
+- **Phase 48 (Base Entity Rename) is sealed 2026-10-14:** `48-VERIFICATION.md` passed (5/5 success
+  criteria; its three human items — Docker Integration Tests / Coverage / pre-commit green after the
+  2ad9fa6 guard fix, `make security` and the Security Audit / License & Dependency Policy jobs, and the
+  82 % coverage floor — were closed by `48-UAT.md` 3/3 from GitHub Actions evidence on run
+  38585690891 at 2388fc13 plus a local `make security` pass on e3075023), `48-SECURITY.md` verified
+  (threats_open 0), `48-VALIDATION.md` validated, code review 10/10 findings fixed. Two dependency
+  advisories published mid-phase were cleared in Cargo.lock (quinn-proto 0.11.19 in 1ff46a35, rustls
+  0.23.46 in 9b5fa65d); unsafe-libyaml's unmaintained advisory is register row 12 (12c6a5fa).
+  ROADMAP row 48 reads 9/9 Complete; ENTITY-01..05 Complete.
+
+- **Next:** `/clear` then `/gsd-discuss-phase 46` (no `46-CONTEXT.md` yet) or `/gsd-plan-phase 46`.
+  Phase 46's migration guide (CURR-23) must carry Phase 48's `MIGRATION.md` §9.2 rows; Phase 47
+  follows.
 
 - **Phase 45 (RustFS Swap & Platform/Observability Deviations) is sealed 2026-09-30:**
   `45-VERIFICATION.md` passed, `45-UAT.md` complete (5/5: CI run 36751442387 green with the 11-case

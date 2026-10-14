@@ -1106,6 +1106,11 @@ while the code ships):
 - [ ] Rate pacing on 429 / `Retry-After`, Redis-shared pacing, and a stampede lock (FUT-09)
 - [ ] Legacy Battalion error/retry/timeout surfaces and `PaladinError::LlmError` removed (X-03 supersession)
 - [x] RustFS replaces the terminal MinIO pin (FUT-10) — Phase 45, ADR-0055 (STORE-01..03)
+- [x] Base entity rename: `paladin_core::base::entity::Node<T>` → `Entity<T>` (payload `node` →
+      `data`, serde read-aliases for persisted JSON, clean break under a Phase-48-only X-03
+      supersession), five dormant base items retained with a written reason, "node" reserved for
+      the graph sense and pinned by `tests/entity_rename_guard.rs` — Phase 48, ADR-0060
+      (ENTITY-01..05), sealed 2026-10-14
 - [ ] `GET /runs*` per-caller scoping — ✓ Phase 40 (TENANT-01, TENANT-02, PLAT-07; ADR-0054;
       verified 2026-09-30, UAT 5/5, security 26/26 closed; `/v1/threads/*` scoping deferred as
       WINDOWS.md row 58, D-14); `Runnable::Agent` SSE/webhook emission — ✓ Phase 45 (PLAT-08);
@@ -1977,6 +1982,21 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
+
+---
+*Last updated: 2026-10-14 after **Phase 48: Base Entity Rename** completed and verified — the
+base-layer wrapper `paladin_core::base::entity::node::Node<T>` is `Entity<T>` with payload field
+`data`; `Paladin`, `Council`, `Grove`, `User`, `Log`, `ContentItem` and `PromptItem` are built on it
+and pre-rename JSON (Citadel snapshots, stored Paladins) still loads through serde read-aliases
+(ENTITY-01). `Node<T>` and `base::entity::node` are gone as a clean break under ADR-0060's
+Phase-48-only X-03 supersession, `NodeVersion*` is `EntityVersion*`, the duplicate `Paladin` alias and
+the citadel placeholder types are unified (ENTITY-02, ENTITY-03); `Field`, `Collection`, `Element`
+and the two versioning services are retained pending the content/general-data review, with the
+`Entity<T>::version` contract stated in rustdoc (ENTITY-04); the graph vocabulary is byte-for-byte
+untouched and `tests/entity_rename_guard.rs` pins both the freeze and the absence of the old paths
+(ENTITY-05). Verification `passed` 5/5; UAT 3/3 (CI green after the 2ad9fa6 guard fix, `make
+security` clean, 82 % coverage floor held); security verified (0 open); Nyquist validated; code
+review 10/10 fixed. Next: `/gsd-discuss-phase 46` — its MIGRATION.md guide carries the §9.2 rows.*
 
 ---
 *Last updated: 2026-10-11 after **Phase 44: Legacy Clean-Break Removal** completed and verified --

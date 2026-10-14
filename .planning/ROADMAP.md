@@ -103,7 +103,7 @@ frozen at 311 lines that two milestones made invisible.
 | **Provider Expansion** | 17 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-15 per *Roadmap Extension Protocol* item 1. |
 | **Security Tooling** | 18-21 | ✅ **Shipped v0.9.0 (2026-09-01)** — [archive](milestones/v0.9.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-24 per *Roadmap Extension Protocol* item 1, closing the Rust-SAST gap the v0.8.0 milestone audit left as its one genuinely open item; extended 2026-08-25 with Phases 19-21 (publish credential, publish operations, release artifacts). |
 | **Durable Agent Execution Runtime** | 22-37.1 | ✅ **Shipped v0.10.0 (2026-09-23)** — [archive](milestones/v0.10.0-ROADMAP.md). Released to crates.io as `0.10.1` (tag `v0.10.1` on merge commit `f7dae267`, 2026-09-21) after the `v0.10.0` tag published 3 of 12 crates — see MILESTONES.md. Phases 22-29 complete 2026-09-10; Phases 30-33 added 2026-09-14, complete 2026-09-16; Phases 34-37 added 2026-09-17, Phase 36.1 and 37.1 inserted; all 19 phases complete 2026-09-23 | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. **Extended 2026-09-14** with Phases 30-33 (Token Economy — Commissary anchoring, lossless accounting, primitive unification, Commissary adoption), sourced from `.project/Milestone_13-Token-Economy/` (overview + Epics 1-4). Milestone 14 (Treasurer, `.project/Milestone_14-Treasurer/`) is reserved, not roadmapped. **Extended 2026-09-17** with Phases 34-37 (Release Readiness — documentation currency audit, mdBook currency, rustdoc zero-warning bar & examples currency, the crate release) — operator-instructed pre-tag work, not corpus-sourced. |
-| **Treasurer Spend Governance** | 38-47 | 🚧 **In progress** | Forward work — not ingest-derived. Sourced from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD `prd-treasurer-spend-governance.md`, R1-R6), the supporting scope in PROJECT.md *Current Milestone*, and `.planning/research/SUMMARY.md` (2026-09-24). Operator-confirmed full governance (per-tenant + per-API-key), 2026-09-24. |
+| **Treasurer Spend Governance** | 38-49 | 🚧 **In progress** | Forward work — not ingest-derived. Sourced from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD `prd-treasurer-spend-governance.md`, R1-R6), the supporting scope in PROJECT.md *Current Milestone*, and `.planning/research/SUMMARY.md` (2026-09-24). Operator-confirmed full governance (per-tenant + per-API-key), 2026-09-24. Extended 2026-10-12 with Phase 48 (Base Entity Rename) and 2026-10-14 with Phase 49 (Downstream Adoption of v0.10.1, from the web3sec handoff), both sequenced before Phases 46-47. |
 
 **The ingest is complete.** All 263 documents in `.project/` are covered — 199 classified across
 five runs and 64 `tasks-*.md` measured deterministically by `intel/task-completion-state.md`. There
@@ -223,7 +223,7 @@ Phase artifacts: `milestones/v0.10.0-phases/`
 
 </details>
 
-**Treasurer Spend Governance (Phases 38-47)** — in progress, not yet shipped. Forward work sourced
+**Treasurer Spend Governance (Phases 38-49)** — in progress, not yet shipped. Forward work sourced
 from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 `.planning/research/SUMMARY.md`; requirements minted in `.planning/REQUIREMENTS.md`.
 
@@ -238,6 +238,7 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 - [ ] **Phase 46: Docs Currency & Hygiene** - Close the v0.10.0 audit's docs fixes, publish the Treasurer mdBook page and migration guide, reconcile Nyquist validation, and dispose of the three v2 debt lines
 - [ ] **Phase 47: v0.11.0 Crate Release** - Tag and publish v0.11.0: all 12 crates on crates.io, CHANGELOG and MIGRATION complete, publish-order gate green
 - [x] **Phase 48: Base Entity Rename** - Rename the base-layer entity wrapper `Node<T>` → `Entity<T>` (payload field `node` → `data`; clean break under a Phase-48-only X-03 supersession, or a one-release deprecated alias — decided at discuss; serde alias for persisted JSON), disposition the unused base-layer items, and reserve "node" for the graph sense only — **executes before Phases 46 and 47** (added 2026-10-12, after Phase 44 sealed) (completed 2026-10-14)
+- [ ] **Phase 49: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)** - Move the sole consumer onto the `v0.10.1` tag in one coordinated step (B-1/B-2/B-3 adopted consumer-side, the D-2 token-usage mapping decided, no Paladin shims) and add a compile-only consumer-surface muster plus a `MIGRATION.md` consumer note so the next downstream break is red upstream first — **executes before Phases 46 and 47** (added 2026-10-14 from the web3sec handoff)
 
 ## Phase Details
 
@@ -731,7 +732,7 @@ format) is MEDIUM-confidence only; the phase's first work item should close this
 milestone's validation/tech-debt bookkeeping is current.
 **Depends on**: Phase 45 and Phase 48 (documents everything the milestone shipped, so it runs
 last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48's
-`Node<T>` → `Entity<T>` rows — added 2026-10-12)
+`Node<T>` → `Entity<T>` rows — added 2026-10-12), and Phase 49 (the consumer-surface muster and its `MIGRATION.md` consumer note are inputs to the v0.10 → v0.11 migration guide — added 2026-10-14)
 **Requirements**: CURR-22, CURR-23, CURR-24, CURR-25
 **Success Criteria** (what must be TRUE):
 
@@ -754,7 +755,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 ### Phase 47: v0.11.0 Crate Release
 
 **Goal**: v0.11.0 ships to crates.io with every gate green.
-**Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release)
+**Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release); Phase 49 (the consumer is on a release tag and the consumer-surface muster is green before v0.11.0 is tagged — added 2026-10-14)
 **Requirements**: SHIP-07
 **Success Criteria** (what must be TRUE):
 
@@ -796,6 +797,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 | 46. Docs Currency & Hygiene | v0.11.0 | 0/TBD | Not started | - |
 | 47. v0.11.0 Crate Release | v0.11.0 | 0/TBD | Not started | - |
 | 48. Base Entity Rename (runs after 44, before 46-47) | v0.11.0 | 9/9 | Complete    | 2026-10-14 |
+| 49. Downstream Adoption of v0.10.1 (web3sec Consumer Bump) (runs after 48, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see
@@ -1145,6 +1147,83 @@ Plans:
 **Wave 7** *(blocked on Wave 6 completion)*
 
 - [x] 48-09-PLAN.md — Closeout: full gate run with measured coverage; ADR-0060 conforms; ENTITY-01/04/05 and ROADMAP wording corrected (ENTITY-04 retained pending review), IDs unchanged
+
+### Phase 49: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)
+
+**Goal**: Web3 Security Paladin ("web3sec"), Paladin's only consumer, moves from its pre-`v0.10.0`
+submodule pin (`35fd839`) onto the `v0.10.1` release tag (`f7dae267`) in one coordinated step, per
+Milestone 13 §5 (clean break, no shims, coordinated pointer bump). The three documented breaks it
+hits (`MIGRATION.md` §9.2 — B-1 `Commissary::new`/`from_port` lost `is_exact_counter`; B-2
+`PaladinResult.token_count: u32` → `usage: TokenUsage`; B-3 `TokenUsage` gained three
+`Option<u32>` fields) are adopted on the consumer side with behaviour preserved, and Paladin gains
+a compile-only **consumer-surface muster** — a test that `use`s every path and signature the
+consumer imports — so the next downstream break is a red Paladin check, not a surprise at bump
+time. No Paladin library API changes to accommodate the consumer.
+**Depends on**: Phase 48 (complete 2026-10-14; the muster is written against the post-rename
+tree). **Sequenced ahead of Phases 46 and 47** (owner decision 2026-10-14): the first of a series
+of consumer-driven phases that must land before the v0.11 docs pass and tag, because the muster
+and the `MIGRATION.md` consumer note change what Phase 46's migration guide must say.
+**Requirements**: ADOPT-01, ADOPT-02, ADOPT-03, ADOPT-04, ADOPT-05
+**UI hint**: no
+**Source**: the web3sec handoff of 2026-10-08, filed verbatim as `49-HANDOFF-web3sec.md` with
+its companion `49-REFERENCE-adoption.diff` (15 files, +39/−34 — the trial adoption that builds
+and passes 2,592 / 0 / 2 on `v0.10.1`; mechanical, unreviewed, and using the D-2 fallback). The
+consumer repository is not reachable from this checkout: ADOPT-01..03 are executed in web3sec
+against handoff §7 as the spec and are closed here by the §9 return report; ADOPT-04 and
+ADOPT-05 are Paladin-side and executable here.
+**Ground truth** (verified 2026-10-14 on `e8815625`, 180 commits past `v0.10.1`, workspace still
+`version = "0.10.1"`): B-1, B-2 and B-3 read exactly as the handoff states —
+`Commissary::new(provider, capabilities, counter, config)` / `from_port(llm, counter, config)` in
+`crates/paladin-llm/src/services/commissary.rs`; `TokenUsage`
+(`paladin_core::platform::container::token_usage`, re-exported by
+`paladin_ports::output::llm_port`) has six fields, derives `Default`, is not `#[non_exhaustive]`,
+and offers `new(prompt, completion)` plus `with_cache_read` / `with_cache_write` /
+`with_reasoning` but **no total-only constructor**, so D-2's lossless route is the only one that
+keeps the documented `total == prompt + completion` invariant. **Drift the handoff cannot see:**
+the tree web3sec meets at its *next* bump already differs from `v0.10.1` on four Appendix-A
+items — `battalion::ErrorStrategy` and the legacy `battalion::NodeError` summary are removed
+(Phase 44, §9.2 rows; the structured `platform::container::node_error::NodeError` remains),
+`core::base::entity::node::Node` is removed in favour of `base::entity::Entity<T>` with payload
+`data` (Phase 48, §9.2 row), and `PaladinResult` gained `cost: Option<Cost>` (Phase 38,
+`#[serde(default)]`), which breaks web3sec's full struct literal in `phalanx_dispatch.rs` again.
+Appendix A also lists `mcp_protocol::looks_like_auth_failure`, which is a private `fn` at both
+`v0.10.1` and `HEAD` (its rustdoc says it was ported *from* web3sec's `audit-mcp`), so the
+imported surface must be re-verified from the consumer's actual `use` lines before the muster
+freezes it. Precedent for a repository-level guard: `tests/legacy_removal_guard.rs`,
+`tests/entity_rename_guard.rs`, `tests/treasurer_vocabulary_guard.rs` (std-only scans); the
+muster is a different shape — a compile-time `use` + fn-pointer test — settled at discuss.
+`MIGRATION.md` §9.8 is today a v0.9 → v0.10 *operator* checklist with no library-consumer
+section.
+**Success Criteria** (what must be TRUE):
+
+  1. `git -C paladin rev-parse HEAD` in the consumer equals `f7dae267…`, the consumer commit
+     records the pointer together with the adaptation and `Cargo.lock`, and the local-only
+     submodule commit `4b7bed87` is recorded as superseded (its seven planning files are
+     byte-identical in `v0.10.1`).
+
+  2. The consumer gates pass on the new pin — `cargo fmt --check`, `cargo clippy --workspace
+     --all-targets -- -D warnings`, `cargo check --workspace`, `cargo test --workspace` — with
+     the test count ≥ the 2,592 / 0 / 2 baseline, no `unwrap`/`expect`/`panic!` added to library
+     code, and `grep -rn 'is_exact_counter\|token_count: report' crates/` finding no stale call
+     site (remaining prose mentions updated).
+
+  3. The D-2 token-usage mapping is decided and recorded (lossless `TokenUsage` carried through
+     `RoutineReport` preferred; the `total_tokens`-only fallback only with a site comment and a
+     tech-debt entry), and the §9 return report (consumer SHA, D-2 choice, gate totals, Paladin
+     commits, divergences) is filed in the phase directory.
+
+  4. Paladin carries a compile-only consumer-surface muster covering every re-verified Appendix-A
+     import path and signature as it exists on the current tree, green on `cargo test`, wired into
+     the existing gates, and **proven red**: it fails to compile when (for example) a `bool` is
+     re-added to `Commissary::new`.
+
+  5. `MIGRATION.md` gains a consumer-facing upgrade note — the D-2 "no total-only `TokenUsage`"
+     pitfall and the `v0.10.1` → `v0.11.0` break list the muster exposes (`ErrorStrategy`, legacy
+     `NodeError`, `Node<T>` → `Entity<T>`, `PaladinResult.cost`) — and **no Paladin library API
+     is changed, shimmed or deprecated** for the consumer: zero new §9.2 rows and zero
+     `semver-checks` allowlist changes from this phase; `make clean-code`, `make check-gates`,
+     `make api-surface` and the 82 % coverage floor stay green. No `v0.10.2` is cut.
+**Plans**: TBD
 
 ---
 *Roadmap created: 2026-07-30 (ingest run 1 of 5 — `.project/Milestone_1-MVP`, 36 docs)*

@@ -162,6 +162,41 @@ the graph side is kept.*
   and `cargo doc`, `make check-api-examples`, `make clean-code` and the 82 %
   coverage floor stay green
 
+### Downstream adoption (ADOPT)
+
+*Added 2026-10-14 (Phase 49) from the web3sec handoff of 2026-10-08 (`49-HANDOFF-web3sec.md`).
+Paladin's only consumer is 631 commits behind `v0.10.1` and has frozen its own work until it adopts
+the release; the trial adoption found no Paladin defect. ADOPT-01..03 are consumer-side (executed
+in web3sec, closed here by the handoff's §9 return report); ADOPT-04..05 are Paladin-side.*
+
+- [ ] **ADOPT-01**: The consumer pins `paladin` at exactly `v0.10.1` (`f7dae267`), detached, in
+  one commit that also carries the adaptation and `Cargo.lock`; the local-only submodule commit
+  `4b7bed87` is recorded as superseded (its seven planning files are byte-identical in `v0.10.1`)
+
+- [ ] **ADOPT-02**: Consumer call sites are adapted for B-1 (`Commissary::new`/`from_port` without
+  `is_exact_counter`), B-2 (`PaladinResult.usage: TokenUsage`) and B-3 (`TokenUsage`'s three
+  `Option<u32>` fields), with the D-2 token-usage mapping decided and documented — lossless
+  `TokenUsage` carried through `RoutineReport` preferred; the `total_tokens`-only fallback only
+  with a site comment and a tech-debt entry
+
+- [ ] **ADOPT-03**: The consumer workspace is green on the new pin: `cargo fmt --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace` and
+  `cargo test --workspace` with ≥ 2,592 passed / 0 failed / 2 ignored, no `unwrap`/`expect`/
+  `panic!` added to library code, and no stale `is_exact_counter` / `token_count: report` call
+  site
+
+- [ ] **ADOPT-04**: Paladin carries a compile-only consumer-surface muster — a test that imports
+  every path and takes every signature the consumer uses (handoff Appendix A, re-verified against
+  the consumer's actual `use` lines and the current tree) — green on `cargo test`, wired into the
+  existing gates, and proven red against a deliberately broken signature (e.g. a `bool` re-added
+  to `Commissary::new`)
+
+- [ ] **ADOPT-05**: `MIGRATION.md` gains a consumer-facing upgrade note — the "no total-only
+  `TokenUsage` constructor" pitfall and the `v0.10.1` → `v0.11.0` break list the muster exposes
+  (`battalion::ErrorStrategy`, the legacy `battalion::NodeError`, `Node<T>` → `Entity<T>`,
+  `PaladinResult.cost`) — while no Paladin library API is changed, shimmed or deprecated for the
+  consumer: zero new §9.2 rows and zero `semver-checks` allowlist changes from this phase
+
 ### Object storage (STORE)
 
 - [x] **STORE-01**: The dev/test compose stack and the Coverage, Integration Tests, Docker
@@ -298,16 +333,23 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ENTITY-03 | Phase 48 | Complete |
 | ENTITY-04 | Phase 48 | Complete |
 | ENTITY-05 | Phase 48 | Complete |
+| ADOPT-01 | Phase 49 | Pending |
+| ADOPT-02 | Phase 49 | Pending |
+| ADOPT-03 | Phase 49 | Pending |
+| ADOPT-04 | Phase 49 | Pending |
+| ADOPT-05 | Phase 49 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 40 total
-- Mapped to phases: 40
+- v1 requirements: 45 total
+- Mapped to phases: 45
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-24*
-*Last updated: 2026-10-12 — Phase 48 added (Base Entity Rename), ENTITY-01..05 minted from the
+*Last updated: 2026-10-14 — Phase 49 added (Downstream Adoption of v0.10.1), ADOPT-01..05 minted
+from the web3sec handoff (`49-HANDOFF-web3sec.md`); Phases 38-49, 45/45 requirements mapped, 100%
+coverage. Previous: 2026-10-12 — Phase 48 added (Base Entity Rename), ENTITY-01..05 minted from the
 code survey in `48-CONTEXT.md`; Phases 38-48, 40/40 requirements mapped, 100% coverage. Previous:
 2026-09-24 — roadmap created (`/gsd-new-project` roadmapper), Phases 38-47, 35/35 requirements
 mapped*

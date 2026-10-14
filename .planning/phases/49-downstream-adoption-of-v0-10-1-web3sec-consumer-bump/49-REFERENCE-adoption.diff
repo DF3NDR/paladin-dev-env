@@ -1,0 +1,336 @@
+diff -ru '--exclude=target' a/crates/audit-agents/src/breadth.rs b/crates/audit-agents/src/breadth.rs
+--- a/crates/audit-agents/src/breadth.rs	2026-10-06 16:20:42.194059371 +0000
++++ b/crates/audit-agents/src/breadth.rs	2026-10-08 00:41:56.192139056 +0000
+@@ -276,14 +276,8 @@
+             model_hint: format!("{stage}-war-chest"),
+             ..Default::default()
+         };
+-        let commissary = Commissary::new(
+-            format!("{stage}-war-chest"),
+-            capabilities,
+-            counter,
+-            false,
+-            plan,
+-        )
+-        .map_err(|e| BreadthConfigError::Commissary(e.to_string()))?;
++        let commissary = Commissary::new(format!("{stage}-war-chest"), capabilities, counter, plan)
++            .map_err(|e| BreadthConfigError::Commissary(e.to_string()))?;
+         Ok(Self {
+             allotment: commissary.allotted_tokens(),
+             spent: 0,
+diff -ru '--exclude=target' a/crates/audit-agents/src/deductive.rs b/crates/audit-agents/src/deductive.rs
+--- a/crates/audit-agents/src/deductive.rs	2026-10-03 17:49:40.869550640 +0000
++++ b/crates/audit-agents/src/deductive.rs	2026-10-08 00:41:56.266138649 +0000
+@@ -893,19 +893,14 @@
+     let counter: Arc<dyn TokenCounterPort> = Arc::new(HeuristicTokenCounter);
+     let mut commissary_plan = deductive_commissary_plan(escalated_budget);
+     commissary_plan.model_hint = model.to_string();
+-    let commissary = Commissary::from_port(
+-        llm.as_ref(),
+-        counter,
+-        /* is_exact_counter */ false,
+-        commissary_plan,
+-    )
+-    .map_err(|e| {
+-        DeductiveError::Execute(format!(
+-            "failed to construct the deductive prompt-budgeting Commissary for provider \
++    let commissary =
++        Commissary::from_port(llm.as_ref(), counter, commissary_plan).map_err(|e| {
++            DeductiveError::Execute(format!(
++                "failed to construct the deductive prompt-budgeting Commissary for provider \
+              '{}': {e}",
+-            llm.get_provider_name()
+-        ))
+-    })?;
++                llm.get_provider_name()
++            ))
++        })?;
+ 
+     let attempt1 = call_deductive_llm(
+         llm,
+@@ -1836,6 +1831,7 @@
+                         prompt_tokens: 10,
+                         completion_tokens: 20,
+                         total_tokens: 30,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+@@ -2423,8 +2419,6 @@
+             // No exact tokenizer exists offline for deepseek-*/claude-* —
+             // mirrors production's `run_deductive_llm_with_repair_retry`,
+             // which always supplies `false` here too.
+-            /* is_exact_counter */
+-            false,
+             // Mirrors `deductive_commissary_plan`'s own `per_item_min_bytes`
+             // choice (see that function's doc comment) so tests exercising
+             // shedding behavior see the SAME config production builds.
+@@ -2453,7 +2447,6 @@
+             llm.get_provider_name(),
+             llm.get_capabilities(),
+             Arc::new(HeuristicTokenCounter),
+-            /* is_exact_counter */ false,
+             CommissaryPlan {
+                 reserved_completion_tokens,
+                 model_hint: "mock-model".to_string(),
+diff -ru '--exclude=target' a/crates/audit-agents/src/design_doc_enrichment.rs b/crates/audit-agents/src/design_doc_enrichment.rs
+--- a/crates/audit-agents/src/design_doc_enrichment.rs	2026-09-11 02:33:10.195807809 +0000
++++ b/crates/audit-agents/src/design_doc_enrichment.rs	2026-10-08 00:41:56.285138545 +0000
+@@ -120,13 +120,7 @@
+         model_hint: "design-doc-enrichment-span".to_string(),
+         ..Default::default()
+     };
+-    Commissary::new(
+-        "design-doc-enrichment-span",
+-        capabilities,
+-        counter,
+-        false,
+-        plan,
+-    )
++    Commissary::new("design-doc-enrichment-span", capabilities, counter, plan)
+ }
+ 
+ /// Bound `text` to [`MAX_SPAN_BYTES`] through the shared [`Commissary`]
+@@ -826,6 +820,7 @@
+                         prompt_tokens: 10,
+                         completion_tokens: 20,
+                         total_tokens: 30,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+diff -ru '--exclude=target' a/crates/audit-agents/src/fuzz.rs b/crates/audit-agents/src/fuzz.rs
+--- a/crates/audit-agents/src/fuzz.rs	2026-10-07 01:15:21.493903130 +0000
++++ b/crates/audit-agents/src/fuzz.rs	2026-10-08 00:41:56.443137676 +0000
+@@ -237,7 +237,7 @@
+         model_hint: "fuzz-interface-context".to_string(),
+         ..Default::default()
+     };
+-    Commissary::new("fuzz-interface-context", capabilities, counter, false, plan)
++    Commissary::new("fuzz-interface-context", capabilities, counter, plan)
+ }
+ 
+ pub(crate) use audit_ports::PropertyTemplate;
+@@ -3431,6 +3431,7 @@
+                         prompt_tokens: 10,
+                         completion_tokens: 20,
+                         total_tokens: 30,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+@@ -4636,6 +4637,7 @@
+                     prompt_tokens: 10,
+                     completion_tokens: 20,
+                     total_tokens: 30,
++                    ..Default::default()
+                 },
+                 created_at: chrono::Utc::now(),
+                 metadata: HashMap::new(),
+@@ -5942,6 +5944,7 @@
+                             prompt_tokens: 0,
+                             completion_tokens: tokens,
+                             total_tokens: tokens,
++                            ..Default::default()
+                         },
+                         created_at: chrono::Utc::now(),
+                         metadata: HashMap::new(),
+@@ -5962,6 +5965,7 @@
+                             prompt_tokens: 0,
+                             completion_tokens: tokens,
+                             total_tokens: tokens,
++                            ..Default::default()
+                         },
+                         created_at: chrono::Utc::now(),
+                         metadata: HashMap::new(),
+@@ -6612,6 +6616,7 @@
+                         prompt_tokens: 10,
+                         completion_tokens: 20,
+                         total_tokens: 30,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+diff -ru '--exclude=target' a/crates/audit-agents/src/phalanx_dispatch.rs b/crates/audit-agents/src/phalanx_dispatch.rs
+--- a/crates/audit-agents/src/phalanx_dispatch.rs	2026-10-07 01:10:17.650664213 +0000
++++ b/crates/audit-agents/src/phalanx_dispatch.rs	2026-10-08 00:41:56.548137099 +0000
+@@ -485,7 +485,10 @@
+         match routine.run().await {
+             Ok(report) => Ok(PaladinResult {
+                 output: report.summary,
+-                token_count: report.token_count,
++                usage: paladin_ports::output::llm_port::TokenUsage {
++                    total_tokens: report.token_count,
++                    ..Default::default()
++                },
+                 execution_time_ms: report.execution_time_ms,
+                 loop_count: 1,
+                 stop_reason: StopReason::Completed,
+@@ -753,7 +756,7 @@
+             .expect("fuzz dispatch should succeed");
+ 
+         assert_eq!(
+-            result.token_count, 4242,
++            result.usage.total_tokens, 4242,
+             "token_count must reflect the mocked routine's own tracked metric, not a fabricated 0"
+         );
+         assert_eq!(
+diff -ru '--exclude=target' a/crates/audit-agents/src/prover.rs b/crates/audit-agents/src/prover.rs
+--- a/crates/audit-agents/src/prover.rs	2026-09-14 15:05:11.115579425 +0000
++++ b/crates/audit-agents/src/prover.rs	2026-10-08 00:41:56.696136285 +0000
+@@ -5769,6 +5769,7 @@
+                         prompt_tokens: 10,
+                         completion_tokens: 20,
+                         total_tokens: 30,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+diff -ru '--exclude=target' a/crates/audit-agents/src/provider_breaker.rs b/crates/audit-agents/src/provider_breaker.rs
+--- a/crates/audit-agents/src/provider_breaker.rs	2026-09-14 15:05:03.035621410 +0000
++++ b/crates/audit-agents/src/provider_breaker.rs	2026-10-08 00:41:56.712136197 +0000
+@@ -472,6 +472,7 @@
+                         prompt_tokens: 1,
+                         completion_tokens: 1,
+                         total_tokens: 2,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+diff -ru '--exclude=target' a/crates/audit-agents/src/sapper.rs b/crates/audit-agents/src/sapper.rs
+--- a/crates/audit-agents/src/sapper.rs	2026-10-07 01:29:57.075711397 +0000
++++ b/crates/audit-agents/src/sapper.rs	2026-10-08 00:41:56.826135570 +0000
+@@ -2553,6 +2553,7 @@
+                     prompt_tokens: 0,
+                     completion_tokens: tokens,
+                     total_tokens: tokens,
++                    ..Default::default()
+                 },
+                 created_at: chrono::Utc::now(),
+                 metadata: HashMap::new(),
+diff -ru '--exclude=target' a/crates/audit-agents/src/scrivener.rs b/crates/audit-agents/src/scrivener.rs
+--- a/crates/audit-agents/src/scrivener.rs	2026-10-03 18:03:57.146495755 +0000
++++ b/crates/audit-agents/src/scrivener.rs	2026-10-08 00:41:56.840135493 +0000
+@@ -343,6 +343,7 @@
+                 prompt_tokens: prompt,
+                 completion_tokens: completion,
+                 total_tokens: prompt + completion,
++                ..Default::default()
+             },
+         })
+     }
+@@ -354,6 +355,7 @@
+                 prompt_tokens: 0,
+                 completion_tokens: 0,
+                 total_tokens: 0,
++                ..Default::default()
+             },
+         })
+     }
+diff -ru '--exclude=target' a/crates/audit-agents/src/tally_stick.rs b/crates/audit-agents/src/tally_stick.rs
+--- a/crates/audit-agents/src/tally_stick.rs	2026-10-04 20:23:20.349821780 +0000
++++ b/crates/audit-agents/src/tally_stick.rs	2026-10-08 00:41:56.867135345 +0000
+@@ -136,6 +136,7 @@
+                     prompt_tokens: 0,
+                     completion_tokens: self.total,
+                     total_tokens: self.total,
++                    ..Default::default()
+                 },
+                 created_at: chrono::Utc::now(),
+                 metadata: HashMap::new(),
+diff -ru '--exclude=target' a/crates/audit-agents/src/triage.rs b/crates/audit-agents/src/triage.rs
+--- a/crates/audit-agents/src/triage.rs	2026-09-28 01:18:30.795393276 +0000
++++ b/crates/audit-agents/src/triage.rs	2026-10-08 00:41:56.917135070 +0000
+@@ -1911,6 +1911,7 @@
+                         prompt_tokens: 10,
+                         completion_tokens: 20,
+                         total_tokens: 30,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+diff -ru '--exclude=target' a/crates/audit-agents/src/tribunal.rs b/crates/audit-agents/src/tribunal.rs
+--- a/crates/audit-agents/src/tribunal.rs	2026-09-30 21:20:01.070248853 +0000
++++ b/crates/audit-agents/src/tribunal.rs	2026-10-08 00:41:56.965134806 +0000
+@@ -195,7 +195,7 @@
+         model_hint: "tribunal-corpus-brief".to_string(),
+         ..Default::default()
+     };
+-    Commissary::new("tribunal-corpus-brief", capabilities, counter, false, plan)
++    Commissary::new("tribunal-corpus-brief", capabilities, counter, plan)
+ }
+ 
+ /// One sanitised design-doc item as it is rendered into the judge's brief.
+@@ -2094,6 +2094,7 @@
+                         prompt_tokens: 10,
+                         completion_tokens: 20,
+                         total_tokens: 30,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+diff -ru '--exclude=target' a/crates/audit-agents/tests/phase47_support/mod.rs b/crates/audit-agents/tests/phase47_support/mod.rs
+--- a/crates/audit-agents/tests/phase47_support/mod.rs	2026-09-29 21:41:48.528052016 +0000
++++ b/crates/audit-agents/tests/phase47_support/mod.rs	2026-10-08 00:41:56.984134701 +0000
+@@ -472,6 +472,7 @@
+                     prompt_tokens: 0,
+                     completion_tokens: total_tokens,
+                     total_tokens,
++                    ..Default::default()
+                 },
+                 created_at: chrono::DateTime::<chrono::Utc>::default(),
+                 metadata: HashMap::new(),
+diff -ru '--exclude=target' a/crates/audit-cli/src/submit_render.rs b/crates/audit-cli/src/submit_render.rs
+--- a/crates/audit-cli/src/submit_render.rs	2026-09-11 01:44:16.031882607 +0000
++++ b/crates/audit-cli/src/submit_render.rs	2026-10-08 00:41:57.949129403 +0000
+@@ -1137,6 +1137,7 @@
+                     prompt_tokens: 10,
+                     completion_tokens: 10,
+                     total_tokens: 20,
++                    ..Default::default()
+                 },
+                 created_at: chrono::Utc::now(),
+                 metadata: HashMap::new(),
+@@ -1921,6 +1922,7 @@
+                     prompt_tokens: 10,
+                     completion_tokens: 10,
+                     total_tokens: 20,
++                    ..Default::default()
+                 },
+                 created_at: chrono::Utc::now(),
+                 metadata: HashMap::new(),
+@@ -2110,6 +2112,7 @@
+                         prompt_tokens: 10,
+                         completion_tokens: 10,
+                         total_tokens: 20,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+@@ -2254,6 +2257,7 @@
+                         prompt_tokens: 10,
+                         completion_tokens: 10,
+                         total_tokens: 20,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+@@ -2413,6 +2417,7 @@
+                         prompt_tokens: 10,
+                         completion_tokens: 10,
+                         total_tokens: 20,
++                        ..Default::default()
+                     },
+                     created_at: chrono::Utc::now(),
+                     metadata: HashMap::new(),
+diff -ru '--exclude=target' a/crates/audit-invariants/src/armory.rs b/crates/audit-invariants/src/armory.rs
+--- a/crates/audit-invariants/src/armory.rs	2026-10-07 01:07:13.988724706 +0000
++++ b/crates/audit-invariants/src/armory.rs	2026-10-08 00:41:58.422126809 +0000
+@@ -969,6 +969,7 @@
+                     prompt_tokens: 10,
+                     completion_tokens: 20,
+                     total_tokens: 30,
++                    ..Default::default()
+                 },
+                 created_at: chrono::Utc::now(),
+                 metadata: HashMap::new(),

@@ -567,6 +567,13 @@ Phases 30-33. The PRD's open operator question is answered: **full governance** 
   or kept with a reason; "node" is reserved for the graph sense (`NodeId`, `NodeSpec`,
   `StateNode`, …), which is untouched. Runs after Phase 44 and before Phases 46-47 because it is a
   public-API break the v0.11 migration guide and tag must carry.
+- **Downstream adoption (added 2026-10-14, Phase 49):** Paladin's only consumer, Web3 Security
+  Paladin, moves from its pre-`v0.10.0` submodule pin onto the `v0.10.1` tag in one coordinated
+  step (Milestone 13 §5: clean break, no shims, coordinated pointer bump); Paladin gains a
+  compile-only consumer-surface muster over the imported surface and a `MIGRATION.md` consumer
+  note, so the next downstream break — already four items on this tree: `ErrorStrategy`, the
+  legacy `NodeError`, `Node<T>` → `Entity<T>`, `PaladinResult.cost` — is red upstream first. The
+  first of a series of consumer-driven phases that run before Phases 46-47.
 - **RustFS (FUT-10):** replace the terminal quay.io MinIO pin in the dev/test stack, CI and the
   Kubernetes smoke test.
 - **Platform deviations:** scope `GET /runs*` per caller (`WINDOWS.md` row 32); SSE and webhook

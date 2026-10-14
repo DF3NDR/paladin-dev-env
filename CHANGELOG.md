@@ -820,6 +820,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written with the doubled key still read back. `TraceEvent::RunStarted` no longer serializes
   `run_id` on its own; inside a `TraceRecord` the value is unchanged. Public API unchanged.
 
+### Security
+
+- Lockfile-only dependency refresh. `quinn-proto` 0.11.16 -> 0.11.19 (with `quinn` 0.11.12 and
+  `quinn-udp` 0.5.16), clearing RUSTSEC-2026-0338, -0339, -0340, -0341 and -0342, the five
+  vulnerability advisories that failed the `Security Audit` and `License & Dependency Policy`
+  CI jobs. `quinn` is reached only through `reqwest`'s optional `http3` feature, which no
+  Paladin crate enables, so no first-party code path was exposed; the bump keeps `cargo audit`
+  and `cargo deny` green without adding an exception. The yanked `spin` 0.9.8 and `chacha20`
+  0.10.0 releases were replaced with 0.9.9 and 0.10.2 at the same time. No `.cargo/audit.toml`,
+  `deny.toml` or `SECURITY-EXCEPTIONS.md` change. Public API unchanged.
+
 ### Breaking Changes
 
 - **BREAKING (`paladin-web`): `Principal` gains the required `tenant_id: TenantId` field and is

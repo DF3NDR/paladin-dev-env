@@ -1,15 +1,13 @@
-//! Persisted-JSON compatibility harness for the base entity wrapper.
+//! Persisted-JSON compatibility harness for the base entity wrapper (ADR-0060).
 //!
-//! The fixtures under `tests/fixtures/pre_rename/` are the bytes v0.10 wrote. Plan 48-01
-//! captured them from the unmodified tree and they are never hand-edited. This file proves
-//! they keep loading through the public types and re-serialize to an identical JSON
-//! document (ENTITY-01, D-03; the version record per D-09; the Citadel snapshot per D-10).
-//!
-//! Later plans update the lossless comparison to the renamed keys and add the alias edge
-//! cases (both keys present, neither key present). The version record (plan 48-03) already
-//! compares against the fixture with `node_id` / `node_data` renamed to `entity_id` /
-//! `entity_data`. A failure here means the persisted wire
-//! shape changed, which is a regression to report, not an assertion to relax.
+//! The fixtures under `tests/fixtures/pre_rename/` are the bytes v0.10 wrote, captured from
+//! the unrenamed tree and never hand-edited. This file proves they keep loading through the
+//! public types and re-serialize to the same JSON document with only the renamed keys
+//! changed: `node` becomes `data`, `ContentItem` / `PromptItem` write `entity`, and the
+//! version record writes `entity_id` / `entity_data` in place of `node_id` / `node_data`.
+//! It also pins the alias edge cases (both spellings present, neither present) and that new
+//! writes never emit an old key. A failure here means the persisted wire shape changed, which
+//! is a regression to report, not an assertion to relax.
 
 use paladin_core::base::entity::Entity;
 use paladin_core::base::service::entity_version_service::{ChangeType, EntityVersion};

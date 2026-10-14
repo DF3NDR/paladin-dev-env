@@ -446,10 +446,11 @@ mod tests {
         assert!(FileCitadel::parse_filename("paladin-123.txt").is_none());
     }
 
-    /// Tracer for the Phase 48 base-entity rename (ENTITY-01, D-03, D-10): the
-    /// bytes a v0.10 Citadel wrote -- captured by plan 48-01 from the unmodified
-    /// tree and never hand-edited -- load through the real `FileCitadel` adapter
-    /// into a `PaladinState` and save back to an identical JSON document.
+    /// Compatibility check for the base-entity rename (ADR-0060): the bytes a
+    /// v0.10 Citadel wrote -- captured from the unrenamed tree and never
+    /// hand-edited -- load through the real `FileCitadel` adapter into a
+    /// `PaladinState` and save back to the same JSON document, apart from the
+    /// renamed entity key (`paladin.node` is written as `paladin.data`).
     #[tokio::test]
     async fn pre_rename_citadel_snapshot_loads_through_file_citadel()
     -> Result<(), Box<dyn std::error::Error>> {

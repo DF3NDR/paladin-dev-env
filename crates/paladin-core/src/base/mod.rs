@@ -12,10 +12,9 @@
 //! `CollectionVersionService` have no consumer outside `base`. They are kept because they are the
 //! scaffolding of the content / general data orchestration system that was started with this
 //! layer and never finished, and a consumer count must not decide their fate. The review that
-//! will decide it is
-//! `.planning/todos/pending/2026-10-13-review-content-data-orchestration-base-items.md`
-//! (ADR-0060 (g), D-05). Until that review is done, nothing in these five is removed or reshaped
-//! beyond the import paths a rename elsewhere forces.
+//! will decide it is tracked in the repository's planning notes (ADR-0060 (g)). Until that
+//! review is done, nothing in these five is removed or reshaped beyond the import paths a
+//! rename elsewhere forces.
 
 #[allow(missing_docs)]
 pub mod component;

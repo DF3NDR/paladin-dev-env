@@ -326,7 +326,7 @@ fn generic_entity_reads_the_old_payload_key() -> TestResult {
 /// | content | `/entity` | `data` | `node` |
 /// | prompt | `` (root) | `entity` | `node` |
 /// | prompt | `/entity` | `data` | `node` |
-/// | version | `` (root) | `entity_id`, `entity_data` | `node_id`, `node_data` |
+/// | version | `` (root) | `entity_id`, `entity_data` | `node_id`, `node_data`, `data` |
 ///
 /// The version record is required to hold no `data` key: its payload sits under
 /// `entity_data`, and `ContentData`, `TextContent` and `EntityVersionMetadata` declare no
@@ -391,7 +391,7 @@ fn new_writes_never_emit_the_old_keys() -> TestResult {
         &reserialized(&version)?,
         "",
         &["entity_id", "entity_data"],
-        &["node_id", "node_data"],
+        &["node_id", "node_data", "data"],
     )?;
     assert_no_old_spelling(&text);
     Ok(())

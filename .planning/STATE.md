@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 49
-current_phase_name: downstream-adoption-of-v0-10-1-web3sec-consumer-bump
-status: executing
-stopped_at: Completed 49-03-PLAN.md
+current_phase: 50
+current_phase_name: provider-parity-config-driven-model-swap
+status: pending
+stopped_at: Phase 49 closed by scope cut; Phase 50 not yet planned
 last_updated: "2026-10-14T21:25:09.177Z"
 last_activity: 2026-10-14
-last_activity_desc: Phase 49 execution started
+last_activity_desc: Phase 49 scope cut and closed (2026-10-14); Phase 50 next
 progress:
   total_phases: 12
-  completed_phases: 9
-  total_plans: 92
+  completed_phases: 10
+  total_plans: 89
   completed_plans: 89
 ---
 
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-10-14 after Phase 48)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 49 — downstream-adoption-of-v0-10-1-web3sec-consumer-bump
+**Current focus:** Phase 50 — provider-parity-config-driven-model-swap (Phase 49 closed 2026-10-14 by scope cut: muster and §9.8 consumer note kept, consumer bump moved to one post-release move to v0.11.0)
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
 2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
@@ -44,7 +44,7 @@ operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
 **Progress:** [████████████████████] 86/86 plans ([██████████] 97%) of the phases planned so far (38-45, 48);
-Phases 46, 47, 49, 50 and 51 are not yet planned; Phase 49 is next, then Phase 50, then Phase 51.
+Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -62,10 +62,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 49 (downstream-adoption-of-v0-10-1-web3sec-consumer-bump) — EXECUTING
-Plan: 4 of 6
-Status: Ready to execute
-Last activity: 2026-10-14 — Phase 49 execution started
+Phase: 50 (provider-parity-config-driven-model-swap) — NOT PLANNED
+Plan: 0 of 0
+Status: Ready to discuss/plan
+Last activity: 2026-10-14 — Phase 49 closed by scope cut (muster + §9.8 note kept; ADOPT-01..03 superseded)
 
 ## Performance Metrics
 
@@ -500,6 +500,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 49]: muster [[test]] uses required-features so --no-default-features fails loudly instead of skipping
 - [Phase ?]: Phase 49-02: library-consumer note is a ### subsection after MIGRATION.md 9.8 step 7 (no new ## 9.9); rows labelled DR-n so the allowlist guard never reads them; section 9.2 wording wins over the research drift register
 - [Phase 49]: 49-03: red-proof scripts stay outside the repo; full text recorded in 49-MUSTER-RED-EVIDENCE.md
+- [Phase 49]: scope cut 2026-10-14 — the consumer never adopts v0.10.1; it moves once to v0.11.0 after Phases 50-51 (MIGRATION.md §9.8 consumer note is the spec); plans 49-04..06 cancelled
 
 ### Pending Todos
 

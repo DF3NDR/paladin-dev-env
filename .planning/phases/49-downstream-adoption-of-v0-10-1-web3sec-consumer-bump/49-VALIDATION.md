@@ -11,6 +11,8 @@ created: 2026-10-14
 
 # Phase 49 — Validation Strategy
 
+> **Scope cut 2026-10-14:** plans 49-04..06 were cancelled (see ROADMAP Phase 49). Rows 49-04-*, 49-05-* and 49-06-* below and the `49-CONSUMER-ADOPTION-SPEC.md` / `49-RETURN-report.md` artifacts are void; the kept plans are 49-01..03.
+
 > Per-phase validation contract for feedback sampling during execution.
 
 ---

@@ -238,7 +238,7 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 - [ ] **Phase 46: Docs Currency & Hygiene** - Close the v0.10.0 audit's docs fixes, publish the Treasurer mdBook page and migration guide, reconcile Nyquist validation, and dispose of the three v2 debt lines
 - [ ] **Phase 47: v0.11.0 Crate Release** - Tag and publish v0.11.0: all 12 crates on crates.io, CHANGELOG and MIGRATION complete, publish-order gate green
 - [x] **Phase 48: Base Entity Rename** - Rename the base-layer entity wrapper `Node<T>` → `Entity<T>` (payload field `node` → `data`; clean break under a Phase-48-only X-03 supersession, or a one-release deprecated alias — decided at discuss; serde alias for persisted JSON), disposition the unused base-layer items, and reserve "node" for the graph sense only — **executes before Phases 46 and 47** (added 2026-10-12, after Phase 44 sealed) (completed 2026-10-14)
-- [ ] **Phase 49: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)** - Move the sole consumer onto the `v0.10.1` tag in one coordinated step (B-1/B-2/B-3 adopted consumer-side, the D-2 token-usage mapping decided, no Paladin shims) and add a compile-only consumer-surface muster plus a `MIGRATION.md` consumer note so the next downstream break is red upstream first — **executes before Phases 46 and 47** (added 2026-10-14 from the web3sec handoff)
+- [x] **Phase 49: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)** - Scope cut to its Paladin-side half on 2026-10-14 (owner decision): the compile-only consumer-surface muster and the `MIGRATION.md` library-consumer note landed (plans 49-01..03); the consumer bump itself (ADOPT-01..03) is superseded by one web3sec move straight to `v0.11.0` after Phases 50 and 51 (todo `2026-10-14-web3sec-single-bump-to-v0-11-0.md`) (completed 2026-10-14)
 - [ ] **Phase 50: Provider Parity & Configuration-Driven Model Swap** - Make any Paladin agent movable between the nine LLM providers by changing configuration only, or fail the build early naming the provider, model and parameter: fix the OpenAI adapter's empty user message, model parameter support per provider *and* per model (ADR amending 0004), config-driven provider construction through a public library API with all nine adapter/config pairs exported from the facade, a dated per-model profile registry feeding Commissary, response/error parity (empty output, typed refusal, usage cap, cache-write, reasoning text, stop sequences), per-step models in fallback chains, and all nine adapters in the conformance suite, live smoke and an mdBook "Switching providers" page — **executes after Phase 49, before Phases 46 and 47** (added 2026-10-14 from the second web3sec handoff)
 - [ ] **Phase 51: Adjustable Reasoning Effort** - One provider-neutral `ReasoningEffort` setting per request, per agent and per provider that every adapter translates exactly to its vendor's native wire form (compile-enforced per compat preset, model-aware in the native adapters, levels read from Phase 50's model-profile registry) or refuses loudly before the HTTP call with a new additive `LlmError::UnsupportedParameter`; a silent-no-op regression test for Kimi, requested and effective effort on the response and trace stream, `Budget(n)` validated against vendor bounds and `max_tokens`, live per-vendor proof that the effort field is parsed, an ADR amending 0004 and an mdBook "Reasoning effort" page — **executes after Phase 50, before Phases 46 and 47** (added 2026-10-14 from the third web3sec handoff; the handoff read `v0.10.1`, the feature ships in v0.11.0)
 
@@ -757,7 +757,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 ### Phase 47: v0.11.0 Crate Release
 
 **Goal**: v0.11.0 ships to crates.io with every gate green.
-**Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release); Phase 49 (the consumer is on a release tag and the consumer-surface muster is green before v0.11.0 is tagged — added 2026-10-14); Phase 50 (the provider-swap matrix, the `api-surface` refresh for the nine facade exports and their CHANGELOG/MIGRATION entries land before the tag — added 2026-10-14); Phase 51 (the `ReasoningEffort` type, the `UnsupportedParameter` variant and the per-provider effort config key are additive public surface that the `api-surface` refresh and the CHANGELOG/MIGRATION entries must carry before the tag — added 2026-10-14)
+**Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release); Phase 49 (the consumer-surface muster is green before v0.11.0 is tagged — added 2026-10-14; the consumer bump itself was moved to a single post-release move to `v0.11.0`, scope cut 2026-10-14); Phase 50 (the provider-swap matrix, the `api-surface` refresh for the nine facade exports and their CHANGELOG/MIGRATION entries land before the tag — added 2026-10-14); Phase 51 (the `ReasoningEffort` type, the `UnsupportedParameter` variant and the per-provider effort config key are additive public surface that the `api-surface` refresh and the CHANGELOG/MIGRATION entries must carry before the tag — added 2026-10-14)
 **Requirements**: SHIP-07
 **Success Criteria** (what must be TRUE):
 
@@ -1163,6 +1163,7 @@ hits (`MIGRATION.md` §9.2 — B-1 `Commissary::new`/`from_port` lost `is_exact_
 a compile-only **consumer-surface muster** — a test that `use`s every path and signature the
 consumer imports — so the next downstream break is a red Paladin check, not a surprise at bump
 time. No Paladin library API changes to accommodate the consumer.
+**Scope cut (2026-10-14, owner decision)**: the phase closes with its Paladin-side half only. Plans 49-01..03 landed the muster (`tests/consumer_surface_muster.rs`, `[[test]]` table, `make check-consumer-surface`), the `MIGRATION.md` §9.8 `### Library consumers: v0.10.1 → v0.11.0` note and the red proof (`49-MUSTER-RED-EVIDENCE.md`). Plans 49-04..06 were cancelled and their files removed: the handoff of 2026-10-08 targets `v0.10.1`, but the tree the consumer meets next is `v0.11.0` with the Phase 44 and 48 breaks already in (the research counted roughly three times the handoff's break list), so moving web3sec to `v0.10.1` now would break it again weeks later and contradict the Milestone 13 §5 single coordinated bump the handoff itself cites. ADOPT-01..03 are superseded by one consumer move straight to `v0.11.0` after Phases 50 and 51, with the §9.8 note as its spec (todo `2026-10-14-web3sec-single-bump-to-v0-11-0.md`). No `v0.10.2` is cut.
 **Depends on**: Phase 48 (complete 2026-10-14; the muster is written against the post-rename
 tree). **Sequenced ahead of Phases 46 and 47** (owner decision 2026-10-14): the first of a series
 of consumer-driven phases that must land before the v0.11 docs pass and tag, because the muster
@@ -1227,7 +1228,7 @@ section.
      is changed, shimmed or deprecated** for the consumer: zero new §9.2 rows and zero
      `semver-checks` allowlist changes from this phase; `make clean-code`, `make check-gates`,
      `make api-surface` and the 82 % coverage floor stay green. No `v0.10.2` is cut.
-**Plans**: 6 plans
+**Plans**: 3 plans (49-04..06 cancelled 2026-10-14, scope cut)
 
 Plans:
 **Wave 1**
@@ -1239,17 +1240,7 @@ Plans:
 
 - [x] 49-03-PLAN.md — Proven red: `bool` re-added to `Commissary::new` (callers patched) and a dropped facade re-export each fail only the muster; tree restored; 49-MUSTER-RED-EVIDENCE.md
 
-**Wave 3** *(blocked on Wave 2 completion)*
-
-- [ ] 49-04-PLAN.md — Consumer hand-back: 49-CONSUMER-ADOPTION-SPEC.md (Step-0 inventory, commit-SHA pin, D-1, D-2 lossless, D-3, gates, Appendix-A corrections) + 49-RETURN-report.md template (consumer fields PENDING) + phase-wide no-API-change evidence
-
-**Wave 4** *(blocked on Wave 3 completion; external: web3sec)*
-
-- [ ] 49-05-PLAN.md — Checkpoint (blocking-human): relay the spec, file the consumer's return report, mechanical intake C1-C14; ADOPT-01..03 close only on an accepted report
-
-**Wave 5** *(blocked on Wave 4 completion)*
-
-- [ ] 49-06-PLAN.md — Muster v1.1: reconcile with the consumer's Step-0 import inventory (pin, DR row or reason per item) and extend the consumer table if needed; zero §9.2 rows
+*Waves 3-5 (49-04 consumer hand-back, 49-05 return-report checkpoint, 49-06 muster v1.1) cancelled 2026-10-14 with the scope cut; the consumer's import inventory is re-verified at its `v0.11.0` bump instead (todo `2026-10-14-web3sec-single-bump-to-v0-11-0.md`).*
 
 ### Phase 50: Provider Parity & Configuration-Driven Model Swap
 
@@ -1271,9 +1262,9 @@ and text, stop sequences) with per-step models in fallback chains, and closes wi
 adapters in the shared conformance suite and the credential-gated live smoke plus an mdBook
 "Switching providers" page. Library-level APIs matter as much as server config: the consumer
 builds adapters directly from their `*Config` types and never touches `agent_host`.
-**Depends on**: Phase 49 (the consumer is on `v0.10.1` and the consumer-surface muster is green
-before this phase changes the surface it musters; the muster then catches this phase's own
-breaks). **Sequenced ahead of Phases 46 and 47** (owner decision 2026-10-14): the second of the
+**Depends on**: Phase 49 (complete 2026-10-14, scope cut: the consumer-surface muster is green before this phase
+changes the surface it musters, and catches this phase's own breaks; the consumer stays on its old
+pin until it moves straight to `v0.11.0` after Phases 50 and 51). **Sequenced ahead of Phases 46 and 47** (owner decision 2026-10-14): the second of the
 consumer-driven phases that must land in v0.11.0, because the ADR amending 0004, the facade
 exports, the typed refusal and the "Switching providers" page change what Phase 46's docs pass and
 migration guide must say. The companion reasoning-effort handoff (not yet filed in this repository)

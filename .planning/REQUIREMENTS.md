@@ -169,17 +169,19 @@ Paladin's only consumer is 631 commits behind `v0.10.1` and has frozen its own w
 the release; the trial adoption found no Paladin defect. ADOPT-01..03 are consumer-side (executed
 in web3sec, closed here by the handoff's §9 return report); ADOPT-04..05 are Paladin-side.*
 
-- [ ] **ADOPT-01**: The consumer pins `paladin` at exactly `v0.10.1` (`f7dae267`), detached, in
+*Scope cut 2026-10-14 (owner decision): ADOPT-01..03 are superseded. The consumer does not move to `v0.10.1`; it moves once, straight to `v0.11.0`, after Phases 50 and 51, with `MIGRATION.md` §9.8 "Library consumers: v0.10.1 → v0.11.0" as the spec (todo `2026-10-14-web3sec-single-bump-to-v0-11-0.md`). ADOPT-04 and ADOPT-05 are complete.*
+
+- [ ] **ADOPT-01** *(superseded 2026-10-14, see note above)*: The consumer pins `paladin` at exactly `v0.10.1` (`f7dae267`), detached, in
   one commit that also carries the adaptation and `Cargo.lock`; the local-only submodule commit
   `4b7bed87` is recorded as superseded (its seven planning files are byte-identical in `v0.10.1`)
 
-- [ ] **ADOPT-02**: Consumer call sites are adapted for B-1 (`Commissary::new`/`from_port` without
+- [ ] **ADOPT-02** *(superseded 2026-10-14, see note above)*: Consumer call sites are adapted for B-1 (`Commissary::new`/`from_port` without
   `is_exact_counter`), B-2 (`PaladinResult.usage: TokenUsage`) and B-3 (`TokenUsage`'s three
   `Option<u32>` fields), with the D-2 token-usage mapping decided and documented — lossless
   `TokenUsage` carried through `RoutineReport` preferred; the `total_tokens`-only fallback only
   with a site comment and a tech-debt entry
 
-- [ ] **ADOPT-03**: The consumer workspace is green on the new pin: `cargo fmt --check`,
+- [ ] **ADOPT-03** *(superseded 2026-10-14, see note above)*: The consumer workspace is green on the new pin: `cargo fmt --check`,
   `cargo clippy --workspace --all-targets -- -D warnings`, `cargo check --workspace` and
   `cargo test --workspace` with ≥ 2,592 passed / 0 failed / 2 ignored, no `unwrap`/`expect`/
   `panic!` added to library code, and no stale `is_exact_counter` / `token_count: report` call
@@ -446,9 +448,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ENTITY-03 | Phase 48 | Complete |
 | ENTITY-04 | Phase 48 | Complete |
 | ENTITY-05 | Phase 48 | Complete |
-| ADOPT-01 | Phase 49 | Pending |
-| ADOPT-02 | Phase 49 | Pending |
-| ADOPT-03 | Phase 49 | Pending |
+| ADOPT-01 | Phase 49 | Superseded (scope cut 2026-10-14) |
+| ADOPT-02 | Phase 49 | Superseded (scope cut 2026-10-14) |
+| ADOPT-03 | Phase 49 | Superseded (scope cut 2026-10-14) |
 | ADOPT-04 | Phase 49 | Complete |
 | ADOPT-05 | Phase 49 | Complete |
 | PARITY-01 | Phase 50 | Pending |
@@ -475,7 +477,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 
 ---
 *Requirements defined: 2026-09-24*
-*Last updated: 2026-10-14 — Phase 51 added (Adjustable Reasoning Effort), REASON-01..07 minted from the
+*Last updated: 2026-10-14 — Phase 49 scope cut: ADOPT-01..03 superseded by one consumer move to `v0.11.0` after Phases 50-51; ADOPT-04..05 complete. Previous: 2026-10-14 — Phase 51 added (Adjustable Reasoning Effort), REASON-01..07 minted from the
 third web3sec handoff (`51-HANDOFF-web3sec-reasoning-effort.md`); Phases 38-51, 60/60 requirements
 mapped, 100% coverage. Previous: 2026-10-14 — Phase 50 added (Provider Parity & Configuration-Driven Model Swap),
 PARITY-01..08 minted from the second web3sec handoff (`50-HANDOFF-web3sec-parity.md`); Phases 38-50,

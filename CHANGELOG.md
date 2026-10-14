@@ -836,6 +836,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that drops the crate; the register row (`SECURITY-EXCEPTIONS.md`, mirrored in `deny.toml`)
   records the local-file-only scope and names the migration to a safe-Rust parser
   (`serde-saphyr`) as the revisit condition. YAML is never parsed from a network or request path.
+- `rustls` 0.23.45 -> 0.23.46 (lockfile only), clearing RUSTSEC-2026-0346, -0347, -0348 and -0349,
+  the four advisories published 2026-10-14 that re-failed the `Security Audit` and
+  `License & Dependency Policy` jobs the same day the `quinn-proto` fix landed. No exception
+  added; no manifest change. Public API unchanged.
 
 ### Breaking Changes
 

@@ -3,7 +3,7 @@ status: testing
 phase: 48-base-entity-rename
 source: [48-VERIFICATION.md]
 started: 2026-10-14T00:24:17Z
-updated: 2026-10-14T00:24:17Z
+updated: 2026-10-14T12:53:00Z
 ---
 
 ## Current Test
@@ -23,6 +23,7 @@ result: [pending]
 
 ### 2. Run make security (cargo-audit and cargo-deny) where they are installed, and read the Security Audit and License and Dependency Policy CI job logs
 expected: Pass, or a failure that is already present on the pre-phase tree. Context: neither tool is installed in the sandbox. Both CI jobs are red on dcbcb63 and were red before any Phase 48 code; Cargo.lock is byte-identical to the phase base (3cac94f). Which advisory or licence rule fires is unknown. security.instructions.md requires make security before a phase is sealed.
+evidence (2026-10-14, orchestrator): cargo-audit 0.22.2 and cargo-deny 0.20.2 installed; `make security` exits 0 on 0a20e7ba (advisories/bans/licenses/sources ok, 9 allowed warnings, 0 vulnerabilities). Root cause of the red CI jobs was five RustSec advisories on quinn-proto (fixed by 1ff46a35, upgrade to 0.11.19) plus the unmaintained unsafe-libyaml advisory (governed by 12c6a5fa as register row 12). CI confirmation on 0a20e7ba pending.
 result: [pending]
 
 ### 3. Measure the workspace line-coverage percentage (cargo llvm-cov --fail-under-lines 82) or read it from the CI Coverage log

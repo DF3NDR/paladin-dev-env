@@ -457,6 +457,17 @@ mod tests {
         // Runtime read (never `include_str!`) so crate packaging is unaffected.
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../paladin-core/tests/fixtures/pre_rename/citadel.json");
+        // The fixture lives in the sibling `paladin-core` crate. A packaged
+        // `paladin-memory` tarball or a build context that copies only this
+        // crate does not have it, so skip loudly instead of failing on I/O.
+        if !fixture_path.exists() {
+            eprintln!(
+                "skipping pre_rename_citadel_snapshot_loads_through_file_citadel: \
+                 fixture {} is absent (sibling paladin-core crate not present)",
+                fixture_path.display()
+            );
+            return Ok(());
+        }
         let fixture_bytes = std::fs::read(&fixture_path)?;
         let fixture_value: serde_json::Value = serde_json::from_slice(&fixture_bytes)?;
 

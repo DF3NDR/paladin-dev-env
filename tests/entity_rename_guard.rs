@@ -46,10 +46,13 @@
 //! the field-version `node_id` fields and `get_node_field_versions`), are never matched.
 //!
 //! Scanned files end in `.rs`, `.md`, `.toml`, `.yaml` or `.yml`. The only things skipped are the
-//! declared history set: `target`, `node_modules` and every dot-directory (which covers
-//! `.planning` and `.project`), every `CHANGELOG.md`, the root `MIGRATION.md`, the two upgrade
-//! guides under `docs/src/api-reference/`, and this file. A hit is fixed at its source; it is never
-//! silenced by growing that set.
+//! declared history set: `target`, `node_modules` and the dot-directories `.git`, `.planning` and
+//! `.project` (every other dot-directory is scanned, so `.github/` and `.claude/`, which carry the
+//! project's convention text, are covered), every `CHANGELOG.md`, the root `MIGRATION.md`, the
+//! two upgrade guides under `docs/src/api-reference/`, the semver allowlist
+//! `.cargo/semver-checks-allowlist.toml` (it mirrors `MIGRATION.md` and so names the removed items
+//! by necessity), and this file. A hit is fixed at its source; it is never silenced by growing
+//! that set.
 //!
 //! The forbidden strings are assembled at run time with `concat`, so this file never contains one
 //! whole. A guard that cannot fail proves nothing, so the positive controls run the same scanner
@@ -220,11 +223,17 @@ const GRAPH_DECLARATIONS: [(&str, &[&str]); 11] = [
 
 /// Version-to-version history files: they must name the old items, so they are not scanned.
 /// Every `CHANGELOG.md` is skipped by name in addition to these exact paths.
-const HISTORY_FILES: [&str; 3] = [
+const HISTORY_FILES: [&str; 4] = [
     "MIGRATION.md",
+    ".cargo/semver-checks-allowlist.toml",
     "docs/src/api-reference/migration-guide.md",
     "docs/src/api-reference/upgrading.md",
 ];
+
+/// The dot-directories the walk skips, by exact name. Every other one is scanned, so `.github/`
+/// (the project's convention source of truth), `.cargo/` and the like cannot quietly bring an old
+/// name back.
+const SKIPPED_DOT_DIRECTORIES: [&str; 3] = [".git", ".planning", ".project"];
 
 /// This guard: it describes the old names, so it is not scanned (its strings are also assembled
 /// at run time).
@@ -536,10 +545,10 @@ fn report_declaration_counts(found: &[Vec<(String, usize)>], violations: &mut Ve
     }
 }
 
-/// `true` for a directory the walk must not enter: build output, vendored packages and every
-/// dot-directory (version control, `.planning`, `.project`, tool caches).
+/// `true` for a directory the walk must not enter: build output, vendored packages and the named
+/// dot-directories (version control, `.planning`, `.project`).
 fn skip_directory(name: &str) -> bool {
-    matches!(name, "target" | "node_modules") || name.starts_with('.')
+    matches!(name, "target" | "node_modules") || SKIPPED_DOT_DIRECTORIES.contains(&name)
 }
 
 /// `true` for a file the scan must not read: every `CHANGELOG.md`, the history files and this guard.
@@ -888,6 +897,10 @@ fn clean_tree(label: &str) -> io::Result<ScratchTree> {
         "crates/paladin-core/src/base/service/field_version_service.rs",
         &retained_item_uses(),
     )?;
+    // Dot-directories other than the skipped ones are scanned, so they must be clean too.
+    tree.write(".github/copilot-instructions.md", &look_alikes())?;
+    tree.write(".github/workflows/ci.yml", "# nothing forbidden here\n")?;
+    tree.write(".claude/commands/look_alikes.md", &look_alikes())?;
     // Prose that restates a declaration is not a `.rs` declaration.
     tree.write("docs/notes.md", "pub type Paladin = Entity<PaladinData>;\n")?;
     // History files name every old item; skipped directories and non-scanned extensions too.
@@ -896,6 +909,8 @@ fn clean_tree(label: &str) -> io::Result<ScratchTree> {
         "CHANGELOG.md",
         "crates/x/CHANGELOG.md",
         "MIGRATION.md",
+        ".cargo/semver-checks-allowlist.toml",
+        ".git/info/notes.md",
         ".planning/phases/48/notes.md",
         ".project/current-exports.txt.md",
         "docs/src/api-reference/upgrading.md",
@@ -950,6 +965,18 @@ fn plant_one_violation_per_rule() -> Vec<(String, String, u8)> {
             2,
         ),
         ("ops/i.yml".into(), format!("{cap}: 5\n"), 2),
+        // Dot-directories that are scanned: the convention text and CI config, and tool commands.
+        (
+            ".github/copilot-instructions.md".into(),
+            format!("use `{upper}<T>` for the wrapper\n"),
+            2,
+        ),
+        (".github/workflows/ci.yml".into(), format!("# {cap}\n"), 2),
+        (
+            ".claude/commands/note.md".into(),
+            format!("see `{wrapper_path}`\n"),
+            1,
+        ),
         // Rule 3: an entity-sense read in a container file, a field in the wrapper, an old
         // variant in the version module.
         (

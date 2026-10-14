@@ -49,11 +49,12 @@
 //! silenced by growing that set.
 //!
 //! The forbidden strings are assembled at run time with `concat`, so this file never contains one
-//! whole. A guard that cannot fail proves nothing, so three positive controls run the same scanner
+//! whole. A guard that cannot fail proves nothing, so the positive controls run the same scanner
 //! over temporary trees: one with a planted violation per rule variant (each must be reported,
 //! naming its rule), one with each file-scoped target removed in turn (each removal must be
-//! reported, never skipped) and one full of look-alikes, retained-item paths and history files
-//! (nothing may be reported).
+//! reported, never skipped), one full of look-alikes, retained-item paths and history files
+//! (nothing may be reported) and one with no `docs/` directory at all, the shape of the Docker
+//! test image's build context (the graph schema is not demanded there; nothing may be reported).
 //!
 //! ```bash
 //! cargo test --test entity_rename_guard
@@ -392,8 +393,18 @@ fn scan_scoped(
 
 /// Rule 5: every file in `GRAPH_DECLARATIONS` must exist and still contain each of its
 /// declarations. The whole file is read, not just its production lines.
+///
+/// The one exception is the graph schema in a tree with no `docs/` directory at all: the Docker
+/// test image copies no documentation (`.dockerignore` excludes `docs/`), so the schema cannot be
+/// there and demanding it fails `cargo test` in that image for a reason unrelated to the freeze. A
+/// tree whose `docs/` exists but lacks the schema is still reported, and the byte-identical
+/// freeze is also checked against the phase base by `git diff` at the closeout.
 fn scan_declared(root: &Path, violations: &mut Vec<String>) {
+    let has_docs = root.join("docs").is_dir();
     for (relative, needles) in GRAPH_DECLARATIONS {
+        if relative == SCHEMA_FILE && !has_docs {
+            continue;
+        }
         match fs::read_to_string(root.join(relative)) {
             Ok(content) => {
                 for needle in needles {
@@ -1050,6 +1061,22 @@ fn scanner_reports_missing_scoped_targets() -> io::Result<()> {
 #[test]
 fn scanner_accepts_a_clean_tree() -> io::Result<()> {
     let tree = clean_tree("clean")?;
+
+    let violations = scan(&tree.root);
+
+    assert!(violations.is_empty(), "{violations:#?}");
+    Ok(())
+}
+
+/// Positive control: a build context that carries no `docs/` directory at all (the Docker test
+/// image copies only `Cargo.toml`, `src`, `crates`, `benches` and `tests`, and `.dockerignore`
+/// excludes `docs/`) cannot hold the graph schema, so the schema is not demanded there. A tree
+/// whose `docs/` directory exists but lacks the schema is still reported
+/// (`scanner_reports_missing_scoped_targets`), so the freeze stays pinned wherever it can be read.
+#[test]
+fn scanner_accepts_a_build_context_without_docs() -> io::Result<()> {
+    let tree = clean_tree("no_docs")?;
+    fs::remove_dir_all(tree.root.join("docs"))?;
 
     let violations = scan(&tree.root);
 

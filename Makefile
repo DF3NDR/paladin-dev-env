@@ -231,6 +231,17 @@ check-release-consistency: ## Verify a release tag's version matches every publi
 	fi
 	@./scripts/check-release-consistency.sh --tag "$(RELEASE_TAG)"
 
+.PHONY: check-consumer-surface
+# Deliberately NOT part of check-gates: the eight members of check-gates are
+# offline script guards that finish in about a second and no workflow invokes
+# check-gates, while this target compiles the facade crate. `make check` and
+# `make lint` (so `make clean-code`) and CI's clippy, all-targets check and
+# integration-test steps already compile or run the muster; this alias runs it
+# on its own. The explicit --test form fails loudly if the consumer's provider
+# features are off, instead of skipping the target silently.
+check-consumer-surface: ## Compile and run the consumer-surface muster (ADOPT-04); not part of check-gates (it builds)
+	@$(CARGO) test --test consumer_surface_muster
+
 .PHONY: check-gates
 check-gates: check-changelogs check-crate-names check-advisory-register check-workflow-suppressions check-workflow-triggers check-codeql-dismissals check-migration-allowlist check-publish-order ## Run all offline release-gate guards
 

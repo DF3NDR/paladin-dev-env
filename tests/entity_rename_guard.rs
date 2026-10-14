@@ -33,9 +33,12 @@
 //! 5. **Graph freeze.** Every graph definition (`NodeId`, `NodeSpec`, `StateNode`, `NodeContext`,
 //!    `NodeInterceptor`, `NodeDoc`, `NodeExecutionRecord`, `NodeOutcomeKind`, `NodeProgressKind`,
 //!    the `TraceEvent::Node*` variants, the node-cache port, key, error, in-memory and Redis
-//!    adapters, the `node_cache` config section, and the `nodes` and `max_node_visits` keys of
-//!    `wargraph-doc.schema.json`) is still declared in its current file, so a moved or renamed
-//!    definition fails.
+//!    adapters and the `node_cache` config section) is still declared in its current file: a
+//!    production line there must begin with the declaration (after indentation), so a match arm, a
+//!    comment, a test or an example that merely repeats the text does not count. The `nodes`
+//!    property and the `LimitsDoc.max_node_visits` property of `wargraph-doc.schema.json` are
+//!    looked up in the parsed document, not searched for as text. A moved or renamed definition
+//!    fails.
 //!
 //! The five retained base items are NOT banned (D-07 (d)): the paths of `base::entity::field`,
 //! `base::entity::collection`, `base::component::element` and the two retained services, and the
@@ -140,8 +143,16 @@ const SINGLE_DECLARATIONS: [SingleDeclaration; 5] = [
 /// The graph schema, read by explicit path: its `.json` extension is not otherwise scanned.
 const SCHEMA_FILE: &str = "docs/schemas/wargraph-doc.schema.json";
 
-/// The rule 5 table: each file and the graph declarations it must still contain.
-const GRAPH_DECLARATIONS: [(&str, &[&str]); 12] = [
+/// The schema keys rule 5 pins, as JSON pointers into the parsed document: the `nodes` property
+/// and the `max_node_visits` property of `LimitsDoc`.
+const SCHEMA_KEYS: [&str; 2] = [
+    "/properties/nodes",
+    "/$defs/LimitsDoc/properties/max_node_visits",
+];
+
+/// The rule 5 table: each file and the graph declarations it must still begin a production line
+/// with.
+const GRAPH_DECLARATIONS: [(&str, &[&str]); 11] = [
     (
         "crates/paladin-core/src/platform/container/waypoint.rs",
         &[
@@ -199,7 +210,6 @@ const GRAPH_DECLARATIONS: [(&str, &[&str]); 12] = [
         &["pub struct NodeCacheConfig", "pub enum NodeCacheBackend"],
     ),
     ("src/config/mod.rs", &["pub mod node_cache;"]),
-    (SCHEMA_FILE, &["\"nodes\"", "\"max_node_visits\""]),
 ];
 
 /// Version-to-version history files: they must name the old items, so they are not scanned.
@@ -348,9 +358,9 @@ fn version_service_hits(line: &str) -> Vec<(u8, String)> {
 }
 
 /// `true` for the line that opens an inline test module: `mod tests {` or `mod test {`, with an
-/// optional visibility qualifier. Matching the whole item (not a prefix) keeps `mod tests_support {`
-/// and the out-of-line `mod tests;` from ending the scan early and leaving the rest of the file
-/// unread.
+/// optional visibility qualifier. Matching the whole item (not a prefix) keeps
+/// `mod tests_support {` and the out-of-line `mod tests;` from ending the scan early and leaving
+/// the rest of the file unread.
 fn opens_test_module(line: &str) -> bool {
     let item = line.trim();
     let item = ["pub(crate) ", "pub(super) ", "pub "]
@@ -405,24 +415,27 @@ fn scan_scoped(
     }
 }
 
-/// Rule 5: every file in `GRAPH_DECLARATIONS` must exist and still contain each of its
-/// declarations. The whole file is read, not just its production lines.
-///
-/// The one exception is the graph schema in a tree with no `docs/` directory at all: the Docker
-/// test image copies no documentation (`.dockerignore` excludes `docs/`), so the schema cannot be
-/// there and demanding it fails `cargo test` in that image for a reason unrelated to the freeze. A
-/// tree whose `docs/` exists but lacks the schema is still reported, and the byte-identical
-/// freeze is also checked against the phase base by `git diff` at the closeout.
+/// `true` when `line` declares `needle`: the needle starts the line (after indentation) and, when
+/// it ends in an identifier character, is not the prefix of a longer name.
+fn declares(line: &str, needle: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with(needle)
+        && (needle.ends_with(|c: char| !is_identifier(c))
+            || !line[needle.len()..]
+                .chars()
+                .next()
+                .is_some_and(is_identifier))
+}
+
+/// Rule 5: every file in `GRAPH_DECLARATIONS` must exist and still declare each of its items on a
+/// production line. A line that only repeats the text (a match arm, a comment, a test, an example)
+/// is not a declaration, so deleting the real one cannot pass.
 fn scan_declared(root: &Path, violations: &mut Vec<String>) {
-    let has_docs = root.join("docs").is_dir();
     for (relative, needles) in GRAPH_DECLARATIONS {
-        if relative == SCHEMA_FILE && !has_docs {
-            continue;
-        }
         match fs::read_to_string(root.join(relative)) {
             Ok(content) => {
                 for needle in needles {
-                    if !content.contains(needle) {
+                    if !production_lines(&content).any(|(_, line)| declares(line, needle)) {
                         violations.push(format!(
                             "{relative}: rule 5: graph declaration `{needle}` is no longer here \
                              (a moved or renamed definition)"
@@ -435,6 +448,45 @@ fn scan_declared(root: &Path, violations: &mut Vec<String>) {
                  so the rule proves nothing"
             )),
         }
+    }
+}
+
+/// Rule 5 for the graph schema: the parsed document must still define each key in `SCHEMA_KEYS`.
+/// A key that only appears elsewhere in the file (an example, the `required` list) does not count.
+///
+/// The one exception is a tree with no `docs/` directory at all: the Docker test image copies no
+/// documentation (`.dockerignore` excludes `docs/`), so the schema cannot be there and demanding it
+/// fails `cargo test` in that image for a reason unrelated to the freeze. A tree whose `docs/`
+/// exists but lacks the schema is still reported, and the byte-identical freeze is also checked
+/// against the phase base by `git diff` at the closeout.
+fn scan_schema(root: &Path, violations: &mut Vec<String>) {
+    if !root.join("docs").is_dir() {
+        return;
+    }
+    let content = match fs::read_to_string(root.join(SCHEMA_FILE)) {
+        Ok(content) => content,
+        Err(error) => {
+            violations.push(format!(
+                "{SCHEMA_FILE}: rule 5: target file is missing or unreadable ({error}), \
+                 so the rule proves nothing"
+            ));
+            return;
+        }
+    };
+    match serde_json::from_str::<serde_json::Value>(&content) {
+        Ok(document) => {
+            for key in SCHEMA_KEYS {
+                if document.pointer(key).is_none() {
+                    violations.push(format!(
+                        "{SCHEMA_FILE}: rule 5: schema key `{key}` is no longer defined \
+                         (a moved or renamed definition)"
+                    ));
+                }
+            }
+        }
+        Err(error) => violations.push(format!(
+            "{SCHEMA_FILE}: rule 5: not valid JSON ({error}), so the rule proves nothing"
+        )),
     }
 }
 
@@ -557,6 +609,7 @@ fn scan(root: &Path) -> Vec<String> {
     );
     report_declaration_counts(&found, &mut violations);
     scan_declared(root, &mut violations);
+    scan_schema(root, &mut violations);
 
     violations.sort();
     violations
@@ -606,6 +659,7 @@ fn all_targets() -> Vec<&'static str> {
     let mut targets: Vec<&'static str> = ENTITY_FIELD_FILES.to_vec();
     targets.push(VERSION_SERVICE_FILE);
     targets.extend(GRAPH_DECLARATIONS.iter().map(|(path, _)| *path));
+    targets.push(SCHEMA_FILE);
     for declaration in &SINGLE_DECLARATIONS {
         if !targets.contains(&declaration.home) {
             targets.push(declaration.home);
@@ -623,7 +677,9 @@ fn is_rule_3_target(relative: &str) -> bool {
 /// rule 4 declaration homed there (their count drops to zero).
 fn expected_reports_for_removal(relative: &str) -> usize {
     usize::from(is_rule_3_target(relative))
-        + usize::from(GRAPH_DECLARATIONS.iter().any(|(path, _)| *path == relative))
+        + usize::from(
+            relative == SCHEMA_FILE || GRAPH_DECLARATIONS.iter().any(|(path, _)| *path == relative),
+        )
         + SINGLE_DECLARATIONS
             .iter()
             .filter(|declaration| declaration.home == relative)
@@ -676,8 +732,30 @@ fn version_source(extra: &str) -> String {
     )
 }
 
+/// A clean graph schema: every pinned key defined, and the same names repeated where they do not
+/// count (the `required` list and a `default` example). `skip` removes one pinned key (a JSON
+/// pointer from `SCHEMA_KEYS`), leaving only those repeats behind.
+fn schema_source(skip: Option<&str>) -> String {
+    let mut document = serde_json::json!({
+        "properties": { "nodes": {}, "edges": {} },
+        "required": ["nodes", "edges"],
+        "$defs": {
+            "LimitsDoc": {
+                "properties": { "max_node_visits": {} },
+                "default": { "max_node_visits": 100 }
+            }
+        }
+    });
+    let removed = skip.and_then(|pointer| {
+        let (parent, key) = pointer.rsplit_once('/')?;
+        document.pointer_mut(parent)?.as_object_mut()?.remove(key)
+    });
+    debug_assert_eq!(removed.is_some(), skip.is_some(), "skip names a pinned key");
+    document.to_string()
+}
+
 /// Clean content for any scoped target, with `extra` planted among it. `skip` leaves one
-/// declaration needle out (a deleted or moved declaration).
+/// declaration needle (or, for the schema, one pinned key) out: a deleted or moved declaration.
 fn clean_content_skipping(relative: &str, extra: &str, skip: Option<&str>) -> String {
     let keep = |needle: &str| skip != Some(needle);
     let declared: String = SINGLE_DECLARATIONS
@@ -687,6 +765,8 @@ fn clean_content_skipping(relative: &str, extra: &str, skip: Option<&str>) -> St
         .collect();
     if ENTITY_FIELD_FILES.contains(&relative) {
         entity_source(&declared, extra)
+    } else if relative == SCHEMA_FILE {
+        schema_source(skip)
     } else if relative == VERSION_SERVICE_FILE {
         version_source(extra)
     } else if let Some((_, needles)) = GRAPH_DECLARATIONS
@@ -880,7 +960,7 @@ fn plant_one_violation_per_rule() -> Vec<(String, String, u8)> {
         ),
         (
             SCHEMA_FILE.into(),
-            clean_content_skipping(SCHEMA_FILE, "", Some("\"nodes\"")),
+            clean_content_skipping(SCHEMA_FILE, "", Some(SCHEMA_KEYS[0])),
             5,
         ),
     ];
@@ -1067,6 +1147,54 @@ fn scanner_reports_missing_scoped_targets() -> io::Result<()> {
             "emptied {relative} passed vacuously: {violations:#?}"
         );
     }
+    Ok(())
+}
+
+/// Positive control: rule 5 counts a declaration, not a repeat of its text. Removing the real
+/// declaration is reported even when the same text remains in a match arm, a comment, a test
+/// module, or (for the schema) the `required` list and an example.
+#[test]
+fn scanner_reports_graph_declarations_that_only_appear_elsewhere() -> io::Result<()> {
+    let trace = "crates/paladin-core/src/platform/container/trace.rs";
+    let repeats = "match event {\n    TraceEvent::NodeStarted { .. } => 1,\n}\n\
+                   // NodeStarted {\n\
+                   #[cfg(test)]\n\
+                   mod tests {\n    NodeStarted {\n}";
+    let tree = clean_tree("declaration_repeats")?;
+    tree.write(
+        trace,
+        &clean_content_skipping(trace, repeats, Some("NodeStarted {")),
+    )?;
+    let violations = scan(&tree.root);
+    assert_eq!(violations.len(), 1, "{violations:#?}");
+    assert!(
+        violations[0].starts_with(&format!("{trace}:"))
+            && violations[0].contains(": rule 5:")
+            && violations[0].contains("`NodeStarted {`"),
+        "{violations:#?}"
+    );
+
+    for key in SCHEMA_KEYS {
+        let tree = clean_tree("schema_key_repeats")?;
+        tree.write(
+            SCHEMA_FILE,
+            &clean_content_skipping(SCHEMA_FILE, "", Some(key)),
+        )?;
+        let violations = scan(&tree.root);
+        assert_eq!(violations.len(), 1, "removed `{key}`: {violations:#?}");
+        assert!(
+            violations[0].starts_with(&format!("{SCHEMA_FILE}:"))
+                && violations[0].contains(": rule 5:")
+                && violations[0].contains(key),
+            "removed `{key}`: {violations:#?}"
+        );
+    }
+
+    let tree = clean_tree("schema_not_json")?;
+    tree.write(SCHEMA_FILE, "\"nodes\" \"max_node_visits\"")?;
+    let violations = scan(&tree.root);
+    assert_eq!(violations.len(), 1, "{violations:#?}");
+    assert!(violations[0].contains("not valid JSON"), "{violations:#?}");
     Ok(())
 }
 

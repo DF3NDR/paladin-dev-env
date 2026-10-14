@@ -799,7 +799,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 | 46. Docs Currency & Hygiene | v0.11.0 | 0/TBD | Not started | - |
 | 47. v0.11.0 Crate Release | v0.11.0 | 0/TBD | Not started | - |
 | 48. Base Entity Rename (runs after 44, before 46-47) | v0.11.0 | 9/9 | Complete    | 2026-10-14 |
-| 49. Downstream Adoption of v0.10.1 (web3sec Consumer Bump) (runs after 48, before 46-47) | v0.11.0 | 0/6 | Not started | - |
+| 49. Downstream Adoption of v0.10.1 (web3sec Consumer Bump) (runs after 48, before 46-47) | v0.11.0 | 3/3 | Complete    | 2026-10-14 |
 | 50. Provider Parity & Configuration-Driven Model Swap (runs after 49, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
 | 51. Adjustable Reasoning Effort (runs after 50, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
 

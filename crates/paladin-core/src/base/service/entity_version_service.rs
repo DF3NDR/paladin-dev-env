@@ -538,7 +538,7 @@ mod tests {
             number: 42,
         };
 
-        let entity = Entity::new(test_data, Some("test_node".to_string()));
+        let entity = Entity::new(test_data, Some("test_entity".to_string()));
 
         let version = service
             .create_version(
@@ -565,7 +565,7 @@ mod tests {
             number: 42,
         };
 
-        let entity = Entity::new(test_data.clone(), Some("test_node".to_string()));
+        let entity = Entity::new(test_data.clone(), Some("test_entity".to_string()));
 
         // Create initial version
         service
@@ -601,7 +601,7 @@ mod tests {
             number: 1,
         };
 
-        let entity = Entity::new(test_data.clone(), Some("test_node".to_string()));
+        let entity = Entity::new(test_data.clone(), Some("test_entity".to_string()));
 
         // Create initial version
         service

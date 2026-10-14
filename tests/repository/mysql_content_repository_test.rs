@@ -239,7 +239,7 @@ mod tests {
         };
 
         // Reconstruct Entity (as repository does)
-        let reconstructed_node = Entity {
+        let reconstructed_entity = Entity {
             uuid,
             created,
             modified,
@@ -249,7 +249,7 @@ mod tests {
         };
 
         let reconstructed_item = ContentItem {
-            entity: reconstructed_node,
+            entity: reconstructed_entity,
         };
 
         // Verify reconstruction preserves key identifiers

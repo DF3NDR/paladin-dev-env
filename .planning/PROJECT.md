@@ -584,6 +584,16 @@ Phases 30-33. The PRD's open operator question is answered: **full governance** 
   text, stop sequences), per-step models in fallback chains, and all nine adapters in the
   conformance suite and live smoke. The second consumer-driven phase before Phases 46-47; the
   companion reasoning-effort handoff is the next.
+- **Adjustable reasoning effort (added 2026-10-14, Phase 51):** one provider-neutral
+  `ReasoningEffort` setting per request, per agent and per provider that every adapter translates
+  exactly to its vendor's native wire form or refuses loudly before the HTTP call
+  (`LlmError::UnsupportedParameter`), built around the measured silent-no-op hazard (Kimi ignores a
+  top-level `reasoning_effort` with HTTP 200; an unconfigured `kimi-k3` reasons at `max` and returns
+  nothing). Supported levels come from Phase 50's model-profile registry; requested and effective
+  effort are surfaced on the response and trace stream; `Budget(n)` is validated against vendor
+  bounds and `max_tokens`; an ADR amending 0004 and an mdBook "Reasoning effort" page close it. The
+  third consumer-driven phase before Phases 46-47; the handoff read `v0.10.1`, the feature ships in
+  v0.11.0.
 - **RustFS (FUT-10):** replace the terminal quay.io MinIO pin in the dev/test stack, CI and the
   Kubernetes smoke test.
 - **Platform deviations:** scope `GET /runs*` per caller (`WINDOWS.md` row 32); SSE and webhook

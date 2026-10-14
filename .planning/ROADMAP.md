@@ -223,7 +223,7 @@ Phase artifacts: `milestones/v0.10.0-phases/`
 
 </details>
 
-**Treasurer Spend Governance (Phases 38-50)** — in progress, not yet shipped. Forward work sourced
+**Treasurer Spend Governance (Phases 38-51)** — in progress, not yet shipped. Forward work sourced
 from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 `.planning/research/SUMMARY.md`; requirements minted in `.planning/REQUIREMENTS.md`.
 
@@ -240,6 +240,7 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 - [x] **Phase 48: Base Entity Rename** - Rename the base-layer entity wrapper `Node<T>` → `Entity<T>` (payload field `node` → `data`; clean break under a Phase-48-only X-03 supersession, or a one-release deprecated alias — decided at discuss; serde alias for persisted JSON), disposition the unused base-layer items, and reserve "node" for the graph sense only — **executes before Phases 46 and 47** (added 2026-10-12, after Phase 44 sealed) (completed 2026-10-14)
 - [ ] **Phase 49: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)** - Move the sole consumer onto the `v0.10.1` tag in one coordinated step (B-1/B-2/B-3 adopted consumer-side, the D-2 token-usage mapping decided, no Paladin shims) and add a compile-only consumer-surface muster plus a `MIGRATION.md` consumer note so the next downstream break is red upstream first — **executes before Phases 46 and 47** (added 2026-10-14 from the web3sec handoff)
 - [ ] **Phase 50: Provider Parity & Configuration-Driven Model Swap** - Make any Paladin agent movable between the nine LLM providers by changing configuration only, or fail the build early naming the provider, model and parameter: fix the OpenAI adapter's empty user message, model parameter support per provider *and* per model (ADR amending 0004), config-driven provider construction through a public library API with all nine adapter/config pairs exported from the facade, a dated per-model profile registry feeding Commissary, response/error parity (empty output, typed refusal, usage cap, cache-write, reasoning text, stop sequences), per-step models in fallback chains, and all nine adapters in the conformance suite, live smoke and an mdBook "Switching providers" page — **executes after Phase 49, before Phases 46 and 47** (added 2026-10-14 from the second web3sec handoff)
+- [ ] **Phase 51: Adjustable Reasoning Effort** - One provider-neutral `ReasoningEffort` setting per request, per agent and per provider that every adapter translates exactly to its vendor's native wire form (compile-enforced per compat preset, model-aware in the native adapters, levels read from Phase 50's model-profile registry) or refuses loudly before the HTTP call with a new additive `LlmError::UnsupportedParameter`; a silent-no-op regression test for Kimi, requested and effective effort on the response and trace stream, `Budget(n)` validated against vendor bounds and `max_tokens`, live per-vendor proof that the effort field is parsed, an ADR amending 0004 and an mdBook "Reasoning effort" page — **executes after Phase 50, before Phases 46 and 47** (added 2026-10-14 from the third web3sec handoff; the handoff read `v0.10.1`, the feature ships in v0.11.0)
 
 ## Phase Details
 
@@ -733,7 +734,7 @@ format) is MEDIUM-confidence only; the phase's first work item should close this
 milestone's validation/tech-debt bookkeeping is current.
 **Depends on**: Phase 45 and Phase 48 (documents everything the milestone shipped, so it runs
 last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48's
-`Node<T>` → `Entity<T>` rows — added 2026-10-12), and Phase 49 (the consumer-surface muster and its `MIGRATION.md` consumer note are inputs to the v0.10 → v0.11 migration guide — added 2026-10-14), and Phase 50 (the ADR amending 0004, the facade re-exports, the typed refusal and the "Switching providers" mdBook page are inputs to the docs pass and the migration guide — added 2026-10-14)
+`Node<T>` → `Entity<T>` rows — added 2026-10-12), and Phase 49 (the consumer-surface muster and its `MIGRATION.md` consumer note are inputs to the v0.10 → v0.11 migration guide — added 2026-10-14), and Phase 50 (the ADR amending 0004, the facade re-exports, the typed refusal and the "Switching providers" mdBook page are inputs to the docs pass and the migration guide — added 2026-10-14), and Phase 51 (the ADR amending 0004 a second time, the `ReasoningEffort` public type, its MIGRATION §9.2 rows and the "Reasoning effort" mdBook page are inputs to the docs pass and the migration guide — added 2026-10-14)
 **Requirements**: CURR-22, CURR-23, CURR-24, CURR-25
 **Success Criteria** (what must be TRUE):
 
@@ -756,7 +757,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 ### Phase 47: v0.11.0 Crate Release
 
 **Goal**: v0.11.0 ships to crates.io with every gate green.
-**Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release); Phase 49 (the consumer is on a release tag and the consumer-surface muster is green before v0.11.0 is tagged — added 2026-10-14); Phase 50 (the provider-swap matrix, the `api-surface` refresh for the nine facade exports and their CHANGELOG/MIGRATION entries land before the tag — added 2026-10-14)
+**Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release); Phase 49 (the consumer is on a release tag and the consumer-surface muster is green before v0.11.0 is tagged — added 2026-10-14); Phase 50 (the provider-swap matrix, the `api-surface` refresh for the nine facade exports and their CHANGELOG/MIGRATION entries land before the tag — added 2026-10-14); Phase 51 (the `ReasoningEffort` type, the `UnsupportedParameter` variant and the per-provider effort config key are additive public surface that the `api-surface` refresh and the CHANGELOG/MIGRATION entries must carry before the tag — added 2026-10-14)
 **Requirements**: SHIP-07
 **Success Criteria** (what must be TRUE):
 
@@ -800,6 +801,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 | 48. Base Entity Rename (runs after 44, before 46-47) | v0.11.0 | 9/9 | Complete    | 2026-10-14 |
 | 49. Downstream Adoption of v0.10.1 (web3sec Consumer Bump) (runs after 48, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
 | 50. Provider Parity & Configuration-Driven Model Swap (runs after 49, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
+| 51. Adjustable Reasoning Effort (runs after 50, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see
@@ -1351,6 +1353,146 @@ the existing credential gate with the env vars Paladin already reads.
      every intentional break; `make clean-code`, `make check-gates`, `make api-surface`,
      `make security` and the 82 % coverage floor stay green, with no `unwrap`/`expect`/`panic!`
      added to library code.
+**Plans**: TBD
+
+### Phase 51: Adjustable Reasoning Effort
+
+**Goal**: One provider-neutral, per-agent (and per-request) **reasoning-effort** setting that
+every adapter translates exactly to its vendor's native form, or refuses loudly before the HTTP
+call. Today Paladin has no way to control how hard a model reasons: no request struct in any of
+the nine adapters serialises an effort, thinking or budget field, reasoning is handled only on the
+response side (token counts, empty-output detection, parsed-then-discarded reasoning text), and
+the vendor default always applies. For Moonshot `kimi-k3` that default is `max` — measured live,
+a one-line question spent the whole 16,000-token output budget on reasoning in about eight minutes
+and returned no answer, where `low` answered in 56 s and `disabled` in 2 s (handoff §4.1). The
+central hazard is the **silent no-op**: at least four vendors return HTTP 200 while ignoring or
+coercing the requested effort, and `kimi-k3` ignores an OpenAI-style top-level `reasoning_effort`
+outright — only `thinking.effort` works (§5, Appendix A). So the design is a `#[non_exhaustive]`
+`ReasoningEffort` enum on `LlmRequest` (the `response_format` precedent, D-28), a per-Paladin
+default on `PaladinData` with a builder setter and a YAML agent field, a per-provider default
+through Phase 50's config-driven construction, a compile-enforced per-preset wire declaration in
+the compat engine, model-aware mapping in the native adapters, a new additive
+`LlmError::UnsupportedParameter` for anything that cannot be mapped losslessly, requested and
+effective effort on the response and the trace stream, and a live conformance check per vendor
+proving the effort field is actually parsed. Effort, output budget and timeout are designed
+together: raising effort without raising `max_tokens` turns into `EmptyCompletion`. web3sec needs
+this at **request level** (it builds adapters directly and calls `LlmPort::generate`), and wants
+per-role settings for cost/latency control and A/B benchmarking.
+**Depends on**: Phase 50 (the ADR amending 0004 and the per-provider/per-model parameter-support
+policy this phase extends — PARITY-02; the `llm.<provider>` config-driven construction and the
+300 s reasoning-capable defaults the per-provider effort default rides on — PARITY-03; the dated
+per-model profile registry that holds each model's supported levels and budget bounds — PARITY-04;
+the reasoning-text and reasoning-token surfaces — PARITY-05; and per-hop models in fallback chains
+so each step resolves effort against its own model — PARITY-06; handoff §9). The handoff's
+"sooner" option — Plans 1-3 against adapter-wide supported sets, migrated to model profiles later —
+is declined: it costs a second pass over every preset. **Sequenced ahead of Phases 46 and 47**
+(owner decision 2026-10-14): the third consumer-driven phase that must land in **v0.11.0**,
+because the ADR, the `ReasoningEffort` public type, the MIGRATION §9.2 rows and the mdBook
+"Reasoning effort" page change what Phase 46's docs pass and migration guide must say and what
+Phase 47 tags.
+**Requirements**: REASON-01, REASON-02, REASON-03, REASON-04, REASON-05, REASON-06, REASON-07
+**UI hint**: no
+**Source**: the third web3sec handoff of 2026-10-13, filed verbatim as
+`51-HANDOFF-web3sec-reasoning-effort.md` — a read-only audit of `origin/main` @ `df24689c`
+(post-`v0.10.1`) with live Moonshot measurements dated 2026-10-07 and 2026-10-13 (`kimi-k3`
+`valid_efforts: [low, high, max]`, `default_effort: max`; `thinking:{type:"disabled"}` accepted
+despite `supports_thinking_type: "only"`; top-level `reasoning_effort: "bogus"` → HTTP 200,
+ignored; `thinking.effort: "bogus"` → HTTP 400) and desk research on the other seven vendors, every
+row of which is to be re-verified against its cited source and a live probe before it is encoded
+into a model profile. The handoff proposed "Phase 39 if parity is 38" against its own roadmap
+snapshot; it is Phase 51 here, and it ships in v0.11.0, not as a patch on the v0.10.1 the handoff
+was read against. Its §7 decisions **D-1** (enum shape — keep `Auto` distinct from `None` and
+include `Budget(u32)` now, because `Auto` is needed where "on" must be stated explicitly and
+`Budget` is the only control Qwen and Gemini 2.5 offer), **D-2** (placement — `LlmRequest` plus
+a per-agent default on `PaladinData`; never `PromptParameters`, whose hand-written
+`PartialEq`/`Ord`/`Hash` and twelve struct literals would silently exclude or break on a new
+field; never `ProviderCapabilities`, guarded against gaining a field), **D-3** (fail loudly by
+default on any value that cannot be mapped losslessly, with nearest-level substitution as an
+explicit opt-in — recorded as an ADR amending 0004, consistent with Phase 50's D-1), **D-4**
+(reasoning text typed on `LlmResponse` and the streaming delta, not buried in `metadata`) and
+**D-5** (Anthropic uses `output_config.effort` where the model supports it and
+`thinking.budget_tokens` only on models that still accept it, chosen per model profile; the
+deprecated form is never sent to a model that rejects it) are settled at discuss. The handoff's §8
+shape — one phase, about five plans in the order red tests → types and plumbing → compat presets →
+native adapters → live conformance, docs and ADR — is the starting point for planning, not a
+constraint. Its §10 out-of-scope list holds: no native tool calling or interleaved thinking with
+tools (ADR-0042), no Anthropic per-message effort beta, no live discovery of supported levels from
+vendor `/models` endpoints (a possible follow-up to Phase 50's D-3), and no web3sec-side changes.
+**Ground truth** (verified 2026-10-14 on `885db3b8`; the handoff's line numbers have drifted and
+the execution service now lives under `src/application/services/`, but every claim re-checked
+holds): **nothing request-side** — a grep for `reasoning_effort|budget_tokens|thinkingConfig|
+thinkingBudget|enable_thinking|output_config|"think"` over `crates/`, `src/` and `tests/` hits
+only the unrelated RAG budget helper (`rag_retrieval_service.rs:153`), never an adapter request
+struct. **Placement holds** — `LlmRequest` is `#[non_exhaustive]` (`llm_port.rs:763`) with the
+additive `response_format` field (`:784`) and `with_response_format` (`:910`), threaded from the
+run context at `paladin_execution_service.rs:2817-2820`; the other two request-construction sites
+are `:3003` and `:3586`; `LlmError` is `#[non_exhaustive]` (`:289`); `PaladinData` already adds
+per-agent knobs as `#[serde(default)]` fields (`paladin.rs:175-198`); `AgentDefinition`
+(`src/config/agents.rs:321`) carries `model` and `provider` but no effort; the
+`ProviderCapabilities` guard `provider_capabilities_gained_no_field` sits at `llm_port.rs:1977`.
+**Compat engine holds** — `CompatRequestParameters` (`compat/engine.rs:129-156`) is five `bool`s
+with deliberately no `Default` ("a new preset must be a compile error until its author states a
+position for every field", `:122-126`); Kimi's position is at `kimi/adapter.rs:245-251`;
+`build_request` (`:472`) reports dropped parameters only through `log::debug!` (`:502`), the path
+this phase must **not** reuse for effort; `detect_empty_completion` (`:651`) fires only on
+`length`. **Response side holds** — `reasoning_content` is deserialised in `compat/types.rs:80`
+and `deepseek/adapter.rs:202` and never reaches callers; `TokenUsage.reasoning_tokens`
+(`token_usage.rs:44`, `with_reasoning` `:114`) is filled by OpenAI (`:533`), Anthropic
+`thinking_tokens` (`:835`), Gemini `thoughtsTokenCount` (`:1143`), DeepSeek and the compat
+engine; Anthropic's `detect_no_text_content` (`:957`) still turns thinking-only responses into
+`EmptyCompletion`. **Kimi's default timeout is 60 s** (`kimi/adapter.rs:118`, `:139`) against a
+measured 56 s for `low` — Phase 50's 300 s reasoning-capable default is a prerequisite, not a
+nicety. **No `ModelProfile` type exists on the tree** — the per-model supported-level set this
+phase reads (REASON-04) is created by Phase 50 (PARITY-04). `conformance.rs` and
+`examples/live_vendor_smoke.rs` exist and are the homes for the offline wire-body cases and the
+live invalid-effort probes. Precedent: the `response_format` threading (Phase 26, D-27/D-28),
+`ReasoningAgentOptions` (`src/presets/mod.rs:62`) as the option-type pattern, ADR-0004's
+"no undiscoverable substitution" principle (`:92`, `:164`, `:179`), and the Phase 17-19 live
+temperature probes.
+**Success Criteria** (what must be TRUE):
+
+  1. A `#[non_exhaustive]` `ReasoningEffort` (`Off`, `Auto`, `Minimal`, `Low`, `Medium`,
+     `High`, `XHigh`, `Max`, `Budget(u32)`) is settable per request (`LlmRequest.reasoning`
+     + `with_reasoning`), per agent (`PaladinData`, a `PaladinBuilder` setter, a YAML
+     `AgentDefinition` field) and per provider (`llm.<provider>.reasoning_effort`), resolved
+     request → agent → provider config → vendor default on every `LlmRequest` the execution
+     service builds — and an unset value produces a byte-identical request body on every
+     adapter, pinned by a mockito wire-body test per adapter/preset that was red first.
+
+  2. Every adapter and preset declares its reasoning wire form — a non-`bool` `ReasoningWire`
+     on `CompatRequestParameters` the compiler forces each preset author to state (generic
+     OpenAI-compatible defaults to `Unsupported`), and a private model-aware `map_reasoning`
+     in Anthropic, OpenAI, DeepSeek and Gemini — and maps each level exactly or returns the new
+     additive `LlmError::UnsupportedParameter { param, value, provider, model }`, classified
+     `Permanent`, before any HTTP call: a level the vendor lacks, a level gated off for that
+     model, `Off` on an always-thinking model, `Budget` where only levels exist, and a level
+     the vendor is known to coerce silently all refuse; nearest-level substitution is an
+     explicit opt-in, off by default, that logs `warn!` and records both efforts.
+
+  3. No preset emits a field its vendor ignores: a silent-no-op regression test asserts the
+     Kimi preset never emits top-level `reasoning_effort` and sends `thinking:{type, effort}`
+     instead, and the credential-gated live smoke proves per vendor, where a key exists, that
+     an invalid effort is rejected (the field is parsed) and that a higher level reports more
+     `reasoning_tokens`.
+
+  4. Supported levels and budget bounds are per model, read from Phase 50's dated model-profile
+     registry with config overrides rather than adapter-wide constants; each hop of a fallback
+     chain resolves effort against its own model; and `Budget(n)` is validated against the
+     vendor's bounds and the request's `max_tokens` before send, with `EmptyCompletion` kept as
+     the runtime backstop.
+
+  5. Requested and effective effort are recorded in `LlmResponse.metadata` beside
+     `SERVED_BY_METADATA_KEY` and emitted on the Phase 28 trace stream; every adapter fills
+     `TokenUsage.reasoning_tokens` when the vendor reports it; and reasoning text reaches
+     callers through the typed shape settled at discuss (D-4) on both the normal and the
+     streaming path, building on Phase 50's surface rather than duplicating it.
+
+  6. An ADR amending ADR-0004 records the fail-loud policy and its opt-in fallback; the mdBook
+     has a "Reasoning effort" page with the per-provider/per-model mapping table and the
+     effort/output-budget/timeout guidance; MIGRATION §9.2 and CHANGELOG carry the additive
+     type, field, variant and config key with `make api-surface-update`; and `make clean-code`,
+     `make check-gates`, `make api-surface`, `make security`, the 82 % coverage floor and the
+     doc tests stay green, with no `unwrap`/`expect`/`panic!` added to library code.
 **Plans**: TBD
 
 ---

@@ -248,6 +248,68 @@ cross-cutting, and several are defects in the three original adapters. `PROV-*` 
   when present) on the execution-service path, with a mock-transport regression test that is red
   on the current tree and green after the fix
 
+### Reasoning effort (REASON)
+
+*Added 2026-10-14 (Phase 51) from the third web3sec handoff of 2026-10-13
+(`51-HANDOFF-web3sec-reasoning-effort.md`). Paladin carries no effort, thinking or budget parameter
+on the request path of any of the nine adapters, so the vendor default always applies — `max` on
+Moonshot `kimi-k3`, measured live to burn a 16,000-token output budget on reasoning and return no
+answer. Several vendors accept a wrong or unsupported effort field with HTTP 200 and ignore or
+coerce it, so the design is built around refusing before the HTTP call. Depends on Phase 50's
+parameter-support policy (PARITY-02), config-driven construction (PARITY-03), model-profile registry
+(PARITY-04), reasoning surfaces (PARITY-05) and per-hop fallback models (PARITY-06). The handoff
+read `v0.10.1`; the feature ships in v0.11.0. A new prefix, the fortieth. Decisions D-1..D-5 of the
+handoff are settled at discuss.*
+
+- [ ] **REASON-01**: A `#[non_exhaustive]` `ReasoningEffort` enum (`Off`, `Auto`, `Minimal`,
+  `Low`, `Medium`, `High`, `XHigh`, `Max`, `Budget(u32)`) is settable per request
+  (`LlmRequest.reasoning` + `with_reasoning`, the `response_format` precedent), per agent (a
+  `#[serde(default)]` `PaladinData` field, a `PaladinBuilder` setter and a YAML `AgentDefinition`
+  field) and per provider (`llm.<provider>.reasoning_effort` through Phase 50's config-driven
+  construction), resolved request → agent → provider config → vendor default by
+  `PaladinExecutionService` on every request it builds — and an unset value produces a
+  byte-identical request body on every adapter
+
+- [ ] **REASON-02**: Every adapter and preset declares its reasoning wire form — a non-`bool`
+  `ReasoningWire` field on `CompatRequestParameters` (no `Default`, so each preset author must
+  state a position; generic OpenAI-compatible defaults to `Unsupported`) and a private
+  model-aware `map_reasoning` in each native adapter — and maps each level exactly or returns a
+  new additive `LlmError::UnsupportedParameter { param, value, provider, model }`, classified
+  `Permanent`, before any HTTP call; a level the vendor lacks, a level gated off for that model,
+  `Off` on an always-thinking model, `Budget` where only levels exist and a level the vendor is
+  known to coerce silently all refuse, and nearest-level substitution is an explicit opt-in, off
+  by default, that logs `warn!` and records both requested and effective effort
+
+- [ ] **REASON-03**: No preset emits a field its vendor ignores — a silent-no-op regression test
+  asserts the Kimi preset never emits top-level `reasoning_effort`, an offline mockito wire-body
+  case per adapter/preset pins the exact body sent for each level, and the credential-gated live
+  smoke proves per vendor, where a key exists, that an invalid effort is rejected (the field is
+  parsed) and that a higher level reports more `reasoning_tokens`
+
+- [ ] **REASON-04**: Supported levels and budget bounds are per model, read from Phase 50's
+  dated model-profile registry (PARITY-04) with config overrides rather than from adapter-wide
+  constants, and each hop of a fallback chain resolves effort against its own model
+  (PARITY-06)
+
+- [ ] **REASON-05**: Requested and effective effort are recorded in `LlmResponse.metadata` beside
+  `SERVED_BY_METADATA_KEY` and emitted on the Phase 28 trace stream; every adapter fills
+  `TokenUsage.reasoning_tokens` when the vendor reports it; and reasoning text reaches callers
+  through the typed shape settled at discuss (D-4) on the normal and streaming paths, building
+  on PARITY-05's surface rather than duplicating it
+
+- [ ] **REASON-06**: `Budget(n)` is validated against the vendor's bounds (Anthropic
+  `budget_tokens` ≥ 1024 and < `max_tokens`; Qwen `thinking_budget` 1–32768; Gemini 2.5
+  `thinkingBudget` ranges, re-verified live) and the request's `max_tokens` before send;
+  `EmptyCompletion` stays the runtime backstop; and the effort/output-budget/timeout guidance is
+  documented so an agent on `kimi-k3` at the documented defaults answers instead of exhausting
+  its budget
+
+- [ ] **REASON-07**: An ADR amending ADR-0004 records the fail-loud policy and its opt-in
+  fallback; the mdBook has a "Reasoning effort" page with the per-provider/per-model mapping
+  table; MIGRATION §9.2 and CHANGELOG carry the additive type, field, variant and config key
+  with the public-API baseline refreshed; and the 82 % coverage floor (ADR-0006) and the doc
+  tests are met
+
 ### Object storage (STORE)
 
 - [x] **STORE-01**: The dev/test compose stack and the Coverage, Integration Tests, Docker
@@ -397,16 +459,25 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PARITY-06 | Phase 50 | Pending |
 | PARITY-07 | Phase 50 | Pending |
 | PARITY-08 | Phase 50 | Pending |
+| REASON-01 | Phase 51 | Pending |
+| REASON-02 | Phase 51 | Pending |
+| REASON-03 | Phase 51 | Pending |
+| REASON-04 | Phase 51 | Pending |
+| REASON-05 | Phase 51 | Pending |
+| REASON-06 | Phase 51 | Pending |
+| REASON-07 | Phase 51 | Pending |
 
 **Coverage:**
 
-- v1 requirements: 53 total
-- Mapped to phases: 53
+- v1 requirements: 60 total
+- Mapped to phases: 60
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-09-24*
-*Last updated: 2026-10-14 — Phase 50 added (Provider Parity & Configuration-Driven Model Swap),
+*Last updated: 2026-10-14 — Phase 51 added (Adjustable Reasoning Effort), REASON-01..07 minted from the
+third web3sec handoff (`51-HANDOFF-web3sec-reasoning-effort.md`); Phases 38-51, 60/60 requirements
+mapped, 100% coverage. Previous: 2026-10-14 — Phase 50 added (Provider Parity & Configuration-Driven Model Swap),
 PARITY-01..08 minted from the second web3sec handoff (`50-HANDOFF-web3sec-parity.md`); Phases 38-50,
 53/53 requirements mapped, 100% coverage. Previous: 2026-10-14 — Phase 49 added (Downstream Adoption of v0.10.1), ADOPT-01..05 minted
 from the web3sec handoff (`49-HANDOFF-web3sec.md`); Phases 38-49, 45/45 requirements mapped, 100%

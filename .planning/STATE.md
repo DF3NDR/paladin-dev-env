@@ -6,11 +6,11 @@ current_phase: 49
 current_phase_name: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)
 status: planning
 stopped_at: Completed 48-09-PLAN.md
-last_updated: "2026-10-14T16:20:03.433Z"
+last_updated: "2026-10-14T16:35:48.000Z"
 last_activity: 2026-10-14
-last_activity_desc: Phase 49 added from the web3sec handoff, sequenced before Phases 46-47
+last_activity_desc: Phase 51 added from the third web3sec handoff (reasoning effort), sequenced after 50 and before Phases 46-47
 progress:
-  total_phases: 11
+  total_phases: 12
   completed_phases: 9
   total_plans: 86
   completed_plans: 86
@@ -28,21 +28,23 @@ provider, transport, or storage implementation.
 **Current focus:** Phase 49 — Downstream Adoption of v0.10.1 (web3sec Consumer Bump) — added
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
-2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then at
-least one more consumer-driven phase (the reasoning-effort companion handoff, not yet filed),
-before Phase 46 (Docs Currency & Hygiene) resumes.
-Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 13 phases (38-50; Phase 50 added 2026-10-14 from the second web3sec
+2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
+(Adjustable Reasoning Effort, added 2026-10-14 from the third web3sec handoff,
+`51-HANDOFF-web3sec-reasoning-effort.md`, depends on Phase 50's PARITY-02..06), before Phase 46
+(Docs Currency & Hygiene) resumes.
+Phase 45 was resequenced ahead of, Phase 45 D-01). Milestone v0.11.0: 14 phases (38-51; Phase 51 added 2026-10-14 from the third web3sec
+handoff, `51-HANDOFF-web3sec-reasoning-effort.md`, sequenced after 50 and before 46-47; Phase 50 added 2026-10-14 from the second web3sec
 handoff, `50-HANDOFF-web3sec-parity.md`, sequenced after 49 and before 46-47; Phase 49 added 2026-10-14 from the web3sec
 handoff, `49-HANDOFF-web3sec.md`, sequenced before 46-47; Phase 48
 added 2026-10-12 after a code survey of the two senses of "node", sequenced before 46-47 because
-it is a public-API break the v0.11 migration guide and tag must carry), 53/53 requirements
-mapped (PARITY-01..08 and ADOPT-01..05 minted 2026-10-14); Phases 38-45 and 48 all sealed (Phase 48 sealed 2026-10-14: 9/9 plans, verification `passed`, UAT 3/3, security verified, Nyquist validated; Phase 40 verified 2026-09-30 once Phase 45's RustFS swap
+it is a public-API break the v0.11 migration guide and tag must carry), 60/60 requirements
+mapped (REASON-01..07, PARITY-01..08 and ADOPT-01..05 minted 2026-10-14); Phases 38-45 and 48 all sealed (Phase 48 sealed 2026-10-14: 9/9 plans, verification `passed`, UAT 3/3, security verified, Nyquist validated; Phase 40 verified 2026-09-30 once Phase 45's RustFS swap
 delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-10-12 when the
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
 **Progress:** [████████████████████] 86/86 plans (100%) of the phases planned so far (38-45, 48);
-Phases 46, 47, 49 and 50 are not yet planned; Phase 49 is next, then Phase 50.
+Phases 46, 47, 49, 50 and 51 are not yet planned; Phase 49 is next, then Phase 50, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
 (22-37.1), 231 plans, 574 tasks, 88/89 requirements (SHIP-05 superseded by SHIP-06), 1,678 commits
@@ -595,6 +597,7 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
 - Phase 48 added: Base Entity Rename — `base::entity::node::Node<T>` → `Entity<T>` (payload `node` → `data`; clean break under a Phase-48-only X-03 supersession or a one-release deprecated alias, decided at discuss; serde alias for persisted JSON), unused base-layer items dispositioned, "node" reserved for the graph sense; ENTITY-01..05 minted; **sequenced before Phases 46-47**, added after Phase 44 sealed (owner decision 2026-10-12 after the code survey in `48-CONTEXT.md`, re-verified on the post-44 tree)
 - Phase 49 added: Downstream Adoption of v0.10.1 (web3sec Consumer Bump) — Paladin's only consumer moves from pin 35fd839 onto the v0.10.1 tag in one coordinated step (Milestone 13 §5, no shims); B-1/B-2/B-3 adopted consumer-side with the D-2 token-usage mapping decided; Paladin gains a compile-only consumer-surface muster and a MIGRATION.md consumer note (ADOPT-01..05 minted, from the web3sec handoff filed as 49-HANDOFF-web3sec.md); **sequenced before Phases 46-47**, the first of a series of consumer-driven phases (owner decision 2026-10-14)
 - Phase 50 added: Provider Parity & Configuration-Driven Model Swap — any agent movable between the nine LLM providers by config only, or an early build error naming provider/model/parameter: OpenAI empty-user-message defect fixed first, parameter support per provider and per model (ADR amending 0004), config-driven provider construction as a library API with all nine adapter/config pairs on the facade, dated per-model profile registry feeding Commissary, response/error parity (empty output, typed refusal, usage cap, cache-write, reasoning text, stop sequences), per-step fallback models, nine-adapter conformance + live smoke + mdBook "Switching providers" page (PARITY-01..08 minted, from the second web3sec handoff filed as 50-HANDOFF-web3sec-parity.md; D-1..D-4 settled at discuss); **sequenced after Phase 49 and before Phases 46-47** (owner decision 2026-10-14)
+- Phase 51 added: Adjustable Reasoning Effort — a provider-neutral `ReasoningEffort` on `LlmRequest`, `PaladinData`, the YAML agent definition and `llm.<provider>` config (request → agent → provider → vendor default), translated exactly to each vendor's native wire form or refused before the HTTP call with `LlmError::UnsupportedParameter`; compile-enforced `ReasoningWire` per compat preset, model-aware mapping in the native adapters, levels from Phase 50's model-profile registry, Kimi silent-no-op regression test, requested/effective effort on the response and trace stream, `Budget(n)` bounds, live per-vendor invalid-effort probes, ADR amending 0004, mdBook "Reasoning effort" page (REASON-01..07 minted, fortieth prefix; source `51-HANDOFF-web3sec-reasoning-effort.md`; runs after 50, before 46-47; ships in v0.11.0)
 
 ## Deferred Items
 

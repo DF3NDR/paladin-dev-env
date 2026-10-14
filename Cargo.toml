@@ -447,6 +447,14 @@ name = "evals"
 harness = false
 path = "tests/evals.rs"
 
+# Phase 49 (ADOPT-04): the consumer-surface muster. Compile-only; nothing in it is executed.
+# `required-features` makes an explicit `--test consumer_surface_muster` run fail loudly,
+# instead of skipping, when the consumer's two provider features are off.
+[[test]]
+name = "consumer_surface_muster"
+path = "tests/consumer_surface_muster.rs"
+required-features = ["llm-anthropic", "llm-deepseek"]
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"

@@ -799,7 +799,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 | 46. Docs Currency & Hygiene | v0.11.0 | 0/TBD | Not started | - |
 | 47. v0.11.0 Crate Release | v0.11.0 | 0/TBD | Not started | - |
 | 48. Base Entity Rename (runs after 44, before 46-47) | v0.11.0 | 9/9 | Complete    | 2026-10-14 |
-| 49. Downstream Adoption of v0.10.1 (web3sec Consumer Bump) (runs after 48, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
+| 49. Downstream Adoption of v0.10.1 (web3sec Consumer Bump) (runs after 48, before 46-47) | v0.11.0 | 0/6 | Not started | - |
 | 50. Provider Parity & Configuration-Driven Model Swap (runs after 49, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
 | 51. Adjustable Reasoning Effort (runs after 50, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
 
@@ -1227,7 +1227,29 @@ section.
      is changed, shimmed or deprecated** for the consumer: zero new §9.2 rows and zero
      `semver-checks` allowlist changes from this phase; `make clean-code`, `make check-gates`,
      `make api-surface` and the 82 % coverage floor stay green. No `v0.10.2` is cut.
-**Plans**: TBD
+**Plans**: 6 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 49-01-PLAN.md — Tracer: the compile-only consumer-surface muster (`tests/consumer_surface_muster.rs`) green under `cargo test` as one `[[test]]` target with `required-features`; gate wiring proved (`make check`/`make lint`/`api-surface`), `make check-consumer-surface` alias outside check-gates; 49-VALIDATION.md map filled
+- [ ] 49-02-PLAN.md — MIGRATION.md §9.8 `### Library consumers: v0.10.1 → v0.11.0` (D-2 no-total-only-`TokenUsage` pitfall, DR-1..DR-11 break table, insulation advice) + CHANGELOG [Unreleased] entry; zero §9.2 rows, zero allowlist changes
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 49-03-PLAN.md — Proven red: `bool` re-added to `Commissary::new` (callers patched) and a dropped facade re-export each fail only the muster; tree restored; 49-MUSTER-RED-EVIDENCE.md
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 49-04-PLAN.md — Consumer hand-back: 49-CONSUMER-ADOPTION-SPEC.md (Step-0 inventory, commit-SHA pin, D-1, D-2 lossless, D-3, gates, Appendix-A corrections) + 49-RETURN-report.md template (consumer fields PENDING) + phase-wide no-API-change evidence
+
+**Wave 4** *(blocked on Wave 3 completion; external: web3sec)*
+
+- [ ] 49-05-PLAN.md — Checkpoint (blocking-human): relay the spec, file the consumer's return report, mechanical intake C1-C14; ADOPT-01..03 close only on an accepted report
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 49-06-PLAN.md — Muster v1.1: reconcile with the consumer's Step-0 import inventory (pin, DR row or reason per item) and extend the consumer table if needed; zero §9.2 rows
 
 ### Phase 50: Provider Parity & Configuration-Driven Model Swap
 

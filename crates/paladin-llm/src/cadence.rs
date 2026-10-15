@@ -83,7 +83,8 @@ use paladin_ports::output::cadence_port::{
     CADENCE_LOG_TARGET, CadenceError, CadenceKey, CadencePort,
 };
 use paladin_ports::output::llm_port::{
-    LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
+    LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
+    StreamingResponse,
 };
 use paladin_ports::output::rate_limit_hints::RetryDelaySource;
 
@@ -454,6 +455,12 @@ impl LlmPort for CadenceLlmAdapter {
     /// Unchanged -- delegates to `inner`.
     fn get_capabilities(&self) -> ProviderCapabilities {
         self.inner.get_capabilities()
+    }
+
+    /// Unchanged -- delegates to `inner`, so the per-model parameter policy (ADR-0061) is not
+    /// silently disabled by this decorator.
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        self.inner.model_profile(model)
     }
 }
 
@@ -1154,5 +1161,23 @@ mod tests {
         let w = wiring();
         assert_eq!(w.settings(), &CadenceSettings::default());
         assert!(format!("{w:?}").contains("CadenceWiring"));
+    }
+
+    use crate::fallback::test_support::ProfiledStubPort;
+    use paladin_ports::output::llm_port::{ModelProfile, ParamSupport};
+
+    /// ADR-0061 / Pitfall 4: the Cadence decorator forwards `model_profile` to its inner port and
+    /// passes the model string through unchanged.
+    #[test]
+    fn cadence_forwards_model_profile() {
+        let profile = ModelProfile::new()
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            .with_max_output_tokens(8_192);
+        let stub = Arc::new(ProfiledStubPort::new("stub", "m", Some(profile.clone())));
+        let paced = with_cadence(stub.clone(), Some(&wiring()));
+
+        assert_eq!(paced.model_profile("m"), Some(profile));
+        assert_eq!(paced.model_profile("other"), None);
+        assert_eq!(stub.asked(), vec!["m".to_string(), "other".to_string()]);
     }
 }

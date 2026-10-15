@@ -31,7 +31,8 @@ use futures::stream::{Stream, StreamExt};
 use paladin_core::platform::container::cost::{Cost, PriceTable};
 use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_ports::output::llm_port::{
-    LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
+    LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
+    StreamingResponse,
 };
 
 /// The log/trace target every unpriced-model warning is emitted under (D-08).
@@ -213,6 +214,12 @@ impl LlmPort for PricingLlmAdapter {
     /// Unchanged -- delegates to `inner`.
     fn get_capabilities(&self) -> ProviderCapabilities {
         self.inner.get_capabilities()
+    }
+
+    /// Unchanged -- delegates to `inner`, so the per-model parameter policy (ADR-0061) is not
+    /// silently disabled by this decorator.
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        self.inner.model_profile(model)
     }
 }
 
@@ -540,5 +547,48 @@ mod tests {
             adapter.get_available_models().await.unwrap(),
             mock.get_available_models().await.unwrap()
         );
+    }
+
+    use crate::fallback::test_support::ProfiledStubPort;
+    use paladin_ports::output::llm_port::ParamSupport;
+
+    fn sample_profile() -> ModelProfile {
+        ModelProfile::new()
+            .with_temperature(ParamSupport::Fixed(1.0))
+            .with_context_window(128_000)
+            .with_verified_on("2026-10-15")
+    }
+
+    /// ADR-0061 / Pitfall 4: the pricing decorator forwards `model_profile` to its inner port and
+    /// passes the model string through unchanged.
+    #[test]
+    fn pricing_forwards_model_profile() {
+        let stub = Arc::new(ProfiledStubPort::new("stub", "m", Some(sample_profile())));
+        let adapter = PricingLlmAdapter::new(stub.clone(), usd_table());
+
+        assert_eq!(adapter.model_profile("m"), Some(sample_profile()));
+        assert_eq!(adapter.model_profile("other"), None);
+        assert_eq!(stub.asked(), vec!["m".to_string(), "other".to_string()]);
+    }
+
+    /// ADR-0061 / Pitfall 4: the production composition `Pricing(Cadence(provider))` returns the
+    /// provider's own profile, so the policy cannot be silently disabled by the decorators.
+    #[test]
+    fn pricing_over_cadence_forwards_model_profile() {
+        use crate::cadence::{CadenceSettings, CadenceWiring, with_cadence};
+        use paladin_ports::output::cadence_port::CadencePolicy;
+        use paladin_storage::cadence::InMemoryCadence;
+
+        let stub: Arc<dyn LlmPort> =
+            Arc::new(ProfiledStubPort::new("stub", "m", Some(sample_profile())));
+        let wiring = CadenceWiring::new(
+            Arc::new(InMemoryCadence::new(CadencePolicy::default())),
+            CadenceSettings::default(),
+        );
+        let cadence = with_cadence(stub, Some(&wiring));
+        let composed = with_pricing(cadence, &usd_table());
+
+        assert_eq!(composed.model_profile("m"), Some(sample_profile()));
+        assert_eq!(composed.model_profile("unknown"), None);
     }
 }

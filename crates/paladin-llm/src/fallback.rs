@@ -122,7 +122,8 @@ use futures::stream::{self, Stream, StreamExt};
 use paladin_core::platform::container::transience::Transience;
 use paladin_ports::output::cadence_port::{CADENCE_LOG_TARGET, CadenceKey, CadencePort};
 use paladin_ports::output::llm_port::{
-    LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
+    LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
+    StreamingResponse,
 };
 use paladin_ports::output::trace_sink_port::{TraceEmitter, TraceEvent, current_trace_emitter};
 use thiserror::Error;
@@ -544,6 +545,113 @@ impl LlmPort for FallbackLlmAdapter {
         self.first()
             .map(|provider| provider.get_capabilities())
             .unwrap_or_default()
+    }
+
+    /// The strictest profile any hop would accept (ADR-0061): the [`ModelProfile::intersect`] of
+    /// every hop's `Some` profile for `model`, so the builder refuses what any hop could not
+    /// honour. `None` when no hop declares a profile.
+    ///
+    /// A hop that returns `None` (a third-party adapter with no profile) is skipped and judged
+    /// only by its own request builder. The intersection is order-independent, so the order the
+    /// hops are listed in does not change the answer. Plan 50-14 points each step at its own
+    /// model.
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        self.chain
+            .iter()
+            .filter_map(|provider| provider.model_profile(model))
+            .reduce(|combined, next| combined.intersect(&next))
+    }
+}
+
+/// A scripted [`LlmPort`] that reports a fixed [`ModelProfile`] for one model, used by the
+/// decorator tests in this crate to prove `model_profile` is forwarded (ADR-0061, Pitfall 4).
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::Mutex;
+
+    use async_trait::async_trait;
+    use futures::stream::Stream;
+    use paladin_ports::output::llm_port::{
+        LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
+        StreamingResponse,
+    };
+
+    /// Reports `profile` for `model` and `None` for any other model, recording every model it is
+    /// asked about so a test can check the model string passes through unchanged.
+    pub(crate) struct ProfiledStubPort {
+        name: &'static str,
+        model: &'static str,
+        profile: Option<ModelProfile>,
+        asked: Mutex<Vec<String>>,
+    }
+
+    impl ProfiledStubPort {
+        pub(crate) fn new(
+            name: &'static str,
+            model: &'static str,
+            profile: Option<ModelProfile>,
+        ) -> Self {
+            Self {
+                name,
+                model,
+                profile,
+                asked: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// The models `model_profile` has been called with, in order.
+        pub(crate) fn asked(&self) -> Vec<String> {
+            self.asked
+                .lock()
+                .map(|asked| asked.clone())
+                .unwrap_or_default()
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for ProfiledStubPort {
+        async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err(LlmError::ProcessingError(
+                "ProfiledStubPort does not generate".to_string(),
+            ))
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
+        {
+            Err(LlmError::ProcessingError(
+                "ProfiledStubPort does not stream".to_string(),
+            ))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![self.model.to_string()])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            self.name
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+
+        fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+            if let Ok(mut asked) = self.asked.lock() {
+                asked.push(model.to_string());
+            }
+            if model == self.model {
+                self.profile.clone()
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -1646,5 +1754,65 @@ mod tests {
         assert_eq!(served_by(&response), Some("anthropic"));
         assert_eq!(primary.call_count(), 1);
         assert_eq!(start.elapsed(), Duration::ZERO);
+    }
+
+    use super::test_support::ProfiledStubPort;
+    use paladin_ports::output::llm_port::{ModelProfile, ParamSupport, StopSupport};
+
+    fn hop(name: &'static str, profile: Option<ModelProfile>) -> Arc<dyn LlmPort> {
+        Arc::new(ProfiledStubPort::new(name, "m", profile))
+    }
+
+    /// ADR-0061 (g): the chain's profile is the intersection of its hops' profiles; a hop with no
+    /// profile is skipped; a chain where no hop declares one has none; and the order the hops are
+    /// listed in does not change the answer.
+    #[test]
+    fn fallback_model_profile_is_the_intersection_of_hops() {
+        let p1 = ModelProfile::new()
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            .with_stop_sequences(StopSupport::Supported { max: Some(16) })
+            .with_context_window(200_000)
+            .with_json_object(true);
+        let p2 = ModelProfile::new()
+            .with_temperature(ParamSupport::Range(0.0, 1.0))
+            .with_stop_sequences(StopSupport::Supported { max: Some(4) })
+            .with_context_window(128_000)
+            .with_json_object(true);
+        let expected = p1.intersect(&p2);
+        assert_eq!(expected.temperature, ParamSupport::Range(0.0, 1.0));
+
+        let chain = FallbackLlmAdapter::new(vec![
+            hop("openai", Some(p1.clone())),
+            hop("anthropic", Some(p2.clone())),
+        ])
+        .expect("chain");
+        assert_eq!(chain.model_profile("m"), Some(expected.clone()));
+
+        // Order independent.
+        let reversed = FallbackLlmAdapter::new(vec![
+            hop("anthropic", Some(p2.clone())),
+            hop("openai", Some(p1.clone())),
+        ])
+        .expect("chain");
+        assert_eq!(reversed.model_profile("m"), Some(expected.clone()));
+
+        // A hop with no profile is skipped, not treated as "nothing sendable".
+        let with_blank = FallbackLlmAdapter::new(vec![
+            hop("openai", Some(p1)),
+            hop("third-party", None),
+            hop("anthropic", Some(p2)),
+        ])
+        .expect("chain");
+        assert_eq!(with_blank.model_profile("m"), Some(expected));
+
+        // No hop declares one: no profile.
+        let none = FallbackLlmAdapter::new(vec![hop("a", None), hop("b", None)]).expect("chain");
+        assert_eq!(none.model_profile("m"), None);
+
+        // A single-hop chain returns that hop's profile unchanged.
+        let single_profile = ModelProfile::new().with_temperature(ParamSupport::Fixed(1.0));
+        let single = FallbackLlmAdapter::new(vec![hop("only", Some(single_profile.clone()))])
+            .expect("chain");
+        assert_eq!(single.model_profile("m"), Some(single_profile));
     }
 }

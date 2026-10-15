@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Per-model parameter support (PARITY-02; Phase 50 plan 50-02; ADR-0061).** `paladin-ports`
+  gains `ModelProfile`, `ParamSupport` (`Range`, `Fixed`, `NotSent`), `StopSupport` and
+  `SamplingParam` in `output::model_profile` (re-exported from `output::llm_port`), and
+  `LlmPort::model_profile(&self, model: &str) -> Option<ModelProfile>`, a defaulted method that
+  returns `None`, so every existing implementor compiles unchanged and `ProviderCapabilities` is
+  untouched. `ParamSupport::admits` is the single admission rule (inclusive range, exact `Fixed`
+  equality, `NaN` never admitted, no clamping), and `ModelProfile::new()` is fail closed.
+  `PricingLlmAdapter`, `CadenceLlmAdapter` and `FallbackLlmAdapter` forward `model_profile`
+  (the fallback chain reports the intersection of its hops' profiles), so the policy cannot be
+  silently disabled by the decorators every server-built agent is wrapped in. ADR-0061 amends
+  ADR-0004. Additive only: no `MIGRATION.md` row and no allowlist entry.
+
 - **Consumer-surface muster and library-consumer upgrade note (ADOPT-04, ADOPT-05; Phase 49 plans
   49-01, 49-02).** `tests/consumer_surface_muster.rs`, a compile-only integration test declared as
   `[[test]] consumer_surface_muster` with `required-features = ["llm-anthropic", "llm-deepseek"]`,

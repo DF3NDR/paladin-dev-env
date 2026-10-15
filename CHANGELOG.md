@@ -591,6 +591,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `max_tokens` above a model's profiled maximum output is refused by name before anything is
   sent, never clamped. The dropped-parameter log moved from `debug!` to `warn!`.
 
+- **The original adapters follow the per-model parameter policy (PARITY-01, PARITY-02,
+  PARITY-05; Phase 50 plan 50-05; ADR-0061; `MIGRATION.md` 9.1, M-B-13).** OpenAI, DeepSeek,
+  Anthropic and Gemini build their request, buffered and streamed, through `sampling::apply` with
+  the profile their model registry resolves, stamp `paladin.params_omitted`,
+  `paladin.response_format_adjusted` and `paladin.unprofiled_model` on buffered responses as the
+  compat engine does, and now report a `model_profile`. OpenAI no longer sends a fabricated
+  `temperature` of 0.7 or `top_p` of 1.0 when the caller set none (`max_tokens` keeps its
+  documented default of 4096). Anthropic's validate-then-discard is gone: its profile states
+  `temperature` and `top_p` not sent, so an explicit temperature on an Anthropic agent is refused
+  at build by name, and a direct call's value is omitted and recorded instead of dropped silently.
+  Stop sequences now reach the wire in declared order on OpenAI (`stop`, at most 4; more are
+  omitted whole and recorded, never truncated), DeepSeek (`stop`) and Anthropic
+  (`stop_sequences`); Gemini already sent them. DeepSeek's schema-to-object downgrade and
+  Anthropic's never-sent JSON format are now recorded, and an effective `max_tokens` above a
+  profiled maximum is refused by name. The nine-provider "same agent is equivalent or refused by
+  name" matrix row is green for every provider. `paladin-llm` public surface is unchanged (the
+  adapters' new fields are private).
+
 - **The base version family is renamed to the Entity vocabulary** (Phase 48; ENTITY-03; ADR-0060;
   see the Phase 48 rows in `MIGRATION.md` 9.2). `base::service::node_version_service` becomes
   `base::service::entity_version_service`, and `NodeVersion`, `NodeVersionMetadata`,

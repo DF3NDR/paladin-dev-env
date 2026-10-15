@@ -776,9 +776,9 @@ matrix_case!(ollama_context_reaches_the_wire => case_context_reaches_the_wire("o
 matrix_case!(openai_compatible_context_reaches_the_wire => case_context_reaches_the_wire("openai-compatible"));
 
 // (b) the same agent is equivalent or refused by name -- all nine
-matrix_case!(#[ignore = "red until plan 50-05: the stop words are not sent on the wire"] openai_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("openai"));
-matrix_case!(#[ignore = "red until plan 50-05: neither the temperature nor the stop words are sent on the wire"] anthropic_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("anthropic"));
-matrix_case!(#[ignore = "red until plan 50-05: the stop words are not sent on the wire"] deepseek_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("deepseek"));
+matrix_case!(openai_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("openai"));
+matrix_case!(anthropic_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("anthropic"));
+matrix_case!(deepseek_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("deepseek"));
 matrix_case!(kimi_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("kimi"));
 matrix_case!(qwen_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("qwen"));
 matrix_case!(grok_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("grok"));

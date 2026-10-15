@@ -370,7 +370,7 @@ impl GeminiAdapter {
                 contents.push(GeminiContent {
                     role: "user".to_string(),
                     parts: vec![GeminiPart {
-                        text: user_prompt.query.clone(),
+                        text: crate::turn::user_turn_text(user_prompt),
                     }],
                 });
             }
@@ -1500,6 +1500,30 @@ mod tests {
         let assistant_gemini = adapter.build_request(&assistant_request).unwrap();
         // Gemini's assistant-equivalent role is "model", never "assistant".
         assert_eq!(assistant_gemini.contents[0].role, "model");
+    }
+
+    /// Phase 50 (PARITY-08): a present context is appended to the query by the shared
+    /// `user_turn_text` helper; an absent one leaves the query unchanged.
+    #[test]
+    fn gemini_user_turn_appends_context() {
+        let adapter = test_adapter("https://example.invalid");
+        let user_turn = |context: Option<&str>| -> serde_json::Value {
+            let request = build_request(
+                "gemini-2.5-flash",
+                PromptType::User(UserPrompt {
+                    query: "What is 2+2?".to_string(),
+                    context: context.map(str::to_string),
+                }),
+            );
+            let body = serde_json::to_value(adapter.build_request(&request).unwrap()).unwrap();
+            body["contents"][0]["parts"][0]["text"].clone()
+        };
+
+        assert_eq!(user_turn(None), "What is 2+2?");
+        assert_eq!(
+            user_turn(Some("Extra context.")),
+            "What is 2+2?\n\nExtra context."
+        );
     }
 
     #[test]

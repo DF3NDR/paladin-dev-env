@@ -477,7 +477,7 @@ impl DeepSeekAdapter {
             PromptType::User(user_prompt) => {
                 messages.push(DeepSeekMessage {
                     role: "user".to_string(),
-                    content: user_prompt.query.clone(),
+                    content: crate::turn::user_turn_text(user_prompt),
                     reasoning_content: None,
                 });
             }
@@ -1689,6 +1689,33 @@ mod tests {
         assert!(
             body.as_object().unwrap().get("response_format").is_none(),
             "absent response_format must not appear on the wire, got: {body:?}"
+        );
+    }
+
+    /// Phase 50 (PARITY-08): a present context is appended to the query by the shared
+    /// `user_turn_text` helper; an absent one leaves the query unchanged.
+    #[test]
+    fn deepseek_user_turn_appends_context() {
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        let adapter = test_adapter();
+        let user_turn = |context: Option<&str>| -> serde_json::Value {
+            let request = LlmRequest::new(
+                "deepseek-chat",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "What is 2+2?".to_string(),
+                    context: context.map(str::to_string),
+                }))
+                .unwrap(),
+            );
+            let body = serde_json::to_value(adapter.build_request(&request).unwrap()).unwrap();
+            body["messages"][0]["content"].clone()
+        };
+
+        assert_eq!(user_turn(None), "What is 2+2?");
+        assert_eq!(
+            user_turn(Some("Extra context.")),
+            "What is 2+2?\n\nExtra context."
         );
     }
 

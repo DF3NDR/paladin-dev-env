@@ -581,7 +581,7 @@ impl CompatEngine {
             PromptType::User(user_prompt) => {
                 messages.push(CompatMessage {
                     role: "user".to_string(),
-                    content: user_prompt.query.clone(),
+                    content: crate::turn::user_turn_text(user_prompt),
                     reasoning_content: None,
                 });
             }
@@ -1819,6 +1819,34 @@ mod tests {
         let body_json: Value =
             serde_json::from_str(&body_text).expect("captured body must be valid JSON");
         (body_json, body_text)
+    }
+
+    /// Phase 50 (PARITY-08): one test for the engine covers Kimi, Qwen, Grok, Ollama and the
+    /// OpenAI-compatible provider, which all build their request here. A present context is
+    /// appended to the query by the shared `user_turn_text` helper; an absent one leaves the
+    /// query unchanged.
+    #[tokio::test]
+    async fn compat_engine_user_turn_appends_context() {
+        async fn user_content(context: Option<&str>) -> Value {
+            let request = LlmRequest::new(
+                "test-model",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "What is 2+2?".to_string(),
+                    context: context.map(str::to_string),
+                }))
+                .unwrap(),
+            );
+            let (body, _) =
+                generate_and_capture_body(test_config_at("https://example.invalid/v1"), request)
+                    .await;
+            body["messages"][0]["content"].clone()
+        }
+
+        assert_eq!(user_content(None).await, "What is 2+2?");
+        assert_eq!(
+            user_content(Some("Extra context.")).await,
+            "What is 2+2?\n\nExtra context."
+        );
     }
 
     // Test 1 — mechanism is data-driven: a preset declaring

@@ -107,6 +107,14 @@ pub mod rate_limit_headers;
 /// — reused by the shared compatible core and by bespoke adapters alike).
 #[allow(missing_docs)]
 pub mod redaction;
+/// The per-model profile registry (ADR-0061, D-05..D-07): seeded entry, config
+/// [`registry::ModelOverride`], adapter-wide fallback, and the visible unknown-model fallback.
+/// Not feature-gated -- every adapter resolves its profile through it.
+pub mod registry;
+/// The one wire-time sampling filter every request builder calls (ADR-0061): a set parameter is
+/// sent only when the model's profile admits it, every omission is logged once and recorded under
+/// [`sampling::PARAMS_OMITTED_METADATA_KEY`]. Not feature-gated.
+pub mod sampling;
 /// Application-layer services composing this crate's ports (provider capabilities,
 /// [`paladin_ports::output::token_counter_port::TokenCounterPort`]) rather than
 /// implementing a provider adapter themselves. Houses [`services::commissary`], the

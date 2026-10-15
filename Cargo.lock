@@ -3516,6 +3516,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "chrono",
+ "config",
  "criterion",
  "futures",
  "httpdate",

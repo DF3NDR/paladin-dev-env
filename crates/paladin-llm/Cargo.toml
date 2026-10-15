@@ -57,6 +57,12 @@ base64 = { workspace = true, optional = true }
 tokio-test = "0.4"
 criterion = "0.5"
 mockito = "1.7.0"
+# Parses `registry::ModelOverride` from YAML in its own tests (plan 50-03) through the same `config`
+# loader the root crate reads application settings with, so the enum map form (`{fixed: 0.95}`),
+# `deny_unknown_fields` and the `u32`-overflow behaviour are pinned through the real path
+# (`serde_yaml` would demand YAML tags for enums instead). Same `0.15` pin as the root crate;
+# already in `Cargo.lock`, so no new package.
+config = "0.15.11"
 # `test-util` gives the Cadence decorator's paused-clock tests (`start_paused`) -- a feature of the
 # already-present tokio dependency, not a new crate.
 tokio = { workspace = true, features = ["test-util"] }

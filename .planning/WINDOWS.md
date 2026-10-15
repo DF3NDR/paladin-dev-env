@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 13
+open_count: 14
 waived_count: 37
 fixed_count: 22
-total_count: 72
-last_updated: 2026-10-15T16:23:35.635Z
+total_count: 73
+last_updated: 2026-10-15T17:13:24.980Z
 ---
 
 # Broken Windows Ledger
@@ -87,6 +87,7 @@ last_updated: 2026-10-15T16:23:35.635Z
 | 70 | 50 | unrun-verify | Cargo.toml |  | 50-01: full 'cargo test --workspace' not run to completion: the workspace test build exhausted the sandbox disk quota (No space left on device while linking); targeted verifies all passed instead (provider_swap_matrix --features llm-all, paladin-llm --all-features --lib 651 tests, cargo clippy --all-targets --features llm-all -D warnings, cargo fmt --check, make check-consumer-surface, make api-surface) | open |  | 2026-10-15T14:44:02.279Z |  |
 | 71 | 50 | skipped-test | tests/provider_swap_matrix.rs |  | 50-01: 19 provider_swap_matrix cases are #[ignore = 'red until plan 50-NN'] by design (50-03: 7, 50-05: 3, 50-12: 7, 50-13: 1, 50-14: 1); each fixing plan must un-ignore the cases it names; none may remain ignored at phase close | open |  | 2026-10-15T14:44:02.458Z |  |
 | 72 | 50 | unrun-verify | Makefile | 367 | 50-02: make clean-code stops at lint-shell (shellcheck not installed in the sandbox); fmt, clippy -D warnings and workspace check passed separately | open |  | 2026-10-15T16:23:35.635Z |  |
+| 73 | 50 | unrun-verify | src/infrastructure/web/run_api_wiring.rs | 2369 | Wave 1 post-merge gate (plans 50-02, 50-04): cargo test --workspace --lib --bins passes 1348 tests but build_run_api_persists_no_run_traces_by_default and build_run_api_persists_run_traces_when_trace_persist_is_set fail with 'the run never reached a terminal status' (10 s worker deadline). Reproduced identically at the pre-wave-1 commit 28b6a69b in a throwaway worktree, so it is pre-existing and sandbox-specific, not a Phase 50 regression; CI on the pushed branch is the proof of record. | open |  | 2026-10-15T17:13:24.980Z |  |
 
 ````json
 [
@@ -952,6 +953,18 @@ last_updated: 2026-10-15T16:23:35.635Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-15T16:23:35.635Z",
+    "resolved_at": null
+  },
+  {
+    "id": 73,
+    "kind": "unrun-verify",
+    "phase": "50",
+    "file": "src/infrastructure/web/run_api_wiring.rs",
+    "line": 2369,
+    "description": "Wave 1 post-merge gate (plans 50-02, 50-04): cargo test --workspace --lib --bins passes 1348 tests but build_run_api_persists_no_run_traces_by_default and build_run_api_persists_run_traces_when_trace_persist_is_set fail with 'the run never reached a terminal status' (10 s worker deadline). Reproduced identically at the pre-wave-1 commit 28b6a69b in a throwaway worktree, so it is pre-existing and sandbox-specific, not a Phase 50 regression; CI on the pushed branch is the proof of record.",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-15T17:13:24.980Z",
     "resolved_at": null
   }
 ]

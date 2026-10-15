@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 12
+open_count: 13
 waived_count: 37
 fixed_count: 22
-total_count: 71
-last_updated: 2026-10-15T14:44:02.458Z
+total_count: 72
+last_updated: 2026-10-15T16:23:35.635Z
 ---
 
 # Broken Windows Ledger
@@ -86,6 +86,7 @@ last_updated: 2026-10-15T14:44:02.458Z
 | 69 | 48 | unrun-verify | scripts/coverage.sh |  | 48-09: workspace coverage percentage not measured locally (no Docker daemon, no object store, 3 GB free); CI Coverage job passed the 82 percent gate on dcbcb63 but its figure was not retrievable (artifact download denied) | open |  | 2026-10-14T00:14:54.479Z |  |
 | 70 | 50 | unrun-verify | Cargo.toml |  | 50-01: full 'cargo test --workspace' not run to completion: the workspace test build exhausted the sandbox disk quota (No space left on device while linking); targeted verifies all passed instead (provider_swap_matrix --features llm-all, paladin-llm --all-features --lib 651 tests, cargo clippy --all-targets --features llm-all -D warnings, cargo fmt --check, make check-consumer-surface, make api-surface) | open |  | 2026-10-15T14:44:02.279Z |  |
 | 71 | 50 | skipped-test | tests/provider_swap_matrix.rs |  | 50-01: 19 provider_swap_matrix cases are #[ignore = 'red until plan 50-NN'] by design (50-03: 7, 50-05: 3, 50-12: 7, 50-13: 1, 50-14: 1); each fixing plan must un-ignore the cases it names; none may remain ignored at phase close | open |  | 2026-10-15T14:44:02.458Z |  |
+| 72 | 50 | unrun-verify | Makefile | 367 | 50-02: make clean-code stops at lint-shell (shellcheck not installed in the sandbox); fmt, clippy -D warnings and workspace check passed separately | open |  | 2026-10-15T16:23:35.635Z |  |
 
 ````json
 [
@@ -939,6 +940,18 @@ last_updated: 2026-10-15T14:44:02.458Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-15T14:44:02.458Z",
+    "resolved_at": null
+  },
+  {
+    "id": 72,
+    "kind": "unrun-verify",
+    "phase": "50",
+    "file": "Makefile",
+    "line": 367,
+    "description": "50-02: make clean-code stops at lint-shell (shellcheck not installed in the sandbox); fmt, clippy -D warnings and workspace check passed separately",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-15T16:23:35.635Z",
     "resolved_at": null
   }
 ]

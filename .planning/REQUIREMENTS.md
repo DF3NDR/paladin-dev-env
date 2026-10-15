@@ -213,7 +213,7 @@ cross-cutting, and several are defects in the three original adapters. `PROV-*` 
   parameter — covering manual and auto temperature on a `(1,1)` provider, the user prompt on the
   wire, the per-step model in a fallback chain, and an empty `stop` completion
 
-- [ ] **PARITY-02**: Parameter support is modelled per provider and per model (`Range` / `Fixed`
+- [x] **PARITY-02**: Parameter support is modelled per provider and per model (`Range` / `Fixed`
   / `NotSent` for temperature, top_p, penalties and stop sequences), additive to
   `ProviderCapabilities` unless an explicit X-03 supersession is recorded, and one documented
   policy for a configured value the target does not accept — an ADR amending ADR-0004 — governs
@@ -454,7 +454,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ADOPT-04 | Phase 49 | Complete |
 | ADOPT-05 | Phase 49 | Complete |
 | PARITY-01 | Phase 50 | Pending |
-| PARITY-02 | Phase 50 | Pending |
+| PARITY-02 | Phase 50 | Complete |
 | PARITY-03 | Phase 50 | Pending |
 | PARITY-04 | Phase 50 | Pending |
 | PARITY-05 | Phase 50 | Pending |

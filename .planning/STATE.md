@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-01-PLAN.md
-last_updated: "2026-10-15T16:05:17.017Z"
+stopped_at: Completed 50-02-PLAN.md
+last_updated: "2026-10-15T16:23:28.897Z"
 last_activity: 2026-10-15
 last_activity_desc: Phase 50 execution started
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 107
-  completed_plans: 90
+  completed_plans: 91
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([████████░░] 84%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([█████████░] 85%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,8 +63,8 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 1 of 18
-Status: Executing Phase 50
+Plan: 2 of 18
+Status: Ready to execute
 Last activity: 2026-10-15 — Phase 50 execution started
 
 ## Performance Metrics
@@ -297,6 +297,7 @@ Last activity: 2026-10-15 — Phase 50 execution started
 | Phase 49 P02 | 25min | 2 tasks | 2 files |
 | Phase 49 P03 | 25min | 2 tasks | 1 files |
 | Phase 50 P01 | 32min | 3 tasks | 10 files |
+| Phase 50 P02 | 40min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -505,6 +506,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase 49]: scope cut 2026-10-14 — the consumer never adopts v0.10.1; it moves once to v0.11.0 after Phases 50-51 (MIGRATION.md §9.8 consumer note is the spec); plans 49-04..06 cancelled
 - [Phase ?]: 50-01: matrix asserts the query is contained in the last user turn (the execution service folds system prompt + query into UserPrompt::query); adapter-level test keeps exact equality
 - [Phase ?]: 50-01: PARITY-01 left open (matrix has 19 red cases ignored until plans 50-03/05/12/13/14); only PARITY-08 marked complete
+- [Phase ?]: [Phase 50-02] ADR-0061 amends ADR-0004: refuse explicit, omit auto visibly; ModelProfile is additive and fail closed; owner readings R-1 (50-18) and R-2 (50-17) recorded pending
 
 ### Pending Todos
 
@@ -723,8 +725,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-15T14:44:57.434Z
-**Stopped at:** Completed 50-01-PLAN.md
+**Last session:** 2026-10-15T16:23:28.832Z
+**Stopped at:** Completed 50-02-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

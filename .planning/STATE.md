@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-03-PLAN.md
-last_updated: "2026-10-15T17:48:36.455Z"
+stopped_at: Completed 50-05-PLAN.md
+last_updated: "2026-10-15T18:15:02.916Z"
 last_activity: 2026-10-15
 last_activity_desc: Phase 50 execution started
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 107
-  completed_plans: 93
+  completed_plans: 94
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([█████████░] 87%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([█████████░] 88%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 4 of 18
+Plan: 5 of 18
 Status: Ready to execute
 Last activity: 2026-10-15 — Phase 50 execution started
 
@@ -300,6 +300,7 @@ Last activity: 2026-10-15 — Phase 50 execution started
 | Phase 50 P02 | 40min | 3 tasks | 11 files |
 | Phase 50 P04 | 55min | 2 tasks | 2 files |
 | Phase 50 P03 | ~45min | 3 tasks | 16 files |
+| Phase 50 P05 | 20min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -513,6 +514,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 50] 50-03: ModelOverride is pinned through the config crate (the production loader), not serde_yaml, because serde_yaml 0.9 reads enums from YAML tags and would not accept the {fixed: 0.95} form operators write
 - [Phase ?]: [Phase 50] 50-03: a compat preset that declares no temperature_range gets ADR-0004's (0.0, 1.0) in its fallback profile, so the wire filter and the builder check agree; a direct call above 1.0 on such an endpoint is now omitted and recorded (listed for the plan 50-05 MIGRATION 9.1 row)
 - [Phase ?]: [Phase 50] 50-03: an effective max_tokens above a profile's max_output_tokens is refused by name before any request; the framework default PromptParameters.max_tokens is 1000, so seeded max_output_tokens (plan 50-06) must stay at or above it or the default must be made explicit (plan 50-08)
+- [Phase 50-05]: RequestNotes moved into sampling.rs so the compat engine and the four bespoke adapters stamp the three metadata keys through one type
+- [Phase 50-05]: Anthropic adapter-wide profile states temperature and top_p NotSent, so an explicit temperature is refused at build by name; OpenAI keeps max_tokens 4096 as a compiled default that is checked against the profile
 
 ### Pending Todos
 
@@ -731,8 +734,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-15T17:48:36.320Z
-**Stopped at:** Completed 50-03-PLAN.md
+**Last session:** 2026-10-15T18:15:02.828Z
+**Stopped at:** Completed 50-05-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

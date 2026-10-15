@@ -1380,7 +1380,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 50-05-PLAN.md — OpenAI, DeepSeek, Anthropic and Gemini on the shared filter (no fabricated sampling values, no validate-then-discard, stop sequences sent, JSON mode and max output from the profile); nine-provider equivalence row green; M-B row for the whole policy
+- [x] 50-05-PLAN.md — OpenAI, DeepSeek, Anthropic and Gemini on the shared filter (no fabricated sampling values, no validate-then-discard, stop sequences sent, JSON mode and max output from the profile); nine-provider equivalence row green; M-B row for the whole policy
 - [ ] 50-17-PLAN.md — Operator runs the 50-04 probe on real keys (human-action checkpoint, blocks only 50-06) and answers owner reading R-2 per compat vendor (usage cap verified or accepted unverified); scrubbed dated `50-SEED-PROBE.md`
 
 **Wave 4** *(blocked on Wave 3 completion)*

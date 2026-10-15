@@ -64,7 +64,7 @@ under `milestones/`.
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
 Plan: 5 of 18
-Status: Ready to execute
+Status: Paused at checkpoint — plan 50-17 Task 1 needs the operator to run the live probe on their own vendor keys (no keys in this environment); plan 50-06 and everything after depend on 50-SEED-PROBE.md
 Last activity: 2026-10-15 — Phase 50 execution started
 
 ## Performance Metrics
@@ -735,7 +735,7 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 ## Session Continuity
 
 **Last session:** 2026-10-15T18:15:02.828Z
-**Stopped at:** Completed 50-05-PLAN.md
+**Stopped at:** 50-17 Task 1 human-action checkpoint (operator probe run), after completing 50-05-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

@@ -21,6 +21,9 @@ pub mod file_storage_port;
 pub mod garrison_port;
 pub mod llm_port;
 pub mod log_port;
+/// Per-model parameter support and limits (ADR-0061): the [`model_profile::ModelProfile`] an
+/// [`llm_port::LlmPort`] reports for one model, beside the adapter-wide `ProviderCapabilities`.
+pub mod model_profile;
 /// Node cache port for per-node result caching (Doc 04 FT-FR-18…20, D-27).
 pub mod node_cache_port;
 pub mod notification_port;

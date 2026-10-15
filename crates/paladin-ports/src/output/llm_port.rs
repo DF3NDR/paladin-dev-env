@@ -234,6 +234,9 @@ use paladin_core::platform::container::transience::Transience;
 
 use crate::output::rate_limit_hints::RateLimitHints;
 
+/// Re-exported so `paladin_ports::output::llm_port::ModelProfile` resolves (ADR-0061).
+pub use super::model_profile::{ModelProfile, ParamSupport, SamplingParam, StopSupport};
+
 /// Errors that can occur during LLM operations
 ///
 /// Each variant represents a specific failure mode with context for recovery strategies.
@@ -1829,6 +1832,38 @@ pub trait LlmPort: Send + Sync {
     /// - Update capabilities as provider APIs evolve
     /// - Consider making this async if capabilities require API check
     fn get_capabilities(&self) -> ProviderCapabilities;
+
+    /// Per-model parameter support and limits (ADR-0061, amending ADR-0004).
+    ///
+    /// Parameter support varies per model, not per adapter, so this reports what one `model`
+    /// accepts. The adapter-wide [`get_capabilities`](Self::get_capabilities) is unchanged.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(profile)` -- the model's parameter support and limits. An explicit sampling
+    ///   parameter the profile does not admit is refused at build time, by name; an auto-selected
+    ///   one is omitted from the wire with a `warn!` and a `paladin.params_omitted` metadata
+    ///   entry.
+    /// - `None` -- no profile (the default). The builder falls back to
+    ///   [`ProviderCapabilities::temperature_range`], exactly as before this method existed.
+    ///
+    /// # Decorators
+    ///
+    /// A decorator that wraps another `LlmPort` **must forward** this method to its inner port.
+    /// Keeping the default `None` silently disables the policy for everything behind it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_ports::output::llm_port::{ModelProfile, ParamSupport};
+    ///
+    /// // What an implementor returns for a model that accepts only `temperature = 1.0`.
+    /// let profile = Some(ModelProfile::new().with_temperature(ParamSupport::Fixed(1.0)));
+    /// assert!(profile.is_some_and(|p| p.temperature.admits(1.0)));
+    /// ```
+    fn model_profile(&self, _model: &str) -> Option<ModelProfile> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -1934,6 +1969,51 @@ mod tests {
         let json = serde_json::to_value(&json_schema).unwrap();
         let round_tripped: ResponseFormat = serde_json::from_value(json).unwrap();
         assert_eq!(json_schema, round_tripped);
+    }
+
+    /// A minimal implementor that does not override `model_profile`.
+    struct NoProfilePort;
+
+    #[async_trait]
+    impl LlmPort for NoProfilePort {
+        async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err(LlmError::ProcessingError("unused".to_string()))
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            Err(LlmError::ProcessingError("unused".to_string()))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(Vec::new())
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "no-profile"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// ADR-0061 / D-03: an adapter that does not override `model_profile` reports no profile, so
+    /// the builder stays on `temperature_range` exactly as before; every existing implementor
+    /// compiles unchanged.
+    #[test]
+    fn model_profile_defaults_to_none() {
+        assert!(NoProfilePort.model_profile("any-model").is_none());
+        assert!(NoProfilePort.model_profile("").is_none());
     }
 
     fn sample_llm_response() -> LlmResponse {

@@ -779,16 +779,16 @@ matrix_case!(openai_compatible_context_reaches_the_wire => case_context_reaches_
 matrix_case!(#[ignore = "red until plan 50-05: the stop words are not sent on the wire"] openai_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("openai"));
 matrix_case!(#[ignore = "red until plan 50-05: neither the temperature nor the stop words are sent on the wire"] anthropic_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("anthropic"));
 matrix_case!(#[ignore = "red until plan 50-05: the stop words are not sent on the wire"] deepseek_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("deepseek"));
-matrix_case!(#[ignore = "red until plan 50-03: the (1,1) temperature refusal names the provider but not the model"] kimi_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("kimi"));
-matrix_case!(#[ignore = "red until plan 50-03: the compat presets neither send the stop words nor refuse them by name"] qwen_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("qwen"));
-matrix_case!(#[ignore = "red until plan 50-03: the compat presets neither send the stop words nor refuse them by name"] grok_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("grok"));
+matrix_case!(kimi_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("kimi"));
+matrix_case!(qwen_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("qwen"));
+matrix_case!(grok_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("grok"));
 matrix_case!(gemini_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("gemini"));
-matrix_case!(#[ignore = "red until plan 50-03: the compat presets neither send the stop words nor refuse them by name"] ollama_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("ollama"));
-matrix_case!(#[ignore = "red until plan 50-03: the compat presets neither send the stop words nor refuse them by name"] openai_compatible_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("openai-compatible"));
+matrix_case!(ollama_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("ollama"));
+matrix_case!(openai_compatible_same_agent_is_equivalent_or_refused_by_name => case_same_agent_is_equivalent_or_refused_by_name("openai-compatible"));
 
 // (c) and (d) the fixed-temperature provider
-matrix_case!(#[ignore = "red until plan 50-03: an explicit 1.0 is not sent, and the refusal of other values does not name the model"] kimi_fixed_temperature_explicit => case_fixed_temperature_explicit("kimi"));
-matrix_case!(#[ignore = "red until plan 50-03: an auto-selected temperature is refused at build instead of being dropped and recorded"] kimi_fixed_temperature_auto => case_fixed_temperature_auto("kimi"));
+matrix_case!(kimi_fixed_temperature_explicit => case_fixed_temperature_explicit("kimi"));
+matrix_case!(kimi_fixed_temperature_auto => case_fixed_temperature_auto("kimi"));
 
 // (e) an empty stop completion is typed -- all nine
 matrix_case!(#[ignore = "red until plan 50-12: an empty stop completion is returned as a successful empty answer"] openai_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("openai"));

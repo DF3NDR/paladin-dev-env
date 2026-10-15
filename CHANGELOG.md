@@ -21,6 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   silently disabled by the decorators every server-built agent is wrapped in. ADR-0061 amends
   ADR-0004. Additive only: no `MIGRATION.md` row and no allowlist entry.
 
+- **The wire-time sampling filter, the model registry core and their three metadata keys
+  (PARITY-02, PARITY-04, PARITY-05; Phase 50 plan 50-03; ADR-0061).** `paladin-llm` gains
+  `sampling` and `registry`. `sampling::apply` is the one filter every request builder calls: a
+  set parameter reaches the wire only when the target model's `ModelProfile` admits it, and every
+  other set value is omitted, never clamped, defaulted or swapped. Every omission is visible: one
+  `warn!` (target `paladin::sampling`) per adapter instance per (model, parameter), and
+  `paladin.params_omitted` (the omitted names, comma-separated, in fixed order) on every buffered
+  `LlmResponse` from a request that omitted something; the key is absent when nothing was.
+  `paladin.response_format_adjusted` (`json_object` or `omitted`) records a `response_format` the
+  profile could not honour, and `paladin.unprofiled_model` (the model id) records a model that
+  has neither a seeded entry nor an override and so ran on the adapter-wide fallback profile
+  (never a refusal). `registry::ModelOverride` (`deny_unknown_fields`, validated: finite,
+  ordered, non-zero, maximum output inside the window) is the per-model operator statement, laid
+  over the seeded entry field by field. Streamed calls warn only until the owner reading R-1 in
+  ADR-0061 decides whether the keys also reach the stream's terminal chunk. Additive: no
+  `MIGRATION.md` row and no allowlist entry here; plan 50-05 writes the row for the whole policy.
+
 - **Consumer-surface muster and library-consumer upgrade note (ADOPT-04, ADOPT-05; Phase 49 plans
   49-01, 49-02).** `tests/consumer_surface_muster.rs`, a compile-only integration test declared as
   `[[test]] consumer_surface_muster` with `required-features = ["llm-anthropic", "llm-deepseek"]`,
@@ -557,6 +574,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (STORE-02; Phase 45 plan 45-01).
 
 ### Changed
+
+- **Explicit sampling values are checked against the model's profile; auto and default values
+  are omitted visibly (PARITY-01, PARITY-02; Phase 50 plan 50-03; ADR-0061, amending ADR-0004).**
+  `PaladinBuilder` asks `llm_port.model_profile(model)` first and falls back to
+  `temperature_range` only for a port that reports none. An explicit `.temperature()` or
+  `.add_stop_word()` the profile does not admit now fails `build()` with a `ConfigurationError`
+  naming the provider, the model and the parameter and saying why. An `auto_temperature` result
+  the profile does not admit is no longer refused (ADR-0004 A2 is superseded): it logs a warning
+  and is omitted at the wire, recorded as `paladin.params_omitted`, so a Kimi swap with the
+  default `auto_temperature` builds. On the five compat presets (Kimi, Qwen, Grok, Ollama,
+  OpenAI-compatible): Kimi now sends an explicit `1.0` temperature and `0.95` `top_p` (it
+  dropped both unconditionally before); stop sequences now reach the wire in the order declared,
+  except on Grok, which does not take them and refuses them at build; a JSON-schema
+  `response_format` is still sent as a plain JSON object and the downgrade is now recorded; and
+  a `max_tokens` above a model's profiled maximum output is refused by name before anything is
+  sent, never clamped. The dropped-parameter log moved from `debug!` to `warn!`.
 
 - **The base version family is renamed to the Entity vocabulary** (Phase 48; ENTITY-03; ADR-0060;
   see the Phase 48 rows in `MIGRATION.md` 9.2). `base::service::node_version_service` becomes

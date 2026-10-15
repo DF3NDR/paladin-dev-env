@@ -21,7 +21,6 @@ use reqwest::{
     Client,
     header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
-use std::collections::HashMap;
 use std::time::{Duration, SystemTime};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
@@ -41,11 +40,8 @@ use super::types::{
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
-use crate::registry::{ModelRegistry, UNPROFILED_MODEL_METADATA_KEY, fallback_from_compat};
-use crate::sampling::{
-    self, FormatLog, OmissionLog, PARAMS_OMITTED_METADATA_KEY,
-    RESPONSE_FORMAT_ADJUSTED_METADATA_KEY,
-};
+use crate::registry::{ModelRegistry, fallback_from_compat};
+use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 
 /// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
 ///
@@ -413,37 +409,6 @@ pub struct CompatEngine {
     /// Which (model, adjustment) `response_format` changes this instance has already warned
     /// about.
     format_log: FormatLog,
-}
-
-/// What [`CompatEngine::build_request`] decided beyond the body itself, so the buffered
-/// [`CompatEngine::generate`] can record it on the response (ADR-0061 visibility rule).
-#[derive(Debug, Default)]
-struct RequestNotes {
-    /// Comma-joined omitted parameter names, when any (`paladin.params_omitted`).
-    params_omitted: Option<String>,
-    /// `json_object` or `omitted`, when the requested `response_format` was changed
-    /// (`paladin.response_format_adjusted`).
-    format_adjusted: Option<String>,
-    /// The request's model, when it has neither a seeded entry nor an override
-    /// (`paladin.unprofiled_model`).
-    unprofiled_model: Option<String>,
-}
-
-impl RequestNotes {
-    /// The response-metadata entries these notes call for; empty when nothing was adjusted.
-    fn into_metadata(self) -> HashMap<String, String> {
-        let mut metadata = HashMap::new();
-        if let Some(omitted) = self.params_omitted {
-            metadata.insert(PARAMS_OMITTED_METADATA_KEY.to_string(), omitted);
-        }
-        if let Some(adjusted) = self.format_adjusted {
-            metadata.insert(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY.to_string(), adjusted);
-        }
-        if let Some(model) = self.unprofiled_model {
-            metadata.insert(UNPROFILED_MODEL_METADATA_KEY.to_string(), model);
-        }
-        metadata
-    }
 }
 
 /// The provider name a [`CompatEngine`] reports until a preset names it via
@@ -1248,7 +1213,10 @@ impl CompatEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
+    use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
     use mockito::Server;
+    use std::collections::HashMap;
     use paladin_core::platform::container::prompt::UserPrompt;
     use paladin_ports::output::llm_port::ResponseFormat;
 

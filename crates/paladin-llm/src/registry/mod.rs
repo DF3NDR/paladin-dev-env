@@ -20,15 +20,20 @@
 //! The merged result is re-validated too, so an override that is fine alone but contradicts the
 //! seeded value it is laid over (a maximum output above the seeded window) is refused at
 //! construction, naming provider and model.
-// The registry is consumed by the compat engine today and by the bespoke adapters from plan
-// 50-05; without a consuming adapter feature its crate-private items are legitimately unused.
+// The registry is consumed by the compat engine and by the four bespoke adapters (OpenAI,
+// DeepSeek, Anthropic, Gemini); without a consuming adapter feature its crate-private items are
+// legitimately unused.
 #![cfg_attr(
     not(any(
         feature = "kimi",
         feature = "qwen",
         feature = "grok",
         feature = "ollama",
-        feature = "openai-compatible"
+        feature = "openai-compatible",
+        feature = "openai",
+        feature = "anthropic",
+        feature = "deepseek",
+        feature = "gemini"
     )),
     allow(dead_code)
 )]

@@ -9,13 +9,12 @@ use futures::{Stream, StreamExt};
 use paladin_core::platform::container::content::{ContentItem, ContentType};
 use paladin_core::platform::container::prompt::{PromptItem, PromptRole, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
-    StreamingResponse, TokenUsage,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
+    ProviderCapabilities, ResponseFormat, StopSupport, StreamingResponse, TokenUsage,
 };
 use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::env;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
@@ -23,11 +22,25 @@ use uuid::Uuid;
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::registry::ModelRegistry;
+use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits.
 const OPENAI_PROVIDER: &str = "openai";
+
+/// The `max_tokens` this adapter sends when the request sets none: a compiled default, not a
+/// fabricated sampling value (ADR-0061 permits a documented configuration default). It is the
+/// cap OpenAI users have always had; plan 50-08 turns it into the documented `OpenAIConfig`
+/// `max_tokens` knob (D-13). The effective value is checked against the model's profiled
+/// maximum output like any other.
+const OPENAI_DEFAULT_MAX_TOKENS: u32 = 4096;
+
+/// The most stop sequences the OpenAI chat-completions API accepts (`stop` is an array with
+/// `maxItems: 4` in the openai-openapi specification). A longer list is omitted and recorded,
+/// never truncated (ADR-0061 (a)).
+const OPENAI_MAX_STOP_SEQUENCES: u32 = 4;
 
 /// The OpenAI error identifier of an account-level quota wall, carried as `error.code` (and, on
 /// some responses, `error.type`).
@@ -164,6 +177,10 @@ struct OpenAIRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
+    /// The caller's stop sequences, in declared order with duplicates kept, when the model's
+    /// profile admits their count (ADR-0061 (a), D-11a). Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop: Option<Vec<String>>,
     stream: bool,
     /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
     /// entirely when the caller sets no hint, keeping the body byte
@@ -323,6 +340,61 @@ struct OpenAIStreamDelta {
 pub struct OpenAIAdapter {
     pub(crate) config: OpenAIConfig,
     pub(crate) client: Client,
+    /// Resolves the request model to the profile that decides what reaches the wire (ADR-0061).
+    model_registry: ModelRegistry,
+    /// Which (model, parameter) omissions this instance has already warned about.
+    omissions: OmissionLog,
+    /// Which (model, adjustment) `response_format` changes this instance has already warned
+    /// about.
+    format_log: FormatLog,
+}
+
+/// What this adapter's request builder carries today, stated once so [`OpenAIAdapter::new`]'s
+/// adapter-wide fallback profile and [`LlmPort::get_capabilities`] cannot drift apart.
+fn declared_capabilities() -> ProviderCapabilities {
+    ProviderCapabilities {
+        supports_streaming: true,
+        // `LlmRequest` carries no field through which a tool definition could
+        // travel, and this adapter neither sends `tools` nor parses `tool_calls`
+        // out of a response. The flag describes what this adapter does, not what
+        // the vendor's API offers (WEB-03, D-14). This adapter's `generate()` also
+        // hard-codes the absent function call in the response it builds, so the
+        // function-calling flag describes what this adapter does rather than what
+        // the vendor's API offers (WEB-03, D-12).
+        supports_tool_calling: false,
+        supports_function_calling: false,
+        supports_vision: true,
+        max_context_tokens: Some(128000),
+        supports_embeddings: true,
+        supports_system_messages: true,
+        temperature_range: Some((0.0, 1.0)),
+    }
+}
+
+/// The adapter-wide fallback profile, derived from what this adapter's request builder sends
+/// (ADR-0061, D-05): a field it sends maps to `Range`, a field it never sends maps to `NotSent`.
+///
+/// - `temperature`: `Range` over the declared `temperature_range`; `top_p`: `Range(0.0, 1.0)`.
+/// - penalties: `NotSent` -- [`OpenAIRequest`] has no penalty field.
+/// - `stop`: `Supported { max: Some(4) }` (the openai-openapi `maxItems: 4`).
+/// - `json_object` and `json_schema`: both true -- this adapter sends both formats.
+fn fallback_profile() -> ModelProfile {
+    let caps = declared_capabilities();
+    let (low, high) = caps.temperature_range.unwrap_or((0.0, 1.0));
+    let mut profile = ModelProfile::new()
+        .with_temperature(ParamSupport::Range(low, high))
+        .with_top_p(ParamSupport::Range(0.0, 1.0))
+        .with_frequency_penalty(ParamSupport::NotSent)
+        .with_presence_penalty(ParamSupport::NotSent)
+        .with_stop_sequences(StopSupport::Supported {
+            max: Some(OPENAI_MAX_STOP_SEQUENCES),
+        })
+        .with_json_object(true)
+        .with_json_schema(true);
+    if let Some(window) = caps.max_context_tokens {
+        profile = profile.with_context_window(window);
+    }
+    profile
 }
 
 impl OpenAIAdapter {
@@ -342,7 +414,77 @@ impl OpenAIAdapter {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-        Ok(Self { config, client })
+        Ok(Self {
+            config,
+            client,
+            model_registry: ModelRegistry::new(OPENAI_PROVIDER, &[], fallback_profile()),
+            omissions: OmissionLog::new(),
+            format_log: FormatLog::new(),
+        })
+    }
+
+    /// Build the outgoing request body for `request`, plus the notes the buffered path records
+    /// on its response.
+    ///
+    /// What reaches the wire is decided by the request model's [`ModelProfile`] (ADR-0061, D-01):
+    /// [`sampling::apply`] sends `temperature`, `top_p` and `stop` only when the caller set them
+    /// **and** the profile admits them, so an unset parameter is absent from the body -- this
+    /// adapter no longer invents a `temperature` of 0.7 or a `top_p` of 1.0 -- and a set but
+    /// inadmissible one is omitted and recorded, never clamped or swapped. `max_tokens` keeps
+    /// its compiled default of [`OPENAI_DEFAULT_MAX_TOKENS`] (a documented cap, made a
+    /// configuration knob by plan 50-08) and the effective value is checked against the
+    /// profile's maximum output before anything is sent. The `response_format` follows the
+    /// profile through [`sampling::apply_response_format`].
+    ///
+    /// Shared by [`LlmPort::generate`] and [`LlmPort::generate_stream`], so the two paths cannot
+    /// drift.
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+        stream: bool,
+    ) -> Result<(OpenAIRequest, RequestNotes), LlmError> {
+        let messages = self.convert_to_messages(&request.prompt, &request.attachments)?;
+        let params = &request.prompt.entity.data.parameters;
+        let profile = self.model_registry.profile(&request.model);
+
+        let max_tokens = params.max_tokens.unwrap_or(OPENAI_DEFAULT_MAX_TOKENS);
+        sampling::check_max_tokens(OPENAI_PROVIDER, &request.model, &profile, Some(max_tokens))?;
+
+        let applied = sampling::apply(&profile, params);
+        let params_omitted = self
+            .omissions
+            .record(OPENAI_PROVIDER, &request.model, &applied);
+
+        let (effective_format, adjustment) =
+            sampling::apply_response_format(&profile, request.response_format.as_ref());
+        let format_adjusted = self
+            .format_log
+            .record(OPENAI_PROVIDER, &request.model, adjustment);
+
+        let unprofiled_model = self
+            .model_registry
+            .note_unprofiled(&request.model)
+            .then(|| request.model.clone());
+
+        let body = OpenAIRequest {
+            model: request.model.clone(),
+            messages,
+            temperature: applied.temperature,
+            max_tokens: Some(max_tokens),
+            top_p: applied.top_p,
+            stop: applied.stop,
+            stream,
+            response_format: effective_format.as_ref().map(to_openai_response_format),
+            stream_options: stream.then_some(OpenAIStreamOptions {
+                include_usage: true,
+            }),
+        };
+        let notes = RequestNotes {
+            params_omitted,
+            format_adjusted,
+            unprofiled_model,
+        };
+        Ok((body, notes))
     }
 
     /// Map a non-2xx OpenAI response to [`LlmError`] with no rate-limit headers.
@@ -752,36 +894,7 @@ impl OpenAIAdapter {
 #[async_trait]
 impl LlmPort for OpenAIAdapter {
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let messages = self.convert_to_messages(&request.prompt, &request.attachments)?;
-
-        let temperature = request
-            .prompt
-            .entity
-            .data
-            .parameters
-            .temperature
-            .unwrap_or(0.7);
-        let max_tokens = request
-            .prompt
-            .entity
-            .data
-            .parameters
-            .max_tokens
-            .unwrap_or(4096);
-
-        let openai_request = OpenAIRequest {
-            model: request.model.clone(),
-            messages,
-            temperature: Some(temperature),
-            max_tokens: Some(max_tokens),
-            top_p: Some(1.0),
-            stream: false,
-            response_format: request
-                .response_format
-                .as_ref()
-                .map(to_openai_response_format),
-            stream_options: None,
-        };
+        let (openai_request, notes) = self.build_request(&request, false)?;
 
         let response = self.make_request_with_retries(&openai_request).await?;
 
@@ -805,7 +918,7 @@ impl LlmPort for OpenAIAdapter {
             usage,
             cost: None,
             created_at: Utc::now(),
-            metadata: HashMap::new(),
+            metadata: notes.into_metadata(),
             function_call: None,
         })
     }
@@ -814,38 +927,9 @@ impl LlmPort for OpenAIAdapter {
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        let messages = self.convert_to_messages(&request.prompt, &request.attachments)?;
-
-        let temperature = request
-            .prompt
-            .entity
-            .data
-            .parameters
-            .temperature
-            .unwrap_or(0.7);
-        let max_tokens = request
-            .prompt
-            .entity
-            .data
-            .parameters
-            .max_tokens
-            .unwrap_or(4096);
-
-        let openai_request = OpenAIRequest {
-            model: request.model.clone(),
-            messages,
-            temperature: Some(temperature),
-            max_tokens: Some(max_tokens),
-            top_p: Some(1.0),
-            stream: true,
-            response_format: request
-                .response_format
-                .as_ref()
-                .map(to_openai_response_format),
-            stream_options: Some(OpenAIStreamOptions {
-                include_usage: true,
-            }),
-        };
+        // A streamed call has no metadata channel (A1-50-03): its omissions, format changes and
+        // unprofiled model are visible through the `warn!`s `build_request` emits.
+        let (openai_request, _notes) = self.build_request(&request, true)?;
 
         let stream = self.make_streaming_request(&openai_request).await?;
         Ok(Box::new(stream))
@@ -903,23 +987,11 @@ impl LlmPort for OpenAIAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            supports_streaming: true,
-            // `LlmRequest` carries no field through which a tool definition could
-            // travel, and this adapter neither sends `tools` nor parses `tool_calls`
-            // out of a response. The flag describes what this adapter does, not what
-            // the vendor's API offers (WEB-03, D-14). This adapter's `generate()` also
-            // hard-codes the absent function call in the response it builds, so the
-            // function-calling flag describes what this adapter does rather than what
-            // the vendor's API offers (WEB-03, D-12).
-            supports_tool_calling: false,
-            supports_function_calling: false,
-            supports_vision: true,
-            max_context_tokens: Some(128000),
-            supports_embeddings: true,
-            supports_system_messages: true,
-            temperature_range: Some((0.0, 1.0)),
-        }
+        declared_capabilities()
+    }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.model_registry.profile(model))
     }
 }
 
@@ -1971,6 +2043,370 @@ mod tests {
 
             let assembled: String = chunks.iter().map(|c| c.delta.as_str()).collect();
             assert_eq!(assembled, "Hello");
+        }
+    }
+
+    // ── Phase 50 (PARITY-02, ADR-0061, D-01): the per-model parameter policy ──
+
+    mod parameter_policy {
+        use super::*;
+        use crate::registry::{ModelOverride, ModelRegistry, UNPROFILED_MODEL_METADATA_KEY};
+        use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{
+            PromptItem, PromptParameters, PromptType, UserPrompt,
+        };
+        use serde_json::{Value, json};
+        use std::collections::{BTreeMap, HashMap};
+        use std::sync::{Arc, Mutex};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        /// A request whose prompt carries exactly `parameters` -- unlike
+        /// `PromptParameters::default()`, nothing here is pre-set.
+        fn request_with(parameters: PromptParameters) -> LlmRequest {
+            let mut request = LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            );
+            request.prompt.entity.data.parameters = parameters;
+            request
+        }
+
+        fn unset() -> PromptParameters {
+            PromptParameters {
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                stop_sequences: None,
+            }
+        }
+
+        fn completion_json() -> Vec<u8> {
+            json!({
+                "id": "cmpl-1",
+                "model": "gpt-4o",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// Runs `generate()` against a mock endpoint, returning the outgoing JSON body and the
+        /// response metadata.
+        async fn generate_on(
+            adapter_for: impl FnOnce(&str) -> OpenAIAdapter,
+            request: LlmRequest,
+        ) -> (Value, HashMap<String, String>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    completion_json()
+                })
+                .create_async()
+                .await;
+
+            let response = adapter_for(&server.url())
+                .generate(request)
+                .await
+                .expect("the mock answers a well-formed completion");
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            (
+                serde_json::from_str(&body).expect("the body must be JSON"),
+                response.metadata,
+            )
+        }
+
+        async fn generate_capture(request: LlmRequest) -> (Value, HashMap<String, String>) {
+            generate_on(adapter_at, request).await
+        }
+
+        /// Runs `generate_stream()` against a mock endpoint and returns the outgoing JSON body.
+        async fn stream_capture(request: LlmRequest) -> Value {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    b"data: [DONE]\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+
+            let stream = adapter_at(&server.url())
+                .generate_stream(request)
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            serde_json::from_str(&body).expect("the body must be JSON")
+        }
+
+        #[tokio::test]
+        async fn openai_unset_sampling_values_are_absent() {
+            let (body, metadata) = generate_capture(request_with(unset())).await;
+            let obj = body.as_object().expect("body must be a JSON object");
+
+            assert!(
+                !obj.contains_key("temperature"),
+                "no fabricated temperature: {obj:?}"
+            );
+            assert!(!obj.contains_key("top_p"), "no fabricated top_p: {obj:?}");
+            assert!(
+                !obj.contains_key("stop"),
+                "no stop when none was set: {obj:?}"
+            );
+            assert_eq!(
+                body["max_tokens"], 4096,
+                "max_tokens keeps its documented compiled default"
+            );
+            assert!(
+                !metadata.contains_key(PARAMS_OMITTED_METADATA_KEY),
+                "an unset parameter is not an omission: {metadata:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_sends_what_the_caller_set_and_the_profile_admits() {
+            let mut parameters = unset();
+            parameters.temperature = Some(0.5);
+            parameters.top_p = Some(0.9);
+            parameters.max_tokens = Some(777);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert_eq!(body["temperature"], 0.5);
+            assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+            assert_eq!(body["max_tokens"], 777, "the caller's max_tokens wins");
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn openai_out_of_range_temperature_is_omitted_and_recorded() {
+            let mut parameters = unset();
+            parameters.temperature = Some(1.5);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert!(
+                body.get("temperature").is_none(),
+                "an out-of-range temperature is omitted, never clamped: {body}"
+            );
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_penalties_are_never_sent_and_are_recorded() {
+            // `PromptParameters::default()` carries penalties of 0.0; this adapter has no
+            // penalty field, so the fallback profile states them `NotSent` and the omission is
+            // visible rather than silent.
+            let (body, metadata) =
+                generate_capture(request_with(PromptParameters::default())).await;
+
+            assert!(body.get("frequency_penalty").is_none(), "{body}");
+            assert!(body.get("presence_penalty").is_none(), "{body}");
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("frequency_penalty,presence_penalty")
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_stop_sequences_keep_declared_order() {
+            let mut parameters = unset();
+            // A duplicate, deliberately: order and duplicates are the caller's.
+            parameters.stop_sequences = Some(vec![
+                "b".to_string(),
+                "a".to_string(),
+                "b".to_string(),
+                "c".to_string(),
+            ]);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert_eq!(body["stop"], json!(["b", "a", "b", "c"]));
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn openai_stop_sequences_past_the_maximum_are_omitted_not_truncated() {
+            let mut parameters = unset();
+            parameters.stop_sequences = Some(
+                ["a", "b", "c", "d", "e"]
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect(),
+            );
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert!(
+                body.get("stop").is_none(),
+                "five sequences exceed the maximum of four and are omitted whole: {body}"
+            );
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("stop")
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_stream_follows_the_profile() {
+            let mut parameters = unset();
+            parameters.temperature = Some(1.5);
+            parameters.top_p = Some(0.9);
+            parameters.stop_sequences = Some(vec!["END".to_string(), "STOP".to_string()]);
+            let body = stream_capture(request_with(parameters)).await;
+
+            assert!(
+                body.get("temperature").is_none(),
+                "the streaming body omits an inadmissible temperature: {body}"
+            );
+            assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+            assert_eq!(body["stop"], json!(["END", "STOP"]));
+            assert_eq!(body["max_tokens"], 4096);
+            assert_eq!(body["stream"], true);
+
+            let mut over = unset();
+            over.stop_sequences = Some((0..5).map(|n| n.to_string()).collect());
+            let body = stream_capture(request_with(over)).await;
+            assert!(
+                body.get("stop").is_none(),
+                "a streamed over-long stop list is omitted whole: {body}"
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_unprofiled_model_is_stamped() {
+            let (_, metadata) = generate_capture(request_with(unset())).await;
+            assert_eq!(
+                metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some("gpt-4o"),
+                "no seeded entry exists yet, so the model runs on the adapter-wide fallback"
+            );
+        }
+
+        #[test]
+        fn openai_model_profile_is_always_some_and_matches_what_the_wire_sends() {
+            let adapter = adapter_at("http://localhost:1");
+            let profile = adapter
+                .model_profile("any-model")
+                .expect("openai profiles every model");
+            assert_eq!(profile.temperature, ParamSupport::Range(0.0, 1.0));
+            assert_eq!(profile.top_p, ParamSupport::Range(0.0, 1.0));
+            assert_eq!(profile.frequency_penalty, ParamSupport::NotSent);
+            assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
+            assert_eq!(
+                profile.stop_sequences,
+                StopSupport::Supported { max: Some(4) }
+            );
+            assert_eq!(profile.context_window, Some(128_000));
+            assert!(profile.json_object && profile.json_schema);
+        }
+
+        #[tokio::test]
+        async fn openai_json_schema_still_reaches_the_wire_as_json_schema() {
+            let request = request_with(unset()).with_response_format(ResponseFormat::JsonSchema {
+                name: "answer".to_string(),
+                schema: json!({"type": "object"}),
+                strict: true,
+            });
+            let (body, metadata) = generate_capture(request).await;
+
+            assert_eq!(body["response_format"]["type"], "json_schema");
+            assert!(
+                !metadata.contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY),
+                "nothing changed on the wire, so nothing is recorded: {metadata:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_max_tokens_default_is_checked_against_the_profile() {
+            let mut server = Server::new_async().await;
+            let mock = server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(completion_json())
+                .expect(0)
+                .create_async()
+                .await;
+
+            let mut adapter = adapter_at(&server.url());
+            let over = ModelOverride {
+                max_output_tokens: Some(1000),
+                ..ModelOverride::default()
+            };
+            adapter.model_registry = ModelRegistry::new(OPENAI_PROVIDER, &[], fallback_profile())
+                .with_overrides(BTreeMap::from([("gpt-4o".to_string(), over)]))
+                .expect("a plain max_output_tokens override is valid");
+
+            // No max_tokens on the request: the 4096 default is what would be sent, and the
+            // profile says the model produces at most 1000.
+            let err = adapter
+                .generate(request_with(unset()))
+                .await
+                .expect_err("4096 is above the profiled maximum of 1000");
+            match err {
+                LlmError::InvalidPrompt(message) => {
+                    assert!(message.contains("openai"), "{message}");
+                    assert!(message.contains("gpt-4o"), "{message}");
+                    assert!(message.contains("max_tokens"), "{message}");
+                }
+                other => panic!("expected InvalidPrompt, got {other:?}"),
+            }
+            mock.assert_async().await;
+
+            // The streaming path refuses it too.
+            let streamed = adapter.generate_stream(request_with(unset())).await;
+            assert!(matches!(streamed, Err(LlmError::InvalidPrompt(_))));
         }
     }
 

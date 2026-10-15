@@ -18,13 +18,15 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
-    StreamingResponse, TokenUsage,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
+    ProviderCapabilities, StopSupport, StreamingResponse, TokenUsage,
 };
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::registry::ModelRegistry;
+use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 // WR-01 (`25-REVIEW.md`): this adapter previously carried its own
 // byte-for-byte copy of the crate's shared credential-redaction routine
 // (`RESPONSE_EXCERPT_CHAR_BUDGET`, `CREDENTIAL_PLACEHOLDER`,
@@ -149,6 +151,10 @@ struct DeepSeekRequest {
     frequency_penalty: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     presence_penalty: Option<f32>,
+    /// The caller's stop sequences, in declared order with duplicates kept, when the model's
+    /// profile admits their count (ADR-0061 (a), D-11a). Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop: Option<Vec<String>>,
     stream: bool,
     /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
     /// entirely when the caller sets no hint, keeping the body byte
@@ -385,6 +391,54 @@ where
 pub struct DeepSeekAdapter {
     client: Client,
     config: DeepSeekConfig,
+    /// Resolves the request model to the profile that decides what reaches the wire (ADR-0061).
+    model_registry: ModelRegistry,
+    /// Which (model, parameter) omissions this instance has already warned about.
+    omissions: OmissionLog,
+    /// Which (model, adjustment) `response_format` changes this instance has already warned
+    /// about.
+    format_log: FormatLog,
+}
+
+/// What this adapter's request builder carries today, stated once so the adapter-wide fallback
+/// profile and [`LlmPort::get_capabilities`] cannot drift apart.
+fn declared_capabilities() -> ProviderCapabilities {
+    ProviderCapabilities {
+        supports_streaming: true,
+        supports_tool_calling: false,
+        supports_function_calling: false,
+        supports_vision: false,
+        supports_embeddings: false,
+        max_context_tokens: Some(64000),
+        supports_system_messages: true,
+        temperature_range: Some((0.0, 2.0)),
+    }
+}
+
+/// The adapter-wide fallback profile, derived from what this adapter's request builder sends
+/// (ADR-0061, D-05): a field it sends maps to `Range`, a field it never sends maps to `NotSent`.
+///
+/// - `temperature`: `Range` over the declared `temperature_range`; `top_p`: `Range(0.0, 1.0)`;
+///   both penalties: `Range(-2.0, 2.0)` -- [`DeepSeekRequest`] carries all four.
+/// - `stop`: `Supported { max: None }` (the vendor's documented limit is not carried here; the
+///   per-model seeded entries of plan 50-06 may state one).
+/// - `json_object` true and `json_schema` false: every `ResponseFormat` compiles down to
+///   DeepSeek's plain JSON-object form today, so a schema request is a recorded downgrade.
+fn fallback_profile() -> ModelProfile {
+    let caps = declared_capabilities();
+    let (low, high) = caps.temperature_range.unwrap_or((0.0, 1.0));
+    let mut profile = ModelProfile::new()
+        .with_temperature(ParamSupport::Range(low, high))
+        .with_top_p(ParamSupport::Range(0.0, 1.0))
+        .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+        .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+        .with_stop_sequences(StopSupport::Supported { max: None })
+        .with_json_object(true)
+        .with_json_schema(false);
+    if let Some(window) = caps.max_context_tokens {
+        profile = profile.with_context_window(window);
+    }
+    profile
 }
 
 impl DeepSeekAdapter {
@@ -423,32 +477,72 @@ impl DeepSeekAdapter {
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
-        Ok(Self { client, config })
+        Ok(Self {
+            client,
+            config,
+            model_registry: ModelRegistry::new(DEEPSEEK_PROVIDER, &[], fallback_profile()),
+            omissions: OmissionLog::new(),
+            format_log: FormatLog::new(),
+        })
     }
 
-    /// Build DeepSeek API request from LlmRequest.
-    fn build_request(&self, request: &LlmRequest) -> Result<DeepSeekRequest, LlmError> {
+    /// Build DeepSeek API request from LlmRequest, plus the notes the buffered path records on
+    /// its response.
+    ///
+    /// What reaches the wire is decided by the request model's [`ModelProfile`] (ADR-0061,
+    /// D-01): [`sampling::apply`] sends a sampling parameter or the stop sequences only when
+    /// the caller set them **and** the profile admits them; a set but inadmissible one is
+    /// omitted and recorded (one `warn!` per instance per model and parameter, and
+    /// `paladin.params_omitted` on the response), never clamped or swapped. A `max_tokens`
+    /// above the profile's maximum output is refused before anything is sent. The
+    /// `response_format` follows the profile through [`sampling::apply_response_format`].
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<(DeepSeekRequest, RequestNotes), LlmError> {
         let messages = self.convert_prompt_to_messages(&request.prompt)?;
         let params = &request.prompt.entity.data.parameters;
+        let profile = self.model_registry.profile(&request.model);
 
-        // D-28: any `ResponseFormat` variant degrades to DeepSeek's plain
-        // JSON-object form — see `DeepSeekResponseFormat`'s rustdoc.
-        let response_format =
-            request
-                .response_format
-                .as_ref()
-                .map(|_: &ResponseFormat| DeepSeekResponseFormat {
-                    kind: "json_object",
-                });
+        sampling::check_max_tokens(
+            DEEPSEEK_PROVIDER,
+            &request.model,
+            &profile,
+            params.max_tokens,
+        )?;
 
-        Ok(DeepSeekRequest {
+        let applied = sampling::apply(&profile, params);
+        let params_omitted = self
+            .omissions
+            .record(DEEPSEEK_PROVIDER, &request.model, &applied);
+
+        // D-28 / ADR-0061 (i): DeepSeek has one native JSON mode, the plain JSON-object form,
+        // so an effective format -- object or schema -- maps to it. The fallback profile
+        // (`json_object` true, `json_schema` false) makes a schema request a recorded
+        // downgrade (`paladin.response_format_adjusted = json_object`).
+        let (effective_format, adjustment) =
+            sampling::apply_response_format(&profile, request.response_format.as_ref());
+        let format_adjusted = self
+            .format_log
+            .record(DEEPSEEK_PROVIDER, &request.model, adjustment);
+        let response_format = effective_format.map(|_| DeepSeekResponseFormat {
+            kind: "json_object",
+        });
+
+        let unprofiled_model = self
+            .model_registry
+            .note_unprofiled(&request.model)
+            .then(|| request.model.clone());
+
+        let body = DeepSeekRequest {
             model: request.model.clone(),
             messages,
-            temperature: params.temperature,
+            temperature: applied.temperature,
             max_tokens: params.max_tokens,
-            top_p: params.top_p,
-            frequency_penalty: params.frequency_penalty,
-            presence_penalty: params.presence_penalty,
+            top_p: applied.top_p,
+            frequency_penalty: applied.frequency_penalty,
+            presence_penalty: applied.presence_penalty,
+            stop: applied.stop,
             stream: request.stream,
             response_format,
             // Set unconditionally to `None` here; `generate_stream` forces
@@ -456,7 +550,13 @@ impl DeepSeekAdapter {
             // existing defensive `api_request.stream = true` override below
             // (D-15).
             stream_options: None,
-        })
+        };
+        let notes = RequestNotes {
+            params_omitted,
+            format_adjusted,
+            unprofiled_model,
+        };
+        Ok((body, notes))
     }
 
     /// Convert PromptItem to DeepSeek messages.
@@ -686,7 +786,7 @@ impl DeepSeekAdapter {
 #[async_trait]
 impl LlmPort for DeepSeekAdapter {
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let api_request = self.build_request(&request)?;
+        let (api_request, notes) = self.build_request(&request)?;
         let url = format!("{}/chat/completions", self.config.base_url);
 
         let operation = || async {
@@ -783,14 +883,19 @@ impl LlmPort for DeepSeekAdapter {
             })
         };
 
-        self.call_api_with_retry(operation, 3).await
+        let mut response = self.call_api_with_retry(operation, 3).await?;
+        // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
+        response.metadata = notes.into_metadata();
+        Ok(response)
     }
 
     async fn generate_stream(
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        let mut api_request = self.build_request(&request)?;
+        // A streamed call has no metadata channel (A1-50-03): its omissions, format changes and
+        // unprofiled model are visible through the `warn!`s `build_request` emits.
+        let (mut api_request, _notes) = self.build_request(&request)?;
         api_request.stream = true;
         api_request.stream_options = Some(DeepSeekStreamOptions {
             include_usage: true,
@@ -919,22 +1024,18 @@ impl LlmPort for DeepSeekAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            supports_streaming: true,
-            supports_tool_calling: false,
-            supports_function_calling: false,
-            supports_vision: false,
-            supports_embeddings: false,
-            max_context_tokens: Some(64000),
-            supports_system_messages: true,
-            temperature_range: Some((0.0, 2.0)),
-        }
+        declared_capabilities()
+    }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.model_registry.profile(model))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_ports::output::llm_port::ResponseFormat;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1649,7 +1750,7 @@ mod tests {
         let adapter = test_adapter();
         let request = build_response_format_request(Some(ResponseFormat::JsonObject));
 
-        let api_request = adapter.build_request(&request).unwrap();
+        let api_request = adapter.build_request(&request).unwrap().0;
         let body = serde_json::to_value(&api_request).unwrap();
 
         assert_eq!(
@@ -1667,7 +1768,7 @@ mod tests {
             strict: true,
         }));
 
-        let api_request = adapter.build_request(&request).unwrap();
+        let api_request = adapter.build_request(&request).unwrap().0;
         let body = serde_json::to_value(&api_request).unwrap();
 
         assert_eq!(
@@ -1683,7 +1784,7 @@ mod tests {
         let adapter = test_adapter();
         let request = build_response_format_request(None);
 
-        let api_request = adapter.build_request(&request).unwrap();
+        let api_request = adapter.build_request(&request).unwrap().0;
         let body = serde_json::to_value(&api_request).unwrap();
 
         assert!(
@@ -1708,7 +1809,7 @@ mod tests {
                 }))
                 .unwrap(),
             );
-            let body = serde_json::to_value(adapter.build_request(&request).unwrap()).unwrap();
+            let body = serde_json::to_value(adapter.build_request(&request).unwrap().0).unwrap();
             body["messages"][0]["content"].clone()
         };
 
@@ -1873,6 +1974,265 @@ mod tests {
 
         let assembled: String = chunks.iter().map(|c| c.delta.as_str()).collect();
         assert_eq!(assembled, "Hello");
+    }
+
+    // ── Phase 50 (PARITY-02, ADR-0061, D-01): the per-model parameter policy ──
+
+    mod parameter_policy {
+        use super::*;
+        use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
+        use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
+        use paladin_core::platform::container::prompt::{PromptParameters, UserPrompt};
+        use serde_json::{Value, json};
+        use std::sync::Mutex;
+
+        fn request_with(parameters: PromptParameters) -> LlmRequest {
+            let mut request = LlmRequest::new(
+                "deepseek-chat",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            );
+            request.prompt.entity.data.parameters = parameters;
+            request
+        }
+
+        fn unset() -> PromptParameters {
+            PromptParameters {
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                stop_sequences: None,
+            }
+        }
+
+        fn completion_json() -> Vec<u8> {
+            json!({
+                "id": "cmpl-1",
+                "model": "deepseek-chat",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// Runs `generate()` against a mock endpoint, returning the outgoing JSON body and the
+        /// response metadata.
+        async fn generate_capture(
+            request: LlmRequest,
+        ) -> (Value, std::collections::HashMap<String, String>) {
+            let mut server = mockito::Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    completion_json()
+                })
+                .create_async()
+                .await;
+
+            let response = test_adapter_at(&server.url())
+                .generate(request)
+                .await
+                .expect("the mock answers a well-formed completion");
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            (
+                serde_json::from_str(&body).expect("the body must be JSON"),
+                response.metadata,
+            )
+        }
+
+        async fn stream_capture(request: LlmRequest) -> Value {
+            let mut server = mockito::Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    b"data: [DONE]\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+
+            let stream = test_adapter_at(&server.url())
+                .generate_stream(request)
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            serde_json::from_str(&body).expect("the body must be JSON")
+        }
+
+        #[tokio::test]
+        async fn deepseek_stop_sequences_keep_declared_order() {
+            let mut parameters = unset();
+            // A duplicate, deliberately: order and duplicates are the caller's.
+            parameters.stop_sequences = Some(vec![
+                "END".to_string(),
+                "STOP".to_string(),
+                "END".to_string(),
+            ]);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert_eq!(body["stop"], json!(["END", "STOP", "END"]));
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn deepseek_stream_stop_sequences_keep_declared_order() {
+            let mut parameters = unset();
+            parameters.stop_sequences = Some(vec!["END".to_string(), "STOP".to_string()]);
+            let body = stream_capture(request_with(parameters)).await;
+
+            assert_eq!(body["stop"], json!(["END", "STOP"]));
+            assert_eq!(body["stream"], true);
+        }
+
+        #[tokio::test]
+        async fn deepseek_unset_sampling_values_are_absent() {
+            let (body, metadata) = generate_capture(request_with(unset())).await;
+            let obj = body.as_object().expect("body must be a JSON object");
+
+            for key in [
+                "temperature",
+                "top_p",
+                "frequency_penalty",
+                "presence_penalty",
+                "stop",
+                "max_tokens",
+            ] {
+                assert!(!obj.contains_key(key), "{key} was never set: {obj:?}");
+            }
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn deepseek_out_of_range_temperature_is_omitted_and_recorded() {
+            let mut at_edge = unset();
+            at_edge.temperature = Some(2.0);
+            let (body, metadata) = generate_capture(request_with(at_edge)).await;
+            assert_eq!(body["temperature"], 2.0, "the declared maximum is admitted");
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+
+            let mut past_edge = unset();
+            past_edge.temperature = Some(2.1);
+            let (body, metadata) = generate_capture(request_with(past_edge)).await;
+            assert!(
+                body.get("temperature").is_none(),
+                "2.1 is omitted, never clamped to 2.0: {body}"
+            );
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+        }
+
+        #[tokio::test]
+        async fn deepseek_schema_request_is_recorded_as_downgraded() {
+            let request = request_with(unset()).with_response_format(ResponseFormat::JsonSchema {
+                name: "answer".to_string(),
+                schema: json!({"type": "object"}),
+                strict: true,
+            });
+            let (body, metadata) = generate_capture(request).await;
+
+            assert_eq!(body["response_format"], json!({"type": "json_object"}));
+            assert_eq!(
+                metadata
+                    .get(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("json_object"),
+                "the schema-to-object downgrade is now visible on the response"
+            );
+
+            let request = request_with(unset()).with_response_format(ResponseFormat::JsonObject);
+            let (_, metadata) = generate_capture(request).await;
+            assert!(
+                !metadata.contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY),
+                "a plain object request is sent as asked, so nothing is recorded"
+            );
+        }
+
+        #[tokio::test]
+        async fn deepseek_unprofiled_model_is_stamped() {
+            let (_, metadata) = generate_capture(request_with(unset())).await;
+            assert_eq!(
+                metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some("deepseek-chat"),
+                "no seeded entry exists yet, so the model runs on the adapter-wide fallback"
+            );
+        }
+
+        #[test]
+        fn deepseek_model_profile_is_always_some_and_matches_what_the_wire_sends() {
+            let profile = test_adapter()
+                .model_profile("any-model")
+                .expect("deepseek profiles every model");
+            assert_eq!(profile.temperature, ParamSupport::Range(0.0, 2.0));
+            assert_eq!(profile.top_p, ParamSupport::Range(0.0, 1.0));
+            assert_eq!(profile.frequency_penalty, ParamSupport::Range(-2.0, 2.0));
+            assert_eq!(profile.presence_penalty, ParamSupport::Range(-2.0, 2.0));
+            assert_eq!(profile.stop_sequences, StopSupport::Supported { max: None });
+            assert!(profile.json_object);
+            assert!(!profile.json_schema);
+        }
+
+        #[test]
+        fn deepseek_max_tokens_above_a_profiled_maximum_is_refused_by_name() {
+            use crate::registry::{ModelOverride, ModelRegistry};
+            use std::collections::BTreeMap;
+
+            let mut adapter = test_adapter();
+            let over = ModelOverride {
+                max_output_tokens: Some(1000),
+                ..ModelOverride::default()
+            };
+            adapter.model_registry = ModelRegistry::new(DEEPSEEK_PROVIDER, &[], fallback_profile())
+                .with_overrides(BTreeMap::from([("deepseek-chat".to_string(), over)]))
+                .expect("a plain max_output_tokens override is valid");
+
+            let mut parameters = unset();
+            parameters.max_tokens = Some(4000);
+            match adapter.build_request(&request_with(parameters)) {
+                Err(LlmError::InvalidPrompt(message)) => {
+                    assert!(message.contains("deepseek"), "{message}");
+                    assert!(message.contains("deepseek-chat"), "{message}");
+                    assert!(message.contains("max_tokens"), "{message}");
+                }
+                other => panic!("expected InvalidPrompt, got {other:?}"),
+            }
+        }
     }
 
     // ── Shared conformance suite (D-19, plan 31-04) ──

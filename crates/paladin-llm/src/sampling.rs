@@ -33,25 +33,31 @@
 //!
 //! Warn text names the provider, the model, the parameter and a numeric value or a count --
 //! never a key, a URL or a body.
-// The helpers below are consumed by the compat engine today and by the bespoke adapters from
-// plan 50-05; without a consuming adapter feature they are legitimately unused.
+// The helpers below are consumed by the compat engine and by the four bespoke adapters (OpenAI,
+// DeepSeek, Anthropic, Gemini); without a consuming adapter feature they are legitimately unused.
 #![cfg_attr(
     not(any(
         feature = "kimi",
         feature = "qwen",
         feature = "grok",
         feature = "ollama",
-        feature = "openai-compatible"
+        feature = "openai-compatible",
+        feature = "openai",
+        feature = "anthropic",
+        feature = "deepseek",
+        feature = "gemini"
     )),
     allow(dead_code)
 )]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use paladin_core::platform::container::prompt::PromptParameters;
 use paladin_ports::output::llm_port::{LlmError, ResponseFormat};
 use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, SamplingParam};
+
+use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
 
 /// The `LlmResponse.metadata` key under which an adapter records the sampling parameters it did
 /// not send, as a comma-separated list of [`SamplingParam::as_str`] names in fixed order
@@ -350,6 +356,41 @@ pub(crate) fn check_max_tokens(
             )))
         }
         _ => Ok(()),
+    }
+}
+
+/// What an adapter's request builder decided beyond the body itself, so the buffered path can
+/// record it on the response (the ADR-0061 visibility rule) and the streaming path can drop it
+/// after the `warn!` has been emitted.
+///
+/// One type for every adapter -- the compat engine and the four bespoke wires -- so the three
+/// metadata keys are stamped identically everywhere.
+#[derive(Debug, Default)]
+pub(crate) struct RequestNotes {
+    /// Comma-joined omitted parameter names, when any ([`PARAMS_OMITTED_METADATA_KEY`]).
+    pub params_omitted: Option<String>,
+    /// `json_object` or `omitted`, when the requested `response_format` was changed
+    /// ([`RESPONSE_FORMAT_ADJUSTED_METADATA_KEY`]).
+    pub format_adjusted: Option<String>,
+    /// The request's model, when it has neither a seeded entry nor an override
+    /// ([`UNPROFILED_MODEL_METADATA_KEY`]).
+    pub unprofiled_model: Option<String>,
+}
+
+impl RequestNotes {
+    /// The response-metadata entries these notes call for; empty when nothing was adjusted.
+    pub(crate) fn into_metadata(self) -> HashMap<String, String> {
+        let mut metadata = HashMap::new();
+        if let Some(omitted) = self.params_omitted {
+            metadata.insert(PARAMS_OMITTED_METADATA_KEY.to_string(), omitted);
+        }
+        if let Some(adjusted) = self.format_adjusted {
+            metadata.insert(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY.to_string(), adjusted);
+        }
+        if let Some(model) = self.unprofiled_model {
+            metadata.insert(UNPROFILED_MODEL_METADATA_KEY.to_string(), model);
+        }
+        metadata
     }
 }
 

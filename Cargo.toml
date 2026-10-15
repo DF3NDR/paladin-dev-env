@@ -455,6 +455,14 @@ name = "consumer_surface_muster"
 path = "tests/consumer_surface_muster.rs"
 required-features = ["llm-anthropic", "llm-deepseek"]
 
+# Phase 50 (PARITY-01): the provider-swap matrix. One agent definition against all nine providers,
+# switched only through an `LlmProviderConfig` block. `required-features` makes `--no-default-features`
+# fail loudly, instead of skipping, when any provider feature is off (the Phase 49 rule).
+[[test]]
+name = "provider_swap_matrix"
+path = "tests/provider_swap_matrix.rs"
+required-features = ["llm-all"]
+
 [[example]]
 name = "vision_analysis"
 path = "examples/vision_analysis.rs"

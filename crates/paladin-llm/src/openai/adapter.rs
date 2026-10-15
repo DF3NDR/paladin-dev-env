@@ -432,7 +432,7 @@ impl OpenAIAdapter {
             PromptType::User(user_prompt) => {
                 messages.push(OpenAIMessage {
                     role: "user".to_string(),
-                    content: user_prompt.context.clone().unwrap_or_default(),
+                    content: crate::turn::user_turn_text(user_prompt),
                 });
             }
             PromptType::Assistant(assistant_prompt) => {
@@ -1648,6 +1648,104 @@ mod tests {
                     "stream"
                 ])
             );
+        }
+    }
+
+    // ── Phase 50 (PARITY-08, handoff B-4): the user turn carries the query ─
+
+    mod user_turn_wiring {
+        use super::*;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::Value;
+        use std::sync::{Arc, Mutex};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        /// A request whose prompt is a `UserPrompt` with the given query and context.
+        fn user_request(query: &str, context: Option<&str>) -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: query.to_string(),
+                    context: context.map(str::to_string),
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        /// Sends `request` to a mock endpoint and returns the content of the last user message
+        /// in the captured request body.
+        async fn user_content_on_the_wire(request: LlmRequest) -> String {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let captured_clone = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    let body_text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                    *captured_clone.lock().unwrap() = Some(body_text);
+                    serde_json::json!({
+                        "id": "cmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                    })
+                    .to_string()
+                    .into_bytes()
+                })
+                .create_async()
+                .await;
+
+            let result = adapter_at(&server.url()).generate(request).await;
+            assert!(
+                result.is_ok(),
+                "mock returned a well-formed response: {result:?}"
+            );
+
+            let body_text = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("mock must have been called");
+            let body: Value = serde_json::from_str(&body_text).expect("body must be JSON");
+            body["messages"]
+                .as_array()
+                .and_then(|messages| {
+                    messages
+                        .iter()
+                        .rev()
+                        .find(|m| m["role"] == "user")
+                        .and_then(|m| m["content"].as_str().map(str::to_string))
+                })
+                .expect("the body must carry a user message with string content")
+        }
+
+        /// B-4: the execution service builds `UserPrompt { query, context: None }`; the adapter
+        /// used to read only `context`, so the user message went out empty.
+        #[tokio::test]
+        async fn openai_user_turn_carries_query_on_the_execution_service_path() {
+            let content = user_content_on_the_wire(user_request("What is 2+2?", None)).await;
+            assert_eq!(content, "What is 2+2?");
+
+            let content =
+                user_content_on_the_wire(user_request("What is 2+2?", Some("Extra context.")))
+                    .await;
+            assert_eq!(content, "What is 2+2?\n\nExtra context.");
         }
     }
 

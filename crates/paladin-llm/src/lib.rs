@@ -114,6 +114,21 @@ pub mod redaction;
 /// priority-ordered allocator with explicit truncation markers).
 #[allow(missing_docs)]
 pub mod services;
+// The one user-turn text helper every provider adapter's request builder calls (PARITY-08,
+// handoff B-4). Crate-private; documented by its own inner `//!` block; compiled only when a
+// provider adapter is.
+#[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "gemini",
+    feature = "openai-compatible"
+))]
+mod turn;
 /// The shared context-window precedence resolver (PRIM-04, D-01/D-02): one
 /// pure function, [`window::resolve_context_window`], that every consumer of
 /// [`paladin_ports::output::llm_port::ProviderCapabilities`] calls through

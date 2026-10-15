@@ -24,6 +24,11 @@ pub(crate) struct CompatRequest {
     pub frequency_penalty: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f32>,
+    /// The caller's stop sequences, in the order declared, when the model's profile admits them
+    /// (ADR-0061). Absent -- never `null` -- when the caller set none or the profile does not
+    /// admit them, so a body without stop sequences stays byte-identical to a pre-Phase-50 one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
     pub stream: bool,
     /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
     /// entirely when the caller sets no hint, keeping the body byte
@@ -47,7 +52,9 @@ pub(crate) struct CompatStreamOptions {
 }
 
 /// The provider-agnostic `response_format` hint, compiled down to this
-/// engine's own plain JSON-object wire shape (D-28).
+/// engine's own plain JSON-object wire shape (D-28). Whether one is sent at all, and whether a
+/// schema request is downgraded to this form, follows the model's profile (ADR-0061 (i)); a
+/// downgrade is recorded as `paladin.response_format_adjusted`.
 ///
 /// Every preset built on [`super::engine::CompatEngine`] — Kimi, Qwen, Grok,
 /// Ollama and the generic OpenAI-compatible preset — speaks the de-facto

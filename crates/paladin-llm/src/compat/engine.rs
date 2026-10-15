@@ -28,9 +28,10 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
-    StreamingResponse, TokenUsage,
+    FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
+    TokenUsage,
 };
+use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use super::types::{
@@ -40,6 +41,11 @@ use super::types::{
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
+use crate::registry::{ModelRegistry, UNPROFILED_MODEL_METADATA_KEY, fallback_from_compat};
+use crate::sampling::{
+    self, FormatLog, OmissionLog, PARAMS_OMITTED_METADATA_KEY,
+    RESPONSE_FORMAT_ADJUSTED_METADATA_KEY,
+};
 
 /// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
 ///
@@ -139,8 +145,13 @@ pub struct CompatRequestParameters {
     /// happened."* Declaring this field `false` is not that: no value is
     /// swapped in for another, the key is simply absent from the JSON body,
     /// and the vendor's own single legal value applies server-side. The
-    /// caller's declared-unsupported value is still discoverable — see the
-    /// `debug` log this method emits when a value is dropped. First used by
+    /// caller's declared-unsupported value is still discoverable — the
+    /// omission is logged as a `warn!` (target `paladin::sampling`, once per
+    /// instance per model) and recorded on the response as
+    /// `paladin.params_omitted` (ADR-0061; it was a `debug!` before Phase
+    /// 50). Since Phase 50 the **per-model profile** decides what is sent;
+    /// this flag now feeds the adapter-wide fallback profile derived from it
+    /// (`registry::fallback_from_compat`), not a separate gate. First used by
     /// Kimi's fixed-temperature preset (`kimi::adapter::KimiAdapter`, plan
     /// 17-19), whose live-measured constraint made the framework's
     /// fabricated `0.7` default temperature (`PaladinData::default()`)
@@ -186,8 +197,9 @@ pub struct CompatEngineConfig {
     /// What this preset's own request path implements (D-04 posture).
     pub capabilities: CompatCapabilities,
     /// Which optional sampling parameters this preset's own request path
-    /// carries (17-18). Gates `build_request`'s five optional fields — see
-    /// [`CompatRequestParameters`]. Sits beside `error_override` and
+    /// carries (17-18). Gates `max_tokens` and seeds the adapter-wide fallback
+    /// profile `build_request` filters the other four through (ADR-0061) —
+    /// see [`CompatRequestParameters`]. Sits beside `error_override` and
     /// `redirect_policy` as a per-vendor protocol knob the engine reads
     /// off its own config rather than branching on provider identity.
     pub request_parameters: CompatRequestParameters,
@@ -390,6 +402,48 @@ pub struct CompatEngine {
     /// [`DEFAULT_PROVIDER_NAME`] so an engine built without a preset still
     /// carries a truthful, if generic, name.
     provider_name: &'static str,
+    /// The per-model profile registry the preset attached through
+    /// [`CompatEngine::with_model_registry`] (ADR-0061). Private and **not** a field of the
+    /// public [`CompatEngineConfig`], which stays constructible exactly as before. `None` for an
+    /// engine built without a preset: [`CompatEngine::model_profile`] then derives one profile
+    /// from the config's own declarations.
+    model_registry: Option<ModelRegistry>,
+    /// Which (model, parameter) omissions this instance has already warned about.
+    omissions: OmissionLog,
+    /// Which (model, adjustment) `response_format` changes this instance has already warned
+    /// about.
+    format_log: FormatLog,
+}
+
+/// What [`CompatEngine::build_request`] decided beyond the body itself, so the buffered
+/// [`CompatEngine::generate`] can record it on the response (ADR-0061 visibility rule).
+#[derive(Debug, Default)]
+struct RequestNotes {
+    /// Comma-joined omitted parameter names, when any (`paladin.params_omitted`).
+    params_omitted: Option<String>,
+    /// `json_object` or `omitted`, when the requested `response_format` was changed
+    /// (`paladin.response_format_adjusted`).
+    format_adjusted: Option<String>,
+    /// The request's model, when it has neither a seeded entry nor an override
+    /// (`paladin.unprofiled_model`).
+    unprofiled_model: Option<String>,
+}
+
+impl RequestNotes {
+    /// The response-metadata entries these notes call for; empty when nothing was adjusted.
+    fn into_metadata(self) -> HashMap<String, String> {
+        let mut metadata = HashMap::new();
+        if let Some(omitted) = self.params_omitted {
+            metadata.insert(PARAMS_OMITTED_METADATA_KEY.to_string(), omitted);
+        }
+        if let Some(adjusted) = self.format_adjusted {
+            metadata.insert(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY.to_string(), adjusted);
+        }
+        if let Some(model) = self.unprofiled_model {
+            metadata.insert(UNPROFILED_MODEL_METADATA_KEY.to_string(), model);
+        }
+        metadata
+    }
 }
 
 /// The provider name a [`CompatEngine`] reports until a preset names it via
@@ -429,6 +483,9 @@ impl CompatEngine {
             config,
             models_cache: OnceCell::new(),
             provider_name: DEFAULT_PROVIDER_NAME,
+            model_registry: None,
+            omissions: OmissionLog::new(),
+            format_log: FormatLog::new(),
         })
     }
 
@@ -443,6 +500,29 @@ impl CompatEngine {
         self
     }
 
+    /// Attach the per-model profile registry this engine resolves every request's model through
+    /// (ADR-0061, D-05). Each thin preset calls this with a registry over its adapter-wide
+    /// fallback profile, in the [`with_provider_name`](Self::with_provider_name) style.
+    #[must_use]
+    pub(crate) fn with_model_registry(mut self, registry: ModelRegistry) -> Self {
+        self.model_registry = Some(registry);
+        self
+    }
+
+    /// The profile that decides what reaches the wire for `model`: the registry's (override over
+    /// seeded entry over adapter-wide fallback), or, when no registry was attached, one derived
+    /// from this config's own capabilities and `request_parameters` with stop sequences not sent.
+    pub(crate) fn model_profile(&self, model: &str) -> ModelProfile {
+        match &self.model_registry {
+            Some(registry) => registry.profile(model),
+            None => fallback_from_compat(
+                &self.capabilities(),
+                &self.config.request_parameters,
+                StopSupport::NotSent,
+            ),
+        }
+    }
+
     /// The name this engine stamps on its [`LlmError::ProviderError`]s.
     pub fn provider_name(&self) -> &'static str {
         self.provider_name
@@ -453,82 +533,87 @@ impl CompatEngine {
         self.config.capabilities.clone().into()
     }
 
-    /// Build the outgoing request body from a port-level [`LlmRequest`].
+    /// Build the outgoing request body from a port-level [`LlmRequest`], plus the notes the
+    /// buffered path records on its response.
     ///
-    /// Each of the five optional sampling parameters is gated on this
-    /// engine's own [`CompatRequestParameters`] declaration (17-18): a
-    /// carried parameter passes the caller's `Option` through unchanged; a
-    /// parameter the preset does not carry resolves to `None`, which
-    /// `CompatRequest`'s existing `skip_serializing_if = "Option::is_none"`
-    /// turns into an absent JSON key — never a `null`. The gate reads only
-    /// `self.config.request_parameters`, never the provider name or base
-    /// URL, so the same mechanism serves the next vendor without editing
-    /// this method.
+    /// What reaches the wire is decided by the request model's [`ModelProfile`] (ADR-0061),
+    /// resolved through [`CompatEngine::model_profile`]: [`sampling::apply`] sends a sampling
+    /// parameter only when the profile admits it, and a set parameter it does not admit is
+    /// **omitted** -- the key is absent from the JSON body (`CompatRequest`'s
+    /// `skip_serializing_if = "Option::is_none"`), never `null`, never a substituted legal value
+    /// -- and recorded: one `warn!` per instance per (model, parameter), and
+    /// `paladin.params_omitted` on the response. Stop sequences ride the same filter and reach
+    /// the wire in the order the caller declared them.
     ///
-    /// This method backs **five presets** sharing this one engine: Kimi,
-    /// Qwen, Grok, Ollama and the generic OpenAI-compatible preset — a
-    /// change here (e.g. the `response_format` mapping below, D-28) is
-    /// shared by all five, not per-vendor.
-    fn build_request(&self, request: &LlmRequest) -> Result<CompatRequest, LlmError> {
+    /// `max_tokens` is the one parameter still gated by this engine's own
+    /// [`CompatRequestParameters`] declaration; an effective `max_tokens` above the profile's
+    /// `max_output_tokens` is refused by [`sampling::check_max_tokens`] before anything is built.
+    ///
+    /// The gate reads only the profile and `self.config.request_parameters`, never the provider
+    /// name or base URL, so the same mechanism serves the next vendor without editing this method.
+    ///
+    /// This method backs **five presets** sharing this one engine: Kimi, Qwen, Grok, Ollama and
+    /// the generic OpenAI-compatible preset -- a change here (e.g. the `response_format` mapping
+    /// below, D-28) is shared by all five, not per-vendor.
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<(CompatRequest, RequestNotes), LlmError> {
         let messages = Self::convert_prompt_to_messages(&request.prompt)?;
         let params = &request.prompt.entity.data.parameters;
-        let allowed = &self.config.request_parameters;
+        let profile = self.model_profile(&request.model);
 
-        let temperature = params.temperature.filter(|_| allowed.temperature);
-        let max_tokens = params.max_tokens.filter(|_| allowed.max_tokens);
-        let top_p = params.top_p.filter(|_| allowed.top_p);
-        let frequency_penalty = params
-            .frequency_penalty
-            .filter(|_| allowed.frequency_penalty);
-        let presence_penalty = params.presence_penalty.filter(|_| allowed.presence_penalty);
-
-        let mut dropped: Vec<&'static str> = Vec::new();
-        if params.temperature.is_some() && temperature.is_none() {
-            dropped.push("temperature");
-        }
+        let max_tokens = params
+            .max_tokens
+            .filter(|_| self.config.request_parameters.max_tokens);
+        sampling::check_max_tokens(self.provider_name, &request.model, &profile, max_tokens)?;
         if params.max_tokens.is_some() && max_tokens.is_none() {
-            dropped.push("max_tokens");
-        }
-        if params.top_p.is_some() && top_p.is_none() {
-            dropped.push("top_p");
-        }
-        if params.frequency_penalty.is_some() && frequency_penalty.is_none() {
-            dropped.push("frequency_penalty");
-        }
-        if params.presence_penalty.is_some() && presence_penalty.is_none() {
-            dropped.push("presence_penalty");
-        }
-        if !dropped.is_empty() {
-            log::debug!(
-                "this preset's request_parameters declaration does not carry {:?}; \
-                 dropped from the outgoing body although the caller supplied a value",
-                dropped
+            log::warn!(
+                target: "paladin::sampling",
+                "provider '{}' model '{}': this preset's request path does not carry \
+                 'max_tokens'; the caller's value was dropped from the outgoing body",
+                self.provider_name,
+                request.model
             );
         }
 
-        // D-28: every `ResponseFormat` variant degrades to this engine's
-        // plain JSON-object form — these five presets speak the de-facto
-        // chat-completions dialect without OpenAI's schema-carrying
-        // extension. The field is present whenever the caller asked for
-        // JSON (never omitted, EDGE(RT-05/wire shape)); correctness never
-        // depends on it because the caller also appends the
-        // schema-conformance instruction block (D-27).
-        let response_format =
-            request
-                .response_format
-                .as_ref()
-                .map(|_: &ResponseFormat| CompatResponseFormat {
-                    kind: "json_object",
-                });
+        let applied = sampling::apply(&profile, params);
+        let params_omitted = self
+            .omissions
+            .record(self.provider_name, &request.model, &applied);
 
-        Ok(CompatRequest {
+        // D-28 / ADR-0061 (i): the effective `response_format` follows the profile. These five
+        // presets speak the de-facto chat-completions dialect without OpenAI's schema-carrying
+        // extension, so an effective format -- object or schema -- maps to this engine's plain
+        // JSON-object wire form; the compat fallback profile (`json_object` true, `json_schema`
+        // false) makes a schema request a recorded downgrade. The field is present whenever an
+        // effective format exists (never `null`, EDGE(RT-05/wire shape)); correctness never
+        // depends on it because the caller also appends the schema-conformance instruction block
+        // (D-27).
+        let (effective_format, adjustment) =
+            sampling::apply_response_format(&profile, request.response_format.as_ref());
+        let format_adjusted =
+            self.format_log
+                .record(self.provider_name, &request.model, adjustment);
+        let response_format = effective_format.map(|_| CompatResponseFormat {
+            kind: "json_object",
+        });
+
+        let unprofiled_model = self
+            .model_registry
+            .as_ref()
+            .is_some_and(|registry| registry.note_unprofiled(&request.model))
+            .then(|| request.model.clone());
+
+        let body = CompatRequest {
             model: request.model.clone(),
             messages,
-            temperature,
+            temperature: applied.temperature,
             max_tokens,
-            top_p,
-            frequency_penalty,
-            presence_penalty,
+            top_p: applied.top_p,
+            frequency_penalty: applied.frequency_penalty,
+            presence_penalty: applied.presence_penalty,
+            stop: applied.stop,
             stream: request.stream,
             response_format,
             // Set unconditionally to `None` here; `generate_stream` forces
@@ -539,7 +624,13 @@ impl CompatEngine {
             // the `LlmRequest` and only decide to call `generate_stream`
             // afterward.
             stream_options: None,
-        })
+        };
+        let notes = RequestNotes {
+            params_omitted,
+            format_adjusted,
+            unprofiled_model,
+        };
+        Ok((body, notes))
     }
 
     /// Map a wire-reported [`CompatUsage`] into [`TokenUsage`], applying the
@@ -800,7 +891,10 @@ impl CompatEngine {
 
     /// Generate a completion. POSTs to `{base_url}/chat/completions`.
     pub async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let api_request = self.build_request(&request)?;
+        let (api_request, notes) = self.build_request(&request)?;
+        // ADR-0061 visibility rule: whatever the filter omitted or adjusted is stamped on every
+        // response this request yields, built once and cloned per retry attempt.
+        let metadata = notes.into_metadata();
         let url = format!("{}/chat/completions", self.config.base_url);
 
         let operation = || async {
@@ -880,7 +974,7 @@ impl CompatEngine {
                 usage,
                 cost: None,
                 created_at: Utc::now(),
-                metadata: HashMap::new(),
+                metadata: metadata.clone(),
                 function_call: None,
             })
         };
@@ -918,7 +1012,9 @@ impl CompatEngine {
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        let mut api_request = self.build_request(&request)?;
+        // A streamed call has no metadata channel (A1-50-03): its omissions are visible through
+        // the `warn!` `build_request` already emitted, so the notes are dropped here.
+        let (mut api_request, _notes) = self.build_request(&request)?;
         api_request.stream = true;
         api_request.stream_options = Some(CompatStreamOptions {
             include_usage: true,
@@ -1154,6 +1250,7 @@ mod tests {
     use super::*;
     use mockito::Server;
     use paladin_core::platform::container::prompt::UserPrompt;
+    use paladin_ports::output::llm_port::ResponseFormat;
 
     fn test_config() -> CompatEngineConfig {
         CompatEngineConfig {
@@ -1768,6 +1865,16 @@ mod tests {
         config: CompatEngineConfig,
         request: LlmRequest,
     ) -> (Value, String) {
+        let (body, text, _metadata) = generate_and_capture_all(config, request).await;
+        (body, text)
+    }
+
+    /// [`generate_and_capture_body`] plus the response's metadata map, for the tests that pin
+    /// what an omission recorded (ADR-0061).
+    async fn generate_and_capture_all(
+        config: CompatEngineConfig,
+        request: LlmRequest,
+    ) -> (Value, String, HashMap<String, String>) {
         // `server` must outlive the call to `generate()` below (it is
         // dropped at the end of this function's scope, after `.await`
         // returns), so it cannot be constructed inside a nested block.
@@ -1810,6 +1917,7 @@ mod tests {
             result.is_ok(),
             "mock server returned a well-formed response: {result:?}"
         );
+        let metadata = result.map(|response| response.metadata).unwrap_or_default();
 
         let body_text = captured
             .lock()
@@ -1818,7 +1926,7 @@ mod tests {
             .expect("mock must have been called exactly once");
         let body_json: Value =
             serde_json::from_str(&body_text).expect("captured body must be valid JSON");
-        (body_json, body_text)
+        (body_json, body_text, metadata)
     }
 
     /// Phase 50 (PARITY-08): one test for the engine covers Kimi, Qwen, Grok, Ollama and the
@@ -1861,12 +1969,19 @@ mod tests {
             test_config_with_request_parameters("https://example.invalid/v1", request_parameters);
         let request = build_request_with_parameters("test-model", fully_specified_parameters());
 
-        let (body, _) = generate_and_capture_body(config, request).await;
+        let (body, _, metadata) = generate_and_capture_all(config, request).await;
         let obj = body.as_object().expect("body must be a JSON object");
 
         assert!(
             !obj.contains_key("presence_penalty"),
             "declared-unsupported parameter must be absent from the wire body, got: {obj:?}"
+        );
+        assert_eq!(
+            metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("presence_penalty"),
+            "the omission must be recorded, not silent (ADR-0061)"
         );
         assert_eq!(obj.get("temperature").and_then(Value::as_f64), Some(0.5));
         assert_eq!(obj.get("max_tokens").and_then(Value::as_u64), Some(123));
@@ -1942,7 +2057,7 @@ mod tests {
         parameters.presence_penalty = Some(1.5);
         let request = build_request_with_parameters("test-model", parameters);
 
-        let (body, body_text) = generate_and_capture_body(config, request).await;
+        let (body, body_text, metadata) = generate_and_capture_all(config, request).await;
         let obj = body.as_object().expect("body must be a JSON object");
 
         assert!(
@@ -1951,6 +2066,12 @@ mod tests {
              parameter, got: {obj:?}"
         );
         assert!(!body_text.contains("presence_penalty"));
+        assert_eq!(
+            metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("presence_penalty")
+        );
     }
 
     // Test 5 — unset stays unset: a preset declaring a parameter carried,
@@ -2003,12 +2124,19 @@ mod tests {
             test_config_with_request_parameters("https://example.invalid/v1", request_parameters);
         let request = build_request_with_parameters("test-model", fully_specified_parameters());
 
-        let (body, body_text) = generate_and_capture_body(config, request).await;
+        let (body, body_text, metadata) = generate_and_capture_all(config, request).await;
         let obj = body.as_object().expect("body must be a JSON object");
 
         assert!(
             !obj.contains_key("temperature"),
             "declared-absent temperature must not appear on the wire, got: {obj:?}"
+        );
+        assert_eq!(
+            metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("temperature"),
+            "the omission must be recorded, not silent (ADR-0061)"
         );
         assert!(
             !body_text.contains("temperature"),
@@ -2257,6 +2385,324 @@ mod tests {
         assert!(
             !obj.contains_key("response_format"),
             "absent response_format must not appear on the wire, got: {obj:?}"
+        );
+    }
+
+    // ── Phase 50 (ADR-0061): the per-model profile decides what reaches the wire ────────────
+    //
+    // One set of cases for all five presets that share this engine. The registry is attached
+    // the way a preset attaches it, over a fallback profile derived from the config.
+
+    /// A registry over the test config's own declaration, with stop sequences supported.
+    fn test_registry(overrides: Vec<(&str, crate::registry::ModelOverride)>) -> ModelRegistry {
+        let config = test_config();
+        let fallback = fallback_from_compat(
+            &config.capabilities.clone().into(),
+            &config.request_parameters,
+            StopSupport::Supported { max: None },
+        );
+        ModelRegistry::new("test-preset", &[], fallback)
+            .with_overrides(
+                overrides
+                    .into_iter()
+                    .map(|(model, over)| (model.to_string(), over))
+                    .collect(),
+            )
+            .expect("the test overrides are valid")
+    }
+
+    /// Run `generate` through a mock endpoint, returning the outcome, the captured body (if any
+    /// request arrived) and how many requests arrived.
+    async fn generate_through(
+        engine_for: impl FnOnce(String) -> CompatEngine,
+        request: LlmRequest,
+    ) -> (Result<LlmResponse, LlmError>, Option<Value>, usize) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mut server = Server::new_async().await;
+        let captured: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+        let hits = Arc::new(AtomicUsize::new(0));
+        let (captured_clone, hits_clone) = (Arc::clone(&captured), Arc::clone(&hits));
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_body_from_request(move |req| {
+                hits_clone.fetch_add(1, Ordering::SeqCst);
+                let text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                *captured_clone.lock().unwrap() = serde_json::from_str(&text).ok();
+                json!({
+                    "id": "cmpl-1",
+                    "model": "test-model",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                })
+                .to_string()
+                .into_bytes()
+            })
+            .expect_at_least(0)
+            .create_async()
+            .await;
+
+        let engine = engine_for(server.url());
+        let outcome = engine.generate(request).await;
+        let body = captured.lock().unwrap().take();
+        (outcome, body, hits.load(Ordering::SeqCst))
+    }
+
+    fn engine_with(registry: ModelRegistry) -> impl FnOnce(String) -> CompatEngine {
+        move |url| {
+            CompatEngine::new(test_config_at(&url))
+                .unwrap()
+                .with_provider_name("test-preset")
+                .with_model_registry(registry)
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_omission_is_recorded_in_metadata() {
+        let mut parameters = fully_specified_parameters();
+        parameters.temperature = Some(1.5); // above the declared (0.0, 1.0)
+        parameters.top_p = Some(0.25); // admitted
+        let request = build_request_with_parameters("test-model", parameters);
+
+        let (outcome, body, _) =
+            generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("the request is well-formed");
+        let body = body.expect("a request was sent");
+
+        assert!(
+            body.get("temperature").is_none(),
+            "an inadmissible temperature is omitted -- absent, never null or swapped: {body}"
+        );
+        assert_eq!(body.get("top_p").and_then(Value::as_f64), Some(0.25));
+        assert_eq!(
+            response
+                .metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("temperature")
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_nothing_omitted_leaves_the_metadata_key_absent() {
+        let request = build_request_with_parameters("test-model", fully_specified_parameters());
+
+        let (outcome, _, _) = generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("the request is well-formed");
+
+        assert!(
+            !response.metadata.contains_key(PARAMS_OMITTED_METADATA_KEY),
+            "nothing was omitted, so the key must be absent: {:?}",
+            response.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_stop_reaches_the_wire_in_order() {
+        let mut parameters = fully_specified_parameters();
+        parameters.stop_sequences = Some(vec!["END".into(), "STOP".into(), "END".into()]);
+        let request = build_request_with_parameters("test-model", parameters);
+
+        let (outcome, body, _) =
+            generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("the request is well-formed");
+
+        assert_eq!(
+            body.expect("a request was sent").get("stop"),
+            Some(&json!(["END", "STOP", "END"])),
+            "stop sequences keep the caller's order and duplicates"
+        );
+        assert!(!response.metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+    }
+
+    #[tokio::test]
+    async fn compat_stop_is_omitted_and_recorded_when_the_profile_does_not_take_it() {
+        // No registry attached: the profile derives from the config with stop NotSent.
+        let mut parameters = fully_specified_parameters();
+        parameters.stop_sequences = Some(vec!["END".into()]);
+        let request = build_request_with_parameters("test-model", parameters);
+
+        let (outcome, body, _) = generate_through(
+            |url| CompatEngine::new(test_config_at(&url)).unwrap(),
+            request,
+        )
+        .await;
+        let response = outcome.expect("the request is well-formed");
+
+        let body = body.expect("a request was sent");
+        assert!(body.get("stop").is_none(), "no stop key at all: {body}");
+        assert_eq!(
+            response
+                .metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("stop")
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_unprofiled_model_is_recorded() {
+        let request = build_request("some-new-model");
+
+        let (outcome, _, _) = generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("an unknown model is never a refusal (D-07)");
+
+        assert_eq!(
+            response
+                .metadata
+                .get(UNPROFILED_MODEL_METADATA_KEY)
+                .map(String::as_str),
+            Some("some-new-model")
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_an_overridden_model_is_not_reported_unprofiled() {
+        let request = build_request("tuned-model");
+        let registry = test_registry(vec![(
+            "tuned-model",
+            crate::registry::ModelOverride {
+                max_output_tokens: Some(1000),
+                ..crate::registry::ModelOverride::default()
+            },
+        )]);
+
+        let (outcome, _, _) = generate_through(engine_with(registry), request).await;
+        let response = outcome.expect("the request is well-formed");
+
+        assert!(
+            !response
+                .metadata
+                .contains_key(UNPROFILED_MODEL_METADATA_KEY)
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_response_format_follows_the_profile() {
+        let schema = || ResponseFormat::JsonSchema {
+            name: "answer".to_string(),
+            schema: json!({"type": "object"}),
+            strict: true,
+        };
+
+        // JsonObject still reaches the wire as json_object, unrecorded.
+        let request = build_request("test-model").with_response_format(ResponseFormat::JsonObject);
+        let (outcome, body, _) =
+            generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("well-formed");
+        assert_eq!(
+            body.expect("sent").get("response_format"),
+            Some(&json!({"type": "json_object"}))
+        );
+        assert!(
+            !response
+                .metadata
+                .contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+        );
+
+        // JsonSchema is still sent as json_object, and the downgrade is now recorded.
+        let request = build_request("test-model").with_response_format(schema());
+        let (outcome, body, _) =
+            generate_through(engine_with(test_registry(vec![])), request).await;
+        let response = outcome.expect("well-formed");
+        assert_eq!(
+            body.expect("sent").get("response_format"),
+            Some(&json!({"type": "json_object"}))
+        );
+        assert_eq!(
+            response
+                .metadata
+                .get(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("json_object")
+        );
+
+        // An override that says the model has no JSON mode drops the field and records it.
+        let registry = test_registry(vec![(
+            "no-json-model",
+            crate::registry::ModelOverride {
+                json_object: Some(false),
+                ..crate::registry::ModelOverride::default()
+            },
+        )]);
+        let request =
+            build_request("no-json-model").with_response_format(ResponseFormat::JsonObject);
+        let (outcome, body, _) = generate_through(engine_with(registry), request).await;
+        let response = outcome.expect("well-formed");
+        let body = body.expect("sent");
+        assert!(
+            body.get("response_format").is_none(),
+            "no response_format key at all: {body}"
+        );
+        assert_eq!(
+            response
+                .metadata
+                .get(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("omitted")
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_max_tokens_above_the_profile_is_refused() {
+        let registry = test_registry(vec![(
+            "small-output-model",
+            crate::registry::ModelOverride {
+                max_output_tokens: Some(1000),
+                ..crate::registry::ModelOverride::default()
+            },
+        )]);
+        let mut parameters = fully_specified_parameters();
+        parameters.max_tokens = Some(1001);
+        let request = build_request_with_parameters("small-output-model", parameters);
+
+        let (outcome, _, hits) = generate_through(engine_with(registry), request).await;
+
+        let Err(LlmError::InvalidPrompt(message)) = outcome else {
+            panic!("max_tokens 1001 above a limit of 1000 must be InvalidPrompt: {outcome:?}");
+        };
+        for needle in [
+            "test-preset",
+            "small-output-model",
+            "max_tokens",
+            "1001",
+            "1000",
+        ] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+        assert_eq!(hits, 0, "nothing may be sent for a refused request");
+    }
+
+    #[tokio::test]
+    async fn compat_max_tokens_at_the_profile_limit_is_sent() {
+        let registry = test_registry(vec![(
+            "small-output-model",
+            crate::registry::ModelOverride {
+                max_output_tokens: Some(1000),
+                ..crate::registry::ModelOverride::default()
+            },
+        )]);
+        let mut parameters = fully_specified_parameters();
+        parameters.max_tokens = Some(1000);
+        let request = build_request_with_parameters("small-output-model", parameters);
+
+        let (outcome, body, hits) = generate_through(engine_with(registry), request).await;
+
+        outcome.expect("exactly the limit is allowed");
+        assert_eq!(hits, 1);
+        assert_eq!(
+            body.expect("sent")
+                .get("max_tokens")
+                .and_then(Value::as_u64),
+            Some(1000)
         );
     }
 

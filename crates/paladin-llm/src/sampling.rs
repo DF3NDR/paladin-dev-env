@@ -35,9 +35,6 @@
 //! never a key, a URL or a body.
 // The helpers below are consumed by the compat engine today and by the bespoke adapters from
 // plan 50-05; without a consuming adapter feature they are legitimately unused.
-// TEMPORARY (plan 50-03 task 1): removed in the next commit, when the compat engine consumes
-// every item below.
-#![allow(dead_code)]
 #![cfg_attr(
     not(any(
         feature = "kimi",

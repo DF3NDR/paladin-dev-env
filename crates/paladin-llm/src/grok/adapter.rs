@@ -16,9 +16,12 @@ use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
 
+use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
+
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
+use crate::registry::{ModelRegistry, fallback_from_compat};
 
 /// Default Grok (xAI) API base URL.
 ///
@@ -234,10 +237,25 @@ impl GrokAdapter {
             redirect_policy: Some(reqwest::redirect::Policy::none()),
         };
 
+        // ADR-0061 (plan 50-03): the adapter-wide fallback profile is this preset's own
+        // declaration above, restated as a profile; per-model seeded entries arrive in plan
+        // 50-06.
+        // Stop sequences: `NotSent` -- xAI's reasoning models reject `stop` (RESEARCH A5, the
+        // handoff's G-10 note), so a stop-word agent is refused at build by name and a direct
+        // call's `stop` is omitted and recorded. A model that does take it is corrected by its
+        // seeded entry (plan 50-06), never by this adapter (D-04a).
+        let fallback = fallback_from_compat(
+            &engine_config.capabilities.clone().into(),
+            &engine_config.request_parameters,
+            StopSupport::NotSent,
+        );
+
         Ok(Self {
             // Phase 25 D-03: name the engine so every `ProviderError` it
             // emits carries "grok", not the engine's generic default.
-            engine: CompatEngine::new(engine_config)?.with_provider_name(GROK_PROVIDER),
+            engine: CompatEngine::new(engine_config)?
+                .with_provider_name(GROK_PROVIDER)
+                .with_model_registry(ModelRegistry::new(GROK_PROVIDER, &[], fallback)),
         })
     }
 }
@@ -270,15 +288,23 @@ impl LlmPort for GrokAdapter {
     fn get_capabilities(&self) -> ProviderCapabilities {
         self.engine.capabilities()
     }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.engine.model_profile(model))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::http_status::map_http_status;
+    use crate::sampling::PARAMS_OMITTED_METADATA_KEY;
     use mockito::Server;
-    use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    use paladin_core::platform::container::prompt::{
+        PromptItem, PromptParameters, PromptType, UserPrompt,
+    };
     use paladin_ports::output::llm_port::FinishReason;
+    use paladin_ports::output::model_profile::ParamSupport;
     use serde_json::json;
 
     fn build_request(model: &str) -> LlmRequest {
@@ -290,6 +316,64 @@ mod tests {
             }))
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn grok_model_profile_does_not_take_stop_or_penalties() {
+        let adapter = GrokAdapter::new(GrokConfig::new(
+            "test-key".to_string(),
+            "https://example.invalid/v1".to_string(),
+            GROK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let profile = adapter
+            .model_profile(GROK_DEFAULT_MODEL)
+            .expect("Grok profiles every model");
+        assert_eq!(profile.stop_sequences, StopSupport::NotSent);
+        assert_eq!(profile.frequency_penalty, ParamSupport::NotSent);
+        assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
+        assert_eq!(profile.temperature, ParamSupport::Range(0.0, 2.0));
+    }
+
+    #[tokio::test]
+    async fn grok_stop_is_omitted_and_recorded() {
+        let mut server = crate::compat::test_support::server().await;
+        let captured = crate::compat::test_support::mock_completion(&mut server).await;
+        let adapter = GrokAdapter::new(GrokConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            GROK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let mut request = build_request(GROK_DEFAULT_MODEL);
+        request.prompt.entity.data.parameters = PromptParameters {
+            max_tokens: Some(64),
+            temperature: Some(0.5),
+            top_p: None,
+            frequency_penalty: None,
+            presence_penalty: Some(0.0),
+            stop_sequences: Some(vec!["END".to_string()]),
+        };
+
+        let response = adapter
+            .generate(request)
+            .await
+            .expect("well-formed response");
+        let body = captured.lock().unwrap().take().expect("a request was sent");
+
+        assert!(
+            body.get("stop").is_none(),
+            "no stop key on the Grok wire: {body}"
+        );
+        assert!(body.get("presence_penalty").is_none(), "{body}");
+        assert_eq!(body.get("temperature").and_then(|v| v.as_f64()), Some(0.5));
+        assert_eq!(
+            response
+                .metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("presence_penalty,stop")
+        );
     }
 
     // ── GrokConfig::from_env() defaulting logic ──

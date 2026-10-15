@@ -33,9 +33,12 @@ use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
 
+use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
+
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
+use crate::registry::{ModelRegistry, fallback_from_compat};
 
 /// Default Ollama base URL — the local OpenAI-compatibility layer
 /// (`/v1/*`), not the native `/api/chat` endpoint. See the module-level
@@ -220,10 +223,24 @@ impl OllamaAdapter {
             redirect_policy: Some(reqwest::redirect::Policy::none()),
         };
 
+        // ADR-0061 (plan 50-03): the adapter-wide fallback profile is this preset's own
+        // declaration above, restated as a profile; per-model seeded entries arrive in plan
+        // 50-06.
+        // Stop sequences: `Supported { max: None }` is the vendor's published request schema
+        // (A3-50-03); a vendor that rejects `stop` for a model is corrected by that model's
+        // seeded entry (plan 50-06), never by this adapter (D-04a).
+        let fallback = fallback_from_compat(
+            &engine_config.capabilities.clone().into(),
+            &engine_config.request_parameters,
+            StopSupport::Supported { max: None },
+        );
+
         Ok(Self {
             // Phase 25 D-03: name the engine so every `ProviderError` it
             // emits carries "ollama", not the engine's generic default.
-            engine: CompatEngine::new(engine_config)?.with_provider_name(OLLAMA_PROVIDER),
+            engine: CompatEngine::new(engine_config)?
+                .with_provider_name(OLLAMA_PROVIDER)
+                .with_model_registry(ModelRegistry::new(OLLAMA_PROVIDER, &[], fallback)),
         })
     }
 }
@@ -256,6 +273,10 @@ impl LlmPort for OllamaAdapter {
     fn get_capabilities(&self) -> ProviderCapabilities {
         self.engine.capabilities()
     }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.engine.model_profile(model))
+    }
 }
 
 #[cfg(test)]
@@ -263,7 +284,9 @@ mod tests {
     use super::*;
     use crate::http_status::map_http_status;
     use mockito::Server;
-    use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    use paladin_core::platform::container::prompt::{
+        PromptItem, PromptParameters, PromptType, UserPrompt,
+    };
     use paladin_ports::output::llm_port::FinishReason;
     use serde_json::json;
 
@@ -276,6 +299,46 @@ mod tests {
             }))
             .unwrap(),
         )
+    }
+
+    #[tokio::test]
+    async fn ollama_stop_reaches_the_wire_in_order() {
+        let mut server = crate::compat::test_support::server().await;
+        let captured = crate::compat::test_support::mock_completion(&mut server).await;
+        let adapter = OllamaAdapter::new(OllamaConfig::new(
+            server.url(),
+            OLLAMA_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let mut request = build_request(OLLAMA_DEFAULT_MODEL);
+        request.prompt.entity.data.parameters = PromptParameters {
+            max_tokens: Some(64),
+            temperature: Some(0.5),
+            top_p: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: Some(vec!["END".to_string(), "STOP".to_string()]),
+        };
+
+        let response = adapter
+            .generate(request)
+            .await
+            .expect("well-formed response");
+        let body = captured.lock().unwrap().take().expect("a request was sent");
+
+        assert_eq!(body.get("stop"), Some(&json!(["END", "STOP"])));
+        assert!(
+            !response
+                .metadata
+                .contains_key(crate::sampling::PARAMS_OMITTED_METADATA_KEY)
+        );
+        let profile = adapter
+            .model_profile(OLLAMA_DEFAULT_MODEL)
+            .expect("ollama profiles every model");
+        assert_eq!(
+            profile.temperature,
+            paladin_ports::output::model_profile::ParamSupport::Range(0.0, 2.0)
+        );
     }
 
     // ── OllamaConfig::from_env() defaulting logic ──

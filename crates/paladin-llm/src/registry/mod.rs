@@ -22,9 +22,6 @@
 //! construction, naming provider and model.
 // The registry is consumed by the compat engine today and by the bespoke adapters from plan
 // 50-05; without a consuming adapter feature its crate-private items are legitimately unused.
-// TEMPORARY (plan 50-03 task 1): removed in the next commit, when the compat engine consumes
-// every item below.
-#![allow(dead_code)]
 #![cfg_attr(
     not(any(
         feature = "kimi",
@@ -216,6 +213,9 @@ fn validate_stop(stop: StopSupport) -> Result<(), String> {
 }
 
 /// The sanity rules applied to a fully merged profile.
+// Called by `ModelRegistry::with_overrides`, which the config bridge first consumes in plans
+// 50-08/50-09; until then only the tests exercise it.
+#[allow(dead_code)]
 fn validate_profile(profile: &ModelProfile) -> Result<(), String> {
     validate_limits(profile.context_window, profile.max_output_tokens)?;
     validate_support("temperature", profile.temperature)?;
@@ -291,6 +291,9 @@ impl ModelRegistry {
     ///
     /// A message naming the provider, the model and the problem: an empty model id, an invalid
     /// override, or an override that contradicts the profile it is laid over.
+    // First consumed by the config bridge in plans 50-08/50-09; until then only the tests (and
+    // plan 50-06's seeded tables) exercise it.
+    #[allow(dead_code)]
     pub(crate) fn with_overrides(
         mut self,
         overrides: BTreeMap<String, ModelOverride>,

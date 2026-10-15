@@ -26,9 +26,12 @@ use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
 
+use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
+use crate::registry::{ModelRegistry, fallback_from_compat};
 
 /// Default Kimi (Moonshot AI) API base URL.
 ///
@@ -209,31 +212,17 @@ impl KimiAdapter {
                 // (`lib.rs`) still holds: `Some(_)`, never `None`.
                 temperature_range: Some((1.0, 1.0)),
             },
-            // Option (a), chosen by the developer 2026-08-22 against
-            // ADR-0004 (17-19, closing G-17-4b): Kimi's request path does
-            // NOT carry `temperature` — the key is omitted from the
-            // outgoing body entirely rather than a legal value being
-            // substituted for another (see
-            // `CompatRequestParameters::temperature`'s rustdoc for the full
-            // ADR-0004 reasoning). The vendor's own single legal value
-            // (`1`) applies server-side once the key is absent.
+            // History (17-19, closing G-17-4b; superseded by ADR-0061 in Phase 50): Kimi's
+            // request path used to declare `temperature` and `top_p` NOT carried, so the keys
+            // were dropped from every body and the vendor's own single legal value (`1`,
+            // `0.95`) applied server-side. That made an explicit `temperature(1.0)` impossible
+            // to send and the drop invisible. Both are now carried when the per-model profile
+            // admits them: the profile below declares them `Fixed(1.0)` / `Fixed(0.95)`, so an
+            // explicit `1.0` reaches the wire, the framework's fabricated `0.7` / `1.0`
+            // defaults are omitted and recorded (never swapped for the legal value, ADR-0004),
+            // and `max_tokens`, `frequency_penalty` and `presence_penalty` are carried as
+            // before.
             //
-            // `top_p` is declared unsupported for the same reason, on a
-            // separate measured constraint discovered while re-running the
-            // live harness after the temperature fix landed (Rule 1,
-            // in-scope bugfix, not a plan-scope expansion — ADR-0004 governs
-            // `temperature` only; `top_p` has no `ProviderCapabilities`
-            // range field and no builder-side gate, so dropping it needs no
-            // equivalent to Task 2's narrowing): with `temperature` no
-            // longer sent, the framework's `PromptParameters::default()`
-            // `top_p: Some(1.0)` became the next value the vendor's
-            // per-field validation rejected —
-            // `{"message":"invalid top_p: only 0.95 is allowed for this
-            // model","type":"invalid_request_error"}` — measured on both
-            // `kimi-k3` and `kimi-k2.6`, 2026-08-22. `max_tokens`,
-            // `frequency_penalty` and `presence_penalty` remain carried,
-            // unchanged from 17-18's behaviour-preserving `all()`
-            // declaration.
             // WR-02: every field stated explicitly. `..CompatRequestParameters::all()`
             // was a struct-update spread, which the type's own invariant
             // (`compat/engine.rs`) and plan 17-18's prohibition both forbid: the
@@ -243,8 +232,8 @@ impl KimiAdapter {
             // field to `true` here, which is exactly how the shipped Grok
             // preset came to send a parameter xAI rejects.
             request_parameters: CompatRequestParameters {
-                temperature: false,
-                top_p: false,
+                temperature: true,
+                top_p: true,
                 max_tokens: true,
                 frequency_penalty: true,
                 presence_penalty: true,
@@ -264,10 +253,33 @@ impl KimiAdapter {
             redirect_policy: Some(reqwest::redirect::Policy::none()),
         };
 
+        // ADR-0061 (plan 50-03): the adapter-wide fallback profile is this preset's own
+        // declaration above, restated as a profile; per-model seeded entries arrive in plan
+        // 50-06.
+        // Stop sequences: `Supported { max: None }` is the vendor's published request schema
+        // (A3-50-03); a vendor that rejects `stop` for a model is corrected by that model's
+        // seeded entry (plan 50-06), never by this adapter (D-04a).
+        let fallback = fallback_from_compat(
+            &engine_config.capabilities.clone().into(),
+            &engine_config.request_parameters,
+            StopSupport::Supported { max: None },
+        );
+        // Kimi's two measured single values (ADR-0004 A3/A4, the Phase 17-19 live measurement
+        // against `kimi-k3` and `kimi-k2.6`, 2026-08-22): the vendor answers `invalid
+        // temperature: only 1 is allowed for this model` and `invalid top_p: only 0.95 is
+        // allowed for this model`. Declared `Fixed`, so an explicit `1.0` / `0.95` reaches the
+        // wire and any other value is refused at build (explicit) or omitted and recorded
+        // (auto, default, direct) -- never swapped for the legal one.
+        let fallback = fallback
+            .with_temperature(ParamSupport::Fixed(1.0))
+            .with_top_p(ParamSupport::Fixed(0.95));
+
         Ok(Self {
             // Phase 25 D-03: name the engine so every `ProviderError` it
             // emits carries "kimi", not the engine's generic default.
-            engine: CompatEngine::new(engine_config)?.with_provider_name(KIMI_PROVIDER),
+            engine: CompatEngine::new(engine_config)?
+                .with_provider_name(KIMI_PROVIDER)
+                .with_model_registry(ModelRegistry::new(KIMI_PROVIDER, &[], fallback)),
         })
     }
 }
@@ -300,15 +312,23 @@ impl LlmPort for KimiAdapter {
     fn get_capabilities(&self) -> ProviderCapabilities {
         self.engine.capabilities()
     }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.engine.model_profile(model))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::http_status::map_http_status;
+    use crate::sampling::PARAMS_OMITTED_METADATA_KEY;
     use mockito::{Matcher, Server};
-    use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    use paladin_core::platform::container::prompt::{
+        PromptItem, PromptParameters, PromptType, UserPrompt,
+    };
     use paladin_ports::output::llm_port::FinishReason;
+    use paladin_ports::output::model_profile::SamplingParam;
     use serde_json::json;
 
     fn build_request(model: &str) -> LlmRequest {
@@ -1064,6 +1084,7 @@ mod tests {
             result.is_ok(),
             "mock returned a well-formed response: {result:?}"
         );
+        let metadata = result.map(|r| r.metadata).unwrap_or_default();
 
         let body = captured
             .lock()
@@ -1073,6 +1094,13 @@ mod tests {
         assert!(
             !body.contains("temperature"),
             "the key name itself must not appear on the wire — got body: {body}"
+        );
+        // ADR-0061: the drop is no longer silent.
+        assert!(
+            metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .is_some_and(|omitted| omitted.contains("temperature")),
+            "the omitted default temperature must be recorded: {metadata:?}"
         );
     }
 
@@ -1121,6 +1149,7 @@ mod tests {
             result.is_ok(),
             "mock returned a well-formed response: {result:?}"
         );
+        let metadata = result.map(|r| r.metadata).unwrap_or_default();
 
         let body = captured
             .lock()
@@ -1137,6 +1166,88 @@ mod tests {
         assert!(body.contains("max_tokens"));
         assert!(body.contains("frequency_penalty"));
         assert!(body.contains("presence_penalty"));
+        assert!(
+            metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .is_some_and(|omitted| omitted.contains("top_p")),
+            "the omitted default top_p must be recorded: {metadata:?}"
+        );
+    }
+
+    /// Run one request through a Kimi adapter on a mock endpoint; returns the wire body and the
+    /// response metadata.
+    async fn kimi_wire(
+        parameters: PromptParameters,
+    ) -> (serde_json::Value, std::collections::HashMap<String, String>) {
+        let mut server = crate::compat::test_support::server().await;
+        let captured = crate::compat::test_support::mock_completion(&mut server).await;
+        let adapter = KimiAdapter::new(KimiConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            KIMI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let mut request = build_request(KIMI_DEFAULT_MODEL);
+        request.prompt.entity.data.parameters = parameters;
+        let response = adapter
+            .generate(request)
+            .await
+            .expect("well-formed response");
+        let body = captured.lock().unwrap().take().expect("a request was sent");
+        (body, response.metadata)
+    }
+
+    fn kimi_parameters(temperature: f32, top_p: f32) -> PromptParameters {
+        PromptParameters {
+            max_tokens: Some(64),
+            temperature: Some(temperature),
+            top_p: Some(top_p),
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: None,
+        }
+    }
+
+    #[test]
+    fn kimi_model_profile_declares_the_two_measured_single_values() {
+        let adapter = KimiAdapter::new(KimiConfig::new(
+            "test-key".to_string(),
+            "https://example.invalid/v1".to_string(),
+            KIMI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let profile = adapter
+            .model_profile(KIMI_DEFAULT_MODEL)
+            .expect("Kimi profiles every model");
+        assert_eq!(profile.temperature, ParamSupport::Fixed(1.0));
+        assert_eq!(profile.top_p, ParamSupport::Fixed(0.95));
+        assert_eq!(profile.stop_sequences, StopSupport::Supported { max: None });
+        assert_eq!(
+            profile.support_for(SamplingParam::Temperature),
+            Some(ParamSupport::Fixed(1.0))
+        );
+    }
+
+    #[tokio::test]
+    async fn kimi_fixed_values_follow_the_profile() {
+        // The vendor's two legal values reach the wire when asked for explicitly ...
+        let (body, metadata) = kimi_wire(kimi_parameters(1.0, 0.95)).await;
+        assert_eq!(body.get("temperature").and_then(|v| v.as_f64()), Some(1.0));
+        // serde_json writes an `f32` with its shortest round-trip digits, so the vendor sees
+        // the literal `0.95` it asked for.
+        assert_eq!(body.get("top_p").and_then(|v| v.as_f64()), Some(0.95));
+        assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+
+        // ... and anything else is omitted and recorded -- never replaced by the legal value.
+        let (body, metadata) = kimi_wire(kimi_parameters(0.85, 0.5)).await;
+        assert!(body.get("temperature").is_none(), "{body}");
+        assert!(body.get("top_p").is_none(), "{body}");
+        assert_eq!(
+            metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("temperature,top_p")
+        );
     }
 
     // ── Model list: memoization / concurrency (D-13/D-14) ──

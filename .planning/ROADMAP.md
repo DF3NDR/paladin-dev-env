@@ -1365,26 +1365,27 @@ the existing credential gate with the env vars Paladin already reads.
      every intentional break; `make clean-code`, `make check-gates`, `make api-surface`,
      `make security` and the 82 % coverage floor stay green, with no `unwrap`/`expect`/`panic!`
      added to library code.
-**Plans**: 16 plans
+**Plans**: 18 plans
 
 Plans:
 **Wave 1**
 
 - [ ] 50-01-PLAN.md — Tracer: one agent from an `llm.openai` block through PaladinBuilder and PaladinExecutionService to a mock transport, red then fixed (B-4, PARITY-08); shared `user_turn_text` on all five request builders; the nine-provider provider-swap matrix with red cases ignored per fixing plan and the red run recorded
 - [ ] 50-02-PLAN.md — ADR-0061 amending ADR-0004 (refuse explicit, omit auto visibly; D-01..D-04a), PROMOTION next free 0062; `ModelProfile`/`ParamSupport`/`StopSupport`/`SamplingParam` and defaulted `LlmPort::model_profile` in paladin-ports; Pricing/Cadence/Fallback forward it
-- [ ] 50-04-PLAN.md — Nine-provider credential-gated live smoke with `--probe`/`--dry-run`; operator runs the seed probe on real keys (checkpoint); scrubbed dated `50-SEED-PROBE.md`
+- [ ] 50-04-PLAN.md — Nine-provider credential-gated live smoke with `--probe` (sampling, stop, output cap, JSON-object and JSON-schema probes) and `--dry-run`; autonomous harness only (the operator run is 50-17)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 50-03-PLAN.md — Shared `sampling::apply` and the model registry core (seed > override > visible fallback); CompatEngine and the five compat presets on them with stop on the wire; PaladinBuilder profile-first (explicit refused by name, auto omitted); Kimi matrix rows green
+- [ ] 50-03-PLAN.md — Shared `sampling::apply` (plus `apply_response_format` and `check_max_tokens`) and the model registry core (seed > override > visible fallback); CompatEngine and the five compat presets on them with stop on the wire; PaladinBuilder profile-first (explicit refused by name, auto omitted); Kimi matrix rows green
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 50-05-PLAN.md — OpenAI, DeepSeek, Anthropic and Gemini on the shared filter (no fabricated sampling values, no validate-then-discard, stop sequences sent); nine-provider equivalence row green; M-B row for the whole policy
+- [ ] 50-05-PLAN.md — OpenAI, DeepSeek, Anthropic and Gemini on the shared filter (no fabricated sampling values, no validate-then-discard, stop sequences sent, JSON mode and max output from the profile); nine-provider equivalence row green; M-B row for the whole policy
+- [ ] 50-17-PLAN.md — Operator runs the 50-04 probe on real keys (human-action checkpoint, blocks only 50-06) and answers owner reading R-2 per compat vendor (usage cap verified or accepted unverified); scrubbed dated `50-SEED-PROBE.md`
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 50-06-PLAN.md — Dated per-vendor registry tables seeded only from `50-SEED-PROBE.md` (D-05/D-08); adapters read them; stale Anthropic/DeepSeek defaults, Anthropic model list and adapter windows replaced
+- [ ] 50-06-PLAN.md — Dated per-vendor registry tables seeded only from `50-SEED-PROBE.md` (D-05/D-08, after 50-17); adapters read them; stale Anthropic/DeepSeek defaults, Anthropic model list and adapter windows replaced
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -1392,7 +1393,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 50-08-PLAN.md — Owner checkpoint on the `*Config` shape (non_exhaustive + builders vs plain fields); `max_tokens`, `max_retries`, `context_window`, `model_overrides` on all nine configs, each read by its adapter; redacting `Debug`
+- [ ] 50-08-PLAN.md — Owner checkpoint on the `*Config` shape (non_exhaustive + builders vs plain fields); `max_tokens`, `max_retries`, `context_window` (beats seeded windows), `model_overrides` on all nine configs, each read by its adapter; 300 s reasoning default on the direct constructors; every workspace literal (bridges, examples, root tests) migrated in the same commits; redacting `Debug`
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
@@ -1408,11 +1409,11 @@ Plans:
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 50-12-PLAN.md — `LlmError::Refusal` (Permanent) in all four tables; shared `classify_completion` (refusal > content filter > empty on any stop); compat, OpenAI and DeepSeek on it with cache-write and reasoning text
+- [ ] 50-12-PLAN.md — `LlmError::Refusal` (Permanent) in all four tables; shared `classify_completion` (refusal > content filter > empty on any stop, buffered and streamed); compat, OpenAI and DeepSeek on it with cache-write and reasoning text
 
 **Wave 11** *(blocked on Wave 10 completion)*
 
-- [ ] 50-13-PLAN.md — Anthropic refusal before empty, named stop reasons, thinking text and the stream's real stop reason; Gemini on the guard; usage-cap overrides only where the probe evidences them; empty-stop matrix green on all nine
+- [ ] 50-13-PLAN.md — Anthropic refusal before empty, named stop reasons, thinking text and the stream's real stop reason; Gemini on the guard; empty streams typed; usage-cap overrides only where the probe evidences them, every compat vendor listed verified/unverified per R-2; empty-stop matrix green on all nine
 
 **Wave 12** *(blocked on Wave 11 completion)*
 
@@ -1420,9 +1421,13 @@ Plans:
 
 **Wave 13** *(blocked on Wave 12 completion)*
 
-- [ ] 50-15-PLAN.md — Anthropic joins the shared conformance suite; six new cases (capability truthfulness, response_format, empty completion, refusal, usage fields, parameter-drop policy); `CASE_COUNT` 16
+- [ ] 50-15-PLAN.md — Anthropic joins the shared conformance suite; seven new cases (capability truthfulness, response_format, empty completion buffered and streamed, refusal, usage fields, parameter-drop policy); `CASE_COUNT` 17
 
 **Wave 14** *(blocked on Wave 13 completion)*
+
+- [ ] 50-18-PLAN.md — Owner reading R-1 (decision checkpoint): what D-01/D-07's "run-metadata entry" is; option-b carries the `paladin.*` keys onto `PaladinResult.run_metadata` and the streaming terminal chunk (registered break, literals migrated); ADR-0061 records the answer
+
+**Wave 15** *(blocked on Wave 14 completion)*
 
 - [ ] 50-16-PLAN.md — mdBook "Switching providers" page with the per-provider/per-model table and a registry drift test; MIGRATION 9.8 consumer rows, changelogs, muster pins; closeout register check; ADR-0061 conforms; full phase gate
 

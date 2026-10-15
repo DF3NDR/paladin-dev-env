@@ -1270,8 +1270,7 @@ exports, the typed refusal and the "Switching providers" page change what Phase 
 migration guide must say. The companion reasoning-effort handoff (not yet filed in this repository)
 is the natural next phase and depends on this one's parameter-support model and profile registry
 (handoff §8), so Plans 2 and 4 are prerequisites for it.
-**Requirements**: PARITY-01, PARITY-02, PARITY-03, PARITY-04, PARITY-05, PARITY-06, PARITY-07,
-PARITY-08
+**Requirements**: PARITY-01, PARITY-02, PARITY-03, PARITY-04, PARITY-05, PARITY-06, PARITY-07, PARITY-08
 **UI hint**: no
 **Source**: the second web3sec handoff of 2026-10-13, filed verbatim as
 `50-HANDOFF-web3sec-parity.md` — a read-only audit of `origin/main` @ `df24689c` (post-`v0.10.1`)

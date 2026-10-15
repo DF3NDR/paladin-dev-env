@@ -48,8 +48,12 @@ caching (`cache_control`), request-id/trace propagation, the reasoning-effort se
   D-27 diagnostic: drop the crate-wide `allow` lines, run `cargo semver-checks check-release
   --package <crate> --baseline-version 0.10.1 --release-type minor`, restore). Every supersession
   of X-03 is its own record (ADR-0051, 0059, 0060 precedent), never inherited. This phase is
-  designed to be **additive** on the Rust surface (D-03, D-09, D-11, D-15); if the planner finds a
-  break is unavoidable, it is recorded in the same commit as the code.
+  additive on the Rust surface wherever the type allows it (D-03, D-09, D-15, the streaming
+  delta in D-11); the **known registered breaks** are the new field on the constructible
+  `LlmResponse` (D-11) and new fields on the publicly constructible `*Config` structs (D-12), each
+  needing a §9.2 row, a measured allowlist lint and a muster update — see `50-RESEARCH.md` Open
+  Questions 1 and 2. Any further break the planner finds is recorded in the same commit as the
+  code.
 - **D-00c:** ADRs take the next free number from `.planning/decisions/PROMOTION.md` (currently
   **0061**) and advance that line in the same commit.
 - **D-00d:** Vocabulary (Phase 30 D-01, Milestone 13 §5): plain names for new config/descriptor
@@ -152,10 +156,12 @@ caching (`cache_control`), request-id/trace propagation, the reasoning-effort se
 
 - **D-09:** **Typed refusal:** a new additive `LlmError::Refusal { provider, model, detail }`
   variant on the `#[non_exhaustive]` enum, classified **`Permanent`** in the `Transience` table and
-  given a row in the `llm_failure` label table. It is **distinct from `ContentFilter`**: Anthropic
-  `stop_reason: "refusal"` and OpenAI's `refusal` message field map to `Refusal`; vendor
-  `content_filter` finish reasons stay `ContentFilter`. `detail` carries the vendor's refusal text
-  **redacted then truncated** (D-00a). Rejected: mapping refusals onto `ContentFilter`.
+  given a row in the `llm_failure` label table. It is **distinct from `ContentFilter`**, which on
+  the tree is a `FinishReason` variant, not an `LlmError`: Anthropic `stop_reason: "refusal"` and
+  OpenAI's `refusal` message field map to `Err(Refusal)`; vendor `content_filter` / `SAFETY`
+  finishes stay `Ok(LlmResponse { finish_reason: ContentFilter })` as today (the Gemini adapter
+  pins this). `detail` carries the vendor's refusal text **redacted then truncated** (D-00a).
+  Rejected: mapping refusals onto the `ContentFilter` finish reason.
   — **Reversibility:** costly — a public error variant consumers will match on; the additive
   variant needs no §9.2 row, but removing it later would.
 - **D-10:** **Chain behaviour on refusal:** **stop by default** — `Permanent` short-circuits
@@ -165,10 +171,18 @@ caching (`cache_control`), request-id/trace propagation, the reasoning-effort se
   fail-loud-default / explicit-opt-in pattern. Rejected: always hop (hides the refusal, spends
   budget on every hop); always stop with no opt-in.
 - **D-11:** **Reasoning text** surfaces as a **typed `Option<String>` on `LlmResponse`** and a
-  **typed field on the streaming delta** — both structs are `#[non_exhaustive]`, so this is
-  additive — on the normal and streaming paths of every adapter that receives it (compat presets'
-  `reasoning_content`, DeepSeek, Anthropic thinking blocks). This is the shape Phase 51's roadmap
-  entry already assumes. Rejected: `metadata["reasoning_content"]`.
+  **typed field on the streaming delta**, on the normal and streaming paths of every adapter that
+  receives it (compat presets' `reasoning_content`, DeepSeek, Anthropic thinking blocks). This is
+  the shape Phase 51's roadmap entry already assumes. Rejected: `metadata["reasoning_content"]`.
+  **Premise correction (research):** `StreamingResponse` is `#[non_exhaustive]`, so the delta
+  field is additive; `LlmResponse` is **constructible and deliberately not `#[non_exhaustive]`**
+  (`MIGRATION.md` §9.2, Phase 38's X-10.3 option (b) choice), so the new field is a **registered
+  break**: extend the existing `LlmResponse` §9.2 row and allowlist entry, migrate every literal
+  site in one commit, and update the consumer muster. Whether to also add
+  `LlmResponse::new(..)`/`with_reasoning(..)` so later fields are free is the planner's call
+  (`50-RESEARCH.md` Open Question 1). The decision to type the field stands.
+  — **Reversibility:** costly — a public field on a constructible struct in `paladin-ai-ports`;
+  Phase 51 reads it.
 - **D-11a:** The rest of PARITY-05 is settled by the requirement text and not re-opened: empty
   text is `EmptyCompletion` on **any** stop reason in every adapter (OpenAI included); compat
   presets map `prompt_tokens_details.cache_write_tokens` via `with_cache_write`; usage-cap
@@ -184,6 +198,12 @@ caching (`cache_control`), request-id/trace propagation, the reasoning-effort se
   overrides). `agent_host` resolves per-agent `provider` + `model` (already in
   `src/config/agents.rs`) through the same call. The `*Config` types remain the direct-construction
   path web3sec uses and gain the same fields. Rejected: a separate builder type.
+  **Premise correction (research):** the `*Config` structs are publicly constructible and
+  `paladin-llm` has no semver-lint table yet, so adding fields is a consumer-visible break however
+  it is done. Whether to break once and mark each `*Config` `#[non_exhaustive]` with `with_*`
+  builders (so Phase 51's fields are free) or to add plain fields is **open for the owner at plan
+  time** (`50-RESEARCH.md` Open Question 2); either way the break gets §9.2 rows, measured lints
+  and a muster update (D-00b, D-00i).
 - **D-13:** **Precedence:** per-agent setting **>** `llm.<provider>` YAML block **>** legacy
   provider env var (`OPENAI_BASE_URL`, `ANTHROPIC_MAX_TOKENS`, `*_API_KEY`, …) **>** adapter
   compiled default. The most specific operator statement wins; env vars fill gaps (the API key

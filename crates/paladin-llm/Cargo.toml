@@ -79,4 +79,4 @@ harness = false
 # Requires real credentials in the environment; never run in CI.
 [[example]]
 name = "live_vendor_smoke"
-required-features = ["kimi", "qwen", "grok", "gemini"]
+required-features = ["openai", "anthropic", "deepseek", "kimi", "qwen", "grok", "ollama", "gemini", "openai-compatible"]

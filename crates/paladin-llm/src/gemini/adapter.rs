@@ -79,8 +79,8 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptRole, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
-    StreamingResponse, TokenUsage,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
+    ProviderCapabilities, ResponseFormat, StopSupport, StreamingResponse, TokenUsage,
 };
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
@@ -89,6 +89,8 @@ use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::{
     RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, diagnostic_excerpt, redact_credentials,
 };
+use crate::registry::ModelRegistry;
+use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits (Phase 25 D-03).
@@ -296,6 +298,61 @@ pub struct GeminiAdapter {
     client: Client,
     config: GeminiConfig,
     models_cache: OnceCell<Vec<String>>,
+    /// Resolves the request model to the profile that decides what reaches the wire (ADR-0061).
+    model_registry: ModelRegistry,
+    /// Which (model, parameter) omissions this instance has already warned about.
+    omissions: OmissionLog,
+    /// Which (model, adjustment) `response_format` changes this instance has already warned
+    /// about.
+    format_log: FormatLog,
+}
+
+/// What this adapter declares to the port, stated once so the adapter-wide fallback profile and
+/// [`LlmPort::get_capabilities`] cannot drift apart.
+fn declared_capabilities() -> ProviderCapabilities {
+    ProviderCapabilities {
+        supports_streaming: true,
+        // `LlmRequest` has no field through which a tool definition
+        // could travel, and this adapter neither sends `tools`/
+        // `toolConfig` nor parses a function-call part out of a
+        // response (D-08).
+        supports_tool_calling: false,
+        supports_function_calling: false,
+        // Text-only (D-08) — a truthful report of what ships, not an
+        // omission. A Gemini vision adapter is a recorded, deferred
+        // idea, not scope here.
+        supports_vision: false,
+        supports_embeddings: false,
+        max_context_tokens: Some(1_048_576),
+        supports_system_messages: true,
+        temperature_range: Some((0.0, 2.0)),
+    }
+}
+
+/// The adapter-wide fallback profile, derived from what this adapter's request builder sends
+/// (ADR-0061, D-05): a field it sends maps to `Range`, a field it never sends maps to `NotSent`.
+///
+/// - `temperature`: `Range` over the declared `temperature_range`; `top_p`: `Range(0.0, 1.0)`
+///   (`generationConfig.topP`).
+/// - both penalties: `NotSent` -- `generationConfig` as built here carries no penalty field.
+/// - `stop`: `Supported { max: None }` -- `generationConfig.stopSequences`, which this adapter
+///   already sent before the profile existed.
+/// - `json_object` and `json_schema`: both true -- `responseMimeType` and `responseSchema`.
+fn fallback_profile() -> ModelProfile {
+    let caps = declared_capabilities();
+    let (low, high) = caps.temperature_range.unwrap_or((0.0, 1.0));
+    let mut profile = ModelProfile::new()
+        .with_temperature(ParamSupport::Range(low, high))
+        .with_top_p(ParamSupport::Range(0.0, 1.0))
+        .with_frequency_penalty(ParamSupport::NotSent)
+        .with_presence_penalty(ParamSupport::NotSent)
+        .with_stop_sequences(StopSupport::Supported { max: None })
+        .with_json_object(true)
+        .with_json_schema(true);
+    if let Some(window) = caps.max_context_tokens {
+        profile = profile.with_context_window(window);
+    }
+    profile
 }
 
 impl GeminiAdapter {
@@ -341,10 +398,21 @@ impl GeminiAdapter {
             client,
             config,
             models_cache: OnceCell::new(),
+            model_registry: ModelRegistry::new(GEMINI_PROVIDER, &[], fallback_profile()),
+            omissions: OmissionLog::new(),
+            format_log: FormatLog::new(),
         })
     }
 
-    /// Build the outgoing request body from a port-level [`LlmRequest`].
+    /// Build the outgoing request body from a port-level [`LlmRequest`], plus the notes the
+    /// buffered path records on its response.
+    ///
+    /// What reaches `generationConfig` is decided by the request model's [`ModelProfile`]
+    /// (ADR-0061, D-01): [`sampling::apply`] sends `temperature`, `topP` and `stopSequences`
+    /// only when the caller set them **and** the profile admits them; a set but inadmissible
+    /// one is omitted and recorded, never clamped or swapped. A `max_tokens` above the
+    /// profile's maximum output is refused before anything is sent. The `response_format`
+    /// follows the profile through [`sampling::apply_response_format`].
     ///
     /// `PromptType::System` (and `PromptType::Text` with
     /// [`PromptRole::System`]) map to the top-level `systemInstruction`
@@ -354,7 +422,10 @@ impl GeminiAdapter {
     /// mapping — Gemini's function surface is out of scope for this adapter
     /// (D-08) — and return [`LlmError::InvalidPrompt`] naming the
     /// unsupported prompt type rather than silently dropping it.
-    fn build_request(&self, request: &LlmRequest) -> Result<GeminiRequest, LlmError> {
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<(GeminiRequest, RequestNotes), LlmError> {
         let mut system_instruction = None;
         let mut contents = Vec::new();
 
@@ -424,14 +495,32 @@ impl GeminiAdapter {
         }
 
         let params = &request.prompt.entity.data.parameters;
-        // RT-FR-17, D-28: `responseMimeType` is set for either
-        // `ResponseFormat` variant; `responseSchema` carries the schema
-        // value only for `JsonSchema`. `ResponseFormat` is
-        // `#[non_exhaustive]`, so a future variant this match has not been
-        // taught still gets the plain `application/json` mime type rather
-        // than silently sending no JSON-mode hint at all
-        // (EDGE(RT-05/wire shape)).
-        let (response_mime_type, response_schema) = match &request.response_format {
+        let profile = self.model_registry.profile(&request.model);
+
+        sampling::check_max_tokens(GEMINI_PROVIDER, &request.model, &profile, params.max_tokens)?;
+
+        let applied = sampling::apply(&profile, params);
+        let params_omitted = self
+            .omissions
+            .record(GEMINI_PROVIDER, &request.model, &applied);
+
+        let (effective_format, adjustment) =
+            sampling::apply_response_format(&profile, request.response_format.as_ref());
+        let format_adjusted = self
+            .format_log
+            .record(GEMINI_PROVIDER, &request.model, adjustment);
+
+        let unprofiled_model = self
+            .model_registry
+            .note_unprofiled(&request.model)
+            .then(|| request.model.clone());
+
+        // RT-FR-17, D-28 / ADR-0061 (i): `responseMimeType` is set for either
+        // `ResponseFormat` variant the profile admits; `responseSchema` carries the schema
+        // value only for `JsonSchema`. `ResponseFormat` is `#[non_exhaustive]`, but
+        // `apply_response_format` already drops a variant it does not know, so what reaches
+        // this match is one of the two this adapter can express.
+        let (response_mime_type, response_schema) = match &effective_format {
             Some(ResponseFormat::JsonSchema { schema, .. }) => {
                 (Some("application/json".to_string()), Some(schema.clone()))
             }
@@ -440,11 +529,11 @@ impl GeminiAdapter {
         };
 
         let generation_config = GeminiGenerationConfig {
-            temperature: params.temperature,
+            temperature: applied.temperature,
             max_output_tokens: params.max_tokens,
-            top_p: params.top_p,
+            top_p: applied.top_p,
             top_k: None,
-            stop_sequences: params.stop_sequences.clone(),
+            stop_sequences: applied.stop,
             candidate_count: None,
             response_mime_type,
             response_schema,
@@ -460,11 +549,17 @@ impl GeminiAdapter {
             None
         };
 
-        Ok(GeminiRequest {
+        let body = GeminiRequest {
             contents,
             system_instruction,
             generation_config,
-        })
+        };
+        let notes = RequestNotes {
+            params_omitted,
+            format_adjusted,
+            unprofiled_model,
+        };
+        Ok((body, notes))
     }
 
     /// Parse a well-formed Gemini `generateContent` response into an
@@ -847,7 +942,7 @@ impl GeminiAdapter {
 impl LlmPort for GeminiAdapter {
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
         validate_model_identifier(&request.model)?;
-        let gemini_request = self.build_request(&request)?;
+        let (gemini_request, notes) = self.build_request(&request)?;
         let url = format!(
             "{}/models/{}:generateContent",
             self.config.base_url, request.model
@@ -901,7 +996,10 @@ impl LlmPort for GeminiAdapter {
             self.parse_response(request.id, &request.model, gemini_response)
         };
 
-        self.execute_with_retry(operation, 3).await
+        let mut response = self.execute_with_retry(operation, 3).await?;
+        // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
+        response.metadata = notes.into_metadata();
+        Ok(response)
     }
 
     /// Generate a streaming completion. POSTs with `alt=sse` and assembles
@@ -933,7 +1031,9 @@ impl LlmPort for GeminiAdapter {
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
         validate_model_identifier(&request.model)?;
-        let gemini_request = self.build_request(&request)?;
+        // A streamed call has no metadata channel (A1-50-03): its omissions, format changes and
+        // unprofiled model are visible through the `warn!`s `build_request` emits.
+        let (gemini_request, _notes) = self.build_request(&request)?;
         let url = format!(
             "{}/models/{}:streamGenerateContent",
             self.config.base_url, request.model
@@ -1009,23 +1109,11 @@ impl LlmPort for GeminiAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            supports_streaming: true,
-            // `LlmRequest` has no field through which a tool definition
-            // could travel, and this adapter neither sends `tools`/
-            // `toolConfig` nor parses a function-call part out of a
-            // response (D-08).
-            supports_tool_calling: false,
-            supports_function_calling: false,
-            // Text-only (D-08) — a truthful report of what ships, not an
-            // omission. A Gemini vision adapter is a recorded, deferred
-            // idea, not scope here.
-            supports_vision: false,
-            supports_embeddings: false,
-            max_context_tokens: Some(1_048_576),
-            supports_system_messages: true,
-            temperature_range: Some((0.0, 2.0)),
-        }
+        declared_capabilities()
+    }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.model_registry.profile(model))
     }
 }
 
@@ -1460,7 +1548,7 @@ mod tests {
             }),
         );
 
-        let gemini_request = adapter.build_request(&request).unwrap();
+        let gemini_request = adapter.build_request(&request).unwrap().0;
         let json = serde_json::to_value(&gemini_request).unwrap();
 
         assert_eq!(json["systemInstruction"]["parts"][0]["text"], "Be terse.");
@@ -1487,7 +1575,7 @@ mod tests {
                 context: None,
             }),
         );
-        let user_gemini = adapter.build_request(&user_request).unwrap();
+        let user_gemini = adapter.build_request(&user_request).unwrap().0;
         assert_eq!(user_gemini.contents[0].role, "user");
 
         let assistant_request = build_request(
@@ -1497,7 +1585,7 @@ mod tests {
                 reasoning: None,
             }),
         );
-        let assistant_gemini = adapter.build_request(&assistant_request).unwrap();
+        let assistant_gemini = adapter.build_request(&assistant_request).unwrap().0;
         // Gemini's assistant-equivalent role is "model", never "assistant".
         assert_eq!(assistant_gemini.contents[0].role, "model");
     }
@@ -1515,7 +1603,7 @@ mod tests {
                     context: context.map(str::to_string),
                 }),
             );
-            let body = serde_json::to_value(adapter.build_request(&request).unwrap()).unwrap();
+            let body = serde_json::to_value(adapter.build_request(&request).unwrap().0).unwrap();
             body["contents"][0]["parts"][0]["text"].clone()
         };
 
@@ -1542,7 +1630,7 @@ mod tests {
             }),
         );
 
-        let gemini_request = adapter.build_request(&request).unwrap();
+        let gemini_request = adapter.build_request(&request).unwrap().0;
         let value = serde_json::to_value(&gemini_request).unwrap();
         let object = value
             .as_object()
@@ -1574,7 +1662,7 @@ mod tests {
         )
         .with_response_format(ResponseFormat::JsonObject);
 
-        let gemini_request = adapter.build_request(&request).unwrap();
+        let gemini_request = adapter.build_request(&request).unwrap().0;
         let json = serde_json::to_value(&gemini_request).unwrap();
 
         assert_eq!(
@@ -1611,7 +1699,7 @@ mod tests {
             strict: true,
         });
 
-        let gemini_request = adapter.build_request(&request).unwrap();
+        let gemini_request = adapter.build_request(&request).unwrap().0;
         let json = serde_json::to_value(&gemini_request).unwrap();
 
         assert_eq!(
@@ -1632,7 +1720,7 @@ mod tests {
             }),
         );
 
-        let gemini_request = adapter.build_request(&request).unwrap();
+        let gemini_request = adapter.build_request(&request).unwrap().0;
         let json = serde_json::to_value(&gemini_request).unwrap();
         let generation_config = json["generationConfig"]
             .as_object()
@@ -3514,6 +3602,282 @@ mod tests {
             matches!(result, Err(LlmError::AuthenticationError(_))),
             "expected AuthenticationError, got: {result:?}"
         );
+    }
+
+    // ── Phase 50 (PARITY-02, ADR-0061, D-01): the per-model parameter policy ──
+
+    mod parameter_policy {
+        use super::*;
+        use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
+        use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
+        use paladin_core::platform::container::prompt::PromptParameters;
+        use serde_json::Value;
+        use std::sync::Mutex;
+
+        const MODEL: &str = "gemini-2.5-flash";
+
+        fn request_with(parameters: PromptParameters) -> LlmRequest {
+            let mut request = build_request(
+                MODEL,
+                PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }),
+            );
+            request.prompt.entity.data.parameters = parameters;
+            request
+        }
+
+        fn unset() -> PromptParameters {
+            PromptParameters {
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                stop_sequences: None,
+            }
+        }
+
+        fn completion_json() -> Vec<u8> {
+            json!({
+                "candidates": [{
+                    "content": {"role": "model", "parts": [{"text": "ok"}]},
+                    "finishReason": "STOP"
+                }],
+                "usageMetadata": {
+                    "promptTokenCount": 1,
+                    "candidatesTokenCount": 1,
+                    "totalTokenCount": 2
+                }
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// Runs `generate()` against a mock `generateContent` endpoint, returning the outgoing
+        /// JSON body and the response metadata.
+        async fn generate_capture(
+            request: LlmRequest,
+        ) -> (Value, std::collections::HashMap<String, String>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/models/gemini-2.5-flash:generateContent")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    completion_json()
+                })
+                .create_async()
+                .await;
+
+            let response = test_adapter(&server.url())
+                .generate(request)
+                .await
+                .expect("the mock answers a well-formed candidate");
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            (
+                serde_json::from_str(&body).expect("the body must be JSON"),
+                response.metadata,
+            )
+        }
+
+        /// Runs `generate_stream()` against a mock endpoint and returns the outgoing JSON body.
+        async fn stream_capture(request: LlmRequest) -> Value {
+            let mut server = Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    b"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+
+            let stream = test_adapter(&server.url())
+                .generate_stream(request)
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            serde_json::from_str(&body).expect("the body must be JSON")
+        }
+
+        #[test]
+        fn gemini_model_profile_is_always_some_and_matches_what_the_wire_sends() {
+            let profile = test_adapter("https://example.invalid")
+                .model_profile("any-model")
+                .expect("gemini profiles every model");
+            assert_eq!(profile.temperature, ParamSupport::Range(0.0, 2.0));
+            assert_eq!(profile.top_p, ParamSupport::Range(0.0, 1.0));
+            assert_eq!(profile.frequency_penalty, ParamSupport::NotSent);
+            assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
+            assert_eq!(profile.stop_sequences, StopSupport::Supported { max: None });
+            assert_eq!(profile.context_window, Some(1_048_576));
+            assert!(profile.json_object && profile.json_schema);
+        }
+
+        #[tokio::test]
+        async fn gemini_stop_sequences_keep_declared_order() {
+            let mut parameters = unset();
+            // A duplicate, deliberately: order and duplicates are the caller's.
+            parameters.stop_sequences = Some(vec![
+                "END".to_string(),
+                "STOP".to_string(),
+                "END".to_string(),
+            ]);
+            parameters.temperature = Some(0.5);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert_eq!(
+                body["generationConfig"]["stopSequences"],
+                json!(["END", "STOP", "END"])
+            );
+            assert_eq!(body["generationConfig"]["temperature"], 0.5);
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn gemini_stream_follows_the_profile() {
+            let mut parameters = unset();
+            parameters.temperature = Some(2.5);
+            parameters.top_p = Some(0.9);
+            parameters.stop_sequences = Some(vec!["END".to_string(), "STOP".to_string()]);
+            let body = stream_capture(request_with(parameters)).await;
+
+            let config = body["generationConfig"]
+                .as_object()
+                .expect("generationConfig is present");
+            assert!(
+                !config.contains_key("temperature"),
+                "the streaming body omits an inadmissible temperature: {body}"
+            );
+            assert!((config["topP"].as_f64().unwrap() - 0.9).abs() < 1e-6);
+            assert_eq!(config["stopSequences"], json!(["END", "STOP"]));
+        }
+
+        #[tokio::test]
+        async fn gemini_out_of_range_temperature_is_omitted_and_recorded() {
+            let mut at_edge = unset();
+            at_edge.temperature = Some(2.0);
+            let (body, metadata) = generate_capture(request_with(at_edge)).await;
+            assert_eq!(body["generationConfig"]["temperature"], 2.0);
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+
+            let mut past_edge = unset();
+            past_edge.temperature = Some(2.5);
+            past_edge.top_p = Some(0.9);
+            let (body, metadata) = generate_capture(request_with(past_edge)).await;
+            let config = body["generationConfig"]
+                .as_object()
+                .expect("topP keeps generationConfig present");
+            assert!(
+                !config.contains_key("temperature"),
+                "2.5 is omitted, never clamped to 2.0: {body}"
+            );
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+        }
+
+        #[tokio::test]
+        async fn gemini_penalties_never_appear_on_the_wire() {
+            // `PromptParameters::default()` carries penalties of 0.0; the generationConfig this
+            // adapter builds has no penalty field, so the omission is recorded, not silent.
+            let (body, metadata) =
+                generate_capture(request_with(PromptParameters::default())).await;
+
+            let text = body.to_string();
+            assert!(
+                !text.contains("enalty"),
+                "no penalty field on the wire: {text}"
+            );
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("frequency_penalty,presence_penalty")
+            );
+        }
+
+        #[tokio::test]
+        async fn gemini_json_schema_still_sets_mime_type_and_schema() {
+            let schema = json!({"type": "object"});
+            let request = request_with(unset()).with_response_format(ResponseFormat::JsonSchema {
+                name: "answer".to_string(),
+                schema: schema.clone(),
+                strict: true,
+            });
+            let (body, metadata) = generate_capture(request).await;
+
+            assert_eq!(
+                body["generationConfig"]["responseMimeType"],
+                "application/json"
+            );
+            assert_eq!(body["generationConfig"]["responseSchema"], schema);
+            assert!(
+                !metadata.contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY),
+                "nothing changed on the wire, so nothing is recorded: {metadata:?}"
+            );
+        }
+
+        #[tokio::test]
+        async fn gemini_unprofiled_model_is_stamped() {
+            let (_, metadata) = generate_capture(request_with(unset())).await;
+            assert_eq!(
+                metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some(MODEL),
+                "no seeded entry exists yet, so the model runs on the adapter-wide fallback"
+            );
+        }
+
+        #[test]
+        fn gemini_max_tokens_above_a_profiled_maximum_is_refused_by_name() {
+            use crate::registry::{ModelOverride, ModelRegistry};
+
+            let mut adapter = test_adapter("https://example.invalid");
+            let over = ModelOverride {
+                max_output_tokens: Some(1000),
+                ..ModelOverride::default()
+            };
+            adapter.model_registry = ModelRegistry::new(GEMINI_PROVIDER, &[], fallback_profile())
+                .with_overrides(BTreeMap::from([(MODEL.to_string(), over)]))
+                .expect("a plain max_output_tokens override is valid");
+
+            let mut parameters = unset();
+            parameters.max_tokens = Some(4000);
+            match adapter.build_request(&request_with(parameters)) {
+                Err(LlmError::InvalidPrompt(message)) => {
+                    assert!(message.contains("gemini"), "{message}");
+                    assert!(message.contains(MODEL), "{message}");
+                    assert!(message.contains("max_tokens"), "{message}");
+                }
+                other => panic!("expected InvalidPrompt, got {other:?}"),
+            }
+        }
     }
 
     // ── Shared conformance suite (RT-06, D-31) ──

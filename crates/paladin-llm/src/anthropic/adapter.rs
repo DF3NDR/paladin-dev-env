@@ -20,12 +20,14 @@ use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::PromptType;
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
-    StreamingResponse, TokenUsage,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
+    ProviderCapabilities, StopSupport, StreamingResponse, TokenUsage,
 };
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::registry::ModelRegistry;
+use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
@@ -176,6 +178,62 @@ impl AnthropicConfig {
 pub struct AnthropicAdapter {
     pub(crate) client: Client,
     pub(crate) config: AnthropicConfig,
+    /// Resolves the request model to the profile that decides what reaches the wire (ADR-0061).
+    model_registry: ModelRegistry,
+    /// Which (model, parameter) omissions this instance has already warned about.
+    omissions: OmissionLog,
+    /// Which (model, adjustment) `response_format` changes this instance has already warned
+    /// about.
+    format_log: FormatLog,
+}
+
+/// What this adapter declares to the port, stated once so the adapter-wide fallback profile and
+/// [`LlmPort::get_capabilities`] cannot drift apart.
+fn declared_capabilities() -> ProviderCapabilities {
+    ProviderCapabilities {
+        supports_streaming: true,
+        // `LlmRequest` carries no field through which a tool definition could
+        // travel, and this adapter neither sends `tools` nor parses `tool_calls`
+        // out of a response. The flag describes what this adapter does, not what
+        // the vendor's API offers (WEB-03, D-14).
+        supports_tool_calling: false,
+        supports_function_calling: false,
+        supports_vision: true,
+        supports_embeddings: false,
+        max_context_tokens: Some(200_000),
+        supports_system_messages: true,
+        temperature_range: Some((0.0, 1.0)),
+    }
+}
+
+/// The adapter-wide fallback profile, derived from what this adapter's request builder sends
+/// (ADR-0061, D-05): a field it sends maps to `Range`, a field it never sends maps to `NotSent`.
+///
+/// - `temperature` and `top_p`: `NotSent`. This adapter has never put either on the wire --
+///   current Claude models (Opus 4.7 and later) answer `400` to a non-default value -- so the
+///   honest fallback states what it sends. An agent that asks for an explicit temperature is
+///   therefore refused at build, naming `anthropic`, the model and `temperature`, instead of
+///   having the value validated and then silently discarded (the behaviour this replaces).
+///   Per-model entries seeded in plan 50-06 may re-open a range for a model the live probe
+///   shows accepts one.
+/// - both penalties: `NotSent` -- the Messages API has no such field.
+/// - `stop`: `Supported { max: None }` -- the Messages API field `stop_sequences`.
+/// - `json_object` and `json_schema`: false -- the adapter is prompt-only for JSON today, so a
+///   requested format is recorded as `omitted` rather than silently ignored.
+fn fallback_profile() -> ModelProfile {
+    let caps = declared_capabilities();
+    let mut profile = ModelProfile::new()
+        .with_temperature(ParamSupport::NotSent)
+        .with_top_p(ParamSupport::NotSent)
+        .with_frequency_penalty(ParamSupport::NotSent)
+        .with_presence_penalty(ParamSupport::NotSent)
+        .with_stop_sequences(StopSupport::Supported { max: None })
+        .with_json_object(false)
+        .with_json_schema(false);
+    if let Some(window) = caps.max_context_tokens {
+        profile = profile.with_context_window(window);
+    }
+    profile
 }
 
 impl AnthropicAdapter {
@@ -205,7 +263,13 @@ impl AnthropicAdapter {
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
-        Ok(Self { client, config })
+        Ok(Self {
+            client,
+            config,
+            model_registry: ModelRegistry::new(ANTHROPIC_PROVIDER, &[], fallback_profile()),
+            omissions: OmissionLog::new(),
+            format_log: FormatLog::new(),
+        })
     }
 
     /// Build HTTP headers for Anthropic API requests.
@@ -221,8 +285,23 @@ impl AnthropicAdapter {
         Ok(headers)
     }
 
-    /// Convert LlmRequest to Claude API format.
-    fn build_request(&self, request: &LlmRequest) -> Result<ClaudeRequest, LlmError> {
+    /// Convert LlmRequest to Claude API format, plus the notes the buffered path records on its
+    /// response.
+    ///
+    /// What reaches the wire is decided by the request model's [`ModelProfile`] (ADR-0061,
+    /// D-01): [`sampling::apply`] sends `temperature`, `top_p` and `stop_sequences` only when
+    /// the caller set them **and** the profile admits them. With the adapter-wide fallback
+    /// `temperature` and `top_p` are `NotSent`, so a set value is omitted and recorded (one
+    /// `warn!` per instance per model and parameter, and `paladin.params_omitted` on the
+    /// response) -- the honest form of what used to be a silent `None`. The effective
+    /// `max_tokens` (the caller's, else the configured one) is checked against the profile's
+    /// maximum output before anything is sent. A requested `response_format` is routed through
+    /// [`sampling::apply_response_format`]; this adapter has no JSON mode, so it is recorded as
+    /// `omitted`.
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<(ClaudeRequest, RequestNotes), LlmError> {
         let mut system_message = None;
         let mut messages = Vec::new();
 
@@ -238,37 +317,24 @@ impl AnthropicAdapter {
             }
             PromptType::Text(text_prompt) => {
                 let role = match &text_prompt.role {
+                    // A system-role text prompt becomes the `system` field and carries no
+                    // message of its own.
                     paladin_core::platform::container::prompt::PromptRole::System => {
                         system_message = Some(text_prompt.content.clone());
-                        return Ok(ClaudeRequest {
-                            model: request.model.clone(),
-                            messages: vec![],
-                            system: system_message,
-                            max_tokens: request
-                                .prompt
-                                .entity
-                                .data
-                                .parameters
-                                .max_tokens
-                                .unwrap_or(self.config.max_tokens),
-                            // Phase 23.1: current Claude models (e.g. claude-opus-4-8)
-                            // reject an explicit `temperature` ("deprecated for this
-                            // model") — and restrict other sampling overrides — so omit
-                            // both and let the API default apply. `skip_serializing_if`
-                            // drops the `None`s from the request body entirely.
-                            temperature: None,
-                            top_p: None,
-                            stream: false,
-                        });
+                        None
                     }
-                    paladin_core::platform::container::prompt::PromptRole::User => "user",
-                    paladin_core::platform::container::prompt::PromptRole::Assistant => "assistant",
-                    paladin_core::platform::container::prompt::PromptRole::Function => "user",
+                    paladin_core::platform::container::prompt::PromptRole::User => Some("user"),
+                    paladin_core::platform::container::prompt::PromptRole::Assistant => {
+                        Some("assistant")
+                    }
+                    paladin_core::platform::container::prompt::PromptRole::Function => Some("user"),
                 };
-                messages.push(ClaudeMessage {
-                    role: role.to_string(),
-                    content: text_prompt.content.clone(),
-                });
+                if let Some(role) = role {
+                    messages.push(ClaudeMessage {
+                        role: role.to_string(),
+                        content: text_prompt.content.clone(),
+                    });
+                }
             }
             PromptType::Assistant(assistant_prompt) => {
                 messages.push(ClaudeMessage {
@@ -283,27 +349,57 @@ impl AnthropicAdapter {
             }
         }
 
-        let max_tokens = request
-            .prompt
-            .entity
-            .data
-            .parameters
-            .max_tokens
-            .unwrap_or(self.config.max_tokens);
+        let params = &request.prompt.entity.data.parameters;
+        let profile = self.model_registry.profile(&request.model);
 
-        Ok(ClaudeRequest {
+        let max_tokens = params.max_tokens.unwrap_or(self.config.max_tokens);
+        sampling::check_max_tokens(
+            ANTHROPIC_PROVIDER,
+            &request.model,
+            &profile,
+            Some(max_tokens),
+        )?;
+
+        let applied = sampling::apply(&profile, params);
+        let params_omitted = self
+            .omissions
+            .record(ANTHROPIC_PROVIDER, &request.model, &applied);
+
+        // This adapter has no JSON mode (the fallback profile says so), so a requested format
+        // is never sent: record it as `omitted` instead of ignoring it silently. The returned
+        // effective format is `None` whenever the profile has no JSON mode.
+        let (_effective_format, adjustment) =
+            sampling::apply_response_format(&profile, request.response_format.as_ref());
+        let format_adjusted =
+            self.format_log
+                .record(ANTHROPIC_PROVIDER, &request.model, adjustment);
+
+        let unprofiled_model = self
+            .model_registry
+            .note_unprofiled(&request.model)
+            .then(|| request.model.clone());
+
+        let body = ClaudeRequest {
             model: request.model.clone(),
             messages,
             system: system_message,
             max_tokens,
-            // Phase 23.1: current Claude models (e.g. claude-opus-4-8) reject an
-            // explicit `temperature` ("deprecated for this model") and restrict other
-            // sampling overrides — omit both and let the API default apply
-            // (`skip_serializing_if` drops the `None`s from the request body).
-            temperature: None,
-            top_p: None,
+            // ADR-0061: the profile decides, not a hard-coded `None`. Current Claude models
+            // (e.g. claude-opus-4-8) reject an explicit `temperature` ("deprecated for this
+            // model") and restrict other sampling overrides, which is why the adapter-wide
+            // fallback states both `NotSent`; `skip_serializing_if` drops a `None` from the
+            // request body entirely.
+            temperature: applied.temperature,
+            top_p: applied.top_p,
+            stop_sequences: applied.stop,
             stream: false,
-        })
+        };
+        let notes = RequestNotes {
+            params_omitted,
+            format_adjusted,
+            unprofiled_model,
+        };
+        Ok((body, notes))
     }
 
     /// Parse Claude API response into LlmResponse.
@@ -506,7 +602,7 @@ impl AnthropicAdapter {
 #[async_trait]
 impl LlmPort for AnthropicAdapter {
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let claude_request = self.build_request(&request)?;
+        let (claude_request, notes) = self.build_request(&request)?;
         let headers = self.build_headers()?;
 
         let operation = || async {
@@ -553,14 +649,19 @@ impl LlmPort for AnthropicAdapter {
             self.parse_response(request.id, claude_response)
         };
 
-        self.execute_with_retry(operation, 3).await
+        let mut response = self.execute_with_retry(operation, 3).await?;
+        // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
+        response.metadata = notes.into_metadata();
+        Ok(response)
     }
 
     async fn generate_stream(
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        let mut claude_request = self.build_request(&request)?;
+        // A streamed call has no metadata channel (A1-50-03): its omissions, format changes and
+        // unprofiled model are visible through the `warn!`s `build_request` emits.
+        let (mut claude_request, _notes) = self.build_request(&request)?;
         claude_request.stream = true;
 
         let headers = self.build_headers()?;
@@ -696,20 +797,11 @@ impl LlmPort for AnthropicAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            supports_streaming: true,
-            // `LlmRequest` carries no field through which a tool definition could
-            // travel, and this adapter neither sends `tools` nor parses `tool_calls`
-            // out of a response. The flag describes what this adapter does, not what
-            // the vendor's API offers (WEB-03, D-14).
-            supports_tool_calling: false,
-            supports_function_calling: false,
-            supports_vision: true,
-            supports_embeddings: false,
-            max_context_tokens: Some(200_000),
-            supports_system_messages: true,
-            temperature_range: Some((0.0, 1.0)),
-        }
+        declared_capabilities()
+    }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.model_registry.profile(model))
     }
 }
 
@@ -726,6 +818,10 @@ struct ClaudeRequest {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
+    /// The caller's stop sequences, in declared order with duplicates kept, when the model's
+    /// profile admits their count (ADR-0061 (a), D-11a). Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_sequences: Option<Vec<String>>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     stream: bool,
 }
@@ -1618,7 +1714,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 }))
                 .unwrap(),
             );
-            let body = serde_json::to_value(adapter.build_request(&request).unwrap()).unwrap();
+            let body = serde_json::to_value(adapter.build_request(&request).unwrap().0).unwrap();
             body["messages"][0]["content"].clone()
         };
 
@@ -1976,6 +2072,281 @@ stake, so an attacker donating to himself alone is a strict loss.";
             "Anthropic has no native JSON mode -- response_format must not \
              appear on the wire, got: {body_text}"
         );
+    }
+
+    // ── Phase 50 (PARITY-02, ADR-0061, D-01): the per-model parameter policy ──
+
+    mod parameter_policy {
+        use super::*;
+        use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
+        use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{
+            PromptItem, PromptParameters, PromptType, UserPrompt,
+        };
+        use paladin_ports::output::llm_port::ResponseFormat;
+        use serde_json::{Value, json};
+        use std::sync::Mutex as StdMutex;
+
+        const MODEL: &str = "claude-opus-4-8";
+
+        fn adapter_at(base_url: &str) -> AnthropicAdapter {
+            AnthropicAdapter::new(AnthropicConfig::new(
+                "sk-ant-test123".to_string(),
+                base_url.to_string(),
+                MODEL.to_string(),
+                4096,
+            ))
+            .expect("test config must build a valid adapter")
+        }
+
+        fn request_with(parameters: PromptParameters) -> LlmRequest {
+            let mut request = LlmRequest::new(
+                MODEL,
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            );
+            request.prompt.entity.data.parameters = parameters;
+            request
+        }
+
+        fn unset() -> PromptParameters {
+            PromptParameters {
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                stop_sequences: None,
+            }
+        }
+
+        /// Runs `generate()` against a mock `/messages` endpoint, returning the outgoing JSON
+        /// body and the response metadata.
+        async fn generate_capture(
+            request: LlmRequest,
+        ) -> (Value, std::collections::HashMap<String, String>) {
+            let mut server = Server::new_async().await;
+            let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    TEXT_ONLY_OPUS_4_8_JSON.as_bytes().to_vec()
+                })
+                .create_async()
+                .await;
+
+            let response = adapter_at(&server.url())
+                .generate(request)
+                .await
+                .expect("the mock answers a well-formed message");
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            (
+                serde_json::from_str(&body).expect("the body must be JSON"),
+                response.metadata,
+            )
+        }
+
+        /// Runs `generate_stream()` against a mock endpoint and returns the outgoing JSON body.
+        async fn stream_capture(request: LlmRequest) -> Value {
+            let mut server = Server::new_async().await;
+            let captured: Arc<StdMutex<Option<String>>> = Arc::new(StdMutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+
+            let stream = adapter_at(&server.url())
+                .generate_stream(request)
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            serde_json::from_str(&body).expect("the body must be JSON")
+        }
+
+        #[test]
+        fn anthropic_model_profile_states_temperature_and_top_p_not_sent() {
+            let profile = test_adapter()
+                .model_profile("any-model")
+                .expect("anthropic profiles every model");
+            assert_eq!(profile.temperature, ParamSupport::NotSent);
+            assert_eq!(profile.top_p, ParamSupport::NotSent);
+            assert_eq!(profile.frequency_penalty, ParamSupport::NotSent);
+            assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
+            assert_eq!(profile.stop_sequences, StopSupport::Supported { max: None });
+            assert_eq!(profile.context_window, Some(200_000));
+            assert!(!profile.json_object && !profile.json_schema);
+        }
+
+        #[tokio::test]
+        async fn anthropic_temperature_is_omitted_and_recorded() {
+            let mut parameters = unset();
+            parameters.temperature = Some(0.7);
+            parameters.top_p = Some(0.9);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert!(
+                body.get("temperature").is_none(),
+                "the Messages request carries no temperature: {body}"
+            );
+            assert!(body.get("top_p").is_none(), "nor top_p: {body}");
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature,top_p"),
+                "the omission that used to be silent is now recorded"
+            );
+        }
+
+        #[tokio::test]
+        async fn anthropic_unset_values_are_neither_sent_nor_recorded() {
+            let (body, metadata) = generate_capture(request_with(unset())).await;
+            let obj = body.as_object().expect("body must be a JSON object");
+
+            for key in ["temperature", "top_p", "stop_sequences"] {
+                assert!(!obj.contains_key(key), "{key} was never set: {obj:?}");
+            }
+            assert_eq!(obj["max_tokens"], 4096, "the configured max_tokens applies");
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn anthropic_stop_sequences_keep_declared_order() {
+            let mut parameters = unset();
+            // A duplicate, deliberately: order and duplicates are the caller's.
+            parameters.stop_sequences = Some(vec![
+                "END".to_string(),
+                "STOP".to_string(),
+                "END".to_string(),
+            ]);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert_eq!(body["stop_sequences"], json!(["END", "STOP", "END"]));
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_follows_the_profile() {
+            let mut parameters = unset();
+            parameters.temperature = Some(0.7);
+            parameters.stop_sequences = Some(vec!["END".to_string(), "STOP".to_string()]);
+            let body = stream_capture(request_with(parameters)).await;
+
+            assert!(
+                body.get("temperature").is_none(),
+                "the streaming body omits the temperature too: {body}"
+            );
+            assert_eq!(body["stop_sequences"], json!(["END", "STOP"]));
+            assert_eq!(body["stream"], true);
+        }
+
+        #[tokio::test]
+        async fn anthropic_response_format_is_recorded_as_omitted() {
+            let request = request_with(unset()).with_response_format(ResponseFormat::JsonObject);
+            let (body, metadata) = generate_capture(request).await;
+
+            assert!(
+                body.get("response_format").is_none(),
+                "Anthropic has no native JSON mode: {body}"
+            );
+            assert_eq!(
+                metadata
+                    .get(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("omitted"),
+                "the never-sent format is now recorded, not silently ignored"
+            );
+
+            let (_, metadata) = generate_capture(request_with(unset())).await;
+            assert!(
+                !metadata.contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY),
+                "no format requested, nothing adjusted"
+            );
+        }
+
+        #[tokio::test]
+        async fn anthropic_unprofiled_model_is_stamped() {
+            let (_, metadata) = generate_capture(request_with(unset())).await;
+            assert_eq!(
+                metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some(MODEL),
+                "no seeded entry exists yet, so the model runs on the adapter-wide fallback"
+            );
+        }
+
+        #[test]
+        fn anthropic_max_tokens_above_a_profiled_maximum_is_refused_by_name() {
+            use crate::registry::{ModelOverride, ModelRegistry};
+            use std::collections::BTreeMap;
+
+            let mut adapter = test_adapter();
+            let over = ModelOverride {
+                max_output_tokens: Some(1000),
+                ..ModelOverride::default()
+            };
+            adapter.model_registry =
+                ModelRegistry::new(ANTHROPIC_PROVIDER, &[], fallback_profile())
+                    .with_overrides(BTreeMap::from([(MODEL.to_string(), over)]))
+                    .expect("a plain max_output_tokens override is valid");
+
+            // No max_tokens on the request: the configured 4096 is what would be sent.
+            match adapter.build_request(&request_with(unset())) {
+                Err(LlmError::InvalidPrompt(message)) => {
+                    assert!(message.contains("anthropic"), "{message}");
+                    assert!(message.contains(MODEL), "{message}");
+                    assert!(message.contains("max_tokens"), "{message}");
+                }
+                other => panic!("expected InvalidPrompt, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn anthropic_system_role_text_prompt_still_becomes_the_system_field() {
+            use paladin_core::platform::container::prompt::{PromptRole, TextPrompt};
+
+            let mut request = request_with(unset());
+            request.prompt = PromptItem::new(PromptType::Text(TextPrompt {
+                content: "Be terse.".to_string(),
+                role: PromptRole::System,
+            }))
+            .expect("a text prompt must build");
+            let (body, _) = test_adapter()
+                .build_request(&request)
+                .expect("a system-role text prompt builds");
+            let body = serde_json::to_value(body).unwrap();
+
+            assert_eq!(body["system"], "Be terse.");
+            assert_eq!(body["messages"], json!([]));
+        }
     }
 
     // ── Plan 31-04 (D-14/D-15/D-19): event-accumulation streaming usage ───

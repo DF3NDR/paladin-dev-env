@@ -1216,9 +1216,9 @@ mod tests {
     use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
     use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
     use mockito::Server;
-    use std::collections::HashMap;
     use paladin_core::platform::container::prompt::UserPrompt;
     use paladin_ports::output::llm_port::ResponseFormat;
+    use std::collections::HashMap;
 
     fn test_config() -> CompatEngineConfig {
         CompatEngineConfig {

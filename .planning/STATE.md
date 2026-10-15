@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 50
-current_phase_name: Provider Parity & Configuration-Driven Model Swap
+current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Phase 50 context gathered
-last_updated: "2026-10-15T14:01:07.009Z"
-last_activity: 2026-10-14
-last_activity_desc: Phase 49 complete, transitioned to Phase 50
+stopped_at: Completed 50-01-PLAN.md
+last_updated: "2026-10-15T14:44:57.462Z"
+last_activity: 2026-10-15
+last_activity_desc: Phase 50 execution started
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 107
-  completed_plans: 89
+  completed_plans: 90
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-10-14 after Phase 48)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 50 — provider-parity-config-driven-model-swap (Phase 49 closed 2026-10-14 by scope cut: muster and §9.8 consumer note kept, consumer bump moved to one post-release move to v0.11.0)
+**Current focus:** Phase 50 — provider-parity-config-driven-model-swap
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
 2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([██████████] 97%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([████████░░] 84%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -62,10 +62,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 50 — Provider Parity & Configuration-Driven Model Swap
-Plan: Not started
+Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
+Plan: 2 of 18
 Status: Ready to execute
-Last activity: 2026-10-14 — Phase 49 complete, transitioned to Phase 50
+Last activity: 2026-10-15 — Phase 50 execution started
 
 ## Performance Metrics
 
@@ -296,6 +296,7 @@ Last activity: 2026-10-14 — Phase 49 complete, transitioned to Phase 50
 | Phase 49 P01 | 125min | 3 tasks | 4 files |
 | Phase 49 P02 | 25min | 2 tasks | 2 files |
 | Phase 49 P03 | 25min | 2 tasks | 1 files |
+| Phase 50 P01 | 32min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -502,6 +503,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: Phase 49-02: library-consumer note is a ### subsection after MIGRATION.md 9.8 step 7 (no new ## 9.9); rows labelled DR-n so the allowlist guard never reads them; section 9.2 wording wins over the research drift register
 - [Phase 49]: 49-03: red-proof scripts stay outside the repo; full text recorded in 49-MUSTER-RED-EVIDENCE.md
 - [Phase 49]: scope cut 2026-10-14 — the consumer never adopts v0.10.1; it moves once to v0.11.0 after Phases 50-51 (MIGRATION.md §9.8 consumer note is the spec); plans 49-04..06 cancelled
+- [Phase ?]: 50-01: matrix asserts the query is contained in the last user turn (the execution service folds system prompt + query into UserPrompt::query); adapter-level test keeps exact equality
+- [Phase ?]: 50-01: PARITY-01 left open (matrix has 19 red cases ignored until plans 50-03/05/12/13/14); only PARITY-08 marked complete
 
 ### Pending Todos
 
@@ -720,9 +723,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-15T00:37:55.086Z
-**Stopped at:** Phase 50 context gathered
-**Resume file:** .planning/phases/50-provider-parity-config-driven-model-swap/50-CONTEXT.md
+**Last session:** 2026-10-15T14:44:57.434Z
+**Stopped at:** Completed 50-01-PLAN.md
+**Resume file:** None
 
 ## Operator Next Steps
 

@@ -1370,7 +1370,7 @@ the existing credential gate with the env vars Paladin already reads.
 Plans:
 **Wave 1**
 
-- [ ] 50-01-PLAN.md — Tracer: one agent from an `llm.openai` block through PaladinBuilder and PaladinExecutionService to a mock transport, red then fixed (B-4, PARITY-08); shared `user_turn_text` on all five request builders; the nine-provider provider-swap matrix with red cases ignored per fixing plan and the red run recorded
+- [x] 50-01-PLAN.md — Tracer: one agent from an `llm.openai` block through PaladinBuilder and PaladinExecutionService to a mock transport, red then fixed (B-4, PARITY-08); shared `user_turn_text` on all five request builders; the nine-provider provider-swap matrix with red cases ignored per fixing plan and the red run recorded
 - [ ] 50-02-PLAN.md — ADR-0061 amending ADR-0004 (refuse explicit, omit auto visibly; D-01..D-04a), PROMOTION next free 0062; `ModelProfile`/`ParamSupport`/`StopSupport`/`SamplingParam` and defaulted `LlmPort::model_profile` in paladin-ports; Pricing/Cadence/Fallback forward it
 - [ ] 50-04-PLAN.md — Nine-provider credential-gated live smoke with `--probe` (sampling, stop, output cap, JSON-object and JSON-schema probes) and `--dry-run`; autonomous harness only (the operator run is 50-17)
 

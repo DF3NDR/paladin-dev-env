@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 10
+open_count: 12
 waived_count: 37
 fixed_count: 22
-total_count: 69
-last_updated: 2026-10-14T00:14:54.479Z
+total_count: 71
+last_updated: 2026-10-15T14:44:02.458Z
 ---
 
 # Broken Windows Ledger
@@ -84,6 +84,8 @@ last_updated: 2026-10-14T00:14:54.479Z
 | 67 | 42 | deviation | crates/paladin-battalion/src/engine/settlement.rs |  | G15: a graph Paladin node on a model with no treasurer.pricing row settles nothing (an unpriced call has no cost and nothing is fabricated, D-00c), so the superstep-boundary check cannot see that node's spend and an allowance cannot bound it; workflow assistants are not refused at admission for an unpriced model (only agent routes and agent-kind runs are, 422 model_unpriced). Owner: the operator; rationale: pricing is operator-supplied configuration and the engine has no source for a price it was not given. Operators must price every model a metered principal can reach; closing condition: a pricing-coverage check at graph registration, deferred. | open |  | 2026-10-07T02:02:08.278Z |  |
 | 68 | 48 | unrun-verify | Makefile |  | 48-09: make security (cargo-audit, cargo-deny) not run locally, tools absent; CI Security Audit and License & Dependency Policy jobs are red on the branch before and after Phase 48 with Cargo.lock unchanged | open |  | 2026-10-14T00:14:54.346Z |  |
 | 69 | 48 | unrun-verify | scripts/coverage.sh |  | 48-09: workspace coverage percentage not measured locally (no Docker daemon, no object store, 3 GB free); CI Coverage job passed the 82 percent gate on dcbcb63 but its figure was not retrievable (artifact download denied) | open |  | 2026-10-14T00:14:54.479Z |  |
+| 70 | 50 | unrun-verify | Cargo.toml |  | 50-01: full 'cargo test --workspace' not run to completion: the workspace test build exhausted the sandbox disk quota (No space left on device while linking); targeted verifies all passed instead (provider_swap_matrix --features llm-all, paladin-llm --all-features --lib 651 tests, cargo clippy --all-targets --features llm-all -D warnings, cargo fmt --check, make check-consumer-surface, make api-surface) | open |  | 2026-10-15T14:44:02.279Z |  |
+| 71 | 50 | skipped-test | tests/provider_swap_matrix.rs |  | 50-01: 19 provider_swap_matrix cases are #[ignore = 'red until plan 50-NN'] by design (50-03: 7, 50-05: 3, 50-12: 7, 50-13: 1, 50-14: 1); each fixing plan must un-ignore the cases it names; none may remain ignored at phase close | open |  | 2026-10-15T14:44:02.458Z |  |
 
 ````json
 [
@@ -913,6 +915,30 @@ last_updated: 2026-10-14T00:14:54.479Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-14T00:14:54.479Z",
+    "resolved_at": null
+  },
+  {
+    "id": 70,
+    "kind": "unrun-verify",
+    "phase": "50",
+    "file": "Cargo.toml",
+    "line": null,
+    "description": "50-01: full 'cargo test --workspace' not run to completion: the workspace test build exhausted the sandbox disk quota (No space left on device while linking); targeted verifies all passed instead (provider_swap_matrix --features llm-all, paladin-llm --all-features --lib 651 tests, cargo clippy --all-targets --features llm-all -D warnings, cargo fmt --check, make check-consumer-surface, make api-surface)",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-15T14:44:02.279Z",
+    "resolved_at": null
+  },
+  {
+    "id": 71,
+    "kind": "skipped-test",
+    "phase": "50",
+    "file": "tests/provider_swap_matrix.rs",
+    "line": null,
+    "description": "50-01: 19 provider_swap_matrix cases are #[ignore = 'red until plan 50-NN'] by design (50-03: 7, 50-05: 3, 50-12: 7, 50-13: 1, 50-14: 1); each fixing plan must un-ignore the cases it names; none may remain ignored at phase close",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-15T14:44:02.458Z",
     "resolved_at": null
   }
 ]

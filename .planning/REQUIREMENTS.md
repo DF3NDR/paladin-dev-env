@@ -246,7 +246,7 @@ cross-cutting, and several are defects in the three original adapters. `PROV-*` 
   "Switching providers" page with the per-provider/per-model behaviour table plus
   MIGRATION/CHANGELOG entries for every intentional break
 
-- [ ] **PARITY-08**: The OpenAI adapter sends the prompt text (`query`, with `context` appended
+- [x] **PARITY-08**: The OpenAI adapter sends the prompt text (`query`, with `context` appended
   when present) on the execution-service path, with a mock-transport regression test that is red
   on the current tree and green after the fix
 
@@ -460,7 +460,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PARITY-05 | Phase 50 | Pending |
 | PARITY-06 | Phase 50 | Pending |
 | PARITY-07 | Phase 50 | Pending |
-| PARITY-08 | Phase 50 | Pending |
+| PARITY-08 | Phase 50 | Complete |
 | REASON-01 | Phase 51 | Pending |
 | REASON-02 | Phase 51 | Pending |
 | REASON-03 | Phase 51 | Pending |

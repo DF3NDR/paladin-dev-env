@@ -1376,7 +1376,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 50-03-PLAN.md — Shared `sampling::apply` (plus `apply_response_format` and `check_max_tokens`) and the model registry core (seed > override > visible fallback); CompatEngine and the five compat presets on them with stop on the wire; PaladinBuilder profile-first (explicit refused by name, auto omitted); Kimi matrix rows green
+- [x] 50-03-PLAN.md — Shared `sampling::apply` (plus `apply_response_format` and `check_max_tokens`) and the model registry core (seed > override > visible fallback); CompatEngine and the five compat presets on them with stop on the wire; PaladinBuilder profile-first (explicit refused by name, auto omitted); Kimi matrix rows green
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

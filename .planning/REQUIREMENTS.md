@@ -207,7 +207,7 @@ Moonshot `kimi-k3` fails or silently degrades in five blocking and eleven degrad
 cross-cutting, and several are defects in the three original adapters. `PROV-*` is spent (Phase
 17), so a new prefix. Decisions D-1..D-4 of the handoff are settled at discuss.*
 
-- [ ] **PARITY-01**: A provider-swap matrix test with mock transports passes for all nine
+- [x] **PARITY-01**: A provider-swap matrix test with mock transports passes for all nine
   providers — the same agent definition switched only through config builds and runs with
   equivalent behaviour, or fails at build time with an error naming the provider, model and
   parameter — covering manual and auto temperature on a `(1,1)` provider, the user prompt on the
@@ -226,12 +226,12 @@ cross-cutting, and several are defects in the three original adapters. `PROV-*` 
   adapter/config pairs behind ADR-0046's features, with the public-API baseline refreshed and a
   CHANGELOG entry
 
-- [ ] **PARITY-04**: Per-model limits (context window, max output, reasoning support, fixed
+- [x] **PARITY-04**: Per-model limits (context window, max output, reasoning support, fixed
   sampling values, JSON-mode support) come from a dated registry with config overrides that
   Commissary and `resolve_context_window` read, so `kimi-k3` is rationed against its real
   1,048,576-token window and the stale Anthropic/DeepSeek defaults and model lists are replaced
 
-- [ ] **PARITY-05**: Every adapter maps empty output (`EmptyCompletion` on any stop reason,
+- [x] **PARITY-05**: Every adapter maps empty output (`EmptyCompletion` on any stop reason,
   OpenAI included), refusal (a typed `LlmError::Refusal`, classified `Permanent`), usage cap
   (live-verified per compat vendor), cache read/write and reasoning tokens the same way,
   surfaces reasoning text on the normal and streaming paths, and sends stop sequences where the
@@ -453,11 +453,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ADOPT-03 | Phase 49 | Superseded (scope cut 2026-10-14) |
 | ADOPT-04 | Phase 49 | Complete |
 | ADOPT-05 | Phase 49 | Complete |
-| PARITY-01 | Phase 50 | Pending |
+| PARITY-01 | Phase 50 | Complete |
 | PARITY-02 | Phase 50 | Complete |
 | PARITY-03 | Phase 50 | Pending |
-| PARITY-04 | Phase 50 | Pending |
-| PARITY-05 | Phase 50 | Pending |
+| PARITY-04 | Phase 50 | Complete |
+| PARITY-05 | Phase 50 | Complete |
 | PARITY-06 | Phase 50 | Pending |
 | PARITY-07 | Phase 50 | Pending |
 | PARITY-08 | Phase 50 | Complete |

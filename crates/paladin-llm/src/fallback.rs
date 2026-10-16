@@ -136,6 +136,14 @@ use crate::cadence::{CadenceWiring, with_cadence as wrap_with_cadence};
 /// (D-26). A plain single-provider adapter never sets it.
 pub const SERVED_BY_METADATA_KEY: &str = "paladin.served_by";
 
+/// The `LlmResponse.metadata` key under which the chain records the model the serving hop was
+/// sent (PARITY-06, D-15): the step's model for a [`FallbackLlmAdapter::from_steps`] chain, the
+/// request's model for a [`FallbackLlmAdapter::new`] chain.
+///
+/// It is the model the hop was *sent*, not the vendor-echoed `LlmResponse.model`, which may be a
+/// dated alias of it. Both are visible to the caller.
+pub const SERVED_MODEL_METADATA_KEY: &str = "paladin.served_model";
+
 /// The provider name the adapter itself reports from
 /// [`LlmPort::get_provider_name`].
 pub const FALLBACK_PROVIDER_NAME: &str = "fallback";
@@ -149,6 +157,68 @@ pub enum FallbackChainError {
     /// not on the first request.
     #[error("a fallback chain needs at least one provider")]
     EmptyChain,
+    /// [`FallbackLlmAdapter::from_steps`] was given a step whose model is empty (or only
+    /// whitespace). A step states the model it sends; an empty one would send nothing, or tempt
+    /// the hop's adapter to substitute its own default (D-15's rejected alternative).
+    #[error("fallback step {index} has an empty model; every step must name the model it sends")]
+    EmptyStepModel {
+        /// Zero-based position of the offending step.
+        index: usize,
+    },
+}
+
+/// One hop of a [`FallbackLlmAdapter::from_steps`] chain: the port to call and the model to send
+/// it (D-15).
+///
+/// Before the hop is tried, the request's `model` is rewritten to [`FallbackStep::model`], so an
+/// Anthropic -> Kimi chain sends `claude-*` to Anthropic and the Kimi model to Moonshot rather
+/// than the first model to both (handoff B-3). The model is also what the hop is paced under
+/// (D-00h): Cadence keys on `(provider, model)`.
+///
+/// A plain struct with public fields, so a caller can also build one without [`FallbackStep::new`].
+///
+/// # Examples
+///
+/// ```rust
+/// # #[cfg(feature = "mock")]
+/// # {
+/// use std::sync::Arc;
+/// use paladin_llm::fallback::FallbackStep;
+/// use paladin_llm::mock::MockLlmAdapter;
+///
+/// let step = FallbackStep::new(
+///     Arc::new(MockLlmAdapter::new().with_provider_name("kimi")),
+///     "kimi-k2",
+/// );
+/// assert_eq!(step.model, "kimi-k2");
+/// assert!(format!("{step:?}").contains("kimi"));
+/// # }
+/// ```
+#[derive(Clone)]
+pub struct FallbackStep {
+    /// The port this hop calls.
+    pub port: Arc<dyn LlmPort>,
+    /// The model this hop is sent, in place of the request's own.
+    pub model: String,
+}
+
+impl FallbackStep {
+    /// A step that sends `model` to `port`.
+    pub fn new(port: Arc<dyn LlmPort>, model: impl Into<String>) -> Self {
+        Self {
+            port,
+            model: model.into(),
+        }
+    }
+}
+
+impl fmt::Debug for FallbackStep {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("FallbackStep")
+            .field("provider", &self.port.get_provider_name())
+            .field("model", &self.model)
+            .finish()
+    }
 }
 
 /// The item type every [`LlmPort::generate_stream`] yields.
@@ -179,8 +249,14 @@ type StreamItem = Result<StreamingResponse, LlmError>;
 #[derive(Clone)]
 pub struct FallbackLlmAdapter {
     chain: Vec<Arc<dyn LlmPort>>,
+    /// The model each hop is sent, parallel to `chain`: `Some` for a
+    /// [`FallbackLlmAdapter::from_steps`] chain, `None` for every hop of a
+    /// [`FallbackLlmAdapter::new`] chain (the request's own model is sent).
+    models: Vec<Option<String>>,
     trace_emitter: Option<Arc<dyn TraceEmitter>>,
     pacing: Option<FallbackPacing>,
+    /// Whether a [`LlmError::Refusal`] hops to the next step (D-10). Off by default.
+    hop_on_refusal: bool,
 }
 
 /// What the chain needs to decide whether a `429` is paced on the same hop (D-03): the shared
@@ -205,8 +281,10 @@ impl fmt::Debug for FallbackLlmAdapter {
                     .map(|provider| provider.get_provider_name())
                     .collect::<Vec<_>>(),
             )
+            .field("models", &self.models)
             .field("trace_emitter", &self.trace_emitter.is_some())
             .field("paced", &self.pacing.is_some())
+            .field("hop_on_refusal", &self.hop_on_refusal)
             .finish()
     }
 }
@@ -222,11 +300,80 @@ impl FallbackLlmAdapter {
         if chain.is_empty() {
             return Err(FallbackChainError::EmptyChain);
         }
+        let models = vec![None; chain.len()];
         Ok(Self {
             chain,
+            models,
             trace_emitter: None,
             pacing: None,
+            hop_on_refusal: false,
         })
+    }
+
+    /// Build a chain whose every hop is sent its own model (D-15, PARITY-06): `steps[0]` is
+    /// tried first, `steps[n-1]` last, and before each hop the request's `model` is rewritten to
+    /// that step's model, on [`LlmPort::generate`] and [`LlmPort::generate_stream`] alike.
+    ///
+    /// Two consecutive steps may share a port and differ in model; they are two hops, each sent
+    /// its own model. The same model on two steps is still two hops.
+    ///
+    /// # Errors
+    ///
+    /// [`FallbackChainError::EmptyChain`] if `steps` is empty;
+    /// [`FallbackChainError::EmptyStepModel`] naming the first step whose model is empty after
+    /// trimming.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # #[cfg(feature = "mock")]
+    /// # {
+    /// use std::sync::Arc;
+    /// use paladin_llm::fallback::{FallbackLlmAdapter, FallbackStep};
+    /// use paladin_llm::mock::MockLlmAdapter;
+    ///
+    /// let anthropic = Arc::new(MockLlmAdapter::new().with_provider_name("anthropic"));
+    /// let kimi = Arc::new(MockLlmAdapter::new().with_provider_name("kimi"));
+    /// let chain = FallbackLlmAdapter::from_steps(vec![
+    ///     FallbackStep::new(anthropic, "claude-sonnet-4"),
+    ///     FallbackStep::new(kimi, "kimi-k2"),
+    /// ])?;
+    /// assert_eq!(chain.chain_len(), 2);
+    /// # }
+    /// # Ok::<(), paladin_llm::fallback::FallbackChainError>(())
+    /// ```
+    pub fn from_steps(steps: Vec<FallbackStep>) -> Result<Self, FallbackChainError> {
+        if steps.is_empty() {
+            return Err(FallbackChainError::EmptyChain);
+        }
+        if let Some(index) = steps.iter().position(|step| step.model.trim().is_empty()) {
+            return Err(FallbackChainError::EmptyStepModel { index });
+        }
+        let (chain, models): (Vec<_>, Vec<_>) = steps
+            .into_iter()
+            .map(|step| (step.port, Some(step.model)))
+            .unzip();
+        Ok(Self {
+            chain,
+            models,
+            trace_emitter: None,
+            pacing: None,
+            hop_on_refusal: false,
+        })
+    }
+
+    /// Whether a [`LlmError::Refusal`] hops to the next step (D-10). Default `false`.
+    ///
+    /// A refusal is `Permanent`, so by default it short-circuits the chain and reaches the
+    /// consumer: an automatic hop would hide the refusal and spend budget on every hop. With
+    /// `true`, a `Refusal` -- and only a `Refusal` -- tries the next step; every other
+    /// `Permanent` error (a bad key, a malformed request) still short-circuits. When the last
+    /// step refuses too, the chain ends in [`LlmError::AllProvidersFailed`], whose `attempts`
+    /// list every refusal.
+    #[must_use]
+    pub fn hop_on_refusal(mut self, enabled: bool) -> Self {
+        self.hop_on_refusal = enabled;
+        self
     }
 
     /// Pace every hop (PACE-02, D-03): each hop is wrapped in the Cadence decorator, so it is
@@ -1814,5 +1961,383 @@ mod tests {
         let single = FallbackLlmAdapter::new(vec![hop("only", Some(single_profile.clone()))])
             .expect("chain");
         assert_eq!(single.model_profile("m"), Some(single_profile));
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-step models, the served model and the refusal opt-in (plan 50-14:
+    // D-15, D-10, D-00h, PARITY-06)
+    // -----------------------------------------------------------------------
+
+    use super::test_support::ProfiledStubPort as StubProfile;
+
+    fn step(port: &MockLlmAdapter, model: &str) -> FallbackStep {
+        FallbackStep::new(Arc::new(port.clone()) as Arc<dyn LlmPort>, model)
+    }
+
+    fn timed_step(port: &TimedProvider, model: &str) -> FallbackStep {
+        FallbackStep::new(Arc::new(port.clone()) as Arc<dyn LlmPort>, model)
+    }
+
+    fn served_model(response: &LlmResponse) -> Option<&str> {
+        response
+            .metadata
+            .get(SERVED_MODEL_METADATA_KEY)
+            .map(String::as_str)
+    }
+
+    fn sent_models(port: &MockLlmAdapter) -> Vec<String> {
+        port.requests()
+            .into_iter()
+            .map(|request| request.model)
+            .collect()
+    }
+
+    fn refusal(provider: &str, model: &str) -> LlmError {
+        LlmError::Refusal {
+            provider: provider.to_string(),
+            model: model.to_string(),
+            detail: "I can't help with that.".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_served_model_key_is_namespaced() {
+        assert_eq!(SERVED_MODEL_METADATA_KEY, "paladin.served_model");
+    }
+
+    /// D-15 / PARITY-06: hop 2 is sent its own model, and the response names the hop that served
+    /// and the model it was sent.
+    #[tokio::test]
+    async fn from_steps_sends_each_hop_its_own_model() {
+        let anthropic = failing("anthropic", transient("anthropic", 503));
+        let kimi = provider("kimi");
+        let adapter =
+            FallbackLlmAdapter::from_steps(vec![step(&anthropic, "m1"), step(&kimi, "m2")])
+                .unwrap();
+
+        let response = adapter.generate(request()).await.unwrap();
+
+        assert_eq!(sent_models(&anthropic), ["m1"]);
+        assert_eq!(sent_models(&kimi), ["m2"]);
+        assert_eq!(response.content, "answer from kimi");
+        assert_eq!(
+            response
+                .metadata
+                .get(SERVED_BY_METADATA_KEY)
+                .map(String::as_str),
+            Some("kimi")
+        );
+        assert_eq!(served_model(&response), Some("m2"));
+    }
+
+    #[tokio::test]
+    async fn from_steps_sends_each_hop_its_own_model_on_the_stream() {
+        let anthropic = failing("anthropic", transient("anthropic", 503));
+        let kimi = MockLlmAdapter::new()
+            .with_provider_name("kimi")
+            .with_stream_items(vec![Ok("Hello".to_string())]);
+        let adapter =
+            FallbackLlmAdapter::from_steps(vec![step(&anthropic, "m1"), step(&kimi, "m2")])
+                .unwrap();
+
+        let items = collect(adapter.generate_stream(request()).await.unwrap()).await;
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].as_deref().unwrap(), "Hello");
+        assert_eq!(sent_models(&anthropic), ["m1"]);
+        assert_eq!(sent_models(&kimi), ["m2"]);
+    }
+
+    /// A `new` chain is unchanged: every hop is sent the request's own model, and the served
+    /// model names it.
+    #[tokio::test]
+    async fn a_new_chain_keeps_sending_every_hop_the_requests_model() {
+        let first = failing("openai", transient("openai", 503));
+        let second = provider("anthropic");
+        let adapter = chain(&[first.clone(), second.clone()]);
+
+        let response = adapter.generate(request()).await.unwrap();
+
+        assert_eq!(sent_models(&first), ["mock-model"]);
+        assert_eq!(sent_models(&second), ["mock-model"]);
+        assert_eq!(served_model(&response), Some("mock-model"));
+        assert_eq!(served_by(&response), Some("anthropic"));
+    }
+
+    /// Two consecutive steps on one port with different models are two hops; the same model on
+    /// two steps is still two hops.
+    #[tokio::test]
+    async fn same_port_different_models_are_two_hops() {
+        let port = MockLlmAdapter::new()
+            .with_provider_name("openai")
+            .with_script(vec![
+                MockScriptEntry::Error(transient("openai", 503)),
+                MockScriptEntry::Text("second model answered".to_string()),
+            ]);
+        let adapter =
+            FallbackLlmAdapter::from_steps(vec![step(&port, "gpt-a"), step(&port, "gpt-b")])
+                .unwrap();
+
+        let response = adapter.generate(request()).await.unwrap();
+
+        assert_eq!(sent_models(&port), ["gpt-a", "gpt-b"]);
+        assert_eq!(response.content, "second model answered");
+        assert_eq!(served_model(&response), Some("gpt-b"));
+
+        let twice = MockLlmAdapter::new()
+            .with_provider_name("openai")
+            .with_script(vec![
+                MockScriptEntry::Error(transient("openai", 503)),
+                MockScriptEntry::Text("again".to_string()),
+            ]);
+        let adapter =
+            FallbackLlmAdapter::from_steps(vec![step(&twice, "gpt-a"), step(&twice, "gpt-a")])
+                .unwrap();
+        let response = adapter.generate(request()).await.unwrap();
+        assert_eq!(sent_models(&twice), ["gpt-a", "gpt-a"], "two hops, not one");
+        assert_eq!(served_model(&response), Some("gpt-a"));
+    }
+
+    /// Steps are tried strictly in declared order; the served metadata names the hop that
+    /// succeeded, not the first or the last configured.
+    #[tokio::test]
+    async fn steps_are_tried_in_order_and_the_server_is_recorded() {
+        let first = failing("alpha", transient("alpha", 503));
+        let second = failing("bravo", LlmError::Timeout("1s".to_string()));
+        let third = provider("charlie");
+        let fourth = provider("delta");
+        let adapter = FallbackLlmAdapter::from_steps(vec![
+            step(&first, "m-a"),
+            step(&second, "m-b"),
+            step(&third, "m-c"),
+            step(&fourth, "m-d"),
+        ])
+        .unwrap();
+
+        let response = adapter.generate(request()).await.unwrap();
+
+        assert_eq!(first.call_count(), 1);
+        assert_eq!(second.call_count(), 1);
+        assert_eq!(third.call_count(), 1);
+        assert_eq!(fourth.call_count(), 0, "the later step is never reached");
+        assert_eq!(served_by(&response), Some("charlie"));
+        assert_eq!(served_model(&response), Some("m-c"));
+    }
+
+    #[test]
+    fn from_steps_rejects_an_empty_chain_and_an_empty_model() {
+        assert_eq!(
+            FallbackLlmAdapter::from_steps(Vec::new()).unwrap_err(),
+            FallbackChainError::EmptyChain
+        );
+
+        let good = provider("openai");
+        let bad = provider("kimi");
+        let err = FallbackLlmAdapter::from_steps(vec![step(&bad, "  ")]).unwrap_err();
+        assert_eq!(err, FallbackChainError::EmptyStepModel { index: 0 });
+        assert!(err.to_string().contains('0'), "{err}");
+
+        let err =
+            FallbackLlmAdapter::from_steps(vec![step(&good, "m1"), step(&bad, "")]).unwrap_err();
+        assert_eq!(err, FallbackChainError::EmptyStepModel { index: 1 });
+    }
+
+    #[test]
+    fn a_step_debug_names_the_provider_and_the_model() {
+        let kimi = provider("kimi");
+        let rendered = format!("{:?}", step(&kimi, "kimi-k2"));
+        assert!(rendered.contains("kimi"), "{rendered}");
+        assert!(rendered.contains("kimi-k2"), "{rendered}");
+    }
+
+    /// D-10: a refusal short-circuits by default; hop 2 is never called.
+    #[tokio::test]
+    async fn refusal_stops_by_default() {
+        let first = failing("anthropic", refusal("anthropic", "m1"));
+        let second = provider("kimi");
+        let adapter =
+            FallbackLlmAdapter::from_steps(vec![step(&first, "m1"), step(&second, "m2")]).unwrap();
+
+        let err = adapter.generate(request()).await.unwrap_err();
+
+        assert!(matches!(err, LlmError::Refusal { .. }), "{err:?}");
+        assert_eq!(second.call_count(), 0, "a refusal must not hop by default");
+
+        let stream_err = adapter.generate_stream(request()).await.err().unwrap();
+        assert!(
+            matches!(stream_err, LlmError::Refusal { .. }),
+            "{stream_err:?}"
+        );
+        assert_eq!(second.call_count(), 0);
+    }
+
+    /// D-10: with the opt-in, a refusal (and only a refusal) tries the next step.
+    #[tokio::test]
+    async fn hop_on_refusal_tries_the_next_step() {
+        let first = failing("anthropic", refusal("anthropic", "m1"));
+        let second = provider("kimi");
+        let adapter = FallbackLlmAdapter::from_steps(vec![step(&first, "m1"), step(&second, "m2")])
+            .unwrap()
+            .hop_on_refusal(true);
+
+        let response = adapter.generate(request()).await.unwrap();
+
+        assert_eq!(second.call_count(), 1);
+        assert_eq!(served_by(&response), Some("kimi"));
+        assert_eq!(served_model(&response), Some("m2"));
+
+        // Setting it back off restores the default.
+        let off = FallbackLlmAdapter::from_steps(vec![step(&first, "m1"), step(&second, "m2")])
+            .unwrap()
+            .hop_on_refusal(true)
+            .hop_on_refusal(false);
+        assert!(matches!(
+            off.generate(request()).await,
+            Err(LlmError::Refusal { .. })
+        ));
+    }
+
+    /// With the opt-in on, every other `Permanent` error still short-circuits.
+    #[tokio::test]
+    async fn hop_on_refusal_does_not_hop_past_other_permanent_errors() {
+        let first = failing(
+            "anthropic",
+            LlmError::AuthenticationError("bad key".to_string()),
+        );
+        let second = provider("kimi");
+        let adapter = FallbackLlmAdapter::from_steps(vec![step(&first, "m1"), step(&second, "m2")])
+            .unwrap()
+            .hop_on_refusal(true);
+
+        let err = adapter.generate(request()).await.unwrap_err();
+
+        assert!(matches!(err, LlmError::AuthenticationError(_)), "{err:?}");
+        assert_eq!(second.call_count(), 0);
+    }
+
+    /// With the opt-in, an exhausted chain lists every refusal and ends in `AllProvidersFailed`.
+    #[tokio::test]
+    async fn hop_on_refusal_exhaustion_lists_every_refusal() {
+        let first = failing("anthropic", refusal("anthropic", "m1"));
+        let second = failing("kimi", refusal("kimi", "m2"));
+        let adapter = FallbackLlmAdapter::from_steps(vec![step(&first, "m1"), step(&second, "m2")])
+            .unwrap()
+            .hop_on_refusal(true);
+
+        let err = adapter.generate(request()).await.unwrap_err();
+
+        let LlmError::AllProvidersFailed { attempts, last } = &err else {
+            panic!("expected AllProvidersFailed, got {err:?}");
+        };
+        let names: Vec<&str> = attempts.iter().map(|(name, _)| name.as_str()).collect();
+        assert_eq!(names, ["anthropic", "kimi"]);
+        assert!(matches!(**last, LlmError::Refusal { .. }));
+    }
+
+    /// The streaming path honours the opt-in the same way.
+    #[tokio::test]
+    async fn hop_on_refusal_applies_to_the_stream() {
+        let first = failing("anthropic", refusal("anthropic", "m1"));
+        let second = MockLlmAdapter::new()
+            .with_provider_name("kimi")
+            .with_stream_items(vec![Ok("ok".to_string())]);
+        let adapter = FallbackLlmAdapter::from_steps(vec![step(&first, "m1"), step(&second, "m2")])
+            .unwrap()
+            .hop_on_refusal(true);
+
+        let items = collect(adapter.generate_stream(request()).await.unwrap()).await;
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(sent_models(&second), ["m2"]);
+    }
+
+    /// D-00h: a 429 on hop 1 gates `(hop-1 provider, hop-1 model)` and nothing else: not the
+    /// request's model, not hop 2's model, not hop 2's provider.
+    #[tokio::test(start_paused = true)]
+    async fn cadence_is_keyed_on_each_steps_model() {
+        let first = always("openai", explicit_429(Duration::from_secs(120)));
+        let second = provider_timed("anthropic");
+        let (wiring, port) = pacing(|| 0.999, Duration::from_secs(60));
+        let adapter = FallbackLlmAdapter::from_steps(vec![
+            timed_step(&first, "m1"),
+            timed_step(&second, "m2"),
+        ])
+        .unwrap()
+        .with_cadence(&wiring);
+
+        let response = adapter.generate(request()).await.unwrap();
+
+        assert_eq!(served_by(&response), Some("anthropic"));
+        assert_eq!(served_model(&response), Some("m2"));
+        let gate = |provider: &'static str, model: &'static str| {
+            let port = port.clone();
+            async move { port.gate(&CadenceKey::new(provider, model)).await.unwrap() }
+        };
+        assert_eq!(gate("openai", "m1").await.wait(), Duration::from_secs(120));
+        assert!(
+            gate("openai", "mock-model").await.is_clear(),
+            "the request's model must not key hop 1"
+        );
+        assert!(gate("openai", "m2").await.is_clear());
+        assert!(gate("anthropic", "m2").await.is_clear());
+        assert!(gate("anthropic", "m1").await.is_clear());
+    }
+
+    /// D-00h: `pace_hop` reads the hop's own gate. Hop 1's 429 gate is `(openai, m1)`; had the
+    /// chain read `(openai, request-model)` it would see a clear gate and hop instead of pacing.
+    #[tokio::test(start_paused = true)]
+    async fn a_429_is_paced_on_the_hops_own_model() {
+        let first = scripted(
+            "openai",
+            vec![
+                MockScriptEntry::Error(explicit_429(Duration::from_secs(7))),
+                answer("openai"),
+            ],
+        );
+        let second = provider_timed("anthropic");
+        let (wiring, _port) = pacing(|| 0.999, Duration::from_secs(60));
+        let adapter = FallbackLlmAdapter::from_steps(vec![
+            timed_step(&first, "m1"),
+            timed_step(&second, "m2"),
+        ])
+        .unwrap()
+        .with_cadence(&wiring);
+
+        let response = adapter.generate(request()).await.unwrap();
+
+        assert_eq!(served_by(&response), Some("openai"));
+        assert_eq!(served_model(&response), Some("m1"));
+        assert_eq!(first.call_count(), 2, "paced on the same hop, not hopped");
+        assert_eq!(second.call_count(), 0);
+        assert_eq!(
+            first
+                .inner
+                .requests()
+                .iter()
+                .map(|request| request.model.as_str())
+                .collect::<Vec<_>>(),
+            ["m1", "m1"]
+        );
+    }
+
+    /// The chain's profile is the intersection of each step's profile for that step's model.
+    #[test]
+    fn from_steps_model_profile_uses_each_steps_own_model() {
+        let m1 = ModelProfile::new().with_temperature(ParamSupport::Range(0.0, 2.0));
+        let m2 = ModelProfile::new().with_temperature(ParamSupport::Fixed(1.0));
+        let first = Arc::new(StubProfile::new("openai", "m1", Some(m1)));
+        let second = Arc::new(StubProfile::new("anthropic", "m2", Some(m2)));
+        let adapter = FallbackLlmAdapter::from_steps(vec![
+            FallbackStep::new(first.clone(), "m1"),
+            FallbackStep::new(second.clone(), "m2"),
+        ])
+        .unwrap();
+
+        // The argument is the request's model; a steps chain ignores it.
+        let profile = adapter.model_profile("whatever-the-request-says").unwrap();
+
+        assert_eq!(profile.temperature, ParamSupport::Fixed(1.0));
+        assert_eq!(first.asked(), ["m1"]);
+        assert_eq!(second.asked(), ["m2"]);
     }
 }

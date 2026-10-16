@@ -2755,13 +2755,11 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 .to_string()
         }
 
-        /// Stands in for `crate::conformance::cases::streaming_usage_equals_non_streaming_usage`
-        /// (D-19, plan 31-04): Anthropic's event-accumulation wire shape (usage split across
-        /// `message_start`/`message_delta`, no `[DONE]` sentinel) diverges too far from
-        /// `ConformanceFixture`'s single-`stream_body()`-string assumption to instantiate the
-        /// shared macro, so this test asserts the identical three properties by hand: exactly
-        /// one chunk carries a finish reason, that SAME chunk is the only one carrying usage,
-        /// and its usage equals the non-streaming path's `LlmResponse.usage` field-for-field.
+        /// Predates Anthropic's place in the shared suite (plan 50-15 added the fixture, whose
+        /// `streaming_usage_equals_non_streaming_usage` case now asserts the same three
+        /// properties). Kept as the pin on the cached-prompt Sonnet fixture: exactly one chunk
+        /// carries a finish reason, that SAME chunk is the only one carrying usage, and its usage
+        /// equals the non-streaming path's `LlmResponse.usage` field-for-field.
         #[tokio::test]
         async fn message_stop_is_the_only_usage_bearing_chunk_and_equals_the_non_streaming_usage() {
             let mut non_stream_server = Server::new_async().await;
@@ -2859,6 +2857,103 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 .expect("stream must still end with a message_stop terminal chunk");
             assert_eq!(terminal.usage, None);
         }
+    }
+
+    // ── Shared conformance suite (PARITY-07, plan 50-15) ──
+    //
+    // Anthropic joins the suite every other adapter already answers. Its Messages API framing
+    // (`content[]` blocks; usage split across `message_start` and `message_delta` and no `[DONE]`
+    // sentinel) is carried by `Wire::Anthropic`, whose default bodies this fixture inherits for
+    // every case except the three below. Nested in its own module so every generated test's full
+    // path contains "conformance" (`cargo test --lib conformance` selects it).
+    mod conformance_suite {
+        use super::*;
+        use serde_json::json;
+
+        struct AnthropicFixture;
+
+        impl crate::conformance::ConformanceFixture for AnthropicFixture {
+            const WIRE: crate::conformance::Wire = crate::conformance::Wire::Anthropic;
+
+            fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
+                let mut config = AnthropicConfig::new(
+                    "test-key".to_string(),
+                    base_url.to_string(),
+                    ANTHROPIC_DEFAULT_MODEL.to_string(),
+                    4096,
+                );
+                // The suite measures one attempt per call (the status cases would otherwise sleep
+                // through this adapter's retry back-off), like the OpenAI fixture's `max_retries: 0`.
+                config.max_retries = 0;
+                config.timeout_seconds = 5;
+                Arc::new(AnthropicAdapter::new(config).expect("test config must build"))
+            }
+
+            fn success_body() -> String {
+                // The usage object is the full real shape (cache read, cache write and thinking
+                // counts) so the D-19 stream-versus-buffered case compares every sub-count.
+                // `input_tokens` 85 + cache read 512 + cache write 128 = prompt 725.
+                json!({
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": ANTHROPIC_DEFAULT_MODEL,
+                    "content": [{"type": "text", "text": "Hi there"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": null,
+                    "usage": {
+                        "input_tokens": 85,
+                        "cache_creation_input_tokens": 128,
+                        "cache_read_input_tokens": 512,
+                        "output_tokens": 40,
+                        "output_tokens_details": {"thinking_tokens": 0}
+                    }
+                })
+                .to_string()
+            }
+
+            fn stream_body() -> String {
+                // D-19: `message_start` carries the input and cache figures and `message_delta`
+                // the output and thinking figures; merged at `message_stop` they equal
+                // `success_body()`'s usage field-for-field.
+                concat!(
+                    "event: message_start\n",
+                    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",",
+                    "\"role\":\"assistant\",\"model\":\"claude-haiku-5-5\",\"content\":[],\"stop_reason\":null,",
+                    "\"stop_sequence\":null,\"usage\":{\"input_tokens\":85,\"cache_creation_input_tokens\":128,",
+                    "\"cache_read_input_tokens\":512,\"output_tokens\":1}}}\n\n",
+                    "event: content_block_delta\n",
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hel\"}}\n\n",
+                    "event: content_block_delta\n",
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"lo \"}}\n\n",
+                    "event: content_block_delta\n",
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"world\"}}\n\n",
+                    "event: message_delta\n",
+                    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},",
+                    "\"usage\":{\"output_tokens\":40,\"output_tokens_details\":{\"thinking_tokens\":0}}}\n\n",
+                    "event: message_stop\n",
+                    "data: {\"type\":\"message_stop\"}\n\n",
+                )
+                .to_string()
+            }
+
+            // Anthropic's stream parser skips an unparsable event with a `warn!` naming only its
+            // bounded type (`anthropic_stream_skips_a_malformed_event_and_keeps_going`), so the
+            // after-the-first-chunk case asserts that documented alternative.
+            fn malformed_frame() -> crate::conformance::MalformedFrame {
+                crate::conformance::MalformedFrame::SkippedWithWarning
+            }
+
+            fn error_body(status: u16) -> String {
+                json!({
+                    "type": "error",
+                    "error": {"type": "api_error", "message": format!("mock error for status {status}")}
+                })
+                .to_string()
+            }
+        }
+
+        crate::llm_conformance_suite!(AnthropicFixture);
     }
 
     /// Refusals, stop reasons, thinking text and the stream's real stop reason (plan 50-13,

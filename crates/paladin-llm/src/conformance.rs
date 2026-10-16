@@ -41,21 +41,79 @@ use crate::redaction::RESPONSE_EXCERPT_CHAR_BUDGET;
 
 /// Which response-wire shape a [`ConformanceFixture`]'s adapter speaks.
 ///
-/// Exactly two shapes exist in this crate today (26-PATTERNS.md): the OpenAI-style
-/// `choices[].message.content` / `choices[].delta.content` framing every `CompatEngine`-based
-/// preset speaks (terminated by a `data: [DONE]` sentinel), and Gemini's bespoke
-/// `candidates[].content.parts[].text` framing (which has no `[DONE]` sentinel -- the stream
-/// simply ends when the body ends). Recorded on the fixture for documentation; the suite's cases
-/// themselves do not currently branch on it -- every case is expressed generically against
-/// [`LlmPort`], with each fixture supplying wire-correct bodies.
+/// Three shapes exist in this crate: the OpenAI-style `choices[].message.content` /
+/// `choices[].delta.content` framing every `CompatEngine`-based preset (and the OpenAI and
+/// DeepSeek adapters) speaks, terminated by a `data: [DONE]` sentinel; Gemini's bespoke
+/// `candidates[].content.parts[].text` framing, which has no `[DONE]` sentinel (the stream simply
+/// ends when the body ends); and Anthropic's Messages API (`content[]` blocks; an SSE stream of
+/// `message_start`, `content_block_delta`, `message_delta` and `message_stop` events).
+///
+/// Phase 50 plan 50-15: the cases branch on it for the bodies a fixture does not override (the
+/// empty-completion, refusal and usage bodies, and where a parameter sits on the wire), so a
+/// fixture only overrides a body when its vendor genuinely differs from its wire's default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // documentation-only today (see doc comment above); no case currently branches on it
 pub enum Wire {
-    /// OpenAI-compatible `choices[]` framing (openai_compatible, ollama, and every other
-    /// `CompatEngine`-based preset).
+    /// OpenAI-compatible `choices[]` framing (openai, deepseek, openai_compatible, ollama, and
+    /// every other `CompatEngine`-based preset).
     OpenAiChat,
     /// Gemini's bespoke `candidates[]` framing.
     Gemini,
+    /// Anthropic's Messages API framing (`content[]` blocks, `event:`/`data:` SSE events ending
+    /// at `message_stop`).
+    Anthropic,
+}
+
+/// How a fixture's vendor signals that the model declined to answer (plan 50-15, D-09).
+///
+/// Every fixture is measured by `refusal_is_typed_and_permanent`; a vendor with no refusal signal
+/// does not skip the case, it states the documented alternative shape. Each variant carries a
+/// complete non-streaming response body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefusalShape {
+    /// The vendor has a typed refusal signal (OpenAI-chat `message.refusal`, Anthropic
+    /// `stop_reason: refusal`): the adapter must return [`LlmError::Refusal`].
+    Typed(String),
+    /// The vendor has no refusal signal, only a content-filter finish (Gemini `SAFETY`): the
+    /// adapter must return `Ok` with `FinishReason::ContentFilter` and no text.
+    ContentFilterOnly(String),
+}
+
+/// What a fixture's adapter does with an unparsable `data:` frame that arrives after valid ones
+/// (plan 50-15; asserted by `stream_error_after_the_first_chunk`).
+///
+/// Never a reason to skip the case: both variants are asserted, each against the content the valid
+/// frames carried.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MalformedFrame {
+    /// The frame surfaces as a typed [`LlmError`] on the stream (every adapter but Anthropic).
+    Error,
+    /// The frame is logged by event type and skipped, and the stream finishes normally
+    /// (Anthropic: its streaming reference tells clients to tolerate event types they do not
+    /// know, so one unparsable event does not end an otherwise complete response; the adapter
+    /// warns instead of skipping silently, plan 50-13).
+    SkippedWithWarning,
+}
+
+/// The usage figures a fixture's [`ConformanceFixture::usage_body`] must map to.
+///
+/// `None` in a sub-count means the vendor does not report that field. `total` is
+/// `prompt + completion`: `TokenUsage` derives `total_tokens` that way for every adapter (D-02,
+/// ADR-0061 era decision, WINDOWS row 74), so the suite asserts the invariant rather than a vendor
+/// figure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpectedUsage {
+    /// Expected `prompt_tokens` (cache read and write tokens included).
+    pub prompt: u32,
+    /// Expected `completion_tokens` (reasoning tokens included).
+    pub completion: u32,
+    /// Expected `cache_read_tokens`.
+    pub cache_read: Option<u32>,
+    /// Expected `cache_write_tokens`.
+    pub cache_write: Option<u32>,
+    /// Expected `reasoning_tokens`.
+    pub reasoning: Option<u32>,
+    /// Expected `total_tokens`; always `prompt + completion`.
+    pub total: u32,
 }
 
 /// One adapter's real-body conformance fixture (D-31).
@@ -66,8 +124,7 @@ pub enum Wire {
 /// synthetic ones invented for this suite (26-PATTERNS.md "No Analog Found": "use the per-adapter
 /// test modules only as the source of *case content*").
 pub trait ConformanceFixture {
-    /// The wire shape this fixture's adapter speaks (documentation only -- see [`Wire`]).
-    #[allow(dead_code)]
+    /// The wire shape this fixture's adapter speaks; the default bodies below branch on it.
     const WIRE: Wire;
 
     /// Build a live adapter instance pointed at `base_url` (a `mockito` server's URL).
@@ -91,6 +148,252 @@ pub trait ConformanceFixture {
     /// credential-redaction case constructs its own body independently; see
     /// [`cases::credential_never_appears_in_a_rendered_error`]).
     fn error_body(status: u16) -> String;
+
+    /// What the adapter does with an unparsable frame after valid ones; see [`MalformedFrame`].
+    fn malformed_frame() -> MalformedFrame {
+        MalformedFrame::Error
+    }
+
+    /// The API key the adapter built by [`Self::adapter`] is configured with. The refusal case
+    /// plants it in the vendor's refusal text and asserts it never reaches the error's `detail`,
+    /// so a fixture whose adapter uses a different key must override this (Ollama's fixed
+    /// placeholder), or the case fails rather than passing vacuously.
+    fn api_key() -> &'static str {
+        "test-key"
+    }
+
+    /// A non-streaming body whose model finished `stop`-equivalently with no text at all. The
+    /// adapter must answer [`LlmError::EmptyCompletion`] (D-11a), never an `Ok` empty string.
+    fn empty_stop_body() -> String {
+        wire_defaults::empty_stop_body(Self::WIRE)
+    }
+
+    /// The wire's normal stream framing with zero text deltas and a `stop`-equivalent terminal
+    /// (`[DONE]`-terminated chat chunks; Anthropic `message_stop` after `end_turn`; Gemini's last
+    /// chunk with `STOP`). `generate_stream` must end with [`LlmError::EmptyCompletion`] (D-11a).
+    fn empty_stop_stream_body() -> String {
+        wire_defaults::empty_stop_stream_body(Self::WIRE)
+    }
+
+    /// How this vendor signals a refusal, as a complete non-streaming body. `secret` is the
+    /// adapter's own API key ([`Self::api_key`]); it is planted in the vendor's refusal text so
+    /// the case can prove the redaction reaches `detail`.
+    fn refusal_shape(secret: &str) -> RefusalShape {
+        wire_defaults::refusal_shape(Self::WIRE, secret)
+    }
+
+    /// A non-streaming success body whose usage object reports every sub-count this vendor
+    /// reports (cache read, cache write, reasoning), with figures that differ from each other so
+    /// a field mapped from the wrong source is caught.
+    fn usage_body() -> String {
+        wire_defaults::usage_body(Self::WIRE)
+    }
+
+    /// What [`Self::usage_body`] must map to; `None` for a field the vendor does not report.
+    fn expected_usage() -> ExpectedUsage {
+        wire_defaults::expected_usage(Self::WIRE)
+    }
+}
+
+/// Wire-default response bodies for the cases added in Phase 50 plan 50-15, shaped from the
+/// adapters' own tests (real vendor shapes, not invented ones). A fixture overrides a body only
+/// where its vendor genuinely differs from its wire's default.
+pub mod wire_defaults {
+    use super::{ExpectedUsage, RefusalShape, Wire};
+    use serde_json::json;
+
+    /// A chat-completions body with `message` and `finish_reason`.
+    fn chat_body(message: serde_json::Value, finish_reason: &str) -> String {
+        json!({
+            "id": "cmpl-1",
+            "model": "conformance-model",
+            "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5}
+        })
+        .to_string()
+    }
+
+    /// An Anthropic Messages body.
+    fn anthropic_body(
+        content: serde_json::Value,
+        stop_reason: &str,
+        extra: serde_json::Value,
+    ) -> String {
+        let mut body = json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "conformance-model",
+            "content": content,
+            "stop_reason": stop_reason,
+            "stop_sequence": null,
+            "usage": {"input_tokens": 5, "output_tokens": 0}
+        });
+        if let (Some(target), Some(extra)) = (body.as_object_mut(), extra.as_object()) {
+            for (key, value) in extra {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+        body.to_string()
+    }
+
+    /// Gemini's `usageMetadata` for the empty and refusal bodies.
+    fn gemini_usage() -> serde_json::Value {
+        json!({"promptTokenCount": 5, "candidatesTokenCount": 0, "totalTokenCount": 5})
+    }
+
+    /// See [`super::ConformanceFixture::empty_stop_body`].
+    pub fn empty_stop_body(wire: Wire) -> String {
+        match wire {
+            Wire::OpenAiChat => chat_body(json!({"role": "assistant", "content": ""}), "stop"),
+            Wire::Anthropic => anthropic_body(json!([]), "end_turn", json!({})),
+            Wire::Gemini => json!({
+                "candidates": [{
+                    "content": {"role": "model", "parts": [{"text": ""}]},
+                    "finishReason": "STOP"
+                }],
+                "usageMetadata": gemini_usage()
+            })
+            .to_string(),
+        }
+    }
+
+    /// See [`super::ConformanceFixture::empty_stop_stream_body`].
+    pub fn empty_stop_stream_body(wire: Wire) -> String {
+        match wire {
+            Wire::OpenAiChat => concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":0,\"total_tokens\":5}}\n\n",
+                "data: [DONE]\n\n",
+            )
+            .to_string(),
+            Wire::Anthropic => concat!(
+                "event: message_start\n",
+                "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"conformance-model\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+                "event: message_delta\n",
+                "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":0}}\n\n",
+                "event: message_stop\n",
+                "data: {\"type\":\"message_stop\"}\n\n",
+            )
+            .to_string(),
+            Wire::Gemini => concat!(
+                "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"\"}],\"role\":\"model\"},",
+                "\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":5,",
+                "\"candidatesTokenCount\":0,\"totalTokenCount\":5}}\n\n",
+            )
+            .to_string(),
+        }
+    }
+
+    /// See [`super::ConformanceFixture::refusal_shape`].
+    pub fn refusal_shape(wire: Wire, secret: &str) -> RefusalShape {
+        match wire {
+            Wire::OpenAiChat => RefusalShape::Typed(chat_body(
+                json!({
+                    "role": "assistant",
+                    "content": null,
+                    "refusal": format!("I can't help with that request (ref {secret}).")
+                }),
+                "stop",
+            )),
+            Wire::Anthropic => RefusalShape::Typed(anthropic_body(
+                json!([]),
+                "refusal",
+                json!({"stop_details": {
+                    "type": "refusal",
+                    "category": "cyber",
+                    "explanation": format!("This request seeks malware (ref {secret}).")
+                }}),
+            )),
+            Wire::Gemini => RefusalShape::ContentFilterOnly(
+                json!({
+                    "candidates": [{
+                        "content": {"role": "model", "parts": []},
+                        "finishReason": "SAFETY"
+                    }],
+                    "usageMetadata": gemini_usage()
+                })
+                .to_string(),
+            ),
+        }
+    }
+
+    /// See [`super::ConformanceFixture::usage_body`].
+    pub fn usage_body(wire: Wire) -> String {
+        match wire {
+            // The OpenAI-chat usage object: cached tokens and reasoning tokens in the two
+            // `*_details` objects. No cache-write figure: OpenAI does not report one.
+            Wire::OpenAiChat => json!({
+                "id": "cmpl-1",
+                "model": "conformance-model",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi there"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 40,
+                    "total_tokens": 140,
+                    "prompt_tokens_details": {"cached_tokens": 30},
+                    "completion_tokens_details": {"reasoning_tokens": 15}
+                }
+            })
+            .to_string(),
+            // `input_tokens` excludes the two cache counts, so the adapter's prompt is
+            // 50 + 30 + 20 = 100.
+            Wire::Anthropic => json!({
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "conformance-model",
+                "content": [{"type": "text", "text": "Hi there"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": 50,
+                    "cache_creation_input_tokens": 20,
+                    "cache_read_input_tokens": 30,
+                    "output_tokens": 40,
+                    "output_tokens_details": {"thinking_tokens": 15}
+                }
+            })
+            .to_string(),
+            // `candidatesTokenCount` excludes thoughts, so the adapter's completion is
+            // 25 + 15 = 40; Gemini reports no cache-write figure.
+            Wire::Gemini => json!({
+                "candidates": [{
+                    "content": {"role": "model", "parts": [{"text": "Hi there"}]},
+                    "finishReason": "STOP"
+                }],
+                "usageMetadata": {
+                    "promptTokenCount": 100,
+                    "candidatesTokenCount": 25,
+                    "cachedContentTokenCount": 30,
+                    "thoughtsTokenCount": 15,
+                    "totalTokenCount": 140
+                }
+            })
+            .to_string(),
+        }
+    }
+
+    /// See [`super::ConformanceFixture::expected_usage`].
+    pub fn expected_usage(wire: Wire) -> ExpectedUsage {
+        let (cache_read, cache_write, reasoning) = match wire {
+            Wire::OpenAiChat | Wire::Gemini => (Some(30), None, Some(15)),
+            Wire::Anthropic => (Some(30), Some(20), Some(15)),
+        };
+        ExpectedUsage {
+            prompt: 100,
+            completion: 40,
+            cache_read,
+            cache_write,
+            reasoning,
+            total: 140,
+        }
+    }
 }
 
 /// Build the single [`LlmRequest`] every case in this suite sends.
@@ -207,16 +510,18 @@ pub mod cases {
         );
     }
 
-    /// Case: a malformed frame arriving AFTER valid ones surfaces a typed [`LlmError`] without
-    /// erasing the content already assembled from the valid frames that preceded it (the
-    /// first-chunk preservation rule Phase 25's D-25 established for the fallback chain, applied
-    /// here to a single adapter's own stream).
+    /// Case: a malformed frame arriving AFTER valid ones never erases the content already
+    /// assembled from the valid frames that preceded it (the first-chunk preservation rule Phase
+    /// 25's D-25 established for the fallback chain, applied here to a single adapter's own
+    /// stream). What the frame itself becomes is the fixture's [`MalformedFrame`]: a typed
+    /// [`LlmError`] (the default) or, for Anthropic, a warned skip with the stream finishing
+    /// normally.
     pub async fn stream_error_after_the_first_chunk<F: ConformanceFixture>() {
         let mut server = Server::new_async().await;
-        // Deliberately malformed JSON appended after a fully valid stream body: every wire
-        // parser in this crate looks for `data: `-prefixed lines and calls `serde_json::from_str`
-        // on the remainder, so an unparseable trailing line produces a typed parse error
-        // regardless of which of the two `Wire` shapes is in play.
+        // Deliberately malformed JSON appended after a fully valid stream body: every wire parser
+        // in this crate looks for `data: `-prefixed lines and calls `serde_json::from_str` on the
+        // remainder, so an unparseable trailing line is seen by each of them regardless of which
+        // `Wire` shape is in play.
         let body = format!("{}data: {{not valid json\n\n", F::stream_body());
         server
             .mock("POST", Matcher::Any)
@@ -235,9 +540,13 @@ pub mod cases {
 
         let mut assembled = String::new();
         let mut saw_error = false;
+        let mut saw_terminal = false;
         while let Some(item) = stream.next().await {
             match item {
-                Ok(chunk) => assembled.push_str(&chunk.delta),
+                Ok(chunk) => {
+                    assembled.push_str(&chunk.delta);
+                    saw_terminal |= chunk.finish_reason.is_some();
+                }
                 Err(_typed_llm_error) => {
                     saw_error = true;
                     break;
@@ -245,10 +554,22 @@ pub mod cases {
             }
         }
 
-        assert!(
-            saw_error,
-            "a malformed frame arriving after valid ones must surface as a typed LlmError"
-        );
+        match F::malformed_frame() {
+            MalformedFrame::Error => assert!(
+                saw_error,
+                "a malformed frame arriving after valid ones must surface as a typed LlmError"
+            ),
+            MalformedFrame::SkippedWithWarning => {
+                assert!(
+                    !saw_error,
+                    "a fixture declaring SkippedWithWarning must finish the stream without an error"
+                );
+                assert!(
+                    saw_terminal,
+                    "the terminal chunk must still arrive when an unparsable frame is skipped"
+                );
+            }
+        }
         assert_eq!(
             assembled, "Hello world",
             "content already assembled from valid frames must survive a later malformed frame"
@@ -333,13 +654,15 @@ pub mod cases {
     /// fails the case. [`transience_by_value`]'s 429 row deliberately keeps `expect_at_least(1)`:
     /// that case measures classification, this one measures attempt count.
     ///
-    /// **Coverage notes.** The Anthropic adapter is not instantiated with
-    /// [`llm_conformance_suite!`]; its once-only proof is the hand-written
-    /// `anthropic_429_is_surfaced_once_with_its_retry_delay_and_four_dimensions` (plan 43-03). The OpenAI fixture is built
-    /// with `max_retries: 0`, so the "exactly once" half is vacuous for it here; its once-only
-    /// proof with `max_retries: 3` is `openai_429_is_surfaced_on_the_first_attempt` (plan 43-01),
-    /// and `openai_429_carries_retry_after_and_ratelimit_dimensions` (plan 43-03) covers the
-    /// header carriage. The delay and classification halves still run for it.
+    /// **Coverage notes.** Anthropic is instantiated like the rest (plan 50-15); its hand-written
+    /// `anthropic_429_is_surfaced_once_with_its_retry_delay_and_four_dimensions` (plan 43-03) stays
+    /// because it also pins the four rate-limit dimensions and the no-sleep bound, which this
+    /// case does not. The OpenAI fixture is built with `max_retries: 0`, so the "exactly once" half
+    /// is vacuous for it here; its once-only proof with `max_retries: 3` is
+    /// `openai_429_is_surfaced_on_the_first_attempt` (plan 43-01), and
+    /// `openai_429_carries_retry_after_and_ratelimit_dimensions` (plan 43-03) covers the header
+    /// carriage. The delay and classification halves still run for it. The Anthropic fixture has
+    /// the same `max_retries: 0` shape.
     pub async fn rate_limit_is_surfaced_once_with_its_retry_delay<F: ConformanceFixture>() {
         let mut server = Server::new_async().await;
         let mock = server
@@ -508,10 +831,22 @@ pub mod cases {
     /// Case: a redirect to a different host is never followed while carrying a credential header
     /// -- proven by asserting the redirect TARGET is never contacted at all
     /// (security.instructions.md; T-26-46).
+    ///
+    /// **Detection power (plan 50-15, the same repair plan 50-09 made).** The redirect is a `307`
+    /// and the target mocks BOTH `POST` and `GET` with `expect(0)`. The earlier shape answered
+    /// `302` with a `POST`-only target mock; a client that followed a `302` re-sent the request
+    /// as a `GET` (the method change `302` permits), which that mock never matched, so a followed
+    /// redirect passed unnoticed. A `307` keeps the method, and the `GET` mock catches a client
+    /// that downgrades it anyway.
     pub async fn redirect_is_not_followed_with_a_credential_header<F: ConformanceFixture>() {
         let mut redirect_target = Server::new_async().await;
-        let target_mock = redirect_target
+        let post_mock = redirect_target
             .mock("POST", Matcher::Any)
+            .expect(0)
+            .create_async()
+            .await;
+        let get_mock = redirect_target
+            .mock("GET", Matcher::Any)
             .expect(0)
             .create_async()
             .await;
@@ -519,7 +854,7 @@ pub mod cases {
         let mut server = Server::new_async().await;
         server
             .mock("POST", Matcher::Any)
-            .with_status(302)
+            .with_status(307)
             .with_header(
                 "location",
                 &format!("{}/chat/completions", redirect_target.url()),
@@ -536,7 +871,8 @@ pub mod cases {
             result.is_err(),
             "a refused redirect must surface as an error, never a followed 2xx"
         );
-        target_mock.assert_async().await;
+        post_mock.assert_async().await;
+        get_mock.assert_async().await;
     }
 }
 

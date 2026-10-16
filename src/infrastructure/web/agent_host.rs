@@ -20,7 +20,7 @@ use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::user::UserRole;
 use paladin_llm::cadence::CadenceWiring;
 use paladin_llm::config::llm::LlmConfig;
-use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError};
+use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError, provider_names};
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
@@ -128,6 +128,9 @@ pub(crate) fn default_provider_name(settings: &Settings) -> String {
 /// streaming handles below -- so every priced call this agent makes, buffered or streamed,
 /// settles under this same ledger, regardless of which handle a caller reaches it through.
 ///
+/// Production builds go through [`build_agent`], which also carries the provider block's default
+/// temperature (D-02); this thin form (no block value) exists for the hermetic tests below.
+///
 /// `token_budget` is the operator's `agent_runtime.token_budget` (D-11, G12, ALLOW-05). It
 /// installs the ONE [`TokenBudget`] on the same shared service, so the agent loop of every
 /// config-defined and runtime-provisioned agent enforces the tighter of the operator's figure
@@ -136,12 +139,49 @@ pub(crate) fn default_provider_name(settings: &Settings) -> String {
 /// deployment with neither is unchanged. The operator's figure therefore now takes effect on
 /// the HTTP agent routes -- before Phase 42 only the preset path honoured it. The shared run
 /// engine's service is built elsewhere and runs Treasurer-only (plan 42-09).
+#[cfg(test)]
 pub(crate) async fn build_agent_with_llm(
     def: &AgentDefinition,
     llm: Arc<dyn LlmPort>,
     breaker: Arc<CircuitBreaker>,
     treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
     token_budget: TokenBudgetConfig,
+) -> Result<BuiltAgent, HostBuildError> {
+    build_agent_with_llm_and_block_temperature(
+        def,
+        llm,
+        breaker,
+        treasury_ledger,
+        token_budget,
+        None,
+    )
+    .await
+}
+
+/// A provider block's `default_temperature` and the YAML key that carries it, handed to the
+/// build as an explicit value (D-02).
+struct BlockTemperature {
+    /// The value from `llm.<provider>.default_temperature`.
+    value: f32,
+    /// The key that set it, named in a refusal (`llm.<provider>.default_temperature`).
+    key: String,
+}
+
+/// `build_agent_with_llm` plus the provider block's default temperature (D-02).
+///
+/// When the definition sets no `temperature` of its own and `block_temperature` is `Some`, the
+/// block's value is passed to [`PaladinBuilder::temperature`] -- an *expressed* value, judged
+/// against the model's profile exactly like one the agent wrote. A refusal that names the
+/// temperature then also names the YAML key that set it: `agents[<id>].temperature` or the
+/// block's `llm.<provider>.default_temperature`. An agent that sets none, under a block that sets
+/// none, expresses nothing and nothing is judged (ADR-0004 A1).
+async fn build_agent_with_llm_and_block_temperature(
+    def: &AgentDefinition,
+    llm: Arc<dyn LlmPort>,
+    breaker: Arc<CircuitBreaker>,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    token_budget: TokenBudgetConfig,
+    block_temperature: Option<BlockTemperature>,
 ) -> Result<BuiltAgent, HostBuildError> {
     // One execution service backs both the buffered and streaming handles
     // (`PaladinExecutionService` implements both `PaladinExecutorPort` and
@@ -161,9 +201,18 @@ pub(crate) async fn build_agent_with_llm(
         .name(&def.id)
         .system_prompt(&def.system_prompt)
         .model(&def.model);
-    if let Some(temperature) = def.temperature {
-        builder = builder.temperature(temperature);
-    }
+    // The agent's own value beats the block's default (D-13); either is explicit.
+    let temperature_key = match (def.temperature, &block_temperature) {
+        (Some(temperature), _) => {
+            builder = builder.temperature(temperature);
+            Some(format!("agents[{}].temperature", def.id))
+        }
+        (None, Some(block)) => {
+            builder = builder.temperature(block.value);
+            Some(block.key.clone())
+        }
+        (None, None) => None,
+    };
     if let Some(max_loops) = def.max_loops {
         builder = builder.max_loops(max_loops);
     }
@@ -176,10 +225,24 @@ pub(crate) async fn build_agent_with_llm(
         .await
         .map_err(|source| HostBuildError::Build {
             id: def.id.clone(),
-            source,
+            source: name_temperature_key(source, temperature_key.as_deref()),
         })?;
 
     Ok((paladin, executor, Some(streamer)))
+}
+
+/// Append the YAML key that set the temperature to a builder refusal that names the
+/// `temperature` parameter, so an operator knows which line of the configuration to change.
+/// Any other error, and a refusal when no temperature was expressed, passes through unchanged.
+fn name_temperature_key(error: PaladinError, key: Option<&str>) -> PaladinError {
+    match (error, key) {
+        (PaladinError::ConfigurationError(message), Some(key))
+            if message.contains("temperature") =>
+        {
+            PaladinError::ConfigurationError(format!("{message} (set by `{key}`)"))
+        }
+        (other, _) => other,
+    }
 }
 
 /// Build a `(Paladin, executor)` pair from a definition, resolving the provider via the
@@ -207,17 +270,51 @@ pub(crate) async fn build_agent(
     token_budget: TokenBudgetConfig,
     cadence: Option<&CadenceWiring>,
 ) -> Result<BuiltAgent, HostBuildError> {
-    let _ = llm_config;
     let provider = resolve_provider(def, default_provider);
+    // An absent `llm:` section is an empty one: no blocks, so every field resolves from the
+    // provider's environment variables exactly as the env-only `create(name)` did.
+    let empty = LlmConfig::default();
+    let config = llm_config.unwrap_or(&empty);
+    // D-12/D-13: the provider block, the agent's own provider and its own model, through the one
+    // public construction path. `def.timeout_seconds` is deliberately NOT consulted here: it is
+    // the per-agent execution timeout applied by the web layer (`register_built`), never the
+    // provider's HTTP client timeout, which only the block, the environment or the adapter's
+    // compiled default set (RESEARCH Pitfall 13).
     let llm = factory
-        .create(&provider)
+        .create_from_config(config, &provider, Some(&def.model))
         .map_err(|source| HostBuildError::Provider {
             id: def.id.clone(),
-            provider,
+            provider: provider.clone(),
             source,
         })?;
     let llm = compose_llm(llm, price_table, cadence);
-    build_agent_with_llm(def, llm, breaker, treasury_ledger, token_budget).await
+    let block_temperature = config
+        .get_provider_config(&provider)
+        .and_then(|block| block.default_temperature)
+        .map(|value| BlockTemperature {
+            value,
+            key: format!("llm.{}.default_temperature", yaml_provider_key(&provider)),
+        });
+    build_agent_with_llm_and_block_temperature(
+        def,
+        llm,
+        breaker,
+        treasury_ledger,
+        token_budget,
+        block_temperature,
+    )
+    .await
+}
+
+/// The key under `llm:` a provider's block lives at: the provider's own name, lower-cased, with
+/// the hyphenated generic provider spelled as the YAML key `openai-compatible` either way.
+fn yaml_provider_key(provider: &str) -> String {
+    let lower = provider.to_lowercase();
+    if lower == "openai_compatible" {
+        "openai-compatible".to_string()
+    } else {
+        lower
+    }
 }
 
 /// Insert a built agent into the registry, rejecting a duplicate id.
@@ -258,8 +355,10 @@ pub fn bind_address(settings: &Settings) -> String {
 /// This is a fast, key-free pre-flight check so misconfiguration fails at startup with a
 /// specific message rather than mid-build. It verifies, for every agent: non-empty `id`,
 /// `model`, and `system_prompt`; no duplicate ids; and that the resolved provider is one
-/// of the providers available in this build. It does **not** verify API keys — those are
-/// checked when the provider is actually created in `build_agent`.
+/// this build registers and has a usable credential, from the operator's `llm.<provider>` block
+/// or the provider's environment variable (`LlmProviderFactory::is_configured`). It does **not**
+/// construct an adapter or check that a key is *valid* — that happens when the provider is
+/// actually created in `build_agent`.
 ///
 /// # Errors
 ///
@@ -290,20 +389,52 @@ pub fn validate_config(settings: &Settings) -> Result<(), HostBuildError> {
         }
     }
 
-    // Pass 2 — provider availability. `list_available_providers` is gated on the
-    // presence of each provider's API key, so this also catches a missing key for the
-    // configured provider (the message lists what is available).
+    // Pass 2 — provider availability, judged by credential through
+    // `LlmProviderFactory::is_configured` over the operator's `llm:` section AND the
+    // environment, so a provider configured only in YAML passes (RESEARCH Pitfall 8) and one with
+    // neither a usable block key nor its environment variable fails here, naming the agent, the
+    // provider and the model, rather than mid-build.
     let default_provider = default_provider_name(settings);
-    let available = LlmProviderFactory::list_available_providers();
+    let llm = settings.llm.as_ref();
+    let registered = provider_names();
     for def in &settings.agents {
         let provider = resolve_provider(def, &default_provider);
-        if !available.iter().any(|p| p == &provider) {
+        if LlmProviderFactory::is_configured(llm, &provider) {
+            continue;
+        }
+        let canonical = provider.to_lowercase().replace('_', "-");
+        if !registered.iter().any(|name| *name == canonical) {
+            // Not a provider this build registers (a typo, or its feature is compiled out).
+            let available = registered
+                .iter()
+                .filter(|name| LlmProviderFactory::is_configured(llm, name))
+                .map(|name| (*name).to_string())
+                .collect();
             return Err(HostBuildError::UnknownProvider {
                 id: def.id.clone(),
                 provider,
-                available: available.clone(),
+                available,
             });
         }
+        // A registered provider with no usable credential: ask the factory for its own error,
+        // which names the provider, the model and the variable or key it looked for (never a
+        // value), and report it against this agent.
+        let empty = LlmConfig::default();
+        let source = match LlmProviderFactory::new().create_from_config(
+            llm.unwrap_or(&empty),
+            &provider,
+            Some(&def.model),
+        ) {
+            Err(source) => source,
+            // `is_configured` and construction disagree only on a field this pre-flight does not
+            // judge; construction in `build_agent` reports it, so do not fail early on a guess.
+            Ok(_) => continue,
+        };
+        return Err(HostBuildError::Provider {
+            id: def.id.clone(),
+            provider,
+            source,
+        });
     }
     Ok(())
 }

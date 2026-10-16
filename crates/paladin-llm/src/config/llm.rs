@@ -212,8 +212,10 @@ impl Default for LlmConfig {
 impl LlmConfig {
     /// Validate LLM configuration.
     ///
-    /// Checks that `default_provider` names a provider whose block is present. An empty
-    /// `api_key` is **not** an error: the key may come from the provider's environment
+    /// Checks that `default_provider` names a provider this crate recognises. Its block need
+    /// **not** be present: a provider configured only through its environment variables is built
+    /// by `LlmProviderFactory::create_from_config` with no block (D-13). An empty
+    /// `api_key` is likewise **not** an error: the key may come from the provider's environment
     /// variable (D-13), and construction reports one that is still missing.
     ///
     /// Returns `Err(String)` describing the first validation failure found.
@@ -236,9 +238,11 @@ impl LlmConfig {
                     // builds with (including combinations that compile out
                     // some of the nine config fields' matching adapter).
                     if is_recognised_provider_field_name(default) {
-                        return Err(format!(
-                            "Default provider is '{default}' but {default} config is not present"
-                        ));
+                        // A recognised provider with no block is valid: every field then
+                        // resolves from the provider's environment variables (D-13) through
+                        // `LlmProviderFactory::create_from_config`, and `is_configured`
+                        // reports a credential that is missing from both places.
+                        return Ok(());
                     }
                     return Err(format!(
                         "Invalid default provider: {default}. Must be one of: {}",
@@ -320,34 +324,25 @@ mod tests {
         assert!(config.anthropic.is_none());
     }
 
+    /// D-13 (plan 50-10): a recognised default provider with no block is valid -- its fields
+    /// resolve from the provider's environment variables, and a credential missing from both is
+    /// reported by `is_configured` and `create_from_config`, which name the provider, the model
+    /// and the variable. (Until Phase 50 this asserted the opposite.)
     #[test]
-    fn test_llm_config_validate_default_provider_must_be_configured() {
-        let config = LlmConfig {
-            default_provider: Some("openai".to_string()),
-            openai: None,
-            deepseek: None,
-            anthropic: None,
-            ..Default::default()
-        };
-        assert!(config.validate().is_err());
-
-        let config = LlmConfig {
-            default_provider: Some("deepseek".to_string()),
-            openai: None,
-            deepseek: None,
-            anthropic: None,
-            ..Default::default()
-        };
-        assert!(config.validate().is_err());
-
-        let config = LlmConfig {
-            default_provider: Some("anthropic".to_string()),
-            openai: None,
-            deepseek: None,
-            anthropic: None,
-            ..Default::default()
-        };
-        assert!(config.validate().is_err());
+    fn test_llm_config_validate_default_provider_block_is_optional() {
+        for name in ["openai", "deepseek", "anthropic", "openai_compatible"] {
+            let config = LlmConfig {
+                default_provider: Some(name.to_string()),
+                openai: None,
+                deepseek: None,
+                anthropic: None,
+                ..Default::default()
+            };
+            assert!(
+                config.validate().is_ok(),
+                "a default provider '{name}' with no block resolves from the environment"
+            );
+        }
     }
 
     #[test]

@@ -365,8 +365,12 @@ pub fn paladin_port_from_settings_with_cadence(
 
     let factory = LlmProviderFactory::new();
     let provider = default_provider_name(settings);
+    // D-12: the default provider's block, through the one public construction path. No model is
+    // passed: the run engine's model is the block's `default_model` (else the adapter's own
+    // default), which is exactly what the layering resolves for `None` (D-13).
+    let empty = LlmConfig::default();
     let llm = factory
-        .create(&provider)
+        .create_from_config(settings.llm.as_ref().unwrap_or(&empty), &provider, None)
         .map_err(|source| HostBuildError::Provider {
             id: "run-engine".to_string(),
             provider,
@@ -507,7 +511,8 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(chat_completion())
-            .expect(1)
+            // A runtime spec carries no `max_loops`, so the builder's default loop count applies.
+            .expect_at_least(1)
             .create_async()
             .await;
         let provisioner = FacadeProvisioner::new("deepseek", default_circuit_breaker())

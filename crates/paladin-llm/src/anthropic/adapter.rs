@@ -6,14 +6,13 @@
 //! max_tokens required, and different message structure.
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::{Stream, StreamExt};
 use reqwest::{
     Client,
     header::{CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::env;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
@@ -31,6 +30,7 @@ use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
     default_timeout_seconds, seeded, seeded_window,
 };
+use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
@@ -496,46 +496,54 @@ impl AnthropicAdapter {
 
     /// Parse Claude API response into LlmResponse.
     ///
-    /// Fails loud via [`detect_no_text_content`] instead of ever returning
-    /// `Ok` with empty content — an empty-string success is indistinguishable
-    /// from a valid empty answer to every downstream caller, and is exactly
-    /// what produced a 0-byte `PoC.t.sol` before this fix. Recovers ALL
-    /// text-bearing blocks via [`concat_text_blocks`] in array order, not
-    /// just the first, so a text block that follows a `thinking` block is no
-    /// longer silently dropped.
+    /// Every outcome is decided by the shared [`classify_completion`] guard (PARITY-05), after
+    /// the stop reason has been mapped by name (see [`map_stop_reason`]):
+    ///
+    /// - `stop_reason: "refusal"` is checked BEFORE emptiness (RESEARCH Pitfall 1). Anthropic
+    ///   reports a refusal as HTTP 200 with `content: []`, so an empty check first would report
+    ///   it as an empty completion with max-tokens advice. The refusal text is built from
+    ///   `stop_details` by [`refusal_text`] and reaches [`LlmError::Refusal`] through
+    ///   `diagnostic_excerpt` (redacted, then bounded).
+    /// - A response with no text on any other stop reason is [`LlmError::EmptyCompletion`] --
+    ///   an empty-string success would be indistinguishable from a valid empty answer to every
+    ///   downstream caller, and is exactly what produced a 0-byte `PoC.t.sol` before this
+    ///   guard existed. The error also names the content-block types the response carried.
+    ///
+    /// All text-bearing blocks are recovered in array order by [`concat_text_blocks`], not just
+    /// the first, so a text block that follows a `thinking` block is not dropped. The text of
+    /// the `thinking` blocks, in the same order, becomes [`LlmResponse::reasoning`] (D-11).
     fn parse_response(
         &self,
         request_id: Uuid,
         response: ClaudeResponse,
     ) -> Result<LlmResponse, LlmError> {
-        if let Some(err) =
-            detect_no_text_content(&response.content, response.stop_reason.as_deref())
-        {
-            return Err(err);
-        }
-
         let content = concat_text_blocks(&response.content);
+        let finish_reason = map_stop_reason(response.stop_reason.as_deref());
+        let refusal = refusal_text(
+            response.stop_reason.as_deref(),
+            response.stop_details.as_ref(),
+        );
 
-        let finish_reason = match response.stop_reason.as_deref() {
-            Some("end_turn") => FinishReason::Stop,
-            Some("max_tokens") => FinishReason::Length,
-            Some("stop_sequence") => FinishReason::Stop,
-            _ => FinishReason::Error("unknown".to_string()),
-        };
+        classify_completion(
+            ANTHROPIC_PROVIDER,
+            &response.model,
+            &content,
+            &finish_reason,
+            refusal.as_deref(),
+            &self.config.api_key,
+        )
+        .map_err(|err| with_block_census(err, &response.content, &self.config.api_key))?;
 
-        Ok(LlmResponse {
-            id: Uuid::new_v4(),
+        // `with_reasoning` stores blank text (every captured thinking block carries an empty
+        // `thinking` string) as `None`.
+        Ok(LlmResponse::new(
             request_id,
-            model: response.model,
+            response.model,
             content,
             finish_reason,
-            usage: map_claude_usage(&response.usage),
-            cost: None,
-            created_at: Utc::now(),
-            metadata: HashMap::new(),
-            function_call: None,
-            reasoning: None,
-        })
+            map_claude_usage(&response.usage),
+        )
+        .with_reasoning(concat_thinking_blocks(&response.content)))
     }
 
     /// Map a non-2xx Anthropic response to [`LlmError`] with no rate-limit headers.
@@ -750,6 +758,16 @@ impl LlmPort for AnthropicAdapter {
         Ok(response)
     }
 
+    /// Stream a completion.
+    ///
+    /// The stream's real stop reason and refusal details are held from `message_delta` and
+    /// applied on the terminal `message_stop` chunk (RESEARCH Pitfall 2), where the shared
+    /// [`classify_completion`] rule runs on the accumulated text. A refusal (which may arrive
+    /// after partial output) therefore ends the stream with `Err(`[`LlmError::Refusal`]`)`, and
+    /// a stream that carried no text ends with `Err(`[`LlmError::EmptyCompletion`]`)` (D-11a).
+    /// Chunks already yielded stay yielded: partial text and `thinking_delta` reasoning are not
+    /// withdrawn, only the terminal item becomes the typed error. A `thinking_delta` is yielded as
+    /// an empty-delta chunk carrying [`StreamingResponse::reasoning`], in wire order.
     async fn generate_stream(
         &self,
         request: LlmRequest,
@@ -798,6 +816,14 @@ impl LlmPort for AnthropicAdapter {
         // subsequent event (including `message_stop` itself) whenever a test
         // or a real transport delivered more than one frame per chunk.
         let mut held_usage: Option<ClaudeUsage> = None;
+        // The real stop reason and refusal details, held beside the usage until `message_stop`
+        // (RESEARCH Pitfall 2), the response model for naming it in an error, and the
+        // accumulator the shared guard classifies at the terminal chunk.
+        let mut held_stop_reason: Option<String> = None;
+        let mut held_stop_details: Option<AnthropicStopDetails> = None;
+        let mut model = claude_request.model.clone();
+        let mut completion = StreamCompletion::default();
+        let api_key = self.config.api_key.clone();
 
         let stream = response.bytes_stream().flat_map(move |chunk_result| {
             let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
@@ -814,19 +840,42 @@ impl LlmPort for AnthropicAdapter {
                         }
 
                         let Ok(event) = serde_json::from_str::<ClaudeStreamEvent>(json_str) else {
+                            // Never skipped silently: name the event type only, never its body
+                            // (it can echo a credential) and never serde's message (it can quote
+                            // the offending value).
+                            log::warn!(
+                                target: "paladin::anthropic",
+                                "skipping an unparsable stream event (type: {})",
+                                unparsable_event_type(json_str)
+                            );
                             continue;
                         };
 
                         match event.event_type.as_str() {
                             "content_block_delta" => {
-                                if let Some(text) = event.delta.and_then(|d| d.text) {
-                                    items.push(Ok(StreamingResponse::delta(text)));
+                                if let Some(delta) = event.delta {
+                                    if let Some(text) = delta.text {
+                                        completion.observe_content(&text);
+                                        items.push(Ok(StreamingResponse::delta(text)));
+                                    }
+                                    if let Some(thinking) = delta.thinking {
+                                        items
+                                            .push(Ok(StreamingResponse::delta("")
+                                                .with_reasoning(thinking)));
+                                    }
                                 }
                             }
                             "message_start" => {
-                                if let Some(usage) = event.message.and_then(|m| m.usage) {
-                                    held_usage =
-                                        Some(merge_claude_stream_usage(held_usage.take(), usage));
+                                if let Some(message) = event.message {
+                                    if let Some(started) = message.model {
+                                        model = started;
+                                    }
+                                    if let Some(usage) = message.usage {
+                                        held_usage = Some(merge_claude_stream_usage(
+                                            held_usage.take(),
+                                            usage,
+                                        ));
+                                    }
                                 }
                             }
                             "message_delta" => {
@@ -834,13 +883,44 @@ impl LlmPort for AnthropicAdapter {
                                     held_usage =
                                         Some(merge_claude_stream_usage(held_usage.take(), usage));
                                 }
+                                if let Some(delta) = event.delta {
+                                    if let Some(reason) = delta.stop_reason {
+                                        held_stop_reason = Some(reason);
+                                    }
+                                    if let Some(details) = delta.stop_details {
+                                        held_stop_details = Some(details);
+                                    }
+                                }
                             }
                             "message_stop" => {
-                                let mut terminal = StreamingResponse::terminal(FinishReason::Stop);
-                                if let Some(usage) = held_usage.take() {
-                                    terminal = terminal.with_usage(map_claude_usage(&usage));
+                                // A stream that never reported a stop reason keeps the
+                                // pre-50-13 terminal `Stop`; a reported one is mapped by name.
+                                let finish = match held_stop_reason.as_deref() {
+                                    None => FinishReason::Stop,
+                                    reason => map_stop_reason(reason),
+                                };
+                                if let Some(refusal) = refusal_text(
+                                    held_stop_reason.as_deref(),
+                                    held_stop_details.as_ref(),
+                                ) {
+                                    completion.observe_refusal(&refusal);
                                 }
-                                items.push(Ok(terminal));
+                                match completion.finish(
+                                    ANTHROPIC_PROVIDER,
+                                    &model,
+                                    &finish,
+                                    &api_key,
+                                ) {
+                                    Ok(()) => {
+                                        let mut terminal = StreamingResponse::terminal(finish);
+                                        if let Some(usage) = held_usage.take() {
+                                            terminal =
+                                                terminal.with_usage(map_claude_usage(&usage));
+                                        }
+                                        items.push(Ok(terminal));
+                                    }
+                                    Err(err) => items.push(Err(err)),
+                                }
                             }
                             _ => {}
                         }
@@ -921,7 +1001,25 @@ struct ClaudeResponse {
     model: String,
     content: Vec<ClaudeContent>,
     stop_reason: Option<String>,
+    /// Present (possibly with `null` members) when the model refused; see [`AnthropicStopDetails`].
+    #[serde(default)]
+    stop_details: Option<AnthropicStopDetails>,
     usage: ClaudeUsage,
+}
+
+/// The `stop_details` object that accompanies `stop_reason: "refusal"` (RESEARCH, cited vendor
+/// fact): `{ type, category, explanation }`. `category` is one of `cyber`, `bio`,
+/// `frontier_llm`, `general_harms`, and either member may be `null`.
+///
+/// Buffered responses carry it at the top level, streamed ones on `message_delta.delta`. Both
+/// members are vendor-supplied text, so they only ever reach an error through
+/// `diagnostic_excerpt` (redact, then bound).
+#[derive(Debug, Default, Deserialize)]
+struct AnthropicStopDetails {
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    explanation: Option<String>,
 }
 
 /// A single content block in an Anthropic response.
@@ -934,14 +1032,17 @@ struct ClaudeResponse {
 /// optional, not required: a required `String` here was the entire root
 /// cause of this adapter's original thinking-block deserialization bug.
 /// `content_type` is read by the block-type census in
-/// [`detect_no_text_content`], so it is genuinely load-bearing, not dead
-/// code kept only for documentation.
+/// [`with_block_census`], so it is genuinely load-bearing, not dead code kept only for
+/// documentation. `thinking` is present only on a `thinking` block and feeds
+/// [`LlmResponse::reasoning`] through [`concat_thinking_blocks`] (D-11).
 #[derive(Debug, Deserialize)]
 struct ClaudeContent {
     #[serde(rename = "type")]
     content_type: String,
     #[serde(default)]
     text: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1116,49 +1217,118 @@ fn concat_text_blocks(content: &[ClaudeContent]) -> String {
         .collect()
 }
 
-/// Detect a response with no recoverable text.
+/// The `type` of an event line that failed to parse as a [`ClaudeStreamEvent`], for the
+/// `warn!` that replaces the old silent skip. `unknown` when the line is not JSON or has no
+/// string `type`; otherwise only a bounded run of identifier characters, so the log line can
+/// never carry the event's body.
+fn unparsable_event_type(json_str: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(json_str)
+        .ok()
+        .and_then(|value| value.get("type")?.as_str().map(sanitize_token))
+        .filter(|event_type| !event_type.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Concatenate the text of every `thinking` content block, in array order (D-11).
 ///
-/// Fires when every content block is skipped by [`concat_text_blocks`] —
-/// the concatenated text is empty or whitespace-only. This is the same
-/// class of failure DeepSeek's `detect_empty_completion` guards against: a
-/// reasoning model can spend its entire `max_tokens` budget on hidden
-/// thinking and emit no visible answer at all (verified live against
-/// `claude-sonnet-5`, see this module's captured-fixture tests). Returning
-/// `Ok("")` here would let that truncation masquerade as a valid empty
-/// completion — exactly what produced a 0-byte `PoC.t.sol` in production.
+/// Only a block that actually carries a `thinking` string contributes; `redacted_thinking`
+/// (opaque `data`) and every other block type are skipped, the same degrade-to-ignored rule
+/// [`concat_text_blocks`] follows. No separator is inserted, mirroring the streaming path.
+fn concat_thinking_blocks(content: &[ClaudeContent]) -> String {
+    content
+        .iter()
+        .filter_map(|block| block.thinking.as_deref())
+        .collect()
+}
+
+/// Map an Anthropic `stop_reason` to a [`FinishReason`], naming every documented value
+/// (RESEARCH State of the Art):
 ///
-/// The message names the block-type census and the stop reason so the next
-/// reader learns "the model spent its whole budget thinking" in one step
-/// instead of three rounds of debugging. [`LlmError::EmptyCompletion`]'s
-/// `Display` no longer appends a fixed remedy (D-11a), so the advice that
-/// fits the stop reason lives here: a larger `max_tokens` for a `max_tokens`
-/// stop, "the model returned no text" otherwise.
-fn detect_no_text_content(
-    content: &[ClaudeContent],
+/// | `stop_reason` | finish reason |
+/// |---|---|
+/// | `end_turn`, `stop_sequence` | `Stop` |
+/// | `max_tokens`, `model_context_window_exceeded` | `Length` (A1-50-13: truncation) |
+/// | `tool_use` | `FunctionCall` |
+/// | `pause_turn` | `Error("pause_turn")` |
+/// | `refusal` | `Error("refusal")`, never read: [`refusal_text`] makes the guard return
+///   [`LlmError::Refusal`] first |
+/// | any other value | `Error("unknown: <value>")` |
+/// | absent | `Error("unknown")` |
+///
+/// The unknown value is wrapped as vendor text in a finish reason (not an error message), so it
+/// is bounded to a short run of identifier characters; the full value is never trusted.
+fn map_stop_reason(stop_reason: Option<&str>) -> FinishReason {
+    match stop_reason {
+        Some("end_turn" | "stop_sequence") => FinishReason::Stop,
+        Some("max_tokens" | "model_context_window_exceeded") => FinishReason::Length,
+        Some("tool_use") => FinishReason::FunctionCall,
+        Some("pause_turn") => FinishReason::Error("pause_turn".to_string()),
+        Some("refusal") => FinishReason::Error("refusal".to_string()),
+        Some(other) => FinishReason::Error(format!("unknown: {}", sanitize_token(other))),
+        None => FinishReason::Error("unknown".to_string()),
+    }
+}
+
+/// Keep only the leading identifier characters of a vendor-supplied token (at most 64), so a
+/// hostile or malformed value cannot smuggle control characters or a secret into a finish
+/// reason or a log line.
+fn sanitize_token(token: &str) -> String {
+    token
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        .take(64)
+        .collect()
+}
+
+/// The refusal text for [`classify_completion`], or `None` when the stop reason is not
+/// `refusal`.
+///
+/// Built from `stop_details.category` and `stop_details.explanation`, joined with `"; "` (either
+/// may be `null`); when both are absent the text is `stop_reason=refusal`, so a refusal is never
+/// anonymous. The result is raw vendor text -- the guard redacts it before bounding it.
+fn refusal_text(
     stop_reason: Option<&str>,
-) -> Option<LlmError> {
-    if !concat_text_blocks(content).trim().is_empty() {
+    details: Option<&AnthropicStopDetails>,
+) -> Option<String> {
+    if stop_reason != Some("refusal") {
         return None;
     }
-
-    let block_types = content
-        .iter()
-        .map(|block| block.content_type.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let advice = if stop_reason == Some("max_tokens") {
-        "reasoning likely consumed the entire max_tokens budget; retry with a larger max_tokens"
+    let category = details
+        .and_then(|d| d.category.as_deref())
+        .filter(|c| !c.trim().is_empty())
+        .map(|c| format!("category={c}"));
+    let explanation = details
+        .and_then(|d| d.explanation.as_deref())
+        .filter(|e| !e.trim().is_empty())
+        .map(str::to_string);
+    let parts: Vec<String> = category.into_iter().chain(explanation).collect();
+    if parts.is_empty() {
+        Some("stop_reason=refusal".to_string())
     } else {
-        "the model returned no text"
-    };
+        Some(parts.join("; "))
+    }
+}
 
-    Some(LlmError::EmptyCompletion(format!(
-        "{} content block(s) with no text (types: [{}]), stop_reason={} — {advice}",
-        content.len(),
-        block_types,
-        stop_reason.unwrap_or("none")
-    )))
+/// Add the content-block census to an [`LlmError::EmptyCompletion`] so the reader learns "the
+/// model spent its whole budget thinking" in one step (the guard's own payload names only the
+/// finish reason). Any other error passes through untouched. The block-type names are vendor
+/// text, so they go through `diagnostic_excerpt`.
+fn with_block_census(err: LlmError, content: &[ClaudeContent], api_key: &str) -> LlmError {
+    match err {
+        LlmError::EmptyCompletion(msg) => {
+            let block_types = content
+                .iter()
+                .map(|block| block.content_type.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            LlmError::EmptyCompletion(format!(
+                "{msg}; {} content block(s) (types: [{}])",
+                content.len(),
+                crate::redaction::diagnostic_excerpt(&block_types, api_key)
+            ))
+        }
+        other => other,
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1184,6 +1354,9 @@ struct ClaudeStreamEvent {
 struct ClaudeStreamMessage {
     #[serde(default)]
     usage: Option<ClaudeUsage>,
+    /// The response model, used to name the provider's model in a refusal or empty completion.
+    #[serde(default)]
+    model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1191,7 +1364,18 @@ struct ClaudeDelta {
     #[serde(rename = "type")]
     #[allow(dead_code)]
     delta_type: Option<String>,
+    /// A `text_delta`'s text.
+    #[serde(default)]
     text: Option<String>,
+    /// A `thinking_delta`'s text (D-11).
+    #[serde(default)]
+    thinking: Option<String>,
+    /// On `message_delta`: the real stop reason, held until `message_stop` (Pitfall 2).
+    #[serde(default)]
+    stop_reason: Option<String>,
+    /// On `message_delta`: the refusal details, when `stop_reason` is `refusal`.
+    #[serde(default)]
+    stop_details: Option<AnthropicStopDetails>,
 }
 
 #[cfg(test)]
@@ -2674,6 +2858,389 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 .find(|c| c.finish_reason.is_some())
                 .expect("stream must still end with a message_stop terminal chunk");
             assert_eq!(terminal.usage, None);
+        }
+    }
+
+    /// Refusals, stop reasons, thinking text and the stream's real stop reason (plan 50-13,
+    /// D-09/D-11/D-11a; RESEARCH Pitfalls 1 and 2).
+    mod response_parity {
+        use super::*;
+        use futures::StreamExt;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        fn parse(body: &str) -> Result<LlmResponse, LlmError> {
+            let response: ClaudeResponse =
+                serde_json::from_str(body).expect("test body must deserialize");
+            test_adapter().parse_response(Uuid::new_v4(), response)
+        }
+
+        fn body(content: &str, stop_reason: &str, stop_details: &str) -> String {
+            format!(
+                r#"{{"id":"msg_1","model":"claude-opus-5","content":{content},"stop_reason":{stop_reason},"stop_details":{stop_details},"usage":{{"input_tokens":3,"output_tokens":4}}}}"#
+            )
+        }
+
+        #[test]
+        fn anthropic_refusal_is_typed_not_an_empty_completion() {
+            let result = parse(&body(
+                "[]",
+                r#""refusal""#,
+                r#"{"type":"refusal","category":"cyber","explanation":"This request seeks malware."}"#,
+            ));
+            match result {
+                Err(LlmError::Refusal {
+                    provider,
+                    model,
+                    detail,
+                }) => {
+                    assert_eq!(provider, "anthropic");
+                    assert_eq!(model, "claude-opus-5");
+                    assert!(detail.contains("cyber"), "{detail}");
+                    assert!(detail.contains("seeks malware"), "{detail}");
+                }
+                other => panic!("expected Err(Refusal), got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn anthropic_refusal_with_null_details_names_the_stop_reason() {
+            for details in [
+                "null",
+                r#"{"type":"refusal","category":null,"explanation":null}"#,
+            ] {
+                match parse(&body("[]", r#""refusal""#, details)) {
+                    Err(LlmError::Refusal { detail, .. }) => {
+                        assert!(detail.contains("stop_reason=refusal"), "{detail}");
+                    }
+                    other => panic!("expected Err(Refusal), got {other:?}"),
+                }
+            }
+        }
+
+        #[test]
+        fn anthropic_refusal_wins_over_partial_text() {
+            let result = parse(&body(
+                r#"[{"type":"text","text":"Sure, here is"}]"#,
+                r#""refusal""#,
+                r#"{"type":"refusal","category":"bio","explanation":null}"#,
+            ));
+            assert!(
+                matches!(result, Err(LlmError::Refusal { .. })),
+                "{result:?}"
+            );
+        }
+
+        #[test]
+        fn anthropic_refusal_detail_redacts_the_configured_key_before_bounding() {
+            // The key sits just before the character budget, so bounding first would keep a
+            // prefix of it.
+            let key = "sk-ant-test123";
+            let mut explanation = "a".repeat(RESPONSE_EXCERPT_CHAR_BUDGET - 6);
+            explanation.push_str(key);
+            explanation.push_str(&"b".repeat(100));
+            let details =
+                format!(r#"{{"type":"refusal","category":null,"explanation":"{explanation}"}}"#);
+            match parse(&body("[]", r#""refusal""#, &details)) {
+                Err(LlmError::Refusal { detail, .. }) => {
+                    assert!(!detail.contains(key), "{detail}");
+                    assert!(!detail.contains("sk-ant"), "key prefix leaked: {detail}");
+                    assert!(!detail.contains("test123"), "key tail leaked: {detail}");
+                }
+                other => panic!("expected Err(Refusal), got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn anthropic_stop_reasons_map_by_name() {
+            let text = r#"[{"type":"text","text":"ok"}]"#;
+            for (wire, expected) in [
+                ("end_turn", FinishReason::Stop),
+                ("stop_sequence", FinishReason::Stop),
+                ("max_tokens", FinishReason::Length),
+                ("model_context_window_exceeded", FinishReason::Length),
+                ("tool_use", FinishReason::FunctionCall),
+                ("pause_turn", FinishReason::Error("pause_turn".to_string())),
+                (
+                    "something_new",
+                    FinishReason::Error("unknown: something_new".to_string()),
+                ),
+            ] {
+                let response = parse(&body(text, &format!("\"{wire}\""), "null"))
+                    .unwrap_or_else(|e| panic!("{wire} must parse: {e:?}"));
+                assert_eq!(
+                    std::mem::discriminant(&response.finish_reason),
+                    std::mem::discriminant(&expected),
+                    "{wire}"
+                );
+                if let FinishReason::Error(label) = &expected {
+                    assert!(
+                        matches!(&response.finish_reason, FinishReason::Error(got) if got == label),
+                        "{wire}: {:?}",
+                        response.finish_reason
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn anthropic_unknown_stop_reason_is_bounded_to_identifier_characters() {
+            let finish = map_stop_reason(Some("odd value\nwith sk-ant-secret"));
+            assert!(
+                matches!(&finish, FinishReason::Error(label) if label == "unknown: odd"),
+                "{finish:?}"
+            );
+        }
+
+        #[test]
+        fn anthropic_tool_use_without_text_stays_ok() {
+            let response = parse(&body(
+                r#"[{"type":"tool_use","id":"toolu_1","name":"lookup","input":{}}]"#,
+                r#""tool_use""#,
+                "null",
+            ))
+            .expect("a tool_use stop with no text is a valid response");
+            assert!(matches!(response.finish_reason, FinishReason::FunctionCall));
+        }
+
+        #[test]
+        fn anthropic_empty_content_on_end_turn_is_an_empty_completion() {
+            for content in ["[]", r#"[{"type":"text","text":"  "}]"#] {
+                match parse(&body(content, r#""end_turn""#, "null")) {
+                    Err(LlmError::EmptyCompletion(msg)) => {
+                        assert!(msg.contains("finish_reason=stop"), "{msg}");
+                        assert!(msg.contains("content block(s)"), "{msg}");
+                    }
+                    other => panic!("expected Err(EmptyCompletion), got {other:?}"),
+                }
+            }
+        }
+
+        #[test]
+        fn anthropic_context_window_stop_with_no_text_names_the_cause() {
+            match parse(&body("[]", r#""model_context_window_exceeded""#, "null")) {
+                Err(LlmError::EmptyCompletion(msg)) => {
+                    assert!(msg.contains("finish_reason=length"), "{msg}");
+                }
+                other => panic!("expected Err(EmptyCompletion), got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn anthropic_thinking_text_reaches_reasoning_in_block_order() {
+            let response = parse(&body(
+                r#"[{"type":"thinking","thinking":"First, ","signature":"s1"},{"type":"redacted_thinking","data":"opaque"},{"type":"thinking","thinking":"then second.","signature":"s2"},{"type":"text","text":"The answer."}]"#,
+                r#""end_turn""#,
+                "null",
+            ))
+            .expect("thinking plus text must parse");
+            assert_eq!(response.reasoning.as_deref(), Some("First, then second."));
+            assert_eq!(response.content, "The answer.");
+        }
+
+        #[test]
+        fn anthropic_blank_thinking_is_no_reasoning() {
+            let response = parse(&body(
+                r#"[{"type":"thinking","thinking":"","signature":"s"},{"type":"text","text":"ok"}]"#,
+                r#""end_turn""#,
+                "null",
+            ))
+            .expect("must parse");
+            assert!(response.reasoning.is_none());
+        }
+
+        #[test]
+        fn unparsable_event_type_names_only_a_bounded_type() {
+            assert_eq!(
+                unparsable_event_type(r#"{"type":"content_block_delta","index":"oops"}"#),
+                "content_block_delta"
+            );
+            assert_eq!(unparsable_event_type("not json sk-ant-secret"), "unknown");
+            assert_eq!(unparsable_event_type(r#"{"no_type":1}"#), "unknown");
+            assert_eq!(unparsable_event_type(r#"{"type":7}"#), "unknown");
+            let hostile = format!(r#"{{"type":"{}"}}"#, "x".repeat(500));
+            assert_eq!(unparsable_event_type(&hostile).len(), 64);
+        }
+
+        // ── stream ────────────────────────────────────────────────────────
+
+        fn adapter_at(base_url: &str) -> AnthropicAdapter {
+            let config = AnthropicConfig::new(
+                "sk-ant-test123".to_string(),
+                base_url.to_string(),
+                "claude-sonnet-5".to_string(),
+                4096,
+            );
+            AnthropicAdapter::new(config).expect("test config must build a valid adapter")
+        }
+
+        fn stream_request() -> LlmRequest {
+            LlmRequest::new(
+                "claude-sonnet-5",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        const START: &str = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-sonnet-5\",\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n";
+        const STOP: &str = "data: {\"type\":\"message_stop\"}\n\n";
+
+        fn text_delta(text: &str) -> String {
+            format!(
+                "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"{text}\"}}}}\n\n"
+            )
+        }
+
+        fn thinking_delta(text: &str) -> String {
+            format!(
+                "data: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"thinking_delta\",\"thinking\":\"{text}\"}}}}\n\n"
+            )
+        }
+
+        fn message_delta(stop_reason: &str, stop_details: &str) -> String {
+            format!(
+                "data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"{stop_reason}\",\"stop_sequence\":null,\"stop_details\":{stop_details}}},\"usage\":{{\"output_tokens\":7}}}}\n\n"
+            )
+        }
+
+        async fn run_stream(sse: String) -> Vec<Result<StreamingResponse, LlmError>> {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = adapter_at(&server.url())
+                .generate_stream(stream_request())
+                .await
+                .expect("streaming call must start");
+            let mut stream = Box::into_pin(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item);
+            }
+            items
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_maps_the_real_stop_reason_on_the_terminal_chunk() {
+            for (wire, expect_length) in [("max_tokens", true), ("end_turn", false)] {
+                let items = run_stream(format!(
+                    "{START}{}{}{STOP}",
+                    text_delta("Hi"),
+                    message_delta(wire, "null")
+                ))
+                .await;
+                let terminal = items
+                    .last()
+                    .expect("stream must end")
+                    .as_ref()
+                    .expect("terminal chunk must be Ok");
+                assert_eq!(
+                    matches!(terminal.finish_reason, Some(FinishReason::Length)),
+                    expect_length,
+                    "{wire}: {:?}",
+                    terminal.finish_reason
+                );
+                assert!(terminal.usage.is_some(), "usage rides the terminal chunk");
+            }
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_refusal_after_partial_text_ends_in_refusal() {
+            let items = run_stream(format!(
+                "{START}{}{}{}{STOP}",
+                text_delta("Sure, "),
+                text_delta("here "),
+                message_delta(
+                    "refusal",
+                    r#"{"type":"refusal","category":"cyber","explanation":"No."}"#
+                )
+            ))
+            .await;
+            assert_eq!(items.len(), 3, "two text items then the refusal: {items:?}");
+            assert_eq!(items[0].as_ref().expect("text").delta, "Sure, ");
+            assert_eq!(items[1].as_ref().expect("text").delta, "here ");
+            match &items[2] {
+                Err(LlmError::Refusal {
+                    provider,
+                    model,
+                    detail,
+                }) => {
+                    assert_eq!(provider, "anthropic");
+                    assert_eq!(model, "claude-sonnet-5");
+                    assert!(detail.contains("cyber"), "{detail}");
+                }
+                other => panic!("expected Err(Refusal) last, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_thinking_deltas_reach_reasoning_in_wire_order() {
+            let items = run_stream(format!(
+                "{START}{}{}{}{}{STOP}",
+                thinking_delta("one "),
+                thinking_delta("two"),
+                text_delta("Answer"),
+                message_delta("end_turn", "null")
+            ))
+            .await;
+            let reasoning: Vec<&str> = items
+                .iter()
+                .filter_map(|i| i.as_ref().ok()?.reasoning.as_deref())
+                .collect();
+            assert_eq!(reasoning, vec!["one ", "two"]);
+            let text: String = items
+                .iter()
+                .filter_map(|i| i.as_ref().ok())
+                .map(|c| c.delta.as_str())
+                .collect();
+            assert_eq!(text, "Answer");
+            assert!(items.iter().all(Result::is_ok));
+        }
+
+        #[tokio::test]
+        async fn anthropic_empty_stream_is_empty_completion() {
+            let items = run_stream(format!(
+                "{START}{}{}{}{STOP}",
+                thinking_delta("pondering "),
+                thinking_delta("more"),
+                message_delta("end_turn", "null")
+            ))
+            .await;
+            assert_eq!(items.len(), 3, "{items:?}");
+            // The reasoning already yielded stays yielded.
+            assert_eq!(
+                items[0].as_ref().expect("reasoning").reasoning.as_deref(),
+                Some("pondering ")
+            );
+            assert_eq!(
+                items[1].as_ref().expect("reasoning").reasoning.as_deref(),
+                Some("more")
+            );
+            match &items[2] {
+                Err(LlmError::EmptyCompletion(msg)) => {
+                    assert!(msg.contains("finish_reason=stop"), "{msg}");
+                }
+                other => panic!("expected Err(EmptyCompletion) last, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_skips_a_malformed_event_and_keeps_going() {
+            let items = run_stream(format!(
+                "{START}data: {{\"type\":\"content_block_delta\",\"index\":\"bad\"\n\n{}{}{STOP}",
+                text_delta("ok"),
+                message_delta("end_turn", "null")
+            ))
+            .await;
+            assert!(items.iter().all(Result::is_ok), "{items:?}");
+            assert_eq!(items[0].as_ref().expect("text").delta, "ok");
         }
     }
 }

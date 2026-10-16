@@ -139,10 +139,11 @@ pub mod services;
 mod turn;
 // The one rule deciding what a completion's text and finish reason mean: refusal, content filter,
 // function call, empty on any stop (PARITY-05, D-09/D-11a). Crate-private; documented by its own
-// inner `//!` block; compiled only when an adapter that calls it is. Widen this list as the
-// Anthropic and Gemini adapters move onto it.
+// inner `//!` block; compiled only when an adapter that calls it is.
 #[cfg(any(
     feature = "openai",
+    feature = "anthropic",
+    feature = "gemini",
     feature = "deepseek",
     feature = "kimi",
     feature = "qwen",

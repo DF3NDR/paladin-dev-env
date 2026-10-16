@@ -38,6 +38,8 @@
     allow(dead_code)
 )]
 
+pub(crate) mod seeded;
+
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Mutex;
 
@@ -737,5 +739,369 @@ mod tests {
         assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
         assert_eq!(profile.context_window, Some(4096));
         assert!(profile.json_object && !profile.json_schema);
+    }
+}
+
+/// Tests of the dated per-vendor tables in [`seeded`]: structural invariants over every table, and
+/// one test per PROBED vendor that pins an entry to the transcript row it cites
+/// (`50-SEED-PROBE.md`, run on 2026-10-15).
+#[cfg(test)]
+mod seeded_tests {
+    use super::*;
+
+    /// Every compiled vendor table, by provider name.
+    #[allow(unused_mut)]
+    fn tables() -> Vec<(&'static str, &'static [SeededProfile])> {
+        let mut tables: Vec<(&'static str, &'static [SeededProfile])> = Vec::new();
+        #[cfg(feature = "anthropic")]
+        tables.push(("anthropic", seeded::ANTHROPIC));
+        #[cfg(feature = "openai")]
+        tables.push(("openai", seeded::OPENAI));
+        #[cfg(feature = "deepseek")]
+        tables.push(("deepseek", seeded::DEEPSEEK));
+        #[cfg(feature = "kimi")]
+        tables.push(("kimi", seeded::KIMI));
+        #[cfg(feature = "qwen")]
+        tables.push(("qwen", seeded::QWEN));
+        #[cfg(feature = "grok")]
+        tables.push(("grok", seeded::GROK));
+        #[cfg(feature = "gemini")]
+        tables.push(("gemini", seeded::GEMINI));
+        #[cfg(feature = "ollama")]
+        tables.push(("ollama", seeded::OLLAMA));
+        tables
+    }
+
+    /// `YYYY-MM-DD` with a plausible month and day.
+    fn is_iso_date(text: &str) -> bool {
+        let bytes = text.as_bytes();
+        if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' {
+            return false;
+        }
+        let digits = |range: std::ops::Range<usize>| {
+            text.get(range)
+                .filter(|part| part.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|part| part.parse::<u32>().ok())
+        };
+        match (digits(0..4), digits(5..7), digits(8..10)) {
+            (Some(year), Some(month), Some(day)) => {
+                year >= 2000 && (1..=12).contains(&month) && (1..=31).contains(&day)
+            }
+            _ => false,
+        }
+    }
+
+    /// Build one seeded entry the way the registry does, panicking when it is absent.
+    #[allow(dead_code)]
+    fn entry(table: &'static [SeededProfile], model: &str) -> ModelProfile {
+        let seeded = table
+            .iter()
+            .find(|entry| entry.model == model)
+            .unwrap_or_else(|| panic!("no seeded entry for {model}"));
+        (seeded.build)().with_verified_on(seeded.verified_on)
+    }
+
+    #[test]
+    fn seeded_tables_are_dated_unique_and_consistent() {
+        for (provider, table) in tables() {
+            let mut seen = HashSet::new();
+            for entry in table {
+                assert!(
+                    seen.insert(entry.model),
+                    "{provider}: duplicate model id {}",
+                    entry.model
+                );
+                assert!(
+                    !entry.model.is_empty(),
+                    "{provider}: an entry has an empty model id"
+                );
+                assert!(
+                    is_iso_date(entry.verified_on),
+                    "{provider}/{}: verified_on {:?} is not YYYY-MM-DD",
+                    entry.model,
+                    entry.verified_on
+                );
+                let profile = (entry.build)();
+                assert_ne!(
+                    profile.context_window,
+                    Some(0),
+                    "{provider}/{}: zero context window",
+                    entry.model
+                );
+                assert_ne!(
+                    profile.max_output_tokens,
+                    Some(0),
+                    "{provider}/{}: zero max output",
+                    entry.model
+                );
+                if let (Some(window), Some(max_output)) =
+                    (profile.context_window, profile.max_output_tokens)
+                {
+                    assert!(
+                        max_output <= window,
+                        "{provider}/{}: max output {max_output} exceeds window {window}",
+                        entry.model
+                    );
+                }
+                validate_profile(&profile)
+                    .unwrap_or_else(|problem| panic!("{provider}/{}: {problem}", entry.model));
+            }
+        }
+    }
+
+    #[test]
+    fn the_date_check_accepts_iso_dates_and_rejects_the_rest() {
+        assert!(is_iso_date("2026-10-15"));
+        for bad in [
+            "",
+            "2026-1-15",
+            "2026/10/15",
+            "20261015",
+            "2026-13-01",
+            "2026-10-00",
+        ] {
+            assert!(!is_iso_date(bad), "{bad:?} must not pass");
+        }
+    }
+
+    #[test]
+    fn every_entry_carries_the_probe_date() {
+        // One probe run seeds every table; a different date here means a value came from a
+        // source other than 50-SEED-PROBE.md.
+        for (provider, table) in tables() {
+            for entry in table {
+                assert_eq!(
+                    entry.verified_on, "2026-10-15",
+                    "{provider}/{}: not from the 2026-10-15 probe",
+                    entry.model
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unmeasured_and_retired_ids_are_not_seeded() {
+        let unseeded = [
+            // Anthropic: the eight curated legacy ids answered 404 (retired).
+            "claude-3-5-sonnet-20241022",
+            "claude-3-opus-20240229",
+            "claude-2.1",
+            "claude-instant-1.2",
+            // DeepSeek: undocumented aliases, and listed-but-unprobed `deepseek-v4-pro`.
+            "deepseek-chat",
+            "deepseek-coder",
+            "deepseek-v4-pro",
+            // Kimi: every probe was rejected for the thinking mode.
+            "kimi-k2.7-code",
+            "kimi-k2.7-code-highspeed",
+            // Qwen: rate-limited on every probe / 404 on the International endpoint.
+            "qwen-turbo",
+            "qwen3-max",
+        ];
+        for (provider, table) in tables() {
+            for entry in table {
+                assert!(
+                    !unseeded.contains(&entry.model),
+                    "{provider}/{}: has no usable measurement and must not be seeded",
+                    entry.model
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "ollama")]
+    #[test]
+    fn the_ollama_table_is_empty_because_the_probe_skipped_it() {
+        assert!(seeded::OLLAMA.is_empty());
+    }
+
+    #[cfg(feature = "kimi")]
+    #[test]
+    fn seeded_lookup_is_exact_match_only() {
+        let registry = ModelRegistry::new("kimi", seeded::KIMI, ModelProfile::new());
+        assert!(matches!(
+            registry.resolve("kimi-k3").1,
+            ProfileOrigin::Seeded {
+                verified_on: "2026-10-15"
+            }
+        ));
+        for near_miss in ["kimi-k3-preview", "kimi", "KIMI-K3", "kimi-k3 "] {
+            assert_eq!(
+                registry.resolve(near_miss).1,
+                ProfileOrigin::AdapterDefault,
+                "{near_miss:?} must not prefix- or family-match"
+            );
+        }
+    }
+
+    #[cfg(feature = "openai")]
+    #[test]
+    fn openai_gpt_5_4_nano_seed_matches_the_transcript() {
+        let p = entry(seeded::OPENAI, "gpt-5.4-nano");
+        // Probes 2-5: 0.00, 1.00, 0.50 and 1.01 all ACCEPTED, so no upper bound was located.
+        assert_eq!(p.temperature, ParamSupport::Range(0.0, 1.0));
+        assert_eq!(p.top_p, ParamSupport::Range(0.0, 1.0));
+        // Probes 9 and 10: `stop` is not supported with this model, for one and for five.
+        assert_eq!(p.stop_sequences, StopSupport::NotSent);
+        // Operator evidence (b), docs accessed 2026-10-15.
+        assert_eq!(p.context_window, Some(400_000));
+        assert_eq!(p.max_output_tokens, Some(128_000));
+        // Probes 13 and 14: json_object and json_schema ACCEPTED.
+        assert!(p.json_object && p.json_schema);
+        assert_eq!(p.verified_on.as_deref(), Some("2026-10-15"));
+    }
+
+    #[cfg(feature = "openai")]
+    #[test]
+    fn openai_gpt_4o_mini_seed_matches_the_transcript() {
+        let p = entry(seeded::OPENAI, "gpt-4o-mini");
+        // Probe 10: five sequences rejected, "maximum length 4" (operator evidence (c)).
+        assert_eq!(p.stop_sequences, StopSupport::Supported { max: Some(4) });
+        assert_eq!(p.context_window, Some(128_000));
+        assert_eq!(p.max_output_tokens, Some(16_384));
+        assert!(p.json_object && p.json_schema);
+        // The adapter's request type carries no penalty field, so none is admitted.
+        assert_eq!(p.frequency_penalty, ParamSupport::NotSent);
+        assert_eq!(p.presence_penalty, ParamSupport::NotSent);
+    }
+
+    #[cfg(feature = "anthropic")]
+    #[test]
+    fn anthropic_haiku_5_5_seed_matches_the_transcript() {
+        let p = entry(seeded::ANTHROPIC, "claude-haiku-5-5");
+        // Probes 2-4: only temperature 1.00 ACCEPTED; 0.00 and 0.50 "deprecated for this model".
+        assert_eq!(p.temperature, ParamSupport::Fixed(1.0));
+        // Probe 6: top_p "is deprecated for this model".
+        assert_eq!(p.top_p, ParamSupport::NotSent);
+        // Probes 9 and 10: one and five stop sequences ACCEPTED.
+        assert_eq!(p.stop_sequences, StopSupport::Supported { max: None });
+        // Listing: max_input_tokens=1000000, max_tokens=128000.
+        assert_eq!(p.context_window, Some(1_000_000));
+        assert_eq!(p.max_output_tokens, Some(128_000));
+        // Probes 12 and 13: Anthropic has no JSON mode.
+        assert!(!p.json_object && !p.json_schema);
+    }
+
+    #[cfg(feature = "deepseek")]
+    #[test]
+    fn deepseek_flash_seed_matches_the_transcript() {
+        let p = entry(seeded::DEEPSEEK, "deepseek-flash");
+        // Probes 2, 3 and 5: 0.00 and 2.00 ACCEPTED, 2.01 rejected "valid range is [0, 2]".
+        assert_eq!(p.temperature, ParamSupport::Range(0.0, 2.0));
+        assert_eq!(p.stop_sequences, StopSupport::Supported { max: None });
+        // Listing: context_window=1048576, max_output_tokens=393216.
+        assert_eq!(p.context_window, Some(1_048_576));
+        assert_eq!(p.max_output_tokens, Some(393_216));
+        // Probe 1 returned reasoning text.
+        assert!(p.reasoning);
+        // Probe 12 ACCEPTED, probe 13 rejected "response_format type is unavailable now".
+        assert!(p.json_object);
+        assert!(!p.json_schema);
+    }
+
+    #[cfg(feature = "kimi")]
+    #[test]
+    fn kimi_k3_seed_matches_the_transcript() {
+        let p = entry(seeded::KIMI, "kimi-k3");
+        // Probes 3-5: 1.00, 0.50 and 1.01 all rejected, "only 0.6 is allowed".
+        assert_eq!(p.temperature, ParamSupport::NotSent);
+        // Probes 6-8: top_p and both penalties rejected.
+        assert_eq!(p.top_p, ParamSupport::NotSent);
+        assert_eq!(p.frequency_penalty, ParamSupport::NotSent);
+        assert_eq!(p.presence_penalty, ParamSupport::NotSent);
+        assert_eq!(p.stop_sequences, StopSupport::Supported { max: None });
+        // Listing context_length=1048576; no maximum output is documented.
+        assert_eq!(p.context_window, Some(1_048_576));
+        assert_eq!(p.max_output_tokens, None);
+        assert!(p.reasoning && p.json_object && p.json_schema);
+    }
+
+    #[cfg(feature = "kimi")]
+    #[test]
+    fn kimi_k2_6_seed_matches_the_transcript() {
+        let p = entry(seeded::KIMI, "kimi-k2.6");
+        assert_eq!(p.temperature, ParamSupport::NotSent);
+        assert_eq!(p.top_p, ParamSupport::NotSent);
+        // Listing context_length=262144; no maximum output is documented.
+        assert_eq!(p.context_window, Some(262_144));
+        assert_eq!(p.max_output_tokens, None);
+        assert_eq!(p.stop_sequences, StopSupport::Supported { max: None });
+        assert!(p.reasoning && p.json_object && p.json_schema);
+    }
+
+    #[cfg(feature = "qwen")]
+    #[test]
+    fn qwen_3_8_flash_seed_matches_the_transcript() {
+        let p = entry(seeded::QWEN, "qwen3.8-flash");
+        // Probes 2, 3 and 5: 0.00 and 1.99 ACCEPTED, 2.00 rejected "[0.0, 2.0)".
+        assert_eq!(p.temperature, ParamSupport::Range(0.0, 1.99));
+        assert_eq!(p.frequency_penalty, ParamSupport::Range(-2.0, 2.0));
+        assert_eq!(p.stop_sequences, StopSupport::Supported { max: None });
+        // Operator evidence (b), docs accessed 2026-10-15.
+        assert_eq!(p.context_window, Some(1_000_000));
+        assert_eq!(p.max_output_tokens, Some(131_072));
+        assert!(p.reasoning && p.json_object && p.json_schema);
+    }
+
+    #[cfg(feature = "qwen")]
+    #[test]
+    fn qwen_plus_seed_matches_the_transcript() {
+        let p = entry(seeded::QWEN, "qwen-plus");
+        assert_eq!(p.temperature, ParamSupport::Range(0.0, 1.99));
+        // The listing exposes no limit and the vendor page states none: none is seeded.
+        assert_eq!(p.context_window, None);
+        assert_eq!(p.max_output_tokens, None);
+        // Probe 1 carried no reasoning text.
+        assert!(!p.reasoning);
+    }
+
+    #[cfg(feature = "grok")]
+    #[test]
+    fn grok_seeds_match_the_transcript() {
+        for (model, window) in [
+            ("grok-4.3", 1_000_000),
+            ("grok-4.5", 500_000),
+            ("grok-4.6", 500_000),
+        ] {
+            let p = entry(seeded::GROK, model);
+            // Probes 9 and 10: `stop` rejected for one and for five.
+            assert_eq!(p.stop_sequences, StopSupport::NotSent, "{model}");
+            // Probes 7 and 8: both penalties rejected.
+            assert_eq!(p.frequency_penalty, ParamSupport::NotSent, "{model}");
+            assert_eq!(p.presence_penalty, ParamSupport::NotSent, "{model}");
+            // Probe 3 (temperature 2.00) was UNREACHABLE, so no range was measured.
+            assert_eq!(p.temperature, ParamSupport::NotSent, "{model}");
+            assert_eq!(p.top_p, ParamSupport::Range(0.0, 1.0), "{model}");
+            // Listing context_length.
+            assert_eq!(p.context_window, Some(window), "{model}");
+            assert_eq!(p.max_output_tokens, None, "{model}");
+            assert!(p.reasoning && p.json_object && p.json_schema, "{model}");
+        }
+    }
+
+    #[cfg(feature = "gemini")]
+    #[test]
+    fn gemini_seeds_match_the_transcript() {
+        for model in [
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.6-flash",
+        ] {
+            let p = entry(seeded::GEMINI, model);
+            // Probes 2, 3 and 5: 0.00 and 2.00 ACCEPTED, 2.01 rejected "[0.0, 2.0]".
+            assert_eq!(p.temperature, ParamSupport::Range(0.0, 2.0), "{model}");
+            // Probes 7 and 8: the wire has no penalty field.
+            assert_eq!(p.frequency_penalty, ParamSupport::NotSent, "{model}");
+            assert_eq!(p.presence_penalty, ParamSupport::NotSent, "{model}");
+            assert_eq!(
+                p.stop_sequences,
+                StopSupport::Supported { max: None },
+                "{model}"
+            );
+            // Listing: inputTokenLimit=1048576, outputTokenLimit=65536, thinking=true.
+            assert_eq!(p.context_window, Some(1_048_576), "{model}");
+            assert_eq!(p.max_output_tokens, Some(65_536), "{model}");
+            assert!(p.reasoning && p.json_object && p.json_schema, "{model}");
+        }
     }
 }

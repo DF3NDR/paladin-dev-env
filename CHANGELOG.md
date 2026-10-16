@@ -573,6 +573,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   contract suite gained multipart, ETag and exercised-presigned-URL cases, taking it to 11 cases
   (STORE-02; Phase 45 plan 45-01).
 
+- **The dated per-model registry is seeded from a live probe (PARITY-04; Phase 50 plan 50-06;
+  D-05/D-08).** `paladin-llm` gains one dated table per vendor (Anthropic, OpenAI, DeepSeek, Kimi,
+  Qwen, Grok, Gemini, Ollama) whose every value traces to the operator's live seed probe of
+  2026-10-15, and every adapter resolves its models through its own table: a listed model gets
+  its measured temperature, `top_p`, penalty, stop, JSON-format and window facts and its
+  `verified_on` date; any other model still runs on the adapter-wide fallback, visibly
+  unprofiled. A model, field or vendor the probe did not evidence is left out (Ollama's table is
+  empty because the probe skipped it). New public constants `ANTHROPIC_DEFAULT_MODEL` and
+  `DEEPSEEK_DEFAULT_MODEL` give the two adapters whose defaults were inline strings the same
+  named default the other adapters already had.
+
 ### Changed
 
 - **Explicit sampling values are checked against the model's profile; auto and default values
@@ -840,6 +851,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     different items and are unchanged. `Field`, `CollectionType` / `Item`, `element`,
     `FieldVersionService` and `CollectionVersionService` are retained pending review and are not
     removed.
+
+- **Default models, the Anthropic and DeepSeek model lists, and reported windows follow the
+  dated registry (PARITY-04; Phase 50 plan 50-06; D-05/D-08; `MIGRATION.md` row M-B-14).**
+  With no model configured the adapters now default to the operator-identified current model:
+  Anthropic `claude-haiku-5-5` (was the retired `claude-3-5-sonnet-20241022`), DeepSeek
+  `deepseek-flash` (was `deepseek-chat`), Kimi `kimi-k2.6`, Qwen `qwen3.8-flash`, Grok
+  `grok-4.3`, Gemini `gemini-3.5-flash-lite`. `get_capabilities().max_context_tokens` is now the
+  default model's seeded window (Anthropic 1,000,000; DeepSeek 1,048,576, was 64,000; Kimi
+  262,144; Qwen and Grok 1,000,000). `AnthropicAdapter::get_available_models` and
+  `validate_model` serve the Anthropic table (the retired claude-3 and claude-2 lists are gone)
+  and `DeepSeekAdapter::get_available_models` serves `deepseek-flash`. Pin a model explicitly to
+  keep an earlier one.
 
 ### Fixed
 

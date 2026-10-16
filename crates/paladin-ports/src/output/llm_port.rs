@@ -1025,7 +1025,33 @@ pub struct LlmResponse {
 }
 
 impl LlmResponse {
-    /// RED scaffold.
+    /// Construct a response from the five fields every adapter knows: the originating request,
+    /// the served model, the generated text, why generation stopped, and the token usage.
+    ///
+    /// The remaining fields take their neutral values: a fresh `id`, `cost: None` (a pricing
+    /// decorator fills it), `created_at: Utc::now()`, empty `metadata` and `function_call: None`.
+    /// Because `LlmResponse` is constructible, adding a field to it breaks every caller that
+    /// writes a full struct literal; a caller that goes through this constructor is insulated
+    /// from the next field (MIGRATION DR-6) and can chain a `with_*` method for the one it sets.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{FinishReason, LlmResponse, TokenUsage};
+    /// use uuid::Uuid;
+    ///
+    /// let response = LlmResponse::new(
+    ///     Uuid::new_v4(),
+    ///     "gpt-4o-mini",
+    ///     "Hello!",
+    ///     FinishReason::Stop,
+    ///     TokenUsage::new(3, 2),
+    /// );
+    /// assert_eq!(response.content, "Hello!");
+    /// assert!(response.cost.is_none());
+    /// assert!(response.metadata.is_empty());
+    /// assert!(response.function_call.is_none());
+    /// ```
     pub fn new(
         request_id: Uuid,
         model: impl Into<String>,
@@ -1033,12 +1059,11 @@ impl LlmResponse {
         finish_reason: FinishReason,
         usage: TokenUsage,
     ) -> Self {
-        let _ = content;
         Self {
             id: Uuid::new_v4(),
             request_id,
             model: model.into(),
-            content: String::new(),
+            content: content.into(),
             finish_reason,
             usage,
             cost: None,
@@ -1347,7 +1372,12 @@ impl StreamingResponse {
     /// ```
     #[must_use]
     pub fn with_reasoning(mut self, text: impl Into<String>) -> Self {
-        let _ = text;
+        let text = text.into();
+        self.reasoning = if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        };
         self
     }
 }

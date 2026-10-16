@@ -34,9 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has neither a seeded entry nor an override and so ran on the adapter-wide fallback profile
   (never a refusal). `registry::ModelOverride` (`deny_unknown_fields`, validated: finite,
   ordered, non-zero, maximum output inside the window) is the per-model operator statement, laid
-  over the seeded entry field by field. Streamed calls warn only until the owner reading R-1 in
-  ADR-0061 decides whether the keys also reach the stream's terminal chunk. Additive: no
-  `MIGRATION.md` row and no allowlist entry here; plan 50-05 writes the row for the whole policy.
+  over the seeded entry field by field. Streamed calls warned only at this plan; owner reading
+  R-1 (option-b, plan 50-18, below) then carried the keys onto the stream's terminal chunk.
+  Additive: no `MIGRATION.md` row and no allowlist entry here; plan 50-05 writes the row for the
+  whole policy.
 
 - **Consumer-surface muster and library-consumer upgrade note (ADOPT-04, ADOPT-05; Phase 49 plans
   49-01, 49-02).** `tests/consumer_surface_muster.rs`, a compile-only integration test declared as
@@ -719,6 +720,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PaladinResult.run_metadata` (and, having no `served_by` field, carrying `paladin.served_by`
   too). The SSE `done` event of `paladin-web` is not extended.
 
+- **The Switching providers page, its drift test, the widened live smoke and the 17-case
+  conformance suite (PARITY-07, PARITY-01, PARITY-08; Phase 50 plans 50-01, 50-04, 50-15, 50-16).**
+  `docs/src/user-guides/switching-providers.md` explains the configuration-only swap, the library
+  path, the ADR-0061 parameter policy and its metadata keys, the window precedence, the 300 s
+  reasoning default, fallback chains, and carries a per-provider and per-model behaviour table and
+  a response-mapping table for all nine providers; the registry test
+  `switching_providers_page_lists_every_seeded_model` fails when the page and the seeded tables
+  disagree. `tests/provider_swap_matrix.rs` runs one agent definition against all nine providers
+  built from an `llm.<provider>` block (50 cases, none ignored). The shared conformance suite grew
+  from ten to seventeen cases and now measures all nine adapters, Anthropic included (capability
+  declarations match the wire, response format reaches the wire, empty stop completion buffered
+  and streamed, typed refusal, usage fields, unsupported parameters omitted and recorded). The
+  `live_vendor_smoke` example covers all nine providers, credential-gated (`SKIPPED` for an absent
+  credential, never a pass), with `--probe`, `--models` and `--dry-run`. Test and example surface
+  only; no public API change.
+
 ### Changed
 
 - **`llm.<provider>` blocks now take effect: the server builds every agent through
@@ -1072,6 +1089,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The OpenAI adapter no longer sends an empty user message, and all nine adapters build the user
+  turn the same way (PARITY-08; Phase 50 plan 50-01; handoff B-4).** The OpenAI adapter built the
+  user message from `UserPrompt::context` only, while `PaladinExecutionService` fills
+  `UserPrompt::query` and leaves `context` unset, so every OpenAI request on the main execution
+  path went out with `content: ""`. The other adapters read the query only and dropped the
+  context. All nine now call one shared rule: the query then the context, each only when
+  non-empty after trimming, joined by one blank line and otherwise sent unchanged. A query-only
+  prompt is byte-identical to before on the eight adapters that already sent it. Public API
+  unchanged.
 - A run whose superstep charges cannot be written to the treasury ledger no longer spends
   unmetered while the guard's balance reads keep succeeding (Phase 42 review WR-4). The engine now
   tells an attached `SpendGuard` when a boundary settlement was lost (a ledger error or a currency
@@ -1218,6 +1244,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   consumer takes it in its single move to v0.11.0.
 
 ### Known limitations
+
+- **Phase 50 provider-parity limits (ADR-0061; `MIGRATION.md` 9.1 M-B-13 to M-B-17).** (1) Seven of
+  the nine providers were probed on 2026-10-15; Ollama and OpenAI-compatible were skipped (no
+  daemon or endpoint), so they have no seeded models and run on adapter-wide values. Every model
+  the registry does not list does too, visibly unprofiled (`paladin.unprofiled_model`).
+  (2) Usage-cap (quota) mapping is unverified for Kimi, Qwen, Grok, Ollama and OpenAI-compatible:
+  no quota body was captured and the owner accepted each as unverified (owner reading R-2,
+  2026-10-16); each keeps the shared status mapping and an override is a single `error_override`
+  once a body is captured. (3) The OpenAI adapter sends `max_tokens`, which `gpt-5.4-nano`
+  rejects (it wants `max_completion_tokens`), so that model currently returns HTTP 400 through
+  it. (4) Kimi's adapter-wide fallback profile (`temperature` fixed at 1.0, `top_p` at 0.95) comes
+  from the 2026-08-22 measurement and contradicts the 2026-10-15 probe; it applies only to an
+  unseeded Kimi model id. (5) A caller that builds an `LlmRequest` directly gets omit, `warn!` and
+  metadata, not a refusal. (6) `TokenUsage.total_tokens` stays `prompt + completion`; a vendor's
+  own total is not copied. (7) The retry counters are not unified: Anthropic and Gemini count total
+  attempts, the other seven count retries after the first attempt. (8) The Grok and OpenAI
+  temperature upper bounds, and every `top_p` and penalty span, are stated or contract-derived
+  rather than measured edges; the Switching providers page labels each.
 
 - **Phase 42 allowance halts are bounded, not exact (ALLOW-03, ALLOW-05; `WINDOWS.md` rows 65-67,
   ADR-0057).** Three limits are accepted and recorded. (1) The mid-run boundary check is a

@@ -55,6 +55,12 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- Phase 50 (PARITY-05; ADR-0061): the LLM failure classifiers handle the new `LlmError::Refusal`
+  variant. `llm_failure` converts it to a `PaladinError::LlmFailure` that names its provider by
+  value with no HTTP status and `Permanent` transience (a fallback chain stops on it unless built
+  with `hop_on_refusal(true)`), and `LlmDecisionEvaluator`'s error class label for it is `"refusal"`. No
+  public item of this crate changed.
+
 - All five `WarEngine` `RunFinished` emission sites now populate `cost: trace.total_cost()`
   beside `usage: trace.total_usage()`, and each real Paladin-attempt `NodeFinished.cost` carries
   that attempt's own priced `PaladinResult.cost` — never a placeholder — so a run's total cost is

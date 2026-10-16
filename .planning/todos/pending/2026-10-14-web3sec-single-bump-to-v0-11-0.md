@@ -46,3 +46,20 @@ contradict the Milestone 13 section 5 rule the handoff cites (one coordinated po
   51 change that surface, so expect the muster to go red there and update it as part of those
   phases' registered breaks.
 - `MIGRATION.md` section 9.8 library-consumer note, an input to Phase 46's migration guide.
+
+## Update 2026-10-16 (Phase 50 closeout, plan 50-16)
+
+Phase 50's breaks and additions are now in `MIGRATION.md` 9.2 and the 9.8 consumer table, and in the
+root and per-crate CHANGELOGs: 9.8 gains DR-12 through DR-16 (the nine `*Config` types,
+`LlmProviderConfig`, `ModelFallbackConfig` and `AgentRuntimeDeps`, `PaladinResult.run_metadata` with
+the streaming `metadata` fields, `FallbackChainError`) plus a behaviour list for what the consumer
+meets at run time (an explicit Anthropic temperature is refused at build, `EmptyCompletion` and
+`LlmError::Refusal` on every provider, the 300 s reasoning default, adapter-wide `context_window`
+beating seeded windows). `tests/consumer_surface_muster.rs` now also pins `create_from_config`,
+`LlmConfig`, `LlmProviderConfig`, `ModelOverride`, `ModelProfile`, a `LlmError::Refusal` arm,
+`FallbackStep` and `from_steps`, `LlmResponse::new` and the `AnthropicConfig` knob builders.
+
+Still open on the consumer side, so the todo stays pending until the consumer moves after Phase 51:
+the bump itself, its own gates, and the choice among the drifted `new(..)` signatures
+(`2026-10-16-harmonise-llm-config-new-signatures.md`), which is a second break and not in v0.11.0
+unless the owner rides it on this bump.

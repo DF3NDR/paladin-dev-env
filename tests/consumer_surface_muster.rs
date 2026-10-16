@@ -35,7 +35,7 @@
 // pins live in never-called functions, so `dead_code` is allowed.
 #![allow(dead_code, clippy::type_complexity)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -60,7 +60,9 @@ use paladin::prelude::{
 };
 use paladin::{
     AnthropicAdapter, AnthropicConfig, Commissary, CommissaryError, CommissaryPlan, Consignment,
-    ConsignmentItem, DeepSeekAdapter, DeepSeekConfig, MockLlmAdapter, MultiStepMockLlmPort,
+    ConsignmentItem, DeepSeekAdapter, DeepSeekConfig, FallbackChainError, FallbackLlmAdapter,
+    FallbackStep, LlmConfig, LlmProviderConfig, LlmProviderFactory, MockLlmAdapter, ModelOverride,
+    MultiStepMockLlmPort,
 };
 
 // ---- direct path dependencies ----
@@ -69,6 +71,7 @@ use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
     TokenUsage,
 };
+use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 
@@ -336,6 +339,90 @@ async fn service_and_adapter_signatures(args: &[String]) {
             priority: 0,
         },
     );
+}
+
+/// Phase 50 (D-00i): the surfaces the consumer adopts at v0.11.0, all through the facade and
+/// `paladin_ports` paths it already uses, under the same two features (no new required feature):
+/// config-driven construction, the per-model profile, the typed refusal, per-step fallback chains,
+/// the `LlmResponse` constructor and the `AnthropicConfig` knob builders. NEVER CALLED: running
+/// it would build an adapter from the environment.
+async fn phase_50_surface(llm: Arc<dyn LlmPort>) {
+    // PARITY-03: build any adapter from an `llm.<provider>` block. `LlmProviderConfig` and the
+    // nine `*Config` types are `#[non_exhaustive]`, so every construction goes through `new(..)`
+    // and the `with_*` builders; `ModelOverride` is built by `default()` plus field assignment.
+    let mut over = ModelOverride::default();
+    over.temperature = Some(ParamSupport::Fixed(1.0));
+    over.max_output_tokens = Some(1);
+    over.reasoning = Some(true);
+    let block = LlmProviderConfig::new(String::new())
+        .with_base_url(String::new())
+        .with_default_model(String::new())
+        .with_default_temperature(1.0)
+        .with_timeout_seconds(1)
+        .with_max_retries(1)
+        .with_max_tokens(1)
+        .with_context_window(1)
+        .with_models(BTreeMap::from([("m".to_string(), over)]));
+    let config = LlmConfig {
+        anthropic: Some(block),
+        ..LlmConfig::default()
+    };
+    let _built = LlmProviderFactory::new().create_from_config(&config, "anthropic", Some("m"));
+    let _configured: bool = LlmProviderFactory::is_configured(Some(&config), "anthropic");
+
+    // PARITY-02: the per-model profile, read through `LlmPort::model_profile` (object safe).
+    let profile: Option<ModelProfile> = llm.model_profile("m");
+    let built = ModelProfile::new()
+        .with_temperature(ParamSupport::Range(0.0, 1.0))
+        .with_stop_sequences(StopSupport::Supported { max: None })
+        .with_context_window(1)
+        .with_max_output_tokens(1)
+        .with_reasoning(false);
+    let _read: (ParamSupport, StopSupport, Option<u32>, bool) = (
+        built.temperature,
+        built.stop_sequences,
+        built.context_window,
+        built.reasoning,
+    );
+    let _ = profile;
+
+    // PARITY-05: a refusal is its own typed, permanent error; a match arm names its fields.
+    let _refusal = |error: &LlmError| -> Option<(String, String, String)> {
+        match error {
+            LlmError::Refusal {
+                provider,
+                model,
+                detail,
+                ..
+            } => Some((provider.clone(), model.clone(), detail.clone())),
+            _ => None,
+        }
+    };
+
+    // PARITY-06: a fallback chain whose hops each send their own model.
+    let step = FallbackStep::new(llm, "m");
+    let _chain: Result<FallbackLlmAdapter, FallbackChainError> =
+        FallbackLlmAdapter::from_steps(vec![step]).map(|chain| chain.hop_on_refusal(false));
+
+    // PARITY-05 (DR-6): the constructor that names no field a later phase may add.
+    let _response: LlmResponse = LlmResponse::new(
+        Uuid::new_v4(),
+        "m",
+        "text",
+        FinishReason::Stop,
+        TokenUsage::new(1, 2),
+    )
+    .with_reasoning("thinking");
+
+    // PARITY-03: the `AnthropicConfig` knob set in the option-a shape (`new(..)` keeps its four
+    // arguments; the knobs are builders or public fields).
+    let mut anthropic = AnthropicConfig::new(String::new(), String::new(), String::new(), 1)
+        .with_max_tokens(1)
+        .with_max_retries(1)
+        .with_context_window(1)
+        .with_model_overrides(BTreeMap::new());
+    anthropic.timeout_seconds = 1;
+    let _adapter = AnthropicAdapter::new(anthropic);
 }
 
 #[test]

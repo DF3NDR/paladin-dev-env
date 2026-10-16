@@ -1004,6 +1004,36 @@ report the figure.
 | DR-9 | `BattalionError::Timeout` | variant removed | a timed-out attempt surfaces as `BattalionError::Node` with a `Timeout` source (Formation and Campaign) or inside `AggregationError` (Phalanx) | 9.2 `BattalionError` row (Phase 44); 9.1 M-B-06 |
 | DR-10 | `PaladinError::LlmError(String)`, `is_retryable()`, `is_terminal()` | removed | `PaladinError::LlmFailure { transience, status, provider, message }` and `transience()`; message text is never inspected | 9.2 `PaladinError` rows (Phase 44 removals); 9.1 M-B-09, M-B-10 |
 | DR-11 | `StopReason` | new variants `CallLimit`, `TokenBudget`, `AllowanceHalted(..)`; the enum is `#[non_exhaustive]` | none needed behind the wildcard arm the enum already requires | 9.2 `StopReason` rows |
+| DR-12 | The nine adapter configs: `OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`, `GeminiConfig`, `KimiConfig`, `QwenConfig`, `GrokConfig`, `OllamaConfig`, `OpenAiCompatibleConfig` (Phase 50) | each gains the PARITY-03 knob fields (`max_tokens`, `max_retries`, `context_window`, `model_overrides`, whichever it did not already carry) and is marked `#[non_exhaustive]`; a struct literal outside `paladin-llm` no longer compiles | keep `new(..)` and `from_env()` (their signatures are unchanged) and set a knob with `with_max_tokens`, `with_max_retries`, `with_context_window` or `with_model_overrides`, or by assigning the public field. The `new(..)` signatures still differ between providers; harmonising them is a separate, deferred owner todo (`.planning/todos/pending/2026-10-16-harmonise-llm-config-new-signatures.md`), not part of v0.11.0 | 9.2 `paladin-llm \| OpenAIConfig` through `paladin-llm \| OpenAiCompatibleConfig` (Phase 50) |
+| DR-13 | `LlmProviderConfig` (the `llm.<provider>` block, `paladin_llm::config::llm`, re-exported from the facade) | new fields `max_tokens`, `context_window` and `models` (per-model `ModelOverride`s); `api_key` is now optional (empty or absent falls back to the provider's environment variable); marked `#[non_exhaustive]`, so a struct literal no longer compiles | `LlmProviderConfig::new(api_key)` plus `with_base_url`, `with_default_model`, `with_default_temperature`, `with_timeout_seconds`, `with_max_retries`, `with_max_tokens`, `with_context_window`, `with_models`; build an adapter from it with `LlmProviderFactory::create_from_config` | 9.2 `paladin-llm \| LlmProviderConfig` (Phase 50); 9.5 `llm.<provider>` block |
+| DR-14 | `ModelFallbackConfig` and `AgentRuntimeDeps` (root crate) | `ModelFallbackConfig` gains `steps: Vec<FallbackStepConfig>` and `AgentRuntimeDeps` gains `llm_config: Option<LlmConfig>`; a full struct literal of either breaks | end the literal with `..Default::default()` (both derive `Default`); a chain whose hops each send their own model is `steps: vec![FallbackStepConfig { provider, model }]`, or in code `FallbackLlmAdapter::from_steps(vec![FallbackStep::new(port, model)])` | 9.2 `paladin-ai \| ModelFallbackConfig`, `paladin-ai \| AgentRuntimeDeps` (Phase 50) |
+| DR-15 | `PaladinResult`, `ChunkMetadata`, `StreamingResponse` | `PaladinResult` gains `run_metadata: BTreeMap<String, String>` (the third field this struct has gained in the series, after `cost` and `served_by`; a full literal breaks); `ChunkMetadata.run_metadata` and `StreamingResponse.metadata` are additive on `#[non_exhaustive]` structs | for `PaladinResult` use `..Default::default()` or `PaladinResult::new(..)`, neither of which names the field; read the run's `paladin.*` keys (omitted parameters, unprofiled model, adjusted response format, serving hop) from `run_metadata`, or from a stream's terminal chunk | 9.2 `paladin-ai-core \| PaladinResult` (Phase 50 extension, owner reading R-1) |
+| DR-16 | `FallbackChainError` | new variant `EmptyStepModel { index }`, returned by `FallbackLlmAdapter::from_steps`; the enum's only variant was a unit variant, so a numeric cast of `EmptyChain` no longer compiles | match with a wildcard arm; the enum is `#[non_exhaustive]` | 9.2 `paladin-llm \| FallbackChainError` (Phase 50) |
+
+**Phase 50 behaviour changes (no compile break; each has its section 9.1 row).** A consumer that
+swaps providers or models meets these at run time, not at the compiler:
+
+- An **explicit temperature on an Anthropic agent is now refused at build**, naming the provider, the
+  model and the parameter, because the current Anthropic model takes no temperature (M-B-13,
+  ADR-0061); drop `temperature` from those agents. An auto-selected or default value is omitted and
+  recorded instead (`paladin.params_omitted`).
+- **Empty text on any finish reason is `LlmError::EmptyCompletion`**, buffered and streamed, on all
+  nine providers (M-B-16, M-B-17); it used to be an empty `Ok` on several.
+- **A refusal is `LlmError::Refusal { provider, model, detail }`** (`Permanent`; a fallback chain
+  stops on it unless built with `hop_on_refusal(true)`): match it (`LlmError::Refusal { .. }`).
+  Gemini's `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT` and `SPII` finishes are now
+  `ContentFilter`, no longer `Error(<value>)` (M-B-16, M-B-17).
+- A **direct `*Config` constructor defaults a seeded reasoning model to a 300 s timeout**, exactly as
+  `create_from_config` does; a model marked reasoning only through `model_overrides` needs
+  `timeout_seconds` set on the direct path (9.5, `llm.<provider>` block).
+- An **adapter-wide `context_window` now beats seeded windows**, and a per-model override beats both
+  (M-B-14; 9.5). Default models and windows come from a dated registry (M-B-14).
+- **OpenAI no longer sends a fabricated `temperature` or `top_p`**; the vendor default applies
+  unless the caller set one (M-B-13).
+- **`llm.<provider>` blocks take effect** and `default_temperature` is judged against the model's
+  profile (M-B-15).
+- The run-metadata keys of DR-15 are visible per call, per run and on a stream's terminal chunk
+  (owner reading R-1, ADR-0061 (h)).
 
 **Insulating the next bump (consumer-side; no Paladin change).** Prefer
 `PaladinResult { .., ..Default::default() }` or `PaladinResult::new(..)` over a full struct literal;
@@ -1015,8 +1045,13 @@ finish_reason, usage)`, that sets the five fields every mock knows and leaves th
 about: a consumer that routes mock responses through one consumer-owned test helper (for example
 `fn mock_response(usage: TokenUsage) -> LlmResponse`, now built with `LlmResponse::new`) edits one
 line for `reasoning`, and the next added field is then free for every caller of the constructor
-instead of costing one edit per literal.
+instead of costing one edit per literal. The same holds for DR-15: a `PaladinResult` built as
+`PaladinResult { .., ..Default::default() }` takes `run_metadata` for free, and `LlmResponse::new(..)`
+plus `with_reasoning(..)` takes any field a later phase adds to `LlmResponse`.
 
 `tests/consumer_surface_muster.rs` is the executable form of this list (`make
-check-consumer-surface` runs it). A red muster means the next bump needs a row here and its section
-9.2 row in the same commit.
+check-consumer-surface` runs it), including the Phase 50 surfaces the consumer adopts at v0.11.0:
+`LlmProviderFactory::create_from_config`, `LlmConfig`, `LlmProviderConfig`, `ModelOverride`,
+`ModelProfile`, a `LlmError::Refusal { .. }` match arm, `FallbackStep` and
+`FallbackLlmAdapter::from_steps`, `LlmResponse::new` and the `AnthropicConfig` knob builders. A red
+muster means the next bump needs a row here and its section 9.2 row in the same commit.

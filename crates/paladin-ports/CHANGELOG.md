@@ -9,6 +9,21 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 50 (provider parity and configuration-driven model swap; PARITY-02, PARITY-05; ADR-0061):
+  `ModelProfile`, `ParamSupport` (`Range`, `Fixed`, `NotSent`), `StopSupport` and `SamplingParam`
+  in `output::model_profile` (re-exported from `output::llm_port`), and the defaulted
+  `LlmPort::model_profile(&self, model)`, which returns `None` so no implementor breaks and
+  `ProviderCapabilities` is untouched. `ParamSupport::admits` is the single admission rule
+  (inclusive range, exact `Fixed` equality, `NaN` never admitted, no clamping); `ModelProfile` is
+  `#[non_exhaustive]` and `ModelProfile::new()` is fail closed. `LlmError::Refusal { provider,
+  model, detail }`, a vendor's own refusal (`Permanent`), distinct from a `ContentFilter` finish
+  and from `EmptyCompletion`. `LlmResponse::new(request_id, model, content, finish_reason, usage)`
+  and the chainable `LlmResponse::with_reasoning`, which insulate a caller from the next added
+  field; `StreamingResponse.reasoning` and `StreamingResponse.metadata` with `with_reasoning` and
+  `with_metadata` (additive on a `#[non_exhaustive]` struct), `ChunkMetadata.run_metadata` with
+  `with_run_metadata`, and `PaladinResult.run_metadata` (defined in `paladin-core`, re-exported
+  here) carrying the run's `paladin.*` visibility keys (owner reading R-1).
+
 - Phase 43 (rate pacing, the Cadence; PACE-01..PACE-05; ADR-0058): the `CadencePort` output port
   (`gate`, `record_rate_limited`, `record_success`, and the stampede-lock methods `try_lock` and
   `unlock`) with `CadenceKey`, `GateReading`, `CadenceError`, `CadencePolicy` (exponential back-off
@@ -62,6 +77,10 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- Phase 50: `LlmError::EmptyCompletion`'s `Display` is `Empty completion: {0}` without a fixed
+  suffix; the payload now carries the advice. `LlmResponse.usage` still guarantees
+  `total_tokens == prompt_tokens + completion_tokens`.
+
 - `LlmError::RateLimitExceeded` is now the `#[non_exhaustive]` struct variant `{ retry_after:
   Option<Duration>, hints: Option<Box<RateLimitHints>> }` (PACE-01; Phase 43 plan 43-02;
   `MIGRATION.md` section 9.2). Construct it with `LlmError::rate_limited(None)` or
@@ -76,6 +95,15 @@ and this project follows lockstep workspace versioning.
   TENANT-02; see root `MIGRATION.md` §9.2).
 - `CompositeSink::on_event` moves the record into its last child instead of cloning it for every
   child; no behaviour change (OBS-05).
+
+### Breaking Changes
+
+- Phase 50 (PARITY-05, owner reading R-1): `LlmResponse` gains `reasoning: Option<String>`
+  directly after `cost`, so a full `LlmResponse` struct literal no longer compiles; add
+  `reasoning: None`, or build with `LlmResponse::new(..)` plus `with_reasoning`. `PaladinResult`
+  gains `run_metadata` after `served_by`; use `..Default::default()` or `PaladinResult::new(..)`.
+  `LlmError` gains the `Refusal` variant (the enum is `#[non_exhaustive]`; a classifier needs an
+  arm). Each is registered in `MIGRATION.md` section 9.2 and the semver allowlist.
 
 ## [0.10.1] - 2026-09-20
 

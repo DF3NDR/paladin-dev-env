@@ -308,6 +308,12 @@ fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
         // Never produced by a model-list fetch either (no completion is
         // requested) — same reason.
         LlmError::EmptyCompletion(_) => FetchFailureClass::Supported,
+        // A refusal is a policy decision by a model about a prompt; a
+        // model-list fetch sends no prompt, so a vendor answering `/models`
+        // with one means the endpoint is not the OpenAI-compatible service
+        // the configuration claims. That is a configuration problem, not a
+        // transient availability one, so it is audible (D-09).
+        LlmError::Refusal { .. } => FetchFailureClass::Misconfiguration,
         // A malformed prompt cannot reach a model-list fetch at all — this
         // arm exists only so the match stays exhaustive.
         LlmError::InvalidPrompt(_) => FetchFailureClass::Supported,
@@ -2279,6 +2285,18 @@ mod tests {
         assert_eq!(
             classify_fetch_failure(&LlmError::EmptyCompletion("no text".to_string())),
             FetchFailureClass::Supported
+        );
+    }
+
+    #[test]
+    fn classify_fetch_failure_refusal_is_misconfiguration() {
+        assert_eq!(
+            classify_fetch_failure(&LlmError::Refusal {
+                provider: "kimi".to_string(),
+                model: "m".to_string(),
+                detail: "no".to_string(),
+            }),
+            FetchFailureClass::Misconfiguration
         );
     }
 

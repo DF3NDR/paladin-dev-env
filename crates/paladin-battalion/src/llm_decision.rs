@@ -308,6 +308,7 @@ pub(crate) fn llm_error_class(error: &LlmError) -> &'static str {
         LlmError::ModelNotAvailable(_) => "model not available",
         LlmError::TokenLimitExceeded => "token limit exceeded",
         LlmError::EmptyCompletion(_) => "empty completion",
+        LlmError::Refusal { .. } => "refusal",
         LlmError::ProcessingError(_) => "processing error",
         LlmError::Timeout(_) => "timeout",
         LlmError::ProviderError { .. } => "provider error",
@@ -323,6 +324,18 @@ pub(crate) fn llm_error_class(error: &LlmError) -> &'static str {
 mod tests {
     use super::*;
     use paladin_llm::mock::MockLlmAdapter;
+
+    /// D-09: a refusal has its own fixed class label, never the provider's
+    /// refusal text (egress-boundary rule).
+    #[test]
+    fn llm_error_class_labels_a_refusal() {
+        let err = LlmError::Refusal {
+            provider: "openai".to_string(),
+            model: "m".to_string(),
+            detail: "sensitive vendor text".to_string(),
+        };
+        assert_eq!(llm_error_class(&err), "refusal");
+    }
 
     fn make_evaluator(llm: Arc<dyn LlmPort>) -> LlmDecisionEvaluator {
         LlmDecisionEvaluator::new(

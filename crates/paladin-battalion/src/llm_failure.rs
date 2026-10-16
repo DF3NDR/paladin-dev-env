@@ -100,8 +100,8 @@ pub fn to_paladin_error(err: &LlmError) -> PaladinError {
 ///
 /// Only `ProviderError` carries a status, so every other variant converts
 /// with `status: None` -- never a sentinel such as `0`, and never a value
-/// parsed out of the rendered message (T-25-24). `UsageLimitExceeded` names
-/// its provider by value without a status. A fallback chain reports whatever
+/// parsed out of the rendered message (T-25-24). `UsageLimitExceeded` and
+/// `Refusal` name their provider by value without a status. A fallback chain reports whatever
 /// its last attempt carried, matching how its `transience()` delegates to
 /// `last` (FT-FR-16).
 ///
@@ -114,6 +114,7 @@ fn typed_origin(err: &LlmError) -> (Option<u16>, Option<String>) {
             provider, status, ..
         } => (Some(*status), Some(provider.clone())),
         LlmError::UsageLimitExceeded { provider, .. } => (None, Some(provider.clone())),
+        LlmError::Refusal { provider, .. } => (None, Some(provider.clone())),
         LlmError::AllProvidersFailed { last, .. } => typed_origin(last),
         _ => (None, None),
     }
@@ -370,6 +371,8 @@ mod tests {
             LlmError::EmptyCompletion("finish_reason=length".to_string()),
             LlmError::ProcessingError("unexpected body".to_string()),
         ];
+        // `Refusal` is deliberately absent: it names its provider by value
+        // (see `refusal_carries_its_provider`).
 
         for err in without_status {
             let (_, status, provider, _) = expect_failure(to_paladin_error(&err));
@@ -385,6 +388,23 @@ mod tests {
         let err = LlmError::UsageLimitExceeded {
             provider: "anthropic".to_string(),
             regain_hint: None,
+        };
+
+        let (transience, status, provider, _) = expect_failure(to_paladin_error(&err));
+
+        assert_eq!(transience, Transience::Permanent);
+        assert_eq!(status, None);
+        assert_eq!(provider.as_deref(), Some("anthropic"));
+    }
+
+    /// D-09: a `Refusal` names its provider by value and carries no HTTP
+    /// status; it converts as `Permanent`.
+    #[test]
+    fn refusal_carries_its_provider() {
+        let err = LlmError::Refusal {
+            provider: "anthropic".to_string(),
+            model: "m".to_string(),
+            detail: "d".to_string(),
         };
 
         let (transience, status, provider, _) = expect_failure(to_paladin_error(&err));

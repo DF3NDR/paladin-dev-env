@@ -1129,9 +1129,10 @@ fn concat_text_blocks(content: &[ClaudeContent]) -> String {
 ///
 /// The message names the block-type census and the stop reason so the next
 /// reader learns "the model spent its whole budget thinking" in one step
-/// instead of three rounds of debugging. Remediation advice is deliberately
-/// NOT repeated here — [`LlmError::EmptyCompletion`]'s own `Display` already
-/// appends it, and duplicating it would read as noise.
+/// instead of three rounds of debugging. [`LlmError::EmptyCompletion`]'s
+/// `Display` no longer appends a fixed remedy (D-11a), so the advice that
+/// fits the stop reason lives here: a larger `max_tokens` for a `max_tokens`
+/// stop, "the model returned no text" otherwise.
 fn detect_no_text_content(
     content: &[ClaudeContent],
     stop_reason: Option<&str>,
@@ -1146,8 +1147,14 @@ fn detect_no_text_content(
         .collect::<Vec<_>>()
         .join(", ");
 
+    let advice = if stop_reason == Some("max_tokens") {
+        "reasoning likely consumed the entire max_tokens budget; retry with a larger max_tokens"
+    } else {
+        "the model returned no text"
+    };
+
     Some(LlmError::EmptyCompletion(format!(
-        "{} content block(s) with no text (types: [{}]), stop_reason={}",
+        "{} content block(s) with no text (types: [{}]), stop_reason={} — {advice}",
         content.len(),
         block_types,
         stop_reason.unwrap_or("none")

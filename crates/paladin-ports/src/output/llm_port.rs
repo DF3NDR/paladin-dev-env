@@ -425,6 +425,52 @@ pub enum LlmError {
         regain_hint: Option<String>,
     },
 
+    /// The model declined to answer: a policy decision by the model itself,
+    /// reported by the vendor through a dedicated refusal field (D-09).
+    ///
+    /// A refusal is not a [`FinishReason::ContentFilter`] finish (that is an
+    /// `Ok` response the caller inspects), not an empty answer
+    /// ([`LlmError::EmptyCompletion`]) and not a generic processing failure.
+    /// It is its own type so a consumer deciding whether to try another
+    /// provider can tell a policy refusal apart from a fault.
+    ///
+    /// `detail` is the vendor's refusal text, already redacted and then
+    /// bounded by the adapter that built this error (credentials removed
+    /// first, so a key can never be sliced across the truncation boundary).
+    /// It is display text: never parse it into a value anything schedules
+    /// against.
+    ///
+    /// **Recovery**: Do not retry the same request against the same provider;
+    /// it reproduces the same refusal. A caller may deliberately try another
+    /// provider or model. `FallbackLlmAdapter` stops on a refusal by default.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::transience::Transience;
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// let error = LlmError::Refusal {
+    ///     provider: "anthropic".to_string(),
+    ///     model: "claude-sonnet-4".to_string(),
+    ///     detail: "I can't help with that.".to_string(),
+    /// };
+    /// let rendered = error.to_string();
+    /// assert!(rendered.contains("anthropic"));
+    /// assert!(rendered.contains("claude-sonnet-4"));
+    /// assert!(rendered.contains("I can't help with that."));
+    /// assert_eq!(error.transience(), Transience::Permanent);
+    /// ```
+    #[error("Refused by provider '{provider}' (model '{model}'): {detail}")]
+    Refusal {
+        /// The provider whose model refused (e.g. `"anthropic"`, `"openai"`).
+        provider: String,
+        /// The model that refused, as named on the request.
+        model: String,
+        /// The vendor's refusal text, redacted then bounded. Display-only.
+        detail: String,
+    },
+
     /// Requested model not available or not supported by provider
     ///
     /// **Recovery**: Use `get_available_models()` to find alternatives
@@ -437,18 +483,23 @@ pub enum LlmError {
     #[error("Token limit exceeded")]
     TokenLimitExceeded,
 
-    /// Completion was truncated before any content was produced: the provider
-    /// reported `finish_reason=length` while `content` was empty or whitespace-only.
+    /// The provider returned no usable text: `content` was empty or
+    /// whitespace-only on a finish that is neither a refusal, a content
+    /// filter nor a function call (D-11a).
     ///
-    /// This is the signature of a reasoning model (e.g. DeepSeek's `-flash`/`-pro`
-    /// variants) whose hidden `reasoning_content` consumed the entire `max_tokens`
-    /// budget, leaving no tokens for the visible answer. It is distinct from
-    /// [`LlmError::TokenLimitExceeded`], whose recovery (reduce prompt size) is the
-    /// opposite of what this condition needs.
+    /// The payload names the finish reason and carries the advice that fits
+    /// it. For `finish_reason=length` this is the signature of a reasoning
+    /// model (e.g. DeepSeek's `-flash`/`-pro` variants) whose hidden
+    /// reasoning consumed the entire `max_tokens` budget, so the advice is a
+    /// larger `max_tokens`. For `finish_reason=stop` the model simply
+    /// returned no text and a larger budget would not help. It is distinct
+    /// from [`LlmError::TokenLimitExceeded`], whose recovery (reduce prompt
+    /// size) is the opposite of what a truncation needs.
     ///
-    /// **Recovery**: Retry with a larger `max_tokens` budget to give the model
-    /// headroom for both reasoning and the visible completion. Do not retry with
-    /// an identical request — it will reproduce the same truncation.
+    /// **Recovery**: Read the payload. For a `length` truncation, retry with a
+    /// larger `max_tokens` budget; do not retry an identical request, it will
+    /// reproduce the same truncation. For a `stop` with no text, rephrase the
+    /// request or try another model.
     ///
     /// # Examples
     ///
@@ -456,13 +507,13 @@ pub enum LlmError {
     /// use paladin_ports::output::llm_port::LlmError;
     ///
     /// let error = LlmError::EmptyCompletion(
-    ///     "finish_reason=length, content empty (reasoning consumed max_tokens budget)".to_string()
+    ///     "finish_reason=length, content empty (reasoning consumed max_tokens budget); \
+    ///      retry with a larger max_tokens budget".to_string()
     /// );
+    /// assert!(error.to_string().starts_with("Empty completion:"));
     /// assert!(error.to_string().contains("max_tokens"));
     /// ```
-    #[error(
-        "Empty completion: {0} — retry with a larger max_tokens budget (reasoning likely consumed the whole budget)"
-    )]
+    #[error("Empty completion: {0}")]
     EmptyCompletion(String),
 
     /// General processing error during LLM interaction
@@ -640,6 +691,7 @@ impl LlmError {
             LlmError::ModelNotAvailable(_) => Transience::Permanent,
             LlmError::TokenLimitExceeded => Transience::Permanent,
             LlmError::EmptyCompletion(_) => Transience::Permanent,
+            LlmError::Refusal { .. } => Transience::Permanent,
 
             // Unresolvable from a bare string: no typed field distinguishes
             // a transient cause from a permanent one.
@@ -2479,6 +2531,14 @@ mod tests {
             (LlmError::ModelNotAvailable("x".into()), Permanent),
             (LlmError::TokenLimitExceeded, Permanent),
             (LlmError::EmptyCompletion("x".into()), Permanent),
+            (
+                LlmError::Refusal {
+                    provider: "anthropic".into(),
+                    model: "m".into(),
+                    detail: "d".into(),
+                },
+                Permanent,
+            ),
             (LlmError::ProcessingError("x".into()), Unknown),
         ];
         for (err, expected) in cases {
@@ -2489,6 +2549,35 @@ mod tests {
                 err.transience()
             );
         }
+    }
+
+    /// D-09: a refusal's `Display` names the provider, the model and the
+    /// (already redacted and bounded) detail.
+    #[test]
+    fn refusal_display_names_provider_model_and_detail() {
+        let err = LlmError::Refusal {
+            provider: "openai".into(),
+            model: "gpt-x".into(),
+            detail: "I can't help with that.".into(),
+        };
+        let rendered = err.to_string();
+        assert!(rendered.contains("openai"), "{rendered}");
+        assert!(rendered.contains("gpt-x"), "{rendered}");
+        assert!(rendered.contains("I can't help with that."), "{rendered}");
+        assert_eq!(err.transience(), Transience::Permanent);
+    }
+
+    /// D-11a: `EmptyCompletion`'s `Display` no longer appends max-tokens
+    /// advice for every finish reason; the payload carries its own advice.
+    #[test]
+    fn empty_completion_display_has_no_fixed_max_tokens_suffix() {
+        let stop =
+            LlmError::EmptyCompletion("finish_reason=stop, the model returned no text".into());
+        assert_eq!(
+            stop.to_string(),
+            "Empty completion: finish_reason=stop, the model returned no text"
+        );
+        assert!(!stop.to_string().contains("max_tokens"));
     }
 
     /// `ProviderError`'s boundary statuses classify by value only: 408, 429

@@ -344,6 +344,17 @@ Never invent a fourth "partial" value, and never substitute a `TokenCounterPort`
 missing billed figure — an unreported streamed usage is `None`, not an estimate presented as a
 provider-billed count.
 
+### Conformance Suite and Model Profile (Required)
+
+Every adapter that ships is measured by the shared 17-case conformance suite
+(`crates/paladin-llm/src/conformance.rs`, ten transport cases and seven behaviour cases), and a
+new adapter must join it through `llm_conformance_suite!` with its own `ConformanceFixture`. It
+must also declare `model_profile` (see [Switching Providers](../user-guides/switching-providers.md)
+and ADR-0061): the adapter-wide fallback profile states what its request builder sends, and a
+per-model entry is added to the registry only from dated evidence (the operator's live probe,
+`50-SEED-PROBE.md`). An adapter that does not override `model_profile` returns no profile (the
+trait default is `None`) and so sits outside the parameter policy.
+
 ### Integration Tests (Optional)
 
 Create `tests/integration/llm/myprovider_integration_test.rs` with tests marked `#[ignore]` for live API testing.

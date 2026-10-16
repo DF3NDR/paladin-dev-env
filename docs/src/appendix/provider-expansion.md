@@ -27,6 +27,11 @@ Paladin supports multiple LLM providers out of the box, allowing you to choose t
 2. **DeepSeek** (DeepSeek-Chat, DeepSeek-Coder)
 3. **Anthropic** (Claude 3.5 Sonnet, Claude 3 Opus/Haiku)
 
+These three are the long-standing providers this guide describes in detail; six more ship behind
+their own feature flags (see the comparison table below). To move an agent between any of the nine
+by configuration, and for the per-model behaviour each was measured to have, read
+[Switching Providers](../user-guides/switching-providers.md).
+
 ---
 
 ## Provider Comparison
@@ -43,7 +48,7 @@ the struct's own rustdoc notes this explicitly.
 | **Tool Calling** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
 | **Function Calling** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
 | **Vision/Images** | ✅ Yes | ❌ No | ✅ Yes | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | configurable |
-| **Max Context** | 128K | 64K | 200K | 131K | 131K | 131K | model-dependent (unset) | 1.05M | server-dependent |
+| **Max Context** | 128K (adapter-wide; seeded models differ) | 1.05M | 1M | 1M | 262K | 1M | model-dependent (unset) | 1.05M | server-dependent |
 | **Best For** | General purpose, production | Cost-effective, reasoning | Safety-critical, analysis | General purpose | Long-context reasoning | General purpose | Local/self-hosted | Very long context | Self-hosted or third-party OpenAI-API servers |
 | **Pricing** | $$ | $ | $$$ | Varies (see provider docs) | Varies (see provider docs) | Varies (see provider docs) | Free (self-hosted) | Varies (see provider docs) | Varies (server-dependent) |
 | **Latency** | Low | Low | Low-Medium | Varies (see provider docs) | Varies (see provider docs) | Varies (see provider docs) | Varies (local hardware) | Varies (see provider docs) | Varies (server-dependent) |
@@ -78,7 +83,7 @@ the struct's own rustdoc notes this explicitly.
   - Competitive performance at lower cost
 
 - **Limitations**:
-  - Smaller context window (64K)
+  - Context window varies by model (1,048,576 tokens for `deepseek-flash`); see [Switching Providers](../user-guides/switching-providers.md)
   - No vision support
   - Newer ecosystem, less community resources
 
@@ -91,7 +96,7 @@ the struct's own rustdoc notes this explicitly.
 
 #### Anthropic Claude
 - **Strengths**:
-  - Largest context window (200K tokens)
+  - Large context window (1,000,000 tokens for the default `claude-haiku-5-5`)
   - Strong safety and ethical guidelines
   - Excellent for complex analysis
   - Superior long-document processing
@@ -163,12 +168,12 @@ export OPENAI_API_KEY="sk-..."
 # DeepSeek
 export DEEPSEEK_API_KEY="..."
 export DEEPSEEK_BASE_URL="https://api.deepseek.com/v1"  # Optional
-export DEEPSEEK_MODEL="deepseek-chat"                    # Optional
+export DEEPSEEK_MODEL="deepseek-flash"                   # Optional
 
 # Anthropic
 export ANTHROPIC_API_KEY="sk-ant-..."
 export ANTHROPIC_BASE_URL="https://api.anthropic.com/v1" # Optional
-export ANTHROPIC_MODEL="claude-3-5-sonnet-20241022"      # Optional
+export ANTHROPIC_MODEL="claude-haiku-5-5"                # Optional
 ```
 
 ### Configuration Files
@@ -183,20 +188,20 @@ llm:
   openai:
     api_key: "${OPENAI_API_KEY}"
     base_url: "https://api.openai.com/v1"
-    model: "gpt-4"
+    default_model: "gpt-4o-mini"
     timeout_seconds: 30
 
   deepseek:
     api_key: "${DEEPSEEK_API_KEY}"
     base_url: "https://api.deepseek.com/v1"
-    model: "deepseek-chat"
-    timeout_seconds: 60
+    default_model: "deepseek-flash"
+    timeout_seconds: 300
 
   anthropic:
     api_key: "${ANTHROPIC_API_KEY}"
     base_url: "https://api.anthropic.com/v1"
-    model: "claude-3-5-sonnet-20241022"
-    timeout_seconds: 30
+    default_model: "claude-haiku-5-5"
+    timeout_seconds: 300
 ```
 
 ### Programmatic Configuration
@@ -210,14 +215,11 @@ use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 let config = OpenAIConfig::from_env()?;
 let adapter = OpenAIAdapter::new(config)?;
 
-// Or custom
-let config = OpenAIConfig {
-    api_key,
-    base_url: "https://api.openai.com/v1".to_string(),
-    organization: None,
-    timeout_seconds: 30,
-    max_retries: 3,
-};
+// Or custom: `OpenAIConfig` is `#[non_exhaustive]`, so start from `new(..)` and set the
+// knobs with the `with_*` builders or by assigning the public fields
+let mut config = OpenAIConfig::new(api_key).with_max_retries(3);
+config.base_url = "https://api.openai.com/v1".to_string();
+config.timeout_seconds = 30;
 let adapter = OpenAIAdapter::new(config)?;
 ```
 
@@ -234,7 +236,7 @@ let adapter = DeepSeekAdapter::new(config)?;
 let config = DeepSeekConfig::new(
     api_key,
     "https://api.deepseek.com/v1".to_string(),
-    "deepseek-chat".to_string()
+    "deepseek-flash".to_string()
 );
 let adapter = DeepSeekAdapter::new(config)?;
 ```
@@ -252,8 +254,10 @@ let adapter = AnthropicAdapter::new(config)?;
 let config = AnthropicConfig::new(
     api_key,
     "https://api.anthropic.com/v1".to_string(),
-    "claude-3-5-sonnet-20241022".to_string()
-);
+    "claude-haiku-5-5".to_string(), // ANTHROPIC_DEFAULT_MODEL
+    4096,                           // max_tokens, required by the Messages API
+)
+.with_max_retries(3);
 let adapter = AnthropicAdapter::new(config)?;
 ```
 
@@ -333,7 +337,7 @@ let paladin = PaladinBuilder::new(llm_port)
 
 **Considerations:**
 - DeepSeek has no vision support
-- Context window is 64K vs 128K for GPT-4
+- Context windows are per model: `deepseek-flash` is 1,048,576 tokens, `gpt-4o-mini` 128,000 (see [Switching Providers](../user-guides/switching-providers.md))
 - Response style may differ slightly
 
 ### From OpenAI to Anthropic
@@ -357,7 +361,7 @@ let paladin = PaladinBuilder::new(llm_port)
 **Key Differences:**
 - Claude requires `max_tokens` parameter (defaults to 4096)
 - System messages are sent separately
-- Larger context window (200K tokens)
+- Larger context window (1,000,000 tokens for `claude-haiku-5-5`)
 - Different SSE streaming format
 
 ### Provider Fallback Pattern
@@ -539,7 +543,7 @@ println!("Total cost: ${}", calculate_cost(&response, provider_name));
 
 **Solutions:**
 1. Reduce input size
-2. Switch to provider with larger context (Claude: 200K)
+2. Switch to a model with a larger context window (see the per-model table in [Switching Providers](../user-guides/switching-providers.md))
 3. Implement context windowing
 4. Summarize older conversation history
 

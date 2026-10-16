@@ -1498,3 +1498,506 @@ mod knob_tests {
         ));
     }
 }
+
+/// The Switching providers page against the registry (Phase 50 plan 50-16, PARITY-07, RESEARCH
+/// Open Question 10): the mdBook page `docs/src/user-guides/switching-providers.md` carries one
+/// table row per seeded model and one adapter-wide fallback row per provider, and this module
+/// fails when the page and `seeded.rs` disagree, so a row cannot be edited on one side only.
+///
+/// Compiled only when all nine adapters are, because the page lists all nine providers and a
+/// partial build has no table for the others to compare against. The workspace phase gate
+/// (`--features llm-all`) and `cargo test -p paladin-llm --all-features` both compile it.
+///
+/// Skip rule (the Phase 48 precedent, `tests/entity_rename_guard.rs`): the check is skipped only
+/// when the tree has no `docs/` directory at all, which is the Docker test image's build context
+/// (`.dockerignore` excludes `docs/`). A tree that has `docs/` but not the page fails.
+#[cfg(all(
+    test,
+    feature = "openai",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "gemini",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod switching_page_tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    /// The page, relative to the workspace root.
+    const PAGE: &str = "docs/src/user-guides/switching-providers.md";
+    /// The nine providers in the fixed order every table on the page uses.
+    const PROVIDERS: [&str; 9] = [
+        "openai",
+        "anthropic",
+        "deepseek",
+        "kimi",
+        "qwen",
+        "grok",
+        "gemini",
+        "ollama",
+        "openai-compatible",
+    ];
+    /// The model cell of an adapter-wide fallback row.
+    const FALLBACK_LABEL: &str = "(adapter-wide fallback)";
+    /// The `verified on` cell of an adapter-wide fallback row.
+    const UNVERIFIED: &str = "unverified";
+    const BEHAVIOUR_HEADING: &str = "## Per-provider and per-model behaviour";
+    const RESPONSES_HEADING: &str = "## Responses";
+    /// Columns of the behaviour table.
+    const BEHAVIOUR_COLUMNS: usize = 11;
+
+    /// What a check of the page concluded.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Outcome {
+        /// The tree has no `docs/` directory (the Docker test image): nothing to check.
+        Skipped,
+        /// The page was read and agrees with the registry.
+        Checked,
+    }
+
+    fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    /// The seeded table of `provider`; OpenAI-compatible has none by design.
+    fn seeded_for(provider: &str) -> &'static [SeededProfile] {
+        match provider {
+            "openai" => seeded::OPENAI,
+            "anthropic" => seeded::ANTHROPIC,
+            "deepseek" => seeded::DEEPSEEK,
+            "kimi" => seeded::KIMI,
+            "qwen" => seeded::QWEN,
+            "grok" => seeded::GROK,
+            "gemini" => seeded::GEMINI,
+            "ollama" => seeded::OLLAMA,
+            _ => &[],
+        }
+    }
+
+    fn with_thousands(value: u32) -> String {
+        let digits = value.to_string();
+        let mut out = String::new();
+        for (index, digit) in digits.chars().enumerate() {
+            if index > 0 && (digits.len() - index).is_multiple_of(3) {
+                out.push(',');
+            }
+            out.push(digit);
+        }
+        out
+    }
+
+    fn render_limit(limit: Option<u32>) -> String {
+        limit.map_or_else(|| "not set".to_string(), with_thousands)
+    }
+
+    fn render_param(support: ParamSupport) -> String {
+        match support {
+            ParamSupport::Range(lo, hi) => format!("{lo:?} to {hi:?}"),
+            ParamSupport::Fixed(value) => format!("only {value:?}"),
+            ParamSupport::NotSent => "not sent".to_string(),
+        }
+    }
+
+    fn render_penalties(profile: &ModelProfile) -> String {
+        if profile.frequency_penalty == profile.presence_penalty {
+            render_param(profile.frequency_penalty)
+        } else {
+            format!(
+                "frequency {}; presence {}",
+                render_param(profile.frequency_penalty),
+                render_param(profile.presence_penalty)
+            )
+        }
+    }
+
+    fn render_stop(stop: StopSupport) -> String {
+        match stop {
+            StopSupport::NotSent => "not sent".to_string(),
+            StopSupport::Supported { max: None } => "yes".to_string(),
+            StopSupport::Supported { max: Some(max) } => format!("up to {max}"),
+        }
+    }
+
+    fn render_json(profile: &ModelProfile) -> String {
+        match (profile.json_object, profile.json_schema) {
+            (true, true) => "object, schema",
+            (true, false) => "object",
+            (false, true) => "schema",
+            (false, false) => "none",
+        }
+        .to_string()
+    }
+
+    fn render_yes_no(value: bool) -> String {
+        if value { "yes" } else { "no" }.to_string()
+    }
+
+    /// The cells one seeded entry must have on the page, footnote markers excluded.
+    fn expected_cells(provider: &str, entry: &SeededProfile) -> Vec<String> {
+        let profile = (entry.build)();
+        vec![
+            provider.to_string(),
+            format!("`{}`", entry.model),
+            entry.verified_on.to_string(),
+            render_limit(profile.context_window),
+            render_limit(profile.max_output_tokens),
+            render_param(profile.temperature),
+            render_param(profile.top_p),
+            render_penalties(&profile),
+            render_stop(profile.stop_sequences),
+            render_yes_no(profile.reasoning),
+            render_json(&profile),
+        ]
+    }
+
+    /// Remove footnote markers (a space, `[`, one lowercase letter, `]`) from a cell.
+    fn strip_markers(cell: &str) -> String {
+        let chars: Vec<char> = cell.chars().collect();
+        let mut out = String::new();
+        let mut index = 0;
+        while index < chars.len() {
+            let is_marker = chars[index] == ' '
+                && chars.get(index + 1) == Some(&'[')
+                && chars.get(index + 2).is_some_and(char::is_ascii_lowercase)
+                && chars.get(index + 3) == Some(&']');
+            if is_marker {
+                index += 4;
+            } else {
+                out.push(chars[index]);
+                index += 1;
+            }
+        }
+        out
+    }
+
+    /// The lines of the section that starts at `heading` and ends at the next `## ` heading.
+    fn section<'a>(page: &'a str, heading: &str) -> Result<Vec<&'a str>, String> {
+        let mut lines = page.lines();
+        if !lines.by_ref().any(|line| line.trim_end() == heading) {
+            return Err(format!("the page has no `{heading}` section"));
+        }
+        Ok(lines.take_while(|line| !line.starts_with("## ")).collect())
+    }
+
+    fn cells_of(line: &str) -> Vec<String> {
+        line.trim()
+            .trim_matches('|')
+            .split('|')
+            .map(|cell| cell.trim().to_string())
+            .collect()
+    }
+
+    /// The data rows of the behaviour table, markers stripped.
+    fn behaviour_rows(page: &str) -> Result<Vec<Vec<String>>, String> {
+        let mut rows = Vec::new();
+        for line in section(page, BEHAVIOUR_HEADING)? {
+            if !line.trim_start().starts_with('|') {
+                continue;
+            }
+            let cells = cells_of(line);
+            let is_header = cells.first().is_some_and(|cell| cell == "Provider");
+            let is_rule = cells
+                .first()
+                .is_some_and(|cell| !cell.is_empty() && cell.chars().all(|c| c == '-'));
+            if is_header || is_rule {
+                continue;
+            }
+            if cells.len() != BEHAVIOUR_COLUMNS {
+                return Err(format!(
+                    "behaviour table row has {} cells, expected {BEHAVIOUR_COLUMNS}: {line}",
+                    cells.len()
+                ));
+            }
+            rows.push(cells.iter().map(|cell| strip_markers(cell)).collect());
+        }
+        Ok(rows)
+    }
+
+    /// The providers named in the first cell of each response-mapping row, in page order.
+    fn response_providers(page: &str) -> Result<Vec<String>, String> {
+        Ok(section(page, RESPONSES_HEADING)?
+            .into_iter()
+            .filter(|line| line.trim_start().starts_with('|'))
+            .filter_map(|line| cells_of(line).into_iter().next())
+            .filter(|cell| PROVIDERS.contains(&cell.as_str()))
+            .collect())
+    }
+
+    /// Every `(provider, model cell)` the page must list, in the order it must list them: per
+    /// provider, the seeded models by id ascending, then the adapter-wide fallback row.
+    fn expected_order() -> Vec<(String, String)> {
+        let mut order = Vec::new();
+        for provider in PROVIDERS {
+            let mut models: Vec<&str> = seeded_for(provider).iter().map(|e| e.model).collect();
+            models.sort_unstable();
+            for model in models {
+                order.push((provider.to_string(), format!("`{model}`")));
+            }
+            order.push((provider.to_string(), FALLBACK_LABEL.to_string()));
+        }
+        order
+    }
+
+    /// Compare the page text with the registry; the error names the first disagreement.
+    fn check_page_text(page: &str) -> Result<(), String> {
+        let rows = behaviour_rows(page)?;
+        let actual: Vec<(String, String)> = rows
+            .iter()
+            .map(|cells| (cells[0].clone(), cells[1].clone()))
+            .collect();
+        let expected = expected_order();
+
+        if let Some((provider, model)) = expected.iter().find(|row| !actual.contains(row)) {
+            return Err(format!(
+                "the page has no behaviour row for provider '{provider}' model {model}"
+            ));
+        }
+        if let Some((provider, model)) = actual.iter().find(|row| !expected.contains(row)) {
+            return Err(format!(
+                "the page has a behaviour row for provider '{provider}' model {model} that the \
+                 registry does not seed"
+            ));
+        }
+        if actual != expected {
+            return Err(
+                "behaviour table rows are out of order: expected the fixed provider order, then \
+                 model id ascending, then the adapter-wide fallback row"
+                    .to_string(),
+            );
+        }
+
+        for cells in &rows {
+            let (provider, model) = (&cells[0], &cells[1]);
+            if model == FALLBACK_LABEL {
+                if cells[2] != UNVERIFIED {
+                    return Err(format!(
+                        "the adapter-wide fallback row of '{provider}' must read `{UNVERIFIED}` \
+                         in the verified-on column, found `{}`",
+                        cells[2]
+                    ));
+                }
+                continue;
+            }
+            let entry = seeded_for(provider)
+                .iter()
+                .find(|entry| format!("`{}`", entry.model) == *model)
+                .ok_or_else(|| format!("no seeded entry for {provider} {model}"))?;
+            let want = expected_cells(provider, entry);
+            if let Some(column) = (0..BEHAVIOUR_COLUMNS).find(|&i| cells[i] != want[i]) {
+                return Err(format!(
+                    "{provider} {model}: column {column} reads `{}` on the page but the registry \
+                     says `{}`",
+                    cells[column], want[column]
+                ));
+            }
+        }
+
+        let responses = response_providers(page)?;
+        if responses != PROVIDERS {
+            return Err(format!(
+                "the response-mapping table must list the nine providers in the fixed order, \
+                 found {responses:?}"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Read and check the page under `root`: skipped only when `root` has no `docs/` directory.
+    fn check_page_in(root: &Path) -> Result<Outcome, String> {
+        if !root.join("docs").is_dir() {
+            return Ok(Outcome::Skipped);
+        }
+        let path = root.join(PAGE);
+        let page = std::fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "docs/ exists but {} cannot be read: {error}",
+                path.display()
+            )
+        })?;
+        check_page_text(&page).map(|()| Outcome::Checked)
+    }
+
+    /// The real page, or `None` in a tree without `docs/` (the mutation checks below then have
+    /// nothing to mutate and pass vacuously, exactly like the main check skips).
+    fn real_page() -> Option<String> {
+        let root = workspace_root();
+        if !root.join("docs").is_dir() {
+            return None;
+        }
+        Some(
+            std::fs::read_to_string(root.join(PAGE))
+                .unwrap_or_else(|error| panic!("docs/ exists but the page is unreadable: {error}")),
+        )
+    }
+
+    /// A fresh scratch directory under the system temp dir.
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("paladin-switching-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap_or_else(|error| panic!("scratch dir: {error}"));
+        dir
+    }
+
+    /// Apply `edit` to the first line containing `needle`.
+    fn edit_line(page: &str, needle: &str, edit: impl Fn(&str) -> String) -> String {
+        let mut done = false;
+        page.lines()
+            .map(|line| {
+                if !done && line.contains(needle) {
+                    done = true;
+                    edit(line)
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn switching_providers_page_lists_every_seeded_model() {
+        let outcome = check_page_in(&workspace_root());
+        assert!(
+            matches!(outcome, Ok(Outcome::Checked | Outcome::Skipped)),
+            "{}",
+            outcome.err().unwrap_or_default()
+        );
+    }
+
+    #[test]
+    fn a_missing_seeded_row_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated: String = page
+            .lines()
+            .filter(|line| !line.starts_with("| openai | `gpt-4o-mini` |"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let error = check_page_text(&mutated).expect_err("a deleted row must fail");
+        assert!(error.contains("gpt-4o-mini"), "{error}");
+    }
+
+    #[test]
+    fn an_extra_row_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| kimi | `kimi-k3` |", |line| {
+            format!("{line}\n{}", line.replace("kimi-k3", "kimi-k9"))
+        });
+        let error = check_page_text(&mutated).expect_err("an extra row must fail");
+        assert!(error.contains("kimi-k9"), "{error}");
+    }
+
+    #[test]
+    fn an_edited_verified_on_date_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| kimi | `kimi-k3` |", |line| {
+            line.replace("2026-10-15", "2026-10-14")
+        });
+        let error = check_page_text(&mutated).expect_err("a changed date must fail");
+        assert!(
+            error.contains("kimi-k3") && error.contains("2026-10-14"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_edited_value_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| anthropic | `claude-haiku-5-5` |", |line| {
+            line.replace("only 1.0", "0.0 to 1.0")
+        });
+        let error = check_page_text(&mutated).expect_err("a changed value must fail");
+        assert!(error.contains("claude-haiku-5-5"), "{error}");
+    }
+
+    #[test]
+    fn rows_out_of_order_fail_the_check() {
+        let Some(page) = real_page() else { return };
+        let mut lines: Vec<String> = page.lines().map(str::to_string).collect();
+        let first = lines
+            .iter()
+            .position(|l| l.starts_with("| grok | `grok-4.3` |"));
+        let second = lines
+            .iter()
+            .position(|l| l.starts_with("| grok | `grok-4.5` |"));
+        let (Some(first), Some(second)) = (first, second) else {
+            panic!("the page must carry the two grok rows");
+        };
+        lines.swap(first, second);
+        let error = check_page_text(&lines.join("\n")).expect_err("a swapped pair must fail");
+        assert!(error.contains("out of order"), "{error}");
+    }
+
+    #[test]
+    fn a_provider_with_no_fallback_row_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated: String = page
+            .lines()
+            .filter(|line| !line.starts_with("| openai-compatible | (adapter-wide fallback) |"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let error = check_page_text(&mutated).expect_err("a missing fallback row must fail");
+        assert!(error.contains("openai-compatible"), "{error}");
+    }
+
+    #[test]
+    fn a_fallback_row_must_read_unverified() {
+        let Some(page) = real_page() else { return };
+        let mutated = edit_line(&page, "| ollama | (adapter-wide fallback) |", |line| {
+            line.replace("unverified", "2026-10-15")
+        });
+        let error = check_page_text(&mutated).expect_err("a dated fallback row must fail");
+        assert!(error.contains("ollama"), "{error}");
+    }
+
+    #[test]
+    fn a_missing_response_mapping_row_fails_the_check() {
+        let Some(page) = real_page() else { return };
+        let mutated: String = page
+            .lines()
+            .filter(|line| !line.starts_with("| gemini | `EmptyCompletion`"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let error = check_page_text(&mutated).expect_err("a missing mapping row must fail");
+        assert!(error.contains("response-mapping"), "{error}");
+    }
+
+    #[test]
+    fn a_tree_with_docs_but_without_the_page_fails() {
+        let root = scratch("no-page");
+        std::fs::create_dir_all(root.join("docs/src"))
+            .unwrap_or_else(|error| panic!("scratch docs dir: {error}"));
+        let outcome = check_page_in(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        let error = outcome.expect_err("docs/ without the page must fail, never skip");
+        assert!(error.contains("cannot be read"), "{error}");
+    }
+
+    #[test]
+    fn a_tree_without_a_docs_directory_is_skipped() {
+        let root = scratch("no-docs");
+        let outcome = check_page_in(&root);
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(outcome, Ok(Outcome::Skipped));
+    }
+
+    #[test]
+    fn marker_stripping_removes_only_footnote_markers() {
+        assert_eq!(strip_markers("0.0 to 1.0 [a]"), "0.0 to 1.0");
+        assert_eq!(strip_markers("128,000 [d]"), "128,000");
+        assert_eq!(strip_markers("object, schema"), "object, schema");
+        assert_eq!(strip_markers("a [bc] d"), "a [bc] d");
+    }
+
+    #[test]
+    fn thousands_separators_group_by_three() {
+        assert_eq!(with_thousands(0), "0");
+        assert_eq!(with_thousands(999), "999");
+        assert_eq!(with_thousands(1_000), "1,000");
+        assert_eq!(with_thousands(1_048_576), "1,048,576");
+    }
+}

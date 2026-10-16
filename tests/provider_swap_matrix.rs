@@ -30,9 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mockito::{Matcher, ServerGuard};
-use paladin::application::services::paladin::middleware::{
-    ExecutionMiddleware, ModelCallContext, PromptAssembly,
-};
+use paladin::application::services::paladin::middleware::{ModelCallContext, PromptAssembly};
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
 use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
 use paladin::config::agent_runtime::{

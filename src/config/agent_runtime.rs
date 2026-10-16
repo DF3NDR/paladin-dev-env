@@ -21,7 +21,8 @@
 //! pins that no such variable has any effect.
 //!
 //! No field in this tree is secret-shaped: [`ModelFallbackConfig`] names
-//! providers only (`providers: Vec<String>`, e.g. `"openai"`), never a
+//! providers only (`providers: Vec<String>`, e.g. `"openai"`) or provider and model
+//! pairs (`steps: Vec<`[`FallbackStepConfig`]`>`), never a
 //! credential -- those keep coming from
 //! `paladin_llm::provider_factory::LlmProviderFactory`'s existing
 //! env/config path (D-12, D-41). Because nothing here can hold a secret,
@@ -56,6 +57,14 @@
 //! [`VaultRecallConfig`], then the tool-call protocol middleware (built in
 //! plan 26-19, no config sub-struct of its own), and finally
 //! [`ModelRetryConfig`] / [`ModelFallbackConfig`] last.
+//!
+//! `model_fallback` has two spellings of one chain. `providers` sends every hop the request's own
+//! model. `steps: [{provider, model}]` (Phase 50, D-15) sends each hop its own model and builds
+//! each hop from the operator's `llm.<provider>` block through
+//! `LlmProviderFactory::create_from_config` against [`AgentRuntimeDeps::llm_config`]; it is what
+//! an Anthropic then Kimi chain needs, since `claude-*` is not a Moonshot model. They are mutually
+//! exclusive (a validation error naming both keys), and a `providers`-only config builds exactly
+//! as before. There is no environment variable for `steps`.
 //!
 //! The resilience section is paced by default (PACE-02, D-03): when
 //! [`AgentRuntimeDeps::cadence`] is `Some` -- and [`AgentRuntimeDeps::default`] makes it
@@ -486,20 +495,50 @@ impl AgentRuntimeConfig {
             chain.push(Arc::new(ModelRetryMiddleware::new(policy)));
         }
         if self.model_fallback.enabled {
-            match self
-                .model_fallback
-                .resolve_chain(&deps.llm_provider_factory)
-            {
-                Ok(providers) => match fallback_middleware(providers, deps.cadence.as_ref()) {
-                    Ok(middleware) => chain.push(Arc::new(middleware)),
-                    Err(e) => problems.push(format!("agent_runtime.model_fallback: {e}")),
-                },
-                Err(AgentRuntimeConfigError::UnresolvedProviders(unresolved)) => {
-                    for provider in unresolved {
-                        problems.push(format!("agent_runtime.model_fallback: {provider}"));
+            if !self.model_fallback.providers.is_empty() && !self.model_fallback.steps.is_empty() {
+                // `validate` rejects this too; `build_chain` can be called without it, and
+                // silently preferring one spelling would hide the other.
+                problems.push(
+                    "agent_runtime.model_fallback: providers and steps are mutually \
+                     exclusive; set only one"
+                        .to_string(),
+                );
+            } else if !self.model_fallback.steps.is_empty() {
+                // Steps: each hop built from the operator's `llm:` blocks and sent its own
+                // model (D-15).
+                match self
+                    .model_fallback
+                    .resolve_steps(&deps.llm_provider_factory, deps.llm_config.as_ref())
+                {
+                    Ok(steps) => {
+                        match fallback_middleware_from_steps(steps, deps.cadence.as_ref()) {
+                            Ok(middleware) => chain.push(Arc::new(middleware)),
+                            Err(e) => problems.push(format!("agent_runtime.model_fallback: {e}")),
+                        }
                     }
+                    Err(AgentRuntimeConfigError::UnresolvedProviders(unresolved)) => {
+                        for step in unresolved {
+                            problems.push(format!("agent_runtime.model_fallback.steps: {step}"));
+                        }
+                    }
+                    Err(other) => problems.push(format!("agent_runtime.model_fallback: {other}")),
                 }
-                Err(other) => problems.push(format!("agent_runtime.model_fallback: {other}")),
+            } else {
+                match self
+                    .model_fallback
+                    .resolve_chain(&deps.llm_provider_factory)
+                {
+                    Ok(providers) => match fallback_middleware(providers, deps.cadence.as_ref()) {
+                        Ok(middleware) => chain.push(Arc::new(middleware)),
+                        Err(e) => problems.push(format!("agent_runtime.model_fallback: {e}")),
+                    },
+                    Err(AgentRuntimeConfigError::UnresolvedProviders(unresolved)) => {
+                        for provider in unresolved {
+                            problems.push(format!("agent_runtime.model_fallback: {provider}"));
+                        }
+                    }
+                    Err(other) => problems.push(format!("agent_runtime.model_fallback: {other}")),
+                }
             }
         }
 
@@ -1375,8 +1414,55 @@ impl ModelFallbackConfig {
         factory: &LlmProviderFactory,
         llm_config: Option<&LlmConfig>,
     ) -> Result<Vec<FallbackStep>, AgentRuntimeConfigError> {
-        let _ = (factory, llm_config);
-        Ok(Vec::new())
+        if !self.enabled {
+            return Ok(Vec::new());
+        }
+
+        // `None` is an empty `llm:` section: every credential then comes from the provider's
+        // environment variable.
+        let empty = LlmConfig::default();
+        let llm_config = llm_config.unwrap_or(&empty);
+
+        let mut steps = Vec::with_capacity(self.steps.len());
+        let mut problems = Vec::new();
+
+        for (index, step) in self.steps.iter().enumerate() {
+            // `UnresolvedProvider` is a public enum with a single `name` per variant, so the
+            // step's index and model ride in the name: an operator reading the error finds the
+            // step without counting list entries.
+            let label = format!(
+                "{} (step {index}, model {})",
+                step.provider.trim(),
+                step.model.trim()
+            );
+            match factory.create_from_config(
+                llm_config,
+                step.provider.trim(),
+                Some(step.model.trim()),
+            ) {
+                Ok(port) => steps.push(FallbackStep::new(port, step.model.trim())),
+                // As in `resolve_chain`: only `UnknownProvider` is ambiguous between "never a
+                // provider" and "its feature is off"; every other factory error means the name
+                // was recognised and compiled in.
+                Err(paladin_llm::provider_factory::ProviderFactoryError::UnknownProvider(_)) => {
+                    let normalized = step.provider.trim().to_lowercase().replace('_', "-");
+                    if KNOWN_PROVIDER_NAMES.contains(&normalized.as_str()) {
+                        problems.push(UnresolvedProvider::NotCompiled { name: label });
+                    } else {
+                        problems.push(UnresolvedProvider::Unknown { name: label });
+                    }
+                }
+                Err(other) => problems.push(UnresolvedProvider::ConstructionFailed {
+                    name: label,
+                    reason: other.to_string(),
+                }),
+            }
+        }
+
+        if !problems.is_empty() {
+            return Err(AgentRuntimeConfigError::UnresolvedProviders(problems));
+        }
+        Ok(steps)
     }
 }
 

@@ -1024,6 +1024,31 @@ pub struct LlmResponse {
     pub function_call: Option<FunctionCall>,
 }
 
+impl LlmResponse {
+    /// RED scaffold.
+    pub fn new(
+        request_id: Uuid,
+        model: impl Into<String>,
+        content: impl Into<String>,
+        finish_reason: FinishReason,
+        usage: TokenUsage,
+    ) -> Self {
+        let _ = content;
+        Self {
+            id: Uuid::new_v4(),
+            request_id,
+            model: model.into(),
+            content: String::new(),
+            finish_reason,
+            usage,
+            cost: None,
+            created_at: Utc::now(),
+            metadata: HashMap::new(),
+            function_call: None,
+        }
+    }
+}
+
 /// Function call request from the LLM
 ///
 /// When the LLM wants to invoke a tool, it returns this structure
@@ -1205,6 +1230,17 @@ pub struct StreamingResponse {
     /// (D-00c -- never a fabricated zero).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<Cost>,
+    /// Reasoning (thinking) text the vendor streamed on this chunk (D-11).
+    ///
+    /// `None` on every chunk that carried no reasoning text, and never `Some("")`: an empty or
+    /// whitespace-only fragment is stored as `None` by [`StreamingResponse::with_reasoning`].
+    /// Callers concatenate the `Some` values in wire order to rebuild the full reasoning text,
+    /// exactly as they concatenate `delta` for the answer. It is a typed field on purpose --
+    /// reasoning text is never carried through an untyped metadata channel (ADR-0061's sibling
+    /// decision D-11). Absent from serialized JSON when `None`, so a chunk persisted before this
+    /// field existed deserializes with `reasoning == None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
 }
 
 impl StreamingResponse {
@@ -1228,6 +1264,7 @@ impl StreamingResponse {
             finish_reason: None,
             usage: None,
             cost: None,
+            reasoning: None,
         }
     }
 
@@ -1252,6 +1289,7 @@ impl StreamingResponse {
             finish_reason: Some(finish_reason),
             usage: None,
             cost: None,
+            reasoning: None,
         }
     }
 
@@ -1288,6 +1326,28 @@ impl StreamingResponse {
     /// ```
     pub fn with_cost(mut self, cost: Cost) -> Self {
         self.cost = Some(cost);
+        self
+    }
+
+    /// Chainable: attach the reasoning text the vendor streamed on this chunk (D-11).
+    ///
+    /// Text that is empty after trimming is stored as `None`, so a vendor's empty reasoning
+    /// field never becomes `Some("")`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::StreamingResponse;
+    ///
+    /// let chunk = StreamingResponse::delta("").with_reasoning("thinking...");
+    /// assert_eq!(chunk.reasoning.as_deref(), Some("thinking..."));
+    ///
+    /// let blank = StreamingResponse::delta("").with_reasoning("  ");
+    /// assert!(blank.reasoning.is_none());
+    /// ```
+    #[must_use]
+    pub fn with_reasoning(mut self, text: impl Into<String>) -> Self {
+        let _ = text;
         self
     }
 }
@@ -2048,6 +2108,95 @@ mod tests {
 
         let deserialized: LlmResponse = serde_json::from_value(json).unwrap();
         assert!(deserialized.cost.is_none());
+    }
+
+    /// D-11: the streaming delta carries typed reasoning text, chainable like `with_usage`.
+    #[test]
+    fn streaming_with_reasoning_stores_the_text() {
+        let chunk = StreamingResponse::delta("").with_reasoning("thinking...");
+        assert_eq!(chunk.reasoning.as_deref(), Some("thinking..."));
+        assert!(chunk.delta.is_empty());
+    }
+
+    /// Edge PARITY-05/empty (carrier half): an empty or whitespace-only reasoning fragment is
+    /// `None`, never `Some("")`.
+    #[test]
+    fn streaming_with_reasoning_ignores_empty_text() {
+        assert!(
+            StreamingResponse::delta("x")
+                .with_reasoning("")
+                .reasoning
+                .is_none()
+        );
+        assert!(
+            StreamingResponse::delta("x")
+                .with_reasoning("  \n\t ")
+                .reasoning
+                .is_none()
+        );
+    }
+
+    /// The constructors leave `reasoning` unset.
+    #[test]
+    fn streaming_constructors_have_no_reasoning() {
+        assert!(StreamingResponse::delta("a").reasoning.is_none());
+        assert!(
+            StreamingResponse::terminal(FinishReason::Stop)
+                .reasoning
+                .is_none()
+        );
+    }
+
+    /// Runtime State Inventory: a `StreamingResponse` JSON document without a `reasoning` key
+    /// deserializes with `None`, and a `None` is skipped on serialize.
+    #[test]
+    fn streaming_without_reasoning_key_deserializes_to_none() {
+        let chunk = StreamingResponse::delta("hi");
+        let json = serde_json::to_value(&chunk).unwrap();
+        assert!(
+            !json.as_object().unwrap().contains_key("reasoning"),
+            "a None reasoning must be absent from serialized JSON, not present as null"
+        );
+        let back: StreamingResponse = serde_json::from_value(json).unwrap();
+        assert!(back.reasoning.is_none());
+
+        let with = StreamingResponse::delta("").with_reasoning("because");
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["reasoning"], "because");
+        let back: StreamingResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(back.reasoning.as_deref(), Some("because"));
+    }
+
+    /// RESEARCH Open Question 1: `LlmResponse::new` sets the five given fields and defaults the
+    /// rest (fresh id, no cost, empty metadata, no function call).
+    #[test]
+    fn llm_response_new_sets_the_given_fields_and_defaults_the_rest() {
+        let request_id = Uuid::new_v4();
+        let before = Utc::now();
+        let a = LlmResponse::new(
+            request_id,
+            "m",
+            "c",
+            FinishReason::Stop,
+            TokenUsage::new(1, 2),
+        );
+        let b = LlmResponse::new(
+            request_id,
+            "m",
+            "c",
+            FinishReason::Stop,
+            TokenUsage::new(1, 2),
+        );
+        assert_eq!(a.request_id, request_id);
+        assert_eq!(a.model, "m");
+        assert_eq!(a.content, "c");
+        assert!(matches!(a.finish_reason, FinishReason::Stop));
+        assert_eq!(a.usage, TokenUsage::new(1, 2));
+        assert!(a.cost.is_none());
+        assert!(a.metadata.is_empty());
+        assert!(a.function_call.is_none());
+        assert!(a.created_at >= before);
+        assert_ne!(a.id, b.id, "each response gets a fresh id");
     }
 
     /// D-28: compile-time guard for the prohibition -- `ProviderCapabilities`

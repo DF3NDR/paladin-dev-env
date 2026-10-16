@@ -684,16 +684,16 @@ llm:
         assert_eq!(config.default_provider.as_deref(), Some("openai"));
         let openai = config.openai.as_ref().expect("openai block");
         assert_eq!(openai.api_key, "${OPENAI_API_KEY}");
-        assert_eq!(openai.default_model.as_deref(), Some("gpt-4"));
+        assert_eq!(openai.default_model.as_deref(), Some("gpt-4o-mini"));
         assert_eq!(openai.timeout_seconds, Some(300));
         assert_eq!(openai.max_retries, Some(3));
         let anthropic = config.anthropic.as_ref().expect("anthropic block");
-        assert_eq!(
-            anthropic.default_model.as_deref(),
-            Some("claude-3-5-sonnet-20241022")
-        );
+        assert_eq!(anthropic.default_model.as_deref(), Some("claude-haiku-5-5"));
+        // Pitfall 7: claude-haiku-5-5 takes only temperature 1.0, so the example's block must
+        // not carry a 0.7 that would refuse every agent using it.
+        assert_eq!(anthropic.default_temperature, None);
         let kimi = config.kimi.as_ref().expect("kimi block");
-        assert_eq!(kimi.default_model.as_deref(), Some("kimi-k3"));
+        assert_eq!(kimi.default_model.as_deref(), Some("kimi-k2.6"));
         assert_eq!(kimi.timeout_seconds, Some(60));
         let ollama = config.ollama.as_ref().expect("ollama block");
         assert_eq!(ollama.api_key, "");

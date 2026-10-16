@@ -16,13 +16,21 @@ llm_api_key: "" # unused — keys come from environment variables
 # Every `api_key` below uses ${ENV_VAR} indirection naming the real variable; NEVER put a
 # literal key in this file. Only the providers you actually compiled in (via the matching
 # `llm-<provider>` Cargo feature) are usable at runtime — an unused block here is inert.
+#
+# A block drives every agent that uses its provider. Precedence, field by field: the agent's own
+# `model` (or `provider`), then the block, then the provider's own environment variables
+# (OPENAI_API_KEY, ...), then the adapter's built-in default. An exact `"${VAR}"` in `api_key` is
+# read from the variable `VAR` (an unset variable is an error naming it, never sent as the key);
+# an empty or omitted `api_key` falls back to the provider's own variable. A block's
+# `default_temperature` is passed to its agents as an explicit value, so a model that does not
+# accept it refuses the agent at startup: leave it out for models with a fixed temperature.
 llm:
   default_provider: "openai"
 
   openai:
     api_key: "${OPENAI_API_KEY}"
     base_url: "https://api.openai.com/v1"
-    default_model: "gpt-4"
+    default_model: "gpt-4o-mini"
     default_temperature: 0.7
     timeout_seconds: 300
     max_retries: 3
@@ -30,27 +38,39 @@ llm:
   anthropic:
     api_key: "${ANTHROPIC_API_KEY}"
     base_url: "https://api.anthropic.com/v1"
-    default_model: "claude-3-5-sonnet-20241022"
-    default_temperature: 0.7
+    default_model: "claude-haiku-5-5"
+    # No `default_temperature`: claude-haiku-5-5 accepts only temperature 1.0, so a block-level
+    # 0.7 would refuse every agent that uses this provider.
     timeout_seconds: 300
     max_retries: 3
 
   deepseek:
     api_key: "${DEEPSEEK_API_KEY}"
     base_url: "https://api.deepseek.com/v1"
-    default_model: "deepseek-chat"
+    default_model: "deepseek-flash"
     default_temperature: 0.7
     timeout_seconds: 300
     max_retries: 3
 
   # Kimi (Moonshot AI). Live-verified 2026-08-22 (plan 17-19, closing G-17-4b): a live
   # GET /models call and a generate() round trip both succeeded against api.moonshot.ai
-  # using the default model below. (Confirmed: model list + a completion round trip.)
+  # using kimi-k3. Since Phase 50 the block's default_model is the adapter's own current
+  # default, kimi-k2.6 (2026-10-15 probe); kimi-k3 stays available per agent.
   kimi:
     api_key: "${MOONSHOT_API_KEY}"
     base_url: "https://api.moonshot.ai/v1"
-    default_model: "kimi-k3"
+    default_model: "kimi-k2.6"
     timeout_seconds: 60
+    # Optional limits, available on every block (shown here once, commented out so this file
+    # behaves exactly as its defaults):
+    #   max_tokens: 4096        # output budget sent when a request sets none; checked against
+    #                           # the model's profiled maximum output
+    #   context_window: 262144  # adapter-wide window in tokens, replacing every compiled window
+    #                           # of this provider
+    #   models:                 # per-model profile overrides, laid over the built-in entry
+    #     kimi-k3:              # field by field; an unknown key under a model is a load error
+    #       context_window: 262144
+    #       temperature: {fixed: 1.0}   # also {range: [0.0, 1.0]} or not_sent
 
   # Qwen (Alibaba DashScope). Live-verified 2026-08-23 (plan 17-21 gap closure): a live
   # GET /models call against the endpoint below returned a 162-model catalog, including
@@ -68,7 +88,7 @@ llm:
   qwen:
     api_key: "${DASHSCOPE_API_KEY}"
     base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-    default_model: "qwen-plus"
+    default_model: "qwen3.8-flash"
     timeout_seconds: 60
 
   # Grok (xAI). Live-verified 2026-08-22 (plan 17-18, closing G-17-4a): a live GET
@@ -77,7 +97,7 @@ llm:
   grok:
     api_key: "${XAI_API_KEY}"
     base_url: "https://api.x.ai/v1"
-    default_model: "grok-4.6"
+    default_model: "grok-4.3"
     timeout_seconds: 60
 
   # Ollama (self-hosted). Deliberately carries NO api_key field: Ollama requires no
@@ -95,11 +115,12 @@ llm:
   # Live-verified: a live GET /models call and a generate() round trip both succeeded
   # against generativelanguage.googleapis.com. default_model was refreshed from
   # gemini-2.5-flash (retired for new users) to gemini-3.6-flash on 2026-08-22, per
-  # the live catalog. (Confirmed: model list + a completion round trip.)
+  # the live catalog. (Confirmed: model list + a completion round trip.) Since Phase 50 the
+  # block's default_model is the adapter's own current default (2026-10-15 probe).
   gemini:
     api_key: "${GEMINI_API_KEY}"
     base_url: "https://generativelanguage.googleapis.com/v1beta"
-    default_model: "gemini-3.6-flash"
+    default_model: "gemini-3.5-flash-lite"
     timeout_seconds: 60
 
   # Generic operator-configured OpenAI-compatible provider — points Paladin at ANY
@@ -354,14 +375,14 @@ web_server:
 agents:
   - id: "researcher"
     provider: "openai" # optional; defaults to llm.default_provider
-    model: "gpt-4"
+    model: "gpt-4o-mini" # built with the `llm.<provider>` block above, this model
     system_prompt: "You research topics thoroughly."
     temperature: 0.7 # optional
     timeout_seconds: 120 # optional per-agent override (clamped to timeouts.max_seconds)
     # Roles permitted to invoke this agent; omit/empty ⇒ any authenticated caller.
     allowed_roles: ["admin", "user"]
   - id: "summarizer"
-    model: "gpt-4"
+    model: "gpt-4o-mini"
     system_prompt: "You write concise summaries."
     allowed_roles: ["admin"] # restricted to admins
 

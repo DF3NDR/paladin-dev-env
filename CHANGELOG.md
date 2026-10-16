@@ -632,7 +632,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adapter is built. `LlmProviderFactory::create(name)` goes through the same layering with no
   block.
 
+- **The facade exports all nine adapter/config pairs and the `llm:` config types (PARITY-03;
+  Phase 50 plan 50-10; D-14, D-00f).** `paladin` re-exports `KimiAdapter`/`KimiConfig`,
+  `QwenAdapter`/`QwenConfig`, `GrokAdapter`/`GrokConfig`, `GeminiAdapter`/`GeminiConfig`,
+  `OllamaAdapter`/`OllamaConfig` and `OpenAiCompatibleAdapter`/`OpenAiCompatibleConfig`, each behind
+  its existing `llm-*` feature (`llm-kimi`, `llm-qwen`, `llm-grok`, `llm-gemini`, `llm-ollama`,
+  `llm-openai-compatible`), and `LlmConfig`, `LlmProviderConfig` and `ModelOverride`
+  unconditionally, so a consumer can build an `LlmConfig` and call
+  `LlmProviderFactory::create_from_config` without a second path dependency. ADR-0046's default
+  features are unchanged (`llm-openai`, `llm-anthropic`, `llm-deepseek`); naming a feature is what
+  compiles its adapter in. `FacadeProvisioner::with_llm_config` carries the operator's `llm:`
+  section to runtime-provisioned agents (`from_settings` sets it). `config.example.yml` documents
+  `max_tokens`, `context_window` and a `models:` override, and uses the adapters' current default
+  models. The public-API baseline (`.project/current-exports.txt`) gains `LlmConfig`,
+  `LlmProviderConfig` and `ModelOverride` (the feature-gated pairs are outside the default-feature
+  baseline).
+
 ### Changed
+
+- **`llm.<provider>` blocks now take effect: the server builds every agent through
+  `create_from_config` (PARITY-03; Phase 50 plan 50-10; D-12, D-13, D-02; `MIGRATION.md` 9.1
+  M-B-15 and 9.5).** `build_agent_registry*`, `paladin_port_from_settings*` and
+  `FacadeProvisioner` resolve each agent's own `provider` (else `llm.default_provider`) and `model`
+  against the provider's block (host, key, timeout, retries, limits, model overrides), then the
+  provider's environment variables, then the adapter default. A block's `default_temperature` is
+  now passed to its agents as an explicit value when the agent sets none; a model that does not
+  accept it refuses the agent at startup naming the provider, the model, `temperature` and the key
+  that set it (`llm.<provider>.default_temperature` or `agents[<id>].temperature`).
+  `validate_config` judges a provider by its block or its environment
+  (`LlmProviderFactory::is_configured`), so a provider configured only in YAML starts, and a
+  registered provider with no credential fails naming the agent, the provider, the model and the
+  variable (`HostBuildError::Provider`; `HostBuildError::UnknownProvider` is kept for a name this
+  build does not register). `LlmConfig::validate` no longer requires the default provider's block
+  to exist (an environment-only default provider is valid). The agent's `timeout_seconds` is still
+  the per-agent execution timeout, never the provider's HTTP timeout. A runtime `AgentSpec` still
+  supplies a model and nothing else about how a provider is built.
 
 - **`api_key` may be empty in an `llm.<provider>` block, and the `From<&LlmProviderConfig>`
   conversions use the adapters' own defaults (Phase 50 plan 50-09; A1-50-09).** `LlmConfig::validate`

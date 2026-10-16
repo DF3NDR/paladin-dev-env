@@ -1,5 +1,6 @@
 //! Phase 50 provider-swap matrix (PARITY-01, SC-1): one agent definition, nine providers, the
-//! provider switched only through an `LlmProviderConfig` block, every assertion made on the wire
+//! provider switched only through an `LlmProviderConfig` block (built with
+//! `LlmProviderFactory::create_from_config` from one `LlmConfig`), every assertion made on the wire
 //! body a mock transport recorded or on the outcome the execution service returned.
 //!
 //! What it proves: a deployment that changes `llm.<provider>` in its configuration -- and nothing
@@ -33,9 +34,9 @@ use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
 use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
 use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use paladin::prelude::{LlmPort, PaladinError};
+use paladin::{LlmConfig, LlmProviderConfig, LlmProviderFactory};
 use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 use paladin_core::platform::container::transience::Transience;
-use paladin_llm::config::llm::LlmProviderConfig;
 use paladin_llm::fallback::FallbackLlmAdapter;
 use paladin_ports::output::llm_port::{LlmRequest, LlmResponse};
 use serde_json::{Value, json};
@@ -185,62 +186,32 @@ fn matrix_block(base_url: &str, model: &str) -> LlmProviderConfig {
         .with_max_retries(0)
 }
 
-/// Build the named provider's port from a config block, through that provider's existing
-/// `From<&LlmProviderConfig>` bridge into its `*Config` and then `*Adapter::new` -- the
-/// config-only switch available today.
-///
-/// Plan 50-10 replaces this body with `LlmProviderFactory::create_from_config` without changing
-/// any case.
+/// Build the named provider's port the way a deployment does: one `LlmConfig` holding that
+/// provider's block, handed to `LlmProviderFactory::create_from_config` with the block's model
+/// (D-12). The only per-provider code is the choice of which `llm.<provider>` field carries the
+/// block; construction is the one public path, so a case switches provider by configuration
+/// alone. Everything here comes from the facade (`paladin::...`), proving it is enough.
 fn port_from_config(provider: &str, block: &LlmProviderConfig) -> Arc<dyn LlmPort> {
-    const BUILD: &str = "the matrix block must build an adapter";
+    let block = Some(block.clone());
+    let mut config = LlmConfig::default();
     match provider {
-        "openai" => Arc::new(
-            paladin_llm::openai::OpenAIAdapter::new(paladin_llm::openai::OpenAIConfig::from(block))
-                .expect(BUILD),
-        ),
-        "anthropic" => Arc::new(
-            paladin_llm::anthropic::AnthropicAdapter::new(
-                paladin_llm::anthropic::AnthropicConfig::from(block),
-            )
-            .expect(BUILD),
-        ),
-        "deepseek" => Arc::new(
-            paladin_llm::deepseek::DeepSeekAdapter::new(
-                paladin_llm::deepseek::DeepSeekConfig::from(block),
-            )
-            .expect(BUILD),
-        ),
-        "kimi" => Arc::new(
-            paladin_llm::kimi::KimiAdapter::new(paladin_llm::kimi::KimiConfig::from(block))
-                .expect(BUILD),
-        ),
-        "qwen" => Arc::new(
-            paladin_llm::qwen::QwenAdapter::new(paladin_llm::qwen::QwenConfig::from(block))
-                .expect(BUILD),
-        ),
-        "grok" => Arc::new(
-            paladin_llm::grok::GrokAdapter::new(paladin_llm::grok::GrokConfig::from(block))
-                .expect(BUILD),
-        ),
-        "gemini" => Arc::new(
-            paladin_llm::gemini::GeminiAdapter::new(paladin_llm::gemini::GeminiConfig::from(block))
-                .expect(BUILD),
-        ),
-        "ollama" => Arc::new(
-            paladin_llm::ollama::OllamaAdapter::new(paladin_llm::ollama::OllamaConfig::from(block))
-                .expect(BUILD),
-        ),
-        // `OpenAiCompatibleConfig` is a `TryFrom`: the generic provider has no vendor to default
-        // `base_url` and `model` from, so the block must name both (the matrix block does).
-        "openai-compatible" => Arc::new(
-            paladin_llm::openai_compatible::OpenAiCompatibleAdapter::new(
-                paladin_llm::openai_compatible::OpenAiCompatibleConfig::try_from(block)
-                    .expect(BUILD),
-            )
-            .expect(BUILD),
-        ),
-        other => panic!("matrix has no constructor for provider '{other}'"),
+        "openai" => config.openai = block,
+        "anthropic" => config.anthropic = block,
+        "deepseek" => config.deepseek = block,
+        "kimi" => config.kimi = block,
+        "qwen" => config.qwen = block,
+        "grok" => config.grok = block,
+        "gemini" => config.gemini = block,
+        "ollama" => config.ollama = block,
+        "openai-compatible" => config.openai_compatible = block,
+        other => panic!("matrix has no block field for provider '{other}'"),
     }
+    let model = config
+        .get_provider_config(provider)
+        .and_then(|block| block.default_model.clone());
+    LlmProviderFactory::new()
+        .create_from_config(&config, provider, model.as_deref())
+        .unwrap_or_else(|error| panic!("the matrix block must build an adapter: {error}"))
 }
 
 /// A mock vendor for `provider` answering `body`, and the provider's port built from the block

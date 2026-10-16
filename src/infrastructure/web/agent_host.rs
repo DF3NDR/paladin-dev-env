@@ -1527,6 +1527,78 @@ mod config_driven_tests {
             .expect("the HTTP client keeps the block's 30 s timeout, not the agent's 1 s");
     }
 
+    /// T-50-10-03 / RESEARCH Pitfall 7: the shipped `config.example.yml` must not refuse itself.
+    /// For every provider block it carries (and this build compiles), an agent on that provider's
+    /// default model builds under the block's own `default_temperature`; and the two agents the
+    /// file defines build from its `llm:` section. Keys are replaced by a literal so the check
+    /// reads no environment variable.
+    #[tokio::test]
+    async fn the_shipped_example_config_builds_every_agent_it_describes() {
+        #[derive(serde::Deserialize)]
+        struct Example {
+            llm: LlmConfig,
+            agents: Vec<AgentDefinition>,
+        }
+        let example: Example = config::Config::builder()
+            .add_source(config::File::new(
+                "config.example.yml",
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .unwrap_or_else(|e| panic!("config.example.yml must build: {e}"))
+            .try_deserialize()
+            .unwrap_or_else(|e| panic!("config.example.yml's llm/agents must deserialize: {e}"));
+
+        // No environment: every non-empty key becomes a literal, a placeholder included.
+        let mut llm = example.llm;
+        for block in [
+            &mut llm.openai,
+            &mut llm.deepseek,
+            &mut llm.anthropic,
+            &mut llm.kimi,
+            &mut llm.qwen,
+            &mut llm.grok,
+            &mut llm.gemini,
+            &mut llm.openai_compatible,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            block.api_key = "example-literal-key".to_string();
+        }
+
+        let mut checked = 0;
+        for name in provider_names() {
+            let Some(block) = llm.get_provider_config(name) else {
+                panic!("config.example.yml has no `llm.{name}` block for a compiled provider");
+            };
+            let model = block
+                .default_model
+                .clone()
+                .unwrap_or_else(|| panic!("`llm.{name}` names a default_model"));
+            let def = agent("example", name, &model);
+            if let Err(err) = build(&def, Some(&llm), "openai").await {
+                panic!("the example's `llm.{name}` block refuses its own default model: {err}");
+            }
+            checked += 1;
+        }
+        assert!(checked >= 3, "at least the three default-feature providers");
+
+        for def in &example.agents {
+            let provider = resolve_provider(def, &default_provider_name_for(&llm));
+            if let Err(err) = build(def, Some(&llm), &provider).await {
+                panic!("example agent '{}' must build: {err}", def.id);
+            }
+        }
+    }
+
+    /// The provider an example agent falls back to: the example's own `llm.default_provider`.
+    fn default_provider_name_for(llm: &LlmConfig) -> String {
+        llm.default_provider
+            .clone()
+            .unwrap_or_else(|| "openai".to_string())
+    }
+
     /// Pitfall 8: a provider configured only in YAML passes the pre-flight check.
     #[test]
     fn validate_config_accepts_a_provider_configured_only_in_yaml() {

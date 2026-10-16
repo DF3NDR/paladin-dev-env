@@ -658,6 +658,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that is empty after trimming. Reasoning is a typed field, never `metadata`. Adapters start
   filling the fields in plans 50-12 and 50-13.
 
+- **`LlmError::Refusal`, reasoning text and cache-write tokens (PARITY-05; Phase 50 plan 50-12;
+  D-09, D-11, D-11a).** `LlmError` gains `Refusal { provider, model, detail }`: a vendor's own
+  refusal, permanent (never retried), distinct from a `ContentFilter` finish and from an empty
+  answer. `detail` is the vendor text with credentials removed first and then bounded to 512
+  characters. The Kimi, Qwen, Grok, Ollama and generic OpenAI-compatible presets and OpenAI
+  report it (OpenAI's `content: null` plus `refusal` shape was a parse error before). The compat
+  presets and DeepSeek now fill `LlmResponse.reasoning` and each streamed
+  `StreamingResponse.reasoning` from `reasoning_content`, and the compat presets map
+  `prompt_tokens_details.cache_write_tokens` into `TokenUsage.cache_write_tokens`. The match arms
+  every `LlmError` classifier needs (`transience`, `typed_origin`, `llm_error_class`,
+  `classify_fetch_failure`) name the new variant. `MIGRATION.md` 9.1 M-B-16.
+
 ### Changed
 
 - **`llm.<provider>` blocks now take effect: the server builds every agent through
@@ -914,6 +926,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `maneuver::ErrorStrategy::FailFast` (set `CommanderBuilder::error_strategy` to keep
   `ContinueParallel`). The CLI keeps its `timeout_seconds` YAML keys, which now bound each attempt.
   (ADR-0059; LEGACY-01..04; see MIGRATION.md 9.1 M-B-06, M-B-09, M-B-11 and the Phase 44 9.2 rows)
+- **Empty output has one meaning on seven providers (PARITY-05; Phase 50 plan 50-12; D-09,
+  D-11a; `MIGRATION.md` 9.1 M-B-16).** Text that is empty after trimming is now
+  `LlmError::EmptyCompletion` on any finish reason, buffered and streamed, for the five
+  OpenAI-compatible presets, OpenAI and DeepSeek (it was `Ok("")` unless the finish reason was
+  `length`, and streams were never checked: a stream with no text now ends in
+  `Err(EmptyCompletion)` instead of an `Ok` terminal chunk). A `content_filter` or function-call
+  finish stays `Ok`, a refusal wins over partial text. `EmptyCompletion`'s `Display` no longer
+  appends max-tokens advice to every message: it reads `Empty completion: {payload}` and each
+  payload carries the advice that fits its finish reason. OpenAI `tool_calls` now maps to
+  `FinishReason::FunctionCall`. One crate-private rule, `response_guards::classify_completion`,
+  decides all of this, so the adapters cannot drift apart.
 
 ### Removed
 

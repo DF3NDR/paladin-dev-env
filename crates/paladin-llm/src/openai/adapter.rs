@@ -4,7 +4,6 @@
 //! Supports GPT-3.5-Turbo, GPT-4, GPT-4o, and other compatible models.
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::{Stream, StreamExt};
 use paladin_core::platform::container::content::{ContentItem, ContentType};
 use paladin_core::platform::container::prompt::{PromptItem, PromptRole, PromptType};
@@ -19,7 +18,6 @@ use std::collections::BTreeMap;
 use std::env;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
-use uuid::Uuid;
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
@@ -27,6 +25,7 @@ use crate::redaction::RedactedKey;
 use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders, seeded,
 };
+use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
@@ -297,10 +296,30 @@ fn to_openai_response_format(format: &ResponseFormat) -> OpenAIResponseFormat {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+/// A message on the REQUEST path: always a role and a plain string.
+#[derive(Debug, Serialize)]
 struct OpenAIMessage {
     role: String,
     content: String,
+}
+
+/// The assistant message on the RESPONSE path.
+///
+/// Distinct from [`OpenAIMessage`] because the two shapes differ: a response `content` may be
+/// `null` or absent (a refusal carries `content: null` and a `refusal` string, and a tool call
+/// carries no text), where a request `content` is always a string. Sharing one type made a
+/// refusal a parse failure (D-09).
+#[derive(Debug, Deserialize)]
+struct OpenAIResponseMessage {
+    #[allow(dead_code)]
+    #[serde(default)]
+    role: Option<String>,
+    /// `null`, absent and `""` all mean "no text".
+    #[serde(default)]
+    content: Option<String>,
+    /// The vendor's dedicated refusal text; `null` and absent mean the model did not refuse.
+    #[serde(default)]
+    refusal: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -316,7 +335,7 @@ struct OpenAIResponse {
 struct OpenAIChoice {
     #[allow(dead_code)]
     index: u32,
-    message: OpenAIMessage,
+    message: OpenAIResponseMessage,
     finish_reason: Option<String>,
 }
 
@@ -381,6 +400,9 @@ struct OpenAIStreamDelta {
     #[allow(dead_code)]
     role: Option<String>,
     content: Option<String>,
+    /// A fragment of the vendor's refusal text (D-09); `null` and absent mean none.
+    #[serde(default)]
+    refusal: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -711,12 +733,18 @@ impl OpenAIAdapter {
         }
     }
 
-    fn convert_finish_reason(&self, reason: Option<String>) -> FinishReason {
-        match reason.as_deref() {
+    /// Map OpenAI's finish-reason string to [`FinishReason`], for the buffered and the streaming
+    /// path alike so the two cannot drift.
+    ///
+    /// `tool_calls` (what the current API sends when the model wants a tool) and the legacy
+    /// `function_call` both map to [`FinishReason::FunctionCall`] (RESEARCH Pitfall 6); an
+    /// unrecognised string stays [`FinishReason::Error`], never silently `Stop`.
+    fn convert_finish_reason(reason: Option<&str>) -> FinishReason {
+        match reason {
             Some("stop") => FinishReason::Stop,
             Some("length") => FinishReason::Length,
             Some("content_filter") => FinishReason::ContentFilter,
-            Some("function_call") => FinishReason::FunctionCall,
+            Some("function_call") | Some("tool_calls") => FinishReason::FunctionCall,
             Some(other) => FinishReason::Error(format!("Unknown: {}", other)),
             None => FinishReason::Stop,
         }
@@ -893,6 +921,13 @@ impl OpenAIAdapter {
         let mut held_finish_reason: Option<FinishReason> = None;
         let mut held_usage: Option<TokenUsage> = None;
 
+        // D-09 / D-11a on the streaming path: the terminal chunk is decided by the same
+        // `classify_completion` the buffered path uses, over what the stream accumulated.
+        let provider = self.get_provider_name();
+        let model = request.model.clone();
+        let api_key = self.config.api_key.clone();
+        let mut completion = StreamCompletion::default();
+
         let stream = response.bytes_stream().flat_map(move |chunk_result| {
             let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
                 Ok(bytes) => {
@@ -905,13 +940,20 @@ impl OpenAIAdapter {
                         };
 
                         if data.trim() == "[DONE]" {
-                            let mut terminal = StreamingResponse::terminal(
-                                held_finish_reason.take().unwrap_or(FinishReason::Stop),
-                            );
-                            if let Some(usage) = held_usage.take() {
-                                terminal = terminal.with_usage(usage);
+                            let finish_reason =
+                                held_finish_reason.take().unwrap_or(FinishReason::Stop);
+                            match completion.finish(provider, &model, &finish_reason, &api_key) {
+                                Ok(()) => {
+                                    let mut terminal = StreamingResponse::terminal(finish_reason);
+                                    if let Some(usage) = held_usage.take() {
+                                        terminal = terminal.with_usage(usage);
+                                    }
+                                    items.push(Ok(terminal));
+                                }
+                                // A refusal or an empty answer replaces the terminal chunk;
+                                // deltas already yielded stay yielded.
+                                Err(error) => items.push(Err(error)),
                             }
-                            items.push(Ok(terminal));
                             continue;
                         }
 
@@ -922,17 +964,14 @@ impl OpenAIAdapter {
                                 }
                                 if let Some(choice) = chunk.choices.first() {
                                     if let Some(reason) = &choice.finish_reason {
-                                        held_finish_reason = Some(match reason.as_str() {
-                                            "stop" => FinishReason::Stop,
-                                            "length" => FinishReason::Length,
-                                            "content_filter" => FinishReason::ContentFilter,
-                                            "function_call" => FinishReason::FunctionCall,
-                                            other => {
-                                                FinishReason::Error(format!("Unknown: {}", other))
-                                            }
-                                        });
+                                        held_finish_reason =
+                                            Some(Self::convert_finish_reason(Some(reason)));
                                     }
                                     let delta = choice.delta.content.clone().unwrap_or_default();
+                                    completion.observe_content(&delta);
+                                    if let Some(refusal) = &choice.delta.refusal {
+                                        completion.observe_refusal(refusal);
+                                    }
                                     items.push(Ok(StreamingResponse::delta(delta)));
                                 }
                             }
@@ -971,23 +1010,26 @@ impl LlmPort for OpenAIAdapter {
         }
 
         let choice = &response.choices[0];
-        let finish_reason = self.convert_finish_reason(choice.finish_reason.clone());
-        let content = choice.message.content.clone();
+        let finish_reason = Self::convert_finish_reason(choice.finish_reason.as_deref());
+        let content = choice.message.content.clone().unwrap_or_default();
+
+        // One rule for refusal, content filter, function call and empty text on any finish
+        // reason -- OpenAI included (PARITY-05, D-09/D-11a). It used to return `Ok("")`.
+        classify_completion(
+            self.get_provider_name(),
+            &request.model,
+            &content,
+            &finish_reason,
+            choice.message.refusal.as_deref(),
+            &self.config.api_key,
+        )?;
+
         let usage = Self::map_usage(response.usage);
 
-        Ok(LlmResponse {
-            id: Uuid::new_v4(),
-            request_id: request.id,
-            model: response.model,
-            content,
-            finish_reason,
-            usage,
-            cost: None,
-            created_at: Utc::now(),
-            metadata: notes.into_metadata(),
-            function_call: None,
-            reasoning: None,
-        })
+        let mut llm_response =
+            LlmResponse::new(request.id, response.model, content, finish_reason, usage);
+        llm_response.metadata = notes.into_metadata();
+        Ok(llm_response)
     }
 
     async fn generate_stream(
@@ -2597,6 +2639,243 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(OpenAiFixture);
+    }
+
+    /// PARITY-05: refusal, empty output and `tool_calls` on the buffered and streaming paths,
+    /// all decided by the shared `classify_completion` (D-09, D-11a).
+    mod response_guard_wiring {
+        use super::*;
+        use futures::StreamExt;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::{Value, json};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model_overrides: BTreeMap::new(),
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .unwrap(),
+            )
+        }
+
+        fn body(message: Value, finish_reason: &str) -> String {
+            json!({
+                "id": "cmpl-1",
+                "model": "gpt-4o",
+                "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+        }
+
+        async fn generate_from(body: String) -> Result<LlmResponse, LlmError> {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(body)
+                .create_async()
+                .await;
+            adapter_at(&server.url()).generate(build_request()).await
+        }
+
+        async fn stream_from(sse: &str) -> Vec<Result<StreamingResponse, LlmError>> {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await
+                .unwrap();
+            let mut stream = Box::into_pin(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item);
+            }
+            items
+        }
+
+        #[tokio::test]
+        async fn openai_refusal_is_typed_not_a_parse_failure() {
+            let result = generate_from(body(
+                json!({"role": "assistant", "content": null, "refusal": "I can't help with that."}),
+                "stop",
+            ))
+            .await;
+            match result {
+                Err(LlmError::Refusal {
+                    provider,
+                    model,
+                    detail,
+                }) => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(model, "gpt-4o");
+                    assert_eq!(detail, "I can't help with that.");
+                }
+                other => panic!("expected Refusal, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_refusal_detail_is_redacted_before_bounding() {
+            let long = format!("{} test-key {}", "a".repeat(500), "b".repeat(100));
+            let result = generate_from(body(
+                json!({"role": "assistant", "content": null, "refusal": long}),
+                "stop",
+            ))
+            .await;
+            match result {
+                Err(LlmError::Refusal { detail, .. }) => {
+                    assert!(!detail.contains("test-key"), "{detail}");
+                    assert!(detail.contains("truncated"), "{detail}");
+                }
+                other => panic!("expected Refusal, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_empty_stop_completion_is_empty_completion() {
+            for content in [json!(""), json!("   "), json!(null)] {
+                let result = generate_from(body(
+                    json!({"role": "assistant", "content": content}),
+                    "stop",
+                ))
+                .await;
+                assert!(
+                    matches!(result, Err(LlmError::EmptyCompletion(_))),
+                    "got {result:?}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn openai_content_filter_with_empty_text_stays_ok() {
+            let response = generate_from(body(
+                json!({"role": "assistant", "content": ""}),
+                "content_filter",
+            ))
+            .await
+            .expect("a content filter is a finish reason, not an error");
+            assert!(matches!(
+                response.finish_reason,
+                FinishReason::ContentFilter
+            ));
+        }
+
+        #[tokio::test]
+        async fn openai_tool_calls_finish_maps_to_function_call() {
+            let response = generate_from(body(
+                json!({"role": "assistant", "content": null}),
+                "tool_calls",
+            ))
+            .await
+            .expect("a tool-call finish carries no text legitimately");
+            assert!(matches!(response.finish_reason, FinishReason::FunctionCall));
+        }
+
+        #[test]
+        fn openai_unknown_finish_reason_stays_an_error_finish() {
+            assert!(matches!(
+                OpenAIAdapter::convert_finish_reason(Some("mystery")),
+                FinishReason::Error(_)
+            ));
+        }
+
+        #[tokio::test]
+        async fn openai_stream_refusal_is_the_last_item() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"refusal\":\"I can't \"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"refusal\":\"help.\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            match items.last().unwrap() {
+                Err(LlmError::Refusal {
+                    provider,
+                    model,
+                    detail,
+                }) => {
+                    assert_eq!(provider, "openai");
+                    assert_eq!(model, "gpt-4o");
+                    assert_eq!(detail, "I can't help.");
+                }
+                other => panic!("expected Refusal as the last item, got {other:?}"),
+            }
+        }
+
+        /// D-11a on the streaming path ("OpenAI included").
+        #[tokio::test]
+        async fn openai_empty_stream_is_empty_completion() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"  \"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            let (last, yielded) = items.split_last().unwrap();
+            assert!(
+                matches!(last, Err(LlmError::EmptyCompletion(_))),
+                "got {last:?}"
+            );
+            assert!(yielded.iter().all(|item| item.is_ok()));
+            assert!(
+                items
+                    .iter()
+                    .all(|item| !matches!(item, Ok(chunk) if chunk.finish_reason.is_some())),
+                "no Ok terminal chunk is emitted"
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_stream_with_text_is_unchanged() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            let chunks: Vec<StreamingResponse> =
+                items.into_iter().map(|item| item.unwrap()).collect();
+            assert_eq!(chunks[0].delta, "Hi");
+            assert!(matches!(
+                chunks.last().unwrap().finish_reason,
+                Some(FinishReason::Stop)
+            ));
+        }
+
+        #[tokio::test]
+        async fn openai_content_filter_stream_with_no_text_stays_ok() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            let terminal = items.last().unwrap().as_ref().expect("no error item");
+            assert!(matches!(
+                terminal.finish_reason,
+                Some(FinishReason::ContentFilter)
+            ));
+        }
     }
 }
 

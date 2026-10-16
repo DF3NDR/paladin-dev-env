@@ -4,17 +4,15 @@
 //! Supports standard completions, streaming, and all core LlmPort functionality.
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::{Stream, StreamExt};
 use reqwest::{
     Client,
     header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::env;
 use std::time::{Duration, SystemTime};
-use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
@@ -30,6 +28,7 @@ use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
     default_timeout_seconds, seeded, seeded_window,
 };
+use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 // WR-01 (`25-REVIEW.md`): this adapter previously carried its own
 // byte-for-byte copy of the crate's shared credential-redaction routine
@@ -357,32 +356,9 @@ struct DeepSeekStreamChoice {
 #[derive(Debug, Deserialize)]
 struct DeepSeekStreamDelta {
     content: Option<String>,
-}
-
-/// Detect a completion truncated before any content was produced.
-///
-/// Reasoning models (e.g. DeepSeek's `-flash`/`-pro` variants) share their
-/// `max_tokens` budget between hidden `reasoning_content` and the visible
-/// `content`. When the hidden reasoning alone consumes the whole budget, the
-/// API returns `content:""` with `finish_reason:"length"` — a truncation that
-/// looks, to a naive caller, like a valid-but-empty answer.
-///
-/// This detection is deliberately narrow: it only fires when `finish_reason`
-/// is [`FinishReason::Length`] AND `content` is empty or whitespace-only.
-/// A legitimate empty completion with `finish_reason:"stop"`, or any
-/// non-empty content (regardless of finish reason), is left untouched.
-///
-/// Returns `Some(LlmError::EmptyCompletion(..))` when the truncation
-/// signature is detected, `None` otherwise.
-fn detect_empty_completion(content: &str, finish_reason: &FinishReason) -> Option<LlmError> {
-    if matches!(finish_reason, FinishReason::Length) && content.trim().is_empty() {
-        Some(LlmError::EmptyCompletion(format!(
-            "finish_reason=length with empty content ({} raw chars) — reasoning likely consumed the entire max_tokens budget; retry with a larger max_tokens",
-            content.len()
-        )))
-    } else {
-        None
-    }
+    /// Hidden chain-of-thought text streamed on this delta, in wire order (D-11).
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 /// Map a wire-reported [`DeepSeekUsage`] into [`TokenUsage`], applying the
@@ -414,13 +390,13 @@ fn map_usage(usage: DeepSeekUsage) -> TokenUsage {
 /// completion budget on a well-sized prompt". `prompt_tokens` is the number
 /// that distinguishes them — before this function existed, `api_response.usage`
 /// was deserialized and then thrown away on exactly the failure path where it
-/// mattered (`detect_empty_completion` returns its error, at the call site
+/// mattered (`classify_completion` returns its error, at the call site
 /// below, BEFORE the `LlmResponse` carrying `usage` is ever constructed).
 ///
 /// Deliberately additive and narrow: every non-`EmptyCompletion` variant
 /// passes through byte-identical (no reconstruction), and this does NOT
-/// change [`detect_empty_completion`]'s own signature — five existing tests
-/// call it with two arguments and are left untouched.
+/// change `classify_completion`'s signature: the usage rides on the
+/// `EmptyCompletion` payload only on this adapter's buffered path.
 ///
 /// Recording `prompt_tokens`/`completion_tokens`/`total_tokens` here is a
 /// strictly smaller, separately-scoped change from full [`TokenUsage`]
@@ -444,7 +420,7 @@ fn annotate_with_usage(err: LlmError, usage: &DeepSeekUsage) -> LlmError {
 /// `reasoning_content` and visible `content`. When the hidden reasoning
 /// consumes the entire budget, the API may report the empty answer as either
 /// `"content": ""` or `"content": null`. The `""` form is classified by
-/// [`detect_empty_completion`] into an actionable
+/// `classify_completion` into an actionable
 /// [`LlmError::EmptyCompletion`]; the `null` form previously aborted
 /// DESERIALIZATION — which happens strictly earlier — so that classifier never
 /// ran and the truncation surfaced as an opaque body-decode failure instead.
@@ -952,26 +928,34 @@ impl LlmPort for DeepSeekAdapter {
 
             let finish_reason = Self::map_finish_reason(choice.finish_reason.clone());
 
-            if let Some(err) = detect_empty_completion(&choice.message.content, &finish_reason) {
+            // One rule for refusal, content filter, function call and empty text on any
+            // finish reason (PARITY-05, D-11a); this adapter's private copy is gone. DeepSeek
+            // sends no dedicated refusal field, so there is none to pass.
+            if let Err(err) = classify_completion(
+                self.get_provider_name(),
+                &request.model,
+                &choice.message.content,
+                &finish_reason,
+                None,
+                &self.config.api_key,
+            ) {
                 return Err(annotate_with_usage(err, &api_response.usage));
             }
 
             let content = choice.message.content.clone();
             let usage = map_usage(api_response.usage);
 
-            Ok(LlmResponse {
-                id: Uuid::new_v4(),
-                request_id: request.id,
-                model: api_response.model,
+            let mut llm_response = LlmResponse::new(
+                request.id,
+                api_response.model,
                 content,
                 finish_reason,
                 usage,
-                cost: None,
-                created_at: Utc::now(),
-                metadata: HashMap::new(),
-                function_call: None,
-                reasoning: None,
-            })
+            );
+            if let Some(reasoning) = &choice.message.reasoning_content {
+                llm_response = llm_response.with_reasoning(reasoning.as_str());
+            }
+            Ok(llm_response)
         };
 
         let mut response = self
@@ -1044,6 +1028,13 @@ impl LlmPort for DeepSeekAdapter {
         let mut held_finish_reason: Option<FinishReason> = None;
         let mut held_usage: Option<TokenUsage> = None;
 
+        // D-11a on the streaming path: the terminal chunk is decided by the same
+        // `classify_completion` the buffered path uses, over what the stream accumulated.
+        let provider = self.get_provider_name();
+        let model = request.model.clone();
+        let api_key = self.config.api_key.clone();
+        let mut completion = StreamCompletion::default();
+
         let llm_stream = stream.flat_map(move |chunk_result| {
             let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
                 Ok(bytes) => {
@@ -1056,13 +1047,20 @@ impl LlmPort for DeepSeekAdapter {
                         };
 
                         if json_str.trim() == "[DONE]" {
-                            let mut terminal = StreamingResponse::terminal(
-                                held_finish_reason.take().unwrap_or(FinishReason::Stop),
-                            );
-                            if let Some(usage) = held_usage.take() {
-                                terminal = terminal.with_usage(usage);
+                            let finish_reason =
+                                held_finish_reason.take().unwrap_or(FinishReason::Stop);
+                            match completion.finish(provider, &model, &finish_reason, &api_key) {
+                                Ok(()) => {
+                                    let mut terminal = StreamingResponse::terminal(finish_reason);
+                                    if let Some(usage) = held_usage.take() {
+                                        terminal = terminal.with_usage(usage);
+                                    }
+                                    items.push(Ok(terminal));
+                                }
+                                // An empty answer replaces the terminal chunk; deltas already
+                                // yielded (reasoning included) stay yielded.
+                                Err(error) => items.push(Err(error)),
                             }
-                            items.push(Ok(terminal));
                             continue;
                         }
 
@@ -1077,7 +1075,12 @@ impl LlmPort for DeepSeekAdapter {
                                             Some(Self::map_finish_reason(Some(reason.clone())));
                                     }
                                     let content = choice.delta.content.clone().unwrap_or_default();
-                                    items.push(Ok(StreamingResponse::delta(content)));
+                                    completion.observe_content(&content);
+                                    let mut delta = StreamingResponse::delta(content);
+                                    if let Some(reasoning) = &choice.delta.reasoning_content {
+                                        delta = delta.with_reasoning(reasoning.as_str());
+                                    }
+                                    items.push(Ok(delta));
                                 }
                             }
                             Err(e) => {
@@ -1238,31 +1241,44 @@ mod tests {
         assert!(!adapter.validate_model("deepseek-coder").await.unwrap());
     }
 
-    #[test]
-    fn test_detect_empty_completion_length_and_empty_is_truncation() {
-        let result = detect_empty_completion("", &FinishReason::Length);
-        assert!(matches!(result, Some(LlmError::EmptyCompletion(_))));
+    /// The shared guard, as this adapter calls it: no refusal field, the adapter's own key.
+    fn classify(content: &str, finish: &FinishReason) -> Result<(), LlmError> {
+        classify_completion(
+            DEEPSEEK_PROVIDER,
+            "deepseek-test",
+            content,
+            finish,
+            None,
+            "k",
+        )
     }
 
     #[test]
-    fn test_detect_empty_completion_length_and_whitespace_is_truncation() {
-        let result = detect_empty_completion("   \n\t", &FinishReason::Length);
-        assert!(matches!(result, Some(LlmError::EmptyCompletion(_))));
+    fn test_empty_completion_length_and_empty_is_truncation() {
+        let result = classify("", &FinishReason::Length);
+        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
     }
 
     #[test]
-    fn test_detect_empty_completion_non_empty_content_is_never_truncation() {
+    fn test_empty_completion_length_and_whitespace_is_truncation() {
+        let result = classify("   \n\t", &FinishReason::Length);
+        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
+    }
+
+    #[test]
+    fn test_empty_completion_non_empty_content_is_never_truncation() {
         // Non-empty content is not a truncation regardless of finish_reason.
-        assert!(detect_empty_completion("some answer", &FinishReason::Length).is_none());
-        assert!(detect_empty_completion("some answer", &FinishReason::Stop).is_none());
+        assert!(classify("some answer", &FinishReason::Length).is_ok());
+        assert!(classify("some answer", &FinishReason::Stop).is_ok());
     }
 
+    /// D-11a deliberate flip: this pinned the opposite before Phase 50 plan 50-12 (an empty
+    /// `stop` was a legitimate empty answer). Empty text is now an `EmptyCompletion` on any
+    /// finish reason.
     #[test]
-    fn test_detect_empty_completion_empty_but_stop_is_not_truncation() {
-        // A legitimate empty completion with finish_reason=stop is NOT a truncation
-        // — detection is narrow to Length+empty only.
-        let result = detect_empty_completion("", &FinishReason::Stop);
-        assert!(result.is_none());
+    fn test_empty_completion_empty_but_stop_is_empty_completion() {
+        let result = classify("", &FinishReason::Stop);
+        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
     }
 
     #[test]
@@ -1339,9 +1355,9 @@ mod tests {
     /// RED probe (debug session `deepseek-body-decode-persist`): a reasoning
     /// model that spends its whole `max_tokens` budget on hidden reasoning can
     /// return `"content": null` rather than `"content": ""`. The `""` form is
-    /// handled by `detect_empty_completion`; the `null` form must not blow up
+    /// handled by `classify_completion`; the `null` form must not blow up
     /// in DESERIALIZATION, because that happens strictly before
-    /// `detect_empty_completion` ever runs.
+    /// `classify_completion` ever runs.
     #[test]
     fn deepseek_response_deserializes_reasoning_payload_with_null_content() {
         let json = r#"{
@@ -1367,7 +1383,7 @@ mod tests {
             .expect("payload declares one choice");
         assert_eq!(
             choice.message.content, "",
-            "null content must normalize to empty string so detect_empty_completion can \
+            "null content must normalize to empty string so classify_completion can \
              classify it as a truncation"
         );
     }
@@ -1390,8 +1406,8 @@ mod tests {
         let json = r#"{"role":"assistant","content":null}"#;
         let message: DeepSeekMessage = serde_json::from_str(json).expect("should deserialize");
 
-        let detected = detect_empty_completion(&message.content, &FinishReason::Length);
-        assert!(matches!(detected, Some(LlmError::EmptyCompletion(_))));
+        let detected = classify(&message.content, &FinishReason::Length);
+        assert!(matches!(detected, Err(LlmError::EmptyCompletion(_))));
     }
 
     #[test]
@@ -2377,6 +2393,151 @@ mod tests {
 
     // ── Shared conformance suite (D-19, plan 31-04) ──
     //
+    /// PARITY-05: reasoning text and the empty-output rule on both paths (D-11, D-11a).
+    mod response_guard_wiring {
+        use super::*;
+        use futures::StreamExt;
+        use serde_json::{Value, json};
+
+        fn body(message: Value, finish_reason: &str) -> String {
+            json!({
+                "id": "cmpl-1",
+                "model": "deepseek-chat",
+                "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+        }
+
+        async fn generate_from(body: String) -> Result<LlmResponse, LlmError> {
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(body)
+                .create_async()
+                .await;
+            test_adapter_at(&server.url())
+                .generate(build_response_format_request(None))
+                .await
+        }
+
+        async fn stream_from(sse: &str) -> Vec<Result<StreamingResponse, LlmError>> {
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = test_adapter_at(&server.url())
+                .generate_stream(build_response_format_request(None))
+                .await
+                .unwrap();
+            let mut stream = Box::into_pin(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item);
+            }
+            items
+        }
+
+        #[tokio::test]
+        async fn deepseek_buffered_reasoning_text_is_surfaced() {
+            let response = generate_from(body(
+                json!({"role": "assistant", "content": "ok", "reasoning_content": "think"}),
+                "stop",
+            ))
+            .await
+            .unwrap();
+            assert_eq!(response.reasoning.as_deref(), Some("think"));
+
+            let blank = generate_from(body(
+                json!({"role": "assistant", "content": "ok", "reasoning_content": "  "}),
+                "stop",
+            ))
+            .await
+            .unwrap();
+            assert_eq!(blank.reasoning, None);
+        }
+
+        #[tokio::test]
+        async fn deepseek_empty_stop_completion_is_empty_completion_with_usage() {
+            let result =
+                generate_from(body(json!({"role": "assistant", "content": ""}), "stop")).await;
+            match result {
+                Err(LlmError::EmptyCompletion(msg)) => {
+                    assert!(msg.contains("finish_reason=stop"), "{msg}");
+                    assert!(
+                        msg.contains("provider-reported usage"),
+                        "the buffered path still annotates usage: {msg}"
+                    );
+                }
+                other => panic!("expected EmptyCompletion, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn deepseek_stream_reasoning_keeps_wire_order() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"a \"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"b\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let chunks: Vec<StreamingResponse> = stream_from(sse)
+                .await
+                .into_iter()
+                .map(|item| item.unwrap())
+                .collect();
+            let reasoning: Vec<Option<&str>> =
+                chunks.iter().map(|c| c.reasoning.as_deref()).collect();
+            assert_eq!(reasoning, vec![Some("a "), None, Some("b"), None]);
+            let content: Vec<&str> = chunks.iter().map(|c| c.delta.as_str()).collect();
+            assert_eq!(content, vec!["", "Hi", "", ""]);
+        }
+
+        #[tokio::test]
+        async fn deepseek_empty_stream_is_empty_completion() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\" \"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            let (last, yielded) = items.split_last().unwrap();
+            assert!(
+                matches!(last, Err(LlmError::EmptyCompletion(_))),
+                "got {last:?}"
+            );
+            assert_eq!(
+                yielded[0].as_ref().unwrap().reasoning.as_deref(),
+                Some("hmm"),
+                "reasoning already yielded stays yielded"
+            );
+            assert!(
+                items
+                    .iter()
+                    .all(|item| !matches!(item, Ok(chunk) if chunk.finish_reason.is_some())),
+                "no Ok terminal chunk is emitted"
+            );
+        }
+
+        #[tokio::test]
+        async fn deepseek_content_filter_stream_with_no_text_stays_ok() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            let terminal = items.last().unwrap().as_ref().expect("no error item");
+            assert!(matches!(
+                terminal.finish_reason,
+                Some(FinishReason::ContentFilter)
+            ));
+        }
+    }
+
     // Nested in its own module (rather than inline in `mod tests`) so every generated test's
     // full path contains "conformance" -- `cargo test --lib conformance` (the plan's own
     // acceptance criterion) selects it by that substring.

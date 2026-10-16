@@ -749,15 +749,15 @@ matrix_case!(kimi_fixed_temperature_explicit => case_fixed_temperature_explicit(
 matrix_case!(kimi_fixed_temperature_auto => case_fixed_temperature_auto("kimi"));
 
 // (e) an empty stop completion is typed -- all nine
-matrix_case!(#[ignore = "red until plan 50-12: an empty stop completion is returned as a successful empty answer"] openai_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("openai"));
+matrix_case!(openai_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("openai"));
 matrix_case!(anthropic_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("anthropic"));
-matrix_case!(#[ignore = "red until plan 50-12: an empty stop completion is returned as a successful empty answer"] deepseek_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("deepseek"));
-matrix_case!(#[ignore = "red until plan 50-12: an empty stop completion is returned as a successful empty answer"] kimi_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("kimi"));
-matrix_case!(#[ignore = "red until plan 50-12: an empty stop completion is returned as a successful empty answer"] qwen_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("qwen"));
-matrix_case!(#[ignore = "red until plan 50-12: an empty stop completion is returned as a successful empty answer"] grok_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("grok"));
+matrix_case!(deepseek_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("deepseek"));
+matrix_case!(kimi_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("kimi"));
+matrix_case!(qwen_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("qwen"));
+matrix_case!(grok_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("grok"));
 matrix_case!(#[ignore = "red until plan 50-13: an empty stop completion is returned as a successful empty answer"] gemini_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("gemini"));
-matrix_case!(#[ignore = "red until plan 50-12: an empty stop completion is returned as a successful empty answer"] ollama_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("ollama"));
-matrix_case!(#[ignore = "red until plan 50-12: an empty stop completion is returned as a successful empty answer"] openai_compatible_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("openai-compatible"));
+matrix_case!(ollama_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("ollama"));
+matrix_case!(openai_compatible_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("openai-compatible"));
 
 // (f) a fallback hop is sent its own model
 #[ignore = "red until plan 50-14: the fallback hop is sent the primary's model, not its own"]

@@ -240,7 +240,7 @@ cross-cutting, and several are defects in the three original adapters. `PROV-*` 
 - [x] **PARITY-06**: Fallback chains send each hop its own model, key Cadence pacing on it, and
   record the served model beside `SERVED_BY_METADATA_KEY`
 
-- [ ] **PARITY-07**: All nine adapters are in the shared conformance suite (extended with
+- [x] **PARITY-07**: All nine adapters are in the shared conformance suite (extended with
   capability truthfulness, `response_format` wire shape, empty completion, refusal, usage fields
   and the parameter-drop policy) and the credential-gated live smoke, and the mdBook has a
   "Switching providers" page with the per-provider/per-model behaviour table plus
@@ -459,7 +459,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PARITY-04 | Phase 50 | Complete |
 | PARITY-05 | Phase 50 | Complete |
 | PARITY-06 | Phase 50 | Complete |
-| PARITY-07 | Phase 50 | Pending |
+| PARITY-07 | Phase 50 | Complete |
 | PARITY-08 | Phase 50 | Complete |
 | REASON-01 | Phase 51 | Pending |
 | REASON-02 | Phase 51 | Pending |

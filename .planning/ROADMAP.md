@@ -1421,7 +1421,7 @@ Plans:
 
 **Wave 13** *(blocked on Wave 12 completion)*
 
-- [ ] 50-15-PLAN.md — Anthropic joins the shared conformance suite; seven new cases (capability truthfulness, response_format, empty completion buffered and streamed, refusal, usage fields, parameter-drop policy); `CASE_COUNT` 17
+- [x] 50-15-PLAN.md — Anthropic joins the shared conformance suite; seven new cases (capability truthfulness, response_format, empty completion buffered and streamed, refusal, usage fields, parameter-drop policy); `CASE_COUNT` 17
 
 **Wave 14** *(blocked on Wave 13 completion)*
 

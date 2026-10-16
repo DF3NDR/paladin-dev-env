@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-14-PLAN.md
-last_updated: "2026-10-16T17:52:32.459Z"
+stopped_at: Completed 50-15-PLAN.md
+last_updated: "2026-10-16T18:54:22.406Z"
 last_activity: 2026-10-16
 last_activity_desc: Phase 50 execution started
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 107
-  completed_plans: 104
+  completed_plans: 105
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([██████████] 97%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([██████████] 98%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 15 of 18
+Plan: 16 of 18
 Status: Ready to execute
 Last activity: 2026-10-16 — Phase 50 execution started
 
@@ -311,6 +311,7 @@ Last activity: 2026-10-16 — Phase 50 execution started
 | Phase 50 P12 | 35min | 3 tasks | 14 files |
 | Phase 50 P13 | 30min | 3 tasks | 11 files |
 | Phase 50 P14 | 90min | 3 tasks | 11 files |
+| Phase 50 P15 | 60min | 2 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -546,6 +547,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-13: Gemini RECITATION/BLOCKLIST/PROHIBITED_CONTENT/SPII map to ContentFilter like SAFETY; RECITATION was Error(value)
 - [Phase 50]: 50-14: paladin.served_by/served_model are recorded on buffered responses only (streams carry no metadata); hop_on_refusal is code-level only, no config key (D-10)
 - [Phase 50]: 50-14: FallbackChainError::EmptyStepModel fires enum_discriminants_undefined_non_unit_variant (measured, not forecast); registered with one paladin-llm manifest allow line
+- [Phase ?]: 50-15: Anthropic's warn-and-skip stream behaviour and DeepSeek's lack of a typed refusal are asserted by name in the conformance suite (MalformedFrame, RefusalShape) rather than skipped; OpenAI fixture default model is the unseeded gpt-4o (adapter-wide window 128000)
 
 ### Pending Todos
 
@@ -764,8 +766,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-16T17:52:32.426Z
-**Stopped at:** Completed 50-14-PLAN.md
+**Last session:** 2026-10-16T18:54:22.378Z
+**Stopped at:** Completed 50-15-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

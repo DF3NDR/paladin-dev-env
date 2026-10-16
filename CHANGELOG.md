@@ -937,6 +937,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   payload carries the advice that fits its finish reason. OpenAI `tool_calls` now maps to
   `FinishReason::FunctionCall`. One crate-private rule, `response_guards::classify_completion`,
   decides all of this, so the adapters cannot drift apart.
+- **Anthropic and Gemini join the response rules; Anthropic refusals, stop reasons and thinking
+  text (PARITY-05; Phase 50 plan 50-13; D-09, D-11, D-11a; `MIGRATION.md` 9.1 M-B-17).** An
+  Anthropic `stop_reason: "refusal"` is now `LlmError::Refusal` (it was reported as an
+  `EmptyCompletion` with max-tokens advice), buffered and streamed, with `detail` built from
+  `stop_details` and redacted before it is bounded. Every Anthropic stop reason has a name:
+  `tool_use` is `FinishReason::FunctionCall`, `pause_turn` is `Error("pause_turn")`,
+  `model_context_window_exceeded` is `Length`, anything else is `Error("unknown: <value>")`. A
+  streamed Anthropic response now reports its real stop reason on the terminal chunk instead of
+  an unconditional `Stop`, an unparsable stream event is logged (target `paladin::anthropic`,
+  event type only) instead of skipped silently, and `thinking` text reaches
+  `LlmResponse.reasoning` and `StreamingResponse.reasoning`. An Anthropic or Gemini stream with
+  no text ends in `Err(EmptyCompletion)`; Gemini `STOP` with empty text is `EmptyCompletion` on
+  both paths, and Gemini `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT` and `SPII` map to
+  `FinishReason::ContentFilter` like `SAFETY`. All nine providers now turn an empty answer into
+  the same typed error. No compat preset gains a usage-cap mapping: none of their quota bodies
+  was captured, and the owner accepted each as unverified (plan 50-17).
 
 ### Removed
 

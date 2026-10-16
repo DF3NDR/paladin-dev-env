@@ -382,6 +382,9 @@ impl QwenAdapter {
             // declaration, not an unmeasured default.
             request_parameters: CompatRequestParameters::all(),
             fallback_models: QWEN_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect(),
+            // No usage-cap (quota) mapping for qwen: its quota-exhaustion body was never captured
+            // (50-SEED-PROBE.md, owner reading R-2: accepted unverified 2026-10-16, plan 50-17),
+            // so an override would be invented evidence (D-11a). The shared status mapping applies.
             error_override: None,
             // WR-04 (`17-REVIEW.md`, T-17-52/T-17-53), superseding the
             // 17-04 comment this replaces: `QWEN_DEFAULT_BASE_URL` is only

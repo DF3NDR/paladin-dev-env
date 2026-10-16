@@ -659,6 +659,9 @@ impl OpenAiCompatibleAdapter {
             // which is the honest answer for an endpoint this adapter knows
             // nothing about in advance.
             fallback_models: Vec::new(),
+            // No usage-cap (quota) mapping for openai-compatible: its quota-exhaustion body was never captured
+            // (50-SEED-PROBE.md, owner reading R-2: accepted unverified 2026-10-16, plan 50-17),
+            // so an override would be invented evidence (D-11a). The shared status mapping applies.
             error_override: None,
             // T-17-18: this adapter's base_url is entirely operator-supplied
             // (unlike every other preset's fixed vendor host), so a redirect

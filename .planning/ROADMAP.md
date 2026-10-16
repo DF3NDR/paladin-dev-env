@@ -1385,7 +1385,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 50-06-PLAN.md — Dated per-vendor registry tables seeded only from `50-SEED-PROBE.md` (D-05/D-08, after 50-17); adapters read them; stale Anthropic/DeepSeek defaults, Anthropic model list and adapter windows replaced
+- [x] 50-06-PLAN.md — Dated per-vendor registry tables seeded only from `50-SEED-PROBE.md` (D-05/D-08, after 50-17); adapters read them; stale Anthropic/DeepSeek defaults, Anthropic model list and adapter windows replaced
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

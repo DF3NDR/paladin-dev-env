@@ -1417,7 +1417,7 @@ Plans:
 
 **Wave 12** *(blocked on Wave 11 completion)*
 
-- [ ] 50-14-PLAN.md — `FallbackStep`/`from_steps`, per-hop model rewrite feeding Cadence, `paladin.served_model`, `hop_on_refusal` opt-in; `agent_runtime.model_fallback.steps`; matrix fully green; root breaks registered
+- [x] 50-14-PLAN.md — `FallbackStep`/`from_steps`, per-hop model rewrite feeding Cadence, `paladin.served_model`, `hop_on_refusal` opt-in; `agent_runtime.model_fallback.steps`; matrix fully green; root breaks registered
 
 **Wave 13** *(blocked on Wave 12 completion)*
 

@@ -237,7 +237,7 @@ cross-cutting, and several are defects in the three original adapters. `PROV-*` 
   surfaces reasoning text on the normal and streaming paths, and sends stop sequences where the
   vendor accepts them
 
-- [ ] **PARITY-06**: Fallback chains send each hop its own model, key Cadence pacing on it, and
+- [x] **PARITY-06**: Fallback chains send each hop its own model, key Cadence pacing on it, and
   record the served model beside `SERVED_BY_METADATA_KEY`
 
 - [ ] **PARITY-07**: All nine adapters are in the shared conformance suite (extended with
@@ -458,7 +458,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PARITY-03 | Phase 50 | Complete |
 | PARITY-04 | Phase 50 | Complete |
 | PARITY-05 | Phase 50 | Complete |
-| PARITY-06 | Phase 50 | Pending |
+| PARITY-06 | Phase 50 | Complete |
 | PARITY-07 | Phase 50 | Pending |
 | PARITY-08 | Phase 50 | Complete |
 | REASON-01 | Phase 51 | Pending |

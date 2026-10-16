@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-05-PLAN.md
-last_updated: "2026-10-16T00:25:59.069Z"
+stopped_at: Completed 50-17-PLAN.md
+last_updated: "2026-10-16T00:29:53.532Z"
 last_activity: 2026-10-16
 last_activity_desc: Phase 50 execution started
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 107
-  completed_plans: 94
+  completed_plans: 95
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([█████████░] 88%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([█████████░] 89%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,8 +63,8 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 5 of 18
-Status: Executing Phase 50
+Plan: 6 of 18
+Status: Ready to execute
 Last activity: 2026-10-16 — Phase 50 execution started
 
 ## Performance Metrics
@@ -301,6 +301,7 @@ Last activity: 2026-10-16 — Phase 50 execution started
 | Phase 50 P04 | 55min | 2 tasks | 2 files |
 | Phase 50 P03 | ~45min | 3 tasks | 16 files |
 | Phase 50 P05 | 20min | 3 tasks | 10 files |
+| Phase 50 P17 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -516,6 +517,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: [Phase 50] 50-03: an effective max_tokens above a profile's max_output_tokens is refused by name before any request; the framework default PromptParameters.max_tokens is 1000, so seeded max_output_tokens (plan 50-06) must stay at or above it or the default must be made explicit (plan 50-08)
 - [Phase 50-05]: RequestNotes moved into sampling.rs so the compat engine and the four bespoke adapters stamp the three metadata keys through one type
 - [Phase 50-05]: Anthropic adapter-wide profile states temperature and top_p NotSent, so an explicit temperature is refused at build by name; OpenAI keeps max_tokens 4096 as a compiled default that is checked against the profile
+- [Phase ?]: 50-17: owner reading R-2 answered accept unverified for kimi, qwen, grok, ollama, openai-compatible (2026-10-16); no usage-cap error_override to be encoded in 50-13; Ollama and OpenAI-compatible deliberately skipped in the seed probe
 
 ### Pending Todos
 
@@ -734,8 +736,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-15T18:15:02.828Z
-**Stopped at:** 50-17 Task 1 human-action checkpoint (operator probe run), after completing 50-05-PLAN.md
+**Last session:** 2026-10-16T00:29:53.472Z
+**Stopped at:** Completed 50-17-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

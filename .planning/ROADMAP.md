@@ -1397,7 +1397,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 50-09-PLAN.md — `LlmProviderConfig` keys and per-model overrides (existing YAML unchanged), D-13 layering with `${VAR}` placeholders and the 300 s reasoning default, per-provider `from_layers`, `LlmProviderFactory::create_from_config` and `is_configured`
+- [x] 50-09-PLAN.md — `LlmProviderConfig` keys and per-model overrides (existing YAML unchanged), D-13 layering with `${VAR}` placeholders and the 300 s reasoning default, per-provider `from_layers`, `LlmProviderFactory::create_from_config` and `is_configured`
 
 **Wave 8** *(blocked on Wave 7 completion)*
 

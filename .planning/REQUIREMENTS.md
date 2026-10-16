@@ -219,7 +219,7 @@ cross-cutting, and several are defects in the three original adapters. `PROV-*` 
   policy for a configured value the target does not accept — an ADR amending ADR-0004 — governs
   every adapter, the originals included, with nothing substituted undiscoverably
 
-- [ ] **PARITY-03**: Provider construction honours `llm.<provider>` config blocks (model,
+- [x] **PARITY-03**: Provider construction honours `llm.<provider>` config blocks (model,
   base_url, timeout, max_retries, default max_tokens, context-window override) through a public
   library API routed through `config/bridge.rs`; per-agent `provider` + `model` resolve through
   the same path in `agent_host`; existing YAML loads unchanged; and the facade exports all nine
@@ -455,7 +455,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ADOPT-05 | Phase 49 | Complete |
 | PARITY-01 | Phase 50 | Complete |
 | PARITY-02 | Phase 50 | Complete |
-| PARITY-03 | Phase 50 | Pending |
+| PARITY-03 | Phase 50 | Complete |
 | PARITY-04 | Phase 50 | Complete |
 | PARITY-05 | Phase 50 | Complete |
 | PARITY-06 | Phase 50 | Pending |

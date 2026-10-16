@@ -219,6 +219,7 @@ mod tests {
             created_at: chrono::Utc::now(),
             metadata: Default::default(),
             function_call: None,
+            reasoning: None,
         })
     }
 

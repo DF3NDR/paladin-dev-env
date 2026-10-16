@@ -642,6 +642,7 @@ impl LlmPort for MockLlmPort {
             model: "mock".into(),
             usage: Usage::default(),
             tool_calls: vec![],
+            reasoning: None,
         })
     }
 

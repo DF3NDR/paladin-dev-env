@@ -190,6 +190,7 @@ impl LlmPort for MockLlmAdapter {
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             }),
             MockResponse::ToolCall {
                 tool_name,
@@ -208,6 +209,7 @@ impl LlmPort for MockLlmAdapter {
                     name: tool_name,
                     arguments,
                 }),
+                reasoning: None,
             }),
             MockResponse::Streaming(chunks) => {
                 // For non-streaming generate(), concatenate all chunks
@@ -223,6 +225,7 @@ impl LlmPort for MockLlmAdapter {
                     created_at: Utc::now(),
                     metadata: HashMap::new(),
                     function_call: None,
+                    reasoning: None,
                 })
             }
             MockResponse::Error(error) => Err(error),

@@ -2280,6 +2280,7 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 function_call: None,
                 metadata: Default::default(),
+                reasoning: None,
             })
         }
 
@@ -2349,6 +2350,7 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 function_call: None,
                 metadata: Default::default(),
+                reasoning: None,
             })
         }
 

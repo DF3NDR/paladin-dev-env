@@ -1213,6 +1213,7 @@ mod tests {
                     created_at: chrono::Utc::now(),
                     metadata: std::collections::HashMap::new(),
                     function_call: None,
+                    reasoning: None,
                 })
             }
 
@@ -1314,6 +1315,7 @@ mod tests {
                     created_at: chrono::Utc::now(),
                     metadata: std::collections::HashMap::new(),
                     function_call: None,
+                    reasoning: None,
                 })
             }
 
@@ -1413,6 +1415,7 @@ mod tests {
                     created_at: chrono::Utc::now(),
                     metadata: std::collections::HashMap::new(),
                     function_call: None,
+                    reasoning: None,
                 })
             }
 
@@ -1510,6 +1513,7 @@ mod tests {
                     created_at: chrono::Utc::now(),
                     metadata: std::collections::HashMap::new(),
                     function_call: None,
+                    reasoning: None,
                 })
             }
 
@@ -1644,6 +1648,7 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 metadata: std::collections::HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
 

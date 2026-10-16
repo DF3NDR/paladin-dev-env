@@ -31,6 +31,7 @@ fn sample_response(request_id: Uuid) -> LlmResponse {
         created_at: Utc::now(),
         metadata: HashMap::new(),
         function_call: None,
+        reasoning: None,
     }
 }
 

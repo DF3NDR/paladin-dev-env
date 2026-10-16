@@ -963,6 +963,7 @@ impl CompatEngine {
                 created_at: Utc::now(),
                 metadata: metadata.clone(),
                 function_call: None,
+                reasoning: None,
             })
         };
 

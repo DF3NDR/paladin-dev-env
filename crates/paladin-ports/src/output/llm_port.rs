@@ -144,6 +144,7 @@
 //!             finish_reason: FinishReason::Stop,
 //!             usage: TokenUsage::new(10, 20),
 //!             cost: None,
+//!             reasoning: None,
 //!             created_at: Utc::now(),
 //!             metadata: HashMap::new(),
 //!             function_call: None,
@@ -1004,6 +1005,17 @@ pub struct LlmResponse {
     /// (the `served_by` precedent, D-25).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost: Option<Cost>,
+    /// The vendor's reasoning (thinking) text for this response, when it returned one (D-11).
+    ///
+    /// `None` when the model returned no reasoning text, and never `Some("")`: empty or
+    /// whitespace-only text is stored as `None` by [`LlmResponse::with_reasoning`]. It is a typed
+    /// field on purpose -- reasoning text is never carried through `metadata` or any other
+    /// untyped channel, so consumers and the Phase 51 reasoning surface can rely on this shape.
+    /// Absent from serialized JSON when `None`, so a `LlmResponse` document persisted before this
+    /// field existed deserializes with `reasoning == None`, and a response without reasoning
+    /// serializes byte-identically to before (the `cost` precedent).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
     /// When this response was created (UTC)
     pub created_at: DateTime<Utc>,
     /// Additional provider-specific information
@@ -1067,10 +1079,53 @@ impl LlmResponse {
             finish_reason,
             usage,
             cost: None,
+            reasoning: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
         }
+    }
+
+    /// Chainable: attach the vendor's reasoning (thinking) text to this response (D-11).
+    ///
+    /// Text that is empty after trimming is stored as `None`, so a vendor's empty reasoning
+    /// field never becomes `Some("")`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{FinishReason, LlmResponse, TokenUsage};
+    /// use uuid::Uuid;
+    ///
+    /// let response = LlmResponse::new(
+    ///     Uuid::new_v4(),
+    ///     "deepseek-reasoner",
+    ///     "42",
+    ///     FinishReason::Stop,
+    ///     TokenUsage::new(5, 9),
+    /// )
+    /// .with_reasoning("Six times seven is forty-two.");
+    /// assert_eq!(response.reasoning.as_deref(), Some("Six times seven is forty-two."));
+    ///
+    /// let blank = LlmResponse::new(
+    ///     Uuid::new_v4(),
+    ///     "deepseek-reasoner",
+    ///     "42",
+    ///     FinishReason::Stop,
+    ///     TokenUsage::new(5, 9),
+    /// )
+    /// .with_reasoning("   ");
+    /// assert!(blank.reasoning.is_none());
+    /// ```
+    #[must_use]
+    pub fn with_reasoning(mut self, text: impl Into<String>) -> Self {
+        let text = text.into();
+        self.reasoning = if text.trim().is_empty() {
+            None
+        } else {
+            Some(text)
+        };
+        self
     }
 }
 
@@ -2115,6 +2170,7 @@ mod tests {
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(1, 2),
             cost: None,
+            reasoning: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
@@ -2227,6 +2283,70 @@ mod tests {
         assert!(a.function_call.is_none());
         assert!(a.created_at >= before);
         assert_ne!(a.id, b.id, "each response gets a fresh id");
+    }
+
+    /// Runtime State Inventory (D-11): a `LlmResponse` JSON document persisted before
+    /// `reasoning` existed (no `reasoning` key at all) deserializes with `reasoning == None`
+    /// (`#[serde(default)]`), and a `reasoning: None` response serializes with no `reasoning` key
+    /// (`skip_serializing_if`) -- so legacy documents stay byte-identical (the `cost` precedent).
+    #[test]
+    fn llm_response_without_reasoning_key_deserializes_to_none() {
+        let response = sample_llm_response();
+        assert!(response.reasoning.is_none());
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(
+            !json.as_object().unwrap().contains_key("reasoning"),
+            "a None reasoning must be absent from serialized JSON, not present as null"
+        );
+
+        let deserialized: LlmResponse = serde_json::from_value(json).unwrap();
+        assert!(deserialized.reasoning.is_none());
+    }
+
+    /// A response that carries reasoning text round-trips through JSON.
+    #[test]
+    fn llm_response_reasoning_round_trips_through_json() {
+        let response = sample_llm_response().with_reasoning("step one, step two");
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["reasoning"], "step one, step two");
+        let back: LlmResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(back.reasoning.as_deref(), Some("step one, step two"));
+    }
+
+    /// Edge PARITY-05/empty (carrier half): `with_reasoning` stores `None` for text that is empty
+    /// after trimming, so a vendor's empty reasoning field never becomes `Some("")`.
+    #[test]
+    fn with_reasoning_ignores_empty_text() {
+        assert!(sample_llm_response().with_reasoning("").reasoning.is_none());
+        assert!(
+            sample_llm_response()
+                .with_reasoning(" \n\t ")
+                .reasoning
+                .is_none()
+        );
+        assert_eq!(
+            sample_llm_response()
+                .with_reasoning("kept as given ")
+                .reasoning
+                .as_deref(),
+            Some("kept as given ")
+        );
+    }
+
+    /// `LlmResponse::new` leaves `reasoning` unset and puts nothing in `metadata` (D-11: no
+    /// untyped channel).
+    #[test]
+    fn llm_response_new_has_no_reasoning() {
+        let response = LlmResponse::new(
+            Uuid::new_v4(),
+            "m",
+            "c",
+            FinishReason::Stop,
+            TokenUsage::new(1, 2),
+        );
+        assert!(response.reasoning.is_none());
+        assert!(!response.metadata.contains_key("reasoning_content"));
     }
 
     /// D-28: compile-time guard for the prohibition -- `ProviderCapabilities`

@@ -381,6 +381,7 @@ impl LlmPort for MockLlmAdapter {
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             }),
             MockEntry::ToolCall { name, arguments } => Ok(LlmResponse {
                 id: Uuid::new_v4(),
@@ -393,6 +394,7 @@ impl LlmPort for MockLlmAdapter {
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall { name, arguments }),
+                reasoning: None,
             }),
         }
     }
@@ -538,6 +540,7 @@ impl LlmPort for MultiStepMockLlmPort {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         })
     }
 

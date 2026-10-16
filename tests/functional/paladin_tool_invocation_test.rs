@@ -63,6 +63,7 @@ impl LlmPort for MockToolLlm {
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
     }
@@ -293,6 +294,7 @@ async fn test_paladin_with_stdio_tool() {
                 })
                 .to_string(),
             }),
+            reasoning: None,
         },
         // Second response: LLM provides final answer
         LlmResponse {
@@ -306,6 +308,7 @@ async fn test_paladin_with_stdio_tool() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
         // Fallback response for extra iterations
         LlmResponse {
@@ -319,6 +322,7 @@ async fn test_paladin_with_stdio_tool() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 
@@ -373,6 +377,7 @@ async fn test_paladin_with_sse_tool() {
                 })
                 .to_string(),
             }),
+            reasoning: None,
         },
         // Final response
         LlmResponse {
@@ -386,6 +391,7 @@ async fn test_paladin_with_sse_tool() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
         // Fallback
         LlmResponse {
@@ -399,6 +405,7 @@ async fn test_paladin_with_sse_tool() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 
@@ -456,6 +463,7 @@ async fn test_multiple_tool_invocations() {
                 })
                 .to_string(),
             }),
+            reasoning: None,
         },
         // Second tool call: calculator multiply
         LlmResponse {
@@ -477,6 +485,7 @@ async fn test_multiple_tool_invocations() {
                 })
                 .to_string(),
             }),
+            reasoning: None,
         },
         // Final response
         LlmResponse {
@@ -491,6 +500,7 @@ async fn test_multiple_tool_invocations() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
         // Fallback responses for extra iterations
         LlmResponse {
@@ -505,6 +515,7 @@ async fn test_multiple_tool_invocations() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -518,6 +529,7 @@ async fn test_multiple_tool_invocations() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 
@@ -572,6 +584,7 @@ async fn test_tool_timeout_handling() {
                 })
                 .to_string(),
             }),
+            reasoning: None,
         },
         // Recovery response
         LlmResponse {
@@ -585,6 +598,7 @@ async fn test_tool_timeout_handling() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
         // Fallback
         LlmResponse {
@@ -598,6 +612,7 @@ async fn test_tool_timeout_handling() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 
@@ -650,6 +665,7 @@ async fn test_tool_failure_resilience() {
                 })
                 .to_string(),
             }),
+            reasoning: None,
         },
         // Recovery response
         LlmResponse {
@@ -664,6 +680,7 @@ async fn test_tool_failure_resilience() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
         // Fallback
         LlmResponse {
@@ -677,6 +694,7 @@ async fn test_tool_failure_resilience() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 

@@ -433,6 +433,7 @@ impl VisionCapableLlm for OpenAIAdapter {
             created_at: Utc::now(),
             metadata: Default::default(),
             function_call: None,
+            reasoning: None,
         })
     }
 

@@ -3924,6 +3924,7 @@ mod tests {
                 created_at: chrono::Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
 
@@ -4313,6 +4314,7 @@ mod tests {
                     name: "lookup".to_string(),
                     arguments: r#"{"q":"x"}"#.to_string(),
                 }),
+                reasoning: None,
             })
         }
 
@@ -7552,6 +7554,7 @@ mod agent_loop_cost_tests {
                 created_at: chrono::Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
 

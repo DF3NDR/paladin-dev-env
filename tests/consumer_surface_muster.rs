@@ -172,6 +172,7 @@ fn result_literals() -> (PaladinResult, LlmResponse) {
         created_at: Utc::now(),
         metadata: HashMap::new(),
         function_call: None,
+        reasoning: None,
     };
     (result, response)
 }

@@ -104,6 +104,7 @@ impl LlmPort for MockLlmPort {
                 created_at: chrono::Utc::now(),
                 metadata: std::collections::HashMap::new(),
                 function_call: None,
+                reasoning: None,
             }),
             Err(e) => Err(e),
         }

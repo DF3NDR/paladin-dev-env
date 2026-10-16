@@ -340,6 +340,7 @@ impl paladin_ports::output::llm_port::LlmPort for RecordingRoutingLlmMock {
             created_at: chrono::Utc::now(),
             metadata: std::collections::HashMap::new(),
             function_call: None,
+            reasoning: None,
         })
     }
 
@@ -800,6 +801,7 @@ async fn test_grove_llm_routing_end_to_end() {
                 created_at: chrono::Utc::now(),
                 metadata: std::collections::HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
 

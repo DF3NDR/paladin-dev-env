@@ -986,6 +986,7 @@ impl LlmPort for OpenAIAdapter {
             created_at: Utc::now(),
             metadata: notes.into_metadata(),
             function_call: None,
+            reasoning: None,
         })
     }
 

@@ -63,6 +63,7 @@ impl LlmPort for MockLlmWithFunctionCalls {
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
     }
@@ -250,6 +251,7 @@ async fn test_tool_call_detection() {
                 })
                 .to_string(),
             }),
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -262,6 +264,7 @@ async fn test_tool_call_detection() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -274,6 +277,7 @@ async fn test_tool_call_detection() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 
@@ -335,6 +339,7 @@ async fn test_tool_invocation_and_injection() {
                 })
                 .to_string(),
             }),
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -347,6 +352,7 @@ async fn test_tool_invocation_and_injection() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 
@@ -399,6 +405,7 @@ async fn test_paladin_continues_after_tool_failure() {
                 name: "nonexistent_tool".to_string(),
                 arguments: json!({"query": "test"}).to_string(),
             }),
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -411,6 +418,7 @@ async fn test_paladin_continues_after_tool_failure() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -423,6 +431,7 @@ async fn test_paladin_continues_after_tool_failure() {
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 

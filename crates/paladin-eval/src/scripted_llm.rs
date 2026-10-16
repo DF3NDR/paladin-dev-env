@@ -280,6 +280,7 @@ impl ScenarioLlm {
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             }),
             ScriptEntry::ToolCall { name, arguments } => Ok(LlmResponse {
                 id: Uuid::new_v4(),
@@ -295,6 +296,7 @@ impl ScenarioLlm {
                     name: name.clone(),
                     arguments: arguments.to_string(),
                 }),
+                reasoning: None,
             }),
             ScriptEntry::Error(kind) => Err(kind.to_llm_error(&self.node_id, call_index)),
         }

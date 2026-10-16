@@ -136,6 +136,7 @@ impl LlmPort for CustomLlmAdapter {
             model: response_data.model,
             usage: response_data.usage.into(),
             tool_calls: self.parse_tool_calls(&response_data),
+            reasoning: None,
         })
     }
 

@@ -39,6 +39,26 @@
 //! [`CADENCE_LOG_TARGET`] (provider, model and durations only). A
 //! [`TraceEvent::FallbackHop`] is emitted only when a hop really happens.
 //!
+//! ## One model per hop (D-15, PARITY-06, handoff B-3)
+//!
+//! [`FallbackLlmAdapter::new`] sends every hop the request's own model, which is only right when
+//! every hop serves that model. A chain across vendors (Anthropic, then Kimi) must not send
+//! `claude-*` to Moonshot, so [`FallbackLlmAdapter::from_steps`] takes [`FallbackStep`]s, each a
+//! port and the model it is sent. Before each hop the request's `model` is rewritten to the
+//! step's, on `generate` and `generate_stream`; the hop's own default model is never
+//! substituted, and the first hop's model is never reused on a later hop. That model also keys
+//! the pacing (Cadence keys on `(provider, model)`), so a 429 on hop 1 gates hop 1's model only.
+//! Every served response records the hop's provider under [`SERVED_BY_METADATA_KEY`] and the
+//! model it was sent under [`SERVED_MODEL_METADATA_KEY`], for both constructors. A streamed
+//! response has no metadata to carry them; the stream's chunks are the hop's own.
+//!
+//! ## A refusal stops the chain by default (D-10)
+//!
+//! [`LlmError::Refusal`] is `Permanent`, so it short-circuits like any other: an automatic hop
+//! would hide the refusal from the consumer and spend budget on every hop.
+//! [`FallbackLlmAdapter::hop_on_refusal`] is the explicit opt-in to trying the next step on a
+//! refusal; it never widens to any other `Permanent` error.
+//!
 //! ## Composition
 //!
 //! `Pricing(Fallback(Cadence(hop1), Cadence(hop2)))`: pricing stays outermost so it prices the
@@ -484,7 +504,11 @@ impl FallbackLlmAdapter {
         attempts: &mut Vec<(String, String)>,
     ) -> Result<(), LlmError> {
         attempts.push((from.to_string(), err.to_string()));
-        if err.transience() == Transience::Permanent {
+        // A refusal is `Permanent`, so it short-circuits unless the operator opted in (D-10).
+        // The opt-in covers a `Refusal` and nothing else: a rejected key or a malformed request
+        // is no better at the next provider.
+        let hops_past = self.hop_on_refusal && matches!(err, LlmError::Refusal { .. });
+        if err.transience() == Transience::Permanent && !hops_past {
             return Err(err);
         }
         match self.chain.get(index + 1) {
@@ -550,6 +574,18 @@ impl FallbackLlmAdapter {
         true
     }
 
+    /// The request as hop `index` is sent it: the caller's request with `model` replaced by the
+    /// step's model on a [`FallbackLlmAdapter::from_steps`] chain, unchanged on a
+    /// [`FallbackLlmAdapter::new`] chain (D-15). The model is never taken from the hop's adapter
+    /// default: each step states the model it sends.
+    fn request_for_hop(&self, index: usize, request: &LlmRequest) -> LlmRequest {
+        let mut hop_request = request.clone();
+        if let Some(model) = self.models.get(index).and_then(Option::as_deref) {
+            hop_request.model = model.to_string();
+        }
+        hop_request
+    }
+
     /// The error returned when every element of the chain has been asked
     /// and none answered — only reachable if the chain were empty, which
     /// `new` forbids.
@@ -567,21 +603,27 @@ impl LlmPort for FallbackLlmAdapter {
         let mut attempts: Vec<(String, String)> = Vec::new();
         for (index, provider) in self.chain.iter().enumerate() {
             let name = provider.get_provider_name();
+            // The request as this hop is sent it (D-15); its model keys the pacing (D-00h).
+            let hop_request = self.request_for_hop(index, &request);
             // Per hop, per call: when this hop first answered 429 (D-03).
             let mut first_429 = None;
             loop {
-                match provider.generate(request.clone()).await {
+                match provider.generate(hop_request.clone()).await {
                     Ok(mut response) => {
                         response
                             .metadata
                             .insert(SERVED_BY_METADATA_KEY.to_string(), name.to_string());
+                        response.metadata.insert(
+                            SERVED_MODEL_METADATA_KEY.to_string(),
+                            hop_request.model.clone(),
+                        );
                         return Ok(response);
                     }
                     Err(err) => {
                         let paced = self
                             .pace_hop(
                                 provider,
-                                &request.model,
+                                &hop_request.model,
                                 &mut first_429,
                                 &err,
                                 &mut attempts,
@@ -609,10 +651,12 @@ impl LlmPort for FallbackLlmAdapter {
         let mut attempts: Vec<(String, String)> = Vec::new();
         for (index, provider) in self.chain.iter().enumerate() {
             let name = provider.get_provider_name();
+            // The request as this hop is sent it (D-15); its model keys the pacing (D-00h).
+            let hop_request = self.request_for_hop(index, &request);
             // Per hop, per call: when this hop first answered 429 (D-03).
             let mut first_429 = None;
             loop {
-                let first_item = match provider.generate_stream(request.clone()).await {
+                let first_item = match provider.generate_stream(hop_request.clone()).await {
                     Ok(raw) => {
                         // Peek exactly one item. `Box<dyn Stream>` is not
                         // `Unpin`, so pin it once here and keep the pinned
@@ -637,7 +681,7 @@ impl LlmPort for FallbackLlmAdapter {
                         let paced = self
                             .pace_hop(
                                 provider,
-                                &request.model,
+                                &hop_request.model,
                                 &mut first_429,
                                 &err,
                                 &mut attempts,
@@ -700,12 +744,19 @@ impl LlmPort for FallbackLlmAdapter {
     ///
     /// A hop that returns `None` (a third-party adapter with no profile) is skipped and judged
     /// only by its own request builder. The intersection is order-independent, so the order the
-    /// hops are listed in does not change the answer. Plan 50-14 points each step at its own
-    /// model.
+    /// hops are listed in does not change the answer.
+    ///
+    /// Each hop is asked about the model it will be sent (D-15): a
+    /// [`FallbackLlmAdapter::from_steps`] chain asks every step about that step's own model and
+    /// ignores `model`; a [`FallbackLlmAdapter::new`] chain asks every hop about `model`, which
+    /// is what each hop is sent.
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
         self.chain
             .iter()
-            .filter_map(|provider| provider.model_profile(model))
+            .zip(&self.models)
+            .filter_map(|(provider, step_model)| {
+                provider.model_profile(step_model.as_deref().unwrap_or(model))
+            })
             .reduce(|combined, next| combined.intersect(&next))
     }
 }

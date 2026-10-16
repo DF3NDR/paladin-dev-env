@@ -255,28 +255,11 @@ pub fn diagnostic_excerpt(body: &str, api_key: &str) -> String {
 /// into any log line, panic message or test failure that formats the config. Their manual `Debug`
 /// impls wrap the key in this instead (D-00a); an empty key is still shown as empty so an
 /// unconfigured credential stays distinguishable from a configured one.
-#[cfg(any(
-    feature = "openai",
-    feature = "anthropic",
-    feature = "deepseek",
-    feature = "kimi",
-    feature = "qwen",
-    feature = "grok",
-    feature = "gemini",
-    feature = "openai-compatible"
-))]
+///
+/// Not feature-gated: [`crate::config::llm::LlmProviderConfig`], which exists in every build,
+/// prints its key through this too.
 pub(crate) struct RedactedKey<'a>(pub(crate) &'a str);
 
-#[cfg(any(
-    feature = "openai",
-    feature = "anthropic",
-    feature = "deepseek",
-    feature = "kimi",
-    feature = "qwen",
-    feature = "grok",
-    feature = "gemini",
-    feature = "openai-compatible"
-))]
 impl std::fmt::Debug for RedactedKey<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.0.is_empty() {

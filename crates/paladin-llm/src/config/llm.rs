@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::provider_factory::provider_names;
+use crate::redaction::RedactedKey;
 use crate::registry::ModelOverride;
 
 /// Configuration for an individual LLM provider: one `llm.<provider>` block.
@@ -20,7 +21,7 @@ use crate::registry::ModelOverride;
 ///
 /// `Debug` prints the API key as `<redacted>`; the key is a public `String`, so a derived `Debug`
 /// would put it into any log line or panic message that formats the block (D-00a).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct LlmProviderConfig {
     /// API key for the provider. May be empty (the provider's own environment variable then
@@ -54,6 +55,22 @@ pub struct LlmProviderConfig {
     /// field by field, so a model Paladin has never seen can be described without a release.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub models: BTreeMap<String, ModelOverride>,
+}
+
+impl std::fmt::Debug for LlmProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmProviderConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("default_model", &self.default_model)
+            .field("default_temperature", &self.default_temperature)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_retries", &self.max_retries)
+            .field("max_tokens", &self.max_tokens)
+            .field("context_window", &self.context_window)
+            .field("models", &self.models)
+            .finish()
+    }
 }
 
 impl LlmProviderConfig {
@@ -195,6 +212,10 @@ impl Default for LlmConfig {
 impl LlmConfig {
     /// Validate LLM configuration.
     ///
+    /// Checks that `default_provider` names a provider whose block is present. An empty
+    /// `api_key` is **not** an error: the key may come from the provider's environment
+    /// variable (D-13), and construction reports one that is still missing.
+    ///
     /// Returns `Err(String)` describing the first validation failure found.
     pub fn validate(&self) -> Result<(), String> {
         if let Some(default) = &self.default_provider {
@@ -227,28 +248,12 @@ impl LlmConfig {
             }
         }
 
-        // Every provider block requires a non-empty api_key EXCEPT ollama,
-        // which legitimately has none (D-12: Ollama requires no
-        // credential) — do not "fix" the missing ollama entry below, its
-        // absence from this list is deliberate.
-        let keyed_blocks: [(&str, &Option<LlmProviderConfig>); 8] = [
-            ("OpenAI", &self.openai),
-            ("DeepSeek", &self.deepseek),
-            ("Anthropic", &self.anthropic),
-            ("Kimi", &self.kimi),
-            ("Qwen", &self.qwen),
-            ("Grok", &self.grok),
-            ("Gemini", &self.gemini),
-            ("openai-compatible", &self.openai_compatible),
-        ];
-
-        for (display_name, block) in keyed_blocks {
-            if let Some(cfg) = block
-                && cfg.api_key.is_empty()
-            {
-                return Err(format!("{display_name} API key cannot be empty"));
-            }
-        }
+        // No block is rejected for an empty `api_key` (A1-50-09, D-13): the key may come from
+        // the provider's own environment variable, so an empty one is a gap the layers fill
+        // rather than a mistake. A key that is still missing at construction is reported then,
+        // by `LlmProviderFactory::create_from_config`, naming the provider, the model and the
+        // variable it tried -- and up front by `LlmProviderFactory::is_configured`. Ollama has
+        // no key at all (D-12).
 
         Ok(())
     }

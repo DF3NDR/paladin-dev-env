@@ -648,6 +648,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `LlmProviderConfig` and `ModelOverride` (the feature-gated pairs are outside the default-feature
   baseline).
 
+- **Typed reasoning text on the streaming delta, and a constructor for `LlmResponse` (PARITY-05;
+  Phase 50 plan 50-11; D-11).** `StreamingResponse` gains `reasoning: Option<String>` (additive:
+  the struct is `#[non_exhaustive]`) and the chainable `StreamingResponse::with_reasoning`, the
+  vendor's reasoning text for that chunk, concatenated in wire order by the caller. `LlmResponse`
+  gains `LlmResponse::new(request_id, model, content, finish_reason, usage)`, which leaves the
+  other fields neutral, so a caller that uses it is insulated from the next added field, and the
+  chainable `LlmResponse::with_reasoning`. Both `with_reasoning` methods store `None` for text
+  that is empty after trimming. Reasoning is a typed field, never `metadata`. Adapters start
+  filling the fields in plans 50-12 and 50-13.
+
 ### Changed
 
 - **`llm.<provider>` blocks now take effect: the server builds every agent through
@@ -1089,6 +1099,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `with_*` builders (or deserialize it); a struct literal outside the crate no longer compiles.
   Same owner decision `option-a` as the nine adapter configs (Phase 50 plan 50-09). Registered
   with the semver measurement in plan 50-10.
+- **BREAKING (`paladin-ports`): `LlmResponse` gains `reasoning: Option<String>`, directly after
+  `cost`** -- the vendor's reasoning text for the response, `None` when it returned none; a full
+  struct literal must add `reasoning: None` (D-11, PARITY-05; Phase 50 plan 50-11). The struct
+  stays constructible. Build responses with `LlmResponse::new(..)` and `with_reasoning(..)`,
+  which name no later field. Legacy JSON without the key deserializes with `reasoning == None`,
+  and a response without reasoning serializes byte-identically. Registered on the existing
+  `paladin-ports | LlmResponse` `MIGRATION.md` 9.2 row and allowlist entry (the second break
+  after `cost`), and in 9.8 DR-6.
 
 ### Known limitations
 

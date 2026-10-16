@@ -179,14 +179,14 @@ requirement_id = "PRIM-03, PRIM-05"
 justification = "The legacy TokenCounterFactory struct (for_model/supported_models/is_supported) was removed outright with no #[deprecated] shim (D-09) -- zero in-tree callers. content-processing-gated identically to TokenCounter above, so CI's semver job's --default-features-only invocation cannot observe this removal either; this entry and its justification are the only record of that gap. Empirically confirmed via cargo semver-checks check-release --package paladin-memory --features content-processing --baseline-version 0.9.0 --release-type minor (struct_missing on all 3 re-export paths)."
 
 # --- Phase 38 (Design Seams & Pricing, PRICE-01..03) ------------------------
-# Entry below mirrors MIGRATION.md's `paladin-ports | LlmResponse` row (38-04).
+# Entry below mirrors MIGRATION.md's `paladin-ports | LlmResponse` row (38-04; extended in 50-11).
 
 [[entry]]
 crate = "paladin-ports"
 lint = "constructible_struct_adds_field"
 migration_row = "paladin-ports | LlmResponse"
-requirement_id = "PRICE-03"
-justification = "LlmResponse gained the additive cost: Option<Cost> field (D-10), priced per call by the PricingLlmAdapter decorator at the LlmPort boundary (D-09). #[serde(default, skip_serializing_if)] keeps legacy JSON byte-identical and deserialising as None (the served_by precedent, D-25); the struct stays constructible and is deliberately NOT #[non_exhaustive] for the same PaladinResult/Settings reason -- only full struct literals break, and every in-tree one (provider adapters, mocks, services, tests, benches, examples, doctests) was migrated to cost: None in the same commit."
+requirement_id = "PRICE-03, PARITY-05"
+justification = "LlmResponse gained the additive cost: Option<Cost> field (D-10), priced per call by the PricingLlmAdapter decorator at the LlmPort boundary (D-09). #[serde(default, skip_serializing_if)] keeps legacy JSON byte-identical and deserialising as None (the served_by precedent, D-25); the struct stays constructible and is deliberately NOT #[non_exhaustive] for the same PaladinResult/Settings reason -- only full struct literals break, and every in-tree one (provider adapters, mocks, services, tests, benches, examples, doctests) was migrated to cost: None in the same commit. Phase 50 plan 50-11 (D-11, PARITY-05) adds the second additive field on the same struct, reasoning: Option<String>, with the same serde attributes, the same constructible-not-non_exhaustive decision and a same-commit migration of every in-tree literal to reasoning: None; the D-27 run with the crate-wide allows disabled reports constructible_struct_adds_field on LlmResponse.cost and LlmResponse.reasoning, which this one entry covers (no new pair)."
 
 # --- Phase 40 (Tenant Identity & Run-Read Scoping, TENANT-01/02, PLAT-07) ---
 # Every entry below was measured in 40-06 by the D-27 method (cargo-semver-checks

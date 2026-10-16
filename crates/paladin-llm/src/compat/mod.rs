@@ -56,4 +56,77 @@ pub(crate) mod test_support {
     pub(crate) async fn server() -> ServerGuard {
         Server::new_async().await
     }
+
+    /// Send one plain user request for `model` through `port`, with `max_tokens` as the
+    /// request's own value (every other sampling parameter unset), and return the JSON body the
+    /// mock endpoint captured in `captured`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `port.generate` returns, so a test can assert a refusal before any HTTP call.
+    pub(crate) async fn send_with_max_tokens(
+        port: &dyn paladin_ports::output::llm_port::LlmPort,
+        captured: &Arc<Mutex<Option<Value>>>,
+        model: &str,
+        max_tokens: Option<u32>,
+    ) -> Result<Value, paladin_ports::output::llm_port::LlmError> {
+        use paladin_core::platform::container::prompt::{
+            PromptItem, PromptParameters, PromptType, UserPrompt,
+        };
+        use paladin_ports::output::llm_port::LlmRequest;
+
+        let mut request = LlmRequest::new(
+            model,
+            PromptItem::new(PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }))
+            .unwrap(),
+        );
+        request.prompt.entity.data.parameters = PromptParameters {
+            max_tokens,
+            temperature: None,
+            top_p: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: None,
+        };
+        *captured.lock().unwrap() = None;
+        port.generate(request).await?;
+        Ok(captured
+            .lock()
+            .unwrap()
+            .take()
+            .expect("the mock endpoint received a request"))
+    }
+
+    /// How many times `port` hits a mock endpoint that answers every request with HTTP 500,
+    /// for one `generate` call. Asserts nothing about the error beyond it being one.
+    pub(crate) async fn attempts_against_a_failing_endpoint(
+        mut server: ServerGuard,
+        port: &dyn paladin_ports::output::llm_port::LlmPort,
+        model: &str,
+        expected_attempts: usize,
+    ) {
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use paladin_ports::output::llm_port::LlmRequest;
+
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(500)
+            .with_body(r#"{"error":"boom"}"#)
+            .expect(expected_attempts)
+            .create_async()
+            .await;
+        let request = LlmRequest::new(
+            model,
+            PromptItem::new(PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }))
+            .unwrap(),
+        );
+        assert!(port.generate(request).await.is_err());
+        mock.assert_async().await;
+    }
 }

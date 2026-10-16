@@ -404,6 +404,11 @@ pub struct CompatEngine {
     /// engine built without a preset: [`CompatEngine::model_profile`] then derives one profile
     /// from the config's own declarations.
     model_registry: Option<ModelRegistry>,
+    /// The output budget sent when a request leaves `max_tokens` unset, from the preset's config
+    /// ([`CompatEngine::with_default_max_tokens`]). Private and **not** a field of the public
+    /// [`CompatEngineConfig`], which stays constructible exactly as before. `None` sends no
+    /// `max_tokens` key (the engine's behaviour before PARITY-03).
+    default_max_tokens: Option<u32>,
     /// Which (model, parameter) omissions this instance has already warned about.
     omissions: OmissionLog,
     /// Which (model, adjustment) `response_format` changes this instance has already warned
@@ -449,6 +454,7 @@ impl CompatEngine {
             models_cache: OnceCell::new(),
             provider_name: DEFAULT_PROVIDER_NAME,
             model_registry: None,
+            default_max_tokens: None,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
         })
@@ -471,6 +477,18 @@ impl CompatEngine {
     #[must_use]
     pub(crate) fn with_model_registry(mut self, registry: ModelRegistry) -> Self {
         self.model_registry = Some(registry);
+        self
+    }
+
+    /// Set the output budget sent when a request leaves `max_tokens` unset (PARITY-03, D-12).
+    ///
+    /// It is the effective `max_tokens` from then on: it is gated by the preset's
+    /// `request_parameters.max_tokens` declaration and checked against the request model's
+    /// profiled maximum output by [`sampling::check_max_tokens`], exactly as a request's own
+    /// value is. A request's own `max_tokens` always wins over it.
+    #[must_use]
+    pub(crate) fn with_default_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
+        self.default_max_tokens = max_tokens;
         self
     }
 
@@ -1244,6 +1262,64 @@ mod tests {
             fallback_models: vec!["fallback-model".to_string()],
             error_override: None,
             redirect_policy: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_engine_honours_configured_max_retries() {
+        // `CompatEngineConfig.max_retries` is the number of retries after the first attempt:
+        // 0 sends once, 2 sends three times (a retryable 5xx each time).
+        for retries in [0_u32, 2] {
+            let server = crate::compat::test_support::server().await;
+            let mut config = test_config();
+            config.base_url = server.url();
+            config.max_retries = retries;
+            let engine = CompatEngine::new(config).unwrap();
+            crate::compat::test_support::attempts_against_a_failing_endpoint(
+                server,
+                &engine_port::EnginePort(engine),
+                "test-model",
+                retries as usize + 1,
+            )
+            .await;
+        }
+    }
+
+    /// An `LlmPort` over a bare engine, so the shared retry helper can drive it.
+    mod engine_port {
+        use super::super::CompatEngine;
+        use async_trait::async_trait;
+        use futures::Stream;
+        use paladin_ports::output::llm_port::{
+            LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
+        };
+
+        pub(super) struct EnginePort(pub(super) CompatEngine);
+
+        #[async_trait]
+        impl LlmPort for EnginePort {
+            async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+                self.0.generate(request).await
+            }
+            async fn generate_stream(
+                &self,
+                request: LlmRequest,
+            ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError>
+            {
+                self.0.generate_stream(request).await
+            }
+            async fn validate_model(&self, model: &str) -> Result<bool, LlmError> {
+                Ok(self.0.validate_model(model).await)
+            }
+            async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+                Ok(self.0.available_models().await)
+            }
+            fn get_provider_name(&self) -> &'static str {
+                self.0.provider_name()
+            }
+            fn get_capabilities(&self) -> ProviderCapabilities {
+                self.0.capabilities()
+            }
         }
     }
 

@@ -27,6 +27,7 @@
 
 use async_trait::async_trait;
 use futures::Stream;
+use std::collections::BTreeMap;
 use std::env;
 
 use paladin_ports::output::llm_port::{
@@ -38,7 +39,9 @@ use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
-use crate::registry::{ModelRegistry, fallback_from_compat, seeded};
+use crate::registry::{
+    ModelOverride, ModelRegistry, config_knob_builders, fallback_from_compat, seeded,
+};
 
 /// Default Ollama base URL — the local OpenAI-compatibility layer
 /// (`/v1/*`), not the native `/api/chat` endpoint. See the module-level
@@ -70,6 +73,7 @@ pub const OLLAMA_PLACEHOLDER_API_KEY: &str = "ollama";
 /// [`OLLAMA_PLACEHOLDER_API_KEY`] for how the engine's header-construction
 /// path is kept identical across every preset regardless.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct OllamaConfig {
     /// Base URL for the Ollama compat-layer API.
     pub base_url: String,
@@ -79,6 +83,25 @@ pub struct OllamaConfig {
     /// hosted-preset `60` — a local model on cold start is slower than a
     /// hosted endpoint (T-17-17).
     pub timeout_seconds: u64,
+    /// Default output budget (`max_tokens`) sent when a request sets none. `None` (the default)
+    /// sends no `max_tokens` key. The value is checked against the model's profiled maximum
+    /// output exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the request is
+    /// refused before any HTTP call.
+    pub max_tokens: Option<u32>,
+    /// How many times a retryable error is retried after the first attempt. Defaults to `3`;
+    /// `0` sends each request once. A 429 is never retried here (the Cadence decorator waits)
+    /// and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model of this
+    /// provider. `None` (the default) keeps the compiled windows. When set it replaces the
+    /// adapter's declared window, the fallback profile's window and every seeded model's window;
+    /// a `context_window` in [`model_overrides`](Self::model_overrides) still wins for that
+    /// model. Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
 }
 
 impl OllamaConfig {
@@ -126,6 +149,10 @@ impl OllamaConfig {
             base_url,
             model,
             timeout_seconds,
+            max_tokens: None,
+            max_retries: 3,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         };
 
         config.validate()?;
@@ -138,6 +165,10 @@ impl OllamaConfig {
             base_url,
             model,
             timeout_seconds: 120,
+            max_tokens: None,
+            max_retries: 3,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 
@@ -155,6 +186,8 @@ impl OllamaConfig {
         Ok(())
     }
 }
+
+config_knob_builders!(OllamaConfig);
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and that its engine stamps on every `LlmError::ProviderError` (Phase 25 D-03).
@@ -688,5 +721,120 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(OllamaFixture);
+    }
+
+    // ── PARITY-03 knobs (plan 50-08, D-12) ──
+
+    const UNSEEDED: &str = "ollama-unseeded-test-model";
+
+    fn knob_config(url: &str, model: &str) -> OllamaConfig {
+        OllamaConfig::new(url.to_string(), model.to_string())
+    }
+
+    #[tokio::test]
+    async fn ollama_max_tokens_default_reaches_the_wire() {
+        use crate::compat::test_support::{mock_completion, send_with_max_tokens, server};
+
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let adapter =
+            OllamaAdapter::new(knob_config(&server.url(), UNSEEDED).with_max_tokens(2048)).unwrap();
+
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 2048, "{body}");
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 512, "{body}");
+
+        let plain = OllamaAdapter::new(knob_config(&server.url(), UNSEEDED)).unwrap();
+        let body = send_with_max_tokens(&plain, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert!(body.get("max_tokens").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn ollama_max_retries_is_read_by_the_engine() {
+        for retries in [0_u32, 1] {
+            let server = crate::compat::test_support::server().await;
+            let adapter =
+                OllamaAdapter::new(knob_config(&server.url(), UNSEEDED).with_max_retries(retries))
+                    .unwrap();
+            crate::compat::test_support::attempts_against_a_failing_endpoint(
+                server,
+                &adapter,
+                UNSEEDED,
+                retries as usize + 1,
+            )
+            .await;
+        }
+    }
+
+    #[test]
+    fn ollama_context_window_override_is_declared() {
+        let adapter = OllamaAdapter::new(
+            knob_config("https://example.invalid/v1", UNSEEDED).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        let profile = adapter.model_profile(UNSEEDED).unwrap();
+        assert_eq!(profile.context_window, Some(500_000));
+    }
+
+    #[test]
+    fn ollama_model_override_reaches_the_profile_and_invalid_one_fails_construction() {
+        let with_override = |window: u32| {
+            knob_config("https://example.invalid/v1", UNSEEDED).with_model_overrides(
+                std::collections::BTreeMap::from([(
+                    UNSEEDED.to_string(),
+                    crate::registry::ModelOverride {
+                        context_window: Some(window),
+                        ..crate::registry::ModelOverride::default()
+                    },
+                )]),
+            )
+        };
+        let adapter = OllamaAdapter::new(with_override(900_000)).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+        let message = match OllamaAdapter::new(with_override(0)) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("a zero window must fail construction"),
+        };
+        assert!(
+            message.contains("ollama") && message.contains(UNSEEDED),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn ollama_config_defaults_a_reasoning_model_to_300s() {
+        // (model, expected default timeout): a seeded reasoning model gets 300 s (D-13); any
+        // other model keeps this preset's compiled default (120 s).
+        for (model, expected) in [(OLLAMA_DEFAULT_MODEL, 120), (UNSEEDED, 120)] {
+            let url = "https://example.invalid/v1";
+            assert_eq!(
+                knob_config(url, model).timeout_seconds,
+                expected,
+                "new({model})"
+            );
+            let parts = OllamaConfig::from_parts(None, Some(model.to_string()), None).unwrap();
+            assert_eq!(parts.timeout_seconds, expected, "from_parts({model})");
+        }
+        // An explicit environment value always wins.
+        for explicit in ["30", "60", "900"] {
+            let config = OllamaConfig::from_parts(
+                None,
+                Some("llama3".to_string()),
+                Some(explicit.to_string()),
+            )
+            .unwrap();
+            assert_eq!(config.timeout_seconds.to_string(), explicit);
+        }
     }
 }

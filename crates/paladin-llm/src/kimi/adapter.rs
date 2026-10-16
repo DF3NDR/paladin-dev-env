@@ -20,6 +20,7 @@
 
 use async_trait::async_trait;
 use futures::Stream;
+use std::collections::BTreeMap;
 use std::env;
 
 use paladin_ports::output::llm_port::{
@@ -31,7 +32,9 @@ use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSuppo
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
-use crate::registry::{ModelRegistry, fallback_from_compat, seeded, seeded_window};
+use crate::registry::{
+    ModelOverride, ModelRegistry, config_knob_builders, fallback_from_compat, seeded, seeded_window,
+};
 
 /// Default Kimi (Moonshot AI) API base URL.
 ///
@@ -69,6 +72,7 @@ pub const KIMI_FALLBACK_MODELS: &[&str] = &[
 
 /// Configuration for the Kimi (Moonshot AI) adapter.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct KimiConfig {
     /// API key for Kimi authentication.
     pub api_key: String,
@@ -78,6 +82,25 @@ pub struct KimiConfig {
     pub model: String,
     /// Request timeout in seconds.
     pub timeout_seconds: u64,
+    /// Default output budget (`max_tokens`) sent when a request sets none. `None` (the default)
+    /// sends no `max_tokens` key. The value is checked against the model's profiled maximum
+    /// output exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the request is
+    /// refused before any HTTP call.
+    pub max_tokens: Option<u32>,
+    /// How many times a retryable error is retried after the first attempt. Defaults to `3`;
+    /// `0` sends each request once. A 429 is never retried here (the Cadence decorator waits)
+    /// and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model of this
+    /// provider. `None` (the default) keeps the compiled windows. When set it replaces the
+    /// adapter's declared window, the fallback profile's window and every seeded model's window;
+    /// a `context_window` in [`model_overrides`](Self::model_overrides) still wins for that
+    /// model. Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
 }
 
 impl KimiConfig {
@@ -128,6 +151,10 @@ impl KimiConfig {
             base_url,
             model,
             timeout_seconds,
+            max_tokens: None,
+            max_retries: 3,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         };
 
         config.validate()?;
@@ -141,6 +168,10 @@ impl KimiConfig {
             base_url,
             model,
             timeout_seconds: 60,
+            max_tokens: None,
+            max_retries: 3,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 
@@ -161,6 +192,8 @@ impl KimiConfig {
         Ok(())
     }
 }
+
+config_knob_builders!(KimiConfig);
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and that its engine stamps on every `LlmError::ProviderError` (Phase 25 D-03).
@@ -1588,5 +1621,261 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(KimiFixture);
+    }
+
+    // ── PARITY-03 knobs (plan 50-08, D-12) ──
+
+    fn kimi_config(base_url: &str, model: &str) -> KimiConfig {
+        KimiConfig::new(
+            "test-key".to_string(),
+            base_url.to_string(),
+            model.to_string(),
+        )
+    }
+
+    fn window_override(window: u32) -> ModelOverride {
+        ModelOverride {
+            context_window: Some(window),
+            ..ModelOverride::default()
+        }
+    }
+
+    fn kimi_error(config: KimiConfig) -> String {
+        match KimiAdapter::new(config) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("construction must fail"),
+        }
+    }
+
+    #[tokio::test]
+    async fn kimi_max_tokens_default_reaches_the_wire() {
+        use crate::compat::test_support::{mock_completion, send_with_max_tokens, server};
+
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let adapter =
+            KimiAdapter::new(kimi_config(&server.url(), UNSEEDED_MODEL).with_max_tokens(2048))
+                .unwrap();
+
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED_MODEL, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 2048, "{body}");
+        // A request's own value always wins over the configured default.
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED_MODEL, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 512, "{body}");
+
+        // No configured default: no `max_tokens` key, as before PARITY-03.
+        let plain = KimiAdapter::new(kimi_config(&server.url(), UNSEEDED_MODEL)).unwrap();
+        let body = send_with_max_tokens(&plain, &captured, UNSEEDED_MODEL, None)
+            .await
+            .unwrap();
+        assert!(body.get("max_tokens").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn kimi_max_retries_is_read_by_the_engine() {
+        for retries in [0_u32, 1] {
+            let server = crate::compat::test_support::server().await;
+            let adapter = KimiAdapter::new(
+                kimi_config(&server.url(), KIMI_DEFAULT_MODEL).with_max_retries(retries),
+            )
+            .unwrap();
+            crate::compat::test_support::attempts_against_a_failing_endpoint(
+                server,
+                &adapter,
+                KIMI_DEFAULT_MODEL,
+                retries as usize + 1,
+            )
+            .await;
+        }
+    }
+
+    #[test]
+    fn kimi_context_window_override_is_declared() {
+        let adapter = KimiAdapter::new(
+            kimi_config("https://example.invalid/v1", UNSEEDED_MODEL).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        // The fallback profile (an unprofiled model) carries the same window.
+        let profile = adapter.model_profile(UNSEEDED_MODEL).unwrap();
+        assert_eq!(profile.context_window, Some(500_000));
+    }
+
+    #[test]
+    fn context_window_override_beats_a_seeded_window() {
+        use crate::window::effective_capabilities;
+
+        let config = || kimi_config("https://example.invalid/v1", "kimi-k3");
+
+        // The seeded fact, with no knob.
+        let seeded_only = KimiAdapter::new(config()).unwrap();
+        assert_eq!(
+            seeded_only.model_profile("kimi-k3").unwrap().context_window,
+            Some(1_048_576)
+        );
+
+        // The operator's adapter-wide statement beats the compiled seeded fact ...
+        let adapter = KimiAdapter::new(config().with_context_window(500_000)).unwrap();
+        assert_eq!(
+            adapter.model_profile("kimi-k3").unwrap().context_window,
+            Some(500_000)
+        );
+        assert_eq!(
+            effective_capabilities(&adapter, "kimi-k3").max_context_tokens,
+            Some(500_000)
+        );
+
+        // ... and a per-model override beats both, for that model only.
+        let adapter = KimiAdapter::new(config().with_context_window(500_000).with_model_overrides(
+            BTreeMap::from([("kimi-k3".to_string(), window_override(900_000))]),
+        ))
+        .unwrap();
+        assert_eq!(
+            adapter.model_profile("kimi-k3").unwrap().context_window,
+            Some(900_000)
+        );
+        assert_eq!(
+            effective_capabilities(&adapter, "kimi-k3").max_context_tokens,
+            Some(900_000)
+        );
+        assert_eq!(
+            adapter.model_profile("kimi-k2.6").unwrap().context_window,
+            Some(500_000)
+        );
+    }
+
+    #[test]
+    fn kimi_model_override_wins_and_invalid_override_fails_construction() {
+        let with_override = |over: ModelOverride| {
+            kimi_config("https://example.invalid/v1", "kimi-k3")
+                .with_model_overrides(BTreeMap::from([("kimi-k3".to_string(), over)]))
+        };
+
+        let adapter = KimiAdapter::new(with_override(window_override(900_000))).unwrap();
+        assert_eq!(
+            adapter.model_profile("kimi-k3").unwrap().context_window,
+            Some(900_000)
+        );
+
+        let invalid = [
+            window_override(0),
+            ModelOverride {
+                max_output_tokens: Some(2_000_000),
+                ..ModelOverride::default()
+            },
+            ModelOverride {
+                temperature: Some(ParamSupport::Range(1.0, 0.0)),
+                ..ModelOverride::default()
+            },
+        ];
+        for over in invalid {
+            let message = kimi_error(with_override(over));
+            assert!(
+                message.contains("kimi") && message.contains("kimi-k3"),
+                "the error must name the provider and the model: {message}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_max_tokens_default_is_checked_against_the_profile() {
+        use crate::compat::test_support::{mock_completion, send_with_max_tokens, server};
+
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let over = ModelOverride {
+            max_output_tokens: Some(1000),
+            ..ModelOverride::default()
+        };
+        let adapter = KimiAdapter::new(
+            kimi_config(&server.url(), "kimi-k3")
+                .with_max_tokens(2048)
+                .with_model_overrides(BTreeMap::from([("kimi-k3".to_string(), over)])),
+        )
+        .unwrap();
+
+        // The configured default is checked exactly as a request's value is: refused, not
+        // clamped, before any HTTP call.
+        let Err(LlmError::InvalidPrompt(message)) =
+            send_with_max_tokens(&adapter, &captured, "kimi-k3", None).await
+        else {
+            panic!("a default above the model's maximum output must be InvalidPrompt");
+        };
+        for needle in ["max_tokens", "2048", "1000"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+        assert!(captured.lock().unwrap().is_none(), "nothing was sent");
+
+        // A request value inside the limit still goes through.
+        let body = send_with_max_tokens(&adapter, &captured, "kimi-k3", Some(1000))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 1000, "{body}");
+    }
+
+    #[test]
+    fn kimi_config_defaults_a_reasoning_model_to_300s() {
+        // (model, expected default timeout): seeded reasoning models get 300 s (D-13), a seeded
+        // non-reasoning or unknown model keeps today's 60 s.
+        for (model, expected) in [
+            (KIMI_DEFAULT_MODEL, 300),
+            ("kimi-k3", 300),
+            (UNSEEDED_MODEL, 60),
+        ] {
+            let new = kimi_config("https://example.invalid/v1", model);
+            assert_eq!(new.timeout_seconds, expected, "new({model})");
+            let parts =
+                KimiConfig::from_parts(Some("k".to_string()), None, Some(model.to_string()), None)
+                    .unwrap();
+            assert_eq!(parts.timeout_seconds, expected, "from_parts({model})");
+        }
+        // An explicit value always wins, whatever the model.
+        for explicit in ["30", "60", "900"] {
+            let config = KimiConfig::from_parts(
+                Some("k".to_string()),
+                None,
+                Some("kimi-k3".to_string()),
+                Some(explicit.to_string()),
+            )
+            .unwrap();
+            assert_eq!(config.timeout_seconds.to_string(), explicit);
+        }
+        // An explicit field assignment wins too.
+        let mut config = kimi_config("https://example.invalid/v1", "kimi-k3");
+        config.timeout_seconds = 45;
+        assert_eq!(config.timeout_seconds, 45);
+    }
+
+    #[test]
+    fn kimi_config_debug_redacts_the_api_key() {
+        let config = KimiConfig::new(
+            "sk-secret-kimi-key-123".to_string(),
+            "https://api.example.invalid/v1".to_string(),
+            "kimi-k3".to_string(),
+        );
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("sk-secret-kimi-key-123"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        // Every other field is still printed.
+        for needle in [
+            "https://api.example.invalid/v1",
+            "kimi-k3",
+            "timeout_seconds",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
+        // An empty key is printed as empty, not as a redaction marker.
+        let empty = format!(
+            "{:?}",
+            KimiConfig::new(String::new(), "https://x".into(), "m".into())
+        );
+        assert!(!empty.contains("<redacted>"), "{empty}");
     }
 }

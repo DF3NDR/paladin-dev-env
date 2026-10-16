@@ -1463,6 +1463,27 @@ mod tests {
         }
 
         #[test]
+        fn for_model_reads_the_adapter_wide_window_knob_over_a_seeded_window() {
+            // The operator's `context_window` is the most specific statement, so it beats the
+            // compiled seeded window for `kimi-k3` -- and reaches the Commissary through the
+            // same profile.
+            let adapter = KimiAdapter::new(
+                KimiConfig::new(
+                    "test-key".to_string(),
+                    "http://127.0.0.1:9".to_string(),
+                    "kimi-k3".to_string(),
+                )
+                .with_context_window(500_000),
+            )
+            .unwrap();
+            let commissary =
+                Commissary::for_model(&adapter, "kimi-k3", counter(), CommissaryPlan::default())
+                    .unwrap();
+            assert_eq!(commissary.window(), 500_000);
+            assert_ne!(commissary.window(), seeded_k3_window());
+        }
+
+        #[test]
         fn for_model_prefers_an_override_over_the_seed() {
             let over = ModelOverride {
                 context_window: Some(200_000),

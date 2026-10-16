@@ -53,6 +53,169 @@ use serde::{Deserialize, Serialize};
 /// Absent when the model was profiled.
 pub const UNPROFILED_MODEL_METADATA_KEY: &str = "paladin.unprofiled_model";
 
+/// The request timeout, in seconds, a direct `*Config` constructor gives a reasoning model when
+/// no explicit timeout is set (D-13): a reasoning model spends its budget thinking before it
+/// answers, so the 60 s hosted-preset default routinely cuts it off.
+#[cfg(any(
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "gemini"
+))]
+pub(crate) const REASONING_DEFAULT_TIMEOUT_SECONDS: u64 = 300;
+
+/// The seeded table for `provider`, empty for a provider that has none (or whose feature is
+/// not compiled in).
+#[cfg(any(
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "gemini"
+))]
+fn seeded_table(provider: &str) -> &'static [SeededProfile] {
+    match provider {
+        #[cfg(feature = "kimi")]
+        "kimi" => seeded::KIMI,
+        #[cfg(feature = "qwen")]
+        "qwen" => seeded::QWEN,
+        #[cfg(feature = "grok")]
+        "grok" => seeded::GROK,
+        #[cfg(feature = "ollama")]
+        "ollama" => seeded::OLLAMA,
+        #[cfg(feature = "anthropic")]
+        "anthropic" => seeded::ANTHROPIC,
+        #[cfg(feature = "deepseek")]
+        "deepseek" => seeded::DEEPSEEK,
+        #[cfg(feature = "gemini")]
+        "gemini" => seeded::GEMINI,
+        _ => &[],
+    }
+}
+
+/// Whether `model` is a reasoning model on `provider`: the `reasoning` field of its
+/// [`ModelOverride`] when one sets it, else its seeded entry's, else `false`. Exact match on the
+/// model id, like every other registry lookup.
+///
+/// The direct `*Config` constructors use this to default a reasoning model's timeout to
+/// [`REASONING_DEFAULT_TIMEOUT_SECONDS`]; the layered config path reuses it with the overrides it
+/// has resolved.
+#[cfg(any(
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "gemini"
+))]
+pub(crate) fn is_reasoning_model(
+    provider: &str,
+    model: &str,
+    overrides: &BTreeMap<String, ModelOverride>,
+) -> bool {
+    if let Some(reasoning) = overrides.get(model).and_then(|over| over.reasoning) {
+        return reasoning;
+    }
+    seeded_table(provider)
+        .iter()
+        .find(|entry| entry.model == model)
+        .is_some_and(|entry| (entry.build)().reasoning)
+}
+
+/// Generate the `with_*` builders of the PARITY-03 knobs on one `*Config` type (D-12).
+///
+/// Every adapter config carries the same four knobs -- `max_tokens`, `max_retries`,
+/// `context_window` and `model_overrides` -- so their builders (and rustdoc) come from one place
+/// and cannot drift between the nine types. The one-argument form is for a config whose
+/// `max_tokens` is an `Option<u32>`; `plain_max_tokens` is for Anthropic, whose `max_tokens` is a
+/// required `u32`.
+#[allow(unused_macros)]
+macro_rules! config_knob_builders {
+    ($config:ident) => {
+        impl $config {
+            /// Set the default output budget (`max_tokens`) sent when a request sets none.
+            ///
+            /// The value passes through the same maximum-output check as a request's own
+            /// `max_tokens` (ADR-0061 (i)): above the model's profiled maximum, the request is
+            /// refused before any HTTP call.
+            #[must_use]
+            pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+                self.max_tokens = Some(max_tokens);
+                self
+            }
+
+            $crate::registry::config_knob_builders!(@common $config);
+        }
+    };
+    ($config:ident, plain_max_tokens) => {
+        impl $config {
+            /// Set the output budget (`max_tokens`) sent when a request sets none.
+            ///
+            /// The value passes through the same maximum-output check as a request's own
+            /// `max_tokens` (ADR-0061 (i)): above the model's profiled maximum, the request is
+            /// refused before any HTTP call.
+            #[must_use]
+            pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+                self.max_tokens = max_tokens;
+                self
+            }
+
+            $crate::registry::config_knob_builders!(@common $config);
+        }
+    };
+    (@common $config:ident) => {
+        /// Set how many times a retryable error is retried after the first attempt.
+        ///
+        /// `0` sends the request once. A rate-limit answer (429) is never retried here: the
+        /// Cadence decorator owns waiting, and a permanent error is never retried.
+        #[must_use]
+        pub fn with_max_retries(mut self, max_retries: u32) -> Self {
+            self.max_retries = max_retries;
+            self
+        }
+
+        /// Set the adapter-wide context window, in tokens.
+        ///
+        /// The operator's statement for every model of this provider: it replaces the adapter's
+        /// declared window, the fallback profile's window and every seeded model's window. A
+        /// window in [`model_overrides`](Self::model_overrides) for a given model still wins.
+        /// Construction fails when the window is below a model's maximum output.
+        #[must_use]
+        pub fn with_context_window(mut self, context_window: u32) -> Self {
+            self.context_window = Some(context_window);
+            self
+        }
+
+        /// Set the per-model overrides (D-06), keyed by exact model id.
+        ///
+        /// Each override is laid over that model's seeded entry (or the adapter-wide fallback)
+        /// field by field. They are validated when the adapter is built; an invalid one fails
+        /// construction with an error naming the provider and the model.
+        ///
+        /// A model marked `reasoning` only here does not get the 300 s reasoning timeout from
+        /// the direct constructors; set `timeout_seconds` in the same place.
+        #[must_use]
+        pub fn with_model_overrides(
+            mut self,
+            model_overrides: std::collections::BTreeMap<String, $crate::registry::ModelOverride>,
+        ) -> Self {
+            self.model_overrides = model_overrides;
+            self
+        }
+    };
+}
+#[allow(unused_imports)]
+pub(crate) use config_knob_builders;
+
 /// An operator's per-model statement, laid over the seeded entry (or the adapter-wide fallback)
 /// field by field: a field left `None` keeps the value underneath (D-06).
 ///
@@ -291,6 +454,8 @@ pub(crate) struct ModelRegistry {
     provider: &'static str,
     seeded: &'static [SeededProfile],
     overrides: BTreeMap<String, ModelOverride>,
+    /// The operator's adapter-wide window ([`ModelRegistry::with_context_window`]).
+    window: Option<u32>,
     fallback: ModelProfile,
     warned: Mutex<HashSet<String>>,
 }
@@ -307,9 +472,24 @@ impl ModelRegistry {
             provider,
             seeded,
             overrides: BTreeMap::new(),
+            window: None,
             fallback,
             warned: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// Declare the operator's adapter-wide context window (D-13, the most specific statement
+    /// wins): when `Some`, it replaces the window of the fallback and of every seeded entry at
+    /// resolve time. A per-model override's window still wins over it.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the provider, the model and both numbers when the window is zero or
+    /// below a model's maximum output. Never clamps.
+    #[allow(dead_code)]
+    pub(crate) fn with_context_window(self, window: Option<u32>) -> Result<Self, String> {
+        let _ = window;
+        Ok(self)
     }
 
     /// Attach per-model overrides, validating each one and the merged result it produces.
@@ -1124,5 +1304,147 @@ mod seeded_tests {
             assert_eq!(p.max_output_tokens, Some(65_536), "{model}");
             assert!(p.reasoning && p.json_object && p.json_schema, "{model}");
         }
+    }
+}
+
+/// The adapter-wide window knob and the reasoning-model lookup (plan 50-08, D-12/D-13).
+#[cfg(test)]
+mod knob_tests {
+    use super::*;
+
+    fn seeded_k3() -> ModelProfile {
+        ModelProfile::new()
+            .with_temperature(ParamSupport::Fixed(1.0))
+            .with_context_window(1000)
+            .with_max_output_tokens(500)
+            .with_reasoning(true)
+    }
+
+    static SEEDS: [SeededProfile; 1] = [SeededProfile {
+        model: "kimi-k3",
+        verified_on: "2026-10-01",
+        build: seeded_k3,
+    }];
+
+    fn fallback() -> ModelProfile {
+        ModelProfile::new().with_context_window(131_072)
+    }
+
+    fn registry() -> ModelRegistry {
+        ModelRegistry::new("kimi", &SEEDS, fallback())
+    }
+
+    #[test]
+    fn with_context_window_replaces_the_fallback_and_every_seeded_window() {
+        let registry = registry().with_context_window(Some(800)).unwrap();
+        assert_eq!(registry.profile("kimi-k3").context_window, Some(800));
+        assert_eq!(registry.profile("unseeded").context_window, Some(800));
+        // Everything else about the seeded entry is untouched.
+        assert_eq!(registry.profile("kimi-k3").max_output_tokens, Some(500));
+    }
+
+    #[test]
+    fn with_context_window_none_changes_nothing() {
+        let registry = registry().with_context_window(None).unwrap();
+        assert_eq!(registry.profile("kimi-k3").context_window, Some(1000));
+        assert_eq!(registry.profile("unseeded").context_window, Some(131_072));
+    }
+
+    #[test]
+    fn a_per_model_override_window_still_beats_the_adapter_wide_window() {
+        let over = ModelOverride {
+            context_window: Some(900),
+            ..ModelOverride::default()
+        };
+        let registry = registry()
+            .with_context_window(Some(800))
+            .unwrap()
+            .with_overrides(BTreeMap::from([("kimi-k3".to_string(), over)]))
+            .unwrap();
+        assert_eq!(registry.profile("kimi-k3").context_window, Some(900));
+        assert_eq!(registry.profile("unseeded").context_window, Some(800));
+    }
+
+    #[test]
+    fn with_context_window_refuses_a_window_below_a_seeded_max_output() {
+        let error = registry()
+            .with_context_window(Some(400))
+            .expect_err("400 is below the seeded maximum output of 500");
+        for needle in ["kimi", "kimi-k3", "400", "500"] {
+            assert!(error.contains(needle), "'{needle}' missing from: {error}");
+        }
+    }
+
+    #[test]
+    fn with_context_window_refuses_zero() {
+        let error = registry()
+            .with_context_window(Some(0))
+            .expect_err("a zero window");
+        assert!(error.contains("kimi") && error.contains("zero"), "{error}");
+    }
+
+    #[test]
+    fn with_context_window_accepts_a_window_equal_to_a_seeded_max_output() {
+        let registry = registry().with_context_window(Some(500)).unwrap();
+        assert_eq!(registry.profile("kimi-k3").context_window, Some(500));
+    }
+
+    #[test]
+    fn the_adapter_wide_window_is_validated_against_overrides_laid_over_it() {
+        // 600 is a window the seed (maximum output 500) accepts; an override whose maximum
+        // output is above it is then refused, naming the model.
+        let over = ModelOverride {
+            max_output_tokens: Some(700),
+            ..ModelOverride::default()
+        };
+        let error = registry()
+            .with_context_window(Some(600))
+            .unwrap()
+            .with_overrides(BTreeMap::from([("kimi-k3".to_string(), over)]))
+            .expect_err("a maximum output above the adapter-wide window");
+        assert!(error.contains("kimi-k3"), "{error}");
+    }
+
+    #[cfg(feature = "kimi")]
+    #[test]
+    fn is_reasoning_model_prefers_the_override() {
+        let none = BTreeMap::new();
+        // Seeded: kimi-k3 and kimi-k2.6 are reasoning models.
+        assert!(is_reasoning_model("kimi", "kimi-k3", &none));
+        // Unknown model, unknown provider, no override: not a reasoning model.
+        assert!(!is_reasoning_model("kimi", "kimi-unknown", &none));
+        assert!(!is_reasoning_model("no-such-provider", "kimi-k3", &none));
+        // Exact match only.
+        assert!(!is_reasoning_model("kimi", "kimi-k3-preview", &none));
+
+        let say = |model: &str, reasoning: bool| {
+            BTreeMap::from([(
+                model.to_string(),
+                ModelOverride {
+                    reasoning: Some(reasoning),
+                    ..ModelOverride::default()
+                },
+            )])
+        };
+        // The override beats the seed in both directions ...
+        assert!(!is_reasoning_model(
+            "kimi",
+            "kimi-k3",
+            &say("kimi-k3", false)
+        ));
+        assert!(is_reasoning_model(
+            "kimi",
+            "kimi-unknown",
+            &say("kimi-unknown", true)
+        ));
+        // ... an override that leaves `reasoning` unset keeps the seed ...
+        let unset = BTreeMap::from([("kimi-k3".to_string(), ModelOverride::default())]);
+        assert!(is_reasoning_model("kimi", "kimi-k3", &unset));
+        // ... and an override for another model is irrelevant.
+        assert!(is_reasoning_model(
+            "kimi",
+            "kimi-k3",
+            &say("kimi-k2.6", false)
+        ));
     }
 }

@@ -48,6 +48,15 @@ use crate::openai_compatible::adapter::{
     OpenAiCompatibleCapabilitiesConfig, OpenAiCompatibleConfig,
 };
 
+#[cfg(any(
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+use std::collections::BTreeMap;
+
 #[cfg(feature = "vision")]
 use crate::config::vision::VisionConfig as ConfigVisionConfig;
 #[cfg(feature = "vision")]
@@ -139,6 +148,10 @@ impl From<&LlmProviderConfig> for KimiConfig {
                 .clone()
                 .unwrap_or_else(|| crate::kimi::adapter::KIMI_DEFAULT_MODEL.to_string()),
             timeout_seconds: cfg.timeout_seconds.unwrap_or(60),
+            max_tokens: None,
+            max_retries: cfg.max_retries.unwrap_or(3),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 }
@@ -161,6 +174,10 @@ impl From<&LlmProviderConfig> for QwenConfig {
                 .clone()
                 .unwrap_or_else(|| crate::qwen::adapter::QWEN_DEFAULT_MODEL.to_string()),
             timeout_seconds: cfg.timeout_seconds.unwrap_or(60),
+            max_tokens: None,
+            max_retries: cfg.max_retries.unwrap_or(3),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 }
@@ -183,6 +200,10 @@ impl From<&LlmProviderConfig> for GrokConfig {
                 .clone()
                 .unwrap_or_else(|| crate::grok::adapter::GROK_DEFAULT_MODEL.to_string()),
             timeout_seconds: cfg.timeout_seconds.unwrap_or(60),
+            max_tokens: None,
+            max_retries: cfg.max_retries.unwrap_or(3),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 }
@@ -233,6 +254,10 @@ impl From<&LlmProviderConfig> for OllamaConfig {
                 .clone()
                 .unwrap_or_else(|| crate::ollama::adapter::OLLAMA_DEFAULT_MODEL.to_string()),
             timeout_seconds: cfg.timeout_seconds.unwrap_or(120),
+            max_tokens: None,
+            max_retries: cfg.max_retries.unwrap_or(3),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 }
@@ -282,6 +307,10 @@ impl TryFrom<&LlmProviderConfig> for OpenAiCompatibleConfig {
                 max_context_tokens: None,
                 temperature_range: None,
             },
+            max_tokens: None,
+            max_retries: cfg.max_retries.unwrap_or(3),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         })
     }
 }

@@ -109,6 +109,7 @@
 
 use async_trait::async_trait;
 use futures::Stream;
+use std::collections::BTreeMap;
 use std::env;
 
 use paladin_ports::output::llm_port::{
@@ -120,7 +121,9 @@ use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
-use crate::registry::{ModelRegistry, fallback_from_compat, seeded, seeded_window};
+use crate::registry::{
+    ModelOverride, ModelRegistry, config_knob_builders, fallback_from_compat, seeded, seeded_window,
+};
 
 /// Default Qwen (Alibaba DashScope) compatible-mode API base URL — the
 /// Singapore (international) endpoint.
@@ -160,6 +163,7 @@ pub const QWEN_FALLBACK_MODELS: &[&str] =
 
 /// Configuration for the Qwen (Alibaba DashScope) adapter.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct QwenConfig {
     /// API key for Qwen (DashScope) authentication.
     pub api_key: String,
@@ -169,6 +173,25 @@ pub struct QwenConfig {
     pub model: String,
     /// Request timeout in seconds.
     pub timeout_seconds: u64,
+    /// Default output budget (`max_tokens`) sent when a request sets none. `None` (the default)
+    /// sends no `max_tokens` key. The value is checked against the model's profiled maximum
+    /// output exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the request is
+    /// refused before any HTTP call.
+    pub max_tokens: Option<u32>,
+    /// How many times a retryable error is retried after the first attempt. Defaults to `3`;
+    /// `0` sends each request once. A 429 is never retried here (the Cadence decorator waits)
+    /// and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model of this
+    /// provider. `None` (the default) keeps the compiled windows. When set it replaces the
+    /// adapter's declared window, the fallback profile's window and every seeded model's window;
+    /// a `context_window` in [`model_overrides`](Self::model_overrides) still wins for that
+    /// model. Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
 }
 
 impl QwenConfig {
@@ -219,6 +242,10 @@ impl QwenConfig {
             base_url,
             model,
             timeout_seconds,
+            max_tokens: None,
+            max_retries: 3,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         };
 
         config.validate()?;
@@ -232,6 +259,10 @@ impl QwenConfig {
             base_url,
             model,
             timeout_seconds: 60,
+            max_tokens: None,
+            max_retries: 3,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 
@@ -252,6 +283,8 @@ impl QwenConfig {
         Ok(())
     }
 }
+
+config_knob_builders!(QwenConfig);
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and that its engine stamps on every `LlmError::ProviderError` (Phase 25 D-03).
@@ -853,5 +886,157 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(QwenFixture);
+    }
+
+    // ── PARITY-03 knobs (plan 50-08, D-12) ──
+
+    const UNSEEDED: &str = "qwen-unseeded-test-model";
+
+    fn knob_config(url: &str, model: &str) -> QwenConfig {
+        QwenConfig::new("test-key".to_string(), url.to_string(), model.to_string())
+    }
+
+    #[tokio::test]
+    async fn qwen_max_tokens_default_reaches_the_wire() {
+        use crate::compat::test_support::{mock_completion, send_with_max_tokens, server};
+
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let adapter =
+            QwenAdapter::new(knob_config(&server.url(), UNSEEDED).with_max_tokens(2048)).unwrap();
+
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 2048, "{body}");
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 512, "{body}");
+
+        let plain = QwenAdapter::new(knob_config(&server.url(), UNSEEDED)).unwrap();
+        let body = send_with_max_tokens(&plain, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert!(body.get("max_tokens").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn qwen_max_retries_is_read_by_the_engine() {
+        for retries in [0_u32, 1] {
+            let server = crate::compat::test_support::server().await;
+            let adapter =
+                QwenAdapter::new(knob_config(&server.url(), UNSEEDED).with_max_retries(retries))
+                    .unwrap();
+            crate::compat::test_support::attempts_against_a_failing_endpoint(
+                server,
+                &adapter,
+                UNSEEDED,
+                retries as usize + 1,
+            )
+            .await;
+        }
+    }
+
+    #[test]
+    fn qwen_context_window_override_is_declared() {
+        let adapter = QwenAdapter::new(
+            knob_config("https://example.invalid/v1", UNSEEDED).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        let profile = adapter.model_profile(UNSEEDED).unwrap();
+        assert_eq!(profile.context_window, Some(500_000));
+    }
+
+    #[test]
+    fn qwen_model_override_reaches_the_profile_and_invalid_one_fails_construction() {
+        let with_override = |window: u32| {
+            knob_config("https://example.invalid/v1", UNSEEDED).with_model_overrides(
+                std::collections::BTreeMap::from([(
+                    UNSEEDED.to_string(),
+                    crate::registry::ModelOverride {
+                        context_window: Some(window),
+                        ..crate::registry::ModelOverride::default()
+                    },
+                )]),
+            )
+        };
+        let adapter = QwenAdapter::new(with_override(900_000)).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+        let message = match QwenAdapter::new(with_override(0)) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("a zero window must fail construction"),
+        };
+        assert!(
+            message.contains("qwen") && message.contains(UNSEEDED),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn qwen_config_defaults_a_reasoning_model_to_300s() {
+        // (model, expected default timeout): a seeded reasoning model gets 300 s (D-13); any
+        // other model keeps this preset's compiled default (60 s).
+        for (model, expected) in [(QWEN_DEFAULT_MODEL, 300), ("qwen-plus", 60), (UNSEEDED, 60)] {
+            let url = "https://example.invalid/v1";
+            assert_eq!(
+                knob_config(url, model).timeout_seconds,
+                expected,
+                "new({model})"
+            );
+            let parts =
+                QwenConfig::from_parts(Some("k".to_string()), None, Some(model.to_string()), None)
+                    .unwrap();
+            assert_eq!(parts.timeout_seconds, expected, "from_parts({model})");
+        }
+        // An explicit environment value always wins.
+        for explicit in ["30", "60", "900"] {
+            let config = QwenConfig::from_parts(
+                Some("k".to_string()),
+                None,
+                Some("qwen3.8-flash".to_string()),
+                Some(explicit.to_string()),
+            )
+            .unwrap();
+            assert_eq!(config.timeout_seconds.to_string(), explicit);
+        }
+    }
+
+    #[test]
+    fn qwen_context_window_below_a_seeded_max_output_fails_construction() {
+        // `qwen3.8-flash` is seeded with a 131,072-token maximum output; a 100,000-token
+        // window contradicts it and is refused, never clamped.
+        let message = match QwenAdapter::new(
+            knob_config("https://example.invalid/v1", QWEN_DEFAULT_MODEL)
+                .with_context_window(100_000),
+        ) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("a window below a seeded maximum output must fail construction"),
+        };
+        for needle in ["qwen", "qwen3.8-flash", "100000", "131072"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn qwen_config_debug_redacts_the_api_key() {
+        let config = knob_config("https://api.example.invalid/v1", "m");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
     }
 }

@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-06-PLAN.md
-last_updated: "2026-10-16T01:10:27.820Z"
+stopped_at: Completed 50-07-PLAN.md
+last_updated: "2026-10-16T01:56:05.736Z"
 last_activity: 2026-10-16
 last_activity_desc: Phase 50 execution started
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 107
-  completed_plans: 96
+  completed_plans: 97
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([█████████░] 90%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([█████████░] 91%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 7 of 18
+Plan: 8 of 18
 Status: Ready to execute
 Last activity: 2026-10-16 — Phase 50 execution started
 
@@ -303,6 +303,7 @@ Last activity: 2026-10-16 — Phase 50 execution started
 | Phase 50 P05 | 20min | 3 tasks | 10 files |
 | Phase 50 P17 | 25min | 2 tasks | 2 files |
 | Phase 50 P06 | ~1h30m | 3 tasks | 13 files |
+| Phase 50 P07 | 40min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -521,6 +522,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-17: owner reading R-2 answered accept unverified for kimi, qwen, grok, ollama, openai-compatible (2026-10-16); no usage-cap error_override to be encoded in 50-13; Ollama and OpenAI-compatible deliberately skipped in the seed probe
 - [Phase ?]: 50-06: seed only models the probe measured end to end (a seeded entry replaces the fallback); Grok temperature Range(0.0, 1.99) from the vendor's observed 'less than 2' text; Kimi temperature/top_p NotSent; OpenAI/Anthropic/Gemini penalties NotSent (wire has no field)
 - [Phase ?]: 50-06: defaults moved to operator-identified current models (claude-haiku-5-5, deepseek-flash, kimi-k2.6, qwen3.8-flash, grok-4.3, gemini-3.5-flash-lite); adapter windows follow the default model's seeded window
+- [Phase ?]: [Phase 50-07]: Per-model window reaches both readers through window::effective_capabilities (overlay on ProviderCapabilities), not a new WindowSource variant; Commissary::for_model added, Commissary::new unchanged
 
 ### Pending Todos
 
@@ -739,8 +741,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-16T01:10:27.794Z
-**Stopped at:** Completed 50-06-PLAN.md
+**Last session:** 2026-10-16T01:56:05.709Z
+**Stopped at:** Completed 50-07-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

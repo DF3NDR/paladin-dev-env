@@ -1389,7 +1389,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 50-07-PLAN.md — `effective_capabilities`, `Commissary::for_model` and the HistoryTrimmer ration against the per-model window (kimi-k3 at its real window)
+- [x] 50-07-PLAN.md — `effective_capabilities`, `Commissary::for_model` and the HistoryTrimmer ration against the per-model window (kimi-k3 at its real window)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

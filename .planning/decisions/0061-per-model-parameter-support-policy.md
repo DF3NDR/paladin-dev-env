@@ -90,7 +90,7 @@ The "run-metadata entry" of D-01 and D-07 reaches **every caller, buffered and s
 
 ## Owner readings
 
-The planner's reading of an ambiguous owner statement is not recorded as fact. Each reading below is written `pending` with its reversibility rating and the checkpoint that decides it; the deciding plan replaces `pending` with the owner's answer and its date.
+The planner's reading of an ambiguous owner statement is not recorded as fact. Each reading below was written `pending` with its reversibility rating and the checkpoint that decides it; the deciding plan replaced `pending` with the owner's answer and its date. Both are answered (R-2 at plan 50-17, R-1 at plan 50-18, both 2026-10-16); none is pending.
 
 | Id | Reading | Rating | Decided at | Answer |
 |----|---------|--------|------------|--------|
@@ -118,19 +118,41 @@ The planner's reading of an ambiguous owner statement is not recorded as fact. E
 
 ## Code Locations
 
-Planned locations; measured at the closeout (plan 50-16).
+Measured at the closeout (plan 50-16, 2026-10-16), by `git diff 865a3968..HEAD` (the parent of the first Phase 50 code commit).
 
 - `crates/paladin-ports/src/output/model_profile.rs` -- `ModelProfile`, `ParamSupport`, `StopSupport`, `SamplingParam`
-- `crates/paladin-ports/src/output/llm_port.rs` -- `LlmPort::model_profile` and the re-export of the model-profile types
-- `crates/paladin-llm/src/sampling.rs` -- the shared wire filter, the omission log and the response-format and `max_tokens` checks
-- `crates/paladin-llm/src/registry/` -- the per-model registry, the seeded dated tables and the per-model config override
-- the five compat request builders (Kimi, Qwen, Grok, Ollama, the generic OpenAI-compatible adapter) and the four original adapters' request builders
-- `crates/paladin-llm/src/{pricing,cadence,fallback}.rs` -- the three decorators forwarding `model_profile`
-- `src/application/services/paladin/paladin_builder.rs` -- the build-time refusal
+- `crates/paladin-ports/src/output/llm_port.rs` -- `LlmPort::model_profile`, the re-export of the model-profile types, `LlmError::Refusal`, `LlmResponse::new` / `reasoning`, `StreamingResponse.reasoning` / `metadata`
+- `crates/paladin-ports/src/output/paladin_port.rs` and `crates/paladin-core/src/platform/container/execution_result.rs` -- `ChunkMetadata.run_metadata` and `PaladinResult.run_metadata` (decision (h), owner reading R-1)
+- `crates/paladin-llm/src/sampling.rs` -- the shared wire filter, the omission log, the response-format and `max_tokens` checks, `RequestNotes`
+- `crates/paladin-llm/src/registry/mod.rs` and `registry/seeded.rs` -- the per-model registry, `ModelOverride`, the dated per-vendor tables (every value traced to `50-SEED-PROBE.md`)
+- `crates/paladin-llm/src/compat/engine.rs` and the five compat presets (`kimi`, `qwen`, `grok`, `ollama`, `openai_compatible` `adapter.rs`) -- the compat request builder through the filter
+- `crates/paladin-llm/src/{openai,anthropic,deepseek,gemini}/adapter.rs` -- the four original adapters' request builders and `model_profile`
+- `crates/paladin-llm/src/{pricing,cadence,fallback}.rs` -- the three decorators forwarding `model_profile`; the fallback chain's intersection and per-step models
+- `crates/paladin-llm/src/config/{llm,layers,bridge}.rs` and `provider_factory.rs` -- the `llm.<provider>` block, the D-13 layering and `create_from_config`
+- `crates/paladin-llm/src/{window,response_guards,turn}.rs` -- the per-model window, the one empty-output and refusal rule, the shared user-turn text
+- `src/application/services/paladin/paladin_builder.rs` -- the build-time refusal; `paladin_execution_service.rs` -- the run-metadata merge
+- `crates/paladin-llm/src/conformance.rs`, `tests/provider_swap_matrix.rs`, `docs/src/user-guides/switching-providers.md` -- the 17-case suite, the nine-provider matrix and the published behaviour table with its drift test
 
 ## Code Conformance
 
-pending -- measured by plan 50-16
+conforms
+
+Measured at the Phase 50 closeout (plan 50-16, 2026-10-16) on the finished tree, against the phase base `865a3968`. Each decision group is proved by named tests or recorded gate results:
+
+- **(a) The policy (D-01).** `provider_swap_matrix` (`tests/provider_swap_matrix.rs`): 50 passed, 0 failed, **0 ignored** (`-- --ignored --list` lists nothing; the 19 cases ignored at plan 50-01 were each un-ignored by the plan that fixed them, assertions untouched, and `WINDOWS.md` row 71 is closed). It runs one agent definition against all nine providers, built from an `llm.<provider>` block alone, and requires equivalent behaviour or a refusal naming provider, model and parameter. The 21 `sampling::` tests prove admission, omission and the no-clamp rule; the `paladin_builder` profile tests (16 temperature, profile and refusal cases) prove the build-time refusal.
+- **(b) Explicit versus auto (D-02).** The builder tests above distinguish `PaladinBuilder::temperature` and `add_stop_word` (refused) from the `auto_temperature` heuristic and the fabricated `0.7` default (omitted and recorded); `config.example.yml`'s Anthropic block carries no `default_temperature`, and a pinned test asserts it.
+- **(c) The shape (D-03).** `provider_capabilities_gained_no_field` is green; `LlmPort::model_profile` defaults to `None` and the consumer-surface muster compiles an implementor that provides only the required methods; `ModelProfile` is `#[non_exhaustive]` and built through `new()` plus `with_*`.
+- **(d) `Fixed`, `NotSent` and the admission rule (D-04a).** The edge-value table in `model_profile.rs` (both endpoints inclusive, exact `Fixed` equality, `NaN` admitted by none), 10 unit tests and 12 doc tests in `paladin-ports`; the suite case `unsupported_parameters_are_omitted_and_recorded` runs on all nine adapters.
+- **(e) Refuse at build, filter at the wire.** `sampling::apply` is the single filter, called by the compat engine and the four original adapters; the suite cases `capability_declarations_match_the_wire` and `response_format_reaches_the_wire` run on all nine. **Stated limit, unchanged:** a direct `LlmRequest` caller gets omit, `warn!` and metadata, not a refusal.
+- **(f) Precedence (D-13).** 54 `registry::` tests and 31 `config::layers::` tests (per-model override over adapter-wide `context_window` over seeded entry over fallback; the 300 s reasoning default; `${VAR}` placeholders), plus `config::bridge::` (29) and `provider_factory::` (31).
+- **(g) Decorators and chains (Pitfall 4).** The three forwarding tests including the production `Pricing(Cadence(provider))` composition, and 47 `fallback::` tests including per-step models, `hop_on_refusal` and the intersection's order independence.
+- **(h) Run metadata (owner reading R-1 = option-b).** `PaladinResult.run_metadata`, `ChunkMetadata.run_metadata` and the terminal-chunk `StreamingResponse.metadata` are asserted for all nine adapters; a merge test proves a foreign key is never copied; the fallback stream names the serving hop. The `paladin-web` HTTP body is deliberately not extended.
+- **(i) Request-shaping registry fields.** `sampling::apply_response_format` and `check_max_tokens` tests; the suite's `response_format_reaches_the_wire` and a refused `max_tokens` above a seeded maximum output.
+- **The 17-case conformance suite on nine adapters.** `conformance_suite` is 153 tests (17 cases, ten transport and seven behaviour, over OpenAI, Anthropic, DeepSeek, Kimi, Qwen, Grok, Gemini, Ollama and OpenAI-compatible), all green, including the credential-redaction and redirect cases (the redirect case answers 307 with a `GET` and a `POST` mock at `expect(0)`, so it fails a client that follows) and `refusal_is_typed_and_permanent`, which plants the adapter's own key in the vendor's refusal text and asserts the detail never contains it.
+- **The published page.** `switching_providers_page_lists_every_seeded_model` (and 12 controls) compares every seeded row, the fixed provider order, the nine-provider coverage and the response-mapping table against the registry; it was failed by hand (a deleted row, a changed verified-on date) and restored.
+- **Gates.** On the final tree: `cargo test --workspace --features integration-tests,llm-all --no-fail-fast` passes 7,840 tests across 58 test binaries and 6 doctest runs and fails exactly the two ledgered sandbox tests (`run_api_wiring` pair, `WINDOWS.md` row 73, identical on the untouched tree); `make clean-code` (fmt, clippy `-D warnings`, shellcheck, check, the rustdoc zero-warning bar, the `# Examples` gate), `make check-gates`, `make api-surface` (4,298 items, unchanged), `make security` (advisories, bans, licenses, sources ok), `make check-consumer-surface`, `make check-migration-allowlist` and `make check-api-examples` all exit 0. The closeout D-27 (cargo-semver-checks 0.50.0 against the published 0.10.1, allows disabled and restored byte for byte) found no Phase 50 lint without a `MIGRATION.md` 9.2 row and allowlist entry in `paladin-ports`, `paladin-llm`, `paladin-battalion` or `paladin-ai`. The phase diff adds no `unwrap(`, `expect(` or `panic!(` outside `#[cfg(test)]` code, and the manual credential-handling review (redact before truncate, no key in logs, `Debug`, metadata or errors, redirects refused on every adapter including factory-built ones, `${VAR}` placeholders never sent literally) is recorded in the plan 50-16 SUMMARY. The 82 percent workspace line-coverage floor (ADR-0006) is gated by CI's `coverage` job; `cargo-llvm-cov` is not run locally and no percentage is quoted here.
+
+**Stated limits.** (1) A direct `LlmRequest` caller is not refused (decision (e)). (2) Seven of nine providers were probed on 2026-10-15; Ollama and OpenAI-compatible were skipped and have no seeded models. (3) Penalty and `top_p` spans are contract-derived from a single 0.5 probe, the OpenAI and Grok temperature upper bounds are stated rather than measured edges, and the Switching providers page labels each. (4) Usage-cap mapping is unverified for the five compat presets (R-2, owner-accepted 2026-10-16). (5) The Kimi adapter-wide fallback profile and the OpenAI adapter's `max_tokens` against `gpt-5.4-nano` are open owner items (`WINDOWS.md` rows 76 and 75). (6) `TokenUsage.total_tokens` stays `prompt + completion` (`WINDOWS.md` row 74, owner decision pending). (7) The Docker-bound suites and the credential-gated `live_vendor_smoke` run are not exercised in this environment; CI's `test-integration-docker` job and the operator's manual smoke run are their proof.
 
 ## Downstream Consumers
 

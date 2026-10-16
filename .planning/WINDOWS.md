@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 15
+open_count: 14
 waived_count: 37
-fixed_count: 22
-total_count: 74
-last_updated: 2026-10-16T16:30:20.647Z
+fixed_count: 25
+total_count: 76
+last_updated: 2026-10-16T21:57:02.159Z
 ---
 
 # Broken Windows Ledger
@@ -84,11 +84,13 @@ last_updated: 2026-10-16T16:30:20.647Z
 | 67 | 42 | deviation | crates/paladin-battalion/src/engine/settlement.rs |  | G15: a graph Paladin node on a model with no treasurer.pricing row settles nothing (an unpriced call has no cost and nothing is fabricated, D-00c), so the superstep-boundary check cannot see that node's spend and an allowance cannot bound it; workflow assistants are not refused at admission for an unpriced model (only agent routes and agent-kind runs are, 422 model_unpriced). Owner: the operator; rationale: pricing is operator-supplied configuration and the engine has no source for a price it was not given. Operators must price every model a metered principal can reach; closing condition: a pricing-coverage check at graph registration, deferred. | open |  | 2026-10-07T02:02:08.278Z |  |
 | 68 | 48 | unrun-verify | Makefile |  | 48-09: make security (cargo-audit, cargo-deny) not run locally, tools absent; CI Security Audit and License & Dependency Policy jobs are red on the branch before and after Phase 48 with Cargo.lock unchanged | open |  | 2026-10-14T00:14:54.346Z |  |
 | 69 | 48 | unrun-verify | scripts/coverage.sh |  | 48-09: workspace coverage percentage not measured locally (no Docker daemon, no object store, 3 GB free); CI Coverage job passed the 82 percent gate on dcbcb63 but its figure was not retrievable (artifact download denied) | open |  | 2026-10-14T00:14:54.479Z |  |
-| 70 | 50 | unrun-verify | Cargo.toml |  | 50-01: full 'cargo test --workspace' not run to completion: the workspace test build exhausted the sandbox disk quota (No space left on device while linking); targeted verifies all passed instead (provider_swap_matrix --features llm-all, paladin-llm --all-features --lib 651 tests, cargo clippy --all-targets --features llm-all -D warnings, cargo fmt --check, make check-consumer-surface, make api-surface) | open |  | 2026-10-15T14:44:02.279Z |  |
-| 71 | 50 | skipped-test | tests/provider_swap_matrix.rs |  | 50-01: 19 provider_swap_matrix cases are #[ignore = 'red until plan 50-NN'] by design (50-03: 7, 50-05: 3, 50-12: 7, 50-13: 1, 50-14: 1); each fixing plan must un-ignore the cases it names; none may remain ignored at phase close | open |  | 2026-10-15T14:44:02.458Z |  |
-| 72 | 50 | unrun-verify | Makefile | 367 | 50-02: make clean-code stops at lint-shell (shellcheck not installed in the sandbox); fmt, clippy -D warnings and workspace check passed separately | open |  | 2026-10-15T16:23:35.635Z |  |
+| 70 | 50 | unrun-verify | Cargo.toml |  | 50-01: full 'cargo test --workspace' not run to completion: the workspace test build exhausted the sandbox disk quota (No space left on device while linking); targeted verifies all passed instead (provider_swap_matrix --features llm-all, paladin-llm --all-features --lib 651 tests, cargo clippy --all-targets --features llm-all -D warnings, cargo fmt --check, make check-consumer-surface, make api-surface) | fixed |  | 2026-10-15T14:44:02.279Z | 2026-10-16T21:57:01.717Z |
+| 71 | 50 | skipped-test | tests/provider_swap_matrix.rs |  | 50-01: 19 provider_swap_matrix cases are #[ignore = 'red until plan 50-NN'] by design (50-03: 7, 50-05: 3, 50-12: 7, 50-13: 1, 50-14: 1); each fixing plan must un-ignore the cases it names; none may remain ignored at phase close | fixed |  | 2026-10-15T14:44:02.458Z | 2026-10-16T21:57:01.844Z |
+| 72 | 50 | unrun-verify | Makefile | 367 | 50-02: make clean-code stops at lint-shell (shellcheck not installed in the sandbox); fmt, clippy -D warnings and workspace check passed separately | fixed |  | 2026-10-15T16:23:35.635Z | 2026-10-16T21:57:01.946Z |
 | 73 | 50 | unrun-verify | src/infrastructure/web/run_api_wiring.rs | 2369 | Wave 1 post-merge gate (plans 50-02, 50-04): cargo test --workspace --lib --bins passes 1348 tests but build_run_api_persists_no_run_traces_by_default and build_run_api_persists_run_traces_when_trace_persist_is_set fail with 'the run never reached a terminal status' (10 s worker deadline). Reproduced identically at the pre-wave-1 commit 28b6a69b in a throwaway worktree, so it is pre-existing and sandbox-specific, not a Phase 50 regression; CI on the pushed branch is the proof of record. | open |  | 2026-10-15T17:13:24.980Z |  |
 | 74 | 50 | deviation | crates/paladin-llm/src/compat/engine.rs |  | 50-12: vendor total_tokens not copied into TokenUsage (D-02 invariant kept; plan truth 'never recomputed' unimplemented); owner decision pending | open |  | 2026-10-16T16:30:20.647Z |  |
+| 75 | 50 | deviation | crates/paladin-llm/src/openai/adapter.rs |  | 50-16 closeout: the OpenAI adapter sends max_tokens, which gpt-5.4-nano (the probed default model) rejects with HTTP 400 (it wants max_completion_tokens; 50-SEED-PROBE.md probe 11). The ModelProfile has no field for the token-limit parameter name. Carried unfixed from 50-06, 50-08 and 50-09; documented in the Switching providers page and the CHANGELOG known limitations. Needs an owner decision on the profile field or an adapter fix | open |  | 2026-10-16T21:57:02.053Z |  |
+| 76 | 50 | deviation | crates/paladin-llm/src/kimi/adapter.rs |  | 50-16 closeout: the Kimi adapter-wide fallback profile (temperature Fixed(1.0), top_p Fixed(0.95), declared range (1.0, 1.0)) comes from the 2026-08-22 measurement and contradicts the 2026-10-15 probe (kimi-k2.6 and kimi-k3 accept only 0.6 and reject top_p). Applies to unseeded Kimi ids only; carried unreconciled from 50-06 and 50-15; labelled unverified on the Switching providers page. Owner decision pending | open |  | 2026-10-16T21:57:02.159Z |  |
 
 ````json
 [
@@ -927,10 +929,10 @@ last_updated: 2026-10-16T16:30:20.647Z
     "file": "Cargo.toml",
     "line": null,
     "description": "50-01: full 'cargo test --workspace' not run to completion: the workspace test build exhausted the sandbox disk quota (No space left on device while linking); targeted verifies all passed instead (provider_swap_matrix --features llm-all, paladin-llm --all-features --lib 651 tests, cargo clippy --all-targets --features llm-all -D warnings, cargo fmt --check, make check-consumer-surface, make api-surface)",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-10-15T14:44:02.279Z",
-    "resolved_at": null
+    "resolved_at": "2026-10-16T21:57:01.717Z"
   },
   {
     "id": 71,
@@ -939,10 +941,10 @@ last_updated: 2026-10-16T16:30:20.647Z
     "file": "tests/provider_swap_matrix.rs",
     "line": null,
     "description": "50-01: 19 provider_swap_matrix cases are #[ignore = 'red until plan 50-NN'] by design (50-03: 7, 50-05: 3, 50-12: 7, 50-13: 1, 50-14: 1); each fixing plan must un-ignore the cases it names; none may remain ignored at phase close",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-10-15T14:44:02.458Z",
-    "resolved_at": null
+    "resolved_at": "2026-10-16T21:57:01.844Z"
   },
   {
     "id": 72,
@@ -951,10 +953,10 @@ last_updated: 2026-10-16T16:30:20.647Z
     "file": "Makefile",
     "line": 367,
     "description": "50-02: make clean-code stops at lint-shell (shellcheck not installed in the sandbox); fmt, clippy -D warnings and workspace check passed separately",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-10-15T16:23:35.635Z",
-    "resolved_at": null
+    "resolved_at": "2026-10-16T21:57:01.946Z"
   },
   {
     "id": 73,
@@ -978,6 +980,30 @@ last_updated: 2026-10-16T16:30:20.647Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-10-16T16:30:20.647Z",
+    "resolved_at": null
+  },
+  {
+    "id": 75,
+    "kind": "deviation",
+    "phase": "50",
+    "file": "crates/paladin-llm/src/openai/adapter.rs",
+    "line": null,
+    "description": "50-16 closeout: the OpenAI adapter sends max_tokens, which gpt-5.4-nano (the probed default model) rejects with HTTP 400 (it wants max_completion_tokens; 50-SEED-PROBE.md probe 11). The ModelProfile has no field for the token-limit parameter name. Carried unfixed from 50-06, 50-08 and 50-09; documented in the Switching providers page and the CHANGELOG known limitations. Needs an owner decision on the profile field or an adapter fix",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-16T21:57:02.053Z",
+    "resolved_at": null
+  },
+  {
+    "id": 76,
+    "kind": "deviation",
+    "phase": "50",
+    "file": "crates/paladin-llm/src/kimi/adapter.rs",
+    "line": null,
+    "description": "50-16 closeout: the Kimi adapter-wide fallback profile (temperature Fixed(1.0), top_p Fixed(0.95), declared range (1.0, 1.0)) comes from the 2026-08-22 measurement and contradicts the 2026-10-15 probe (kimi-k2.6 and kimi-k3 accept only 0.6 and reject top_p). Applies to unseeded Kimi ids only; carried unreconciled from 50-06 and 50-15; labelled unverified on the Switching providers page. Owner decision pending",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-10-16T21:57:02.159Z",
     "resolved_at": null
   }
 ]

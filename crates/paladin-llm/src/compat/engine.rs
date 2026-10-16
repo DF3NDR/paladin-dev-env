@@ -546,8 +546,12 @@ impl CompatEngine {
         let params = &request.prompt.entity.data.parameters;
         let profile = self.model_profile(&request.model);
 
+        // The configured default output budget (PARITY-03) stands in for a request that sets
+        // none; either way the effective value is gated by this preset's declaration and checked
+        // against the profile below, so a default is held to the same limit as a caller's value.
         let max_tokens = params
             .max_tokens
+            .or(self.default_max_tokens)
             .filter(|_| self.config.request_parameters.max_tokens);
         sampling::check_max_tokens(self.provider_name, &request.model, &profile, max_tokens)?;
         if params.max_tokens.is_some() && max_tokens.is_none() {

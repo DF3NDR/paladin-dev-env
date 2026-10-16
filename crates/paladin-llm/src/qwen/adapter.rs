@@ -121,8 +121,10 @@ use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
+use crate::redaction::RedactedKey;
 use crate::registry::{
-    ModelOverride, ModelRegistry, config_knob_builders, fallback_from_compat, seeded, seeded_window,
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, fallback_from_compat, seeded, seeded_window,
 };
 
 /// Default Qwen (Alibaba DashScope) compatible-mode API base URL — the
@@ -162,7 +164,7 @@ pub const QWEN_FALLBACK_MODELS: &[&str] =
     &[QWEN_DEFAULT_MODEL, "qwen-plus", "qwen-turbo", "qwen3-max"];
 
 /// Configuration for the Qwen (Alibaba DashScope) adapter.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct QwenConfig {
     /// API key for Qwen (DashScope) authentication.
@@ -192,6 +194,24 @@ pub struct QwenConfig {
     /// entry field by field. Empty by default. Validated at construction; an invalid override
     /// fails it with an error naming the provider and the model.
     pub model_overrides: BTreeMap<String, ModelOverride>,
+}
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for QwenConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QwenConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_tokens", &self.max_tokens)
+            .field("max_retries", &self.max_retries)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .finish()
+    }
 }
 
 impl QwenConfig {
@@ -232,10 +252,12 @@ impl QwenConfig {
             api_key.ok_or_else(|| "DASHSCOPE_API_KEY environment variable not set".to_string())?;
         let base_url = base_url.unwrap_or_else(|| QWEN_DEFAULT_BASE_URL.to_string());
         let model = model.unwrap_or_else(|| QWEN_DEFAULT_MODEL.to_string());
-        let timeout_seconds = timeout_seconds
-            .unwrap_or_else(|| "60".to_string())
-            .parse()
-            .map_err(|_| "Invalid DASHSCOPE_TIMEOUT_SECONDS value".to_string())?;
+        let timeout_seconds = match timeout_seconds {
+            Some(value) => value
+                .parse()
+                .map_err(|_| "Invalid DASHSCOPE_TIMEOUT_SECONDS value".to_string())?,
+            None => default_timeout_seconds(QWEN_PROVIDER, &model, 60),
+        };
 
         let config = Self {
             api_key,
@@ -243,7 +265,7 @@ impl QwenConfig {
             model,
             timeout_seconds,
             max_tokens: None,
-            max_retries: 3,
+            max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
         };
@@ -254,13 +276,14 @@ impl QwenConfig {
 
     /// Create configuration with custom values.
     pub fn new(api_key: String, base_url: String, model: String) -> Self {
+        let timeout_seconds = default_timeout_seconds(QWEN_PROVIDER, &model, 60);
         Self {
             api_key,
             base_url,
             model,
-            timeout_seconds: 60,
+            timeout_seconds,
             max_tokens: None,
-            max_retries: 3,
+            max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
         }
@@ -314,7 +337,7 @@ impl QwenAdapter {
             api_key: config.api_key,
             model: config.model,
             timeout_seconds: config.timeout_seconds,
-            max_retries: 3,
+            max_retries: config.max_retries,
             capabilities: CompatCapabilities {
                 supports_streaming: true,
                 supports_tool_calling: false,
@@ -328,7 +351,9 @@ impl QwenAdapter {
                 // The default model's seeded window (`seeded::QWEN`, `qwen3.8-flash`, verified
                 // 2026-10-15: the vendor's China/Beijing model page, the only page that states
                 // one), replacing the unevidenced 131,072.
-                max_context_tokens: seeded_window(seeded::QWEN, QWEN_DEFAULT_MODEL),
+                max_context_tokens: config
+                    .context_window
+                    .or(seeded_window(seeded::QWEN, QWEN_DEFAULT_MODEL)),
                 supports_system_messages: true,
                 // Live-measured 2026-08-23 against `qwen-plus` and
                 // `qwen3.7-plus` at the shipped Singapore endpoint:
@@ -384,12 +409,22 @@ impl QwenAdapter {
             StopSupport::Supported { max: None },
         );
 
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let registry = ModelRegistry::new(QWEN_PROVIDER, seeded::QWEN, fallback)
+            .with_context_window(config.context_window)
+            .and_then(|registry| registry.with_overrides(config.model_overrides))
+            .map_err(|e| {
+                LlmError::AuthenticationError(format!("Invalid Qwen configuration: {e}"))
+            })?;
+
         Ok(Self {
             // Phase 25 D-03: name the engine so every `ProviderError` it
             // emits carries "qwen", not the engine's generic default.
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(QWEN_PROVIDER)
-                .with_model_registry(ModelRegistry::new(QWEN_PROVIDER, seeded::QWEN, fallback)),
+                .with_default_max_tokens(config.max_tokens)
+                .with_model_registry(registry),
         })
     }
 }
@@ -432,6 +467,7 @@ impl LlmPort for QwenAdapter {
 mod tests {
     use super::*;
     use crate::http_status::map_http_status;
+    use crate::registry;
     use mockito::Server;
     use paladin_core::platform::container::prompt::{
         PromptItem, PromptParameters, PromptType, UserPrompt,
@@ -538,7 +574,12 @@ mod tests {
             .expect("key alone must be sufficient to build a valid config");
         assert_eq!(config.base_url, QWEN_DEFAULT_BASE_URL);
         assert_eq!(config.model, QWEN_DEFAULT_MODEL);
-        assert_eq!(config.timeout_seconds, 60);
+        // The default model is a seeded reasoning model, so its default timeout is the
+        // reasoning-model 300 s (D-13), not the hosted-preset 60 s.
+        assert_eq!(
+            config.timeout_seconds,
+            registry::REASONING_DEFAULT_TIMEOUT_SECONDS
+        );
     }
 
     /// Pins the shipped default to the literal Singapore (international)

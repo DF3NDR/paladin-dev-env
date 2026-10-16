@@ -40,7 +40,8 @@ use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
 use crate::registry::{
-    ModelOverride, ModelRegistry, config_knob_builders, fallback_from_compat, seeded,
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, fallback_from_compat, seeded,
 };
 
 /// Default Ollama base URL — the local OpenAI-compatibility layer
@@ -140,17 +141,19 @@ impl OllamaConfig {
     ) -> Result<Self, String> {
         let base_url = base_url.unwrap_or_else(|| OLLAMA_DEFAULT_BASE_URL.to_string());
         let model = model.unwrap_or_else(|| OLLAMA_DEFAULT_MODEL.to_string());
-        let timeout_seconds = timeout_seconds
-            .unwrap_or_else(|| "120".to_string())
-            .parse()
-            .map_err(|_| "Invalid OLLAMA_TIMEOUT_SECONDS value".to_string())?;
+        let timeout_seconds = match timeout_seconds {
+            Some(value) => value
+                .parse()
+                .map_err(|_| "Invalid OLLAMA_TIMEOUT_SECONDS value".to_string())?,
+            None => default_timeout_seconds(OLLAMA_PROVIDER, &model, 120),
+        };
 
         let config = Self {
             base_url,
             model,
             timeout_seconds,
             max_tokens: None,
-            max_retries: 3,
+            max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
         };
@@ -161,12 +164,13 @@ impl OllamaConfig {
 
     /// Create configuration with custom values.
     pub fn new(base_url: String, model: String) -> Self {
+        let timeout_seconds = default_timeout_seconds(OLLAMA_PROVIDER, &model, 120);
         Self {
             base_url,
             model,
-            timeout_seconds: 120,
+            timeout_seconds,
             max_tokens: None,
-            max_retries: 3,
+            max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
         }
@@ -217,7 +221,7 @@ impl OllamaAdapter {
             api_key: OLLAMA_PLACEHOLDER_API_KEY.to_string(),
             model: config.model,
             timeout_seconds: config.timeout_seconds,
-            max_retries: 3,
+            max_retries: config.max_retries,
             capabilities: CompatCapabilities {
                 supports_streaming: true,
                 supports_tool_calling: false,
@@ -227,7 +231,7 @@ impl OllamaAdapter {
                 // The context window depends on whichever model the
                 // operator pulled — declaring a number would be a claim
                 // nobody asserted.
-                max_context_tokens: None,
+                max_context_tokens: config.context_window,
                 supports_system_messages: true,
                 temperature_range: Some((0.0, 2.0)),
             },
@@ -268,16 +272,24 @@ impl OllamaAdapter {
             StopSupport::Supported { max: None },
         );
 
+        // The Ollama table is empty by design: the 2026-10-15 probe skipped Ollama (no daemon was
+        // configured), so every model runs on the adapter-wide fallback.
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let registry = ModelRegistry::new(OLLAMA_PROVIDER, seeded::OLLAMA, fallback)
+            .with_context_window(config.context_window)
+            .and_then(|registry| registry.with_overrides(config.model_overrides))
+            .map_err(|e| {
+                LlmError::AuthenticationError(format!("Invalid Ollama configuration: {e}"))
+            })?;
+
         Ok(Self {
             // Phase 25 D-03: name the engine so every `ProviderError` it
             // emits carries "ollama", not the engine's generic default.
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(OLLAMA_PROVIDER)
-                .with_model_registry(
-                    // The Ollama table is empty by design: the 2026-10-15 probe skipped Ollama (no daemon
-                    // was configured), so every model runs on the adapter-wide fallback.
-                    ModelRegistry::new(OLLAMA_PROVIDER, seeded::OLLAMA, fallback),
-                ),
+                .with_default_max_tokens(config.max_tokens)
+                .with_model_registry(registry),
         })
     }
 }

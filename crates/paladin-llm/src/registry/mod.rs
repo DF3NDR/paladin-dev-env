@@ -53,6 +53,12 @@ use serde::{Deserialize, Serialize};
 /// Absent when the model was profiled.
 pub const UNPROFILED_MODEL_METADATA_KEY: &str = "paladin.unprofiled_model";
 
+/// How many times an adapter retries a retryable error after the first attempt when its config
+/// does not say otherwise: the value every adapter hard-coded before PARITY-03 made it a knob.
+// TEMP(50-08 task 2): the default-feature adapter (OpenAI) consumes this in task 3.
+#[allow(dead_code)]
+pub(crate) const DEFAULT_MAX_RETRIES: u32 = 3;
+
 /// The request timeout, in seconds, a direct `*Config` constructor gives a reasoning model when
 /// no explicit timeout is set (D-13): a reasoning model spends its budget thinking before it
 /// answers, so the 60 s hosted-preset default routinely cuts it off.
@@ -129,6 +135,27 @@ pub(crate) fn is_reasoning_model(
         .iter()
         .find(|entry| entry.model == model)
         .is_some_and(|entry| (entry.build)().reasoning)
+}
+
+/// The default request timeout a direct `*Config` constructor gives `model` when no explicit
+/// timeout is set (D-13): [`REASONING_DEFAULT_TIMEOUT_SECONDS`] for a seeded reasoning model,
+/// `compiled_default` (the provider's own long-standing default) for any other.
+#[cfg(any(
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "gemini"
+))]
+pub(crate) fn default_timeout_seconds(provider: &str, model: &str, compiled_default: u64) -> u64 {
+    if is_reasoning_model(provider, model, &BTreeMap::new()) {
+        REASONING_DEFAULT_TIMEOUT_SECONDS
+    } else {
+        compiled_default
+    }
 }
 
 /// Generate the `with_*` builders of the PARITY-03 knobs on one `*Config` type (D-12).
@@ -383,8 +410,7 @@ fn validate_stop(stop: StopSupport) -> Result<(), String> {
 }
 
 /// The sanity rules applied to a fully merged profile.
-// Called by `ModelRegistry::with_overrides`, which the config bridge first consumes in plans
-// 50-08/50-09; until then only the tests exercise it.
+// TEMP(50-08 task 2): consumed through `with_overrides` by OpenAI in task 3.
 #[allow(dead_code)]
 fn validate_profile(profile: &ModelProfile) -> Result<(), String> {
     validate_limits(profile.context_window, profile.max_output_tokens)?;
@@ -486,10 +512,48 @@ impl ModelRegistry {
     ///
     /// A message naming the provider, the model and both numbers when the window is zero or
     /// below a model's maximum output. Never clamps.
+    // TEMP(50-08 task 2): the default-feature adapter (OpenAI) consumes this in task 3.
     #[allow(dead_code)]
-    pub(crate) fn with_context_window(self, window: Option<u32>) -> Result<Self, String> {
-        let _ = window;
+    pub(crate) fn with_context_window(mut self, window: Option<u32>) -> Result<Self, String> {
+        self.window = window;
+        let Some(window) = window else {
+            return Ok(self);
+        };
+        if window == 0 {
+            return Err(format!(
+                "invalid context_window on provider '{}': it must be greater than zero",
+                self.provider
+            ));
+        }
+        // The fallback and every seeded entry now carry the operator's window; each must still
+        // be coherent with the maximum output it declares.
+        let fallback = self.window_applied(self.fallback.clone());
+        validate_limits(fallback.context_window, fallback.max_output_tokens).map_err(|problem| {
+            format!(
+                "invalid context_window {window} on provider '{}' (adapter-wide fallback): {problem}",
+                self.provider
+            )
+        })?;
+        for entry in self.seeded {
+            let merged = self.base_for(entry.model).0;
+            validate_limits(merged.context_window, merged.max_output_tokens).map_err(
+                |problem| {
+                    format!(
+                        "invalid context_window {window} for model '{}' on provider '{}': {problem}",
+                        entry.model, self.provider
+                    )
+                },
+            )?;
+        }
         Ok(self)
+    }
+
+    /// `profile` with the operator's adapter-wide window laid over it, when one was declared.
+    fn window_applied(&self, profile: ModelProfile) -> ModelProfile {
+        match self.window {
+            Some(window) => profile.with_context_window(window),
+            None => profile,
+        }
     }
 
     /// Attach per-model overrides, validating each one and the merged result it produces.
@@ -498,8 +562,7 @@ impl ModelRegistry {
     ///
     /// A message naming the provider, the model and the problem: an empty model id, an invalid
     /// override, or an override that contradicts the profile it is laid over.
-    // First consumed by the config bridge in plans 50-08/50-09; until then only the tests (and
-    // plan 50-06's seeded tables) exercise it.
+    // TEMP(50-08 task 2): the default-feature adapter (OpenAI) consumes this in task 3.
     #[allow(dead_code)]
     pub(crate) fn with_overrides(
         mut self,
@@ -528,10 +591,10 @@ impl ModelRegistry {
     fn base_for(&self, model: &str) -> (ModelProfile, Option<&'static SeededProfile>) {
         match self.seeded.iter().find(|entry| entry.model == model) {
             Some(entry) => (
-                (entry.build)().with_verified_on(entry.verified_on),
+                self.window_applied((entry.build)().with_verified_on(entry.verified_on)),
                 Some(entry),
             ),
-            None => (self.fallback.clone(), None),
+            None => (self.window_applied(self.fallback.clone()), None),
         }
     }
 

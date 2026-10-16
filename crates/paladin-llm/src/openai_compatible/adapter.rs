@@ -106,7 +106,11 @@ use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
-use crate::registry::{ModelOverride, ModelRegistry, config_knob_builders, fallback_from_compat};
+use crate::redaction::RedactedKey;
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, fallback_from_compat,
+};
 
 /// Default request timeout, in seconds, when `OPENAI_COMPATIBLE_TIMEOUT_SECONDS`
 /// is unset.
@@ -372,7 +376,7 @@ impl OpenAiCompatibleCapabilitiesConfig {
 /// Unlike every named preset in this crate, every field here — including
 /// `base_url` and `model` — is **required**, with no defensible default:
 /// there is no vendor to inherit an endpoint or a model identifier from.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct OpenAiCompatibleConfig {
     /// API key for the configured endpoint.
@@ -406,6 +410,25 @@ pub struct OpenAiCompatibleConfig {
     /// entry field by field. Empty by default. Validated at construction; an invalid override
     /// fails it with an error naming the provider and the model.
     pub model_overrides: BTreeMap<String, ModelOverride>,
+}
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for OpenAiCompatibleConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiCompatibleConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("capabilities", &self.capabilities)
+            .field("max_tokens", &self.max_tokens)
+            .field("max_retries", &self.max_retries)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .finish()
+    }
 }
 
 impl OpenAiCompatibleConfig {
@@ -451,10 +474,16 @@ impl OpenAiCompatibleConfig {
              default model for an operator-configured provider"
                 .to_string()
         })?;
-        let timeout_seconds = timeout_seconds
-            .unwrap_or_else(|| OPENAI_COMPATIBLE_DEFAULT_TIMEOUT_SECONDS.to_string())
-            .parse()
-            .map_err(|_| "Invalid OPENAI_COMPATIBLE_TIMEOUT_SECONDS value".to_string())?;
+        let timeout_seconds = match timeout_seconds {
+            Some(value) => value
+                .parse()
+                .map_err(|_| "Invalid OPENAI_COMPATIBLE_TIMEOUT_SECONDS value".to_string())?,
+            None => default_timeout_seconds(
+                OPENAI_COMPATIBLE_PROVIDER,
+                &model,
+                OPENAI_COMPATIBLE_DEFAULT_TIMEOUT_SECONDS,
+            ),
+        };
 
         let config = Self {
             api_key,
@@ -463,7 +492,7 @@ impl OpenAiCompatibleConfig {
             timeout_seconds,
             capabilities,
             max_tokens: None,
-            max_retries: 3,
+            max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
         };
@@ -479,14 +508,19 @@ impl OpenAiCompatibleConfig {
         model: String,
         capabilities: OpenAiCompatibleCapabilitiesConfig,
     ) -> Self {
+        let timeout_seconds = default_timeout_seconds(
+            OPENAI_COMPATIBLE_PROVIDER,
+            &model,
+            OPENAI_COMPATIBLE_DEFAULT_TIMEOUT_SECONDS,
+        );
         Self {
             api_key,
             base_url,
             model,
-            timeout_seconds: OPENAI_COMPATIBLE_DEFAULT_TIMEOUT_SECONDS,
+            timeout_seconds,
             capabilities,
             max_tokens: None,
-            max_retries: 3,
+            max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
             model_overrides: BTreeMap::new(),
         }
@@ -589,14 +623,16 @@ impl OpenAiCompatibleAdapter {
             api_key: config.api_key,
             model: config.model,
             timeout_seconds: config.timeout_seconds,
-            max_retries: 3,
+            max_retries: config.max_retries,
             capabilities: CompatCapabilities {
                 supports_streaming: config.capabilities.supports_streaming,
                 supports_tool_calling: config.capabilities.supports_tool_calling,
                 supports_function_calling: config.capabilities.supports_function_calling,
                 supports_vision: config.capabilities.supports_vision,
                 supports_embeddings: config.capabilities.supports_embeddings,
-                max_context_tokens: config.capabilities.max_context_tokens,
+                max_context_tokens: config
+                    .context_window
+                    .or(config.capabilities.max_context_tokens),
                 supports_system_messages: config.capabilities.supports_system_messages,
                 temperature_range: config.capabilities.temperature_range,
             },
@@ -635,16 +671,24 @@ impl OpenAiCompatibleAdapter {
             StopSupport::Supported { max: None },
         );
 
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let registry = ModelRegistry::new(OPENAI_COMPATIBLE_PROVIDER, &[], fallback)
+            .with_context_window(config.context_window)
+            .and_then(|registry| registry.with_overrides(config.model_overrides))
+            .map_err(|e| {
+                LlmError::AuthenticationError(format!(
+                    "Invalid openai-compatible configuration: {e}"
+                ))
+            })?;
+
         Ok(Self {
             // Phase 25 D-03: name the engine explicitly (it matches the
             // engine's own default, but the preset owns its identity).
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(OPENAI_COMPATIBLE_PROVIDER)
-                .with_model_registry(ModelRegistry::new(
-                    OPENAI_COMPATIBLE_PROVIDER,
-                    &[],
-                    fallback,
-                )),
+                .with_default_max_tokens(config.max_tokens)
+                .with_model_registry(registry),
         })
     }
 }
@@ -1578,7 +1622,7 @@ mod tests {
     fn openai_compatible_config_defaults_a_reasoning_model_to_300s() {
         // (model, expected default timeout): a seeded reasoning model gets 300 s (D-13); any
         // other model keeps this preset's compiled default (60 s).
-        for (model, expected) in [(UNSEEDED, 60)] {
+        for (model, expected) in [(UNSEEDED, 60), ("any-other-model", 60)] {
             let url = "https://example.invalid/v1";
             assert_eq!(
                 knob_config(url, model).timeout_seconds,

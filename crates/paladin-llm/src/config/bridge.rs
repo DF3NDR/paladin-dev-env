@@ -149,7 +149,9 @@ impl From<&LlmProviderConfig> for KimiConfig {
                 .unwrap_or_else(|| crate::kimi::adapter::KIMI_DEFAULT_MODEL.to_string()),
             timeout_seconds: cfg.timeout_seconds.unwrap_or(60),
             max_tokens: None,
-            max_retries: cfg.max_retries.unwrap_or(3),
+            max_retries: cfg
+                .max_retries
+                .unwrap_or(crate::registry::DEFAULT_MAX_RETRIES),
             context_window: None,
             model_overrides: BTreeMap::new(),
         }
@@ -175,7 +177,9 @@ impl From<&LlmProviderConfig> for QwenConfig {
                 .unwrap_or_else(|| crate::qwen::adapter::QWEN_DEFAULT_MODEL.to_string()),
             timeout_seconds: cfg.timeout_seconds.unwrap_or(60),
             max_tokens: None,
-            max_retries: cfg.max_retries.unwrap_or(3),
+            max_retries: cfg
+                .max_retries
+                .unwrap_or(crate::registry::DEFAULT_MAX_RETRIES),
             context_window: None,
             model_overrides: BTreeMap::new(),
         }
@@ -201,7 +205,9 @@ impl From<&LlmProviderConfig> for GrokConfig {
                 .unwrap_or_else(|| crate::grok::adapter::GROK_DEFAULT_MODEL.to_string()),
             timeout_seconds: cfg.timeout_seconds.unwrap_or(60),
             max_tokens: None,
-            max_retries: cfg.max_retries.unwrap_or(3),
+            max_retries: cfg
+                .max_retries
+                .unwrap_or(crate::registry::DEFAULT_MAX_RETRIES),
             context_window: None,
             model_overrides: BTreeMap::new(),
         }
@@ -255,7 +261,9 @@ impl From<&LlmProviderConfig> for OllamaConfig {
                 .unwrap_or_else(|| crate::ollama::adapter::OLLAMA_DEFAULT_MODEL.to_string()),
             timeout_seconds: cfg.timeout_seconds.unwrap_or(120),
             max_tokens: None,
-            max_retries: cfg.max_retries.unwrap_or(3),
+            max_retries: cfg
+                .max_retries
+                .unwrap_or(crate::registry::DEFAULT_MAX_RETRIES),
             context_window: None,
             model_overrides: BTreeMap::new(),
         }
@@ -308,7 +316,9 @@ impl TryFrom<&LlmProviderConfig> for OpenAiCompatibleConfig {
                 temperature_range: None,
             },
             max_tokens: None,
-            max_retries: cfg.max_retries.unwrap_or(3),
+            max_retries: cfg
+                .max_retries
+                .unwrap_or(crate::registry::DEFAULT_MAX_RETRIES),
             context_window: None,
             model_overrides: BTreeMap::new(),
         })

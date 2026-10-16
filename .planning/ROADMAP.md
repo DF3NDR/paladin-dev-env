@@ -1393,7 +1393,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 50-08-PLAN.md — Owner checkpoint on the `*Config` shape (non_exhaustive + builders vs plain fields); `max_tokens`, `max_retries`, `context_window` (beats seeded windows), `model_overrides` on all nine configs, each read by its adapter; 300 s reasoning default on the direct constructors; every workspace literal (bridges, examples, root tests) migrated in the same commits; redacting `Debug`
+- [x] 50-08-PLAN.md — Owner checkpoint on the `*Config` shape (non_exhaustive + builders vs plain fields); `max_tokens`, `max_retries`, `context_window` (beats seeded windows), `model_overrides` on all nine configs, each read by its adapter; 300 s reasoning default on the direct constructors; every workspace literal (bridges, examples, root tests) migrated in the same commits; redacting `Debug`
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

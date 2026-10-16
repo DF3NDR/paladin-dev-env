@@ -208,7 +208,7 @@ pub use paladin_llm::services::commissary::{
 // fallback walk. Facade users see one surface for window resolution.
 pub use paladin_llm::window::{
     ResolvedWindow, UnknownContextWindow, WindowFallbackPolicy, WindowSource,
-    resolve_context_window,
+    effective_capabilities, resolve_context_window,
 };
 
 // Paladin (Agent) Types

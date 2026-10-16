@@ -584,6 +584,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DEEPSEEK_DEFAULT_MODEL` give the two adapters whose defaults were inline strings the same
   named default the other adapters already had.
 
+- **The Commissary and the HistoryTrimmer ration against the model's own window (PARITY-04;
+  Phase 50 plan 50-07; ADR-0061, D-05).** `paladin_llm::window::effective_capabilities(port,
+  model)` (also re-exported from the facade) returns the port's `ProviderCapabilities` with
+  `max_context_tokens` replaced by the model profile's `context_window` when it has one, and
+  `Commissary::for_model(port, model, counter, plan)` builds a Commissary over it, so `kimi-k3` is
+  rationed against its seeded 1,048,576-token window instead of the adapter-wide 262,144. The
+  `HistoryTrimmer` resolves its limit through the same function: its config table still wins, its
+  `Default` policy still applies when nothing declares a window, and no `WindowSource` variant was
+  added. `Commissary::new` and `Commissary::from_port` are unchanged, and a Commissary resolves
+  its window once, so a different model needs a new one.
+
 ### Changed
 
 - **Explicit sampling values are checked against the model's profile; auto and default values

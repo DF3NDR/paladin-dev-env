@@ -595,7 +595,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   added. `Commissary::new` and `Commissary::from_port` are unchanged, and a Commissary resolves
   its window once, so a different model needs a new one.
 
+- **Configuration knobs on every adapter config (PARITY-03; Phase 50 plan 50-08; D-12).** Each of
+  the nine `paladin-llm` adapter configs (`OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`,
+  `GeminiConfig`, `KimiConfig`, `QwenConfig`, `GrokConfig`, `OllamaConfig`,
+  `OpenAiCompatibleConfig`) now carries `max_tokens` (the default output budget sent when a
+  request sets none; Anthropic keeps its required `u32`, OpenAI's `new` and `from_env` keep
+  `Some(4096)`), `max_retries`, `context_window` (an adapter-wide window override) and
+  `model_overrides` (a `BTreeMap<String, ModelOverride>`, the per-model override), each read by its
+  adapter, with the `#[must_use]` builders `with_max_tokens`, `with_max_retries`,
+  `with_context_window` and `with_model_overrides`. A configured `max_tokens` passes through the
+  same maximum-output check as a request's own value; an invalid override or a window below a
+  model's maximum output fails adapter construction with an error naming the provider and the
+  model. The configs that hold a key (all but `OllamaConfig`) now print it as `<redacted>` from
+  `Debug`. Every existing `new`, `from_env` and `from_parts` signature is unchanged; harmonising
+  the drifted `new` argument lists is a later, separately registered break
+  (`.planning/todos/pending/2026-10-16-harmonise-llm-config-new-signatures.md`).
+
 ### Changed
+
+- **Reasoning models default to a 300 s timeout on the direct config path, and an adapter-wide
+  `context_window` overrides seeded windows (D-13; Phase 50 plan 50-08).** `KimiConfig`,
+  `QwenConfig`, `GrokConfig`, `DeepSeekConfig`, `GeminiConfig` and `AnthropicConfig` (`new`,
+  `from_env`/`from_parts`) default `timeout_seconds` to 300 when the configured model is a seeded
+  reasoning model and no `<PROVIDER>_TIMEOUT_SECONDS` is set (the default models of Kimi, Qwen,
+  Grok, DeepSeek and Gemini are, so their default timeout rises from 60 s); any other model keeps
+  today's default, `OpenAIConfig` is 300 s already, and an explicit value always wins. A
+  `context_window` set on a config replaces the adapter's declared window, the fallback window and
+  every seeded model's window; a per-model override still beats it. `LlmProviderConfig.max_retries`
+  is now honoured by the Kimi, Qwen, Grok, Ollama, OpenAI-compatible, Anthropic, DeepSeek and
+  Gemini conversions (it was ignored for them).
 
 - **Explicit sampling values are checked against the model's profile; auto and default values
   are omitted visibly (PARITY-01, PARITY-02; Phase 50 plan 50-03; ADR-0061, amending ADR-0004).**
@@ -980,6 +1008,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `EntityVersion*`, and the Citadel stores the real `PaladinData` and `PaladinStatus`. v0.11 reads
   the v0.10 keys but a v0.10 binary cannot read v0.11 output (ENTITY-01..05; ADR-0060;
   `MIGRATION.md` 9.1 M-B-12, 9.2 Phase 48 rows, 9.4).
+- **BREAKING (`paladin-llm`): the nine adapter configs gain `max_tokens`, `max_retries`,
+  `context_window` and `model_overrides` and are marked `#[non_exhaustive]`** (`OpenAIConfig` gains
+  `max_tokens`, `context_window` and `model_overrides`; `AnthropicConfig` gains `max_retries`,
+  `context_window` and `model_overrides`) -- build one with `new` or `from_env` and set fields or
+  call the `with_*` builders; a struct literal outside the crate no longer compiles. Owner
+  decision `option-a` (Phase 50 plan 50-08), so Phase 51's `reasoning_effort` is free. Registered
+  with the semver measurement in plan 50-10.
 
 ### Known limitations
 

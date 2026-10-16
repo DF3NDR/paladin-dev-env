@@ -716,13 +716,13 @@ mod tests {
         assert!(wiring.is_some(), "pacing is on");
 
         let mut server = Server::new_async().await;
-        let openai = OpenAIAdapter::new(OpenAIConfig {
-            api_key: "test-key".to_string(),
-            base_url: server.url(),
-            organization: None,
-            timeout_seconds: 5,
-            max_retries: 3,
-        })?;
+        // `OpenAIConfig` is `#[non_exhaustive]`: build it with `new` and set what differs.
+        let mut openai_config = OpenAIConfig::new("test-key".to_string());
+        openai_config.base_url = server.url();
+        openai_config.organization = None;
+        openai_config.timeout_seconds = 5;
+        openai_config.max_retries = 3;
+        let openai = OpenAIAdapter::new(openai_config)?;
         let llm = compose_llm(Arc::new(openai), &empty_price_table()?, wiring.as_ref());
 
         let request = || -> Result<LlmRequest, Box<dyn std::error::Error>> {

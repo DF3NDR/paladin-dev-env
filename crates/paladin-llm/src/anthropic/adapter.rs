@@ -13,7 +13,7 @@ use reqwest::{
     header::{CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
@@ -26,7 +26,11 @@ use paladin_ports::output::llm_port::{
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
-use crate::registry::{ModelRegistry, seeded, seeded_window};
+use crate::redaction::RedactedKey;
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, seeded, seeded_window,
+};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
@@ -93,7 +97,12 @@ fn snapshot_rate_limit_hints(
 }
 
 /// Configuration for Anthropic Claude LLM adapter.
-#[derive(Debug, Clone)]
+///
+/// Marked `#[non_exhaustive]` (owner decision, Phase 50 plan 50-08, option-a): build one with
+/// [`AnthropicConfig::new`] or [`AnthropicConfig::from_env`] and set fields or call the `with_*`
+/// builders, so a later field is not another break for callers.
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct AnthropicConfig {
     /// API key for Anthropic authentication.
     pub api_key: String,
@@ -102,11 +111,51 @@ pub struct AnthropicConfig {
     /// Default model to use; [`ANTHROPIC_DEFAULT_MODEL`] when constructed from the environment
     /// with `ANTHROPIC_MODEL` unset.
     pub model: String,
-    /// Default max tokens for responses (required by Claude API).
+    /// Output budget (`max_tokens`, required by the Claude API) sent when a request sets none.
+    /// Checked against the model's profiled maximum output exactly as a request's own
+    /// `max_tokens` is (ADR-0061 (i)): above it, the request is refused before any HTTP call.
     pub max_tokens: u32,
-    /// Request timeout in seconds.
+    /// Request timeout in seconds. [`AnthropicConfig::new`] and [`AnthropicConfig::from_env`]
+    /// default it to 300 for a seeded reasoning model and to 60 otherwise (D-13); an explicit
+    /// `ANTHROPIC_TIMEOUT_SECONDS` or field assignment always wins. A model marked `reasoning`
+    /// only through [`model_overrides`](Self::model_overrides) does not change this default
+    /// here: set this field in the same place.
     pub timeout_seconds: u64,
+    /// The retry budget for a retryable error. This adapter's loop counts total attempts, so the
+    /// default `3` sends up to three and `0` or `1` send once. A 429 is never retried here
+    /// (the Cadence decorator waits) and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model. `None`
+    /// (the default) keeps the compiled windows. When set it replaces the adapter's declared
+    /// window, the fallback profile's window and every seeded model's window; a
+    /// `context_window` in [`model_overrides`](Self::model_overrides) still wins for that model.
+    /// Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
 }
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for AnthropicConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnthropicConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("max_tokens", &self.max_tokens)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_retries", &self.max_retries)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .finish()
+    }
+}
+
+config_knob_builders!(AnthropicConfig, plain_max_tokens);
 
 impl AnthropicConfig {
     /// Load configuration from environment variables.
@@ -116,7 +165,8 @@ impl AnthropicConfig {
     /// - `ANTHROPIC_BASE_URL` (optional): API base URL
     /// - `ANTHROPIC_MODEL` (optional): Default model
     /// - `ANTHROPIC_MAX_TOKENS` (optional): Default max tokens
-    /// - `ANTHROPIC_TIMEOUT_SECONDS` (optional): Request timeout
+    /// - `ANTHROPIC_TIMEOUT_SECONDS` (optional): Request timeout, 300 for a seeded reasoning
+    ///   model and 60 otherwise
     ///
     /// # Errors
     /// Returns error if required environment variables are missing or invalid.
@@ -135,10 +185,12 @@ impl AnthropicConfig {
             .parse()
             .map_err(|_| "Invalid ANTHROPIC_MAX_TOKENS value")?;
 
-        let timeout_seconds = env::var("ANTHROPIC_TIMEOUT_SECONDS")
-            .unwrap_or_else(|_| "60".to_string())
-            .parse()
-            .map_err(|_| "Invalid ANTHROPIC_TIMEOUT_SECONDS value")?;
+        let timeout_seconds = match env::var("ANTHROPIC_TIMEOUT_SECONDS") {
+            Ok(value) => value
+                .parse()
+                .map_err(|_| "Invalid ANTHROPIC_TIMEOUT_SECONDS value")?,
+            Err(_) => default_timeout_seconds(ANTHROPIC_PROVIDER, &model, 60),
+        };
 
         let config = Self {
             api_key,
@@ -146,6 +198,9 @@ impl AnthropicConfig {
             model,
             max_tokens,
             timeout_seconds,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         };
 
         config.validate()?;
@@ -154,12 +209,16 @@ impl AnthropicConfig {
 
     /// Create configuration with custom values.
     pub fn new(api_key: String, base_url: String, model: String, max_tokens: u32) -> Self {
+        let timeout_seconds = default_timeout_seconds(ANTHROPIC_PROVIDER, &model, 60);
         Self {
             api_key,
             base_url,
             model,
             max_tokens,
-            timeout_seconds: 60,
+            timeout_seconds,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 
@@ -199,7 +258,7 @@ pub struct AnthropicAdapter {
 
 /// What this adapter declares to the port, stated once so the adapter-wide fallback profile and
 /// [`LlmPort::get_capabilities`] cannot drift apart.
-fn declared_capabilities() -> ProviderCapabilities {
+fn declared_capabilities(context_window: Option<u32>) -> ProviderCapabilities {
     ProviderCapabilities {
         supports_streaming: true,
         // `LlmRequest` carries no field through which a tool definition could
@@ -213,7 +272,9 @@ fn declared_capabilities() -> ProviderCapabilities {
         // The default model's seeded window (`seeded::ANTHROPIC`, `claude-haiku-5-5`, verified
         // 2026-10-15: listing `max_input_tokens`), so this declaration describes the model a
         // caller gets when it names none.
-        max_context_tokens: seeded_window(seeded::ANTHROPIC, ANTHROPIC_DEFAULT_MODEL),
+        // The operator's adapter-wide window (PARITY-03) replaces it when set.
+        max_context_tokens: context_window
+            .or(seeded_window(seeded::ANTHROPIC, ANTHROPIC_DEFAULT_MODEL)),
         supports_system_messages: true,
         temperature_range: Some((0.0, 1.0)),
     }
@@ -233,8 +294,8 @@ fn declared_capabilities() -> ProviderCapabilities {
 /// - `stop`: `Supported { max: None }` -- the Messages API field `stop_sequences`.
 /// - `json_object` and `json_schema`: false -- the adapter is prompt-only for JSON today, so a
 ///   requested format is recorded as `omitted` rather than silently ignored.
-fn fallback_profile() -> ModelProfile {
-    let caps = declared_capabilities();
+fn fallback_profile(context_window: Option<u32>) -> ModelProfile {
+    let caps = declared_capabilities(context_window);
     let mut profile = ModelProfile::new()
         .with_temperature(ParamSupport::NotSent)
         .with_top_p(ParamSupport::NotSent)
@@ -276,14 +337,23 @@ impl AnthropicAdapter {
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let model_registry = ModelRegistry::new(
+            ANTHROPIC_PROVIDER,
+            seeded::ANTHROPIC,
+            fallback_profile(config.context_window),
+        )
+        .with_context_window(config.context_window)
+        .and_then(|registry| registry.with_overrides(config.model_overrides.clone()))
+        .map_err(|e| {
+            LlmError::AuthenticationError(format!("Invalid Anthropic configuration: {e}"))
+        })?;
+
         Ok(Self {
             client,
             config,
-            model_registry: ModelRegistry::new(
-                ANTHROPIC_PROVIDER,
-                seeded::ANTHROPIC,
-                fallback_profile(),
-            ),
+            model_registry,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
         })
@@ -666,7 +736,9 @@ impl LlmPort for AnthropicAdapter {
             self.parse_response(request.id, claude_response)
         };
 
-        let mut response = self.execute_with_retry(operation, 3).await?;
+        let mut response = self
+            .execute_with_retry(operation, self.config.max_retries)
+            .await?;
         // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
         response.metadata = notes.into_metadata();
         Ok(response)
@@ -801,7 +873,7 @@ impl LlmPort for AnthropicAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        declared_capabilities()
+        declared_capabilities(self.config.context_window)
     }
 
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
@@ -1900,7 +1972,8 @@ stake, so an attacker donating to himself alone is a strict loss.";
             .create_async()
             .await;
 
-            // `execute_with_retry(.., 3)`: three attempts are allowed; a 429 must use only one.
+            // `execute_with_retry(.., max_retries)` with the default of 3: three attempts are allowed; a
+            // 429 must use only one.
             let started = std::time::Instant::now();
             let err = adapter_at(&server.url())
                 .generate(build_request())
@@ -2400,7 +2473,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 ..ModelOverride::default()
             };
             adapter.model_registry =
-                ModelRegistry::new(ANTHROPIC_PROVIDER, &[], fallback_profile())
+                ModelRegistry::new(ANTHROPIC_PROVIDER, &[], fallback_profile(None))
                     .with_overrides(BTreeMap::from([(MODEL.to_string(), over)]))
                     .expect("a plain max_output_tokens override is valid");
 
@@ -2588,6 +2661,270 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 .find(|c| c.finish_reason.is_some())
                 .expect("stream must still end with a message_stop terminal chunk");
             assert_eq!(terminal.usage, None);
+        }
+    }
+}
+
+/// The PARITY-03 knobs on `AnthropicConfig` (plan 50-08, D-12): each one is read by the adapter.
+#[cfg(test)]
+mod knob_tests {
+    use super::*;
+    use crate::test_support::{
+        attempts_against_a_failing_endpoint_at, mock_capture, send_with_max_tokens, server,
+    };
+    use crate::window::effective_capabilities;
+    use serde_json::json;
+
+    const UNSEEDED: &str = "claude-unseeded-test-model";
+    const PATH: &str = "/messages";
+
+    fn config(base_url: &str, model: &str) -> AnthropicConfig {
+        AnthropicConfig::new(
+            "test-key".to_string(),
+            base_url.to_string(),
+            model.to_string(),
+            4096,
+        )
+    }
+
+    fn window_override(window: u32) -> ModelOverride {
+        ModelOverride {
+            context_window: Some(window),
+            ..ModelOverride::default()
+        }
+    }
+
+    fn response() -> serde_json::Value {
+        json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "test-model",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": null,
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        })
+    }
+
+    fn error_of(config: AnthropicConfig) -> String {
+        match AnthropicAdapter::new(config) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("construction must fail"),
+        }
+    }
+
+    #[test]
+    fn anthropic_new_keeps_its_four_argument_signature_and_defaults() {
+        // The consumer muster pins this signature; the knobs arrive through builders.
+        let config = AnthropicConfig::new(
+            "test-key".to_string(),
+            "https://api.anthropic.com/v1".to_string(),
+            "claude-haiku-5-5".to_string(),
+            4096,
+        );
+        assert_eq!(config.max_tokens, 4096);
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.context_window, None);
+        assert!(config.model_overrides.is_empty());
+    }
+
+    #[tokio::test]
+    async fn anthropic_max_tokens_is_the_default_output_budget_on_the_wire() {
+        let mut server = server().await;
+        let captured = mock_capture(&mut server, PATH, response()).await;
+        let url = server.url();
+
+        let adapter = AnthropicAdapter::new(config(&url, UNSEEDED).with_max_tokens(2048)).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 2048, "{body}");
+        // A request's own value wins.
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 512, "{body}");
+    }
+
+    #[tokio::test]
+    async fn anthropic_max_tokens_default_is_checked_against_the_profile() {
+        let mut server = server().await;
+        let captured = mock_capture(&mut server, PATH, response()).await;
+        let over = ModelOverride {
+            max_output_tokens: Some(1000),
+            ..ModelOverride::default()
+        };
+        let adapter = AnthropicAdapter::new(
+            config(&server.url(), UNSEEDED)
+                .with_max_tokens(2048)
+                .with_model_overrides(BTreeMap::from([(UNSEEDED.to_string(), over)])),
+        )
+        .unwrap();
+        let Err(LlmError::InvalidPrompt(message)) =
+            send_with_max_tokens(&adapter, &captured, UNSEEDED, None).await
+        else {
+            panic!("a default above the model's maximum output must be InvalidPrompt");
+        };
+        for needle in ["max_tokens", "2048", "1000"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+        assert!(captured.lock().unwrap().is_none(), "nothing was sent");
+    }
+
+    #[tokio::test]
+    async fn anthropic_max_retries_is_read_by_the_adapter() {
+        // This adapter's loop counts total attempts (its long-standing convention): the budget
+        // `n` sends up to `n` requests on a retryable 5xx.
+        for (budget, attempts) in [(1_u32, 1_usize), (2, 2)] {
+            let server = server().await;
+            let adapter =
+                AnthropicAdapter::new(config(&server.url(), UNSEEDED).with_max_retries(budget))
+                    .unwrap();
+            attempts_against_a_failing_endpoint_at(server, PATH, &adapter, UNSEEDED, attempts)
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn anthropic_429_is_one_attempt_whatever_the_retry_budget() {
+        let mut server = server().await;
+        let mock = server
+            .mock("POST", PATH)
+            .with_status(429)
+            .with_body(r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+        let adapter =
+            AnthropicAdapter::new(config(&server.url(), UNSEEDED).with_max_retries(5)).unwrap();
+        let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let outcome = send_with_max_tokens(&adapter, &captured, UNSEEDED, None).await;
+        assert!(matches!(outcome, Err(LlmError::RateLimitExceeded { .. })));
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn anthropic_context_window_override_is_declared() {
+        let adapter = AnthropicAdapter::new(
+            config("https://example.invalid/v1", UNSEEDED).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(500_000)
+        );
+    }
+
+    #[test]
+    fn context_window_override_beats_a_seeded_window_on_anthropic() {
+        let base = || config("https://example.invalid/v1", "claude-haiku-5-5");
+        let seeded = AnthropicAdapter::new(base()).unwrap();
+        assert_eq!(
+            seeded
+                .model_profile("claude-haiku-5-5")
+                .unwrap()
+                .context_window,
+            Some(1_000_000)
+        );
+
+        let adapter = AnthropicAdapter::new(base().with_context_window(500_000)).unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("claude-haiku-5-5")
+                .unwrap()
+                .context_window,
+            Some(500_000)
+        );
+        assert_eq!(
+            effective_capabilities(&adapter, "claude-haiku-5-5").max_context_tokens,
+            Some(500_000)
+        );
+
+        let adapter =
+            AnthropicAdapter::new(base().with_context_window(500_000).with_model_overrides(
+                BTreeMap::from([("claude-haiku-5-5".to_string(), window_override(900_000))]),
+            ))
+            .unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("claude-haiku-5-5")
+                .unwrap()
+                .context_window,
+            Some(900_000)
+        );
+
+        // A window below the seeded maximum output is refused, never clamped.
+        let message = error_of(base().with_context_window(100_000));
+        for needle in ["anthropic", "claude-haiku-5-5", "100000", "128000"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn anthropic_invalid_override_fails_construction_naming_provider_and_model() {
+        let with_override = |over: ModelOverride| {
+            config("https://example.invalid/v1", UNSEEDED)
+                .with_model_overrides(BTreeMap::from([(UNSEEDED.to_string(), over)]))
+        };
+        let adapter = AnthropicAdapter::new(with_override(window_override(900_000))).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+        for over in [
+            window_override(0),
+            ModelOverride {
+                context_window: Some(1_000),
+                max_output_tokens: Some(2_000_000),
+                ..ModelOverride::default()
+            },
+        ] {
+            let message = error_of(with_override(over));
+            assert!(
+                message.contains("anthropic") && message.contains(UNSEEDED),
+                "the error must name the provider and the model: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn anthropic_config_defaults_a_reasoning_model_to_300s() {
+        // No Anthropic entry is seeded as a reasoning model, so every model keeps today's 60 s
+        // here; the 300 s path is exercised for the vendors that seed one (DeepSeek, Gemini,
+        // Kimi, Qwen, Grok) and by `registry::knob_tests::is_reasoning_model_*`.
+        for model in ["claude-haiku-5-5", UNSEEDED] {
+            assert_eq!(
+                config("https://example.invalid/v1", model).timeout_seconds,
+                60,
+                "new({model})"
+            );
+        }
+        let mut explicit = config("https://example.invalid/v1", "claude-haiku-5-5");
+        explicit.timeout_seconds = 45;
+        assert_eq!(explicit.timeout_seconds, 45);
+    }
+
+    #[test]
+    fn anthropic_config_debug_redacts_the_api_key() {
+        let config = config("https://api.example.invalid/v1", "claude-haiku-5-5");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+            "max_tokens",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
         }
     }
 }

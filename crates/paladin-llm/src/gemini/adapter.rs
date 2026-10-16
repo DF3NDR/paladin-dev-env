@@ -71,7 +71,7 @@ use reqwest::{
     header::{CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::time::{Duration, SystemTime};
 use tokio::sync::OnceCell;
@@ -87,9 +87,13 @@ use paladin_ports::output::rate_limit_hints::RateLimitHints;
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::{
-    RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, diagnostic_excerpt, redact_credentials,
+    RESPONSE_EXCERPT_CHAR_BUDGET, RedactedKey, bounded_excerpt, diagnostic_excerpt,
+    redact_credentials,
 };
-use crate::registry::{ModelRegistry, seeded, seeded_window};
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, seeded, seeded_window,
+};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
@@ -199,7 +203,12 @@ const GEMINI_CREDENTIAL_MESSAGE_SIGNATURES: &[&str] = &[
 ];
 
 /// Configuration for the Gemini LLM adapter.
-#[derive(Debug, Clone)]
+///
+/// Marked `#[non_exhaustive]` (owner decision, Phase 50 plan 50-08, option-a): build one with
+/// [`GeminiConfig::new`] or [`GeminiConfig::from_env`] and set fields or call the `with_*`
+/// builders, so a later field is not another break for callers.
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct GeminiConfig {
     /// API key for Gemini authentication, sent as the `x-goog-api-key`
     /// header on every request.
@@ -208,9 +217,52 @@ pub struct GeminiConfig {
     pub base_url: String,
     /// Default model to use (e.g. `gemini-2.5-flash`).
     pub model: String,
-    /// Request timeout in seconds.
+    /// Request timeout in seconds. [`GeminiConfig::new`] and [`GeminiConfig::from_env`] default
+    /// it to 300 for a seeded reasoning model and to 60 otherwise (D-13); an explicit
+    /// `GEMINI_TIMEOUT_SECONDS` or field assignment always wins. A model marked `reasoning`
+    /// only through [`model_overrides`](Self::model_overrides) does not change this default
+    /// here: set this field in the same place.
     pub timeout_seconds: u64,
+    /// Default output budget (`max_tokens`) sent when a request sets none. `None` (the default)
+    /// sends no `maxOutputTokens`. The value is checked against the model's profiled maximum output
+    /// exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the request is
+    /// refused before any HTTP call.
+    pub max_tokens: Option<u32>,
+    /// The retry budget for a retryable error. This adapter's loop counts total attempts, so the
+    /// default `3` sends up to three and `0` or `1` send once. A 429 is never retried here
+    /// (the Cadence decorator waits) and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model. `None`
+    /// (the default) keeps the compiled windows. When set it replaces the adapter's declared
+    /// window, the fallback profile's window and every seeded model's window; a
+    /// `context_window` in [`model_overrides`](Self::model_overrides) still wins for that model.
+    /// Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
 }
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for GeminiConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GeminiConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_tokens", &self.max_tokens)
+            .field("max_retries", &self.max_retries)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .finish()
+    }
+}
+
+config_knob_builders!(GeminiConfig);
 
 impl GeminiConfig {
     /// Load configuration from environment variables.
@@ -222,7 +274,7 @@ impl GeminiConfig {
     /// - `GEMINI_MODEL` (optional): Default model, defaults to
     ///   [`GEMINI_DEFAULT_MODEL`].
     /// - `GEMINI_TIMEOUT_SECONDS` (optional): Request timeout, defaults to
-    ///   `60`.
+    ///   `300` for a seeded reasoning model and `60` otherwise.
     ///
     /// # Errors
     /// Returns an error if `GEMINI_API_KEY` is absent, or another value
@@ -250,16 +302,22 @@ impl GeminiConfig {
             api_key.ok_or_else(|| "GEMINI_API_KEY environment variable not set".to_string())?;
         let base_url = base_url.unwrap_or_else(|| GEMINI_DEFAULT_BASE_URL.to_string());
         let model = model.unwrap_or_else(|| GEMINI_DEFAULT_MODEL.to_string());
-        let timeout_seconds = timeout_seconds
-            .unwrap_or_else(|| "60".to_string())
-            .parse()
-            .map_err(|_| "Invalid GEMINI_TIMEOUT_SECONDS value".to_string())?;
+        let timeout_seconds = match timeout_seconds {
+            Some(value) => value
+                .parse()
+                .map_err(|_| "Invalid GEMINI_TIMEOUT_SECONDS value".to_string())?,
+            None => default_timeout_seconds(GEMINI_PROVIDER, &model, 60),
+        };
 
         let config = Self {
             api_key,
             base_url,
             model,
             timeout_seconds,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         };
 
         config.validate()?;
@@ -268,11 +326,16 @@ impl GeminiConfig {
 
     /// Create configuration with custom values.
     pub fn new(api_key: String, base_url: String, model: String) -> Self {
+        let timeout_seconds = default_timeout_seconds(GEMINI_PROVIDER, &model, 60);
         Self {
             api_key,
             base_url,
             model,
-            timeout_seconds: 60,
+            timeout_seconds,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 
@@ -311,7 +374,7 @@ pub struct GeminiAdapter {
 
 /// What this adapter declares to the port, stated once so the adapter-wide fallback profile and
 /// [`LlmPort::get_capabilities`] cannot drift apart.
-fn declared_capabilities() -> ProviderCapabilities {
+fn declared_capabilities(context_window: Option<u32>) -> ProviderCapabilities {
     ProviderCapabilities {
         supports_streaming: true,
         // `LlmRequest` has no field through which a tool definition
@@ -327,7 +390,8 @@ fn declared_capabilities() -> ProviderCapabilities {
         supports_embeddings: false,
         // The default model's seeded window (`seeded::GEMINI`, `gemini-3.5-flash-lite`, verified
         // 2026-10-15: listing `inputTokenLimit`).
-        max_context_tokens: seeded_window(seeded::GEMINI, GEMINI_DEFAULT_MODEL),
+        // The operator's adapter-wide window (PARITY-03) replaces it when set.
+        max_context_tokens: context_window.or(seeded_window(seeded::GEMINI, GEMINI_DEFAULT_MODEL)),
         supports_system_messages: true,
         temperature_range: Some((0.0, 2.0)),
     }
@@ -342,8 +406,8 @@ fn declared_capabilities() -> ProviderCapabilities {
 /// - `stop`: `Supported { max: None }` -- `generationConfig.stopSequences`, which this adapter
 ///   already sent before the profile existed.
 /// - `json_object` and `json_schema`: both true -- `responseMimeType` and `responseSchema`.
-fn fallback_profile() -> ModelProfile {
-    let caps = declared_capabilities();
+fn fallback_profile(context_window: Option<u32>) -> ModelProfile {
+    let caps = declared_capabilities(context_window);
     let (low, high) = caps.temperature_range.unwrap_or((0.0, 1.0));
     let mut profile = ModelProfile::new()
         .with_temperature(ParamSupport::Range(low, high))
@@ -398,11 +462,22 @@ impl GeminiAdapter {
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {e}")))?;
 
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let model_registry = ModelRegistry::new(
+            GEMINI_PROVIDER,
+            seeded::GEMINI,
+            fallback_profile(config.context_window),
+        )
+        .with_context_window(config.context_window)
+        .and_then(|registry| registry.with_overrides(config.model_overrides.clone()))
+        .map_err(|e| LlmError::AuthenticationError(format!("Invalid Gemini configuration: {e}")))?;
+
         Ok(Self {
             client,
             config,
             models_cache: OnceCell::new(),
-            model_registry: ModelRegistry::new(GEMINI_PROVIDER, seeded::GEMINI, fallback_profile()),
+            model_registry,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
         })
@@ -501,7 +576,10 @@ impl GeminiAdapter {
         let params = &request.prompt.entity.data.parameters;
         let profile = self.model_registry.profile(&request.model);
 
-        sampling::check_max_tokens(GEMINI_PROVIDER, &request.model, &profile, params.max_tokens)?;
+        // The caller's value, else the configured default; either is held to the model's
+        // maximum output before anything is sent.
+        let max_tokens = params.max_tokens.or(self.config.max_tokens);
+        sampling::check_max_tokens(GEMINI_PROVIDER, &request.model, &profile, max_tokens)?;
 
         let applied = sampling::apply(&profile, params);
         let params_omitted = self
@@ -534,7 +612,7 @@ impl GeminiAdapter {
 
         let generation_config = GeminiGenerationConfig {
             temperature: applied.temperature,
-            max_output_tokens: params.max_tokens,
+            max_output_tokens: max_tokens,
             top_p: applied.top_p,
             top_k: None,
             stop_sequences: applied.stop,
@@ -1000,7 +1078,9 @@ impl LlmPort for GeminiAdapter {
             self.parse_response(request.id, &request.model, gemini_response)
         };
 
-        let mut response = self.execute_with_retry(operation, 3).await?;
+        let mut response = self
+            .execute_with_retry(operation, self.config.max_retries)
+            .await?;
         // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
         response.metadata = notes.into_metadata();
         Ok(response)
@@ -1084,7 +1164,9 @@ impl LlmPort for GeminiAdapter {
             Ok(response)
         };
 
-        let response = self.execute_with_retry(operation, 3).await?;
+        let response = self
+            .execute_with_retry(operation, self.config.max_retries)
+            .await?;
 
         let stream = response.bytes_stream().flat_map(|chunk_result| {
             let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
@@ -1113,7 +1195,7 @@ impl LlmPort for GeminiAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        declared_capabilities()
+        declared_capabilities(self.config.context_window)
     }
 
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
@@ -1556,7 +1638,9 @@ mod tests {
         assert_eq!(config.api_key, "live-key");
         assert_eq!(config.base_url, GEMINI_DEFAULT_BASE_URL);
         assert_eq!(config.model, GEMINI_DEFAULT_MODEL);
-        assert_eq!(config.timeout_seconds, 60);
+        // The default model is a seeded reasoning model, so its default timeout is the
+        // reasoning-model 300 s (D-13), not the hosted-preset 60 s.
+        assert_eq!(config.timeout_seconds, 300);
     }
 
     #[test]
@@ -3901,9 +3985,10 @@ mod tests {
                 max_output_tokens: Some(1000),
                 ..ModelOverride::default()
             };
-            adapter.model_registry = ModelRegistry::new(GEMINI_PROVIDER, &[], fallback_profile())
-                .with_overrides(BTreeMap::from([(MODEL.to_string(), over)]))
-                .expect("a plain max_output_tokens override is valid");
+            adapter.model_registry =
+                ModelRegistry::new(GEMINI_PROVIDER, &[], fallback_profile(None))
+                    .with_overrides(BTreeMap::from([(MODEL.to_string(), over)]))
+                    .expect("a plain max_output_tokens override is valid");
 
             let mut parameters = unset();
             parameters.max_tokens = Some(4000);
@@ -3982,5 +4067,264 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(GeminiFixture);
+    }
+}
+
+/// The PARITY-03 knobs on `GeminiConfig` (plan 50-08, D-12): each one is read by the adapter.
+#[cfg(test)]
+mod knob_tests {
+    use super::*;
+    use crate::test_support::{
+        attempts_against_a_failing_endpoint_at, mock_capture, send_with_max_tokens, server,
+    };
+    use crate::window::effective_capabilities;
+    use serde_json::json;
+
+    const UNSEEDED: &str = "gemini-unseeded-test-model";
+
+    fn path_for(model: &str) -> String {
+        format!("/models/{model}:generateContent")
+    }
+
+    fn config(base_url: &str, model: &str) -> GeminiConfig {
+        GeminiConfig::new(
+            "test-key".to_string(),
+            base_url.to_string(),
+            model.to_string(),
+        )
+    }
+
+    fn window_override(window: u32) -> ModelOverride {
+        ModelOverride {
+            context_window: Some(window),
+            ..ModelOverride::default()
+        }
+    }
+
+    fn response() -> serde_json::Value {
+        json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "ok"}]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 1,
+                "candidatesTokenCount": 1,
+                "totalTokenCount": 2
+            }
+        })
+    }
+
+    fn error_of(config: GeminiConfig) -> String {
+        match GeminiAdapter::new(config) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("construction must fail"),
+        }
+    }
+
+    fn sent(body: &serde_json::Value) -> Option<u64> {
+        body["generationConfig"]
+            .get("maxOutputTokens")
+            .and_then(|v| v.as_u64())
+    }
+
+    #[tokio::test]
+    async fn gemini_max_tokens_default_reaches_the_wire() {
+        let mut server = server().await;
+        let captured = mock_capture(&mut server, &path_for(UNSEEDED), response()).await;
+        let url = server.url();
+
+        let adapter = GeminiAdapter::new(config(&url, UNSEEDED).with_max_tokens(2048)).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(sent(&body), Some(2048), "{body}");
+        // A request's own value wins.
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(sent(&body), Some(512), "{body}");
+
+        // No configured default: no `maxOutputTokens`, as before PARITY-03.
+        let plain = GeminiAdapter::new(config(&url, UNSEEDED)).unwrap();
+        let body = send_with_max_tokens(&plain, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(sent(&body), None, "{body}");
+    }
+
+    #[tokio::test]
+    async fn gemini_max_tokens_default_is_checked_against_the_profile() {
+        let mut server = server().await;
+        let model = "gemini-3.5-flash-lite";
+        let captured = mock_capture(&mut server, &path_for(model), response()).await;
+        // The model is seeded with a 65,536-token maximum output.
+        let adapter =
+            GeminiAdapter::new(config(&server.url(), model).with_max_tokens(100_000)).unwrap();
+        let Err(LlmError::InvalidPrompt(message)) =
+            send_with_max_tokens(&adapter, &captured, model, None).await
+        else {
+            panic!("a default above the model's maximum output must be InvalidPrompt");
+        };
+        for needle in ["max_tokens", "100000", "65536"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+        assert!(captured.lock().unwrap().is_none(), "nothing was sent");
+    }
+
+    #[tokio::test]
+    async fn gemini_max_retries_is_read_by_the_adapter() {
+        // This adapter's loop counts total attempts (its long-standing convention): the budget
+        // `n` sends up to `n` requests on a retryable 5xx.
+        for (budget, attempts) in [(1_u32, 1_usize), (2, 2)] {
+            let server = server().await;
+            let adapter =
+                GeminiAdapter::new(config(&server.url(), UNSEEDED).with_max_retries(budget))
+                    .unwrap();
+            attempts_against_a_failing_endpoint_at(
+                server,
+                &path_for(UNSEEDED),
+                &adapter,
+                UNSEEDED,
+                attempts,
+            )
+            .await;
+        }
+    }
+
+    #[test]
+    fn gemini_context_window_override_is_declared() {
+        let adapter = GeminiAdapter::new(
+            config("https://example.invalid/v1", UNSEEDED).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(500_000)
+        );
+    }
+
+    #[test]
+    fn context_window_override_beats_a_seeded_window_on_gemini() {
+        let model = "gemini-3.5-flash-lite";
+        let base = || config("https://example.invalid/v1", model);
+        let seeded = GeminiAdapter::new(base()).unwrap();
+        assert_eq!(
+            seeded.model_profile(model).unwrap().context_window,
+            Some(1_048_576)
+        );
+
+        // The operator's adapter-wide statement beats the compiled seeded fact ...
+        let adapter = GeminiAdapter::new(base().with_context_window(500_000)).unwrap();
+        assert_eq!(
+            adapter.model_profile(model).unwrap().context_window,
+            Some(500_000)
+        );
+        assert_eq!(
+            effective_capabilities(&adapter, model).max_context_tokens,
+            Some(500_000)
+        );
+
+        // ... and a per-model override beats both.
+        let adapter = GeminiAdapter::new(base().with_context_window(500_000).with_model_overrides(
+            BTreeMap::from([(model.to_string(), window_override(900_000))]),
+        ))
+        .unwrap();
+        assert_eq!(
+            adapter.model_profile(model).unwrap().context_window,
+            Some(900_000)
+        );
+
+        // A window below the seeded maximum output is refused, never clamped.
+        let message = error_of(base().with_context_window(40_000));
+        for needle in ["gemini", model, "40000", "65536"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_invalid_override_fails_construction_naming_provider_and_model() {
+        let with_override = |over: ModelOverride| {
+            config("https://example.invalid/v1", UNSEEDED)
+                .with_model_overrides(BTreeMap::from([(UNSEEDED.to_string(), over)]))
+        };
+        let adapter = GeminiAdapter::new(with_override(window_override(900_000))).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+        for over in [
+            window_override(0),
+            ModelOverride {
+                context_window: Some(1_000),
+                max_output_tokens: Some(2_000_000),
+                ..ModelOverride::default()
+            },
+        ] {
+            let message = error_of(with_override(over));
+            assert!(
+                message.contains("gemini") && message.contains(UNSEEDED),
+                "the error must name the provider and the model: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_config_defaults_a_reasoning_model_to_300s() {
+        // Every seeded Gemini model is a reasoning model; an unknown one keeps 60 s.
+        for (model, expected) in [
+            ("gemini-3.5-flash-lite", 300),
+            ("gemini-3.6-flash", 300),
+            (GEMINI_DEFAULT_MODEL, 300),
+            (UNSEEDED, 60),
+        ] {
+            assert_eq!(
+                config("https://example.invalid/v1", model).timeout_seconds,
+                expected,
+                "new({model})"
+            );
+            let parts = GeminiConfig::from_parts(
+                Some("k".to_string()),
+                None,
+                Some(model.to_string()),
+                None,
+            )
+            .unwrap();
+            assert_eq!(parts.timeout_seconds, expected, "from_parts({model})");
+        }
+        // An explicit environment value always wins.
+        for explicit in ["30", "60", "900"] {
+            let parts = GeminiConfig::from_parts(
+                Some("k".to_string()),
+                None,
+                Some("gemini-3.5-flash-lite".to_string()),
+                Some(explicit.to_string()),
+            )
+            .unwrap();
+            assert_eq!(parts.timeout_seconds.to_string(), explicit);
+        }
+    }
+
+    #[test]
+    fn gemini_config_debug_redacts_the_api_key() {
+        let config = config("https://api.example.invalid/v1", "gemini-3.5-flash-lite");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+            "max_tokens",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
     }
 }

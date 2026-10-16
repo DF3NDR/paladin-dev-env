@@ -49,10 +49,14 @@ use crate::openai_compatible::adapter::{
 };
 
 #[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "deepseek",
     feature = "kimi",
     feature = "qwen",
     feature = "grok",
     feature = "ollama",
+    feature = "gemini",
     feature = "openai-compatible"
 ))]
 use std::collections::BTreeMap;
@@ -83,6 +87,9 @@ impl From<&LlmProviderConfig> for OpenAIConfig {
             organization: None,
             timeout_seconds: cfg.timeout_seconds.unwrap_or(300),
             max_retries: cfg.max_retries.unwrap_or(3),
+            max_tokens: Some(4096),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 }
@@ -105,6 +112,11 @@ impl From<&LlmProviderConfig> for AnthropicConfig {
                 .unwrap_or_else(|| "claude-3-5-sonnet-20241022".to_string()),
             max_tokens: 4096,
             timeout_seconds: cfg.timeout_seconds.unwrap_or(300),
+            max_retries: cfg
+                .max_retries
+                .unwrap_or(crate::registry::DEFAULT_MAX_RETRIES),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 }
@@ -126,6 +138,12 @@ impl From<&LlmProviderConfig> for DeepSeekConfig {
                 .clone()
                 .unwrap_or_else(|| "deepseek-chat".to_string()),
             timeout_seconds: cfg.timeout_seconds.unwrap_or(60),
+            max_tokens: None,
+            max_retries: cfg
+                .max_retries
+                .unwrap_or(crate::registry::DEFAULT_MAX_RETRIES),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 }
@@ -232,6 +250,12 @@ impl From<&LlmProviderConfig> for GeminiConfig {
                 .clone()
                 .unwrap_or_else(|| crate::gemini::adapter::GEMINI_DEFAULT_MODEL.to_string()),
             timeout_seconds: cfg.timeout_seconds.unwrap_or(60),
+            max_tokens: None,
+            max_retries: cfg
+                .max_retries
+                .unwrap_or(crate::registry::DEFAULT_MAX_RETRIES),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 }

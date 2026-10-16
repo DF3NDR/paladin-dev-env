@@ -55,8 +55,6 @@ pub const UNPROFILED_MODEL_METADATA_KEY: &str = "paladin.unprofiled_model";
 
 /// How many times an adapter retries a retryable error after the first attempt when its config
 /// does not say otherwise: the value every adapter hard-coded before PARITY-03 made it a knob.
-// TEMP(50-08 task 2): the default-feature adapter (OpenAI) consumes this in task 3.
-#[allow(dead_code)]
 pub(crate) const DEFAULT_MAX_RETRIES: u32 = 3;
 
 /// The request timeout, in seconds, a direct `*Config` constructor gives a reasoning model when
@@ -200,10 +198,14 @@ macro_rules! config_knob_builders {
         }
     };
     (@common $config:ident) => {
-        /// Set how many times a retryable error is retried after the first attempt.
+        /// Set the retry budget for a retryable error (network failure, timeout, 5xx).
         ///
-        /// `0` sends the request once. A rate-limit answer (429) is never retried here: the
-        /// Cadence decorator owns waiting, and a permanent error is never retried.
+        /// The compat presets, OpenAI and DeepSeek retry up to this many times after the first
+        /// attempt (`0` sends once). Anthropic and Gemini keep their long-standing loop, which
+        /// counts total attempts (`0` and `1` both send once, `3` sends up to three); the
+        /// counter conventions are not unified yet. A rate-limit answer (429) is never retried
+        /// here, because the Cadence decorator owns waiting, and a permanent error is never
+        /// retried.
         #[must_use]
         pub fn with_max_retries(mut self, max_retries: u32) -> Self {
             self.max_retries = max_retries;
@@ -410,8 +412,6 @@ fn validate_stop(stop: StopSupport) -> Result<(), String> {
 }
 
 /// The sanity rules applied to a fully merged profile.
-// TEMP(50-08 task 2): consumed through `with_overrides` by OpenAI in task 3.
-#[allow(dead_code)]
 fn validate_profile(profile: &ModelProfile) -> Result<(), String> {
     validate_limits(profile.context_window, profile.max_output_tokens)?;
     validate_support("temperature", profile.temperature)?;
@@ -512,8 +512,6 @@ impl ModelRegistry {
     ///
     /// A message naming the provider, the model and both numbers when the window is zero or
     /// below a model's maximum output. Never clamps.
-    // TEMP(50-08 task 2): the default-feature adapter (OpenAI) consumes this in task 3.
-    #[allow(dead_code)]
     pub(crate) fn with_context_window(mut self, window: Option<u32>) -> Result<Self, String> {
         self.window = window;
         let Some(window) = window else {
@@ -562,8 +560,6 @@ impl ModelRegistry {
     ///
     /// A message naming the provider, the model and the problem: an empty model id, an invalid
     /// override, or an override that contradicts the profile it is laid over.
-    // TEMP(50-08 task 2): the default-feature adapter (OpenAI) consumes this in task 3.
-    #[allow(dead_code)]
     pub(crate) fn with_overrides(
         mut self,
         overrides: BTreeMap<String, ModelOverride>,

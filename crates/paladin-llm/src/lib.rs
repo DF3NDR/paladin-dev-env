@@ -145,6 +145,10 @@ mod turn;
 /// `HistoryTrimmer` need it unconditionally.
 pub mod window;
 
+// Mock-endpoint plumbing shared by every adapter's wire tests; not gated on any adapter feature.
+#[cfg(test)]
+mod test_support;
+
 #[cfg(any(
     feature = "kimi",
     feature = "qwen",

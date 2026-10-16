@@ -11,7 +11,7 @@ use reqwest::{
     header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::time::{Duration, SystemTime};
 use uuid::Uuid;
@@ -25,7 +25,11 @@ use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
-use crate::registry::{ModelRegistry, seeded, seeded_window};
+use crate::redaction::RedactedKey;
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, seeded, seeded_window,
+};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 // WR-01 (`25-REVIEW.md`): this adapter previously carried its own
 // byte-for-byte copy of the crate's shared credential-redaction routine
@@ -68,7 +72,12 @@ fn snapshot_rate_limit_hints(
 }
 
 /// Configuration for DeepSeek LLM adapter.
-#[derive(Debug, Clone)]
+///
+/// Marked `#[non_exhaustive]` (owner decision, Phase 50 plan 50-08, option-a): build one with
+/// [`DeepSeekConfig::new`] or [`DeepSeekConfig::from_env`] and set fields or call the `with_*`
+/// builders, so a later field is not another break for callers.
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct DeepSeekConfig {
     /// API key for DeepSeek authentication.
     pub api_key: String,
@@ -77,9 +86,52 @@ pub struct DeepSeekConfig {
     /// Default model to use; [`DEEPSEEK_DEFAULT_MODEL`] when constructed from the environment
     /// with `DEEPSEEK_MODEL` unset.
     pub model: String,
-    /// Request timeout in seconds.
+    /// Request timeout in seconds. [`DeepSeekConfig::new`] and [`DeepSeekConfig::from_env`]
+    /// default it to 300 for a seeded reasoning model and to 60 otherwise (D-13); an explicit
+    /// `DEEPSEEK_TIMEOUT_SECONDS` or field assignment always wins. A model marked `reasoning`
+    /// only through [`model_overrides`](Self::model_overrides) does not change this default
+    /// here: set this field in the same place.
     pub timeout_seconds: u64,
+    /// Default output budget (`max_tokens`) sent when a request sets none. `None` (the default)
+    /// sends no `max_tokens`. The value is checked against the model's profiled maximum output
+    /// exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the request is
+    /// refused before any HTTP call.
+    pub max_tokens: Option<u32>,
+    /// How many times a retryable error is retried after the first attempt. Defaults to `3`
+    /// (up to four calls); `0` sends each request once. A 429 is never retried here (the Cadence
+    /// decorator waits) and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model. `None`
+    /// (the default) keeps the compiled windows. When set it replaces the adapter's declared
+    /// window, the fallback profile's window and every seeded model's window; a
+    /// `context_window` in [`model_overrides`](Self::model_overrides) still wins for that model.
+    /// Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
 }
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for DeepSeekConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeepSeekConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_tokens", &self.max_tokens)
+            .field("max_retries", &self.max_retries)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .finish()
+    }
+}
+
+config_knob_builders!(DeepSeekConfig);
 
 impl DeepSeekConfig {
     /// Load configuration from environment variables.
@@ -88,7 +140,8 @@ impl DeepSeekConfig {
     /// - `DEEPSEEK_API_KEY` (required): DeepSeek API key
     /// - `DEEPSEEK_BASE_URL` (optional): API base URL
     /// - `DEEPSEEK_MODEL` (optional): Default model
-    /// - `DEEPSEEK_TIMEOUT_SECONDS` (optional): Request timeout
+    /// - `DEEPSEEK_TIMEOUT_SECONDS` (optional): Request timeout, 300 for a seeded reasoning
+    ///   model and 60 otherwise
     ///
     /// # Errors
     /// Returns error if required environment variables are missing or invalid.
@@ -102,16 +155,22 @@ impl DeepSeekConfig {
         let model =
             env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| DEEPSEEK_DEFAULT_MODEL.to_string());
 
-        let timeout_seconds = env::var("DEEPSEEK_TIMEOUT_SECONDS")
-            .unwrap_or_else(|_| "60".to_string())
-            .parse()
-            .map_err(|_| "Invalid DEEPSEEK_TIMEOUT_SECONDS value")?;
+        let timeout_seconds = match env::var("DEEPSEEK_TIMEOUT_SECONDS") {
+            Ok(value) => value
+                .parse()
+                .map_err(|_| "Invalid DEEPSEEK_TIMEOUT_SECONDS value")?,
+            Err(_) => default_timeout_seconds(DEEPSEEK_PROVIDER, &model, 60),
+        };
 
         let config = Self {
             api_key,
             base_url,
             model,
             timeout_seconds,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         };
 
         config.validate()?;
@@ -120,11 +179,16 @@ impl DeepSeekConfig {
 
     /// Create configuration with custom values.
     pub fn new(api_key: String, base_url: String, model: String) -> Self {
+        let timeout_seconds = default_timeout_seconds(DEEPSEEK_PROVIDER, &model, 60);
         Self {
             api_key,
             base_url,
             model,
-            timeout_seconds: 60,
+            timeout_seconds,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 
@@ -413,7 +477,7 @@ pub struct DeepSeekAdapter {
 
 /// What this adapter's request builder carries today, stated once so the adapter-wide fallback
 /// profile and [`LlmPort::get_capabilities`] cannot drift apart.
-fn declared_capabilities() -> ProviderCapabilities {
+fn declared_capabilities(context_window: Option<u32>) -> ProviderCapabilities {
     ProviderCapabilities {
         supports_streaming: true,
         supports_tool_calling: false,
@@ -422,7 +486,9 @@ fn declared_capabilities() -> ProviderCapabilities {
         supports_embeddings: false,
         // The default model's seeded window (`seeded::DEEPSEEK`, `deepseek-flash`, verified
         // 2026-10-15: listing `context_window`), replacing the unevidenced 64,000.
-        max_context_tokens: seeded_window(seeded::DEEPSEEK, DEEPSEEK_DEFAULT_MODEL),
+        // The operator's adapter-wide window (PARITY-03) replaces it when set.
+        max_context_tokens: context_window
+            .or(seeded_window(seeded::DEEPSEEK, DEEPSEEK_DEFAULT_MODEL)),
         supports_system_messages: true,
         temperature_range: Some((0.0, 2.0)),
     }
@@ -437,8 +503,8 @@ fn declared_capabilities() -> ProviderCapabilities {
 ///   per-model seeded entries of plan 50-06 may state one).
 /// - `json_object` true and `json_schema` false: every `ResponseFormat` compiles down to
 ///   DeepSeek's plain JSON-object form today, so a schema request is a recorded downgrade.
-fn fallback_profile() -> ModelProfile {
-    let caps = declared_capabilities();
+fn fallback_profile(context_window: Option<u32>) -> ModelProfile {
+    let caps = declared_capabilities(context_window);
     let (low, high) = caps.temperature_range.unwrap_or((0.0, 1.0));
     let mut profile = ModelProfile::new()
         .with_temperature(ParamSupport::Range(low, high))
@@ -490,14 +556,23 @@ impl DeepSeekAdapter {
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let model_registry = ModelRegistry::new(
+            DEEPSEEK_PROVIDER,
+            seeded::DEEPSEEK,
+            fallback_profile(config.context_window),
+        )
+        .with_context_window(config.context_window)
+        .and_then(|registry| registry.with_overrides(config.model_overrides.clone()))
+        .map_err(|e| {
+            LlmError::AuthenticationError(format!("Invalid DeepSeek configuration: {e}"))
+        })?;
+
         Ok(Self {
             client,
             config,
-            model_registry: ModelRegistry::new(
-                DEEPSEEK_PROVIDER,
-                seeded::DEEPSEEK,
-                fallback_profile(),
-            ),
+            model_registry,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
         })
@@ -521,12 +596,10 @@ impl DeepSeekAdapter {
         let params = &request.prompt.entity.data.parameters;
         let profile = self.model_registry.profile(&request.model);
 
-        sampling::check_max_tokens(
-            DEEPSEEK_PROVIDER,
-            &request.model,
-            &profile,
-            params.max_tokens,
-        )?;
+        // The caller's value, else the configured default; either is held to the model's
+        // maximum output before anything is sent.
+        let max_tokens = params.max_tokens.or(self.config.max_tokens);
+        sampling::check_max_tokens(DEEPSEEK_PROVIDER, &request.model, &profile, max_tokens)?;
 
         let applied = sampling::apply(&profile, params);
         let params_omitted = self
@@ -555,7 +628,7 @@ impl DeepSeekAdapter {
             model: request.model.clone(),
             messages,
             temperature: applied.temperature,
-            max_tokens: params.max_tokens,
+            max_tokens,
             top_p: applied.top_p,
             frequency_penalty: applied.frequency_penalty,
             presence_penalty: applied.presence_penalty,
@@ -900,7 +973,9 @@ impl LlmPort for DeepSeekAdapter {
             })
         };
 
-        let mut response = self.call_api_with_retry(operation, 3).await?;
+        let mut response = self
+            .call_api_with_retry(operation, self.config.max_retries)
+            .await?;
         // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
         response.metadata = notes.into_metadata();
         Ok(response)
@@ -1044,7 +1119,7 @@ impl LlmPort for DeepSeekAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        declared_capabilities()
+        declared_capabilities(self.config.context_window)
     }
 
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
@@ -2281,9 +2356,10 @@ mod tests {
                 max_output_tokens: Some(1000),
                 ..ModelOverride::default()
             };
-            adapter.model_registry = ModelRegistry::new(DEEPSEEK_PROVIDER, &[], fallback_profile())
-                .with_overrides(BTreeMap::from([("deepseek-chat".to_string(), over)]))
-                .expect("a plain max_output_tokens override is valid");
+            adapter.model_registry =
+                ModelRegistry::new(DEEPSEEK_PROVIDER, &[], fallback_profile(None))
+                    .with_overrides(BTreeMap::from([("deepseek-chat".to_string(), over)]))
+                    .expect("a plain max_output_tokens override is valid");
 
             let mut parameters = unset();
             parameters.max_tokens = Some(4000);
@@ -2355,5 +2431,229 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(DeepSeekFixture);
+    }
+}
+
+/// The PARITY-03 knobs on `DeepSeekConfig` (plan 50-08, D-12): each one is read by the adapter.
+#[cfg(test)]
+mod knob_tests {
+    use super::*;
+    use crate::test_support::{
+        attempts_against_a_failing_endpoint, mock_completion, send_with_max_tokens, server,
+    };
+    use crate::window::effective_capabilities;
+
+    const UNSEEDED: &str = "deepseek-unseeded-test-model";
+
+    fn config(base_url: &str, model: &str) -> DeepSeekConfig {
+        DeepSeekConfig::new(
+            "test-key".to_string(),
+            base_url.to_string(),
+            model.to_string(),
+        )
+    }
+
+    fn window_override(window: u32) -> ModelOverride {
+        ModelOverride {
+            context_window: Some(window),
+            ..ModelOverride::default()
+        }
+    }
+
+    fn error_of(config: DeepSeekConfig) -> String {
+        match DeepSeekAdapter::new(config) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("construction must fail"),
+        }
+    }
+
+    #[tokio::test]
+    async fn deepseek_max_tokens_default_reaches_the_wire() {
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let url = server.url();
+
+        let adapter = DeepSeekAdapter::new(config(&url, UNSEEDED).with_max_tokens(2048)).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 2048, "{body}");
+        // A request's own value wins.
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 512, "{body}");
+
+        // No configured default: no `max_tokens` key, as before PARITY-03.
+        let plain = DeepSeekAdapter::new(config(&url, UNSEEDED)).unwrap();
+        let body = send_with_max_tokens(&plain, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert!(body.get("max_tokens").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn deepseek_max_tokens_default_is_checked_against_the_profile() {
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        // `deepseek-flash` is seeded with a 393,216-token maximum output.
+        let adapter =
+            DeepSeekAdapter::new(config(&server.url(), "deepseek-flash").with_max_tokens(500_000))
+                .unwrap();
+        let Err(LlmError::InvalidPrompt(message)) =
+            send_with_max_tokens(&adapter, &captured, "deepseek-flash", None).await
+        else {
+            panic!("a default above the model's maximum output must be InvalidPrompt");
+        };
+        for needle in ["max_tokens", "500000", "393216"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+        assert!(captured.lock().unwrap().is_none(), "nothing was sent");
+    }
+
+    #[tokio::test]
+    async fn deepseek_max_retries_is_read_by_the_adapter() {
+        // The loop retries up to `max_retries` times after the first attempt.
+        for retries in [0_u32, 1] {
+            let server = server().await;
+            let adapter =
+                DeepSeekAdapter::new(config(&server.url(), UNSEEDED).with_max_retries(retries))
+                    .unwrap();
+            attempts_against_a_failing_endpoint(server, &adapter, UNSEEDED, retries as usize + 1)
+                .await;
+        }
+    }
+
+    #[test]
+    fn deepseek_context_window_override_is_declared() {
+        let adapter = DeepSeekAdapter::new(
+            config("https://example.invalid/v1", UNSEEDED).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(500_000)
+        );
+    }
+
+    #[test]
+    fn context_window_override_beats_a_seeded_window_on_deepseek() {
+        let base = || config("https://example.invalid/v1", "deepseek-flash");
+        let seeded = DeepSeekAdapter::new(base()).unwrap();
+        assert_eq!(
+            seeded
+                .model_profile("deepseek-flash")
+                .unwrap()
+                .context_window,
+            Some(1_048_576)
+        );
+
+        // The operator's adapter-wide statement beats the compiled seeded fact ...
+        let adapter = DeepSeekAdapter::new(base().with_context_window(500_000)).unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("deepseek-flash")
+                .unwrap()
+                .context_window,
+            Some(500_000)
+        );
+        assert_eq!(
+            effective_capabilities(&adapter, "deepseek-flash").max_context_tokens,
+            Some(500_000)
+        );
+
+        // ... and a per-model override beats both.
+        let adapter =
+            DeepSeekAdapter::new(base().with_context_window(500_000).with_model_overrides(
+                BTreeMap::from([("deepseek-flash".to_string(), window_override(900_000))]),
+            ))
+            .unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("deepseek-flash")
+                .unwrap()
+                .context_window,
+            Some(900_000)
+        );
+
+        // A window below the seeded maximum output is refused, never clamped.
+        let message = error_of(base().with_context_window(100_000));
+        for needle in ["deepseek", "deepseek-flash", "100000", "393216"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn deepseek_invalid_override_fails_construction_naming_provider_and_model() {
+        let with_override = |over: ModelOverride| {
+            config("https://example.invalid/v1", UNSEEDED)
+                .with_model_overrides(BTreeMap::from([(UNSEEDED.to_string(), over)]))
+        };
+        let adapter = DeepSeekAdapter::new(with_override(window_override(900_000))).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+        for over in [
+            window_override(0),
+            ModelOverride {
+                context_window: Some(1_000),
+                max_output_tokens: Some(2_000_000),
+                ..ModelOverride::default()
+            },
+        ] {
+            let message = error_of(with_override(over));
+            assert!(
+                message.contains("deepseek") && message.contains(UNSEEDED),
+                "the error must name the provider and the model: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn deepseek_config_defaults_a_reasoning_model_to_300s() {
+        // (model, expected default timeout): `deepseek-flash` is a seeded reasoning model.
+        for (model, expected) in [
+            ("deepseek-flash", 300),
+            ("deepseek-chat", 60),
+            (UNSEEDED, 60),
+        ] {
+            assert_eq!(
+                config("https://example.invalid/v1", model).timeout_seconds,
+                expected,
+                "new({model})"
+            );
+        }
+        assert_eq!(
+            config("https://example.invalid/v1", DEEPSEEK_DEFAULT_MODEL).timeout_seconds,
+            300,
+            "the default model is a seeded reasoning model"
+        );
+        let mut explicit = config("https://example.invalid/v1", "deepseek-flash");
+        explicit.timeout_seconds = 45;
+        assert_eq!(explicit.timeout_seconds, 45);
+    }
+
+    #[test]
+    fn deepseek_config_debug_redacts_the_api_key() {
+        let config = config("https://api.example.invalid/v1", "deepseek-flash");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+            "max_tokens",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
     }
 }

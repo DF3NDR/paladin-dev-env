@@ -265,8 +265,6 @@ pub fn diagnostic_excerpt(body: &str, api_key: &str) -> String {
     feature = "gemini",
     feature = "openai-compatible"
 ))]
-// TEMP(50-08 task 2): the default-feature adapter (OpenAI) consumes this in task 3.
-#[allow(dead_code)]
 pub(crate) struct RedactedKey<'a>(pub(crate) &'a str);
 
 #[cfg(any(

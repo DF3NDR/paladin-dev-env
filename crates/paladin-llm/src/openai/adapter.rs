@@ -15,6 +15,7 @@ use paladin_ports::output::llm_port::{
 use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::env;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
@@ -22,7 +23,10 @@ use uuid::Uuid;
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
-use crate::registry::{ModelRegistry, seeded};
+use crate::redaction::RedactedKey;
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders, seeded,
+};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
@@ -30,11 +34,11 @@ use paladin_ports::output::rate_limit_hints::RateLimitHints;
 /// and stamps on every [`LlmError::ProviderError`] it emits.
 const OPENAI_PROVIDER: &str = "openai";
 
-/// The `max_tokens` this adapter sends when the request sets none: a compiled default, not a
-/// fabricated sampling value (ADR-0061 permits a documented configuration default). It is the
-/// cap OpenAI users have always had; plan 50-08 turns it into the documented `OpenAIConfig`
-/// `max_tokens` knob (D-13). The effective value is checked against the model's profiled
-/// maximum output like any other.
+/// The `max_tokens` [`OpenAIConfig::new`] and [`OpenAIConfig::from_env`] configure: a compiled
+/// default, not a fabricated sampling value (ADR-0061 permits a documented configuration
+/// default). It is the cap OpenAI users have always had, now the documented
+/// [`OpenAIConfig::max_tokens`] knob (D-13). The effective value is checked against the model's
+/// profiled maximum output like any other.
 const OPENAI_DEFAULT_MAX_TOKENS: u32 = 4096;
 
 /// The most stop sequences the OpenAI chat-completions API accepts (`stop` is an array with
@@ -84,7 +88,12 @@ fn snapshot_rate_limit_hints(
 }
 
 /// Configuration for the OpenAI adapter.
-#[derive(Debug, Clone)]
+///
+/// Marked `#[non_exhaustive]` (owner decision, Phase 50 plan 50-08, option-a): build one with
+/// [`OpenAIConfig::new`] or [`OpenAIConfig::from_env`] and set fields or call the `with_*`
+/// builders, so a later field is not another break for callers.
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct OpenAIConfig {
     /// OpenAI API key.
     pub api_key: String,
@@ -96,7 +105,43 @@ pub struct OpenAIConfig {
     pub timeout_seconds: u64,
     /// Maximum retry attempts (default: 3).
     pub max_retries: u32,
+    /// Default output budget (`max_tokens`) sent when a request sets none. [`OpenAIConfig::new`]
+    /// and [`OpenAIConfig::from_env`] set `Some(4096)`, the cap this adapter has always sent;
+    /// `None` sends no `max_tokens` key. The value is checked against the model's profiled
+    /// maximum output exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the
+    /// request is refused before any HTTP call.
+    pub max_tokens: Option<u32>,
+    /// Adapter-wide context window in tokens, the operator's statement for every model. `None`
+    /// (the default) keeps the compiled windows. When set it replaces the adapter's declared
+    /// window, the fallback profile's window and every seeded model's window; a
+    /// `context_window` in [`model_overrides`](Self::model_overrides) still wins for that model.
+    /// Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
 }
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for OpenAIConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAIConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("organization", &self.organization)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_retries", &self.max_retries)
+            .field("max_tokens", &self.max_tokens)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .finish()
+    }
+}
+
+config_knob_builders!(OpenAIConfig);
 
 impl OpenAIConfig {
     /// Load configuration from environment variables.
@@ -134,6 +179,9 @@ impl OpenAIConfig {
             organization,
             timeout_seconds,
             max_retries,
+            max_tokens: Some(OPENAI_DEFAULT_MAX_TOKENS),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         })
     }
 
@@ -144,7 +192,10 @@ impl OpenAIConfig {
             base_url: "https://api.openai.com/v1".to_string(),
             organization: None,
             timeout_seconds: 300,
-            max_retries: 3,
+            max_retries: DEFAULT_MAX_RETRIES,
+            max_tokens: Some(OPENAI_DEFAULT_MAX_TOKENS),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 
@@ -351,7 +402,7 @@ pub struct OpenAIAdapter {
 
 /// What this adapter's request builder carries today, stated once so [`OpenAIAdapter::new`]'s
 /// adapter-wide fallback profile and [`LlmPort::get_capabilities`] cannot drift apart.
-fn declared_capabilities() -> ProviderCapabilities {
+fn declared_capabilities(context_window: Option<u32>) -> ProviderCapabilities {
     ProviderCapabilities {
         supports_streaming: true,
         // `LlmRequest` carries no field through which a tool definition could
@@ -364,7 +415,8 @@ fn declared_capabilities() -> ProviderCapabilities {
         supports_tool_calling: false,
         supports_function_calling: false,
         supports_vision: true,
-        max_context_tokens: Some(128000),
+        // The operator's adapter-wide window (PARITY-03) replaces the compiled 128,000.
+        max_context_tokens: context_window.or(Some(128000)),
         supports_embeddings: true,
         supports_system_messages: true,
         temperature_range: Some((0.0, 1.0)),
@@ -378,8 +430,8 @@ fn declared_capabilities() -> ProviderCapabilities {
 /// - penalties: `NotSent` -- [`OpenAIRequest`] has no penalty field.
 /// - `stop`: `Supported { max: Some(4) }` (the openai-openapi `maxItems: 4`).
 /// - `json_object` and `json_schema`: both true -- this adapter sends both formats.
-fn fallback_profile() -> ModelProfile {
-    let caps = declared_capabilities();
+fn fallback_profile(context_window: Option<u32>) -> ModelProfile {
+    let caps = declared_capabilities(context_window);
     let (low, high) = caps.temperature_range.unwrap_or((0.0, 1.0));
     let mut profile = ModelProfile::new()
         .with_temperature(ParamSupport::Range(low, high))
@@ -414,12 +466,22 @@ impl OpenAIAdapter {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let model_registry = ModelRegistry::new(
+            OPENAI_PROVIDER,
+            seeded::OPENAI,
+            fallback_profile(config.context_window),
+        )
+        .with_context_window(config.context_window)
+        .and_then(|registry| registry.with_overrides(config.model_overrides.clone()))
+        .map_err(|e| format!("Invalid OpenAI configuration: {e}"))?;
         Ok(Self {
             config,
             client,
             // The dated OpenAI table (`seeded::OPENAI`, probed 2026-10-15): the two measured
             // models resolve to their own entry, every other model to the adapter-wide fallback.
-            model_registry: ModelRegistry::new(OPENAI_PROVIDER, seeded::OPENAI, fallback_profile()),
+            model_registry,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
         })
@@ -433,8 +495,8 @@ impl OpenAIAdapter {
     /// **and** the profile admits them, so an unset parameter is absent from the body -- this
     /// adapter no longer invents a `temperature` of 0.7 or a `top_p` of 1.0 -- and a set but
     /// inadmissible one is omitted and recorded, never clamped or swapped. `max_tokens` keeps
-    /// its compiled default of [`OPENAI_DEFAULT_MAX_TOKENS`] (a documented cap, made a
-    /// configuration knob by plan 50-08) and the effective value is checked against the
+    /// the configured [`OpenAIConfig::max_tokens`] (4096 from `new`/`from_env`, the cap this
+    /// adapter has always sent) and the effective value is checked against the
     /// profile's maximum output before anything is sent. The `response_format` follows the
     /// profile through [`sampling::apply_response_format`].
     ///
@@ -449,8 +511,10 @@ impl OpenAIAdapter {
         let params = &request.prompt.entity.data.parameters;
         let profile = self.model_registry.profile(&request.model);
 
-        let max_tokens = params.max_tokens.unwrap_or(OPENAI_DEFAULT_MAX_TOKENS);
-        sampling::check_max_tokens(OPENAI_PROVIDER, &request.model, &profile, Some(max_tokens))?;
+        // The caller's value, else the configured default (`Some(4096)` from `new`/`from_env`);
+        // `None` sends no `max_tokens` key. Either is held to the model's maximum output.
+        let max_tokens = params.max_tokens.or(self.config.max_tokens);
+        sampling::check_max_tokens(OPENAI_PROVIDER, &request.model, &profile, max_tokens)?;
 
         let applied = sampling::apply(&profile, params);
         let params_omitted = self
@@ -472,7 +536,7 @@ impl OpenAIAdapter {
             model: request.model.clone(),
             messages,
             temperature: applied.temperature,
-            max_tokens: Some(max_tokens),
+            max_tokens,
             top_p: applied.top_p,
             stop: applied.stop,
             stream,
@@ -989,7 +1053,7 @@ impl LlmPort for OpenAIAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        declared_capabilities()
+        declared_capabilities(self.config.context_window)
     }
 
     fn model_profile(&self, model: &str) -> Option<ModelProfile> {
@@ -1021,6 +1085,9 @@ mod tests {
             organization: None,
             timeout_seconds: 300,
             max_retries: 3,
+            max_tokens: Some(4096),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         };
         assert!(invalid_config.validate().is_err());
     }
@@ -1094,6 +1161,9 @@ mod tests {
             organization: None,
             timeout_seconds: 300,
             max_retries: 3,
+            max_tokens: Some(4096),
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         };
         assert!(config.validate().is_err());
     }
@@ -1140,6 +1210,9 @@ mod tests {
                 organization: None,
                 timeout_seconds: 5,
                 max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
         }
@@ -1233,6 +1306,9 @@ mod tests {
                 organization: None,
                 timeout_seconds: 5,
                 max_retries: 3,
+                max_tokens: Some(4096),
+                context_window: None,
+                model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter");
 
@@ -1336,6 +1412,9 @@ mod tests {
                 organization: None,
                 timeout_seconds: 5,
                 max_retries: 3,
+                max_tokens: Some(4096),
+                context_window: None,
+                model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
         }
@@ -1625,6 +1704,9 @@ mod tests {
                 organization: None,
                 timeout_seconds: 5,
                 max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
         }
@@ -1763,6 +1845,9 @@ mod tests {
                 organization: None,
                 timeout_seconds: 5,
                 max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
         }
@@ -1863,6 +1948,9 @@ mod tests {
                 organization: None,
                 timeout_seconds: 5,
                 max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
         }
@@ -2091,6 +2179,9 @@ mod tests {
                 organization: None,
                 timeout_seconds: 5,
                 max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
         }
@@ -2408,9 +2499,10 @@ mod tests {
                 max_output_tokens: Some(1000),
                 ..ModelOverride::default()
             };
-            adapter.model_registry = ModelRegistry::new(OPENAI_PROVIDER, &[], fallback_profile())
-                .with_overrides(BTreeMap::from([("gpt-4o".to_string(), over)]))
-                .expect("a plain max_output_tokens override is valid");
+            adapter.model_registry =
+                ModelRegistry::new(OPENAI_PROVIDER, &[], fallback_profile(None))
+                    .with_overrides(BTreeMap::from([("gpt-4o".to_string(), over)]))
+                    .expect("a plain max_output_tokens override is valid");
 
             // No max_tokens on the request: the 4096 default is what would be sent, and the
             // profile says the model produces at most 1000.
@@ -2459,6 +2551,9 @@ mod tests {
                         organization: None,
                         timeout_seconds: 5,
                         max_retries: 0,
+                        max_tokens: Some(4096),
+                        context_window: None,
+                        model_overrides: BTreeMap::new(),
                     })
                     .expect("test config must build a valid adapter"),
                 )
@@ -2501,5 +2596,197 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(OpenAiFixture);
+    }
+}
+
+/// The PARITY-03 knobs on `OpenAIConfig` (plan 50-08, D-12): each one is read by the adapter.
+#[cfg(test)]
+mod knob_tests {
+    use super::*;
+    use crate::test_support::{
+        attempts_against_a_failing_endpoint, mock_completion, send_with_max_tokens, server,
+    };
+    use crate::window::effective_capabilities;
+
+    const UNSEEDED: &str = "gpt-unseeded-test-model";
+
+    fn config(base_url: &str) -> OpenAIConfig {
+        let mut config = OpenAIConfig::new("test-key".to_string());
+        config.base_url = base_url.to_string();
+        config
+    }
+
+    fn window_override(window: u32) -> ModelOverride {
+        ModelOverride {
+            context_window: Some(window),
+            ..ModelOverride::default()
+        }
+    }
+
+    fn error_of(config: OpenAIConfig) -> String {
+        match OpenAIAdapter::new(config) {
+            Err(error) => error,
+            Ok(_) => panic!("construction must fail"),
+        }
+    }
+
+    #[test]
+    fn openai_config_keeps_the_4096_output_cap_by_default() {
+        let config = OpenAIConfig::new("test-key".to_string());
+        assert_eq!(config.max_tokens, Some(4096));
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.timeout_seconds, 300);
+        assert_eq!(config.context_window, None);
+        assert!(config.model_overrides.is_empty());
+    }
+
+    #[tokio::test]
+    async fn openai_max_tokens_default_reaches_the_wire() {
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let url = server.url();
+
+        // The default `new()` gives: 4096 when the request sets none.
+        let adapter = OpenAIAdapter::new(config(&url)).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 4096, "{body}");
+        // A request's own value wins.
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 512, "{body}");
+
+        // The builder replaces the default ...
+        let adapter = OpenAIAdapter::new(config(&url).with_max_tokens(2048)).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 2048, "{body}");
+
+        // ... and `None` sends no `max_tokens` key at all.
+        let mut unbounded = config(&url);
+        unbounded.max_tokens = None;
+        let adapter = OpenAIAdapter::new(unbounded).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert!(body.get("max_tokens").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn openai_max_retries_is_read_by_the_adapter() {
+        // The loop retries up to `max_retries` times after the first attempt.
+        for retries in [0_u32, 1] {
+            let server = server().await;
+            let adapter =
+                OpenAIAdapter::new(config(&server.url()).with_max_retries(retries)).unwrap();
+            attempts_against_a_failing_endpoint(server, &adapter, UNSEEDED, retries as usize + 1)
+                .await;
+        }
+    }
+
+    #[test]
+    fn openai_context_window_override_is_declared() {
+        let adapter =
+            OpenAIAdapter::new(config("https://example.invalid/v1").with_context_window(500_000))
+                .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(500_000)
+        );
+    }
+
+    #[test]
+    fn context_window_override_beats_a_seeded_window_on_openai() {
+        let base = || config("https://example.invalid/v1");
+        let seeded = OpenAIAdapter::new(base()).unwrap();
+        assert_eq!(
+            seeded.model_profile("gpt-5.4-nano").unwrap().context_window,
+            Some(400_000)
+        );
+
+        // The operator's adapter-wide statement beats the compiled seeded fact ...
+        let adapter = OpenAIAdapter::new(base().with_context_window(500_000)).unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("gpt-5.4-nano")
+                .unwrap()
+                .context_window,
+            Some(500_000)
+        );
+        assert_eq!(
+            effective_capabilities(&adapter, "gpt-5.4-nano").max_context_tokens,
+            Some(500_000)
+        );
+
+        // ... and a per-model override beats both.
+        let adapter = OpenAIAdapter::new(base().with_context_window(500_000).with_model_overrides(
+            BTreeMap::from([("gpt-5.4-nano".to_string(), window_override(900_000))]),
+        ))
+        .unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("gpt-5.4-nano")
+                .unwrap()
+                .context_window,
+            Some(900_000)
+        );
+
+        // A window below the seeded maximum output is refused, never clamped.
+        let message = error_of(base().with_context_window(100_000));
+        for needle in ["openai", "gpt-5.4-nano", "100000", "128000"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn openai_invalid_override_fails_construction_naming_provider_and_model() {
+        let with_override = |over: ModelOverride| {
+            config("https://example.invalid/v1")
+                .with_model_overrides(BTreeMap::from([(UNSEEDED.to_string(), over)]))
+        };
+        let adapter = OpenAIAdapter::new(with_override(window_override(900_000))).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+
+        let invalid = [
+            window_override(0),
+            ModelOverride {
+                context_window: Some(1_000),
+                max_output_tokens: Some(2_000_000),
+                ..ModelOverride::default()
+            },
+        ];
+        for over in invalid {
+            let message = error_of(with_override(over));
+            assert!(
+                message.contains("openai") && message.contains(UNSEEDED),
+                "the error must name the provider and the model: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn openai_config_debug_redacts_the_api_key() {
+        let config = config("https://api.example.invalid/v1");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+            "max_tokens",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
     }
 }

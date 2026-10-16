@@ -120,7 +120,7 @@ use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
-use crate::registry::{ModelRegistry, fallback_from_compat};
+use crate::registry::{ModelRegistry, fallback_from_compat, seeded, seeded_window};
 
 /// Default Qwen (Alibaba DashScope) compatible-mode API base URL — the
 /// Singapore (international) endpoint.
@@ -135,21 +135,17 @@ pub const QWEN_DEFAULT_BASE_URL: &str = "https://dashscope-intl.aliyuncs.com/com
 
 /// Default Qwen model requested when `DASHSCOPE_MODEL` is unset.
 ///
-/// `qwen-plus` over `qwen3.7-plus`, live-verified 2026-08-23: both are
-/// present in the live catalog at [`QWEN_DEFAULT_BASE_URL`] and both accept
-/// every sampling parameter this preset declares, so the choice is not about
-/// capability. It is about resilience to retirement. The live catalog
-/// carries `qwen-plus` alongside dated snapshots of it going back to
-/// `qwen-plus-2025-01-25` — evidence that `qwen-plus` is a rolling alias
-/// Alibaba has already silently re-pointed multiple times while keeping the
-/// name stable, the same pattern a caller-facing "always current" name gives
-/// elsewhere. `qwen3.7-plus` is a generation-pinned name: the live catalog
-/// already carries a newer `qwen3.8-*` generation alongside it, so
-/// `qwen3.7-plus` is a future retirement candidate in exactly the way
-/// `moonshot-v1-8k` and `gemini-2.5-flash` were pinned names this same phase
-/// had to refresh after the vendor moved on (17-19, 17-20). A rolling alias
-/// is the more durable shipped default.
-pub const QWEN_DEFAULT_MODEL: &str = "qwen-plus";
+/// `qwen3.8-flash`: the operator-identified current general-purpose model (its cheapest current
+/// tier), measured end to end by the 2026-10-15 live probe (`registry/seeded.rs`, `verified_on`
+/// 2026-10-15). It replaces `qwen-plus`, which stays available and seeded; pin `DASHSCOPE_MODEL`
+/// to keep it.
+///
+/// Trade-off, recorded: the previous reasoning for `qwen-plus` (2026-08-23) was that it is a
+/// rolling alias Alibaba re-points while keeping the name stable, whereas a generation-pinned
+/// name such as this one is a future retirement candidate (the same pattern that forced the
+/// `moonshot-v1-8k` and `gemini-2.5-flash` refreshes). The default now follows the vendor's
+/// current model; the seeded table's date is what tells an operator when it was last checked.
+pub const QWEN_DEFAULT_MODEL: &str = "qwen3.8-flash";
 
 /// Curated fallback model list (D-13), returned when the live `/models`
 /// endpoint fails, is unreachable, or returns an empty list. Never reported
@@ -159,7 +155,8 @@ pub const QWEN_DEFAULT_MODEL: &str = "qwen-plus";
 /// catalog): all three entries are present, undated, general-purpose model
 /// names (no `-vl`/`-audio`/`-image`/`-mt`/`-coder`/`-tts`/`-asr` specialised
 /// suffix), and the first entry matches [`QWEN_DEFAULT_MODEL`].
-pub const QWEN_FALLBACK_MODELS: &[&str] = &["qwen-plus", "qwen-turbo", "qwen3-max"];
+pub const QWEN_FALLBACK_MODELS: &[&str] =
+    &[QWEN_DEFAULT_MODEL, "qwen-plus", "qwen-turbo", "qwen3-max"];
 
 /// Configuration for the Qwen (Alibaba DashScope) adapter.
 #[derive(Debug, Clone)]
@@ -295,7 +292,10 @@ impl QwenAdapter {
                 // boundary; T-17-16).
                 supports_vision: false,
                 supports_embeddings: false,
-                max_context_tokens: Some(131_072),
+                // The default model's seeded window (`seeded::QWEN`, `qwen3.8-flash`, verified
+                // 2026-10-15: the vendor's China/Beijing model page, the only page that states
+                // one), replacing the unevidenced 131,072.
+                max_context_tokens: seeded_window(seeded::QWEN, QWEN_DEFAULT_MODEL),
                 supports_system_messages: true,
                 // Live-measured 2026-08-23 against `qwen-plus` and
                 // `qwen3.7-plus` at the shipped Singapore endpoint:
@@ -356,7 +356,7 @@ impl QwenAdapter {
             // emits carries "qwen", not the engine's generic default.
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(QWEN_PROVIDER)
-                .with_model_registry(ModelRegistry::new(QWEN_PROVIDER, &[], fallback)),
+                .with_model_registry(ModelRegistry::new(QWEN_PROVIDER, seeded::QWEN, fallback)),
         })
     }
 }
@@ -456,6 +456,39 @@ mod tests {
             profile.temperature,
             paladin_ports::output::model_profile::ParamSupport::Range(0.0, 1.99)
         );
+    }
+
+    #[test]
+    fn qwen_default_model_is_seeded() {
+        let adapter = QwenAdapter::new(QwenConfig::new(
+            "test-key".to_string(),
+            "https://example.invalid/v1".to_string(),
+            QWEN_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let profile = adapter
+            .model_profile(QWEN_DEFAULT_MODEL)
+            .expect("qwen profiles every model");
+        // A seeded entry stamps its date on the profile; the adapter-wide fallback carries none.
+        assert_eq!(profile.verified_on.as_deref(), Some("2026-10-15"));
+        assert_eq!(profile.context_window, Some(1_000_000));
+        assert_eq!(
+            adapter.get_capabilities().max_context_tokens,
+            profile.context_window,
+            "the declared window is the default model's seeded window"
+        );
+        // An id outside the table keeps the adapter-wide fallback (D-07).
+        let unseeded = adapter
+            .model_profile("qwen3-max")
+            .expect("qwen profiles every model");
+        assert_eq!(unseeded.verified_on, None);
+    }
+
+    #[test]
+    fn qwen_default_model_is_the_operator_identified_current_model() {
+        assert_eq!(QWEN_DEFAULT_MODEL, "qwen3.8-flash");
+        assert_eq!(QWEN_FALLBACK_MODELS[0], QWEN_DEFAULT_MODEL);
+        assert!(QWEN_FALLBACK_MODELS.contains(&"qwen-plus"));
     }
 
     // ── QwenConfig::from_env() defaulting logic ──

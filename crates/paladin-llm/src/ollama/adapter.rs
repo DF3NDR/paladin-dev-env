@@ -38,7 +38,7 @@ use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
-use crate::registry::{ModelRegistry, fallback_from_compat};
+use crate::registry::{ModelRegistry, fallback_from_compat, seeded};
 
 /// Default Ollama base URL — the local OpenAI-compatibility layer
 /// (`/v1/*`), not the native `/api/chat` endpoint. See the module-level
@@ -240,7 +240,11 @@ impl OllamaAdapter {
             // emits carries "ollama", not the engine's generic default.
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(OLLAMA_PROVIDER)
-                .with_model_registry(ModelRegistry::new(OLLAMA_PROVIDER, &[], fallback)),
+                .with_model_registry(
+                    // The Ollama table is empty by design: the 2026-10-15 probe skipped Ollama (no daemon
+                    // was configured), so every model runs on the adapter-wide fallback.
+                    ModelRegistry::new(OLLAMA_PROVIDER, seeded::OLLAMA, fallback),
+                ),
         })
     }
 }
@@ -339,6 +343,23 @@ mod tests {
             profile.temperature,
             paladin_ports::output::model_profile::ParamSupport::Range(0.0, 2.0)
         );
+    }
+
+    /// The 2026-10-15 probe skipped Ollama (no daemon configured), so its table is empty and its
+    /// default model and window keep their previous values: every model runs on the fallback.
+    #[test]
+    fn ollama_models_run_on_the_adapter_wide_fallback_because_the_probe_skipped_it() {
+        let adapter = OllamaAdapter::new(OllamaConfig::new(
+            "http://localhost:11434/v1".to_string(),
+            OLLAMA_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let profile = adapter
+            .model_profile(OLLAMA_DEFAULT_MODEL)
+            .expect("ollama profiles every model");
+        assert_eq!(profile.verified_on, None);
+        assert_eq!(OLLAMA_DEFAULT_MODEL, "llama3");
+        assert_eq!(adapter.get_capabilities().max_context_tokens, None);
     }
 
     // ── OllamaConfig::from_env() defaulting logic ──

@@ -26,13 +26,22 @@ use paladin_ports::output::llm_port::{
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
-use crate::registry::ModelRegistry;
+use crate::registry::{ModelRegistry, seeded, seeded_window};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits.
 const ANTHROPIC_PROVIDER: &str = "anthropic";
+
+/// Default Anthropic model requested when `ANTHROPIC_MODEL` is unset.
+///
+/// `claude-haiku-5-5`: the operator-identified current general-purpose model (its cheapest
+/// current tier), the one Anthropic entry measured end to end by the 2026-10-15 live probe
+/// (`registry/seeded.rs`, `verified_on` 2026-10-15). It replaces the retired
+/// October-2024 Sonnet id this constant's predecessor named inline, which now answers 404
+/// `not_found_error`. Pin `ANTHROPIC_MODEL` to keep any other model.
+pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-haiku-5-5";
 
 /// The exact phrase observed VERBATIM in Anthropic's HTTP 400
 /// `invalid_request_error` body when an account has reached its configured
@@ -90,7 +99,8 @@ pub struct AnthropicConfig {
     pub api_key: String,
     /// Base URL for Anthropic API.
     pub base_url: String,
-    /// Default model to use (e.g., claude-3-5-sonnet-20241022).
+    /// Default model to use; [`ANTHROPIC_DEFAULT_MODEL`] when constructed from the environment
+    /// with `ANTHROPIC_MODEL` unset.
     pub model: String,
     /// Default max tokens for responses (required by Claude API).
     pub max_tokens: u32,
@@ -117,8 +127,8 @@ impl AnthropicConfig {
         let base_url = env::var("ANTHROPIC_BASE_URL")
             .unwrap_or_else(|_| "https://api.anthropic.com/v1".to_string());
 
-        let model = env::var("ANTHROPIC_MODEL")
-            .unwrap_or_else(|_| "claude-3-5-sonnet-20241022".to_string());
+        let model =
+            env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| ANTHROPIC_DEFAULT_MODEL.to_string());
 
         let max_tokens = env::var("ANTHROPIC_MAX_TOKENS")
             .unwrap_or_else(|_| "4096".to_string())
@@ -200,7 +210,10 @@ fn declared_capabilities() -> ProviderCapabilities {
         supports_function_calling: false,
         supports_vision: true,
         supports_embeddings: false,
-        max_context_tokens: Some(200_000),
+        // The default model's seeded window (`seeded::ANTHROPIC`, `claude-haiku-5-5`, verified
+        // 2026-10-15: listing `max_input_tokens`), so this declaration describes the model a
+        // caller gets when it names none.
+        max_context_tokens: seeded_window(seeded::ANTHROPIC, ANTHROPIC_DEFAULT_MODEL),
         supports_system_messages: true,
         temperature_range: Some((0.0, 1.0)),
     }
@@ -266,7 +279,11 @@ impl AnthropicAdapter {
         Ok(Self {
             client,
             config,
-            model_registry: ModelRegistry::new(ANTHROPIC_PROVIDER, &[], fallback_profile()),
+            model_registry: ModelRegistry::new(
+                ANTHROPIC_PROVIDER,
+                seeded::ANTHROPIC,
+                fallback_profile(),
+            ),
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
         })
@@ -765,31 +782,18 @@ impl LlmPort for AnthropicAdapter {
         Ok(Box::new(stream))
     }
 
+    /// Whether `model` is in the dated Anthropic table (`seeded::ANTHROPIC`). The table lists
+    /// the models the live probe measured, so a current model that was not probed is reported
+    /// `false` here yet still runs, on the adapter-wide fallback profile (D-07).
     async fn validate_model(&self, model: &str) -> Result<bool, LlmError> {
-        let valid_models = [
-            "claude-3-5-sonnet-20241022",
-            "claude-3-5-sonnet-20240620",
-            "claude-3-opus-20240229",
-            "claude-3-sonnet-20240229",
-            "claude-3-haiku-20240307",
-            "claude-2.1",
-            "claude-2.0",
-            "claude-instant-1.2",
-        ];
-        Ok(valid_models.contains(&model))
+        Ok(seeded::ANTHROPIC.iter().any(|entry| entry.model == model))
     }
 
     async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
-        Ok(vec![
-            "claude-3-5-sonnet-20241022".to_string(),
-            "claude-3-5-sonnet-20240620".to_string(),
-            "claude-3-opus-20240229".to_string(),
-            "claude-3-sonnet-20240229".to_string(),
-            "claude-3-haiku-20240307".to_string(),
-            "claude-2.1".to_string(),
-            "claude-2.0".to_string(),
-            "claude-instant-1.2".to_string(),
-        ])
+        Ok(seeded::ANTHROPIC
+            .iter()
+            .map(|entry| entry.model.to_string())
+            .collect())
     }
 
     fn get_provider_name(&self) -> &'static str {
@@ -1175,9 +1179,89 @@ mod tests {
         assert!(!capabilities.supports_tool_calling);
         assert!(capabilities.supports_vision);
         assert!(capabilities.supports_system_messages);
-        assert_eq!(capabilities.max_context_tokens, Some(200_000));
+        assert_eq!(capabilities.max_context_tokens, Some(1_000_000));
         assert_eq!(capabilities.temperature_range, Some((0.0, 1.0)));
         assert_eq!(adapter.get_provider_name(), "anthropic");
+    }
+
+    // ── Dated registry wiring (plan 50-06, D-05/D-08) ─────────────────────
+
+    fn seeded_test_adapter() -> AnthropicAdapter {
+        AnthropicAdapter::new(AnthropicConfig::new(
+            "test-key".to_string(),
+            "https://api.anthropic.com/v1".to_string(),
+            ANTHROPIC_DEFAULT_MODEL.to_string(),
+            4096,
+        ))
+        .expect("a valid config builds")
+    }
+
+    #[test]
+    fn anthropic_default_model_is_seeded() {
+        let (profile, origin) = seeded_test_adapter()
+            .model_registry
+            .resolve(ANTHROPIC_DEFAULT_MODEL);
+        assert_eq!(
+            origin,
+            crate::registry::ProfileOrigin::Seeded {
+                verified_on: "2026-10-15"
+            }
+        );
+        assert_eq!(profile.verified_on.as_deref(), Some("2026-10-15"));
+        assert_eq!(profile.context_window, Some(1_000_000));
+    }
+
+    #[test]
+    fn anthropic_default_model_is_the_operator_identified_current_model() {
+        assert_eq!(ANTHROPIC_DEFAULT_MODEL, "claude-haiku-5-5");
+    }
+
+    #[test]
+    fn anthropic_capabilities_report_the_default_models_seeded_window() {
+        assert_eq!(
+            seeded_test_adapter().get_capabilities().max_context_tokens,
+            Some(1_000_000)
+        );
+    }
+
+    #[test]
+    fn anthropic_unlisted_model_still_resolves_the_adapter_default() {
+        let (_, origin) = seeded_test_adapter()
+            .model_registry
+            .resolve("claude-opus-4-8");
+        assert_eq!(origin, crate::registry::ProfileOrigin::AdapterDefault);
+    }
+
+    #[tokio::test]
+    async fn anthropic_available_models_are_the_seeded_table_ids_in_order() {
+        let models = seeded_test_adapter().get_available_models().await.unwrap();
+        let table: Vec<String> = seeded::ANTHROPIC
+            .iter()
+            .map(|entry| entry.model.to_string())
+            .collect();
+        assert_eq!(models, table);
+        assert!(models.contains(&ANTHROPIC_DEFAULT_MODEL.to_string()));
+    }
+
+    #[tokio::test]
+    async fn anthropic_validate_model_accepts_a_seeded_id_and_rejects_a_claude_3_id() {
+        let adapter = seeded_test_adapter();
+        assert!(
+            adapter
+                .validate_model(ANTHROPIC_DEFAULT_MODEL)
+                .await
+                .unwrap()
+        );
+        for retired in [
+            "claude-3-5-sonnet-20241022",
+            "claude-2.1",
+            "claude-instant-1.2",
+        ] {
+            assert!(
+                !adapter.validate_model(retired).await.unwrap(),
+                "{retired} is retired and must not validate"
+            );
+        }
     }
 
     // ── Fixtures ─────────────────────────────────────────────────────────
@@ -2200,7 +2284,9 @@ stake, so an attacker donating to himself alone is a strict loss.";
             assert_eq!(profile.frequency_penalty, ParamSupport::NotSent);
             assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
             assert_eq!(profile.stop_sequences, StopSupport::Supported { max: None });
-            assert_eq!(profile.context_window, Some(200_000));
+            // The fallback window follows the declared capabilities, which describe the default
+            // model's seeded window (plan 50-06).
+            assert_eq!(profile.context_window, Some(1_000_000));
             assert!(!profile.json_object && !profile.json_schema);
         }
 

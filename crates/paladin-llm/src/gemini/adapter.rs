@@ -89,7 +89,7 @@ use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::{
     RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, diagnostic_excerpt, redact_credentials,
 };
-use crate::registry::ModelRegistry;
+use crate::registry::{ModelRegistry, seeded, seeded_window};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
@@ -129,18 +129,16 @@ pub const GEMINI_DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis
 
 /// Default Gemini model requested when `GEMINI_MODEL` is unset.
 ///
-/// **Refreshed 2026-08-22** from `gemini-2.5-flash`, which Google retired for
-/// new users: a `generateContent` call against it returns *"no longer
-/// available to new users \u2014 please update your code to use
-/// models/gemini-3.6-flash"*. The model remained present in the live
-/// `GET /models` catalog throughout, so the list probe kept passing while
-/// every generate call failed \u2014 catalog presence is not callability, and
-/// only the generate probe distinguishes them.
+/// `gemini-3.5-flash-lite`: the operator-identified current general-purpose model (its cheapest
+/// current tier), measured end to end by the 2026-10-15 live probe (`registry/seeded.rs`,
+/// `verified_on` 2026-10-15). It replaces `gemini-3.6-flash`, which stays available and seeded;
+/// pin `GEMINI_MODEL` to keep it.
 ///
-/// `gemini-3.6-flash` is the identifier Google's own deprecation message
-/// names, and it was verified by a live `generateContent` call on
-/// 2026-08-22 rather than taken from that message on faith.
-pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.6-flash";
+/// History: refreshed 2026-08-22 from `gemini-2.5-flash`, which Google retired for new users (a
+/// `generateContent` call against it answers *"no longer available to new users"* while the
+/// model stays in the live `GET /models` catalog, so catalog presence is not callability; only a
+/// generate call distinguishes the two).
+pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.5-flash-lite";
 
 /// Curated fallback model list (D-13), returned when the live `GET /models`
 /// endpoint fails, is unreachable, or returns an empty list. Gemini's
@@ -161,7 +159,11 @@ pub const GEMINI_DEFAULT_MODEL: &str = "gemini-3.6-flash";
 /// the credential available. An unverified identifier is exactly the kind of
 /// entry this refresh exists to remove, so the list carries only what was
 /// measured.
-pub const GEMINI_FALLBACK_MODELS: &[&str] = &["gemini-3.6-flash", "gemini-3.5-flash"];
+///
+/// **Re-checked 2026-10-15** by the live seed probe: all three entries answered `generateContent`
+/// and are in `seeded::GEMINI`; the default comes first.
+pub const GEMINI_FALLBACK_MODELS: &[&str] =
+    &[GEMINI_DEFAULT_MODEL, "gemini-3.6-flash", "gemini-3.5-flash"];
 
 /// The header name Gemini's API expects the credential on. Never the
 /// documented `?key=` query-parameter alternative — see this module's
@@ -323,7 +325,9 @@ fn declared_capabilities() -> ProviderCapabilities {
         // idea, not scope here.
         supports_vision: false,
         supports_embeddings: false,
-        max_context_tokens: Some(1_048_576),
+        // The default model's seeded window (`seeded::GEMINI`, `gemini-3.5-flash-lite`, verified
+        // 2026-10-15: listing `inputTokenLimit`).
+        max_context_tokens: seeded_window(seeded::GEMINI, GEMINI_DEFAULT_MODEL),
         supports_system_messages: true,
         temperature_range: Some((0.0, 2.0)),
     }
@@ -398,7 +402,7 @@ impl GeminiAdapter {
             client,
             config,
             models_cache: OnceCell::new(),
-            model_registry: ModelRegistry::new(GEMINI_PROVIDER, &[], fallback_profile()),
+            model_registry: ModelRegistry::new(GEMINI_PROVIDER, seeded::GEMINI, fallback_profile()),
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
         })
@@ -1501,6 +1505,40 @@ mod tests {
 
     fn build_request(model: &str, prompt_type: PromptType) -> LlmRequest {
         LlmRequest::new(model, PromptItem::new(prompt_type).unwrap())
+    }
+
+    // ── Dated registry wiring (plan 50-06, D-05/D-08) ──
+
+    #[test]
+    fn gemini_default_model_is_seeded() {
+        let adapter = test_adapter("http://localhost");
+        let (profile, origin) = adapter.model_registry.resolve(GEMINI_DEFAULT_MODEL);
+        assert_eq!(
+            origin,
+            crate::registry::ProfileOrigin::Seeded {
+                verified_on: "2026-10-15"
+            }
+        );
+        assert_eq!(profile.context_window, Some(1_048_576));
+        assert_eq!(
+            adapter.get_capabilities().max_context_tokens,
+            profile.context_window,
+            "the declared window is the default model's seeded window"
+        );
+    }
+
+    #[test]
+    fn gemini_default_model_is_the_operator_identified_current_model() {
+        assert_eq!(GEMINI_DEFAULT_MODEL, "gemini-3.5-flash-lite");
+        assert_eq!(GEMINI_FALLBACK_MODELS[0], GEMINI_DEFAULT_MODEL);
+    }
+
+    #[test]
+    fn gemini_unseeded_model_still_resolves_the_adapter_default() {
+        let (_, origin) = test_adapter("http://localhost")
+            .model_registry
+            .resolve("gemini-3.1-flash-lite");
+        assert_eq!(origin, crate::registry::ProfileOrigin::AdapterDefault);
     }
 
     // ── GeminiConfig::from_parts / from_env defaulting ──

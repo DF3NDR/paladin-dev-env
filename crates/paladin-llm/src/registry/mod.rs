@@ -243,6 +243,26 @@ pub(crate) struct SeededProfile {
     pub build: fn() -> ModelProfile,
 }
 
+/// The context window a seeded table states for `model`, or `None` when the table does not list
+/// the model or states no window for it.
+///
+/// An adapter's declared `max_context_tokens` is read through this from its default model's
+/// entry, so the capability declaration and the dated table cannot drift apart.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "gemini",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok"
+))]
+pub(crate) fn seeded_window(table: &[SeededProfile], model: &str) -> Option<u32> {
+    table
+        .iter()
+        .find(|entry| entry.model == model)
+        .and_then(|entry| (entry.build)().context_window)
+}
+
 /// Where a resolved profile came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProfileOrigin {
@@ -750,7 +770,7 @@ mod seeded_tests {
     use super::*;
 
     /// Every compiled vendor table, by provider name.
-    #[allow(unused_mut)]
+    #[allow(unused_mut, clippy::vec_init_then_push)]
     fn tables() -> Vec<(&'static str, &'static [SeededProfile])> {
         let mut tables: Vec<(&'static str, &'static [SeededProfile])> = Vec::new();
         #[cfg(feature = "anthropic")]
@@ -1069,8 +1089,9 @@ mod seeded_tests {
             // Probes 7 and 8: both penalties rejected.
             assert_eq!(p.frequency_penalty, ParamSupport::NotSent, "{model}");
             assert_eq!(p.presence_penalty, ParamSupport::NotSent, "{model}");
-            // Probe 3 (temperature 2.00) was UNREACHABLE, so no range was measured.
-            assert_eq!(p.temperature, ParamSupport::NotSent, "{model}");
+            // Probes 2 and 4: 0.00 and 0.50 ACCEPTED. Probe 3 (2.00) was UNREACHABLE; probe 5
+            // (2.01) was rejected "must be less than 2", so the bound is seeded at 1.99.
+            assert_eq!(p.temperature, ParamSupport::Range(0.0, 1.99), "{model}");
             assert_eq!(p.top_p, ParamSupport::Range(0.0, 1.0), "{model}");
             // Listing context_length.
             assert_eq!(p.context_window, Some(window), "{model}");

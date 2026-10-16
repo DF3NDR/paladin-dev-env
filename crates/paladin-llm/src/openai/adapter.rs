@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
-use crate::registry::ModelRegistry;
+use crate::registry::{ModelRegistry, seeded};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
@@ -417,7 +417,9 @@ impl OpenAIAdapter {
         Ok(Self {
             config,
             client,
-            model_registry: ModelRegistry::new(OPENAI_PROVIDER, &[], fallback_profile()),
+            // The dated OpenAI table (`seeded::OPENAI`, probed 2026-10-15): the two measured
+            // models resolve to their own entry, every other model to the adapter-wide fallback.
+            model_registry: ModelRegistry::new(OPENAI_PROVIDER, seeded::OPENAI, fallback_profile()),
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
         })
@@ -1053,6 +1055,28 @@ mod tests {
         assert!(caps.supports_vision);
         assert_eq!(caps.max_context_tokens, Some(128000));
         assert_eq!(caps.temperature_range, Some((0.0, 1.0)));
+    }
+
+    /// OpenAI has no adapter-level default model (the model arrives per request), so the
+    /// operator-identified current model from the 2026-10-15 probe, `gpt-5.4-nano`, is the one
+    /// checked here. `max_context_tokens` stays the adapter-wide 128,000 for the same reason:
+    /// no default model's window exists to follow.
+    #[test]
+    fn openai_default_model_is_seeded() {
+        let adapter = OpenAIAdapter::new(OpenAIConfig::new("test-key".to_string())).unwrap();
+        for (model, window) in [("gpt-5.4-nano", 400_000), ("gpt-4o-mini", 128_000)] {
+            let (profile, origin) = adapter.model_registry.resolve(model);
+            assert_eq!(
+                origin,
+                crate::registry::ProfileOrigin::Seeded {
+                    verified_on: "2026-10-15"
+                },
+                "{model}"
+            );
+            assert_eq!(profile.context_window, Some(window), "{model}");
+        }
+        let (_, origin) = adapter.model_registry.resolve("gpt-4o");
+        assert_eq!(origin, crate::registry::ProfileOrigin::AdapterDefault);
     }
 
     #[test]

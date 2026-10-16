@@ -31,7 +31,7 @@ use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSuppo
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
-use crate::registry::{ModelRegistry, fallback_from_compat};
+use crate::registry::{ModelRegistry, fallback_from_compat, seeded, seeded_window};
 
 /// Default Kimi (Moonshot AI) API base URL.
 ///
@@ -43,14 +43,15 @@ pub const KIMI_DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
 
 /// Default Kimi model requested when `MOONSHOT_MODEL` is unset.
 ///
-/// `kimi-k3` — the highest-numbered general-purpose line in the live
-/// `GET /models` response measured 2026-08-22 (17-19, closing G-17-4b),
-/// chosen over the two code-specialised entries (`kimi-k2.7-code`,
-/// `kimi-k2.7-code-highspeed`) present in that same response, since this is
-/// the default a caller gets when they express no preference. The retired
-/// `moonshot-v1-8k` this constant previously held is absent from the live
-/// list entirely.
-pub const KIMI_DEFAULT_MODEL: &str = "kimi-k3";
+/// `kimi-k2.6`: the operator-identified current general-purpose model (its cheapest current
+/// tier), measured end to end by the 2026-10-15 live probe (`registry/seeded.rs`, `verified_on`
+/// 2026-10-15). It replaces `kimi-k3`, which stays available and seeded; pin `MOONSHOT_MODEL` to
+/// keep it. The two code-specialised entries (`kimi-k2.7-code`, `kimi-k2.7-code-highspeed`)
+/// answer only requests that enable thinking, so they are never the default.
+///
+/// History: `kimi-k3` (2026-08-22, 17-19, closing G-17-4b) replaced the retired
+/// `moonshot-v1-8k`, which the live `GET /models` no longer listed.
+pub const KIMI_DEFAULT_MODEL: &str = "kimi-k2.6";
 
 /// Curated fallback model list (D-13), returned when the live `/models`
 /// endpoint fails, is unreachable, or returns an empty list. Never reported
@@ -61,7 +62,7 @@ pub const KIMI_DEFAULT_MODEL: &str = "kimi-k3";
 /// `moonshot-v1-*` family this constant previously held.
 pub const KIMI_FALLBACK_MODELS: &[&str] = &[
     KIMI_DEFAULT_MODEL,
-    "kimi-k2.6",
+    "kimi-k3",
     "kimi-k2.7-code",
     "kimi-k2.7-code-highspeed",
 ];
@@ -196,7 +197,9 @@ impl KimiAdapter {
                 supports_function_calling: false,
                 supports_vision: false,
                 supports_embeddings: false,
-                max_context_tokens: Some(131_072),
+                // The default model's seeded window (`seeded::KIMI`, `kimi-k2.6`, verified
+                // 2026-10-15: listing `context_length`), replacing the unevidenced 131,072.
+                max_context_tokens: seeded_window(seeded::KIMI, KIMI_DEFAULT_MODEL),
                 supports_system_messages: true,
                 // Live-measured 2026-08-22 (17-19, closing G-17-4b) against
                 // `kimi-k3` (`KIMI_DEFAULT_MODEL`) and independently
@@ -279,7 +282,7 @@ impl KimiAdapter {
             // emits carries "kimi", not the engine's generic default.
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(KIMI_PROVIDER)
-                .with_model_registry(ModelRegistry::new(KIMI_PROVIDER, &[], fallback)),
+                .with_model_registry(ModelRegistry::new(KIMI_PROVIDER, seeded::KIMI, fallback)),
         })
     }
 }
@@ -322,6 +325,7 @@ impl LlmPort for KimiAdapter {
 mod tests {
     use super::*;
     use crate::http_status::map_http_status;
+    use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
     use crate::sampling::PARAMS_OMITTED_METADATA_KEY;
     use mockito::{Matcher, Server};
     use paladin_core::platform::container::prompt::{
@@ -1106,6 +1110,8 @@ mod tests {
 
     #[tokio::test]
     async fn generate_omits_top_p_from_the_moonshot_request_body() {
+        // Runs on an unseeded model id, so the adapter-wide fallback profile is what is under
+        // test (the default model has its own seeded entry, covered below).
         // Same mechanism, second measured constraint (discovered re-running
         // the live harness after the temperature fix): with `temperature`
         // no longer sent, `PromptParameters::default()`'s `top_p: Some(1.0)`
@@ -1123,7 +1129,7 @@ mod tests {
                     Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
                 json!({
                     "id": "cmpl-notopp",
-                    "model": KIMI_DEFAULT_MODEL,
+                    "model": UNSEEDED_MODEL,
                     "choices": [{
                         "index": 0,
                         "message": {"role": "assistant", "content": "ok"},
@@ -1140,11 +1146,11 @@ mod tests {
         let config = KimiConfig::new(
             "test-key".to_string(),
             server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
+            UNSEEDED_MODEL.to_string(),
         );
         let adapter = KimiAdapter::new(config).unwrap();
 
-        let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
+        let result = adapter.generate(build_request(UNSEEDED_MODEL)).await;
         assert!(
             result.is_ok(),
             "mock returned a well-formed response: {result:?}"
@@ -1174,6 +1180,11 @@ mod tests {
         );
     }
 
+    /// A model id with no seeded entry: it runs on the adapter-wide fallback profile, which is
+    /// what the fixed-value tests below describe. The default model has its own seeded entry
+    /// (plan 50-06), covered by the `kimi_default_model_*` tests.
+    const UNSEEDED_MODEL: &str = "kimi-unseeded-test-model";
+
     /// Run one request through a Kimi adapter on a mock endpoint; returns the wire body and the
     /// response metadata.
     async fn kimi_wire(
@@ -1184,10 +1195,10 @@ mod tests {
         let adapter = KimiAdapter::new(KimiConfig::new(
             "test-key".to_string(),
             server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
+            UNSEEDED_MODEL.to_string(),
         ))
         .unwrap();
-        let mut request = build_request(KIMI_DEFAULT_MODEL);
+        let mut request = build_request(UNSEEDED_MODEL);
         request.prompt.entity.data.parameters = parameters;
         let response = adapter
             .generate(request)
@@ -1213,11 +1224,11 @@ mod tests {
         let adapter = KimiAdapter::new(KimiConfig::new(
             "test-key".to_string(),
             "https://example.invalid/v1".to_string(),
-            KIMI_DEFAULT_MODEL.to_string(),
+            UNSEEDED_MODEL.to_string(),
         ))
         .unwrap();
         let profile = adapter
-            .model_profile(KIMI_DEFAULT_MODEL)
+            .model_profile(UNSEEDED_MODEL)
             .expect("Kimi profiles every model");
         assert_eq!(profile.temperature, ParamSupport::Fixed(1.0));
         assert_eq!(profile.top_p, ParamSupport::Fixed(0.95));
@@ -1248,6 +1259,69 @@ mod tests {
                 .map(String::as_str),
             Some("temperature,top_p")
         );
+    }
+
+    #[test]
+    fn kimi_default_model_is_seeded() {
+        let adapter = KimiAdapter::new(KimiConfig::new(
+            "test-key".to_string(),
+            "https://example.invalid/v1".to_string(),
+            KIMI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        // A seeded entry stamps its date on the profile; the adapter-wide fallback carries none.
+        let profile = adapter
+            .model_profile(KIMI_DEFAULT_MODEL)
+            .expect("Kimi profiles every model");
+        assert_eq!(profile.verified_on.as_deref(), Some("2026-10-15"));
+        assert_eq!(profile.context_window, Some(262_144));
+        assert_eq!(
+            adapter.get_capabilities().max_context_tokens,
+            profile.context_window,
+            "the declared window is the default model's seeded window"
+        );
+    }
+
+    #[tokio::test]
+    async fn kimi_default_model_omits_every_sampling_parameter_the_probe_rejected() {
+        let mut server = crate::compat::test_support::server().await;
+        let captured = crate::compat::test_support::mock_completion(&mut server).await;
+        let adapter = KimiAdapter::new(KimiConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            KIMI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let mut request = build_request(KIMI_DEFAULT_MODEL);
+        request.prompt.entity.data.parameters = kimi_parameters(0.7, 0.9);
+        let response = adapter
+            .generate(request)
+            .await
+            .expect("well-formed response");
+        let body = captured.lock().unwrap().take().expect("a request was sent");
+        // The 2026-10-15 probe rejected every temperature and top_p value on kimi-k2.6.
+        assert!(body.get("temperature").is_none(), "{body}");
+        assert!(body.get("top_p").is_none(), "{body}");
+        assert_eq!(
+            response
+                .metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("temperature,top_p")
+        );
+        assert!(
+            !response
+                .metadata
+                .contains_key(UNPROFILED_MODEL_METADATA_KEY),
+            "the default model is profiled"
+        );
+    }
+
+    #[test]
+    fn kimi_default_model_is_the_operator_identified_current_model() {
+        assert_eq!(KIMI_DEFAULT_MODEL, "kimi-k2.6");
+        assert_eq!(KIMI_FALLBACK_MODELS[0], KIMI_DEFAULT_MODEL);
+        assert!(KIMI_FALLBACK_MODELS.contains(&"kimi-k3"));
     }
 
     // ── Model list: memoization / concurrency (D-13/D-14) ──

@@ -25,7 +25,7 @@ use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
-use crate::registry::ModelRegistry;
+use crate::registry::{ModelRegistry, seeded, seeded_window};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 // WR-01 (`25-REVIEW.md`): this adapter previously carried its own
 // byte-for-byte copy of the crate's shared credential-redaction routine
@@ -41,6 +41,15 @@ use crate::redaction::{RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, redact_cre
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits.
 const DEEPSEEK_PROVIDER: &str = "deepseek";
+
+/// Default DeepSeek model requested when `DEEPSEEK_MODEL` is unset.
+///
+/// `deepseek-flash`: the general-purpose model in the live `GET /models` listing of the
+/// 2026-10-15 probe and the operator-identified current default (`registry/seeded.rs`,
+/// `verified_on` 2026-10-15). It replaces `deepseek-chat`, which is absent from that listing
+/// and from the vendor's pricing page (an undocumented alias that still answered 200 at probe
+/// time). Pin `DEEPSEEK_MODEL` to keep `deepseek-chat`.
+pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-flash";
 
 /// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
 ///
@@ -65,7 +74,8 @@ pub struct DeepSeekConfig {
     pub api_key: String,
     /// Base URL for DeepSeek API.
     pub base_url: String,
-    /// Default model to use.
+    /// Default model to use; [`DEEPSEEK_DEFAULT_MODEL`] when constructed from the environment
+    /// with `DEEPSEEK_MODEL` unset.
     pub model: String,
     /// Request timeout in seconds.
     pub timeout_seconds: u64,
@@ -89,7 +99,8 @@ impl DeepSeekConfig {
         let base_url = env::var("DEEPSEEK_BASE_URL")
             .unwrap_or_else(|_| "https://api.deepseek.com/v1".to_string());
 
-        let model = env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-chat".to_string());
+        let model =
+            env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| DEEPSEEK_DEFAULT_MODEL.to_string());
 
         let timeout_seconds = env::var("DEEPSEEK_TIMEOUT_SECONDS")
             .unwrap_or_else(|_| "60".to_string())
@@ -409,7 +420,9 @@ fn declared_capabilities() -> ProviderCapabilities {
         supports_function_calling: false,
         supports_vision: false,
         supports_embeddings: false,
-        max_context_tokens: Some(64000),
+        // The default model's seeded window (`seeded::DEEPSEEK`, `deepseek-flash`, verified
+        // 2026-10-15: listing `context_window`), replacing the unevidenced 64,000.
+        max_context_tokens: seeded_window(seeded::DEEPSEEK, DEEPSEEK_DEFAULT_MODEL),
         supports_system_messages: true,
         temperature_range: Some((0.0, 2.0)),
     }
@@ -480,7 +493,11 @@ impl DeepSeekAdapter {
         Ok(Self {
             client,
             config,
-            model_registry: ModelRegistry::new(DEEPSEEK_PROVIDER, &[], fallback_profile()),
+            model_registry: ModelRegistry::new(
+                DEEPSEEK_PROVIDER,
+                seeded::DEEPSEEK,
+                fallback_profile(),
+            ),
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
         })
@@ -1012,11 +1029,14 @@ impl LlmPort for DeepSeekAdapter {
         Ok(available_models.contains(&model.to_string()))
     }
 
+    /// The ids in the dated DeepSeek table (`seeded::DEEPSEEK`), so the list always includes
+    /// [`DEEPSEEK_DEFAULT_MODEL`]. `deepseek-chat` and `deepseek-coder` are not listed: the
+    /// 2026-10-15 probe found them in neither the live listing nor the vendor's pricing page.
     async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
-        Ok(vec![
-            "deepseek-chat".to_string(),
-            "deepseek-coder".to_string(),
-        ])
+        Ok(seeded::DEEPSEEK
+            .iter()
+            .map(|entry| entry.model.to_string())
+            .collect())
     }
 
     fn get_provider_name(&self) -> &'static str {
@@ -1094,9 +1114,52 @@ mod tests {
         assert!(!capabilities.supports_tool_calling);
         assert!(!capabilities.supports_vision);
         assert!(capabilities.supports_system_messages);
-        assert_eq!(capabilities.max_context_tokens, Some(64000));
+        assert_eq!(capabilities.max_context_tokens, Some(1_048_576));
         assert_eq!(capabilities.temperature_range, Some((0.0, 2.0)));
         assert_eq!(adapter.get_provider_name(), "deepseek");
+    }
+
+    #[test]
+    fn deepseek_default_model_is_seeded() {
+        let adapter = DeepSeekAdapter::new(DeepSeekConfig::new(
+            "test-key".to_string(),
+            "https://api.deepseek.com/v1".to_string(),
+            DEEPSEEK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let (profile, origin) = adapter.model_registry.resolve(DEEPSEEK_DEFAULT_MODEL);
+        assert_eq!(
+            origin,
+            crate::registry::ProfileOrigin::Seeded {
+                verified_on: "2026-10-15"
+            }
+        );
+        assert_eq!(profile.context_window, Some(1_048_576));
+        assert_eq!(profile.max_output_tokens, Some(393_216));
+    }
+
+    #[test]
+    fn deepseek_default_model_is_the_operator_identified_current_model() {
+        assert_eq!(DEEPSEEK_DEFAULT_MODEL, "deepseek-flash");
+    }
+
+    #[tokio::test]
+    async fn deepseek_available_models_come_from_the_seeded_table_and_include_the_default() {
+        let adapter = DeepSeekAdapter::new(DeepSeekConfig::new(
+            "test-key".to_string(),
+            "https://api.deepseek.com/v1".to_string(),
+            DEEPSEEK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let models = adapter.get_available_models().await.unwrap();
+        assert!(models.contains(&DEEPSEEK_DEFAULT_MODEL.to_string()));
+        assert!(
+            adapter
+                .validate_model(DEEPSEEK_DEFAULT_MODEL)
+                .await
+                .unwrap()
+        );
+        assert!(!adapter.validate_model("deepseek-coder").await.unwrap());
     }
 
     #[test]
@@ -2190,7 +2253,7 @@ mod tests {
                     .get(UNPROFILED_MODEL_METADATA_KEY)
                     .map(String::as_str),
                 Some("deepseek-chat"),
-                "no seeded entry exists yet, so the model runs on the adapter-wide fallback"
+                "`deepseek-chat` has no seeded entry (an undocumented alias), so it runs on the adapter-wide fallback"
             );
         }
 

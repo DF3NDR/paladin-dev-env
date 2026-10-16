@@ -21,7 +21,7 @@ use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
-use crate::registry::{ModelRegistry, fallback_from_compat};
+use crate::registry::{ModelRegistry, fallback_from_compat, seeded, seeded_window};
 
 /// Default Grok (xAI) API base URL.
 ///
@@ -33,34 +33,29 @@ pub const GROK_DEFAULT_BASE_URL: &str = "https://api.x.ai/v1";
 
 /// Default Grok model requested when `XAI_MODEL` is unset.
 ///
-/// Live-verified 2026-08-22 (17-18, D-00e) against the real `GET
-/// {GROK_DEFAULT_BASE_URL}/models` response, **not** copied from
-/// `17-UAT.md`'s 2026-08-22 snapshot (that snapshot is evidence the old
-/// `"grok-4"` value was wrong, not authority for this one). At that live
-/// snapshot `grok-4` and `grok-3` were both **absent** from the catalog;
-/// the highest general-purpose `grok-4.x` line present was `grok-4.6`
-/// (created after `grok-4.5` and `grok-4.3`, no embedded date or build
-/// suffix — the separately-versioned `grok-4.20-*` reasoning/non-reasoning
-/// family carries dated ids like `grok-4.20-0309-reasoning` and was
-/// excluded on that basis, per the plan's prohibition on dated snapshot
-/// identifiers). A live `generate()` call to this model, with the
-/// framework's default prompt parameters and this preset's
-/// `request_parameters` declaration below, returned a real completion.
-pub const GROK_DEFAULT_MODEL: &str = "grok-4.6";
+/// `grok-4.3`: the operator-identified current general-purpose model (its cheapest current
+/// tier), measured end to end by the 2026-10-15 live probe (`registry/seeded.rs`, `verified_on`
+/// 2026-10-15). It replaces `grok-4.6`, which stays available and seeded; pin `XAI_MODEL` to
+/// keep it.
+///
+/// History (17-18, D-00e, 2026-08-22): the earlier `grok-4` default was absent from the live
+/// catalog; the dated `grok-4.20-*` family is excluded from the defaults by the plan's
+/// prohibition on dated snapshot identifiers.
+pub const GROK_DEFAULT_MODEL: &str = "grok-4.3";
 
 /// Curated fallback model list (D-13), returned when the live `/models`
 /// endpoint fails, is unreachable, or returns an empty list. Never reported
 /// as authoritative — see [`crate::compat::engine::CompatEngine::available_models`].
 ///
-/// Live-verified 2026-08-22 (17-18, D-00e), newest first, default first:
-/// the three stable general-purpose entries from the same live catalog
-/// that produced [`GROK_DEFAULT_MODEL`] — `grok-4.6` (created
+/// Live-verified 2026-08-22 (17-18, D-00e) and re-measured 2026-10-15: the
+/// three stable general-purpose entries from the live catalog, the default
+/// first, then the other two newest first — `grok-4.6` (created
 /// 2026-08-06), `grok-4.5` (created 2026-06-29) and `grok-4.3` (created
 /// 2026-04-17). Excludes the image/video/build-tool models
 /// (`grok-imagine-*`, `grok-build-0.1`) and the dated `grok-4.20-*`
 /// family, none of which are the general-purpose chat line this preset
 /// targets.
-pub const GROK_FALLBACK_MODELS: &[&str] = &["grok-4.6", "grok-4.5", "grok-4.3"];
+pub const GROK_FALLBACK_MODELS: &[&str] = &[GROK_DEFAULT_MODEL, "grok-4.6", "grok-4.5"];
 
 /// Configuration for the Grok (xAI) adapter.
 #[derive(Debug, Clone)]
@@ -192,7 +187,9 @@ impl GrokAdapter {
                 supports_function_calling: false,
                 supports_vision: false,
                 supports_embeddings: false,
-                max_context_tokens: Some(131_072),
+                // The default model's seeded window (`seeded::GROK`, `grok-4.3`, verified
+                // 2026-10-15: listing `context_length`), replacing the unevidenced 131,072.
+                max_context_tokens: seeded_window(seeded::GROK, GROK_DEFAULT_MODEL),
                 supports_system_messages: true,
                 temperature_range: Some((0.0, 2.0)),
             },
@@ -255,7 +252,7 @@ impl GrokAdapter {
             // emits carries "grok", not the engine's generic default.
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(GROK_PROVIDER)
-                .with_model_registry(ModelRegistry::new(GROK_PROVIDER, &[], fallback)),
+                .with_model_registry(ModelRegistry::new(GROK_PROVIDER, seeded::GROK, fallback)),
         })
     }
 }
@@ -332,7 +329,36 @@ mod tests {
         assert_eq!(profile.stop_sequences, StopSupport::NotSent);
         assert_eq!(profile.frequency_penalty, ParamSupport::NotSent);
         assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
-        assert_eq!(profile.temperature, ParamSupport::Range(0.0, 2.0));
+        // The default model's seeded entry (2026-10-15): 2.01 was rejected "must be less than 2".
+        assert_eq!(profile.temperature, ParamSupport::Range(0.0, 1.99));
+        assert_eq!(profile.verified_on.as_deref(), Some("2026-10-15"));
+    }
+
+    #[test]
+    fn grok_default_model_is_seeded() {
+        let adapter = GrokAdapter::new(GrokConfig::new(
+            "test-key".to_string(),
+            "https://example.invalid/v1".to_string(),
+            GROK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let profile = adapter
+            .model_profile(GROK_DEFAULT_MODEL)
+            .expect("Grok profiles every model");
+        // A seeded entry stamps its date on the profile; the adapter-wide fallback carries none.
+        assert_eq!(profile.verified_on.as_deref(), Some("2026-10-15"));
+        assert_eq!(profile.context_window, Some(1_000_000));
+        assert_eq!(
+            adapter.get_capabilities().max_context_tokens,
+            profile.context_window,
+            "the declared window is the default model's seeded window"
+        );
+    }
+
+    #[test]
+    fn grok_default_model_is_the_operator_identified_current_model() {
+        assert_eq!(GROK_DEFAULT_MODEL, "grok-4.3");
+        assert_eq!(GROK_FALLBACK_MODELS[0], GROK_DEFAULT_MODEL);
     }
 
     #[tokio::test]

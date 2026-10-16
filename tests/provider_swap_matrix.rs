@@ -612,30 +612,19 @@ async fn case_empty_stop_completion_is_typed(name: &'static str) {
     }
 }
 
-/// (c) Kimi accepts only temperature `1.0` (a `(1, 1)` range): an explicit `1.0` builds and is
-/// sent; anything else is refused at build, naming provider, model and parameter.
+/// (c) Kimi's default model (`kimi-k2.6`) has a seeded entry from the operator's live probe of
+/// 2026-10-15 (plan 50-06): every probed explicit temperature (`1.0`, `0.5`, just above `1.0`)
+/// was rejected by the vendor ("only 0.6 is allowed for this model"), and the allowed value
+/// depends on the thinking mode the probes disabled, so the entry states `NotSent` rather than
+/// pinning one value. Every explicit temperature is therefore refused at build, naming provider,
+/// model and parameter. (Before the seed this case asserted that an explicit `1.0` builds and is
+/// sent, which was the adapter-wide fallback's `Fixed(1.0)` from the 2026-08-22 measurement.)
 async fn case_fixed_temperature_explicit(name: &'static str) {
     let p = provider(name);
-    let (vendor, port) = vendor_and_port(&p, 200, success_body(p.wire, "Paris")).await;
-
-    let accepted = agent_builder(Arc::clone(&port), p.model)
-        .temperature(1.0)
-        .build()
-        .await
-        .unwrap_or_else(|error| panic!("{name}: an explicit temperature 1.0 must build: {error}"));
-    execution_service(Arc::clone(&port))
-        .execute(&accepted, MATRIX_QUERY)
-        .await
-        .unwrap_or_else(|error| panic!("{name}: the temperature-1.0 agent must execute: {error}"));
-    let last = vendor.last_body(name);
-    assert_eq!(
-        sent_temperature(p.wire, &last),
-        Some(1.0),
-        "{name}: an explicit temperature 1.0 must be on the wire; body was {last}"
-    );
+    let (_vendor, port) = vendor_and_port(&p, 200, success_body(p.wire, "Paris")).await;
 
     let just_above_one = f32::from_bits(1.0f32.to_bits() + 1);
-    for refused in [0.5_f32, just_above_one] {
+    for refused in [1.0_f32, 0.5_f32, just_above_one] {
         match agent_builder(Arc::clone(&port), p.model)
             .temperature(refused)
             .build()
@@ -651,7 +640,8 @@ async fn case_fixed_temperature_explicit(name: &'static str) {
                 "{name}: temperature {refused} failed with something other than a named refusal: {other}"
             ),
             Ok(_) => panic!(
-                "{name}: temperature {refused} is outside the provider's range but the agent built"
+                "{name}: the seeded entry for '{}' admits no temperature but temperature {refused} built",
+                p.model
             ),
         }
     }

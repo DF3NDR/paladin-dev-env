@@ -23,9 +23,10 @@
 //! - `temperature`: [`ParamSupport::Range`]`(lo, hi)` when both probed endpoints were accepted
 //!   and the next value outside was rejected; [`ParamSupport::Fixed`]`(v)` when only `v` was
 //!   accepted; [`ParamSupport::NotSent`] when every probed value was rejected. Where the
-//!   transcript cannot place the upper bound (OpenAI accepted the value *beyond* its declared
-//!   end; Grok's high-end probe was unreachable) the entry says so in a comment instead of
-//!   inventing a bound.
+//!   transcript cannot place the upper bound by measurement (OpenAI accepted the value *beyond*
+//!   its declared end; Grok's high-end probe was unreachable) the entry says so in a comment and
+//!   states the bound the transcript does support: the highest accepted endpoint for OpenAI,
+//!   the vendor's own observed "less than 2" rejection text for Grok.
 //! - `top_p` and the two penalties were probed at `0.5` only: an accepted value is seeded as
 //!   the vendor contract's span (`0..=1`, `-2..=2`) and is marked *contract-derived* below; a
 //!   rejected one is `NotSent`. A penalty is also `NotSent` when the adapter's own request type
@@ -325,11 +326,14 @@ mod grok_table {
     ///
     /// Common to all three:
     ///
-    /// - temperature `0.00` and `0.50` were accepted and `2.01` was rejected ("Temperature must
-    ///   be less than 2"), but the high-end probe (`2.00`) was UNREACHABLE (a transport error,
-    ///   three times), so no upper bound was measured and temperature is left `NotSent` rather
-    ///   than inventing one. Re-running the Grok probe closes this; an operator can state the
-    ///   range in the meantime with a per-model override.
+    /// - temperature: `0.00` and `0.50` were accepted and `2.01` was rejected ("Temperature must
+    ///   be less than 2 but temperature = 2.01"), but the high-end probe (`2.00`) was UNREACHABLE
+    ///   (a transport error, three times), so the upper bound itself was never measured. The
+    ///   vendor's own rejection text states the bound is strictly below 2, so the range is
+    ///   seeded as `0.0..=1.99`, the largest value under it, the same half-open shape the Qwen
+    ///   probe measured at 1.99. Leaving temperature `NotSent` instead would drop a parameter the
+    ///   probe showed Grok accepts. Re-running the Grok probe turns the stated bound into a
+    ///   measured one.
     /// - `top_p` 0.5 was accepted: `0..=1` is contract-derived.
     /// - both penalties and `stop` (one and five sequences) were rejected ("does not support
     ///   parameter ...").
@@ -353,7 +357,7 @@ mod grok_table {
 
     fn grok_4_3() -> ModelProfile {
         ModelProfile::new()
-            .with_temperature(ParamSupport::NotSent)
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
             .with_top_p(ParamSupport::Range(0.0, 1.0))
             .with_frequency_penalty(ParamSupport::NotSent)
             .with_presence_penalty(ParamSupport::NotSent)
@@ -369,7 +373,7 @@ mod grok_table {
 
     fn grok_4_6() -> ModelProfile {
         ModelProfile::new()
-            .with_temperature(ParamSupport::NotSent)
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
             .with_top_p(ParamSupport::Range(0.0, 1.0))
             .with_frequency_penalty(ParamSupport::NotSent)
             .with_presence_penalty(ParamSupport::NotSent)
@@ -384,7 +388,7 @@ mod grok_table {
 
     fn grok_4_5() -> ModelProfile {
         ModelProfile::new()
-            .with_temperature(ParamSupport::NotSent)
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
             .with_top_p(ParamSupport::Range(0.0, 1.0))
             .with_frequency_penalty(ParamSupport::NotSent)
             .with_presence_penalty(ParamSupport::NotSent)

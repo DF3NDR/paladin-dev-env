@@ -1429,7 +1429,7 @@ Plans:
 
 **Wave 15** *(blocked on Wave 14 completion)*
 
-- [ ] 50-16-PLAN.md — mdBook "Switching providers" page with the per-provider/per-model table and a registry drift test; MIGRATION 9.8 consumer rows, changelogs, muster pins; closeout register check; ADR-0061 conforms; full phase gate
+- [x] 50-16-PLAN.md — mdBook "Switching providers" page with the per-provider/per-model table and a registry drift test; MIGRATION 9.8 consumer rows, changelogs, muster pins; closeout register check; ADR-0061 conforms; full phase gate
 
 ### Phase 51: Adjustable Reasoning Effort
 

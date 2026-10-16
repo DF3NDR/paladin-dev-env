@@ -1263,6 +1263,7 @@ mod tests {
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         };
 
         assert_eq!(result.output, "Test output");
@@ -1341,6 +1342,7 @@ mod tests {
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         };
 
         let json = serde_json::to_string(&result).expect("Failed to serialize");
@@ -1389,6 +1391,7 @@ mod tests {
             plan: Some(plan.clone()),
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         };
 
         assert!(result.has_plan());
@@ -1426,6 +1429,7 @@ mod tests {
             plan: None,
             handoff_history: vec![record1, record2],
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         };
 
         assert!(!result.has_plan());
@@ -1470,6 +1474,7 @@ mod tests {
             plan: Some(plan),
             handoff_history: vec![record],
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         };
 
         // Serialize

@@ -6,6 +6,8 @@
 //! These are pure domain value types with no infrastructure dependencies.
 //! The `application` layer re-exports them from here.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::platform::container::allowance::AllowanceRefusal;
@@ -22,6 +24,8 @@ use crate::platform::container::token_usage::TokenUsage;
 /// # Example
 ///
 /// ```
+/// use std::collections::BTreeMap;
+///
 /// use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
 /// use paladin_core::platform::container::token_usage::TokenUsage;
 ///
@@ -31,12 +35,14 @@ use crate::platform::container::token_usage::TokenUsage;
 ///     execution_time_ms: 1250,
 ///     loop_count: 1,
 ///     stop_reason: StopReason::Completed,
+///     run_metadata: BTreeMap::new(),
 ///     ..Default::default()
 /// };
 ///
 /// assert_eq!(result.loop_count, 1);
 /// assert!(result.stop_reason.is_successful());
 /// assert!(result.served_by.is_none());
+/// assert!(result.run_metadata.is_empty());
 /// ```
 ///
 /// # Constructing across crates
@@ -114,6 +120,32 @@ pub struct PaladinResult {
     /// security decision should read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub served_by: Option<String>,
+
+    /// The `paladin.*` visibility keys this run's model calls stamped on their responses
+    /// (Phase 50, ADR-0061 (h), owner reading R-1).
+    ///
+    /// An adapter that omits a sampling parameter it cannot honour, runs a model it holds no
+    /// profile for, adjusts a `response_format`, or serves a call from a fallback step records
+    /// that on the response (`paladin.params_omitted`, `paladin.unprofiled_model`,
+    /// `paladin.response_format_adjusted`, `paladin.served_model`). This map carries those
+    /// entries onto the run result, keyed as stamped (the `paladin.` prefix is kept), so a
+    /// caller does not have to scrape logs to learn that a value it never stated was dropped.
+    ///
+    /// Merge rule, applied by the execution service across every model call of the run:
+    /// `paladin.params_omitted` and `paladin.unprofiled_model` hold the de-duplicated union of
+    /// their comma-separated items in first-seen order; every other `paladin.*` key holds the
+    /// last call's value. `paladin.served_by` is **not** repeated here -- it has its own field,
+    /// [`Self::served_by`]. Keys that do not start with `paladin.` are never copied.
+    ///
+    /// Values are provider names, model ids and parameter names only -- never request content
+    /// or credentials. Like [`Self::served_by`], this is **observability** stamped in-process,
+    /// not an authenticated attestation: no security decision should read it.
+    ///
+    /// Empty for a run whose calls stamped nothing, and absent from the serialised JSON in
+    /// that case (`#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]`), so a
+    /// payload written before this field existed is byte-identical to one written today.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub run_metadata: BTreeMap<String, String>,
 }
 
 /// Reason why Paladin execution stopped
@@ -233,6 +265,7 @@ impl Default for PaladinResult {
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: BTreeMap::new(),
         }
     }
 }
@@ -271,6 +304,7 @@ impl PaladinResult {
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: BTreeMap::new(),
         }
     }
 
@@ -299,6 +333,7 @@ impl PaladinResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     /// D-26: `served_by: None` leaves the serialised JSON byte-identical to
     /// what the same value produced before the field existed.
@@ -314,6 +349,7 @@ mod tests {
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: BTreeMap::new(),
         };
 
         let json = serde_json::to_string(&result).unwrap();
@@ -394,6 +430,74 @@ mod tests {
 
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("\"cost\""), "{json}");
+    }
+
+    /// Phase 50 (owner reading R-1, ADR-0061 (h)): a `PaladinResult` JSON document persisted
+    /// before `run_metadata` existed deserialises with an empty map, and an empty map never
+    /// serialises a `run_metadata` key -- the same precedent `served_by` and `cost` set.
+    #[test]
+    fn paladin_result_without_run_metadata_key_deserializes_to_empty() {
+        let legacy = r#"{"output":"answer","usage":{"prompt_tokens":3,"completion_tokens":0,"total_tokens":3,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#;
+
+        let result: PaladinResult = serde_json::from_str(legacy).unwrap();
+        assert!(result.run_metadata.is_empty());
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("run_metadata"), "{json}");
+        assert_eq!(
+            json,
+            serde_json::to_string(&PaladinResult {
+                output: "answer".to_string(),
+                usage: TokenUsage::new(3, 0),
+                execution_time_ms: 7,
+                loop_count: 1,
+                ..Default::default()
+            })
+            .unwrap()
+        );
+    }
+
+    /// A non-empty `run_metadata` round-trips, keys sorted (a `BTreeMap`, so the serialised
+    /// order is deterministic).
+    #[test]
+    fn run_metadata_round_trips_when_present() {
+        let mut run_metadata = BTreeMap::new();
+        run_metadata.insert("paladin.served_model".to_string(), "m2".to_string());
+        run_metadata.insert(
+            "paladin.params_omitted".to_string(),
+            "temperature,stop".to_string(),
+        );
+        let result = PaladinResult {
+            run_metadata,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(
+            json.contains(
+                r#""run_metadata":{"paladin.params_omitted":"temperature,stop","paladin.served_model":"m2"}"#
+            ),
+            "{json}"
+        );
+        let back: PaladinResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.run_metadata, result.run_metadata);
+    }
+
+    /// `Default` and `new()` give an empty `run_metadata`.
+    #[test]
+    fn default_and_new_leave_run_metadata_empty() {
+        assert!(PaladinResult::default().run_metadata.is_empty());
+        assert!(
+            PaladinResult::new(
+                "text".to_string(),
+                TokenUsage::new(1, 0),
+                1,
+                1,
+                StopReason::Completed
+            )
+            .run_metadata
+            .is_empty()
+        );
     }
 
     /// FT-FR-17: `Default` and `new()` both still work and leave `served_by`

@@ -412,6 +412,7 @@ impl PaladinExecutorPort for SuccessExecutor {
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         })
     }
 }
@@ -476,6 +477,7 @@ impl PaladinExecutorPort for TransientThenSuccessExecutor {
                 plan: None,
                 handoff_history: Vec::new(),
                 served_by: None,
+                run_metadata: std::collections::BTreeMap::new(),
             })
         }
     }

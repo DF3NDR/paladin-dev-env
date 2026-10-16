@@ -590,6 +590,7 @@ impl PaladinPort for RecordingPaladinPort {
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         })
     }
 

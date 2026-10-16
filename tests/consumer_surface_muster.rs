@@ -160,6 +160,7 @@ fn result_literals() -> (PaladinResult, LlmResponse) {
         plan: None,
         handoff_history: Vec::new(),
         served_by: None,
+        run_metadata: std::collections::BTreeMap::new(),
     };
     let response = LlmResponse {
         id: Uuid::new_v4(),

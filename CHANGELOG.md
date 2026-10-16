@@ -690,6 +690,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ModelFallbackMiddleware::from_steps` / `paced_steps`. Names only, never a credential. It is
   mutually exclusive with `providers` (a validation error naming both keys); a `providers`-only
   configuration builds exactly as before. `MIGRATION.md` 9.5.
+- **`PaladinResult.run_metadata` carries the run's `paladin.*` visibility keys (PARITY-02; Phase 50
+  plan 50-18; ADR-0061 (h), owner reading R-1 = `option-b`).** `PaladinResult` gains
+  `run_metadata: BTreeMap<String, String>`, directly after `served_by`: the `paladin.*` keys every
+  model call of the run stamped on its response (`paladin.params_omitted`,
+  `paladin.unprofiled_model`, `paladin.response_format_adjusted`, `paladin.served_model`), so an
+  omitted `auto_temperature`, an unprofiled model or a fallback hop is visible on the result
+  without scraping logs. `paladin.params_omitted` and `paladin.unprofiled_model` hold the
+  de-duplicated union of their comma-separated items in first-seen order; every other key holds
+  the last call's value; `paladin.served_by` keeps its own field and is not repeated; a key
+  without the `paladin.` prefix is never copied. Empty when no call stamped anything and then
+  absent from the serialised JSON (`#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]`),
+  so a payload written before this field existed is byte-identical. `paladin-web`'s
+  `ExecuteResponse` is not extended.
 
 ### Changed
 
@@ -1180,6 +1193,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`FallbackChainError::EmptyChain as isize`) stops compiling. Measured by cargo-semver-checks
   as `enum_discriminants_undefined_non_unit_variant` (Phase 50 plan 50-14; D-15, PARITY-06);
   registered on a new `paladin-llm | FallbackChainError` row and entry.
+- **BREAKING (`paladin-ai-core`): `PaladinResult` gains `run_metadata: BTreeMap<String, String>`,
+  directly after `served_by`** -- a full struct literal must add `run_metadata: BTreeMap::new()`
+  (`..Default::default()` sites are unchanged; `Default` and `PaladinResult::new` give an empty
+  map) (PARITY-02; Phase 50 plan 50-18, owner reading R-1). The struct stays constructible and
+  is still not `#[non_exhaustive]`. Measured by cargo-semver-checks as
+  `constructible_struct_adds_field` on `PaladinResult.run_metadata`; registered by extending the
+  existing `paladin-ai-core | PaladinResult` `MIGRATION.md` 9.2 row and allowlist entry. The
+  consumer takes it in its single move to v0.11.0.
 
 ### Known limitations
 

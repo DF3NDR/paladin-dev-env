@@ -72,9 +72,16 @@ A model with no registry entry uses the adapter-wide fallback with a `warn!` and
 
 `PricingLlmAdapter` and `CadenceLlmAdapter` forward `model_profile` to their inner port. A decorator that kept the default `None` would silently disable this whole policy in the composed `Pricing(Cadence(provider))` stack every server-built agent uses. `FallbackLlmAdapter` returns the `ParamSupport`/`StopSupport`/`ModelProfile` **intersection** of every hop's `Some` profile (`None` when no hop declares one), so the builder refuses what any hop could not honour. The intersection is commutative and associative, so a chain's combined profile does not depend on the order its hops are listed. A hop that returns `None` is skipped and judged only by its own request builder; plan 50-14 re-points the intersection at each step's own model (A3-50-02).
 
-### (h) Run metadata (D-07)
+### (h) Run metadata (D-01, D-07; owner reading R-1 = option-b)
 
-Every buffered `LlmResponse` carries the `paladin.*` keys of this policy in `LlmResponse.metadata`, beside `paladin.served_by` (`paladin.params_omitted`, `paladin.unprofiled_model`, `paladin.response_format_adjusted`). That is the floor under any reading. Whether the keys **also** reach the run result (`PaladinResult`) and the streaming terminal chunk is owner reading R-1, pending (see `## Owner readings`; decided at plan 50-18 Task 1).
+The "run-metadata entry" of D-01 and D-07 reaches **every caller, buffered and streamed**. The owner decided this at plan 50-18 Task 1 on 2026-10-16 (R-1, `one-way`; see `## Owner readings`); it is not the planner's reading.
+
+- **Per call.** Every buffered `LlmResponse` carries the `paladin.*` keys of this policy in `LlmResponse.metadata`, beside `paladin.served_by` and `paladin.served_model` (`paladin.params_omitted`, `paladin.unprofiled_model`, `paladin.response_format_adjusted`). This was the floor of plans 50-03, 50-05 and 50-14.
+- **Per run.** `PaladinResult.run_metadata: BTreeMap<String, String>` carries those keys onto the run result, keyed as stamped (the `paladin.` prefix kept). `PaladinExecutionService` merges every model call's keys into it: `paladin.params_omitted` and `paladin.unprofiled_model` hold the de-duplicated union of their comma-separated items in first-seen order; every other `paladin.*` key holds the last call's value; `paladin.served_by` is not repeated (it has its own field, `PaladinResult.served_by`); a key that does not start with `paladin.` is never copied. A run whose calls stamped nothing has an empty map and serialises byte-identically to before (`#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]`).
+- **Per stream.** `StreamingResponse.metadata: HashMap<String, String>` (additive on the `#[non_exhaustive]` struct, `StreamingResponse::with_metadata`) carries the same keys the buffered path would stamp **on the stream's terminal chunk only**, for the compat engine, OpenAI, DeepSeek, Anthropic and Gemini; content chunks carry an empty map, and an `Err` terminal item (refusal, empty completion) carries none. The execution service's streamed run merges the terminal chunk's keys by the same rule.
+- **Not extended.** The `paladin-web` HTTP body (`ExecuteResponse`) does not carry `run_metadata`; exposing it over HTTP is a separate, published-contract decision (A2-50-18).
+- **Cost.** One registered break on the constructible `PaladinResult` (a full struct literal downstream breaks; `..Default::default()` keeps compiling), measured by the D-27 run and recorded in MIGRATION.md 9.2 on the existing `paladin-ai-core | PaladinResult` row. The consumer takes it in its single move to v0.11.0.
+- **Content.** The values are provider names, model ids and parameter names only -- never request content or credentials -- so carrying them onto a persisted or serialised result adds no secret (A1-50-18, T-50-18-01).
 
 ### (i) Registry fields that shape a request, not only sampling
 
@@ -87,7 +94,7 @@ The planner's reading of an ambiguous owner statement is not recorded as fact. E
 
 | Id | Reading | Rating | Decided at | Answer |
 |----|---------|--------|------------|--------|
-| R-1 | What the D-01/D-07 "run-metadata entry" is: per-call `LlmResponse.metadata` only, or also carried onto `PaladinResult` and the streaming terminal chunk | `one-way` (a public field on a constructible struct) | plan 50-18 Task 1 | `pending` |
+| R-1 | What the D-01/D-07 "run-metadata entry" is: per-call `LlmResponse.metadata` only, or also carried onto `PaladinResult` and the streaming terminal chunk | `one-way` (a public field on a constructible struct) | plan 50-18 Task 1 | 2026-10-16: `option-b` -- "option-b: the run-metadata entry reaches every caller, buffered and streamed; PaladinResult.run_metadata and the streaming terminal chunk carry the paladin.* keys. One registered break taken before the consumer's single move to v0.11.0." |
 | R-2 | SC-5's usage-cap clause, per compat vendor: live-verified against a captured quota body, or owner-accepted as unverified | `reversible` (an override is a single `error_override` added on the day a quota body is captured) | plan 50-17 Task 1 | 2026-10-16, per vendor: kimi `accept unverified`; qwen `accept unverified`; grok `accept unverified`; ollama `accept unverified`; openai-compatible `accept unverified`. No quota-exhaustion body was captured for any compat preset (see `50-SEED-PROBE.md`); each keeps today's error mapping and is recorded as unverified, with no override encoded. |
 
 ## Considered Options

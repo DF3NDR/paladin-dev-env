@@ -91,6 +91,8 @@ use paladin_core::platform::container::treasury_ledger::{
 use paladin_core::platform::container::vault::Namespace;
 use paladin_core::platform::container::waypoint::NodeId;
 use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
+use paladin_llm::registry::UNPROFILED_MODEL_METADATA_KEY;
+use paladin_llm::sampling::PARAMS_OMITTED_METADATA_KEY;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
 use paladin_ports::output::llm_port::{FunctionCall, LlmPort, LlmRequest, ResponseFormat};
@@ -1125,6 +1127,43 @@ impl PaladinExecutionService {
         }
     }
 
+    /// Folds one model call's `paladin.*` visibility keys into the run's
+    /// [`PaladinResult::run_metadata`] (ADR-0061 (h), owner reading R-1).
+    ///
+    /// Only keys that start with `paladin.` are read, and `paladin.served_by` is skipped (it
+    /// has its own `PaladinResult` field), so no foreign key -- and nothing credential-shaped --
+    /// is ever copied (T-50-18-01). `paladin.params_omitted` and `paladin.unprofiled_model`
+    /// hold the de-duplicated union of their comma-separated items in first-seen order, so a
+    /// parameter omitted on every loop is reported once; every other `paladin.*` key
+    /// (`paladin.served_model`, `paladin.response_format_adjusted`) holds the latest call's
+    /// value. The streaming path calls this same helper with the terminal chunk's metadata.
+    fn merge_run_metadata(
+        run_metadata: &mut BTreeMap<String, String>,
+        call_metadata: &HashMap<String, String>,
+    ) {
+        for (key, value) in call_metadata {
+            if !key.starts_with("paladin.") || key == SERVED_BY_METADATA_KEY {
+                continue;
+            }
+            if key == PARAMS_OMITTED_METADATA_KEY || key == UNPROFILED_MODEL_METADATA_KEY {
+                let mut merged = run_metadata.get(key).cloned().unwrap_or_default();
+                for item in value.split(',').map(str::trim).filter(|i| !i.is_empty()) {
+                    if !merged.split(',').any(|seen| seen == item) {
+                        if !merged.is_empty() {
+                            merged.push(',');
+                        }
+                        merged.push_str(item);
+                    }
+                }
+                if !merged.is_empty() {
+                    run_metadata.insert(key.clone(), merged);
+                }
+            } else {
+                run_metadata.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
     /// Finalizes a streamed execution using the configured Herald (D-12).
     ///
     /// The agent loop's streamed-completion producer (`execute_stream_inner`) builds
@@ -1556,6 +1595,10 @@ impl PaladinExecutionService {
         // stamps on its response. A plain adapter stamps nothing, so this
         // stays `None` and the serialised result is byte-identical to before.
         let mut served_by: Option<String> = None;
+        // Phase 50 (ADR-0061 (h), owner reading R-1): the `paladin.*` visibility keys every
+        // model call of this run stamped, merged by `merge_run_metadata`. A run whose calls
+        // stamped nothing leaves it empty, so the serialised result is unchanged.
+        let mut collected_metadata: BTreeMap<String, String> = BTreeMap::new();
 
         // =======================================================================
         // LAYER 1: Autonomous Planning & Prompt Generation (Optional, Pre-Exec)
@@ -1775,6 +1818,7 @@ impl PaladinExecutionService {
                         plan: task_plan,
                         handoff_history,
                         served_by,
+                        run_metadata: collected_metadata,
                     });
                 }
             };
@@ -1823,6 +1867,7 @@ impl PaladinExecutionService {
             if let Some(provider) = response.metadata.get(SERVED_BY_METADATA_KEY) {
                 served_by = Some(provider.clone());
             }
+            Self::merge_run_metadata(&mut collected_metadata, &response.metadata);
 
             // --- D-04: after_model fires on the FINAL response for this
             // iteration -- after the service's own buffered retry and
@@ -1858,6 +1903,7 @@ impl PaladinExecutionService {
                     plan: task_plan,
                     handoff_history,
                     served_by,
+                    run_metadata: collected_metadata,
                 });
             }
 
@@ -2145,6 +2191,7 @@ impl PaladinExecutionService {
                     plan: task_plan, // Layer 1 metadata
                     handoff_history, // Layer 3 metadata
                     served_by,       // FT-FR-17: serving provider (fallback chains only)
+                    run_metadata: collected_metadata,
                 });
             }
         }
@@ -2173,6 +2220,7 @@ impl PaladinExecutionService {
             plan: task_plan, // Layer 1 metadata
             handoff_history, // Layer 3 metadata
             served_by,       // FT-FR-17: serving provider (fallback chains only)
+            run_metadata: collected_metadata,
         })
     }
 
@@ -3953,6 +4001,196 @@ mod tests {
         fn get_capabilities(&self) -> ProviderCapabilities {
             ProviderCapabilities::default()
         }
+    }
+
+    /// An `LlmPort` that answers a plain completion on every call, stamping the scripted
+    /// metadata for that call (the last script entry repeats). Drives the Phase 50 run-metadata
+    /// merge (ADR-0061 (h), owner reading R-1).
+    struct ScriptedMetadataLlmPort {
+        script: Vec<HashMap<String, String>>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ScriptedMetadataLlmPort {
+        fn new(script: Vec<Vec<(&str, &str)>>) -> Self {
+            Self {
+                script: script
+                    .into_iter()
+                    .map(|call| {
+                        call.into_iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect()
+                    })
+                    .collect(),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for ScriptedMetadataLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let metadata = self
+                .script
+                .get(n)
+                .or_else(|| self.script.last())
+                .cloned()
+                .unwrap_or_default();
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model,
+                content: "the answer".to_string(),
+                finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
+                usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                cost: None,
+                created_at: chrono::Utc::now(),
+                metadata,
+                function_call: None,
+                reasoning: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            unimplemented!("not exercised")
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "ScriptedMetadata"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// Phase 50, owner reading R-1 (option-b): every model call's `paladin.*` keys reach
+    /// `PaladinResult.run_metadata`. Two calls stamp `params_omitted` (`temperature`, then
+    /// `temperature,stop`), one stamps `unprofiled_model`, the last stamps `served_model` ->
+    /// the union / last-value rule of ADR-0061 (h). `paladin.served_by` keeps its own field and
+    /// is not duplicated; a non-`paladin.` key is ignored (T-50-18-01).
+    #[tokio::test]
+    async fn run_metadata_collects_the_paladin_keys_of_every_call() {
+        use crate::core::platform::container::paladin::MaxLoops;
+        let llm = Arc::new(ScriptedMetadataLlmPort::new(vec![
+            vec![
+                ("paladin.params_omitted", "temperature"),
+                ("paladin.served_model", "m1"),
+            ],
+            vec![
+                ("paladin.params_omitted", "temperature,stop"),
+                ("paladin.unprofiled_model", "m1"),
+                ("paladin.served_by", "p1"),
+                ("x-request-id", "not-a-paladin-key"),
+            ],
+            vec![("paladin.served_model", "m2")],
+        ]));
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+        let mut paladin = create_test_paladin();
+        paladin.data.max_loops = MaxLoops::Fixed(3);
+
+        let result = service.execute(&paladin, "hello").await.expect("run");
+
+        assert_eq!(result.loop_count, 3);
+        let expected: std::collections::BTreeMap<String, String> = [
+            ("paladin.params_omitted", "temperature,stop"),
+            ("paladin.unprofiled_model", "m1"),
+            ("paladin.served_model", "m2"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(result.run_metadata, expected);
+        assert!(!result.run_metadata.contains_key("paladin.served_by"));
+        assert_eq!(result.served_by.as_deref(), Some("p1"));
+    }
+
+    /// A run whose calls stamped nothing has an empty `run_metadata`, and the serialised result
+    /// carries no `run_metadata` key (byte-identical to before the field existed).
+    #[tokio::test]
+    async fn run_metadata_is_empty_when_no_call_stamped_anything() {
+        let llm = Arc::new(CountingLlmPort::default());
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+
+        let result = service
+            .execute(&create_test_paladin(), "hello")
+            .await
+            .expect("run");
+
+        assert!(result.run_metadata.is_empty());
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("run_metadata"), "{json}");
+    }
+
+    /// The merge helper, unit-level: union keeps first-seen order without duplicates, a
+    /// blank item is dropped, other `paladin.*` keys take the last value, `served_by` and
+    /// foreign keys are ignored.
+    #[test]
+    fn merge_run_metadata_follows_the_adr_0061_rule() {
+        use std::collections::BTreeMap;
+        let call = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let mut merged = BTreeMap::new();
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[("paladin.params_omitted", "top_p,temperature")]),
+        );
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[
+                ("paladin.params_omitted", "temperature, stop,,top_p"),
+                ("paladin.response_format_adjusted", "json_object"),
+                ("paladin.served_by", "p"),
+                ("other", "x"),
+            ]),
+        );
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[("paladin.response_format_adjusted", "omitted")]),
+        );
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[("paladin.params_omitted", "")]),
+        );
+
+        assert_eq!(
+            merged.get("paladin.params_omitted").map(String::as_str),
+            Some("top_p,temperature,stop")
+        );
+        assert_eq!(
+            merged
+                .get("paladin.response_format_adjusted")
+                .map(String::as_str),
+            Some("omitted")
+        );
+        assert_eq!(merged.len(), 2, "{merged:?}");
+
+        // An entry whose only value is blank leaves no key behind.
+        let mut blank = BTreeMap::new();
+        PaladinExecutionService::merge_run_metadata(
+            &mut blank,
+            &call(&[("paladin.unprofiled_model", "")]),
+        );
+        assert!(blank.is_empty(), "{blank:?}");
     }
 
     /// Test 2: a run through `execute` produces a `PaladinResult` equal to

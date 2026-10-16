@@ -1164,6 +1164,7 @@ fn test_user_journey_output_formatting() {
         plan: None,
         handoff_history: vec![],
         served_by: None,
+        run_metadata: std::collections::BTreeMap::new(),
     };
 
     // Format for display
@@ -1207,6 +1208,7 @@ fn test_user_journey_verbose_output_shows_details() {
         plan: None,
         handoff_history: vec![],
         served_by: None,
+        run_metadata: std::collections::BTreeMap::new(),
     };
 
     // Verbose mode should include loop count and stop reason details

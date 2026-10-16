@@ -762,7 +762,7 @@ impl LlmPort for AnthropicAdapter {
     ///
     /// The stream's real stop reason and refusal details are held from `message_delta` and
     /// applied on the terminal `message_stop` chunk (RESEARCH Pitfall 2), where the shared
-    /// [`classify_completion`] rule runs on the accumulated text. A refusal (which may arrive
+    /// `classify_completion` rule runs on the accumulated text. A refusal (which may arrive
     /// after partial output) therefore ends the stream with `Err(`[`LlmError::Refusal`]`)`, and
     /// a stream that carried no text ends with `Err(`[`LlmError::EmptyCompletion`]`)` (D-11a).
     /// Chunks already yielded stay yielded: partial text and `thinking_delta` reasoning are not

@@ -9,7 +9,7 @@
 //! # Per-provider `from_layers`
 //!
 //! Each adapter has a `pub(crate) fn <provider>_from_layers(block, model, env)` that builds its
-//! `*Config` through [`resolve_layers`](crate::config::layers::resolve_layers): the per-agent
+//! `*Config` through `config::layers::resolve_layers`: the per-agent
 //! model, then the `llm.<provider>` block, then the provider's legacy environment variables
 //! (exactly the ones its `from_env` reads), then the adapter's compiled default, field by field
 //! (D-13; see `config::layers`). `LlmProviderFactory::create_from_config` calls these, so they

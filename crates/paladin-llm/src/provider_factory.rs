@@ -1172,6 +1172,9 @@ mod tests {
         use serde_json::{Value, json};
         use std::collections::BTreeMap;
 
+        // Only the tests behind the `kimi` feature call it, so a build without that feature
+        // compiles it unused.
+        #[allow(dead_code)]
         fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
             move |name| {
                 pairs

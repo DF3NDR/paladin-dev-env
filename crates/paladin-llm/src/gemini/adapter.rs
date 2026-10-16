@@ -1114,7 +1114,7 @@ impl LlmPort for GeminiAdapter {
     /// ## Empty output (D-11a)
     ///
     /// A stream cannot be classified until it ends, so the text is
-    /// accumulated as frames pass and the shared [`classify_completion`]
+    /// accumulated as frames pass and the shared `classify_completion`
     /// rule runs on the frame that carries `finishReason` (the last
     /// candidate frame). A stream that reaches it with no non-blank text
     /// and a finish reason other than a blocked-content one ends with

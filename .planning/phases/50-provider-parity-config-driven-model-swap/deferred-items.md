@@ -13,3 +13,17 @@ Out-of-scope discoveries logged by executors, not fixed in the plan that found t
   (`--workspace --all-features --all-targets -- -D warnings`) is clean. Plan 50-15's own additions
   add no warning in any of the seven single-feature builds checked (`#[allow(dead_code)]` with a
   reason on the three items that only some features construct).
+
+## Update from plan 50-16 (closeout)
+
+- The NON-test lib half of the plan 50-15 item is fixed: `StreamCompletion::observe_refusal` now carries
+  an `#[allow(dead_code)]` with its reason, so `cargo build -p paladin-llm --no-default-features
+  --features gemini` and `--features deepseek` no longer warn (and `cargo clippy --lib -D warnings` is
+  clean for both). The test-build warnings in the same single-feature builds (an unused `chat`
+  variable, `cadence::PinnedSpread` / `pin_waiter_spread`, `fallback::test_support::ProfiledStubPort`)
+  remain deferred: they exist only in `--tests` builds under one feature and the workspace gate
+  (`--workspace --all-features --all-targets -- -D warnings`) is clean.
+- `cargo semver-checks` for `paladin-battalion` against the published 0.10.1 with the repository's own
+  lints table reports one failure, `enum_struct_variant_field_added` on `RunOutcome::Halted.cause`
+  (Phase 42, ALLOW-03). It is not a Phase 50 item and is not registered here. CI's `semver` job
+  compares against 0.9.0, so it does not see it; the 0.10.1 baseline is the D-27 register method.

@@ -129,6 +129,9 @@ impl StreamCompletion {
 
     /// Record one refusal delta. Kept whole: redaction runs over the full text before it is
     /// bounded, so capping here could slice a credential across the cap.
+    // The Gemini and DeepSeek streams have no refusal field, so a build with only those two
+    // adapters compiles this method unused (the other seven adapters call it).
+    #[allow(dead_code)]
     pub(crate) fn observe_refusal(&mut self, delta: &str) {
         self.refusal.push_str(delta);
     }

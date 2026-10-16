@@ -643,7 +643,10 @@ impl LlmPort for FallbackLlmAdapter {
 
     /// Fall through only when the call itself fails or the stream's FIRST
     /// item is `Err`; once any `Ok` chunk has been observed the stream is
-    /// handed to the caller untouched and later errors propagate (D-25).
+    /// handed to the caller and later errors propagate (D-25). The serving hop is
+    /// named on the terminal chunk's [`StreamingResponse::metadata`]
+    /// ([`SERVED_BY_METADATA_KEY`], [`SERVED_MODEL_METADATA_KEY`]), the streamed
+    /// counterpart of what [`generate`](Self::generate) stamps on its response.
     async fn generate_stream(
         &self,
         request: LlmRequest,
@@ -674,7 +677,22 @@ impl LlmPort for FallbackLlmAdapter {
                         // Re-attach the peeked chunk (or nothing, if the stream
                         // was already exhausted) in front of the remainder so
                         // the consumer sees every item the provider produced.
-                        let replayed = stream::iter(peeked).chain(rest);
+                        //
+                        // ADR-0061 (h), owner reading R-1 (option-b): the terminal chunk --
+                        // and only it -- names the hop that served this stream, with the same
+                        // two keys `generate` stamps on its response.
+                        let served_by = name.to_string();
+                        let served_model = hop_request.model.clone();
+                        let replayed = stream::iter(peeked).chain(rest).map(move |item| {
+                            item.map(|chunk| {
+                                if chunk.finish_reason.is_none() {
+                                    return chunk;
+                                }
+                                chunk
+                                    .with_metadata(SERVED_BY_METADATA_KEY, served_by.as_str())
+                                    .with_metadata(SERVED_MODEL_METADATA_KEY, served_model.as_str())
+                            })
+                        });
                         return Ok(Box::new(replayed));
                     }
                     Err(err) => {
@@ -2097,6 +2115,51 @@ mod tests {
         assert_eq!(items[0].as_deref().unwrap(), "Hello");
         assert_eq!(sent_models(&anthropic), ["m1"]);
         assert_eq!(sent_models(&kimi), ["m2"]);
+    }
+
+    /// Phase 50, owner reading R-1 (option-b): a streamed fallback call names the hop that
+    /// served it on the terminal chunk -- `paladin.served_by` and `paladin.served_model`, the
+    /// same two keys `generate` stamps -- and stamps no content chunk.
+    #[tokio::test]
+    async fn the_fallback_stream_stamps_served_by_and_served_model_on_its_terminal_chunk() {
+        use futures::StreamExt;
+        let anthropic = failing("anthropic", transient("anthropic", 503));
+        let kimi = MockLlmAdapter::new()
+            .with_provider_name("kimi")
+            .with_response("Hello");
+        let adapter =
+            FallbackLlmAdapter::from_steps(vec![step(&anthropic, "m1"), step(&kimi, "m2")])
+                .unwrap();
+
+        let stream = adapter.generate_stream(request()).await.unwrap();
+        let chunks: Vec<StreamingResponse> = Box::into_pin(stream)
+            .map(|item| item.expect("the scripted stream has no error item"))
+            .collect()
+            .await;
+
+        let terminals: Vec<&StreamingResponse> = chunks
+            .iter()
+            .filter(|chunk| chunk.finish_reason.is_some())
+            .collect();
+        assert_eq!(terminals.len(), 1, "{chunks:?}");
+        let terminal = terminals[0];
+        assert_eq!(
+            terminal
+                .metadata
+                .get(SERVED_BY_METADATA_KEY)
+                .map(String::as_str),
+            Some("kimi")
+        );
+        assert_eq!(
+            terminal
+                .metadata
+                .get(SERVED_MODEL_METADATA_KEY)
+                .map(String::as_str),
+            Some("m2")
+        );
+        for chunk in chunks.iter().filter(|c| c.finish_reason.is_none()) {
+            assert!(chunk.metadata.is_empty(), "content chunk: {chunk:?}");
+        }
     }
 
     /// A `new` chain is unchanged: every hop is sent the request's own model, and the served

@@ -378,6 +378,8 @@
 //! - [`paladin_ports::output::arsenal_port`] - Tool execution
 //! - [`paladin_battalion::battalion`] - Multi-agent orchestration
 
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -448,6 +450,19 @@ pub struct ChunkMetadata {
     /// then hands it to `Herald::finalize_stream`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<ExecutionMetadata>,
+
+    /// The `paladin.*` visibility keys the streamed call stamped on its terminal chunk
+    /// (Phase 50, ADR-0061 (h), owner reading R-1), populated only on the final chunk -- the
+    /// streamed counterpart of [`PaladinResult::run_metadata`].
+    ///
+    /// The execution service merges the provider stream's terminal-chunk metadata by the same
+    /// rule as a buffered run (`paladin.params_omitted` and `paladin.unprofiled_model` as a
+    /// de-duplicated union, every other key as the last value; keys without the `paladin.`
+    /// prefix are never copied). Unlike [`PaladinResult`], a stream chunk has no dedicated
+    /// serving-provider field, so a fallback chain's `paladin.served_by` is carried here too.
+    /// Empty when the call adjusted nothing, and absent from the serialised JSON in that case.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub run_metadata: BTreeMap<String, String>,
 }
 
 impl ChunkMetadata {
@@ -466,6 +481,7 @@ impl ChunkMetadata {
     /// assert!(metadata.usage.is_none());
     /// assert!(metadata.cost.is_none());
     /// assert!(metadata.execution.is_none());
+    /// assert!(metadata.run_metadata.is_empty());
     /// ```
     pub fn new() -> Self {
         Self {
@@ -474,6 +490,7 @@ impl ChunkMetadata {
             usage: None,
             cost: None,
             execution: None,
+            run_metadata: BTreeMap::new(),
         }
     }
 
@@ -547,6 +564,26 @@ impl ChunkMetadata {
     /// ```
     pub fn with_execution(mut self, execution: ExecutionMetadata) -> Self {
         self.execution = Some(execution);
+        self
+    }
+
+    /// Chainable: attach the run's `paladin.*` visibility keys to this chunk (Phase 50,
+    /// ADR-0061 (h)), merged by the streamed-completion producer.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::collections::BTreeMap;
+    ///
+    /// use paladin_ports::output::paladin_port::ChunkMetadata;
+    ///
+    /// let keys = BTreeMap::from([("paladin.params_omitted".to_string(), "temperature".to_string())]);
+    /// let metadata = ChunkMetadata::new().with_run_metadata(keys.clone());
+    /// assert_eq!(metadata.run_metadata, keys);
+    /// ```
+    #[must_use]
+    pub fn with_run_metadata(mut self, run_metadata: BTreeMap<String, String>) -> Self {
+        self.run_metadata = run_metadata;
         self
     }
 }
@@ -1328,6 +1365,44 @@ mod tests {
 
         assert_eq!(metadata.usage, Some(TokenUsage::new(11, 7)));
         assert!(metadata.tokens.is_none());
+    }
+
+    /// Phase 50, owner reading R-1 (option-b): the final chunk of a streamed run carries the
+    /// run's `paladin.*` visibility keys on `ChunkMetadata.run_metadata`, the streamed
+    /// counterpart of `PaladinResult.run_metadata`.
+    #[test]
+    fn test_chunk_metadata_with_run_metadata_carries_the_visibility_keys() {
+        let keys: std::collections::BTreeMap<String, String> = [(
+            "paladin.params_omitted".to_string(),
+            "temperature".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let metadata = ChunkMetadata::new().with_run_metadata(keys.clone());
+
+        assert_eq!(metadata.run_metadata, keys);
+        assert!(ChunkMetadata::new().run_metadata.is_empty());
+    }
+
+    /// An empty `run_metadata` is absent from the serialised chunk metadata, and a document
+    /// without the key deserialises with an empty map.
+    #[test]
+    fn test_chunk_metadata_run_metadata_is_absent_when_empty_and_defaults_on_read() {
+        let json = serde_json::to_value(ChunkMetadata::new()).unwrap();
+        assert!(!json.as_object().unwrap().contains_key("run_metadata"));
+
+        let back: ChunkMetadata = serde_json::from_value(json).unwrap();
+        assert!(back.run_metadata.is_empty());
+
+        let with = ChunkMetadata::new().with_run_metadata(
+            [("paladin.served_model".to_string(), "m2".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["run_metadata"]["paladin.served_model"], "m2");
+        let back: ChunkMetadata = serde_json::from_value(json).unwrap();
+        assert_eq!(back.run_metadata, with.run_metadata);
     }
 
     #[test]

@@ -703,6 +703,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   absent from the serialised JSON (`#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]`),
   so a payload written before this field existed is byte-identical. `paladin-web`'s
   `ExecuteResponse` is not extended.
+- **Streamed calls carry the same visibility keys on their terminal chunk (PARITY-02; Phase 50
+  plan 50-18; ADR-0061 (h), owner reading R-1 = `option-b`).** `StreamingResponse` gains
+  `metadata: HashMap<String, String>` (additive: the struct is `#[non_exhaustive]`; empty and then
+  absent from the serialised JSON) and the chainable `StreamingResponse::with_metadata(key,
+  value)`. The compat engine (so Kimi, Qwen, Grok, Ollama and the generic OpenAI-compatible
+  adapter), OpenAI, DeepSeek, Anthropic and Gemini stamp, on the terminal chunk only, the keys
+  their buffered path stamps (`paladin.params_omitted`, `paladin.unprofiled_model`,
+  `paladin.response_format_adjusted`); an `Err` terminal item (refusal, empty completion) carries
+  none, and the `warn!` behaviour is unchanged. A `FallbackLlmAdapter` stream names the serving
+  hop on its terminal chunk with `paladin.served_by` and `paladin.served_model`, as `generate`
+  does on its response. `ChunkMetadata` (the final `PaladinStreamChunk` of a streamed
+  `PaladinExecutionService` run) gains `run_metadata: BTreeMap<String, String>` and
+  `ChunkMetadata::with_run_metadata`, populated by the same merge rule as
+  `PaladinResult.run_metadata` (and, having no `served_by` field, carrying `paladin.served_by`
+  too). The SSE `done` event of `paladin-web` is not extended.
 
 ### Changed
 

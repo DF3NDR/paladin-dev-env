@@ -3750,6 +3750,19 @@ impl PaladinExecutionService {
                             if let Some(cost) = cost.clone() {
                                 chunk_metadata = chunk_metadata.with_cost(cost);
                             }
+                            // ADR-0061 (h), owner reading R-1 (option-b): the terminal
+                            // chunk's `paladin.*` visibility keys, merged by the same rule
+                            // as a buffered run. A stream chunk has no dedicated
+                            // `served_by` field, so that key is carried here too -- no
+                            // `paladin.*` key is dropped between the provider's terminal
+                            // chunk and the caller.
+                            let mut run_metadata: BTreeMap<String, String> = BTreeMap::new();
+                            Self::merge_run_metadata(&mut run_metadata, &resp.metadata);
+                            if let Some(provider) = resp.metadata.get(SERVED_BY_METADATA_KEY) {
+                                run_metadata
+                                    .insert(SERVED_BY_METADATA_KEY.to_string(), provider.clone());
+                            }
+                            chunk_metadata = chunk_metadata.with_run_metadata(run_metadata);
                             // D-12: the streamed-completion producer -- built
                             // on every terminal chunk, usage or no usage,
                             // priced or not.
@@ -4059,7 +4072,15 @@ mod tests {
             Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
             LlmError,
         > {
-            unimplemented!("not exercised")
+            // One content chunk, then a terminal chunk stamped with the script's last entry.
+            let mut terminal =
+                StreamingResponse::terminal(paladin_ports::output::llm_port::FinishReason::Stop);
+            for (key, value) in self.script.last().cloned().unwrap_or_default() {
+                terminal = terminal.with_metadata(key, value);
+            }
+            let items: Vec<Result<StreamingResponse, LlmError>> =
+                vec![Ok(StreamingResponse::delta("streamed")), Ok(terminal)];
+            Ok(Box::new(futures::stream::iter(items)))
         }
 
         async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
@@ -4118,6 +4139,70 @@ mod tests {
         assert_eq!(result.run_metadata, expected);
         assert!(!result.run_metadata.contains_key("paladin.served_by"));
         assert_eq!(result.served_by.as_deref(), Some("p1"));
+    }
+
+    /// Phase 50, owner reading R-1 (option-b), streaming half: the terminal chunk's `paladin.*`
+    /// keys reach the final `PaladinStreamChunk`'s `ChunkMetadata.run_metadata` by the same
+    /// merge rule (a stream chunk has no `served_by` field, so that key is carried too); a
+    /// content chunk carries none and a non-`paladin.` key is never copied.
+    #[tokio::test]
+    async fn streamed_run_merges_the_terminal_chunk_keys_into_run_metadata() {
+        let llm = Arc::new(ScriptedMetadataLlmPort::new(vec![vec![
+            ("paladin.params_omitted", "temperature, stop,temperature"),
+            ("paladin.served_by", "p1"),
+            ("paladin.served_model", "m2"),
+            ("x-request-id", "not-a-paladin-key"),
+        ]]));
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+
+        let mut stream = service
+            .execute_stream(&create_test_paladin(), "hello")
+            .await
+            .expect("stream opens");
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.recv().await {
+            chunks.push(item.expect("every scripted chunk is Ok"));
+        }
+
+        let last = chunks.last().expect("a final chunk");
+        assert!(last.is_final);
+        let run_metadata = &last.metadata.as_ref().expect("final metadata").run_metadata;
+        let expected: std::collections::BTreeMap<String, String> = [
+            ("paladin.params_omitted", "temperature,stop"),
+            ("paladin.served_by", "p1"),
+            ("paladin.served_model", "m2"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(run_metadata, &expected);
+        for content in chunks.iter().filter(|c| !c.is_final) {
+            assert!(content.metadata.is_none(), "content chunk: {content:?}");
+        }
+    }
+
+    /// A streamed call that adjusted nothing leaves `run_metadata` empty on its final chunk.
+    #[tokio::test]
+    async fn streamed_run_without_stamped_keys_has_empty_run_metadata() {
+        let llm = Arc::new(ScriptedMetadataLlmPort::new(vec![vec![]]));
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+
+        let mut stream = service
+            .execute_stream(&create_test_paladin(), "hello")
+            .await
+            .expect("stream opens");
+        let mut last = None;
+        while let Some(item) = stream.recv().await {
+            last = Some(item.expect("every scripted chunk is Ok"));
+        }
+
+        let last = last.expect("a final chunk");
+        assert!(
+            last.metadata
+                .expect("final metadata")
+                .run_metadata
+                .is_empty()
+        );
     }
 
     /// A run whose calls stamped nothing has an empty `run_metadata`, and the serialised result

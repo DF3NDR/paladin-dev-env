@@ -970,9 +970,11 @@ impl LlmPort for DeepSeekAdapter {
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        // A streamed call has no metadata channel (A1-50-03): its omissions, format changes and
-        // unprofiled model are visible through the `warn!`s `build_request` emits.
-        let (mut api_request, _notes) = self.build_request(&request)?;
+        // ADR-0061 (h), owner reading R-1 (option-b): the omissions, format changes and
+        // unprofiled model `build_request` `warn!`s about are also stamped on the stream's
+        // terminal chunk (only that chunk), as the buffered path stamps `LlmResponse.metadata`.
+        let (mut api_request, notes) = self.build_request(&request)?;
+        let stream_metadata = notes.into_metadata();
         api_request.stream = true;
         api_request.stream_options = Some(DeepSeekStreamOptions {
             include_usage: true,
@@ -1054,6 +1056,10 @@ impl LlmPort for DeepSeekAdapter {
                                     let mut terminal = StreamingResponse::terminal(finish_reason);
                                     if let Some(usage) = held_usage.take() {
                                         terminal = terminal.with_usage(usage);
+                                    }
+                                    for (key, value) in &stream_metadata {
+                                        terminal =
+                                            terminal.with_metadata(key.as_str(), value.as_str());
                                     }
                                     items.push(Ok(terminal));
                                 }
@@ -2335,6 +2341,56 @@ mod tests {
                 !metadata.contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY),
                 "a plain object request is sent as asked, so nothing is recorded"
             );
+        }
+
+        /// Phase 50, owner reading R-1 (option-b): a streamed call stamps the visibility keys
+        /// the buffered path would, on the terminal chunk only.
+        #[tokio::test]
+        async fn deepseek_stream_terminal_chunk_carries_metadata() {
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n\
+                     data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n\
+                     data: [DONE]\n\n",
+                )
+                .create_async()
+                .await;
+
+            let mut parameters = unset();
+            parameters.temperature = Some(2.5); // above the profile's (0.0, 2.0)
+            let stream = test_adapter_at(&server.url())
+                .generate_stream(request_with(parameters))
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every scripted item is Ok"));
+            }
+
+            let terminal = chunks.last().expect("a terminal chunk");
+            assert!(terminal.finish_reason.is_some());
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some("deepseek-chat")
+            );
+            for content in &chunks[..chunks.len() - 1] {
+                assert!(content.metadata.is_empty(), "content chunk: {content:?}");
+            }
         }
 
         #[tokio::test]

@@ -1373,6 +1373,20 @@ pub struct StreamingResponse {
     /// field existed deserializes with `reasoning == None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<String>,
+    /// The `paladin.*` visibility keys this call stamped, on the **terminal chunk only**
+    /// (Phase 50, ADR-0061 (h), owner reading R-1).
+    ///
+    /// The same keys the buffered path puts in [`LlmResponse::metadata`]
+    /// (`paladin.params_omitted`, `paladin.unprofiled_model`,
+    /// `paladin.response_format_adjusted`; `paladin.served_by` and `paladin.served_model` on a
+    /// fallback chain's served stream), so a streamed call is as visible as a buffered one
+    /// without log scraping. Empty on every content chunk, on a terminal chunk of a call that
+    /// adjusted nothing, and never carried by an `Err` terminal item. Values are provider
+    /// names, model ids and parameter names only -- never request content or credentials.
+    /// Absent from serialized JSON when empty, so a chunk persisted before this field existed
+    /// deserializes with an empty map. Set it through [`StreamingResponse::with_metadata`].
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
 }
 
 impl StreamingResponse {
@@ -1397,6 +1411,7 @@ impl StreamingResponse {
             usage: None,
             cost: None,
             reasoning: None,
+            metadata: HashMap::new(),
         }
     }
 
@@ -1422,6 +1437,7 @@ impl StreamingResponse {
             usage: None,
             cost: None,
             reasoning: None,
+            metadata: HashMap::new(),
         }
     }
 
@@ -1485,6 +1501,31 @@ impl StreamingResponse {
         } else {
             Some(text)
         };
+        self
+    }
+
+    /// Chainable: attach one `paladin.*` visibility entry to this chunk (Phase 50, ADR-0061
+    /// (h)). Adapters call it on the terminal chunk only; a later entry for the same key
+    /// replaces the earlier one.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{FinishReason, StreamingResponse};
+    ///
+    /// let chunk = StreamingResponse::terminal(FinishReason::Stop)
+    ///     .with_metadata("paladin.params_omitted", "temperature");
+    /// assert_eq!(
+    ///     chunk.metadata.get("paladin.params_omitted").map(String::as_str),
+    ///     Some("temperature")
+    /// );
+    ///
+    /// // A content chunk carries none.
+    /// assert!(StreamingResponse::delta("Hello").metadata.is_empty());
+    /// ```
+    #[must_use]
+    pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
         self
     }
 }
@@ -2303,6 +2344,84 @@ mod tests {
         assert_eq!(json["reasoning"], "because");
         let back: StreamingResponse = serde_json::from_value(json).unwrap();
         assert_eq!(back.reasoning.as_deref(), Some("because"));
+    }
+
+    /// Phase 50, owner reading R-1 (option-b): the streaming terminal chunk carries the
+    /// `paladin.*` visibility keys, attached with the chainable `with_metadata`.
+    #[test]
+    fn streaming_with_metadata_stores_the_entries() {
+        let chunk = StreamingResponse::terminal(FinishReason::Stop)
+            .with_metadata("paladin.params_omitted", "temperature")
+            .with_metadata("paladin.unprofiled_model", "m1");
+        assert_eq!(chunk.metadata.len(), 2);
+        assert_eq!(
+            chunk
+                .metadata
+                .get("paladin.params_omitted")
+                .map(String::as_str),
+            Some("temperature")
+        );
+        assert_eq!(
+            chunk
+                .metadata
+                .get("paladin.unprofiled_model")
+                .map(String::as_str),
+            Some("m1")
+        );
+    }
+
+    /// A later entry for the same key replaces the earlier one.
+    #[test]
+    fn streaming_with_metadata_replaces_a_repeated_key() {
+        let chunk = StreamingResponse::terminal(FinishReason::Stop)
+            .with_metadata("paladin.served_model", "a")
+            .with_metadata("paladin.served_model", "b");
+        assert_eq!(chunk.metadata.len(), 1);
+        assert_eq!(
+            chunk
+                .metadata
+                .get("paladin.served_model")
+                .map(String::as_str),
+            Some("b")
+        );
+    }
+
+    /// The constructors leave `metadata` empty (content chunks carry none).
+    #[test]
+    fn streaming_constructors_have_empty_metadata() {
+        assert!(StreamingResponse::delta("a").metadata.is_empty());
+        assert!(
+            StreamingResponse::terminal(FinishReason::Stop)
+                .metadata
+                .is_empty()
+        );
+    }
+
+    /// An empty `metadata` map is absent from serialized JSON (byte-identical to before the
+    /// field existed), a document without the key deserializes to an empty map, and a
+    /// populated map round-trips.
+    #[test]
+    fn streaming_without_metadata_key_deserializes_to_empty() {
+        let chunk = StreamingResponse::delta("hi");
+        let json = serde_json::to_value(&chunk).unwrap();
+        assert!(
+            !json.as_object().unwrap().contains_key("metadata"),
+            "an empty metadata map must be absent from serialized JSON"
+        );
+        let back: StreamingResponse = serde_json::from_value(json).unwrap();
+        assert!(back.metadata.is_empty());
+
+        let with = StreamingResponse::terminal(FinishReason::Stop)
+            .with_metadata("paladin.params_omitted", "stop");
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["metadata"]["paladin.params_omitted"], "stop");
+        let back: StreamingResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            back.metadata
+                .get("paladin.params_omitted")
+                .map(String::as_str),
+            Some("stop")
+        );
     }
 
     /// RESEARCH Open Question 1: `LlmResponse::new` sets the five given fields and defaults the

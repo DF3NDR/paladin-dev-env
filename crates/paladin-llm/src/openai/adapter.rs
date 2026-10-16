@@ -14,7 +14,7 @@ use paladin_ports::output::llm_port::{
 use rand::Rng;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
@@ -873,6 +873,7 @@ impl OpenAIAdapter {
     async fn make_streaming_request(
         &self,
         request: &OpenAIRequest,
+        stream_metadata: HashMap<String, String>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>>, LlmError>
     {
         let url = format!("{}/chat/completions", self.config.base_url);
@@ -947,6 +948,10 @@ impl OpenAIAdapter {
                                     let mut terminal = StreamingResponse::terminal(finish_reason);
                                     if let Some(usage) = held_usage.take() {
                                         terminal = terminal.with_usage(usage);
+                                    }
+                                    for (key, value) in &stream_metadata {
+                                        terminal =
+                                            terminal.with_metadata(key.as_str(), value.as_str());
                                     }
                                     items.push(Ok(terminal));
                                 }
@@ -1036,11 +1041,14 @@ impl LlmPort for OpenAIAdapter {
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        // A streamed call has no metadata channel (A1-50-03): its omissions, format changes and
-        // unprofiled model are visible through the `warn!`s `build_request` emits.
-        let (openai_request, _notes) = self.build_request(&request, true)?;
+        // ADR-0061 (h), owner reading R-1 (option-b): the omissions, format changes and
+        // unprofiled model `build_request` `warn!`s about are also stamped on the stream's
+        // terminal chunk (only that chunk), as the buffered path stamps `LlmResponse.metadata`.
+        let (openai_request, notes) = self.build_request(&request, true)?;
 
-        let stream = self.make_streaming_request(&openai_request).await?;
+        let stream = self
+            .make_streaming_request(&openai_request, notes.into_metadata())
+            .await?;
         Ok(Box::new(stream))
     }
 
@@ -2478,6 +2486,56 @@ mod tests {
                 body.get("stop").is_none(),
                 "a streamed over-long stop list is omitted whole: {body}"
             );
+        }
+
+        /// Phase 50, owner reading R-1 (option-b): a streamed call stamps the visibility keys
+        /// the buffered path would, on the terminal chunk only.
+        #[tokio::test]
+        async fn openai_stream_terminal_chunk_carries_metadata() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(
+                    "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n\
+                     data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n\
+                     data: [DONE]\n\n",
+                )
+                .create_async()
+                .await;
+
+            let mut parameters = unset();
+            parameters.temperature = Some(1.5); // above the profile's (0.0, 1.0)
+            let stream = adapter_at(&server.url())
+                .generate_stream(request_with(parameters))
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every scripted item is Ok"));
+            }
+
+            let terminal = chunks.last().expect("a terminal chunk");
+            assert!(terminal.finish_reason.is_some());
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some("gpt-4o")
+            );
+            for content in &chunks[..chunks.len() - 1] {
+                assert!(content.metadata.is_empty(), "content chunk: {content:?}");
+            }
         }
 
         #[tokio::test]

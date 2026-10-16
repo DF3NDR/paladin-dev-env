@@ -1127,9 +1127,12 @@ impl LlmPort for GeminiAdapter {
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
         validate_model_identifier(&request.model)?;
-        // A streamed call has no metadata channel (A1-50-03): its omissions, format changes and
-        // unprofiled model are visible through the `warn!`s `build_request` emits.
-        let (gemini_request, _notes) = self.build_request(&request)?;
+        // ADR-0061 (h), owner reading R-1 (option-b): the omissions, format changes and
+        // unprofiled model `build_request` `warn!`s about are also stamped on the stream's
+        // terminal (finish-reason) chunk, only that chunk, as the buffered path stamps
+        // `LlmResponse.metadata`.
+        let (gemini_request, notes) = self.build_request(&request)?;
+        let stream_metadata = notes.into_metadata();
         let url = format!(
             "{}/models/{}:streamGenerateContent",
             self.config.base_url, request.model
@@ -1189,6 +1192,7 @@ impl LlmPort for GeminiAdapter {
                 Ok(bytes) => {
                     let mut items = parse_sse_chunk(&bytes);
                     classify_stream_items(&mut items, &mut completion, &model, &api_key);
+                    stamp_terminal_metadata(&mut items, &stream_metadata);
                     items
                 }
                 Err(e) => vec![Err(LlmError::NetworkError(format!(
@@ -1542,6 +1546,28 @@ fn classify_stream_items(
         };
         if let Err(err) = verdict {
             *item = Err(err);
+        }
+    }
+}
+
+/// Stamp `metadata` (the request's `paladin.*` visibility keys, ADR-0061 (h)) on the terminal
+/// chunk -- the `Ok` item that carries the finish reason -- and on no other item. A terminal
+/// that [`classify_stream_items`] replaced with an `Err` (an empty answer) carries none.
+fn stamp_terminal_metadata(
+    items: &mut [Result<StreamingResponse, LlmError>],
+    metadata: &HashMap<String, String>,
+) {
+    if metadata.is_empty() {
+        return;
+    }
+    for item in items.iter_mut() {
+        if let Ok(chunk) = item
+            && chunk.finish_reason.is_some()
+        {
+            let taken = std::mem::replace(chunk, StreamingResponse::delta(String::new()));
+            *chunk = metadata.iter().fold(taken, |stamped, (key, value)| {
+                stamped.with_metadata(key.as_str(), value.as_str())
+            });
         }
     }
 }
@@ -4164,6 +4190,55 @@ mod tests {
                 !metadata.contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY),
                 "nothing changed on the wire, so nothing is recorded: {metadata:?}"
             );
+        }
+
+        /// Phase 50, owner reading R-1 (option-b): a streamed call stamps the visibility keys
+        /// the buffered path would, on the terminal (finish-reason) chunk only.
+        #[tokio::test]
+        async fn gemini_stream_terminal_chunk_carries_metadata() {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent?alt=sse")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(
+                    "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hi\"}]}}]}\n\n\
+                     data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"\"}]},\"finishReason\":\"STOP\"}]}\n\n",
+                )
+                .create_async()
+                .await;
+
+            let mut parameters = unset();
+            parameters.temperature = Some(2.5); // above the profile's (0.0, 2.0)
+            let stream = test_adapter(&server.url())
+                .generate_stream(request_with(parameters))
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every scripted item is Ok"));
+            }
+
+            let terminal = chunks.last().expect("a terminal chunk");
+            assert!(terminal.finish_reason.is_some());
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some(MODEL)
+            );
+            for content in &chunks[..chunks.len() - 1] {
+                assert!(content.metadata.is_empty(), "content chunk: {content:?}");
+            }
         }
 
         #[tokio::test]

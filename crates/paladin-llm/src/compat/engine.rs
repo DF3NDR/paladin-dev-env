@@ -1016,9 +1016,12 @@ impl CompatEngine {
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        // A streamed call has no metadata channel (A1-50-03): its omissions are visible through
-        // the `warn!` `build_request` already emitted, so the notes are dropped here.
-        let (mut api_request, _notes) = self.build_request(&request)?;
+        // ADR-0061 (h), owner reading R-1 (option-b): the omissions, adjustments and unprofiled
+        // model `build_request` already `warn!`ed about are also stamped on the stream's
+        // terminal chunk (and only that chunk), exactly as the buffered path stamps them on
+        // `LlmResponse.metadata`.
+        let (mut api_request, notes) = self.build_request(&request)?;
+        let stream_metadata = notes.into_metadata();
         api_request.stream = true;
         api_request.stream_options = Some(CompatStreamOptions {
             include_usage: true,
@@ -1115,6 +1118,10 @@ impl CompatEngine {
                                     let mut terminal = StreamingResponse::terminal(finish_reason);
                                     if let Some(usage) = held_usage.take() {
                                         terminal = terminal.with_usage(usage);
+                                    }
+                                    for (key, value) in &stream_metadata {
+                                        terminal =
+                                            terminal.with_metadata(key.as_str(), value.as_str());
                                     }
                                     items.push(Ok(terminal));
                                 }
@@ -2537,6 +2544,75 @@ mod tests {
                 .with_provider_name("test-preset")
                 .with_model_registry(registry)
         }
+    }
+
+    /// Drain a compat stream against a mock SSE endpoint and return its chunks.
+    async fn stream_through(
+        engine_for: impl FnOnce(String) -> CompatEngine,
+        request: LlmRequest,
+    ) -> Vec<StreamingResponse> {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body_with_usage_frame())
+            .create_async()
+            .await;
+        let engine = engine_for(server.url());
+        let stream = engine.generate_stream(request).await.unwrap();
+        let mut stream = Box::into_pin(stream);
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.next().await {
+            chunks.push(item.expect("every item of the scripted stream is Ok"));
+        }
+        chunks
+    }
+
+    /// Phase 50, owner reading R-1 (option-b): a streamed call stamps the visibility keys the
+    /// buffered path would, on the terminal chunk only.
+    #[tokio::test]
+    async fn compat_stream_terminal_chunk_carries_metadata() {
+        let mut parameters = fully_specified_parameters();
+        parameters.temperature = Some(1.5); // above the declared (0.0, 1.0)
+        let request = build_request_with_parameters("some-new-model", parameters);
+
+        let chunks = stream_through(engine_with(test_registry(vec![])), request).await;
+
+        let terminal = chunks.last().expect("a terminal chunk");
+        assert!(terminal.finish_reason.is_some());
+        assert_eq!(
+            terminal
+                .metadata
+                .get(PARAMS_OMITTED_METADATA_KEY)
+                .map(String::as_str),
+            Some("temperature")
+        );
+        assert_eq!(
+            terminal
+                .metadata
+                .get(UNPROFILED_MODEL_METADATA_KEY)
+                .map(String::as_str),
+            Some("some-new-model")
+        );
+        for content in &chunks[..chunks.len() - 1] {
+            assert!(content.metadata.is_empty(), "content chunk: {content:?}");
+        }
+    }
+
+    /// A streamed call that adjusted nothing ends with an empty metadata map -- the terminal
+    /// chunk is byte-identical to before the field existed.
+    #[tokio::test]
+    async fn compat_stream_terminal_chunk_has_no_metadata_when_nothing_was_adjusted() {
+        let request = build_request_with_parameters("test-model", fully_specified_parameters());
+
+        let chunks = stream_through(
+            |url| CompatEngine::new(test_config_at(&url)).unwrap(),
+            request,
+        )
+        .await;
+
+        assert!(chunks.iter().all(|c| c.metadata.is_empty()), "{chunks:?}");
     }
 
     #[tokio::test]

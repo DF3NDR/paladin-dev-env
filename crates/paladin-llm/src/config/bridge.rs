@@ -21,10 +21,6 @@
 //! becomes empty and the adapter refuses it at construction, and a `${NAME}` placeholder is never
 //! carried through as the credential.
 
-// TEMPORARY (removed in the next commit of plan 50-09): the per-provider `from_layers` functions are
-// consumed by `LlmProviderFactory::create_from_config`, which lands in plan 50-09 Task 3.
-#![allow(dead_code)]
-
 #[cfg(any(
     feature = "openai",
     feature = "anthropic",

@@ -611,7 +611,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the drifted `new` argument lists is a later, separately registered break
   (`.planning/todos/pending/2026-10-16-harmonise-llm-config-new-signatures.md`).
 
+- **Config-driven provider construction (PARITY-03; Phase 50 plan 50-09; D-12, D-13).**
+  `LlmProviderFactory::create_from_config(&LlmConfig, provider, model)` builds any of the nine
+  adapters from its `llm.<provider>` block, and `LlmProviderFactory::is_configured(Option<&LlmConfig>,
+  provider)` reports whether a provider is available by its block or its environment (a provider
+  configured purely in YAML is available, unlike `list_available_providers`). The block gains
+  three keys -- `max_tokens`, `context_window` and `models.<model-id>` (the per-model override,
+  the same shape as `ModelOverride`) -- all optional and skipped when empty, so every existing
+  YAML file loads to the same values. Each input is taken from the most specific statement that
+  sets it, field by field: the per-agent model, then the block, then the provider's legacy
+  environment variables (exactly the ones its `from_env` reads), then the adapter's compiled
+  default; an environment variable never overrides a value written in the block. A model that is
+  a seeded (or overridden) reasoning model gets a 300 s timeout when neither the block nor the
+  environment sets one. `api_key` may be empty (the provider's variable fills it) or an exact
+  `${NAME}` placeholder naming the variable that holds it; `abc${X}` and `$X` are used literally
+  and an unset placeholder variable is a construction error, never sent to the vendor. Every
+  error names the provider and the model (`provider 'kimi' (model 'kimi-k3'): ...`) and the
+  variable it tried, never a key value, and a malformed model id (empty, whitespace or control
+  characters, `..`, `?`, `#`, `%`, a leading `/`, over 256 characters) is refused before any
+  adapter is built. `LlmProviderFactory::create(name)` goes through the same layering with no
+  block.
+
 ### Changed
+
+- **`api_key` may be empty in an `llm.<provider>` block, and the `From<&LlmProviderConfig>`
+  conversions use the adapters' own defaults (Phase 50 plan 50-09; A1-50-09).** `LlmConfig::validate`
+  no longer rejects an empty key, and a block with no `api_key` key deserializes (it used to fail
+  the whole file; `config.example.yml`'s keyless `ollama` block now loads): the provider's
+  environment variable fills it, and a key still missing at construction is reported then, naming
+  the provider, the model and the variable, or up front by `LlmProviderFactory::is_configured`.
+  `LlmProviderConfig` prints its key as `<redacted>` from `Debug`. The infallible
+  `From<&LlmProviderConfig>` conversions (and the `TryFrom` for the generic provider) now run the
+  same layering with no environment: the Anthropic default model is `claude-haiku-5-5` (was the
+  retired October-2024 Sonnet id) with the adapter's 60 s timeout (was 300 s), the DeepSeek
+  default model is `deepseek-flash` (was `deepseek-chat`) with 300 s as a reasoning model (was
+  60 s), and a `${NAME}` key is never carried through as the credential (the field is empty and
+  the adapter refuses it).
 
 - **Reasoning models default to a 300 s timeout on the direct config path, and an adapter-wide
   `context_window` overrides seeded windows (D-13; Phase 50 plan 50-08).** `KimiConfig`,
@@ -1014,6 +1049,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `context_window` and `model_overrides`) -- build one with `new` or `from_env` and set fields or
   call the `with_*` builders; a struct literal outside the crate no longer compiles. Owner
   decision `option-a` (Phase 50 plan 50-08), so Phase 51's `reasoning_effort` is free. Registered
+  with the semver measurement in plan 50-10.
+- **BREAKING (`paladin-llm`): `LlmProviderConfig` gains `max_tokens`, `context_window` and `models`
+  and is marked `#[non_exhaustive]`** -- build one with `LlmProviderConfig::new(api_key)` and the
+  `with_*` builders (or deserialize it); a struct literal outside the crate no longer compiles.
+  Same owner decision `option-a` as the nine adapter configs (Phase 50 plan 50-09). Registered
   with the semver measurement in plan 50-10.
 
 ### Known limitations

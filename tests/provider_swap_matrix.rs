@@ -755,7 +755,7 @@ matrix_case!(deepseek_empty_stop_completion_is_typed => case_empty_stop_completi
 matrix_case!(kimi_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("kimi"));
 matrix_case!(qwen_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("qwen"));
 matrix_case!(grok_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("grok"));
-matrix_case!(#[ignore = "red until plan 50-13: an empty stop completion is returned as a successful empty answer"] gemini_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("gemini"));
+matrix_case!(gemini_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("gemini"));
 matrix_case!(ollama_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("ollama"));
 matrix_case!(openai_compatible_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("openai-compatible"));
 

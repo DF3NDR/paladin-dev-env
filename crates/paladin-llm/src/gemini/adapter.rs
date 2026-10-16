@@ -94,6 +94,7 @@ use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
     default_timeout_seconds, seeded, seeded_window,
 };
+use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
@@ -647,17 +648,25 @@ impl GeminiAdapter {
     /// Parse a well-formed Gemini `generateContent` response into an
     /// [`LlmResponse`].
     ///
-    /// Fails with [`LlmError::EmptyCompletion`] under two named conditions
-    /// rather than ever returning `Ok` with empty content — an empty-string
-    /// success is indistinguishable from a valid empty answer to every
-    /// downstream caller:
+    /// Fails with [`LlmError::EmptyCompletion`] rather than ever returning
+    /// `Ok` with empty content — an empty-string success is
+    /// indistinguishable from a valid empty answer to every downstream
+    /// caller. Two conditions:
     ///
     /// 1. `candidates` is empty.
-    /// 2. The mapped finish reason is [`FinishReason::Length`] (Gemini's
-    ///    `MAX_TOKENS`) and the extracted content trims to empty — the
-    ///    reasoning-model truncation signature also detected by
-    ///    [`crate::compat::engine::CompatEngine::detect_empty_completion`]
-    ///    for every compat-preset adapter in this crate.
+    /// 2. The extracted content trims to empty on any finish reason that is
+    ///    not a blocked-content finish (D-11a): `STOP` and `MAX_TOKENS` both
+    ///    qualify, and the payload carries the advice that fits (a larger
+    ///    `max_tokens` for `MAX_TOKENS`). The decision is the shared
+    ///    [`classify_completion`], the same function every other adapter
+    ///    calls, so the rule cannot drift.
+    ///
+    /// A blocked-content finish (`SAFETY`, `RECITATION`, `BLOCKLIST`,
+    /// `PROHIBITED_CONTENT`, `SPII`) maps to [`FinishReason::ContentFilter`]
+    /// and stays `Ok` even with no text (D-09): a blocked output is a finish
+    /// reason the caller inspects, never reported as a token-budget problem.
+    /// Gemini has no refusal signal distinct from those finishes (A2-50-13),
+    /// so no refusal text is passed to the guard.
     fn parse_response(
         &self,
         request_id: Uuid,
@@ -671,24 +680,14 @@ impl GeminiAdapter {
         let content = candidate_text(candidate);
         let finish_reason = map_finish_reason(candidate.finish_reason.as_deref());
 
-        // Mirrors `crate::compat::engine::CompatEngine::detect_empty_completion` —
-        // the two must stay in step by hand (D-08 keeps Gemini bespoke, so
-        // this parity is not structural; a divergence between the two is a
-        // defect). The predicate is deliberately two conditions, not one: an
-        // empty response under a normal `STOP` finish is a legal empty
-        // answer, the same case every compat preset also lets through. The
-        // finish reason is the discriminator specifically so a `SAFETY` or
-        // `RECITATION` refusal is never misreported as a token-budget
-        // problem — the model declined to answer, and a larger max_tokens
-        // will produce the same refusal.
-        if matches!(finish_reason, FinishReason::Length) && content.trim().is_empty() {
-            return Err(LlmError::EmptyCompletion(format!(
-                "Gemini response finished with MAX_TOKENS and produced no text ({} raw chars) — \
-                 reasoning likely consumed the entire max_tokens budget; retry with a larger \
-                 max_tokens",
-                content.len()
-            )));
-        }
+        classify_completion(
+            GEMINI_PROVIDER,
+            model,
+            &content,
+            &finish_reason,
+            None,
+            &self.config.api_key,
+        )?;
 
         let usage = response.usage_metadata.unwrap_or_default();
 
@@ -1111,6 +1110,18 @@ impl LlmPort for GeminiAdapter {
     /// Gemini, so a transient failure can bill the prompt more than once.
     /// The non-retryable set above exists precisely so a failure the
     /// provider has already answered definitively is never retried.
+    ///
+    /// ## Empty output (D-11a)
+    ///
+    /// A stream cannot be classified until it ends, so the text is
+    /// accumulated as frames pass and the shared [`classify_completion`]
+    /// rule runs on the frame that carries `finishReason` (the last
+    /// candidate frame). A stream that reaches it with no non-blank text
+    /// and a finish reason other than a blocked-content one ends with
+    /// `Err(`[`LlmError::EmptyCompletion`]`)`; a blocked-content finish
+    /// (`SAFETY` and its siblings) stays an `Ok` terminal chunk with
+    /// [`FinishReason::ContentFilter`] (D-09). Frames already yielded stay
+    /// yielded; only the terminal item changes.
     async fn generate_stream(
         &self,
         request: LlmRequest,
@@ -1169,9 +1180,17 @@ impl LlmPort for GeminiAdapter {
             .execute_with_retry(operation, self.config.max_retries)
             .await?;
 
-        let stream = response.bytes_stream().flat_map(|chunk_result| {
+        let model = request.model.clone();
+        let api_key = self.config.api_key.clone();
+        let mut completion = StreamCompletion::default();
+
+        let stream = response.bytes_stream().flat_map(move |chunk_result| {
             let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
-                Ok(bytes) => parse_sse_chunk(&bytes),
+                Ok(bytes) => {
+                    let mut items = parse_sse_chunk(&bytes);
+                    classify_stream_items(&mut items, &mut completion, &model, &api_key);
+                    items
+                }
                 Err(e) => vec![Err(LlmError::NetworkError(format!(
                     "Gemini stream error: {e}"
                 )))],
@@ -1473,14 +1492,15 @@ fn candidate_text(candidate: &GeminiCandidate) -> String {
 /// Map a Gemini `finishReason` string to [`FinishReason`], exhaustively.
 ///
 /// `STOP` maps to [`FinishReason::Stop`], `MAX_TOKENS` to
-/// [`FinishReason::Length`], `SAFETY` to [`FinishReason::ContentFilter`]
-/// (the closest existing variant — Gemini's safety block is a
-/// content-policy decision, matching `ContentFilter`'s semantics). `OTHER`
-/// and `RECITATION` — and any other value this adapter does not
-/// specifically recognise — map to [`FinishReason::Error`] carrying the raw
-/// reason string. This is deliberate: neither has a direct `FinishReason`
-/// equivalent, and coercing either to `Stop` would report a truncated or
-/// blocked generation as a normal completion. An absent `finishReason`
+/// [`FinishReason::Length`]. The blocked-content finishes — `SAFETY`,
+/// `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT` and `SPII` — map to
+/// [`FinishReason::ContentFilter`] (the closest existing variant — each is
+/// a content-policy decision, matching `ContentFilter`'s semantics, and the
+/// shared guard lets that finish through with no text, D-09). `OTHER` — and
+/// any other value this adapter does not specifically recognise — maps to
+/// [`FinishReason::Error`] carrying the raw reason string. This is
+/// deliberate: coercing either to `Stop` would report a truncated or
+/// unexplained generation as a normal completion. An absent `finishReason`
 /// (`None`) maps to `Stop` — the non-terminal-streaming-frame case is
 /// distinguished by callers never invoking this function with `None` for a
 /// frame that has not yet finished.
@@ -1489,8 +1509,40 @@ fn map_finish_reason(reason: Option<&str>) -> FinishReason {
         None => FinishReason::Stop,
         Some("STOP") => FinishReason::Stop,
         Some("MAX_TOKENS") => FinishReason::Length,
-        Some("SAFETY") => FinishReason::ContentFilter,
+        Some("SAFETY" | "RECITATION" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII") => {
+            FinishReason::ContentFilter
+        }
         Some(other) => FinishReason::Error(other.to_string()),
+    }
+}
+
+/// Run the shared empty-output rule over the items of one parsed network chunk (D-11a).
+///
+/// Every `Ok` item's delta is accumulated in `completion`; the item that carries a finish reason
+/// is the terminal chunk, and if [`StreamCompletion::finish`] rejects the accumulated text it is
+/// replaced by that error. Earlier items are untouched, so text and frames already yielded stay
+/// yielded. A blocked-content finish is [`FinishReason::ContentFilter`], which the guard lets
+/// through, so it stays an `Ok` terminal chunk.
+fn classify_stream_items(
+    items: &mut [Result<StreamingResponse, LlmError>],
+    completion: &mut StreamCompletion,
+    model: &str,
+    api_key: &str,
+) {
+    for item in items.iter_mut() {
+        let verdict = match item {
+            Ok(chunk) => {
+                completion.observe_content(&chunk.delta);
+                match &chunk.finish_reason {
+                    Some(finish) => completion.finish(GEMINI_PROVIDER, model, finish, api_key),
+                    None => Ok(()),
+                }
+            }
+            Err(_) => Ok(()),
+        };
+        if let Err(err) = verdict {
+            *item = Err(err);
+        }
     }
 }
 
@@ -1912,9 +1964,24 @@ mod tests {
             FinishReason::Error(reason) => assert_eq!(reason, "OTHER"),
             other => panic!("expected FinishReason::Error(\"OTHER\"), got {other:?}"),
         }
-        match map_finish_reason(Some("RECITATION")) {
-            FinishReason::Error(reason) => assert_eq!(reason, "RECITATION"),
-            other => panic!("expected FinishReason::Error(\"RECITATION\"), got {other:?}"),
+        // Plan 50-13 (D-09/D-11a) flipped RECITATION: it used to be pinned as
+        // `Error("RECITATION")`. It is a blocked-content finish, so it maps to
+        // `ContentFilter` with its siblings -- otherwise the shared guard would
+        // report a recitation block with no text as an empty completion.
+        for blocked in [
+            "SAFETY",
+            "RECITATION",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+        ] {
+            assert!(
+                matches!(
+                    map_finish_reason(Some(blocked)),
+                    FinishReason::ContentFilter
+                ),
+                "{blocked} must map to ContentFilter"
+            );
         }
     }
 
@@ -2117,28 +2184,29 @@ mod tests {
         assert!(matches!(llm_response.finish_reason, FinishReason::Length));
     }
 
-    /// Adjacency control: exact parity with
-    /// `crate::compat::engine::CompatEngine::detect_empty_completion`, which
-    /// also lets a `STOP`-finished empty response through as `Ok`. **Passes
-    /// today.** Widening the guard to fire on empty content under any finish
-    /// reason would make Gemini stricter than every other adapter in this
-    /// crate — a different inconsistency, not a fix.
+    /// D-11a: an empty response under a normal `STOP` is an empty completion, the same as on
+    /// every other adapter (it used to be pinned as `Ok("")`, parity with the compat engine's
+    /// then-`length`-only check; plan 50-13 flipped it onto the shared guard).
     #[test]
-    fn parse_response_keeps_an_empty_response_that_finished_normally() {
+    fn parse_response_maps_an_empty_stop_to_empty_completion() {
         let adapter = test_adapter("https://example.invalid");
-        let body = json!({
-            "candidates": [{
-                "content": {"role": "model", "parts": []},
-                "finishReason": "STOP"
-            }]
-        });
-        let response: GeminiResponse = serde_json::from_value(body).unwrap();
+        for parts in [json!([]), json!([{"text": ""}]), json!([{"text": "  \n"}])] {
+            let body = json!({
+                "candidates": [{
+                    "content": {"role": "model", "parts": parts},
+                    "finishReason": "STOP"
+                }]
+            });
+            let response: GeminiResponse = serde_json::from_value(body).unwrap();
 
-        let llm_response = adapter
-            .parse_response(Uuid::new_v4(), "gemini-2.5-flash", response)
-            .expect("an empty response that finished normally must still be Ok");
-
-        assert!(llm_response.content.is_empty());
+            match adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response) {
+                Err(LlmError::EmptyCompletion(msg)) => {
+                    assert!(msg.contains("finish_reason=stop"), "{msg}");
+                    assert!(!msg.contains("max_tokens"), "{msg}");
+                }
+                other => panic!("expected Err(EmptyCompletion), got {other:?}"),
+            }
+        }
     }
 
     /// Refusal control: a `SAFETY` finish (content-policy refusal, mapped to
@@ -2164,6 +2232,135 @@ mod tests {
             !matches!(result, Err(LlmError::EmptyCompletion(_))),
             "a SAFETY refusal must not be reported as EmptyCompletion (token-budget problem), got {result:?}"
         );
+    }
+
+    /// D-09: every blocked-content finish with no text stays an `Ok` `ContentFilter` result,
+    /// not an empty completion.
+    #[test]
+    fn parse_response_keeps_every_blocked_content_finish_as_content_filter() {
+        let adapter = test_adapter("https://example.invalid");
+        for finish in [
+            "SAFETY",
+            "RECITATION",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+        ] {
+            let body = json!({
+                "candidates": [{
+                    "content": {"role": "model", "parts": []},
+                    "finishReason": finish
+                }]
+            });
+            let response: GeminiResponse = serde_json::from_value(body).unwrap();
+
+            let parsed = adapter
+                .parse_response(Uuid::new_v4(), "gemini-2.5-flash", response)
+                .unwrap_or_else(|e| panic!("{finish} with no text must stay Ok, got {e:?}"));
+            assert!(parsed.content.is_empty(), "{finish}");
+            assert!(
+                matches!(parsed.finish_reason, FinishReason::ContentFilter),
+                "{finish}: {:?}",
+                parsed.finish_reason
+            );
+        }
+    }
+
+    // ── Stream: empty output through the shared guard (D-11a) ──
+
+    fn frame(text: &str, finish: Option<&str>) -> String {
+        let mut candidate = json!({"content": {"role": "model", "parts": [{"text": text}]}});
+        if let Some(finish) = finish {
+            candidate["finishReason"] = json!(finish);
+        }
+        format!("data: {}\n\n", json!({"candidates": [candidate]}))
+    }
+
+    async fn run_stream(sse: String) -> Vec<Result<StreamingResponse, LlmError>> {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .create_async()
+            .await;
+        let request = build_request(
+            "gemini-2.5-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        );
+        let stream = test_adapter(&server.url())
+            .generate_stream(request)
+            .await
+            .expect("stream must open");
+        let mut stream = Box::into_pin(stream);
+        let mut items = Vec::new();
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+        items
+    }
+
+    #[tokio::test]
+    async fn gemini_empty_stream_is_empty_completion() {
+        let items = run_stream(format!("{}{}", frame("", None), frame("  ", Some("STOP")))).await;
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert!(items[0].is_ok(), "the non-terminal frame stays yielded");
+        match &items[1] {
+            Err(LlmError::EmptyCompletion(msg)) => {
+                assert!(msg.contains("finish_reason=stop"), "{msg}");
+            }
+            other => panic!("expected Err(EmptyCompletion) last, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn gemini_empty_stream_on_max_tokens_advises_a_larger_budget() {
+        let items = run_stream(frame("", Some("MAX_TOKENS"))).await;
+        match items.last() {
+            Some(Err(LlmError::EmptyCompletion(msg))) => {
+                assert!(msg.contains("larger max_tokens"), "{msg}");
+            }
+            other => panic!("expected Err(EmptyCompletion), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn gemini_blocked_stream_stays_an_ok_content_filter_terminal_chunk() {
+        for finish in [
+            "SAFETY",
+            "RECITATION",
+            "BLOCKLIST",
+            "PROHIBITED_CONTENT",
+            "SPII",
+        ] {
+            let items = run_stream(frame("", Some(finish))).await;
+            assert_eq!(items.len(), 1, "{finish}: {items:?}");
+            let terminal = items[0]
+                .as_ref()
+                .unwrap_or_else(|e| panic!("{finish}: {e:?}"));
+            assert!(
+                matches!(terminal.finish_reason, Some(FinishReason::ContentFilter)),
+                "{finish}: {:?}",
+                terminal.finish_reason
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn gemini_stream_with_text_before_the_terminal_frame_is_fine() {
+        let items = run_stream(format!("{}{}", frame("Hel", None), frame("", Some("STOP")))).await;
+        assert!(items.iter().all(Result::is_ok), "{items:?}");
+        let text: String = items
+            .iter()
+            .filter_map(|i| i.as_ref().ok())
+            .map(|c| c.delta.as_str())
+            .collect();
+        assert_eq!(text, "Hel");
     }
 
     // ── Error mapping ──
@@ -2432,7 +2629,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_recitation_finish_reason_produces_error_not_stop() {
+    async fn generate_recitation_finish_reason_is_content_filter_not_stop() {
         let mut server = Server::new_async().await;
         server
             .mock("POST", "/models/gemini-2.5-flash:generateContent")
@@ -2459,10 +2656,14 @@ mod tests {
         );
 
         let response = adapter.generate(request).await.unwrap();
-        match response.finish_reason {
-            FinishReason::Error(reason) => assert_eq!(reason, "RECITATION"),
-            other => panic!("expected FinishReason::Error(\"RECITATION\"), got {other:?}"),
-        }
+        // Plan 50-13 flipped this from `Error("RECITATION")` (D-09): a recitation block is a
+        // blocked-content finish, so it is `ContentFilter`, and still never `Stop`.
+        assert!(
+            matches!(response.finish_reason, FinishReason::ContentFilter),
+            "expected ContentFilter, got {:?}",
+            response.finish_reason
+        );
+        assert_eq!(response.content, "partial");
     }
 
     #[tokio::test]

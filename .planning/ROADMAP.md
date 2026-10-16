@@ -1409,7 +1409,7 @@ Plans:
 
 **Wave 10** *(blocked on Wave 9 completion)*
 
-- [ ] 50-12-PLAN.md — `LlmError::Refusal` (Permanent) in all four tables; shared `classify_completion` (refusal > content filter > empty on any stop, buffered and streamed); compat, OpenAI and DeepSeek on it with cache-write and reasoning text
+- [x] 50-12-PLAN.md — `LlmError::Refusal` (Permanent) in all four tables; shared `classify_completion` (refusal > content filter > empty on any stop, buffered and streamed); compat, OpenAI and DeepSeek on it with cache-write and reasoning text
 
 **Wave 11** *(blocked on Wave 10 completion)*
 

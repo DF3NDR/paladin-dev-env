@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-11-PLAN.md
-last_updated: "2026-10-16T15:34:07.156Z"
+stopped_at: Completed 50-12-PLAN.md
+last_updated: "2026-10-16T16:30:10.770Z"
 last_activity: 2026-10-16
 last_activity_desc: Phase 50 execution started
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 107
-  completed_plans: 101
+  completed_plans: 102
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([█████████░] 94%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([██████████] 95%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 12 of 18
+Plan: 13 of 18
 Status: Ready to execute
 Last activity: 2026-10-16 — Phase 50 execution started
 
@@ -308,6 +308,7 @@ Last activity: 2026-10-16 — Phase 50 execution started
 | Phase 50 P09 | 40min | 3 tasks | 13 files |
 | Phase 50 P10 | 45min | 3 tasks | 11 files |
 | Phase 50 P11 | 30min | 3 tasks | 46 files |
+| Phase 50 P12 | 35min | 3 tasks | 14 files |
 
 ## Accumulated Context
 
@@ -537,6 +538,8 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-10: LlmConfig::validate accepts a recognised default provider with no block (env-only default provider valid)
 - [Phase ?]: 50-10: D-27 measured: only struct_marked_non_exhaustive fired (196 checks) on the nine *Config types and LlmProviderConfig; registered with 10 rows and 10 entries; re-run exits 0
 - [Phase ?]: 50-11: LlmResponse.reasoning sits after cost; registered on the existing paladin-ports | LlmResponse 9.2 row and allowlist entry (PRICE-03, PARITY-05), no new pair; D-27 for paladin-ports fired constructible_struct_adds_field on LlmResponse.cost and .reasoning only for this item
+- [Phase ?]: 50-12: TokenUsage.total_tokens stays prompt+completion (D-02); vendor total not copied despite plan truth; owner decision needed if vendor total must be preserved (paladin-core contract change)
+- [Phase ?]: 50-12: response_guards::classify_completion plus StreamCompletion decide refusal > content_filter > function_call > empty-on-any-stop for compat, OpenAI, DeepSeek; widen its cfg feature list in 50-13 for anthropic and gemini
 
 ### Pending Todos
 
@@ -755,8 +758,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-16T15:34:07.106Z
-**Stopped at:** Completed 50-11-PLAN.md
+**Last session:** 2026-10-16T16:30:10.742Z
+**Stopped at:** Completed 50-12-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

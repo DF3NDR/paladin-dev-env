@@ -1,3 +1,68 @@
+# 50-SEED-PROBE: operator live seed probe (Phase 50, D-08 and D-11a)
+
+This file is the sole seed source for plan 50-06 (the dated model registry) and the usage-cap evidence for
+plan 50-13; anything that is not in it must be left out.
+
+## Provenance
+
+- Who ran it: the operator (Am0rfu5), on their own vendor keys, from the project devcontainer. No vendor key
+  exists in the Claude environment, so Claude did not run, edit or re-measure any value below.
+- When: 2026-10-15 22:23:15Z (the transcript's own UTC date line). This is the operator's second run of that
+  day; the first (2026-10-15 19:56Z) hit Gemini free-tier rate limits and is preserved only in git history
+  (commit `c33022b9`). Everything below is the second run.
+- Commit it ran at: `c33022b9` (the transcript's `commit:` line).
+- Curated on 2026-10-16 from the operator's raw transcript. The transcript that follows the `---` rule is
+  verbatim, including its `## Operator-supplied evidence` section (values there carry their own *observed* or
+  *docs* label, source URL and access date) and its `## Owner reading R-2` section. No measured value was edited.
+- Scrub check (plan 50-17 Task 2): the whole file was run against every marker and shape that
+  `paladin_llm::redaction::redact_secret_patterns` recognises (authorization-header tokens, vendor-prefixed secret keys, AWS access key
+  ids, key and token query values, JWT-shaped triples) plus the Google and xAI key shapes, authorization-style header
+  lines, and the literal value of every credential variable present in this environment. Nothing matched, so
+  nothing was redacted or edited.
+
+## Providers PROBED and SKIPPED
+
+PROBED (7 of 9): OpenAI, Anthropic, DeepSeek, Kimi, Qwen, Grok, Gemini.
+
+SKIPPED (2 of 9), both deliberately, as named by the operator in the resume signal:
+
+- Ollama: SKIPPED (`OLLAMA_BASE_URL` not set); no local daemon is configured.
+- OpenAI-compatible: SKIPPED (`OPENAI_COMPATIBLE_API_KEY` not set); no endpoint is configured.
+
+Models listed and candidates probed, per provider, counted from the transcript's tables:
+
+| provider | status | models listed | candidates probed |
+|---|---|---|---|
+| OpenAI | PROBED | 135 | 2 |
+| Anthropic | PROBED | 14 | 9 |
+| DeepSeek | PROBED | 2 | 3 |
+| Kimi | PROBED | 4 | 4 |
+| Qwen | PROBED | 99 | 4 |
+| Grok | PROBED | 14 | 3 |
+| Gemini | PROBED | 63 | 3 |
+| Ollama | SKIPPED | not listed | 0 |
+| OpenAI-compatible | SKIPPED | not listed | 0 |
+
+DeepSeek probed three candidates against a two-model listing: `deepseek-chat` and `deepseek-coder` are not in
+the listing (the operator's evidence section (b) classes them as undocumented aliases, not to be seeded).
+Anthropic probed nine candidates against a fourteen-model listing; the operator's evidence section records
+that the eight curated legacy ids returned 404 and only `claude-haiku-5-5` was measured.
+
+### Usage-cap evidence (owner reading R-2)
+
+- kimi: not captured -- owner accepted unverified (2026-10-16)
+- qwen: not captured -- owner accepted unverified (2026-10-16)
+- grok: not captured -- owner accepted unverified (2026-10-16)
+- ollama: not captured -- owner accepted unverified (2026-10-16)
+- openai-compatible: not captured -- owner accepted unverified (2026-10-16)
+
+No quota-exhaustion (usage-cap) body exists for any of the five compat presets. The two rate-limit bodies in
+the operator's section (a) (Gemini free-tier, DashScope `limit_requests` on `qwen-turbo`) are recorded there
+for context only and are not usage-cap evidence. Plan 50-13 therefore encodes no usage-cap `error_override` for
+these five vendors; each keeps today's error mapping and is listed as unverified.
+
+---
+
 # Live vendor probe
 
 - date (UTC): 2026-10-15 22:23:15Z

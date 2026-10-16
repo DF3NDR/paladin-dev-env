@@ -88,7 +88,7 @@ The planner's reading of an ambiguous owner statement is not recorded as fact. E
 | Id | Reading | Rating | Decided at | Answer |
 |----|---------|--------|------------|--------|
 | R-1 | What the D-01/D-07 "run-metadata entry" is: per-call `LlmResponse.metadata` only, or also carried onto `PaladinResult` and the streaming terminal chunk | `one-way` (a public field on a constructible struct) | plan 50-18 Task 1 | `pending` |
-| R-2 | SC-5's usage-cap clause, per compat vendor: live-verified against a captured quota body, or owner-accepted as unverified | `reversible` (an override is a single `error_override` added on the day a quota body is captured) | plan 50-17 Task 1 | `pending` |
+| R-2 | SC-5's usage-cap clause, per compat vendor: live-verified against a captured quota body, or owner-accepted as unverified | `reversible` (an override is a single `error_override` added on the day a quota body is captured) | plan 50-17 Task 1 | 2026-10-16, per vendor: kimi `accept unverified`; qwen `accept unverified`; grok `accept unverified`; ollama `accept unverified`; openai-compatible `accept unverified`. No quota-exhaustion body was captured for any compat preset (see `50-SEED-PROBE.md`); each keeps today's error mapping and is recorded as unverified, with no override encoded. |
 
 ## Considered Options
 

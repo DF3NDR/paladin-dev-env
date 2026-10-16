@@ -137,6 +137,20 @@ pub mod services;
     feature = "openai-compatible"
 ))]
 mod turn;
+// The one rule deciding what a completion's text and finish reason mean: refusal, content filter,
+// function call, empty on any stop (PARITY-05, D-09/D-11a). Crate-private; documented by its own
+// inner `//!` block; compiled only when an adapter that calls it is. Widen this list as the
+// Anthropic and Gemini adapters move onto it.
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod response_guards;
 /// The shared context-window precedence resolver (PRIM-04, D-01/D-02): one
 /// pure function, [`window::resolve_context_window`], that every consumer of
 /// [`paladin_ports::output::llm_port::ProviderCapabilities`] calls through

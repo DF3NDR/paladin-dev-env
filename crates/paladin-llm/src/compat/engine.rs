@@ -15,7 +15,6 @@
 //!
 //! [`LlmPort`]: paladin_ports::output::llm_port::LlmPort
 
-use chrono::Utc;
 use futures::{Stream, StreamExt};
 use reqwest::{
     Client,
@@ -23,7 +22,6 @@ use reqwest::{
 };
 use std::time::{Duration, SystemTime};
 use tokio::sync::OnceCell;
-use uuid::Uuid;
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
@@ -41,6 +39,7 @@ use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
 use crate::registry::{ModelRegistry, fallback_from_compat};
+use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 
 /// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
@@ -632,13 +631,20 @@ impl CompatEngine {
     /// `None`, never a fabricated `Some(0)`). Shared by both the
     /// non-streaming usage-construction site and the streaming terminal
     /// -chunk usage, so the two paths cannot drift.
+    ///
+    /// Cache-read, cache-write and reasoning counts are copied from the vendor's fields exactly
+    /// as reported. `total_tokens` is the one figure this does not copy: [`TokenUsage`]
+    /// guarantees `total_tokens == prompt_tokens + completion_tokens` (D-02), so it is derived
+    /// by the constructor from the two counts the vendor did report.
     fn map_compat_usage(usage: CompatUsage) -> TokenUsage {
         let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
-        if let Some(cached) = usage
-            .prompt_tokens_details
-            .and_then(|details| details.cached_tokens)
-        {
-            mapped = mapped.with_cache_read(cached);
+        if let Some(details) = usage.prompt_tokens_details {
+            if let Some(cached) = details.cached_tokens {
+                mapped = mapped.with_cache_read(cached);
+            }
+            if let Some(written) = details.cache_write_tokens {
+                mapped = mapped.with_cache_write(written);
+            }
         }
         if let Some(reasoning) = usage
             .completion_tokens_details
@@ -660,6 +666,7 @@ impl CompatEngine {
                     role: "system".to_string(),
                     content: system_prompt.instructions.clone(),
                     reasoning_content: None,
+                    refusal: None,
                 });
             }
             PromptType::User(user_prompt) => {
@@ -667,6 +674,7 @@ impl CompatEngine {
                     role: "user".to_string(),
                     content: crate::turn::user_turn_text(user_prompt),
                     reasoning_content: None,
+                    refusal: None,
                 });
             }
             PromptType::Text(text_prompt) => {
@@ -684,6 +692,7 @@ impl CompatEngine {
                     .to_string(),
                     content: text_prompt.content.clone(),
                     reasoning_content: None,
+                    refusal: None,
                 });
             }
             PromptType::Assistant(assistant_prompt) => {
@@ -691,6 +700,7 @@ impl CompatEngine {
                     role: "assistant".to_string(),
                     content: assistant_prompt.response.clone(),
                     reasoning_content: None,
+                    refusal: None,
                 });
             }
             PromptType::Function(function_prompt) => {
@@ -698,6 +708,7 @@ impl CompatEngine {
                     role: "function".to_string(),
                     content: function_prompt.function_name.clone(),
                     reasoning_content: None,
+                    refusal: None,
                 });
             }
         }
@@ -725,22 +736,6 @@ impl CompatEngine {
             Some("function_call") => FinishReason::FunctionCall,
             Some(other) => FinishReason::Error(format!("Unknown finish reason: {}", other)),
             None => FinishReason::Stop,
-        }
-    }
-
-    /// Detect a completion truncated before any content was produced (the
-    /// reasoning-model truncation signature — see
-    /// `deepseek/adapter.rs::detect_empty_completion`, the source this was
-    /// generalized from).
-    fn detect_empty_completion(content: &str, finish_reason: &FinishReason) -> Option<LlmError> {
-        if matches!(finish_reason, FinishReason::Length) && content.trim().is_empty() {
-            Some(LlmError::EmptyCompletion(format!(
-                "finish_reason=length with empty content ({} raw chars) — reasoning likely \
-                 consumed the entire max_tokens budget; retry with a larger max_tokens",
-                content.len()
-            )))
-        } else {
-            None
         }
     }
 
@@ -949,28 +944,31 @@ impl CompatEngine {
 
             let finish_reason = Self::map_finish_reason(choice.finish_reason.clone());
 
-            if let Some(err) =
-                Self::detect_empty_completion(&choice.message.content, &finish_reason)
-            {
-                return Err(err);
-            }
+            // One rule for refusal, content filter, function call and empty text on any
+            // finish reason (PARITY-05, D-09/D-11a).
+            classify_completion(
+                self.provider_name(),
+                &request.model,
+                &choice.message.content,
+                &finish_reason,
+                choice.message.refusal.as_deref(),
+                &self.config.api_key,
+            )?;
 
-            let content = choice.message.content.clone();
             let usage = Self::map_compat_usage(api_response.usage);
 
-            Ok(LlmResponse {
-                id: Uuid::new_v4(),
-                request_id: request.id,
-                model: api_response.model,
-                content,
+            let mut llm_response = LlmResponse::new(
+                request.id,
+                api_response.model,
+                choice.message.content.clone(),
                 finish_reason,
                 usage,
-                cost: None,
-                created_at: Utc::now(),
-                metadata: metadata.clone(),
-                function_call: None,
-                reasoning: None,
-            })
+            );
+            llm_response.metadata = metadata.clone();
+            if let Some(reasoning) = &choice.message.reasoning_content {
+                llm_response = llm_response.with_reasoning(reasoning.as_str());
+            }
+            Ok(llm_response)
         };
 
         self.call_api_with_retry(operation, self.config.max_retries)
@@ -1002,6 +1000,18 @@ impl CompatEngine {
     /// the provider, so a transient failure can bill the prompt more than
     /// once. The non-retryable set above exists precisely so a failure the
     /// provider has already answered definitively is never retried.
+    ///
+    /// ## Terminal item (D-09, D-11a)
+    ///
+    /// Each delta carries the vendor's reasoning text for that chunk on
+    /// [`StreamingResponse::reasoning`], in wire order. At the `[DONE]`
+    /// sentinel the stream is classified by the same rule as
+    /// [`generate`](Self::generate): a refusal ends the stream with
+    /// `Err(LlmError::Refusal)`, and a stream that carried no text that is
+    /// non-empty after trimming ends with `Err(LlmError::EmptyCompletion)`
+    /// instead of the `Ok` terminal chunk (a `content_filter` or function-call
+    /// finish stays `Ok`). Deltas already yielded, reasoning deltas included,
+    /// stay yielded: only the terminal item changes.
     pub async fn generate_stream(
         &self,
         request: LlmRequest,
@@ -1079,6 +1089,13 @@ impl CompatEngine {
         let mut held_finish_reason: Option<FinishReason> = None;
         let mut held_usage: Option<TokenUsage> = None;
 
+        // D-11a / D-09 on the streaming path: the terminal chunk is decided by the same
+        // `classify_completion` the buffered path uses, over what the stream accumulated.
+        let provider = self.provider_name();
+        let model = request.model.clone();
+        let api_key = self.config.api_key.clone();
+        let mut completion = StreamCompletion::default();
+
         let llm_stream = stream.flat_map(move |chunk_result| {
             let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
                 Ok(bytes) => {
@@ -1091,13 +1108,20 @@ impl CompatEngine {
                         };
 
                         if json_str.trim() == "[DONE]" {
-                            let mut terminal = StreamingResponse::terminal(
-                                held_finish_reason.take().unwrap_or(FinishReason::Stop),
-                            );
-                            if let Some(usage) = held_usage.take() {
-                                terminal = terminal.with_usage(usage);
+                            let finish_reason =
+                                held_finish_reason.take().unwrap_or(FinishReason::Stop);
+                            match completion.finish(provider, &model, &finish_reason, &api_key) {
+                                Ok(()) => {
+                                    let mut terminal = StreamingResponse::terminal(finish_reason);
+                                    if let Some(usage) = held_usage.take() {
+                                        terminal = terminal.with_usage(usage);
+                                    }
+                                    items.push(Ok(terminal));
+                                }
+                                // A refusal or an empty answer replaces the terminal chunk;
+                                // deltas already yielded (reasoning included) stay yielded.
+                                Err(error) => items.push(Err(error)),
                             }
-                            items.push(Ok(terminal));
                             continue;
                         }
 
@@ -1112,7 +1136,15 @@ impl CompatEngine {
                                             Some(Self::map_finish_reason(Some(reason.clone())));
                                     }
                                     let content = choice.delta.content.clone().unwrap_or_default();
-                                    items.push(Ok(StreamingResponse::delta(content)));
+                                    completion.observe_content(&content);
+                                    if let Some(refusal) = &choice.delta.refusal {
+                                        completion.observe_refusal(refusal);
+                                    }
+                                    let mut delta = StreamingResponse::delta(content);
+                                    if let Some(reasoning) = &choice.delta.reasoning_content {
+                                        delta = delta.with_reasoning(reasoning.as_str());
+                                    }
+                                    items.push(Ok(delta));
                                 }
                             }
                             Err(e) => {
@@ -1372,28 +1404,6 @@ mod tests {
             CompatEngine::map_finish_reason(None),
             FinishReason::Stop
         ));
-    }
-
-    #[test]
-    fn detect_empty_completion_length_and_empty_is_truncation() {
-        let result = CompatEngine::detect_empty_completion("", &FinishReason::Length);
-        assert!(matches!(result, Some(LlmError::EmptyCompletion(_))));
-    }
-
-    #[test]
-    fn detect_empty_completion_non_empty_content_is_never_truncation() {
-        assert!(
-            CompatEngine::detect_empty_completion("some answer", &FinishReason::Length).is_none()
-        );
-        assert!(
-            CompatEngine::detect_empty_completion("some answer", &FinishReason::Stop).is_none()
-        );
-    }
-
-    #[test]
-    fn detect_empty_completion_empty_but_stop_is_not_truncation() {
-        let result = CompatEngine::detect_empty_completion("", &FinishReason::Stop);
-        assert!(result.is_none());
     }
 
     #[test]
@@ -3014,6 +3024,378 @@ mod tests {
         assert!(
             !obj.contains_key("stream_options"),
             "a non-streaming request must never carry stream_options, got: {obj:?}"
+        );
+    }
+
+    // ---- PARITY-05: refusal, empty output, reasoning text and cache-write tokens ----
+
+    /// POST a canned non-streaming body to a mock endpoint and return what `generate` made of it.
+    async fn generate_from_body(body: Value) -> Result<LlmResponse, LlmError> {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body.to_string())
+            .create_async()
+            .await;
+        CompatEngine::new(test_config_at(&server.url()))
+            .unwrap()
+            .with_provider_name("test-preset")
+            .generate(build_request("test-model"))
+            .await
+    }
+
+    fn buffered_body(message: Value, finish_reason: &str) -> Value {
+        json!({
+            "id": "cmpl-1",
+            "model": "test-model",
+            "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+        })
+    }
+
+    /// Drain `generate_stream` over a canned SSE body into its ordered items.
+    async fn stream_from_sse(sse: &str) -> Vec<Result<StreamingResponse, LlmError>> {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse)
+            .create_async()
+            .await;
+        let engine = CompatEngine::new(test_config_at(&server.url()))
+            .unwrap()
+            .with_provider_name("test-preset");
+        let stream = engine
+            .generate_stream(build_request("test-model"))
+            .await
+            .unwrap();
+        let mut stream = Box::into_pin(stream);
+        let mut items = Vec::new();
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+        items
+    }
+
+    /// D-11a: empty text on a `stop` finish is an `EmptyCompletion`, no longer `Ok("")`.
+    #[tokio::test]
+    async fn empty_stop_completion_is_empty_completion() {
+        let result = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": ""}),
+            "stop",
+        ))
+        .await;
+        match result {
+            Err(LlmError::EmptyCompletion(msg)) => {
+                assert!(msg.contains("finish_reason=stop"), "{msg}");
+                assert!(!msg.contains("larger max_tokens"), "{msg}");
+            }
+            other => panic!("expected EmptyCompletion, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn whitespace_only_completion_is_empty_and_null_content_too() {
+        for message in [
+            json!({"role": "assistant", "content": "  \n\t"}),
+            json!({"role": "assistant", "content": null}),
+        ] {
+            let result = generate_from_body(buffered_body(message, "stop")).await;
+            assert!(
+                matches!(result, Err(LlmError::EmptyCompletion(_))),
+                "got {result:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_length_completion_keeps_the_larger_max_tokens_advice() {
+        let result = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": ""}),
+            "length",
+        ))
+        .await;
+        match result {
+            Err(LlmError::EmptyCompletion(msg)) => {
+                assert!(msg.contains("finish_reason=length"), "{msg}");
+                assert!(msg.contains("larger max_tokens"), "{msg}");
+            }
+            other => panic!("expected EmptyCompletion, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn non_empty_content_is_never_an_empty_completion() {
+        for finish in ["stop", "length"] {
+            let response = generate_from_body(buffered_body(
+                json!({"role": "assistant", "content": "some answer"}),
+                finish,
+            ))
+            .await
+            .expect("text is a complete answer on any finish reason");
+            assert_eq!(response.content, "some answer");
+        }
+    }
+
+    /// D-09 / adjacency: a `content_filter` finish with no text stays `Ok`.
+    #[tokio::test]
+    async fn content_filter_with_empty_text_stays_ok() {
+        let response = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": ""}),
+            "content_filter",
+        ))
+        .await
+        .expect("a content filter is a finish reason, not an error");
+        assert!(matches!(
+            response.finish_reason,
+            FinishReason::ContentFilter
+        ));
+    }
+
+    #[tokio::test]
+    async fn compat_buffered_refusal_is_typed_and_names_provider_and_model() {
+        let result = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": "", "refusal": "I can't help with that."}),
+            "stop",
+        ))
+        .await;
+        match result {
+            Err(LlmError::Refusal {
+                provider,
+                model,
+                detail,
+            }) => {
+                assert_eq!(provider, "test-preset");
+                assert_eq!(model, "test-model");
+                assert_eq!(detail, "I can't help with that.");
+            }
+            other => panic!("expected Refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_buffered_refusal_redacts_the_configured_key() {
+        // `test_config` carries the key "test-key".
+        let result = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": null, "refusal": "no, test-key is mine"}),
+            "stop",
+        ))
+        .await;
+        match result {
+            Err(LlmError::Refusal { detail, .. }) => {
+                assert!(!detail.contains("test-key"), "{detail}");
+                assert!(detail.contains("[REDACTED]"), "{detail}");
+            }
+            other => panic!("expected Refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compat_buffered_reasoning_text_is_surfaced_and_empty_is_none() {
+        let with_reasoning = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": "ok", "reasoning_content": "think"}),
+            "stop",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(with_reasoning.reasoning.as_deref(), Some("think"));
+
+        for blank in ["", "   "] {
+            let response = generate_from_body(buffered_body(
+                json!({"role": "assistant", "content": "ok", "reasoning_content": blank}),
+                "stop",
+            ))
+            .await
+            .unwrap();
+            assert_eq!(response.reasoning, None, "blank reasoning {blank:?}");
+        }
+
+        let absent = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": "ok"}),
+            "stop",
+        ))
+        .await
+        .unwrap();
+        assert_eq!(absent.reasoning, None);
+        assert!(
+            !absent.metadata.contains_key("reasoning_content"),
+            "reasoning text never travels through metadata"
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_buffered_cache_write_tokens_are_mapped() {
+        let mut body = buffered_body(json!({"role": "assistant", "content": "ok"}), "stop");
+        body["usage"] = json!({
+            "prompt_tokens": 30,
+            "completion_tokens": 2,
+            "total_tokens": 32,
+            "prompt_tokens_details": {"cached_tokens": 4, "cache_write_tokens": 7}
+        });
+        let response = generate_from_body(body).await.unwrap();
+        assert_eq!(response.usage.cache_write_tokens, Some(7));
+        assert_eq!(response.usage.cache_read_tokens, Some(4));
+    }
+
+    /// Edge PARITY-05/precision: sub-counts are copied exactly as the vendor reported them. The
+    /// one figure not copied is `total_tokens`: `TokenUsage` guarantees it is
+    /// `prompt_tokens + completion_tokens` (D-02), so a vendor total that disagrees does not
+    /// override that invariant.
+    #[tokio::test]
+    async fn compat_usage_fields_are_copied_exactly() {
+        let mut body = buffered_body(json!({"role": "assistant", "content": "ok"}), "stop");
+        body["usage"] = json!({
+            "prompt_tokens": 1234,
+            "completion_tokens": 567,
+            "total_tokens": 9999,
+            "prompt_tokens_details": {"cached_tokens": 1000, "cache_write_tokens": 200},
+            "completion_tokens_details": {"reasoning_tokens": 321}
+        });
+        let usage = generate_from_body(body).await.unwrap().usage;
+        assert_eq!(usage.prompt_tokens, 1234);
+        assert_eq!(usage.completion_tokens, 567);
+        assert_eq!(usage.cache_read_tokens, Some(1000));
+        assert_eq!(usage.cache_write_tokens, Some(200));
+        assert_eq!(usage.reasoning_tokens, Some(321));
+        assert_eq!(usage.total_tokens, 1234 + 567);
+
+        // An absent sub-count stays `None`, never a fabricated `Some(0)` (D-03).
+        let bare = generate_from_body(buffered_body(
+            json!({"role": "assistant", "content": "ok"}),
+            "stop",
+        ))
+        .await
+        .unwrap()
+        .usage;
+        assert_eq!(bare.cache_write_tokens, None);
+        assert_eq!(bare.cache_read_tokens, None);
+        assert_eq!(bare.reasoning_tokens, None);
+    }
+
+    /// Edge PARITY-05/ordering: reasoning deltas arrive in wire order, interleaved with content
+    /// exactly as sent, and only the terminal chunk carries the finish reason and usage.
+    #[tokio::test]
+    async fn compat_stream_reasoning_keeps_wire_order() {
+        let sse = concat!(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"think \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"harder\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"An\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\" more\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"swer\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":6,\"total_tokens\":10}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let chunks: Vec<StreamingResponse> = stream_from_sse(sse)
+            .await
+            .into_iter()
+            .map(|item| item.expect("a stream with text has no error item"))
+            .collect();
+
+        let reasoning: Vec<Option<&str>> = chunks.iter().map(|c| c.reasoning.as_deref()).collect();
+        assert_eq!(
+            reasoning,
+            vec![
+                Some("think "),
+                Some("harder"),
+                None,
+                Some(" more"),
+                None,
+                None
+            ],
+            "reasoning deltas stay on the chunk that carried them, in wire order"
+        );
+        let content: Vec<&str> = chunks.iter().map(|c| c.delta.as_str()).collect();
+        assert_eq!(content, vec!["", "", "An", "", "swer", ""]);
+
+        let terminal_indices: Vec<usize> = chunks
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.finish_reason.is_some())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(terminal_indices, vec![chunks.len() - 1]);
+        let terminal = chunks.last().unwrap();
+        assert!(matches!(terminal.finish_reason, Some(FinishReason::Stop)));
+        assert_eq!(terminal.usage, Some(TokenUsage::new(4, 6)));
+        assert!(chunks[..chunks.len() - 1].iter().all(|c| c.usage.is_none()));
+    }
+
+    /// D-11a on the streaming path: reasoning, then a `stop` with no content, ends in
+    /// `Err(EmptyCompletion)` instead of the `Ok` terminal chunk; the reasoning stays yielded.
+    #[tokio::test]
+    async fn compat_empty_stream_is_empty_completion() {
+        let sse = concat!(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm\"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"  \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let items = stream_from_sse(sse).await;
+
+        let (last, yielded) = items.split_last().expect("the stream yields items");
+        assert!(
+            matches!(last, Err(LlmError::EmptyCompletion(_))),
+            "the last item must be EmptyCompletion, got {last:?}"
+        );
+        assert!(
+            yielded.iter().all(|item| item.is_ok()),
+            "everything before the terminal item stays Ok"
+        );
+        assert_eq!(
+            yielded[0].as_ref().unwrap().reasoning.as_deref(),
+            Some("hmm"),
+            "reasoning already yielded stays yielded"
+        );
+        assert!(
+            items
+                .iter()
+                .all(|item| !matches!(item, Ok(chunk) if chunk.finish_reason.is_some())),
+            "no Ok terminal chunk is emitted"
+        );
+    }
+
+    #[tokio::test]
+    async fn compat_content_filter_stream_with_no_text_stays_an_ok_terminal_chunk() {
+        let sse = concat!(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let items = stream_from_sse(sse).await;
+        let terminal = items.last().unwrap().as_ref().expect("no error item");
+        assert!(matches!(
+            terminal.finish_reason,
+            Some(FinishReason::ContentFilter)
+        ));
+    }
+
+    #[tokio::test]
+    async fn compat_stream_refusal_is_the_last_item_and_wins_over_partial_text() {
+        let sse = concat!(
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Sure, \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"refusal\":\"I can't \"},\"finish_reason\":null}]}\n\n",
+            "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"refusal\":\"help.\"},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+        let items = stream_from_sse(sse).await;
+        match items.last().unwrap() {
+            Err(LlmError::Refusal {
+                provider,
+                model,
+                detail,
+            }) => {
+                assert_eq!(provider, "test-preset");
+                assert_eq!(model, "test-model");
+                assert_eq!(detail, "I can't help.");
+            }
+            other => panic!("expected Refusal as the last item, got {other:?}"),
+        }
+        assert_eq!(
+            items[0].as_ref().unwrap().delta,
+            "Sure, ",
+            "partial content already yielded stays yielded"
         );
     }
 }

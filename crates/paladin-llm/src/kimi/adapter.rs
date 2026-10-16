@@ -653,7 +653,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn null_message_content_deserializes_to_empty_string_without_panicking() {
+    async fn null_message_content_is_an_empty_completion_not_a_parse_failure() {
         let mut server = Server::new_async().await;
         server
             .mock("POST", "/chat/completions")
@@ -681,12 +681,15 @@ mod tests {
         );
         let adapter = KimiAdapter::new(config).unwrap();
 
-        let response = adapter
-            .generate(build_request(KIMI_DEFAULT_MODEL))
-            .await
-            .unwrap();
+        // `null` content deserializes to an empty string (no parse failure, no panic) and the
+        // shared guard then classifies the empty `stop` as an `EmptyCompletion` (D-11a; this
+        // pinned `Ok("")` before Phase 50 plan 50-12).
+        let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
 
-        assert_eq!(response.content, "");
+        assert!(
+            matches!(result, Err(LlmError::EmptyCompletion(_))),
+            "got {result:?}"
+        );
     }
 
     #[tokio::test]
@@ -1019,7 +1022,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn generate_stream_with_only_done_terminates_with_stop_and_no_error() {
+    async fn generate_stream_with_only_done_ends_in_an_empty_completion() {
         use futures::StreamExt;
 
         let mut server = Server::new_async().await;
@@ -1043,17 +1046,19 @@ mod tests {
             .unwrap();
         let mut stream = Box::into_pin(stream);
 
-        let mut saw_stop = false;
+        // A stream that carries no text is an empty completion on any stop reason (D-11a): the
+        // `[DONE]`-only stream used to terminate with an `Ok` Stop chunk (pinned before Phase 50
+        // plan 50-12); its terminal item is now the typed error and no Ok terminal chunk exists.
+        let mut items = Vec::new();
         while let Some(item) = stream.next().await {
-            let chunk = item.expect("a DONE-only stream must not error");
-            if matches!(chunk.finish_reason, Some(FinishReason::Stop)) {
-                saw_stop = true;
-            }
+            items.push(item);
         }
 
+        assert_eq!(items.len(), 1, "only the terminal item is emitted");
         assert!(
-            saw_stop,
-            "a stream with only [DONE] must still terminate with Stop"
+            matches!(items[0], Err(LlmError::EmptyCompletion(_))),
+            "got {:?}",
+            items[0]
         );
     }
 

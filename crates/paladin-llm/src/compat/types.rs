@@ -85,6 +85,11 @@ pub(crate) struct CompatMessage {
     /// requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// The vendor's dedicated refusal text (OpenAI-shaped `message.refusal`), when the model
+    /// declined to answer. Only ever present on responses; omitted from outgoing requests.
+    /// `null` and absent both mean "no refusal" (D-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
 }
 
 /// Non-streaming chat-completions response body.
@@ -136,6 +141,10 @@ pub(crate) struct CompatUsage {
 pub(crate) struct CompatPromptTokensDetails {
     #[serde(default)]
     pub cached_tokens: Option<u32>,
+    /// Moonshot's `prompt_tokens_details.cache_write_tokens` (D-11; the field the handoff
+    /// measured and `50-SEED-PROBE.md` re-checked for Kimi). Absent elsewhere.
+    #[serde(default)]
+    pub cache_write_tokens: Option<u32>,
 }
 
 /// `CompatUsage.completion_tokens_details` (D-20).
@@ -170,6 +179,12 @@ pub(crate) struct CompatStreamChoice {
 #[derive(Debug, Deserialize)]
 pub(crate) struct CompatStreamDelta {
     pub content: Option<String>,
+    /// Hidden chain-of-thought text streamed on this delta, in wire order (D-11).
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
+    /// A fragment of the vendor's refusal text (D-09). `null` and absent mean none.
+    #[serde(default)]
+    pub refusal: Option<String>,
 }
 
 /// `GET {base_url}/models` response shape: `{ "data": [ { "id": "..." } ] }`.

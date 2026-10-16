@@ -74,7 +74,8 @@ use serde::{Deserialize, Serialize};
 
 use paladin_core::platform::container::aegis::{RetryPolicy, RetryPredicate};
 use paladin_llm::cadence::CadenceWiring;
-use paladin_llm::fallback::FallbackChainError;
+use paladin_llm::config::llm::LlmConfig;
+use paladin_llm::fallback::{FallbackChainError, FallbackStep};
 use paladin_llm::provider_factory::LlmProviderFactory;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
@@ -295,6 +296,16 @@ pub struct AgentRuntimeDeps {
     /// Pass the server's shared wiring instead to share pacing state with the other ports in the
     /// process; this field changes nothing while `model_fallback` is disabled.
     pub cadence: Option<CadenceWiring>,
+    /// The operator's `llm:` section, used to build the hops of an
+    /// `agent_runtime.model_fallback.steps` chain (D-15, RESEARCH Open Question 7): each step's
+    /// provider and model go through `LlmProviderFactory::create_from_config` against this
+    /// value, so a step is built from the same `llm.<provider>` block an agent of that provider
+    /// is. `None` behaves as an empty `llm:` section: every credential then comes from the
+    /// provider's environment variable, exactly as for the `providers` list.
+    ///
+    /// [`Default`] is `None`. This field changes nothing while `model_fallback` is disabled or
+    /// names `providers` only.
+    pub llm_config: Option<LlmConfig>,
 }
 
 /// The in-process pacing wiring [`AgentRuntimeDeps::default`] carries: `treasurer.cadence`'s
@@ -324,6 +335,18 @@ fn fallback_middleware(
     }
 }
 
+/// The fallback middleware for `steps`, each hop sent its own model (D-15): paced over `cadence`
+/// when it is present, otherwise the plain hop-on-error chain.
+fn fallback_middleware_from_steps(
+    steps: Vec<FallbackStep>,
+    cadence: Option<&CadenceWiring>,
+) -> Result<ModelFallbackMiddleware, FallbackChainError> {
+    match cadence {
+        Some(wiring) => ModelFallbackMiddleware::paced_steps(steps, wiring),
+        None => ModelFallbackMiddleware::from_steps(steps),
+    }
+}
+
 impl Default for AgentRuntimeDeps {
     fn default() -> Self {
         Self {
@@ -335,6 +358,7 @@ impl Default for AgentRuntimeDeps {
             vault: None,
             arsenal: None,
             cadence: default_cadence(),
+            llm_config: None,
         }
     }
 }
@@ -1079,18 +1103,75 @@ pub struct ModelFallbackConfig {
     pub enabled: bool,
     /// Provider **names** (e.g. `"openai"`, `"anthropic"`) resolved
     /// through `LlmProviderFactory::create` in provider order, forming
-    /// the fallback chain. Never a credential.
+    /// the fallback chain. Never a credential. Every hop is sent the
+    /// request's own model; to send each hop a model of its own use
+    /// [`Self::steps`] instead. Mutually exclusive with [`Self::steps`].
     #[serde(default)]
     pub providers: Vec<String>,
+    /// The fallback chain as ordered `{provider, model}` steps (D-15): each hop is sent the
+    /// step's own model, paced under that `(provider, model)`, and built from the operator's
+    /// `llm.<provider>` block through `LlmProviderFactory::create_from_config`. Names only,
+    /// never a credential. Mutually exclusive with [`Self::providers`]; empty by default, in
+    /// which case `providers` is the chain exactly as before.
+    #[serde(default)]
+    pub steps: Vec<FallbackStepConfig>,
+}
+
+/// One step of [`ModelFallbackConfig::steps`]: a provider name and the model that provider's hop
+/// is sent. Names only, never a credential (T-50-14-02): the key comes from the provider's
+/// `llm:` block, resolved by `LlmProviderFactory::create_from_config`.
+///
+/// ```yaml
+/// agent_runtime:
+///   model_fallback:
+///     enabled: true
+///     steps:
+///       - { provider: anthropic, model: claude-sonnet-4 }
+///       - { provider: kimi, model: kimi-k2 }
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FallbackStepConfig {
+    /// The provider name, as it is spelled under `llm:` (e.g. `"anthropic"`, `"kimi"`).
+    pub provider: String,
+    /// The model this step's hop is sent, in place of the request's own.
+    pub model: String,
 }
 
 impl ModelFallbackConfig {
-    /// Rejects an empty `providers` list when `enabled`; never clamps.
+    /// Rejects a mis-shaped chain when `enabled`; never clamps. A disabled section is inert and
+    /// is not inspected.
+    ///
+    /// `providers` and `steps` are two spellings of one chain, so setting both is an error
+    /// naming both keys, and so is enabling fallback with neither. A step with an empty
+    /// provider or model is rejected naming its index.
     pub fn validate(&self) -> Result<(), String> {
-        if self.enabled && self.providers.is_empty() {
-            return Err(
-                "agent_runtime.model_fallback.providers must not be empty when enabled".to_string(),
-            );
+        if !self.enabled {
+            return Ok(());
+        }
+        match (self.providers.is_empty(), self.steps.is_empty()) {
+            (true, true) => {
+                return Err("agent_runtime.model_fallback.providers or \
+                     agent_runtime.model_fallback.steps must be set when enabled"
+                    .to_string());
+            }
+            (false, false) => {
+                return Err("agent_runtime.model_fallback.providers and \
+                     agent_runtime.model_fallback.steps are mutually exclusive; set only one"
+                    .to_string());
+            }
+            _ => {}
+        }
+        for (index, step) in self.steps.iter().enumerate() {
+            if step.provider.trim().is_empty() {
+                return Err(format!(
+                    "agent_runtime.model_fallback.steps[{index}].provider must not be empty"
+                ));
+            }
+            if step.model.trim().is_empty() {
+                return Err(format!(
+                    "agent_runtime.model_fallback.steps[{index}].model must not be empty"
+                ));
+            }
         }
         Ok(())
     }
@@ -1273,6 +1354,29 @@ impl ModelFallbackConfig {
             return Err(AgentRuntimeConfigError::UnresolvedProviders(problems));
         }
         Ok(chain)
+    }
+}
+
+impl ModelFallbackConfig {
+    /// Resolve `steps` (in configured order) into [`FallbackStep`]s, each built through
+    /// `LlmProviderFactory::create_from_config` against `llm_config` with the step's model
+    /// (D-15, RESEARCH Open Question 7). `None` is an empty `llm:` section.
+    ///
+    /// Returns no steps without touching `factory` when `!self.enabled`. Collects EVERY
+    /// unresolvable step into one [`AgentRuntimeConfigError::UnresolvedProviders`], each named by
+    /// its provider, index and model, distinguishing an unknown name, a real provider not
+    /// compiled into this build, and a construction failure (typically a missing credential),
+    /// exactly as [`ModelFallbackConfig::resolve_chain`] does.
+    ///
+    /// Credentials are never read from this struct: every key comes from the provider's `llm:`
+    /// block or its environment variable (T-50-14-02).
+    pub fn resolve_steps(
+        &self,
+        factory: &LlmProviderFactory,
+        llm_config: Option<&LlmConfig>,
+    ) -> Result<Vec<FallbackStep>, AgentRuntimeConfigError> {
+        let _ = (factory, llm_config);
+        Ok(Vec::new())
     }
 }
 
@@ -1569,6 +1673,16 @@ mod tests {
         let config = ModelFallbackConfig {
             enabled: true,
             providers: vec!["openai".to_string(), "anthropic".to_string()],
+            steps: vec![
+                FallbackStepConfig {
+                    provider: "anthropic".to_string(),
+                    model: "claude-sonnet-4".to_string(),
+                },
+                FallbackStepConfig {
+                    provider: "kimi".to_string(),
+                    model: "kimi-k2".to_string(),
+                },
+            ],
         };
         let rendered = format!("{config:?}").to_ascii_lowercase();
         for banned in ["key", "secret", "token", "password"] {
@@ -1760,6 +1874,7 @@ mod tests {
             model_fallback: ModelFallbackConfig {
                 enabled: true,
                 providers: vec!["openai".to_string()],
+                ..ModelFallbackConfig::default()
             },
             ..AgentRuntimeConfig::default()
         };
@@ -1800,6 +1915,7 @@ mod tests {
         let config = ModelFallbackConfig {
             enabled: true,
             providers: vec!["openai".to_string(), "deepseek".to_string()],
+            ..ModelFallbackConfig::default()
         };
         let factory = LlmProviderFactory::new();
         let result = config.resolve_chain(&factory);
@@ -1826,6 +1942,7 @@ mod tests {
                 "totally-bogus-one".to_string(),
                 "totally-bogus-two".to_string(),
             ],
+            ..ModelFallbackConfig::default()
         };
         let factory = LlmProviderFactory::new();
         // `Vec<Arc<dyn LlmPort>>` is not `Debug` (a trait object), so
@@ -1867,6 +1984,7 @@ mod tests {
         let config = ModelFallbackConfig {
             enabled: true,
             providers: vec!["ollama".to_string()],
+            ..ModelFallbackConfig::default()
         };
         let factory = LlmProviderFactory::new();
         let err = match config.resolve_chain(&factory) {
@@ -1894,6 +2012,7 @@ mod tests {
         let config = ModelFallbackConfig {
             enabled: false,
             providers: vec!["this-would-be-unresolvable".to_string()],
+            ..ModelFallbackConfig::default()
         };
         let factory = LlmProviderFactory::new();
         // `Vec<Arc<dyn LlmPort>>` is not `Debug`/`PartialEq` (a trait
@@ -1919,6 +2038,7 @@ mod tests {
         let config = ModelFallbackConfig {
             enabled: true,
             providers: vec!["openai".to_string()],
+            ..ModelFallbackConfig::default()
         };
         let factory = LlmProviderFactory::new();
         let result = config.resolve_chain(&factory);
@@ -1938,6 +2058,263 @@ mod tests {
     fn model_retry_config_maps_to_retry_policy_defaults() {
         let converted: RetryPolicy = (&ModelRetryConfig::default()).into();
         assert_eq!(converted, RetryPolicy::default());
+    }
+
+    // ── ModelFallbackConfig::steps (plan 50-14, D-15, RESEARCH OQ7) ─────
+
+    fn step_config(provider: &str, model: &str) -> FallbackStepConfig {
+        FallbackStepConfig {
+            provider: provider.to_string(),
+            model: model.to_string(),
+        }
+    }
+
+    fn steps_config(steps: Vec<FallbackStepConfig>) -> ModelFallbackConfig {
+        ModelFallbackConfig {
+            enabled: true,
+            steps,
+            ..ModelFallbackConfig::default()
+        }
+    }
+
+    /// A `llm:` section with an Anthropic and a DeepSeek block, each carrying a literal key so
+    /// resolution reads no environment variable.
+    fn two_block_llm_config() -> LlmConfig {
+        LlmConfig {
+            anthropic: Some(
+                paladin_llm::config::llm::LlmProviderConfig::new("test-anthropic-key")
+                    .with_default_model("block-anthropic-default"),
+            ),
+            deepseek: Some(
+                paladin_llm::config::llm::LlmProviderConfig::new("test-deepseek-key")
+                    .with_default_model("block-deepseek-default"),
+            ),
+            ..LlmConfig::default()
+        }
+    }
+
+    #[test]
+    fn steps_deserialize_from_yaml_and_providers_only_configs_are_unchanged() {
+        let wrapper = deserialize_wrapper(
+            r#"
+agent_runtime:
+  model_fallback:
+    enabled: true
+    steps:
+      - { provider: anthropic, model: m1 }
+      - { provider: kimi, model: m2 }
+"#,
+        );
+        let fallback = wrapper.agent_runtime.model_fallback;
+        assert!(fallback.enabled);
+        assert!(fallback.providers.is_empty());
+        assert_eq!(
+            fallback.steps,
+            vec![step_config("anthropic", "m1"), step_config("kimi", "m2")]
+        );
+        assert!(fallback.validate().is_ok());
+
+        let wrapper = deserialize_wrapper(
+            r#"
+agent_runtime:
+  model_fallback:
+    enabled: true
+    providers: [openai, deepseek]
+"#,
+        );
+        let fallback = wrapper.agent_runtime.model_fallback;
+        assert!(
+            fallback.steps.is_empty(),
+            "an existing config gains no steps"
+        );
+        assert_eq!(fallback.providers, ["openai", "deepseek"]);
+        assert!(fallback.validate().is_ok());
+    }
+
+    #[test]
+    fn providers_and_steps_together_are_a_validation_error_naming_both_keys() {
+        let config = ModelFallbackConfig {
+            enabled: true,
+            providers: vec!["openai".to_string()],
+            steps: vec![step_config("anthropic", "m1")],
+        };
+        let message = config.validate().unwrap_err();
+        assert!(
+            message.contains("model_fallback.providers"),
+            "names providers: {message}"
+        );
+        assert!(
+            message.contains("model_fallback.steps"),
+            "names steps: {message}"
+        );
+        assert!(
+            AgentRuntimeConfig {
+                model_fallback: config,
+                ..AgentRuntimeConfig::default()
+            }
+            .validate()
+            .is_err(),
+            "the section validator is reached from the whole config"
+        );
+    }
+
+    #[test]
+    fn enabled_with_neither_providers_nor_steps_names_both_keys() {
+        let config = ModelFallbackConfig {
+            enabled: true,
+            ..ModelFallbackConfig::default()
+        };
+        let message = config.validate().unwrap_err();
+        assert!(message.contains("model_fallback.providers"), "{message}");
+        assert!(message.contains("model_fallback.steps"), "{message}");
+    }
+
+    #[test]
+    fn a_step_with_an_empty_provider_or_model_names_its_index() {
+        let message = steps_config(vec![step_config("anthropic", "m1"), step_config("", "m2")])
+            .validate()
+            .unwrap_err();
+        assert!(message.contains("steps[1].provider"), "{message}");
+
+        let message = steps_config(vec![step_config("anthropic", "  ")])
+            .validate()
+            .unwrap_err();
+        assert!(message.contains("steps[0].model"), "{message}");
+    }
+
+    #[test]
+    fn a_disabled_section_is_not_inspected() {
+        let config = ModelFallbackConfig {
+            enabled: false,
+            providers: vec!["openai".to_string()],
+            steps: vec![step_config("", "")],
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn resolve_steps_builds_each_step_with_its_own_model_from_the_llm_blocks() {
+        let config = steps_config(vec![
+            step_config("anthropic", "step-model-one"),
+            step_config("deepseek", "step-model-two"),
+        ]);
+        let steps = config
+            .resolve_steps(&LlmProviderFactory::new(), Some(&two_block_llm_config()))
+            .expect("both providers are compiled and carry a key in their block");
+
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].port.get_provider_name(), "anthropic");
+        assert_eq!(steps[0].model, "step-model-one");
+        assert_eq!(steps[1].port.get_provider_name(), "deepseek");
+        assert_eq!(steps[1].model, "step-model-two");
+    }
+
+    #[test]
+    fn resolve_steps_on_a_disabled_section_builds_nothing() {
+        let config = ModelFallbackConfig {
+            enabled: false,
+            steps: vec![step_config("totally-bogus", "m")],
+            ..ModelFallbackConfig::default()
+        };
+        let steps = config
+            .resolve_steps(&LlmProviderFactory::new(), None)
+            .expect("a disabled section never fails to resolve");
+        assert!(steps.is_empty());
+    }
+
+    #[test]
+    fn resolve_steps_collects_every_failure_naming_provider_index_and_model() {
+        let config = steps_config(vec![
+            step_config("totally-bogus", "bogus-model"),
+            step_config("anthropic", "ok-model"),
+            // A real provider whose block names a variable that is not set: recognised, but its
+            // key cannot be resolved.
+            step_config("deepseek", "unkeyed-model"),
+        ]);
+        let llm = LlmConfig {
+            deepseek: Some(paladin_llm::config::llm::LlmProviderConfig::new(
+                "${PALADIN_TEST_50_14_UNSET_KEY_VARIABLE}",
+            )),
+            ..two_block_llm_config()
+        };
+        let err = match config.resolve_steps(&LlmProviderFactory::new(), Some(&llm)) {
+            Err(e) => e,
+            Ok(_) => panic!("a bogus provider and an unresolvable key must not resolve"),
+        };
+
+        let AgentRuntimeConfigError::UnresolvedProviders(problems) = &err else {
+            panic!("expected UnresolvedProviders, got {err:?}");
+        };
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        assert!(
+            matches!(&problems[0], UnresolvedProvider::Unknown { name }
+                if name.contains("totally-bogus") && name.contains("step 0") && name.contains("bogus-model")),
+            "{:?}",
+            problems[0]
+        );
+        assert!(
+            matches!(&problems[1], UnresolvedProvider::ConstructionFailed { name, .. }
+                if name.contains("deepseek") && name.contains("step 2") && name.contains("unkeyed-model")),
+            "{:?}",
+            problems[1]
+        );
+        let message = err.to_string();
+        assert!(!message.contains("test-anthropic-key"), "{message}");
+    }
+
+    #[test]
+    fn build_chain_builds_a_steps_chain_paced_and_unpaced() {
+        let config = AgentRuntimeConfig {
+            model_fallback: steps_config(vec![
+                step_config("anthropic", "m1"),
+                step_config("deepseek", "m2"),
+            ]),
+            ..AgentRuntimeConfig::default()
+        };
+        for cadence in [None, AgentRuntimeDeps::default().cadence] {
+            let deps = AgentRuntimeDeps {
+                cadence,
+                llm_config: Some(two_block_llm_config()),
+                ..AgentRuntimeDeps::default()
+            };
+            let chain = config.build_chain(&deps).expect("both steps resolve");
+            assert_eq!(chain.len(), 1);
+            assert_eq!(chain[0].name(), "model_fallback");
+        }
+    }
+
+    #[test]
+    fn build_chain_reports_an_unresolvable_step_and_a_providers_steps_clash() {
+        let config = AgentRuntimeConfig {
+            model_fallback: steps_config(vec![step_config("totally-bogus", "m1")]),
+            ..AgentRuntimeConfig::default()
+        };
+        let err = match config.build_chain(&AgentRuntimeDeps::default()) {
+            Err(e) => e,
+            Ok(_) => panic!("a bogus step must not build"),
+        };
+        assert!(err.to_string().contains("totally-bogus"), "{err}");
+
+        let clash = AgentRuntimeConfig {
+            model_fallback: ModelFallbackConfig {
+                enabled: true,
+                providers: vec!["openai".to_string()],
+                steps: vec![step_config("anthropic", "m1")],
+            },
+            ..AgentRuntimeConfig::default()
+        };
+        let err = match clash.build_chain(&AgentRuntimeDeps::default()) {
+            Err(e) => e,
+            Ok(_) => panic!("providers and steps together must not build"),
+        };
+        let message = err.to_string();
+        assert!(message.contains("providers"), "{message}");
+        assert!(message.contains("steps"), "{message}");
+    }
+
+    #[test]
+    fn default_deps_carry_no_llm_config() {
+        assert!(AgentRuntimeDeps::default().llm_config.is_none());
     }
 
     // ── AgentRuntimeConfig::build_chain (plan 26-20, D-10) ──────────────
@@ -2051,6 +2428,7 @@ mod tests {
             model_fallback: ModelFallbackConfig {
                 enabled: true,
                 providers: vec!["openai".to_string()],
+                ..ModelFallbackConfig::default()
             },
             ..AgentRuntimeConfig::default()
         };
@@ -2102,6 +2480,7 @@ mod tests {
                     "totally-bogus-one".to_string(),
                     "totally-bogus-two".to_string(),
                 ],
+                ..ModelFallbackConfig::default()
             },
             ..AgentRuntimeConfig::default()
         };

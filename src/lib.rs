@@ -177,6 +177,13 @@ pub use application::cli;
 // LLM adapter implementations (from paladin-llm crate)
 pub use paladin_llm::provider_factory::LlmProviderFactory;
 
+// Model fallback chain (Phase 50, D-15): build a chain whose hops each send their own model
+// without a second dependency on `paladin-llm`.
+pub use paladin_llm::fallback::{
+    FallbackChainError, FallbackLlmAdapter, FallbackStep, SERVED_BY_METADATA_KEY,
+    SERVED_MODEL_METADATA_KEY,
+};
+
 #[cfg(feature = "llm-openai")]
 pub use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 

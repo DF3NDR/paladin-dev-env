@@ -48,7 +48,7 @@ use async_trait::async_trait;
 
 use paladin_core::platform::container::aegis::RetryPolicy;
 use paladin_llm::cadence::CadenceWiring;
-use paladin_llm::fallback::{FallbackChainError, FallbackLlmAdapter};
+use paladin_llm::fallback::{FallbackChainError, FallbackLlmAdapter, FallbackStep};
 use paladin_ports::output::llm_port::LlmPort;
 
 use crate::application::services::paladin::error::PaladinError;
@@ -146,6 +146,59 @@ impl ModelFallbackMiddleware {
         cadence: &CadenceWiring,
     ) -> Result<Self, FallbackChainError> {
         let adapter = FallbackLlmAdapter::new(chain)?.with_cadence(cadence);
+        Ok(Self {
+            adapter: Arc::new(adapter),
+        })
+    }
+
+    /// Build a fallback chain whose every hop is sent its own model (D-15, PARITY-06):
+    /// `steps[0]` is tried first, `steps[n-1]` last, and before each hop the request's model is
+    /// rewritten to that step's. [`ModelFallbackMiddleware::new`] sends every hop the request's
+    /// own model, which is wrong when the hops are different vendors.
+    ///
+    /// # Errors
+    ///
+    /// [`FallbackChainError::EmptyChain`] if `steps` is empty and
+    /// [`FallbackChainError::EmptyStepModel`] for a step whose model is empty, both at
+    /// construction (via [`FallbackLlmAdapter::from_steps`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::paladin::middleware::ModelFallbackMiddleware;
+    /// use paladin_llm::fallback::FallbackStep;
+    /// use paladin_llm::mock::MockLlmAdapter;
+    /// use paladin_ports::output::llm_port::LlmPort;
+    ///
+    /// let anthropic: Arc<dyn LlmPort> =
+    ///     Arc::new(MockLlmAdapter::new().with_provider_name("anthropic"));
+    /// let kimi: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_provider_name("kimi"));
+    /// let middleware = ModelFallbackMiddleware::from_steps(vec![
+    ///     FallbackStep::new(anthropic, "claude-sonnet-4"),
+    ///     FallbackStep::new(kimi, "kimi-k2"),
+    /// ])?;
+    /// # Ok::<(), paladin_llm::fallback::FallbackChainError>(())
+    /// ```
+    pub fn from_steps(steps: Vec<FallbackStep>) -> Result<Self, FallbackChainError> {
+        let adapter = FallbackLlmAdapter::from_steps(steps)?;
+        Ok(Self {
+            adapter: Arc::new(adapter),
+        })
+    }
+
+    /// As [`ModelFallbackMiddleware::from_steps`], but every hop is paced (PACE-02, D-03) under
+    /// its own `(provider, model)`: a 429 on a step gates that step's model only. See
+    /// [`ModelFallbackMiddleware::paced`] and [`FallbackLlmAdapter::with_cadence`].
+    ///
+    /// # Errors
+    ///
+    /// As [`ModelFallbackMiddleware::from_steps`].
+    pub fn paced_steps(
+        steps: Vec<FallbackStep>,
+        cadence: &CadenceWiring,
+    ) -> Result<Self, FallbackChainError> {
+        let adapter = FallbackLlmAdapter::from_steps(steps)?.with_cadence(cadence);
         Ok(Self {
             adapter: Arc::new(adapter),
         })
@@ -338,6 +391,66 @@ mod tests {
 
         assert_eq!(result.served_by.as_deref(), Some("backup"));
         assert!(result.output.contains("served by backup"));
+    }
+
+    /// Plan 50-14 (D-15): a `from_steps` middleware sends each hop its own model through the
+    /// real execution service, and the run names the hop that served.
+    #[tokio::test]
+    async fn fallback_steps_middleware_sends_each_hop_its_own_model() {
+        let primary = MockLlmAdapter::new()
+            .with_provider_name("primary")
+            .with_error(transient("primary"));
+        let backup = MockLlmAdapter::new()
+            .with_provider_name("backup")
+            .with_response("served by backup");
+        let middleware = Arc::new(
+            ModelFallbackMiddleware::from_steps(vec![
+                FallbackStep::new(Arc::new(primary.clone()) as Arc<dyn LlmPort>, "model-one"),
+                FallbackStep::new(Arc::new(backup.clone()) as Arc<dyn LlmPort>, "model-two"),
+            ])
+            .unwrap(),
+        );
+        let service_default: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new());
+        let service = make_service(service_default).with_middleware(middleware);
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(result.served_by.as_deref(), Some("backup"));
+        assert_eq!(
+            primary.last_request().map(|request| request.model),
+            Some("model-one".to_string())
+        );
+        assert_eq!(
+            backup.last_request().map(|request| request.model),
+            Some("model-two".to_string())
+        );
+    }
+
+    /// `paced_steps` builds, and rejects what `from_steps` rejects, at construction.
+    #[test]
+    fn fallback_steps_construction_validates_up_front() {
+        assert!(matches!(
+            ModelFallbackMiddleware::from_steps(Vec::new()),
+            Err(FallbackChainError::EmptyChain)
+        ));
+        let cadence = CadenceWiring::new(
+            Arc::new(InMemoryCadence::new(CadencePolicy::default())),
+            CadenceSettings::default(),
+        );
+        assert!(matches!(
+            ModelFallbackMiddleware::paced_steps(Vec::new(), &cadence),
+            Err(FallbackChainError::EmptyChain)
+        ));
+        let port: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new());
+        assert!(matches!(
+            ModelFallbackMiddleware::from_steps(vec![FallbackStep::new(Arc::clone(&port), " ")]),
+            Err(FallbackChainError::EmptyStepModel { index: 0 })
+        ));
+        assert!(
+            ModelFallbackMiddleware::paced_steps(vec![FallbackStep::new(port, "m")], &cadence)
+                .is_ok()
+        );
     }
 
     /// Test 3: `RetryPolicy { max_attempts: 4, jitter: false, .. }` against

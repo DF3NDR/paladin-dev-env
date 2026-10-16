@@ -30,14 +30,20 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use mockito::{Matcher, ServerGuard};
+use paladin::application::services::paladin::middleware::{
+    ExecutionMiddleware, ModelCallContext, PromptAssembly,
+};
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
 use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+use paladin::config::agent_runtime::{
+    AgentRuntimeConfig, AgentRuntimeDeps, FallbackStepConfig, ModelFallbackConfig,
+};
 use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use paladin::prelude::{LlmPort, PaladinError};
 use paladin::{LlmConfig, LlmProviderConfig, LlmProviderFactory};
 use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 use paladin_core::platform::container::transience::Transience;
-use paladin_llm::fallback::FallbackLlmAdapter;
+use paladin_llm::fallback::{FallbackLlmAdapter, FallbackStep};
 use paladin_ports::output::llm_port::{LlmRequest, LlmResponse};
 use serde_json::{Value, json};
 
@@ -669,8 +675,11 @@ async fn case_fallback_hop_gets_its_own_model() {
     let (secondary_vendor, secondary_port) =
         vendor_and_port(&secondary, 200, success_body(secondary.wire, "Paris")).await;
 
-    let chain = FallbackLlmAdapter::new(vec![primary_port, secondary_port])
-        .expect("a two-element chain must build");
+    let chain = FallbackLlmAdapter::from_steps(vec![
+        FallbackStep::new(primary_port, primary.model),
+        FallbackStep::new(secondary_port, secondary.model),
+    ])
+    .expect("a two-step chain must build");
     chain
         .generate(llm_request(primary.model, "Name a colour.", None, None))
         .await
@@ -682,6 +691,103 @@ async fn case_fallback_hop_gets_its_own_model() {
         Some(secondary.model),
         "the second hop must be sent its own model '{}', not the primary's; body was {last}",
         secondary.model
+    );
+}
+
+/// (f2) The same, through the configuration path (RESEARCH Open Question 7): `agent_runtime.
+/// model_fallback.steps` built by `AgentRuntimeConfig::build_chain` from the operator's `llm:`
+/// blocks, run through the middleware's own `before_model`, sends the second hop its own model on
+/// the wire and names the hop and model that served.
+async fn case_config_fallback_steps_send_each_hop_its_own_model() {
+    let primary = provider("anthropic");
+    let secondary = provider("kimi");
+    let primary_vendor = MockVendor::start(
+        503,
+        json!({ "error": { "message": "overloaded", "type": "overloaded_error" } }),
+    )
+    .await;
+    let secondary_vendor = MockVendor::start(200, success_body(secondary.wire, "Paris")).await;
+
+    let llm = LlmConfig {
+        anthropic: Some(matrix_block(
+            &primary_vendor.url(),
+            "block-default-anthropic",
+        )),
+        kimi: Some(matrix_block(&secondary_vendor.url(), "block-default-kimi")),
+        ..LlmConfig::default()
+    };
+    let config = AgentRuntimeConfig {
+        model_fallback: ModelFallbackConfig {
+            enabled: true,
+            steps: vec![
+                FallbackStepConfig {
+                    provider: "anthropic".to_string(),
+                    model: primary.model.to_string(),
+                },
+                FallbackStepConfig {
+                    provider: "kimi".to_string(),
+                    model: secondary.model.to_string(),
+                },
+            ],
+            ..ModelFallbackConfig::default()
+        },
+        ..AgentRuntimeConfig::default()
+    };
+    config.validate().expect("the steps configuration is valid");
+    let chain = config
+        .build_chain(&AgentRuntimeDeps {
+            llm_config: Some(llm),
+            ..AgentRuntimeDeps::default()
+        })
+        .unwrap_or_else(|error| panic!("the steps chain must build from the llm blocks: {error}"));
+    assert_eq!(chain.len(), 1);
+
+    let service_default: Arc<dyn LlmPort> = Arc::new(paladin::MockLlmAdapter::new());
+    let paladin = agent_builder(Arc::clone(&service_default), primary.model)
+        .build()
+        .await
+        .expect("the matrix agent must build");
+    let mut cx = ModelCallContext::new(
+        uuid::Uuid::new_v4(),
+        &paladin,
+        PromptAssembly::new(MATRIX_SYSTEM_PROMPT, "Name a colour.", "", vec![], None),
+    );
+    chain[0]
+        .before_model(&mut cx)
+        .await
+        .expect("the fallback middleware installs its chain");
+    let response = cx
+        .effective_llm(&service_default)
+        .generate(llm_request(primary.model, "Name a colour.", None, None))
+        .await
+        .unwrap_or_else(|error| panic!("the chain must answer from the second step: {error}"));
+
+    let first = primary_vendor.last_body("anthropic");
+    assert_eq!(
+        first.get("model").and_then(Value::as_str),
+        Some(primary.model),
+        "the first step is sent its own model; body was {first}"
+    );
+    let last = secondary_vendor.last_body("kimi");
+    assert_eq!(
+        last.get("model").and_then(Value::as_str),
+        Some(secondary.model),
+        "the second step must be sent its own model '{}', not the first's; body was {last}",
+        secondary.model
+    );
+    assert_eq!(
+        response
+            .metadata
+            .get(paladin::SERVED_BY_METADATA_KEY)
+            .map(String::as_str),
+        Some("kimi")
+    );
+    assert_eq!(
+        response
+            .metadata
+            .get(paladin::SERVED_MODEL_METADATA_KEY)
+            .map(String::as_str),
+        Some(secondary.model)
     );
 }
 
@@ -760,10 +866,15 @@ matrix_case!(ollama_empty_stop_completion_is_typed => case_empty_stop_completion
 matrix_case!(openai_compatible_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("openai-compatible"));
 
 // (f) a fallback hop is sent its own model
-#[ignore = "red until plan 50-14: the fallback hop is sent the primary's model, not its own"]
 #[tokio::test]
 async fn fallback_hop_gets_its_own_model() {
     case_fallback_hop_gets_its_own_model().await
+}
+
+// (f2) the same through `agent_runtime.model_fallback.steps`
+#[tokio::test]
+async fn config_fallback_steps_send_each_hop_its_own_model() {
+    case_config_fallback_steps_send_each_hop_its_own_model().await
 }
 
 /// The provider list the macro invocations above cover, so a provider added to the registry but

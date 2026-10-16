@@ -178,14 +178,11 @@ impl MockVendor {
 /// The `llm.<provider>` block a deployment would write: only the endpoint and the model change
 /// between providers.
 fn matrix_block(base_url: &str, model: &str) -> LlmProviderConfig {
-    LlmProviderConfig {
-        api_key: "matrix-test-key".to_string(),
-        base_url: Some(base_url.to_string()),
-        default_model: Some(model.to_string()),
-        default_temperature: None,
-        timeout_seconds: Some(5),
-        max_retries: Some(0),
-    }
+    LlmProviderConfig::new("matrix-test-key")
+        .with_base_url(base_url.to_string())
+        .with_default_model(model.to_string())
+        .with_timeout_seconds(5)
+        .with_max_retries(0)
 }
 
 /// Build the named provider's port from a config block, through that provider's existing

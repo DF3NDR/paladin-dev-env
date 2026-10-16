@@ -24,25 +24,16 @@ mod tests {
     use paladin_llm::deepseek::adapter::DeepSeekConfig;
 
     fn typical_provider_config() -> LlmProviderConfig {
-        LlmProviderConfig {
-            api_key: "sk-test-key".to_string(),
-            base_url: Some("https://custom.example.com/v1".to_string()),
-            default_model: Some("gpt-4o".to_string()),
-            default_temperature: Some(0.7),
-            timeout_seconds: Some(120),
-            max_retries: Some(5),
-        }
+        LlmProviderConfig::new("sk-test-key")
+            .with_base_url("https://custom.example.com/v1")
+            .with_default_model("gpt-4o")
+            .with_default_temperature(0.7)
+            .with_timeout_seconds(120)
+            .with_max_retries(5)
     }
 
     fn minimal_provider_config() -> LlmProviderConfig {
-        LlmProviderConfig {
-            api_key: "sk-minimal".to_string(),
-            base_url: None,
-            default_model: None,
-            default_temperature: None,
-            timeout_seconds: None,
-            max_retries: None,
-        }
+        LlmProviderConfig::new("sk-minimal")
     }
 
     // ── OpenAI ──────────────────────────────────────────────────────────────

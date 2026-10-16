@@ -1628,6 +1628,14 @@ mod tests {
         impl crate::conformance::ConformanceFixture for KimiFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
+            fn default_model() -> &'static str {
+                KIMI_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "kimi"
+            }
+
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 let config = KimiConfig::new(
                     "test-key".to_string(),
@@ -1662,6 +1670,37 @@ mod tests {
                     "data: [DONE]\n\n",
                 )
                 .to_string()
+            }
+
+            // Moonshot is the one OpenAI-chat vendor that also reports a cache-write figure,
+            // `prompt_tokens_details.cache_write_tokens` (D-11; `50-SEED-PROBE.md`).
+            fn usage_body() -> String {
+                json!({
+                    "id": "cmpl-1",
+                    "model": KIMI_DEFAULT_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 40,
+                        "total_tokens": 140,
+                        "prompt_tokens_details": {"cached_tokens": 30, "cache_write_tokens": 20},
+                        "completion_tokens_details": {"reasoning_tokens": 15}
+                    }
+                })
+                .to_string()
+            }
+
+            fn expected_usage() -> crate::conformance::ExpectedUsage {
+                crate::conformance::ExpectedUsage {
+                    cache_write: Some(20),
+                    ..crate::conformance::wire_defaults::expected_usage(
+                        crate::conformance::Wire::OpenAiChat,
+                    )
+                }
             }
 
             fn error_body(status: u16) -> String {

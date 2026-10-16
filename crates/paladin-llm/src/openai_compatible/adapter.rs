@@ -1481,6 +1481,14 @@ mod tests {
         impl crate::conformance::ConformanceFixture for OpenAiCompatibleFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
+            fn default_model() -> &'static str {
+                "some-model"
+            }
+
+            fn provider_name() -> &'static str {
+                "openai-compatible"
+            }
+
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 let config = OpenAiCompatibleConfig::new(
                     "test-key".to_string(),

@@ -25,6 +25,19 @@
 //! `RateLimitExceeded`, classifies `Transient`, and carries `Some(7s)` -- so no adapter in the
 //! suite retries a rate limit below the Cadence decorator, which owns waiting.
 //!
+//! Phase 50 (plan 50-15, PARITY-07) puts Anthropic in the suite -- all nine adapters now answer
+//! the identical list -- and adds seven cases for the behaviours that phase made uniform:
+//! `capability_declarations_match_the_wire` (the default model is profiled, the declared window
+//! matches, an admitted parameter reaches the wire and a `NotSent` one never does, and
+//! `Pricing(Cadence(adapter))` returns the same profile), `response_format_reaches_the_wire`,
+//! `empty_stop_completion_is_empty_completion` and `empty_stop_stream_is_empty_completion`
+//! (D-11a, buffered and streamed), `refusal_is_typed_and_permanent` (D-09),
+//! `usage_fields_are_mapped` and `unsupported_parameters_are_omitted_and_recorded`. A vendor that
+//! lacks a feature never skips a case: it states its documented alternative shape through the
+//! fixture ([`RefusalShape::ContentFilterOnly`], [`MalformedFrame::SkippedWithWarning`]), so every
+//! adapter is measured against every case. The default bodies for these cases live in
+//! [`wire_defaults`], keyed by [`Wire`]; a fixture overrides one only where its vendor differs.
+//!
 //! `#[cfg(test)]`-only: [`ConformanceFixture`] and [`llm_conformance_suite!`] never ship in a
 //! release build.
 
@@ -33,11 +46,17 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use mockito::{Matcher, Server};
+use paladin_core::platform::container::prompt::PromptParameters;
 use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 use paladin_core::platform::container::transience::Transience;
-use paladin_ports::output::llm_port::{LlmError, LlmPort, LlmRequest};
+use paladin_ports::output::llm_port::{
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
+    ResponseFormat, SamplingParam, StopSupport,
+};
+use serde_json::Value;
 
 use crate::redaction::RESPONSE_EXCERPT_CHAR_BUDGET;
+use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
 
 /// Which response-wire shape a [`ConformanceFixture`]'s adapter speaks.
 ///
@@ -52,6 +71,9 @@ use crate::redaction::RESPONSE_EXCERPT_CHAR_BUDGET;
 /// empty-completion, refusal and usage bodies, and where a parameter sits on the wire), so a
 /// fixture only overrides a body when its vendor genuinely differs from its wire's default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// A variant is constructed only by a fixture of that wire, and each adapter's fixture is compiled
+// only with its own feature, so a single-feature test build leaves the others unconstructed.
+#[allow(dead_code)]
 pub enum Wire {
     /// OpenAI-compatible `choices[]` framing (openai, deepseek, openai_compatible, ollama, and
     /// every other `CompatEngine`-based preset).
@@ -84,6 +106,8 @@ pub enum RefusalShape {
 /// Never a reason to skip the case: both variants are asserted, each against the content the valid
 /// frames carried.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Only the Anthropic fixture (feature `anthropic`) constructs `SkippedWithWarning`.
+#[allow(dead_code)]
 pub enum MalformedFrame {
     /// The frame surfaces as a typed [`LlmError`] on the stream (every adapter but Anthropic).
     Error,
@@ -148,6 +172,16 @@ pub trait ConformanceFixture {
     /// credential-redaction case constructs its own body independently; see
     /// [`cases::credential_never_appears_in_a_rendered_error`]).
     fn error_body(status: u16) -> String;
+
+    /// The model the adapter built by [`Self::adapter`] defaults to. The capability, structured
+    /// output and parameter-policy cases send it, so they measure the profile the adapter really
+    /// resolves for its own default model (a seeded entry, or the adapter-wide fallback).
+    fn default_model() -> &'static str;
+
+    /// The provider name the adapter reports (`get_provider_name`) and that a typed
+    /// [`LlmError::Refusal`] must carry. Declared by the fixture rather than read back from the
+    /// adapter, so a renamed or mistyped provider fails the refusal case.
+    fn provider_name() -> &'static str;
 
     /// What the adapter does with an unparsable frame after valid ones; see [`MalformedFrame`].
     fn malformed_frame() -> MalformedFrame {
@@ -317,6 +351,17 @@ pub mod wire_defaults {
                 .to_string(),
             ),
         }
+    }
+
+    /// An OpenAI-chat body whose only signal is `finish_reason: content_filter` with no text: the
+    /// shape for an OpenAI-chat vendor that has no refusal field (DeepSeek) to hand to
+    /// [`RefusalShape::ContentFilterOnly`].
+    #[allow(dead_code)] // used only by the DeepSeek fixture (feature `deepseek`)
+    pub fn chat_content_filter_body() -> String {
+        chat_body(
+            json!({"role": "assistant", "content": ""}),
+            "content_filter",
+        )
     }
 
     /// See [`super::ConformanceFixture::usage_body`].
@@ -874,45 +919,588 @@ pub mod cases {
         post_mock.assert_async().await;
         get_mock.assert_async().await;
     }
+
+    // ── Phase 50 plan 50-15: the behaviours the phase made uniform ──
+
+    /// [`conformance_request`], for `model`.
+    fn request_for_model(model: &str) -> LlmRequest {
+        let mut request = conformance_request();
+        request.model = model.to_string();
+        request
+    }
+
+    /// Run one buffered request through `F`'s adapter against a mock answering `response_body`,
+    /// returning the JSON body the adapter put on the wire and its result.
+    async fn send_capturing<F: ConformanceFixture>(
+        request: LlmRequest,
+        response_body: String,
+    ) -> (Value, Result<LlmResponse, LlmError>) {
+        use std::sync::Mutex;
+
+        let captured: Arc<Mutex<Option<Value>>> = Arc::new(Mutex::new(None));
+        let slot = Arc::clone(&captured);
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |req| {
+                let text = req.utf8_lossy_body().unwrap_or_default().into_owned();
+                if let Ok(mut guard) = slot.lock() {
+                    *guard = serde_json::from_str(&text).ok();
+                }
+                response_body.clone().into_bytes()
+            })
+            .create_async()
+            .await;
+
+        let adapter = F::adapter(&server.url());
+        let result = adapter.generate(request).await;
+        let wire_body = captured
+            .lock()
+            .expect("the capture slot is never poisoned")
+            .take()
+            .expect("the adapter must have sent a JSON request body");
+        (wire_body, result)
+    }
+
+    /// Where `param` sits in a request body of `wire`: the OpenAI-chat and Anthropic bodies carry
+    /// it at the top level (Anthropic names stop sequences `stop_sequences`, and has no penalty
+    /// keys -- a profile that admitted one would therefore fail the capability case), Gemini
+    /// nests it in `generationConfig` under camel-case names.
+    fn wire_param(body: &Value, wire: Wire, param: SamplingParam) -> Option<&Value> {
+        // `SamplingParam` is `#[non_exhaustive]`: a parameter this suite does not yet place on a
+        // wire fails loudly instead of reading as "absent".
+        let unknown =
+            || -> ! { panic!("the conformance suite does not place {param:?} on a wire") };
+        match wire {
+            Wire::OpenAiChat => body.get(match param {
+                SamplingParam::Temperature => "temperature",
+                SamplingParam::TopP => "top_p",
+                SamplingParam::FrequencyPenalty => "frequency_penalty",
+                SamplingParam::PresencePenalty => "presence_penalty",
+                SamplingParam::StopSequences => "stop",
+                _ => unknown(),
+            }),
+            Wire::Anthropic => body.get(match param {
+                SamplingParam::Temperature => "temperature",
+                SamplingParam::TopP => "top_p",
+                SamplingParam::FrequencyPenalty => "frequency_penalty",
+                SamplingParam::PresencePenalty => "presence_penalty",
+                SamplingParam::StopSequences => "stop_sequences",
+                _ => unknown(),
+            }),
+            Wire::Gemini => body.get("generationConfig")?.get(match param {
+                SamplingParam::Temperature => "temperature",
+                SamplingParam::TopP => "topP",
+                SamplingParam::FrequencyPenalty => "frequencyPenalty",
+                SamplingParam::PresencePenalty => "presencePenalty",
+                SamplingParam::StopSequences => "stopSequences",
+                _ => unknown(),
+            }),
+        }
+    }
+
+    /// A value `support` admits (the midpoint of a range, the one fixed value), or `None` when it
+    /// admits nothing.
+    fn admitted_value(support: ParamSupport) -> Option<f32> {
+        let value = match support {
+            ParamSupport::Range(lo, hi) => lo + (hi - lo) / 2.0,
+            ParamSupport::Fixed(x) => x,
+            ParamSupport::NotSent => return None,
+        };
+        support.admits(value).then_some(value)
+    }
+
+    /// Case (assumption-delta invariant, plan 50-15): what an adapter DECLARES about its default
+    /// model is what its wire DOES.
+    ///
+    /// - `model_profile(default)` is `Some` (an adapter that falls back to `temperature_range`
+    ///   alone, with no profile at all, fails here);
+    /// - `get_capabilities().max_context_tokens` equals the profile's window when it has one;
+    /// - every sampling parameter and stop sequences the profile admits reaches the wire with the
+    ///   value sent, and every one it marks `NotSent` (set on the request all the same) is absent;
+    /// - the production composition `Pricing(Cadence(adapter))` returns the same profile (a
+    ///   decorator that stops forwarding `model_profile` silently disables the whole policy).
+    pub async fn capability_declarations_match_the_wire<F: ConformanceFixture>() {
+        use crate::cadence::{CadenceSettings, CadenceWiring, with_cadence};
+        use crate::pricing::PricingLlmAdapter;
+        use paladin_core::platform::container::cost::{CurrencyCode, PriceTable};
+        use paladin_ports::output::cadence_port::CadencePolicy;
+        use paladin_storage::cadence::InMemoryCadence;
+
+        let model = F::default_model();
+        // Profile and capability queries need no network.
+        let adapter = F::adapter("http://127.0.0.1:9");
+        let profile: ModelProfile = adapter.model_profile(model).unwrap_or_else(|| {
+            panic!(
+                "{}: model_profile({model:?}) must be Some for the default model",
+                F::provider_name()
+            )
+        });
+
+        if let Some(window) = profile.context_window {
+            assert_eq!(
+                adapter.get_capabilities().max_context_tokens,
+                Some(window),
+                "get_capabilities().max_context_tokens must equal the default model's profiled window"
+            );
+        }
+
+        // Decorators forward the profile unchanged.
+        let wiring = CadenceWiring::new(
+            Arc::new(InMemoryCadence::new(CadencePolicy::default())),
+            CadenceSettings::default(),
+        );
+        let paced = with_cadence(Arc::clone(&adapter), Some(&wiring));
+        let table = PriceTable::new(CurrencyCode::new("USD").expect("USD is a valid code"));
+        let decorated: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(paced, Arc::new(table)));
+        assert_eq!(
+            decorated.model_profile(model),
+            Some(profile.clone()),
+            "Pricing(Cadence(adapter)) must return the adapter's own profile"
+        );
+
+        // The wire: set every parameter, an admitted value where the profile admits one and an
+        // arbitrary value where it does not.
+        const NOT_ADMITTED_PROBE: f32 = 0.5;
+        let supports = [
+            (SamplingParam::Temperature, profile.temperature),
+            (SamplingParam::TopP, profile.top_p),
+            (SamplingParam::FrequencyPenalty, profile.frequency_penalty),
+            (SamplingParam::PresencePenalty, profile.presence_penalty),
+        ];
+        let sent: Vec<(SamplingParam, Option<f32>, f32)> = supports
+            .iter()
+            .map(|(param, support)| {
+                let admitted = admitted_value(*support);
+                (*param, admitted, admitted.unwrap_or(NOT_ADMITTED_PROBE))
+            })
+            .collect();
+        let stop_supported = matches!(profile.stop_sequences, StopSupport::Supported { .. });
+
+        let mut request = request_for_model(model);
+        request.prompt.entity.data.parameters = PromptParameters {
+            max_tokens: None,
+            temperature: Some(sent[0].2),
+            top_p: Some(sent[1].2),
+            frequency_penalty: Some(sent[2].2),
+            presence_penalty: Some(sent[3].2),
+            stop_sequences: Some(vec!["END".to_string()]),
+        };
+        let (wire_body, result) = send_capturing::<F>(request, F::success_body()).await;
+        result.expect("a request the profile partly admits must still succeed");
+
+        for (param, admitted, value) in &sent {
+            let on_wire = wire_param(&wire_body, F::WIRE, *param);
+            match admitted {
+                Some(_) => {
+                    let got = on_wire.and_then(Value::as_f64).unwrap_or_else(|| {
+                        panic!(
+                            "{}: an admitted {} must reach the wire: {wire_body}",
+                            F::provider_name(),
+                            param.as_str()
+                        )
+                    });
+                    assert!(
+                        (got - f64::from(*value)).abs() < 1e-4,
+                        "{}: {} reached the wire as {got}, sent {value}",
+                        F::provider_name(),
+                        param.as_str()
+                    );
+                }
+                None => assert!(
+                    on_wire.is_none(),
+                    "{}: {} is NotSent in the profile and must never reach the wire: {wire_body}",
+                    F::provider_name(),
+                    param.as_str()
+                ),
+            }
+        }
+        let stop = wire_param(&wire_body, F::WIRE, SamplingParam::StopSequences);
+        if stop_supported {
+            assert_eq!(
+                stop,
+                Some(&serde_json::json!(["END"])),
+                "{}: supported stop sequences must reach the wire in declared order: {wire_body}",
+                F::provider_name()
+            );
+        } else {
+            assert!(
+                stop.is_none(),
+                "{}: unsupported stop sequences reached the wire: {wire_body}",
+                F::provider_name()
+            );
+        }
+    }
+
+    /// Case: a requested `JsonObject` reaches the wire in the shape the vendor documents, exactly
+    /// when the default model's profile says it supports JSON mode -- OpenAI-chat
+    /// `response_format.type = json_object`, Gemini `generationConfig.responseMimeType =
+    /// application/json`, and Anthropic NO `response_format` key (prompt-level JSON only, as its
+    /// adapter documents). When the profile says it does not, the key is absent and the response
+    /// records the drop under `paladin.response_format_adjusted = omitted`.
+    pub async fn response_format_reaches_the_wire<F: ConformanceFixture>() {
+        let model = F::default_model();
+        let adapter = F::adapter("http://127.0.0.1:9");
+        let profile = adapter
+            .model_profile(model)
+            .expect("the default model must be profiled");
+
+        let mut request = request_for_model(model);
+        request.response_format = Some(ResponseFormat::JsonObject);
+        let (wire_body, result) = send_capturing::<F>(request, F::success_body()).await;
+        let response = result.expect("a JSON-object request must succeed");
+
+        let sent_json_mode = match F::WIRE {
+            Wire::OpenAiChat => {
+                let kind = wire_body
+                    .get("response_format")
+                    .and_then(|f| f.get("type"))
+                    .and_then(Value::as_str);
+                if profile.json_object {
+                    assert_eq!(kind, Some("json_object"), "{wire_body}");
+                }
+                kind == Some("json_object")
+            }
+            Wire::Gemini => {
+                let mime = wire_body
+                    .get("generationConfig")
+                    .and_then(|c| c.get("responseMimeType"))
+                    .and_then(Value::as_str);
+                if profile.json_object {
+                    assert_eq!(mime, Some("application/json"), "{wire_body}");
+                }
+                mime == Some("application/json")
+            }
+            Wire::Anthropic => {
+                assert!(
+                    wire_body.get("response_format").is_none(),
+                    "Anthropic has no response_format key; JSON is requested in the prompt: {wire_body}"
+                );
+                false
+            }
+        };
+        assert_eq!(
+            sent_json_mode,
+            profile.json_object,
+            "{}: the profile says json_object = {} but the wire {} a JSON mode: {wire_body}",
+            F::provider_name(),
+            profile.json_object,
+            if sent_json_mode {
+                "carried"
+            } else {
+                "did not carry"
+            },
+        );
+        assert_eq!(
+            response
+                .metadata
+                .get(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+                .map(String::as_str),
+            (!profile.json_object).then_some("omitted"),
+            "an omitted response_format must be recorded, and a sent one must not be"
+        );
+    }
+
+    /// Case (D-11a, buffered path): a `stop`-equivalent finish with no text is
+    /// [`LlmError::EmptyCompletion`], permanent -- never an `Ok` empty string.
+    pub async fn empty_stop_completion_is_empty_completion<F: ConformanceFixture>() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(F::empty_stop_body())
+            .create_async()
+            .await;
+
+        let adapter = F::adapter(&server.url());
+        let result = adapter.generate(conformance_request()).await;
+
+        match result {
+            Err(err @ LlmError::EmptyCompletion(_)) => assert_eq!(
+                err.transience(),
+                Transience::Permanent,
+                "an empty completion is permanent (retrying the same call does not help)"
+            ),
+            other => panic!("an empty stop completion must be EmptyCompletion, got {other:?}"),
+        }
+    }
+
+    /// Case (D-11a, streaming path): the wire's normal stream framing with zero text deltas and a
+    /// `stop`-equivalent terminal ends with [`LlmError::EmptyCompletion`] as the LAST item,
+    /// permanent.
+    pub async fn empty_stop_stream_is_empty_completion<F: ConformanceFixture>() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(F::empty_stop_stream_body())
+            .create_async()
+            .await;
+
+        let adapter = F::adapter(&server.url());
+        let stream = adapter
+            .generate_stream(conformance_request())
+            .await
+            .expect("the stream must open; the emptiness is only known at the terminal frame");
+        let mut stream = Box::into_pin(stream);
+        let mut items = Vec::new();
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+
+        match items.last() {
+            Some(Err(err @ LlmError::EmptyCompletion(_))) => assert_eq!(
+                err.transience(),
+                Transience::Permanent,
+                "an empty streamed completion is permanent"
+            ),
+            other => panic!(
+                "the last stream item must be Err(EmptyCompletion), got {other:?} (all items: {items:?})"
+            ),
+        }
+    }
+
+    /// Case (D-09): a model that declines to answer.
+    ///
+    /// A vendor with a typed refusal signal ([`RefusalShape::Typed`]) yields
+    /// [`LlmError::Refusal`] naming the fixture's provider, permanent, with the adapter's own API
+    /// key -- planted in the vendor's refusal text -- redacted out of `detail`. A vendor with no
+    /// refusal signal ([`RefusalShape::ContentFilterOnly`], Gemini) asserts its documented
+    /// alternative: a `SAFETY` block is `Ok` with [`FinishReason::ContentFilter`] and no text.
+    /// Neither shape is ever a reason to skip the case.
+    pub async fn refusal_is_typed_and_permanent<F: ConformanceFixture>() {
+        let (body, typed) = match F::refusal_shape(F::api_key()) {
+            RefusalShape::Typed(body) => (body, true),
+            RefusalShape::ContentFilterOnly(body) => (body, false),
+        };
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let adapter = F::adapter(&server.url());
+        let result = adapter.generate(conformance_request()).await;
+
+        if typed {
+            match result {
+                Err(err @ LlmError::Refusal { .. }) => {
+                    assert_eq!(
+                        err.transience(),
+                        Transience::Permanent,
+                        "a refusal is permanent"
+                    );
+                    let LlmError::Refusal {
+                        provider, detail, ..
+                    } = &err
+                    else {
+                        unreachable!("matched as Refusal above");
+                    };
+                    assert_eq!(
+                        provider,
+                        F::provider_name(),
+                        "the refusal must name the provider"
+                    );
+                    assert_eq!(
+                        provider,
+                        adapter.get_provider_name(),
+                        "the fixture's provider_name() must match the adapter's own"
+                    );
+                    assert!(
+                        !detail.trim().is_empty(),
+                        "the refusal must carry its detail"
+                    );
+                    assert!(
+                        !detail.contains(F::api_key()),
+                        "the refusal detail leaked the adapter's API key: {detail}"
+                    );
+                }
+                other => panic!("a typed refusal must be Err(Refusal), got {other:?}"),
+            }
+        } else {
+            let response = result.expect("a content-filter block is a finish reason, not an error");
+            assert!(
+                matches!(response.finish_reason, FinishReason::ContentFilter),
+                "a content-filter block must finish ContentFilter, got {:?}",
+                response.finish_reason
+            );
+            assert!(
+                response.content.trim().is_empty(),
+                "a content-filter block carries no text, got {:?}",
+                response.content
+            );
+        }
+    }
+
+    /// Case: a usage object that reports cache read, cache write and reasoning tokens maps to
+    /// exactly the figures the fixture declares for its vendor (`None` where the vendor does not
+    /// report the field), and `total_tokens` is `prompt + completion` -- the invariant
+    /// `TokenUsage` guarantees, not a vendor figure (WINDOWS row 74).
+    pub async fn usage_fields_are_mapped<F: ConformanceFixture>() {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(F::usage_body())
+            .create_async()
+            .await;
+
+        let adapter = F::adapter(&server.url());
+        let usage = adapter
+            .generate(conformance_request())
+            .await
+            .expect("usage_body() must produce a well-formed response")
+            .usage;
+        let expected = F::expected_usage();
+
+        assert_eq!(usage.prompt_tokens, expected.prompt, "prompt_tokens");
+        assert_eq!(
+            usage.completion_tokens, expected.completion,
+            "completion_tokens"
+        );
+        assert_eq!(
+            usage.cache_read_tokens, expected.cache_read,
+            "cache_read_tokens"
+        );
+        assert_eq!(
+            usage.cache_write_tokens, expected.cache_write,
+            "cache_write_tokens"
+        );
+        assert_eq!(
+            usage.reasoning_tokens, expected.reasoning,
+            "reasoning_tokens"
+        );
+        assert_eq!(usage.total_tokens, expected.total, "total_tokens");
+        assert_eq!(
+            usage.total_tokens,
+            usage.prompt_tokens + usage.completion_tokens,
+            "total_tokens must equal prompt_tokens + completion_tokens"
+        );
+    }
+
+    /// Case (ADR-0061 (a)): a temperature `99.0` -- admitted by no profile -- is omitted from every
+    /// wire, never clamped or substituted, and the response records the omission under
+    /// `paladin.params_omitted`.
+    pub async fn unsupported_parameters_are_omitted_and_recorded<F: ConformanceFixture>() {
+        let mut request = request_for_model(F::default_model());
+        request.prompt.entity.data.parameters = PromptParameters {
+            max_tokens: None,
+            temperature: Some(99.0),
+            top_p: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: None,
+        };
+        let (wire_body, result) = send_capturing::<F>(request, F::success_body()).await;
+        let response =
+            result.expect("an inadmissible temperature is omitted, not refused, by an adapter");
+
+        assert!(
+            wire_param(&wire_body, F::WIRE, SamplingParam::Temperature).is_none(),
+            "{}: a temperature no profile admits reached the wire: {wire_body}",
+            F::provider_name()
+        );
+        let omitted = response
+            .metadata
+            .get(PARAMS_OMITTED_METADATA_KEY)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: the omission must be recorded under {PARAMS_OMITTED_METADATA_KEY}",
+                    F::provider_name()
+                )
+            });
+        assert!(
+            omitted
+                .split(',')
+                .any(|name| name == SamplingParam::Temperature.as_str()),
+            "{PARAMS_OMITTED_METADATA_KEY} must list temperature, got {omitted:?}"
+        );
+    }
 }
 
 /// Generate one `#[tokio::test]` per fixed case in [`cases`] for a concrete
-/// [`ConformanceFixture`], plus a `CASE_COUNT` derived from the SAME identifier list the tests
-/// are generated from -- so a case silently dropped from this list shrinks `CASE_COUNT` too,
+/// [`ConformanceFixture`], plus a `CASE_COUNT` derived from the SAME identifier lists the tests
+/// are generated from -- so a case silently dropped from the lists shrinks `CASE_COUNT` too,
 /// which `suite_generates_the_full_case_list_for_a_fixture` (below) pins against the documented
-/// `10`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
+/// `17`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
+///
+/// The lists are split in two groups: the ten transport cases (status mapping, streaming
+/// framing, redaction, redirects, rate limits) and the seven Phase 50 behaviour cases
+/// (capability truthfulness, structured output, empty completion, refusal, usage, the parameter
+/// policy). `llm_conformance_suite!(Fixture)` generates both. `llm_conformance_suite!(Fixture,
+/// transport_only)` generates only the first group and exists for one caller, the macro's own
+/// self-test fixture, which is a bare transport with no profile, sampling or refusal surface;
+/// `CASE_COUNT` is the full suite's size either way. Every one of the nine adapter fixtures uses
+/// the full form.
 #[macro_export]
 macro_rules! llm_conformance_suite {
     ($fixture:ty) => {
-        $crate::llm_conformance_suite!(@cases $fixture;
-            generate_and_usage_extraction,
-            streaming_assembles_in_wire_order_with_a_terminal_stop,
-            stream_error_before_the_first_chunk,
-            stream_error_after_the_first_chunk,
-            dedicated_status_mappings,
-            transience_by_value,
-            credential_never_appears_in_a_rendered_error,
-            redirect_is_not_followed_with_a_credential_header,
-            streaming_usage_equals_non_streaming_usage,
-            rate_limit_is_surfaced_once_with_its_retry_delay,
+        $crate::llm_conformance_suite!(@all $fixture, all);
+    };
+    ($fixture:ty, transport_only) => {
+        $crate::llm_conformance_suite!(@all $fixture, transport_only);
+    };
+    // The one place the case lists are written down.
+    (@all $fixture:ty, $mode:ident) => {
+        $crate::llm_conformance_suite!(@groups $fixture, $mode;
+            [
+                generate_and_usage_extraction,
+                streaming_assembles_in_wire_order_with_a_terminal_stop,
+                stream_error_before_the_first_chunk,
+                stream_error_after_the_first_chunk,
+                dedicated_status_mappings,
+                transience_by_value,
+                credential_never_appears_in_a_rendered_error,
+                redirect_is_not_followed_with_a_credential_header,
+                streaming_usage_equals_non_streaming_usage,
+                rate_limit_is_surfaced_once_with_its_retry_delay,
+            ];
+            [
+                capability_declarations_match_the_wire,
+                response_format_reaches_the_wire,
+                empty_stop_completion_is_empty_completion,
+                empty_stop_stream_is_empty_completion,
+                refusal_is_typed_and_permanent,
+                usage_fields_are_mapped,
+                unsupported_parameters_are_omitted_and_recorded,
+            ]
         );
     };
-    (@cases $fixture:ty; $($case:ident),+ $(,)?) => {
+    (@groups $fixture:ty, $mode:ident;
+        [$($transport:ident),+ $(,)?];
+        [$($behaviour:ident),+ $(,)?]
+    ) => {
+        $crate::llm_conformance_suite!(@tests $fixture; $($transport),+);
+        $crate::llm_conformance_suite!(@behaviour_tests $mode, $fixture; $($behaviour),+);
+
+        /// The number of cases in the full suite -- mechanically derived from the same token
+        /// lists the `#[tokio::test]` functions above were generated from, never hand-copied.
+        #[allow(dead_code)]
+        pub const CASE_COUNT: usize =
+            $crate::llm_conformance_suite!(@count $($transport,)+ $($behaviour),+);
+    };
+    (@behaviour_tests all, $fixture:ty; $($case:ident),+) => {
+        $crate::llm_conformance_suite!(@tests $fixture; $($case),+);
+    };
+    (@behaviour_tests transport_only, $fixture:ty; $($case:ident),+) => {};
+    (@tests $fixture:ty; $($case:ident),+ $(,)?) => {
         $(
             #[tokio::test]
             async fn $case() {
                 $crate::conformance::cases::$case::<$fixture>().await;
             }
         )+
-
-        /// The number of cases the invocation above just generated for this fixture --
-        /// mechanically derived from the same token list the `#[tokio::test]` functions above
-        /// were generated from, never hand-copied.
-        #[allow(dead_code)]
-        pub const CASE_COUNT: usize = $crate::llm_conformance_suite!(@count $($case),+);
     };
     (@count) => { 0usize };
-    (@count $head:ident $(, $tail:ident)*) => {
+    (@count $head:ident $(, $tail:ident)* $(,)?) => {
         1usize + $crate::llm_conformance_suite!(@count $($tail),*)
     };
 }
@@ -1148,9 +1736,19 @@ mod tests {
         fn error_body(status: u16) -> String {
             format!("trivial error body for status {status}")
         }
+
+        fn default_model() -> &'static str {
+            "trivial-model"
+        }
+
+        fn provider_name() -> &'static str {
+            TRIVIAL_PROVIDER
+        }
     }
 
-    crate::llm_conformance_suite!(TrivialFixture);
+    // The trivial fixture is a bare transport (no sampling, profile or refusal surface), so it
+    // runs the transport group only; `CASE_COUNT` is still the full suite's size.
+    crate::llm_conformance_suite!(TrivialFixture, transport_only);
 
     /// Test 1: instantiating `llm_conformance_suite!` for a trivial in-file fixture produces one
     /// test per fixed case, and the generated module's test count equals the documented case
@@ -1160,8 +1758,8 @@ mod tests {
     #[test]
     fn suite_generates_the_full_case_list_for_a_fixture() {
         assert_eq!(
-            CASE_COUNT, 10,
-            "llm_conformance_suite! must generate exactly the documented 10 fixed cases -- if this \
+            CASE_COUNT, 17,
+            "llm_conformance_suite! must generate exactly the documented 17 fixed cases -- if this \
              fails, a case was added to or removed from the macro's list without updating this \
              pinned expectation"
         );

@@ -698,6 +698,18 @@ mod tests {
         impl crate::conformance::ConformanceFixture for OllamaFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
+            fn default_model() -> &'static str {
+                OLLAMA_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "ollama"
+            }
+
+            fn api_key() -> &'static str {
+                OLLAMA_PLACEHOLDER_API_KEY
+            }
+
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 let config = OllamaConfig::new(base_url.to_string(), "llama3".to_string());
                 Arc::new(OllamaAdapter::new(config).expect("test config must build"))

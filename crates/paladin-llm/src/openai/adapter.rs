@@ -2586,6 +2586,20 @@ mod tests {
         impl crate::conformance::ConformanceFixture for OpenAiFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
+            // OpenAI has no adapter-level default model (the model arrives per request), so the
+            // capability cases measure the adapter-wide declaration the way it applies to an
+            // unseeded id: `gpt-4o` resolves to the adapter-wide fallback profile, whose window is
+            // the declared 128,000 `get_capabilities` returns. (A seeded id such as `gpt-5.4-nano`
+            // legitimately differs from the adapter-wide figure, see
+            // `openai_default_model_is_seeded`.)
+            fn default_model() -> &'static str {
+                "gpt-4o"
+            }
+
+            fn provider_name() -> &'static str {
+                "openai"
+            }
+
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 Arc::new(
                     OpenAIAdapter::new(OpenAIConfig {

@@ -871,6 +871,14 @@ mod tests {
         impl crate::conformance::ConformanceFixture for GrokFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
+            fn default_model() -> &'static str {
+                GROK_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "grok"
+            }
+
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 let config = GrokConfig::new(
                     "test-key".to_string(),

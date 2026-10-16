@@ -2550,6 +2550,14 @@ mod tests {
         impl crate::conformance::ConformanceFixture for DeepSeekFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
+            fn default_model() -> &'static str {
+                DEEPSEEK_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "deepseek"
+            }
+
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 let config = DeepSeekConfig::new(
                     "test-key".to_string(),
@@ -2583,6 +2591,37 @@ mod tests {
                     "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":8}}\n\n",
                     "data: [DONE]\n\n",
                 )
+                .to_string()
+            }
+
+            // DeepSeek's wire has no dedicated refusal field (A3-50-12): a blocked answer is
+            // `finish_reason: content_filter` with no text, which stays `Ok(ContentFilter)`.
+            fn refusal_shape(_secret: &str) -> crate::conformance::RefusalShape {
+                crate::conformance::RefusalShape::ContentFilterOnly(
+                    crate::conformance::wire_defaults::chat_content_filter_body(),
+                )
+            }
+
+            // DeepSeek reports the cache hit as top-level `prompt_cache_hit_tokens` (with a
+            // `prompt_cache_miss_tokens` companion), not OpenAI's `prompt_tokens_details`.
+            fn usage_body() -> String {
+                json!({
+                    "id": "cmpl-1",
+                    "model": DEEPSEEK_DEFAULT_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 40,
+                        "total_tokens": 140,
+                        "prompt_cache_hit_tokens": 30,
+                        "prompt_cache_miss_tokens": 70,
+                        "completion_tokens_details": {"reasoning_tokens": 15}
+                    }
+                })
                 .to_string()
             }
 

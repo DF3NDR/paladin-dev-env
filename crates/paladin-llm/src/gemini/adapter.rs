@@ -4222,6 +4222,18 @@ mod tests {
         impl crate::conformance::ConformanceFixture for GeminiFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::Gemini;
 
+            fn default_model() -> &'static str {
+                GEMINI_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "gemini"
+            }
+
+            fn api_key() -> &'static str {
+                "test-key-abc123"
+            }
+
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 Arc::new(test_adapter(base_url))
             }

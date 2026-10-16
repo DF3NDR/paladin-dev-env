@@ -888,6 +888,14 @@ mod tests {
         impl crate::conformance::ConformanceFixture for QwenFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
 
+            fn default_model() -> &'static str {
+                QWEN_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "qwen"
+            }
+
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 let config = QwenConfig::new(
                     "test-key".to_string(),

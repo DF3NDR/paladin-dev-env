@@ -2875,6 +2875,14 @@ stake, so an attacker donating to himself alone is a strict loss.";
         impl crate::conformance::ConformanceFixture for AnthropicFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::Anthropic;
 
+            fn default_model() -> &'static str {
+                ANTHROPIC_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "anthropic"
+            }
+
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 let mut config = AnthropicConfig::new(
                     "test-key".to_string(),

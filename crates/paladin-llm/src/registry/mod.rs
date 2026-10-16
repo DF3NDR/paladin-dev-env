@@ -59,17 +59,8 @@ pub(crate) const DEFAULT_MAX_RETRIES: u32 = 3;
 
 /// The request timeout, in seconds, a direct `*Config` constructor gives a reasoning model when
 /// no explicit timeout is set (D-13): a reasoning model spends its budget thinking before it
-/// answers, so the 60 s hosted-preset default routinely cuts it off.
-#[cfg(any(
-    feature = "kimi",
-    feature = "qwen",
-    feature = "grok",
-    feature = "ollama",
-    feature = "openai-compatible",
-    feature = "anthropic",
-    feature = "deepseek",
-    feature = "gemini"
-))]
+/// answers, so the 60 s hosted-preset default routinely cuts it off. Also the value the layered
+/// config path (`config::layers`) gives a reasoning model, so it is not feature-gated.
 pub(crate) const REASONING_DEFAULT_TIMEOUT_SECONDS: u64 = 300;
 
 /// The seeded table for `provider`, empty for a provider that has none (or whose feature is

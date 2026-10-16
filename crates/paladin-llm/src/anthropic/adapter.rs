@@ -47,6 +47,11 @@ const ANTHROPIC_PROVIDER: &str = "anthropic";
 /// `not_found_error`. Pin `ANTHROPIC_MODEL` to keep any other model.
 pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-haiku-5-5";
 
+/// The `max_tokens` budget [`AnthropicConfig::from_env`] and the layered config path
+/// (`config::bridge`) use when neither `ANTHROPIC_MAX_TOKENS` nor the config block sets one. The
+/// Claude API requires the field, so this adapter always has a value.
+pub(crate) const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 4096;
+
 /// The exact phrase observed VERBATIM in Anthropic's HTTP 400
 /// `invalid_request_error` body when an account has reached its configured
 /// API usage limit (live run `4a3b749d`). Matched narrowly and deliberately:
@@ -181,7 +186,7 @@ impl AnthropicConfig {
             env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| ANTHROPIC_DEFAULT_MODEL.to_string());
 
         let max_tokens = env::var("ANTHROPIC_MAX_TOKENS")
-            .unwrap_or_else(|_| "4096".to_string())
+            .unwrap_or_else(|_| ANTHROPIC_DEFAULT_MAX_TOKENS.to_string())
             .parse()
             .map_err(|_| "Invalid ANTHROPIC_MAX_TOKENS value")?;
 

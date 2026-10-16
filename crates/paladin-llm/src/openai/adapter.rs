@@ -39,7 +39,7 @@ const OPENAI_PROVIDER: &str = "openai";
 /// default). It is the cap OpenAI users have always had, now the documented
 /// [`OpenAIConfig::max_tokens`] knob (D-13). The effective value is checked against the model's
 /// profiled maximum output like any other.
-const OPENAI_DEFAULT_MAX_TOKENS: u32 = 4096;
+pub(crate) const OPENAI_DEFAULT_MAX_TOKENS: u32 = 4096;
 
 /// The most stop sequences the OpenAI chat-completions API accepts (`stop` is an array with
 /// `maxItems: 4` in the openai-openapi specification). A longer list is omitted and recorded,

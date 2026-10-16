@@ -79,8 +79,13 @@ mod tests {
         let provider = minimal_provider_config();
         let cfg = AnthropicConfig::from(&provider);
         assert_eq!(cfg.base_url, "https://api.anthropic.com/v1");
-        assert_eq!(cfg.model, "claude-3-5-sonnet-20241022");
-        assert_eq!(cfg.timeout_seconds, 300);
+        // Plan 50-09: the bridge's stale defaults (the October-2024 Sonnet id, a 300 s timeout)
+        // are the adapter's own compiled ones now.
+        assert_eq!(
+            cfg.model,
+            paladin_llm::anthropic::adapter::ANTHROPIC_DEFAULT_MODEL
+        );
+        assert_eq!(cfg.timeout_seconds, 60);
     }
 
     // ── DeepSeek ────────────────────────────────────────────────────────────
@@ -102,7 +107,12 @@ mod tests {
         let provider = minimal_provider_config();
         let cfg = DeepSeekConfig::from(&provider);
         assert_eq!(cfg.base_url, "https://api.deepseek.com/v1");
-        assert_eq!(cfg.model, "deepseek-chat");
-        assert_eq!(cfg.timeout_seconds, 60);
+        // Plan 50-09: the retired `deepseek-chat` default is the adapter's current default
+        // model, a seeded reasoning model, so it gets the 300 s reasoning timeout (D-13).
+        assert_eq!(
+            cfg.model,
+            paladin_llm::deepseek::adapter::DEEPSEEK_DEFAULT_MODEL
+        );
+        assert_eq!(cfg.timeout_seconds, 300);
     }
 }

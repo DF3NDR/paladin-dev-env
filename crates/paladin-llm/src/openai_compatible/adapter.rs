@@ -301,16 +301,24 @@ impl OpenAiCompatibleCapabilitiesConfig {
     /// value that fails to parse. Never silently defaults an unparseable
     /// value to `true` or `false`.
     pub fn from_env() -> Result<Self, String> {
+        Self::from_lookup(&|name| env::var(name).ok())
+    }
+
+    /// [`Self::from_env`] over an injected variable lookup, so the layered config path
+    /// (`config::bridge`, plan 50-09) reads the same `OPENAI_COMPATIBLE_*` variables through its
+    /// own environment snapshot, and a lookup that finds nothing yields the conservative
+    /// defaults.
+    pub(crate) fn from_lookup(lookup: &dyn Fn(&str) -> Option<String>) -> Result<Self, String> {
         Self::from_parts(
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_STREAMING").ok(),
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_TOOL_CALLING").ok(),
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_FUNCTION_CALLING").ok(),
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_VISION").ok(),
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_EMBEDDINGS").ok(),
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_SYSTEM_MESSAGES").ok(),
-            env::var("OPENAI_COMPATIBLE_MAX_CONTEXT_TOKENS").ok(),
-            env::var("OPENAI_COMPATIBLE_TEMPERATURE_MIN").ok(),
-            env::var("OPENAI_COMPATIBLE_TEMPERATURE_MAX").ok(),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_STREAMING"),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_TOOL_CALLING"),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_FUNCTION_CALLING"),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_VISION"),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_EMBEDDINGS"),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_SYSTEM_MESSAGES"),
+            lookup("OPENAI_COMPATIBLE_MAX_CONTEXT_TOKENS"),
+            lookup("OPENAI_COMPATIBLE_TEMPERATURE_MIN"),
+            lookup("OPENAI_COMPATIBLE_TEMPERATURE_MAX"),
         )
     }
 

@@ -1401,7 +1401,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7 completion)*
 
-- [ ] 50-10-PLAN.md — agent_host and facade_provisioner on `create_from_config` (per-agent provider/model, block `default_temperature` explicit); facade re-exports of all nine pairs (ADR-0046 defaults kept); matrix through the config API; `paladin-llm` breaks registered from a measured run
+- [x] 50-10-PLAN.md — agent_host and facade_provisioner on `create_from_config` (per-agent provider/model, block `default_temperature` explicit); facade re-exports of all nine pairs (ADR-0046 defaults kept); matrix through the config API; `paladin-llm` breaks registered from a measured run
 
 **Wave 9** *(blocked on Wave 8 completion)*
 

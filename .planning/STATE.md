@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-09-PLAN.md
-last_updated: "2026-10-16T12:46:37.883Z"
+stopped_at: Completed 50-10-PLAN.md
+last_updated: "2026-10-16T13:23:33.604Z"
 last_activity: 2026-10-16
 last_activity_desc: Phase 50 execution started
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 107
-  completed_plans: 99
+  completed_plans: 100
 ---
 
 # Project State
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 10 of 18
+Plan: 11 of 18
 Status: Ready to execute
 Last activity: 2026-10-16 — Phase 50 execution started
 
@@ -306,6 +306,7 @@ Last activity: 2026-10-16 — Phase 50 execution started
 | Phase 50 P07 | 40min | 2 tasks | 6 files |
 | Phase 50 P08 | 65min | 3 tasks | 23 files |
 | Phase 50 P09 | 40min | 3 tasks | 13 files |
+| Phase 50 P10 | 45min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -531,6 +532,9 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-09: An unset ${NAME} placeholder is a construction error even when the provider env var is set; is_configured agrees (false)
 - [Phase ?]: 50-09: D-13 layering lives in config/layers.rs as a pure function over an injected environment; the From conversions run it leniently with no environment and never carry a placeholder as the key
 - [Phase ?]: 50-09: Env vars are read only for fields the block leaves unset; the 300 s reasoning default counts the block's models overrides
+- [Phase ?]: 50-10: unconfigured registered provider is HostBuildError::Provider (names agent, provider, model, variable); UnknownProvider kept for unregistered names; HostBuildError enum unchanged
+- [Phase ?]: 50-10: LlmConfig::validate accepts a recognised default provider with no block (env-only default provider valid)
+- [Phase ?]: 50-10: D-27 measured: only struct_marked_non_exhaustive fired (196 checks) on the nine *Config types and LlmProviderConfig; registered with 10 rows and 10 entries; re-run exits 0
 
 ### Pending Todos
 
@@ -749,8 +753,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-16T12:46:37.856Z
-**Stopped at:** Completed 50-09-PLAN.md
+**Last session:** 2026-10-16T13:23:33.577Z
+**Stopped at:** Completed 50-10-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

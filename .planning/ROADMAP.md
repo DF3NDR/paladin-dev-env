@@ -1405,7 +1405,7 @@ Plans:
 
 **Wave 9** *(blocked on Wave 8 completion)*
 
-- [ ] 50-11-PLAN.md — Typed `LlmResponse.reasoning` and `StreamingResponse.reasoning`, `LlmResponse::new`; atomic migration of every literal; Phase 38 9.2 row extended
+- [x] 50-11-PLAN.md — Typed `LlmResponse.reasoning` and `StreamingResponse.reasoning`, `LlmResponse::new`; atomic migration of every literal; Phase 38 9.2 row extended
 
 **Wave 10** *(blocked on Wave 9 completion)*
 

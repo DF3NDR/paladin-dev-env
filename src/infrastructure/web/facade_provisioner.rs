@@ -102,6 +102,23 @@ impl FacadeProvisioner {
     /// The blocks are operator-only configuration: a runtime
     /// [`AgentSpec`](paladin_web::AgentSpec) carries a model and nothing else about how a
     /// provider is constructed, so a caller cannot steer a host, a key or a limit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin::config::{LlmConfig, LlmProviderConfig};
+    /// use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
+    /// use paladin::infrastructure::web::facade_provisioner::FacadeProvisioner;
+    /// use std::sync::Arc;
+    /// use std::time::Duration;
+    ///
+    /// let llm = LlmConfig {
+    ///     deepseek: Some(LlmProviderConfig::new("${DEEPSEEK_API_KEY}")),
+    ///     ..LlmConfig::default()
+    /// };
+    /// let breaker = Arc::new(CircuitBreaker::new(5, 2, Duration::from_secs(30)));
+    /// let _provisioner = FacadeProvisioner::new("deepseek", breaker).with_llm_config(Some(llm));
+    /// ```
     pub fn with_llm_config(mut self, llm_config: Option<LlmConfig>) -> Self {
         self.llm_config = llm_config;
         self

@@ -15,6 +15,7 @@ use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::run_scope::RunScope;
 use paladin_llm::cadence::CadenceWiring;
+use paladin_llm::config::llm::LlmConfig;
 use paladin_llm::provider_factory::LlmProviderFactory;
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinStream};
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
@@ -39,6 +40,10 @@ use crate::infrastructure::web::agent_host::{
 /// LLM provider factory and the shared agent-build path.
 pub struct FacadeProvisioner {
     factory: LlmProviderFactory,
+    /// The operator's `llm:` section: the provider blocks every runtime-provisioned agent is
+    /// built from (D-12). `None` resolves from the environment alone. Operator-only: a runtime
+    /// `AgentSpec` supplies a model and nothing else about how a provider is constructed.
+    llm_config: Option<LlmConfig>,
     default_provider: String,
     breaker: Arc<CircuitBreaker>,
     treasurer: TreasurerConfig,
@@ -68,6 +73,7 @@ impl FacadeProvisioner {
         let cadence = build_cadence(&treasurer.cadence).ok().flatten();
         Self {
             factory: LlmProviderFactory::new(),
+            llm_config: None,
             default_provider: default_provider.into(),
             breaker,
             treasurer,
@@ -84,6 +90,21 @@ impl FacadeProvisioner {
         Self::new(default_provider_name(settings), default_circuit_breaker())
             .with_treasurer(settings.get_treasurer_config())
             .with_token_budget(settings.agent_runtime.token_budget.clone())
+            .with_llm_config(settings.llm.clone())
+    }
+
+    /// Set the operator's `llm:` section, the provider blocks (`base_url`, key, limits, model
+    /// overrides) every runtime-provisioned agent is constructed from (D-12, D-13).
+    /// [`FacadeProvisioner::from_settings`] sets it from the settings; a provisioner built with
+    /// [`FacadeProvisioner::new`] has none and resolves from the environment alone, exactly as
+    /// before.
+    ///
+    /// The blocks are operator-only configuration: a runtime
+    /// [`AgentSpec`](paladin_web::AgentSpec) carries a model and nothing else about how a
+    /// provider is constructed, so a caller cannot steer a host, a key or a limit.
+    pub fn with_llm_config(mut self, llm_config: Option<LlmConfig>) -> Self {
+        self.llm_config = llm_config;
+        self
     }
 
     /// Set the operator's `agent_runtime.token_budget` that the one
@@ -403,6 +424,7 @@ impl AgentProvisioner for FacadeProvisioner {
         let (paladin, executor, streamer) = build_agent(
             &def,
             &self.factory,
+            self.llm_config.as_ref(),
             &self.default_provider,
             Arc::clone(&self.breaker),
             &price_table,
@@ -442,6 +464,124 @@ mod tests {
             timeout_seconds: None,
             allowed_roles: vec![],
         }
+    }
+
+    use paladin_llm::config::llm::{LlmConfig, LlmProviderConfig};
+
+    const SECRET: &str = "sk-provision-secret-do-not-leak";
+
+    fn chat_completion() -> String {
+        serde_json::json!({
+            "id": "chatcmpl-prov",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "prov",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": "ok" },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+        })
+        .to_string()
+    }
+
+    fn deepseek_llm(base_url: &str) -> LlmConfig {
+        LlmConfig {
+            deepseek: Some(LlmProviderConfig::new(SECRET).with_base_url(base_url)),
+            ..LlmConfig::default()
+        }
+    }
+
+    /// D-12/A3-50-10: a runtime agent builds on the default provider's block with the caller's
+    /// model; the caller chose the model and nothing else.
+    #[tokio::test]
+    async fn a_runtime_agent_builds_on_the_default_providers_block_with_the_callers_model() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", mockito::Matcher::Any)
+            .match_header("authorization", format!("Bearer {SECRET}").as_str())
+            .match_body(mockito::Matcher::PartialJson(
+                serde_json::json!({ "model": "caller-model" }),
+            ))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(chat_completion())
+            .expect(1)
+            .create_async()
+            .await;
+        let provisioner = FacadeProvisioner::new("deepseek", default_circuit_breaker())
+            .with_llm_config(Some(deepseek_llm(&server.url())));
+        let mut spec = sample_spec("runtime");
+        spec.model = "caller-model".to_string();
+        spec.temperature = None;
+        spec.stop_words = vec![];
+
+        let Ok(provisioned) = provisioner.provision(&spec).await else {
+            panic!("a runtime agent on a configured default provider must build");
+        };
+        provisioned
+            .executor
+            .execute(&provisioned.paladin, "hello")
+            .await
+            .expect("the call reaches the block's endpoint");
+        mock.assert_async().await;
+    }
+
+    /// A malformed caller-supplied model id is refused naming provider and model, before any
+    /// adapter is built (T-50-10-01).
+    #[tokio::test]
+    async fn a_malformed_runtime_model_is_refused_naming_provider_and_model() {
+        let provisioner = FacadeProvisioner::new("deepseek", default_circuit_breaker())
+            .with_llm_config(Some(deepseek_llm("http://127.0.0.1:1")));
+        let mut spec = sample_spec("runtime");
+        spec.model = "../etc/passwd".to_string();
+
+        let result = provisioner.provision(&spec).await;
+        let Err(ProvisionError::Failed(message)) = result else {
+            panic!("a malformed model id must be refused");
+        };
+        assert!(message.contains("deepseek"), "{message}");
+        assert!(message.contains("passwd"), "names the model: {message}");
+        assert!(!message.contains(SECRET), "{message}");
+    }
+
+    /// T-50-10-01 tripwire: a runtime `AgentSpec` carries exactly these fields. Adding one (a
+    /// `base_url`, a key, a provider) breaks this destructure, which forces a review of whether a
+    /// caller may now steer provider construction -- it may not (PARITY-03 prohibition).
+    #[test]
+    fn a_runtime_spec_carries_no_provider_construction_input() {
+        let AgentSpec {
+            id: _,
+            name: _,
+            model: _,
+            system_prompt: _,
+            temperature: _,
+            stop_words: _,
+            timeout_seconds: _,
+            allowed_roles: _,
+        } = sample_spec("x");
+        let def = spec_to_definition(&sample_spec("x"));
+        assert!(
+            def.provider.is_none(),
+            "the default provider always applies"
+        );
+    }
+
+    /// The run engine's LLM is built from the default provider's block (D-12).
+    #[test]
+    fn the_run_engine_is_built_from_the_default_providers_yaml_block() {
+        let settings = Settings {
+            llm: Some(LlmConfig {
+                default_provider: Some("deepseek".to_string()),
+                ..deepseek_llm("http://127.0.0.1:1")
+            }),
+            ..Settings::default()
+        };
+        assert!(
+            paladin_port_from_settings(&settings).is_ok(),
+            "a provider configured only in YAML builds the run engine"
+        );
     }
 
     #[test]

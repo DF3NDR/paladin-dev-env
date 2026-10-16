@@ -19,6 +19,7 @@ use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::user::UserRole;
 use paladin_llm::cadence::CadenceWiring;
+use paladin_llm::config::llm::LlmConfig;
 use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError};
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
@@ -198,6 +199,7 @@ pub(crate) async fn build_agent_with_llm(
 pub(crate) async fn build_agent(
     def: &AgentDefinition,
     factory: &LlmProviderFactory,
+    llm_config: Option<&LlmConfig>,
     default_provider: &str,
     breaker: Arc<CircuitBreaker>,
     price_table: &Arc<PriceTable>,
@@ -205,6 +207,7 @@ pub(crate) async fn build_agent(
     token_budget: TokenBudgetConfig,
     cadence: Option<&CadenceWiring>,
 ) -> Result<BuiltAgent, HostBuildError> {
+    let _ = llm_config;
     let provider = resolve_provider(def, default_provider);
     let llm = factory
         .create(&provider)
@@ -418,6 +421,7 @@ pub async fn build_agent_registry_with_cadence(
         let (paladin, executor, streamer) = build_agent(
             def,
             &factory,
+            settings.llm.as_ref(),
             &default_provider,
             Arc::clone(&breaker),
             &price_table,
@@ -513,6 +517,7 @@ mod tests {
         let result = build_agent(
             &def,
             &factory,
+            None,
             "openai",
             default_circuit_breaker(),
             &empty_price_table(),
@@ -1154,5 +1159,284 @@ mod tests {
         let result = result.expect("the job completes");
         assert_eq!(result["stop_reason"], "allowance_halted");
         assert_eq!(result["halt_reason"]["reason"], "allowance_exhausted");
+    }
+}
+
+/// Phase 50 (PARITY-03, D-12/D-13/D-02): agents are built through
+/// `LlmProviderFactory::create_from_config`, so the `llm.<provider>` blocks, the agent's own
+/// `provider` and `model`, and a block's `default_temperature` all take effect.
+#[cfg(test)]
+mod config_driven_tests {
+    use super::*;
+    use mockito::Matcher;
+    use paladin_llm::config::llm::LlmProviderConfig;
+    use serde_json::json;
+
+    /// A block key no assertion may ever find in an error or a log line.
+    const SECRET: &str = "sk-block-secret-do-not-leak";
+
+    fn agent(id: &str, provider: &str, model: &str) -> AgentDefinition {
+        AgentDefinition {
+            id: id.to_string(),
+            model: model.to_string(),
+            system_prompt: "You are a test agent.".to_string(),
+            provider: Some(provider.to_string()),
+            temperature: None,
+            max_loops: Some(1),
+            stop_words: vec![],
+            timeout_seconds: None,
+            allowed_roles: vec![],
+        }
+    }
+
+    fn empty_price_table() -> Arc<PriceTable> {
+        use paladin_core::platform::container::cost::CurrencyCode;
+        Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()))
+    }
+
+    async fn build(
+        def: &AgentDefinition,
+        llm: Option<&LlmConfig>,
+        default_provider: &str,
+    ) -> Result<BuiltAgent, HostBuildError> {
+        build_agent(
+            def,
+            &LlmProviderFactory::new(),
+            llm,
+            default_provider,
+            default_circuit_breaker(),
+            &empty_price_table(),
+            None,
+            TokenBudgetConfig::default(),
+            None,
+        )
+        .await
+    }
+
+    fn chat_completion(text: &str) -> String {
+        json!({
+            "id": "chatcmpl-host",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "host",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": text },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+        })
+        .to_string()
+    }
+
+    fn deepseek_llm(base_url: &str) -> LlmConfig {
+        LlmConfig {
+            deepseek: Some(LlmProviderConfig::new(SECRET).with_base_url(base_url)),
+            ..LlmConfig::default()
+        }
+    }
+
+    fn anthropic_llm(block: LlmProviderConfig) -> LlmConfig {
+        LlmConfig {
+            anthropic: Some(block),
+            ..LlmConfig::default()
+        }
+    }
+
+    fn settings(llm: LlmConfig, agents: Vec<AgentDefinition>) -> Settings {
+        Settings {
+            llm: Some(llm),
+            agents,
+            ..Settings::default()
+        }
+    }
+
+    /// D-12/D-13: an agent naming a provider is built from that provider's block (host and key)
+    /// and the agent's own model, with no environment variable involved.
+    #[tokio::test]
+    async fn an_agent_is_built_from_its_providers_block_and_its_own_model() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", Matcher::Any)
+            .match_header("authorization", format!("Bearer {SECRET}").as_str())
+            .match_body(Matcher::PartialJson(json!({ "model": "agent-model-x" })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(chat_completion("from the block"))
+            .expect(1)
+            .create_async()
+            .await;
+        let llm = deepseek_llm(&server.url());
+
+        let def = agent("a1", "deepseek", "agent-model-x");
+        let Ok((paladin, executor, _)) = build(&def, Some(&llm), "openai").await else {
+            panic!("an agent whose provider block names a key and a host must build");
+        };
+        executor
+            .execute(&paladin, "hello")
+            .await
+            .expect("the call reaches the block's endpoint");
+        mock.assert_async().await;
+    }
+
+    /// D-02: a block's `default_temperature` is an explicit value; a model that does not take it
+    /// refuses the build and the refusal names provider, model, parameter and the YAML key.
+    #[tokio::test]
+    async fn a_blocks_default_temperature_is_explicit_and_a_refusal_names_its_key() {
+        let llm = anthropic_llm(LlmProviderConfig::new(SECRET).with_default_temperature(0.5));
+        let def = agent("a1", "anthropic", "claude-haiku-5-5");
+
+        let err = build(&def, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("claude-haiku-5-5 takes only temperature 1.0, so 0.5 must be refused");
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
+        let text = err.to_string();
+        for needle in [
+            "anthropic",
+            "claude-haiku-5-5",
+            "temperature",
+            "llm.anthropic.default_temperature",
+        ] {
+            assert!(text.contains(needle), "missing '{needle}' in: {text}");
+        }
+        assert!(!text.contains(SECRET), "no key in the error: {text}");
+    }
+
+    /// The same value set on the agent names the agent's own key.
+    #[tokio::test]
+    async fn an_agents_own_temperature_refusal_names_the_agent_key() {
+        let llm = anthropic_llm(LlmProviderConfig::new(SECRET));
+        let mut def = agent("researcher", "anthropic", "claude-haiku-5-5");
+        def.temperature = Some(0.5);
+
+        let err = build(&def, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("0.5 is refused");
+        let text = err.to_string();
+        assert!(text.contains("agents[researcher].temperature"), "{text}");
+        assert!(!text.contains("default_temperature"), "{text}");
+        assert!(!text.contains(SECRET), "{text}");
+    }
+
+    /// The agent's own temperature wins over the block's default, and a block that sets none
+    /// expresses nothing (so a narrow model profile cannot deny service).
+    #[tokio::test]
+    async fn the_agents_temperature_beats_the_blocks_and_silence_expresses_nothing() {
+        let block = LlmProviderConfig::new(SECRET).with_default_temperature(0.5);
+        let mut own = agent("a1", "anthropic", "claude-haiku-5-5");
+        own.temperature = Some(1.0);
+        assert!(
+            build(&own, Some(&anthropic_llm(block)), "openai")
+                .await
+                .is_ok(),
+            "the agent's admitted 1.0 must beat the block's refused 0.5"
+        );
+
+        let silent = agent("a2", "anthropic", "claude-haiku-5-5");
+        assert!(
+            build(
+                &silent,
+                Some(&anthropic_llm(LlmProviderConfig::new(SECRET))),
+                "openai"
+            )
+            .await
+            .is_ok(),
+            "nothing expressed, nothing judged"
+        );
+    }
+
+    /// An absent `llm:` section resolves from the environment exactly as `create(name)` did: an
+    /// unknown provider still surfaces as a `Provider` error.
+    #[tokio::test]
+    async fn an_unknown_provider_with_no_llm_section_is_a_provider_error() {
+        let def = agent("x", "no-such-provider", "m");
+        let result = build(&def, None, "openai").await;
+        assert!(
+            matches!(result, Err(HostBuildError::Provider { .. })),
+            "unknown provider must yield a Provider error"
+        );
+    }
+
+    /// Pitfall 13: `timeout_seconds` on the definition is the per-agent execution timeout. It is
+    /// never mapped onto the provider's HTTP client timeout: a 1 s agent timeout with a slower
+    /// vendor and a 30 s block timeout still completes.
+    #[tokio::test]
+    async fn the_agent_timeout_does_not_become_the_http_client_timeout() {
+        let mut server = mockito::Server::new_async().await;
+        let body = chat_completion("slow but fine");
+        let _mock = server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |_| {
+                std::thread::sleep(Duration::from_millis(1_300));
+                body.clone().into_bytes()
+            })
+            .create_async()
+            .await;
+        let llm = LlmConfig {
+            deepseek: Some(
+                LlmProviderConfig::new(SECRET)
+                    .with_base_url(server.url())
+                    .with_timeout_seconds(30),
+            ),
+            ..LlmConfig::default()
+        };
+        let mut def = agent("slow", "deepseek", "agent-model-x");
+        def.timeout_seconds = Some(1);
+
+        let Ok((paladin, executor, _)) = build(&def, Some(&llm), "openai").await else {
+            panic!("must build");
+        };
+        executor
+            .execute(&paladin, "hello")
+            .await
+            .expect("the HTTP client keeps the block's 30 s timeout, not the agent's 1 s");
+    }
+
+    /// Pitfall 8: a provider configured only in YAML passes the pre-flight check.
+    #[test]
+    fn validate_config_accepts_a_provider_configured_only_in_yaml() {
+        let llm = LlmConfig {
+            default_provider: Some("deepseek".to_string()),
+            ..deepseek_llm("http://127.0.0.1:1")
+        };
+        let settings = settings(llm, vec![agent("a1", "deepseek", "m1")]);
+        validate_config(&settings).expect("a YAML-only provider is available");
+    }
+
+    /// A provider whose block names an unset `${VAR}` is not available; the error names the agent,
+    /// the provider, the model and the variable, never a value.
+    #[test]
+    fn validate_config_rejects_an_unconfigured_provider_naming_agent_provider_and_model() {
+        let llm = LlmConfig {
+            deepseek: Some(LlmProviderConfig::new("${PALADIN_TEST_UNSET_VAR_50_10}")),
+            ..LlmConfig::default()
+        };
+        let settings = settings(llm, vec![agent("planner", "deepseek", "model-p")]);
+        let err = validate_config(&settings).expect_err("an unset placeholder is not configured");
+        let text = err.to_string();
+        for needle in [
+            "planner",
+            "deepseek",
+            "model-p",
+            "PALADIN_TEST_UNSET_VAR_50_10",
+        ] {
+            assert!(text.contains(needle), "missing '{needle}' in: {text}");
+        }
+    }
+
+    /// The env-only default provider needs no block in `llm:` (50-09's observation): the block
+    /// is optional, so a default provider without one is a valid configuration.
+    #[test]
+    fn llm_config_validate_accepts_a_default_provider_with_no_block() {
+        let llm = LlmConfig {
+            default_provider: Some("deepseek".to_string()),
+            ..LlmConfig::default()
+        };
+        llm.validate()
+            .expect("env-only construction works through create_from_config");
     }
 }

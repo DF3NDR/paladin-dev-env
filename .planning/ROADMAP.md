@@ -1425,7 +1425,7 @@ Plans:
 
 **Wave 14** *(blocked on Wave 13 completion)*
 
-- [ ] 50-18-PLAN.md — Owner reading R-1 (decision checkpoint): what D-01/D-07's "run-metadata entry" is; option-b carries the `paladin.*` keys onto `PaladinResult.run_metadata` and the streaming terminal chunk (registered break, literals migrated); ADR-0061 records the answer
+- [x] 50-18-PLAN.md — Owner reading R-1 (decision checkpoint): what D-01/D-07's "run-metadata entry" is; option-b carries the `paladin.*` keys onto `PaladinResult.run_metadata` and the streaming terminal chunk (registered break, literals migrated); ADR-0061 records the answer
 
 **Wave 15** *(blocked on Wave 14 completion)*
 

@@ -100,6 +100,15 @@ include = [
 # `constructible_struct_adds_field` for it, which the allow below already covers; the row is
 # therefore `Y` with a matching `.cargo/semver-checks-allowlist.toml` entry, and no new lint
 # line was needed.
+#
+# PARITY-06 (MIGRATION.md §9.2, Phase 50 plan 50-14, D-15): `ModelFallbackConfig` gained the
+# additive `steps` field (with the new `FallbackStepConfig`) and `AgentRuntimeDeps` gained
+# `llm_config: Option<LlmConfig>`. Both stay constructible (both implement `Default`; in-tree
+# literals use `..Default::default()`), and the D-27 diagnostic (0.50.0 vs 0.10.1, this table's
+# allow disabled and restored byte-for-byte) fired the already-allowed
+# `constructible_struct_adds_field` for them -- the only lint it fired for this plan -- so no
+# new line was needed. `ModelFallbackConfig` has its own row and entry; `AgentRuntimeDeps`'s
+# existing row and entry were extended, not duplicated.
 [package.metadata.cargo-semver-checks.lints]
 constructible_struct_adds_field = "allow"
 

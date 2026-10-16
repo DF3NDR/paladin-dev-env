@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-16 13:13:55 UTC
+# Public API Surface - Generated 2026-10-16 17:44:18 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -15,6 +15,9 @@ pub use paladin::ConsignmentItem
 pub use paladin::DeepSeekAdapter
 pub use paladin::DeepSeekConfig
 pub use paladin::DispensedItem
+pub use paladin::FallbackChainError
+pub use paladin::FallbackLlmAdapter
+pub use paladin::FallbackStep
 pub use paladin::LlmConfig
 pub use paladin::LlmProviderConfig
 pub use paladin::LlmProviderFactory
@@ -28,6 +31,8 @@ pub use paladin::PaladinConfig
 pub use paladin::PaladinData
 pub use paladin::PaladinStatus
 pub use paladin::ResolvedWindow
+pub use paladin::SERVED_BY_METADATA_KEY
+pub use paladin::SERVED_MODEL_METADATA_KEY
 pub use paladin::ShedItem
 pub use paladin::Stockpile
 pub use paladin::UnknownContextWindow
@@ -2076,8 +2081,10 @@ impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::pa
 pub mod paladin::application::services::paladin::middleware::resilience
 pub struct paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware
 impl paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware
+pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::from_steps(alloc::vec::Vec<paladin_llm::fallback::FallbackStep>) -> core::result::Result<Self, paladin_llm::fallback::FallbackChainError>
 pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::new(alloc::vec::Vec<alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>>) -> core::result::Result<Self, paladin_llm::fallback::FallbackChainError>
 pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::paced(alloc::vec::Vec<alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>>, &paladin_llm::cadence::CadenceWiring) -> core::result::Result<Self, paladin_llm::fallback::FallbackChainError>
+pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::paced_steps(alloc::vec::Vec<paladin_llm::fallback::FallbackStep>, &paladin_llm::cadence::CadenceWiring) -> core::result::Result<Self, paladin_llm::fallback::FallbackChainError>
 impl paladin::application::services::paladin::middleware::ExecutionMiddleware for paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware
 pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::after_model<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 mut paladin::application::services::paladin::middleware::context::ModelCallContext<'life2>, &'life3 mut paladin::application::services::paladin::middleware::context::LlmResponseView) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin::application::services::paladin::middleware::MiddlewareFlow, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::around_tool<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut paladin::application::services::paladin::middleware::context::ToolCallContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin::application::services::paladin::middleware::ToolFlow, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -2470,8 +2477,10 @@ impl core::panic::unwind_safe::RefUnwindSafe for paladin::application::services:
 impl core::panic::unwind_safe::UnwindSafe for paladin::application::services::paladin::middleware::limits::ModelCallLimit
 pub struct paladin::application::services::paladin::middleware::ModelFallbackMiddleware
 impl paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware
+pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::from_steps(alloc::vec::Vec<paladin_llm::fallback::FallbackStep>) -> core::result::Result<Self, paladin_llm::fallback::FallbackChainError>
 pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::new(alloc::vec::Vec<alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>>) -> core::result::Result<Self, paladin_llm::fallback::FallbackChainError>
 pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::paced(alloc::vec::Vec<alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>>, &paladin_llm::cadence::CadenceWiring) -> core::result::Result<Self, paladin_llm::fallback::FallbackChainError>
+pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::paced_steps(alloc::vec::Vec<paladin_llm::fallback::FallbackStep>, &paladin_llm::cadence::CadenceWiring) -> core::result::Result<Self, paladin_llm::fallback::FallbackChainError>
 impl paladin::application::services::paladin::middleware::ExecutionMiddleware for paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware
 pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::after_model<'life0, 'life1, 'life2, 'life3, 'async_trait>(&'life0 self, &'life1 mut paladin::application::services::paladin::middleware::context::ModelCallContext<'life2>, &'life3 mut paladin::application::services::paladin::middleware::context::LlmResponseView) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin::application::services::paladin::middleware::MiddlewareFlow, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 pub fn paladin::application::services::paladin::middleware::resilience::ModelFallbackMiddleware::around_tool<'life0, 'life1, 'async_trait>(&'life0 self, &'life1 mut paladin::application::services::paladin::middleware::context::ToolCallContext) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin::application::services::paladin::middleware::ToolFlow, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait
@@ -4414,6 +4423,7 @@ pub struct paladin::config::agent_runtime::AgentRuntimeDeps
 pub paladin::config::agent_runtime::AgentRuntimeDeps::arsenal: core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::arsenal_port::ArsenalPort>>
 pub paladin::config::agent_runtime::AgentRuntimeDeps::cadence: core::option::Option<paladin_llm::cadence::CadenceWiring>
 pub paladin::config::agent_runtime::AgentRuntimeDeps::garrison: core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::garrison_port::GarrisonPort>>
+pub paladin::config::agent_runtime::AgentRuntimeDeps::llm_config: core::option::Option<paladin_llm::config::llm::LlmConfig>
 pub paladin::config::agent_runtime::AgentRuntimeDeps::llm_port: core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>>
 pub paladin::config::agent_runtime::AgentRuntimeDeps::llm_provider_factory: paladin_llm::provider_factory::LlmProviderFactory
 pub paladin::config::agent_runtime::AgentRuntimeDeps::summarizer_override: core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>>
@@ -4428,6 +4438,27 @@ impl core::marker::Unpin for paladin::config::agent_runtime::AgentRuntimeDeps
 impl core::marker::UnsafeUnpin for paladin::config::agent_runtime::AgentRuntimeDeps
 impl !core::panic::unwind_safe::RefUnwindSafe for paladin::config::agent_runtime::AgentRuntimeDeps
 impl !core::panic::unwind_safe::UnwindSafe for paladin::config::agent_runtime::AgentRuntimeDeps
+pub struct paladin::config::agent_runtime::FallbackStepConfig
+pub paladin::config::agent_runtime::FallbackStepConfig::model: alloc::string::String
+pub paladin::config::agent_runtime::FallbackStepConfig::provider: alloc::string::String
+impl core::clone::Clone for paladin::config::agent_runtime::FallbackStepConfig
+pub fn paladin::config::agent_runtime::FallbackStepConfig::clone(&self) -> paladin::config::agent_runtime::FallbackStepConfig
+impl core::cmp::PartialEq for paladin::config::agent_runtime::FallbackStepConfig
+pub fn paladin::config::agent_runtime::FallbackStepConfig::eq(&self, &paladin::config::agent_runtime::FallbackStepConfig) -> bool
+impl core::fmt::Debug for paladin::config::agent_runtime::FallbackStepConfig
+pub fn paladin::config::agent_runtime::FallbackStepConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for paladin::config::agent_runtime::FallbackStepConfig
+impl serde_core::ser::Serialize for paladin::config::agent_runtime::FallbackStepConfig
+pub fn paladin::config::agent_runtime::FallbackStepConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for paladin::config::agent_runtime::FallbackStepConfig
+pub fn paladin::config::agent_runtime::FallbackStepConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for paladin::config::agent_runtime::FallbackStepConfig
+impl core::marker::Send for paladin::config::agent_runtime::FallbackStepConfig
+impl core::marker::Sync for paladin::config::agent_runtime::FallbackStepConfig
+impl core::marker::Unpin for paladin::config::agent_runtime::FallbackStepConfig
+impl core::marker::UnsafeUnpin for paladin::config::agent_runtime::FallbackStepConfig
+impl core::panic::unwind_safe::RefUnwindSafe for paladin::config::agent_runtime::FallbackStepConfig
+impl core::panic::unwind_safe::UnwindSafe for paladin::config::agent_runtime::FallbackStepConfig
 pub struct paladin::config::agent_runtime::GuardrailConfig
 pub paladin::config::agent_runtime::GuardrailConfig::enabled: bool
 pub paladin::config::agent_runtime::GuardrailConfig::pattern_size_limit_bytes: usize
@@ -4539,8 +4570,11 @@ impl core::panic::unwind_safe::UnwindSafe for paladin::config::agent_runtime::Mo
 pub struct paladin::config::agent_runtime::ModelFallbackConfig
 pub paladin::config::agent_runtime::ModelFallbackConfig::enabled: bool
 pub paladin::config::agent_runtime::ModelFallbackConfig::providers: alloc::vec::Vec<alloc::string::String>
+pub paladin::config::agent_runtime::ModelFallbackConfig::steps: alloc::vec::Vec<paladin::config::agent_runtime::FallbackStepConfig>
 impl paladin::config::agent_runtime::ModelFallbackConfig
 pub fn paladin::config::agent_runtime::ModelFallbackConfig::resolve_chain(&self, &paladin_llm::provider_factory::LlmProviderFactory) -> core::result::Result<alloc::vec::Vec<alloc::sync::Arc<dyn paladin_ports::output::llm_port::LlmPort>>, paladin::config::agent_runtime::AgentRuntimeConfigError>
+impl paladin::config::agent_runtime::ModelFallbackConfig
+pub fn paladin::config::agent_runtime::ModelFallbackConfig::resolve_steps(&self, &paladin_llm::provider_factory::LlmProviderFactory, core::option::Option<&paladin_llm::config::llm::LlmConfig>) -> core::result::Result<alloc::vec::Vec<paladin_llm::fallback::FallbackStep>, paladin::config::agent_runtime::AgentRuntimeConfigError>
 impl paladin::config::agent_runtime::ModelFallbackConfig
 pub fn paladin::config::agent_runtime::ModelFallbackConfig::validate(&self) -> core::result::Result<(), alloc::string::String>
 impl core::clone::Clone for paladin::config::agent_runtime::ModelFallbackConfig
@@ -8576,4 +8610,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4278
+Total public items: 4298

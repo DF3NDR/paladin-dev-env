@@ -669,6 +669,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `prompt_tokens_details.cache_write_tokens` into `TokenUsage.cache_write_tokens`. The match arms
   every `LlmError` classifier needs (`transience`, `typed_origin`, `llm_error_class`,
   `classify_fetch_failure`) name the new variant. `MIGRATION.md` 9.1 M-B-16.
+- **A fallback chain can send each hop its own model (PARITY-06; Phase 50 plan 50-14; D-15, D-10,
+  D-00h).** `FallbackStep { port, model }` (`FallbackStep::new`) and
+  `FallbackLlmAdapter::from_steps(Vec<FallbackStep>)` build a chain whose every hop is sent its
+  own model: before each hop the request's `model` is rewritten to the step's, on `generate` and
+  `generate_stream`, and that model (not the request's) is what the hop is paced under, so a 429
+  on hop 1 gates `(hop-1 provider, hop-1 model)` only. An Anthropic then Kimi chain no longer
+  sends `claude-*` to Moonshot. `FallbackLlmAdapter::new` is unchanged. Every served response
+  records the model the serving hop was sent under `paladin.served_model`
+  (`SERVED_MODEL_METADATA_KEY`) beside `paladin.served_by`, on `new` chains too.
+  `FallbackLlmAdapter::hop_on_refusal(bool)` (default `false`) is the explicit opt-in to trying
+  the next step when a hop answers `LlmError::Refusal`; every other permanent error still stops
+  the chain. `FallbackChainError::EmptyStepModel { index }` rejects an empty step model at
+  construction. The `paladin` facade re-exports `FallbackLlmAdapter`, `FallbackStep`,
+  `FallbackChainError`, `SERVED_BY_METADATA_KEY` and `SERVED_MODEL_METADATA_KEY`.
+- **`agent_runtime.model_fallback.steps` (PARITY-06; Phase 50 plan 50-14; D-15, RESEARCH Open
+  Question 7).** The configuration path now sends each fallback hop its own model too:
+  `steps: [{provider, model}]` is resolved through `LlmProviderFactory::create_from_config`
+  against the new `AgentRuntimeDeps.llm_config` and built with the new
+  `ModelFallbackMiddleware::from_steps` / `paced_steps`. Names only, never a credential. It is
+  mutually exclusive with `providers` (a validation error naming both keys); a `providers`-only
+  configuration builds exactly as before. `MIGRATION.md` 9.5.
 
 ### Changed
 
@@ -1146,6 +1167,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a response without reasoning serializes byte-identically. Registered on the existing
   `paladin-ports | LlmResponse` `MIGRATION.md` 9.2 row and allowlist entry (the second break
   after `cost`), and in 9.8 DR-6.
+- **BREAKING (`paladin-ai`): `ModelFallbackConfig` gains `steps` and `AgentRuntimeDeps` gains
+  `llm_config`** -- two fields on constructible root types; a full struct literal must add
+  `steps: Vec::new()` or `llm_config: None` (or end in `..Default::default()`, which every
+  in-tree literal now does) (D-15, PARITY-06; Phase 50 plan 50-14). Both types still derive or
+  implement `Default`. Registered on a new `paladin-ai | ModelFallbackConfig` `MIGRATION.md` 9.2
+  row and allowlist entry, and on the existing `paladin-ai | AgentRuntimeDeps` row and entry
+  (the second field after `cadence`).
+- **BREAKING (`paladin-llm`): `FallbackChainError` gains the `EmptyStepModel { index }` variant**
+  -- the enum was already `#[non_exhaustive]`, so a `match` with a wildcard arm is unaffected,
+  but its only variant was a unit variant, so a numeric cast of a variant
+  (`FallbackChainError::EmptyChain as isize`) stops compiling. Measured by cargo-semver-checks
+  as `enum_discriminants_undefined_non_unit_variant` (Phase 50 plan 50-14; D-15, PARITY-06);
+  registered on a new `paladin-llm | FallbackChainError` row and entry.
 
 ### Known limitations
 

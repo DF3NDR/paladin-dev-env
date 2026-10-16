@@ -311,8 +311,8 @@ justification = "The reshaped LlmError::RateLimitExceeded variant is marked #[no
 crate = "paladin-ai"
 lint = "constructible_struct_adds_field"
 migration_row = "paladin-ai | AgentRuntimeDeps"
-requirement_id = "PACE-02"
-justification = "AgentRuntimeDeps gained the cadence: Option<CadenceWiring> field (D-03, 43-06) -- the Cadence wiring that paces every hop of a config-built model_fallback chain; Default carries an in-process wiring built from treasurer.cadence's defaults and None opts out. The struct stays constructible (not #[non_exhaustive]) because it implements Default and in-tree literals already use ..Default::default(); only a downstream full struct literal breaks. Found by the D-27 diagnostic at the Phase 43 closeout (43-13), which contradicted the row's earlier N; suppressed by the root Cargo.toml's crate-wide allow line."
+requirement_id = "PACE-02, PARITY-06"
+justification = "AgentRuntimeDeps gained the cadence: Option<CadenceWiring> field (D-03, 43-06) -- the Cadence wiring that paces every hop of a config-built model_fallback chain; Default carries an in-process wiring built from treasurer.cadence's defaults and None opts out. The struct stays constructible (not #[non_exhaustive]) because it implements Default and in-tree literals already use ..Default::default(); only a downstream full struct literal breaks. Found by the D-27 diagnostic at the Phase 43 closeout (43-13), which contradicted the row's earlier N; suppressed by the root Cargo.toml's crate-wide allow line. Phase 50 plan 50-14 (D-15, PARITY-06) adds the second additive field on the same struct, llm_config: Option<LlmConfig> (default None, behaves as an empty llm: section), with the same constructible-not-non_exhaustive decision and the same Default-based in-tree construction; the D-27 run with the crate-wide allow disabled reports constructible_struct_adds_field on AgentRuntimeDeps.cadence and AgentRuntimeDeps.llm_config, which this one entry covers (no new pair)."
 
 # --- Phase 44 (Legacy Clean-Break Removal, LEGACY-01..04) ---------------------
 # Entries below mirror the Phase 44 `Y` rows of MIGRATION.md section 9.2 (plan
@@ -614,3 +614,29 @@ lint = "struct_marked_non_exhaustive"
 migration_row = "paladin-llm | LlmProviderConfig"
 requirement_id = "PARITY-03"
 justification = "LlmProviderConfig gained max_tokens, context_window and models (Phase 50, plan 50-09) and is marked #[non_exhaustive] with new(api_key) and with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, and every existing YAML file loads unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# Plan 50-14 (D-15, PARITY-06). The D-27 diagnostic (cargo-semver-checks 0.50.0 vs the published
+# 0.10.1, `--release-type minor`, `--default-features`, each crate's crate-wide allow lines
+# disabled and restored byte-for-byte) was re-run for `paladin-ai` and `paladin-llm` on this
+# plan's tree. `paladin-ai`: 196 checks, 1 lint fired (`constructible_struct_adds_field`) on
+# `ModelFallbackConfig.steps` and `AgentRuntimeDeps.llm_config` among the earlier-phase items; the
+# `AgentRuntimeDeps` entry above was extended (not duplicated) and `ModelFallbackConfig` has its
+# own entry below. `paladin-llm`: 196 checks, 2 lints fired -- `struct_marked_non_exhaustive` on
+# the Phase 50 configs (entries above) and `enum_discriminants_undefined_non_unit_variant` on
+# `FallbackChainError`, the one new here. `FallbackStep`, `from_steps`, `hop_on_refusal`,
+# `SERVED_MODEL_METADATA_KEY`, `FallbackStepConfig`, `ModelFallbackMiddleware::from_steps` and
+# `paced_steps` fired nothing and have register-only `N` rows.
+
+[[entry]]
+crate = "paladin-ai"
+lint = "constructible_struct_adds_field"
+migration_row = "paladin-ai | ModelFallbackConfig"
+requirement_id = "PARITY-06"
+justification = "ModelFallbackConfig gained the additive steps: Vec<FallbackStepConfig> field (Phase 50, plan 50-14, D-15, #[serde(default)], empty by default) so a configuration can send each fallback hop its own model. The struct stays constructible and is deliberately NOT #[non_exhaustive] because it derives Default and in-tree literals use ..ModelFallbackConfig::default(); only a downstream full struct literal breaks. Suppressed by the root Cargo.toml's crate-wide allow line."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "enum_discriminants_undefined_non_unit_variant"
+migration_row = "paladin-llm | FallbackChainError"
+requirement_id = "PARITY-06"
+justification = "FallbackChainError gained the struct variant EmptyStepModel { index } (Phase 50, plan 50-14, D-15), returned by FallbackLlmAdapter::from_steps for a step whose model is empty. The enum was already #[non_exhaustive], so a match with a wildcard arm is unaffected; its only variant was a unit variant, so the new struct variant removes its defined discriminants and a numeric cast of a variant stops compiling (nothing in the tree casts it). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."

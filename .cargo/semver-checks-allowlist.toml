@@ -528,3 +528,89 @@ lint = "struct_pub_field_missing"
 migration_row = "paladin-ai-core | PromptItem"
 requirement_id = "ENTITY-01"
 justification = "PromptItem's public field node is renamed entity (ADR-0060, D-08): the prompt item's payload is read as item.entity.data. The v0.10 node key is still read for stored documents. Every in-tree reader migrated in the same commit series (48-05); suppressed by the crate-wide allow line in crates/paladin-core/Cargo.toml."
+
+# --- Phase 50 (Provider Parity & Configuration-Driven Model Swap, PARITY-01..08) ---
+# Entries below mirror the Phase 50 `Y` rows of MIGRATION.md section 9.2 for
+# `paladin-llm` (plan 50-10). The D-27 diagnostic (cargo-semver-checks 0.50.0,
+# the CI-pinned version, against the published 0.10.1 with `--release-type
+# minor`) ran twice on this plan's tree -- once with `--default-features` and
+# once with all nine adapter features, since the default features hide seven of
+# the ten types -- and `paladin-llm` had no crate-wide allow lines to disable.
+# Both runs checked 196 items and fired exactly one lint, `struct_marked_non_exhaustive`,
+# on the nine adapter configs and `LlmProviderConfig` (the owner's `option-a`
+# decision at the plan 50-08 checkpoint: every existing `new`, `from_env` and
+# `from_parts` signature unchanged, a downstream struct literal no longer
+# compiles). Nothing else fired for `paladin-llm`, so there is one entry per
+# (type, lint) and no row-only register entries. Later Phase 50 plans that
+# change another published type add their own rows and entries in the same
+# commit as the change.
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | OpenAIConfig"
+requirement_id = "PARITY-03"
+justification = "OpenAIConfig gained max_tokens, context_window and model_overrides (it already carried max_retries) (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | AnthropicConfig"
+requirement_id = "PARITY-03"
+justification = "AnthropicConfig gained max_retries, context_window and model_overrides (it already carried the required max_tokens: u32) (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | DeepSeekConfig"
+requirement_id = "PARITY-03"
+justification = "DeepSeekConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | GeminiConfig"
+requirement_id = "PARITY-03"
+justification = "GeminiConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | KimiConfig"
+requirement_id = "PARITY-03"
+justification = "KimiConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | QwenConfig"
+requirement_id = "PARITY-03"
+justification = "QwenConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | GrokConfig"
+requirement_id = "PARITY-03"
+justification = "GrokConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | OllamaConfig"
+requirement_id = "PARITY-03"
+justification = "OllamaConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | OpenAiCompatibleConfig"
+requirement_id = "PARITY-03"
+justification = "OpenAiCompatibleConfig gained max_tokens, max_retries, context_window and model_overrides (it already carried capabilities) (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+[[entry]]
+crate = "paladin-llm"
+lint = "struct_marked_non_exhaustive"
+migration_row = "paladin-llm | LlmProviderConfig"
+requirement_id = "PARITY-03"
+justification = "LlmProviderConfig gained max_tokens, context_window and models (Phase 50, plan 50-09) and is marked #[non_exhaustive] with new(api_key) and with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, and every existing YAML file loads unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."

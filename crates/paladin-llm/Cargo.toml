@@ -86,3 +86,21 @@ harness = false
 [[example]]
 name = "live_vendor_smoke"
 required-features = ["openai", "anthropic", "deepseek", "kimi", "qwen", "grok", "ollama", "gemini", "openai-compatible"]
+
+# X-10.6 deliberate-breaking suppression (PARITY-03, D-27, MIGRATION.md §9.2, Phase 50 plan 50-10).
+# The nine adapter configs (`OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`, `GeminiConfig`,
+# `KimiConfig`, `QwenConfig`, `GrokConfig`, `OllamaConfig`, `OpenAiCompatibleConfig`) and the
+# `llm.<provider>` block (`LlmProviderConfig`) gained the Phase 50 knobs (`max_tokens`,
+# `max_retries`, `context_window`, `model_overrides` / `models`) and are marked
+# `#[non_exhaustive]` with `with_*` builders -- the owner's `option-a` decision at the plan 50-08
+# checkpoint -- so the next field (Phase 51's `reasoning_effort`) is free. Every existing `new`,
+# `from_env` and `from_parts` signature is unchanged; only a downstream struct literal stops
+# compiling. The D-27 diagnostic (cargo-semver-checks 0.50.0 vs the published 0.10.1,
+# `--release-type minor`, run with the default features and again with all nine adapter features;
+# this crate had no suppression to disable) fired exactly one lint,
+# `struct_marked_non_exhaustive`, on those ten items and nothing else, so it is the only line
+# below. Each type has a MIGRATION.md §9.2 row and a `.cargo/semver-checks-allowlist.toml` entry;
+# register/remove this suppression only in the same commit as those (kept set-equal by
+# `make check-migration-allowlist` and CI's `semver` job).
+[package.metadata.cargo-semver-checks.lints]
+struct_marked_non_exhaustive = "allow"

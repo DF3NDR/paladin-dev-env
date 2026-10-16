@@ -1413,7 +1413,7 @@ Plans:
 
 **Wave 11** *(blocked on Wave 10 completion)*
 
-- [ ] 50-13-PLAN.md — Anthropic refusal before empty, named stop reasons, thinking text and the stream's real stop reason; Gemini on the guard; empty streams typed; usage-cap overrides only where the probe evidences them, every compat vendor listed verified/unverified per R-2; empty-stop matrix green on all nine
+- [x] 50-13-PLAN.md — Anthropic refusal before empty, named stop reasons, thinking text and the stream's real stop reason; Gemini on the guard; empty streams typed; usage-cap overrides only where the probe evidences them, every compat vendor listed verified/unverified per R-2; empty-stop matrix green on all nine
 
 **Wave 12** *(blocked on Wave 11 completion)*
 

@@ -1,9 +1,9 @@
 ---
-status: complete
+status: diagnosed
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-17T16:03:45Z
+updated: 2026-10-17T16:53:23Z
 ---
 
 ## Current Test
@@ -59,21 +59,69 @@ blocked: 0
   reason: "User reported: don't dismiss the provider's total token counts -- those are what the vendor charges for, and the Treasurer and Commissary depend on these counts; record as a gap and create a gap-closure plan."
   severity: major
   test: 5
-  artifacts: []
-  missing: []
+  root_cause: "TokenUsage's inclusive contract (prompt_tokens = every billed input token, completion_tokens = every billed output token, total = prompt + completion, D-02) is assumed but never verified at the adapter boundary, and the vendor's own total -- the one figure that could verify it -- is deserialised and deliberately discarded (#[allow(dead_code)]). (1) CompatEngine::map_compat_usage applies OpenAI inclusive semantics to every compat preset; xAI Grok reports completion_tokens EXCLUSIVE of completion_tokens_details.reasoning_tokens (vendor total = prompt + completion + reasoning; secondary-sourced, not yet live-measured), so Grok reasoning calls lose reasoning tokens from total_tokens and break reasoning <= completion, and cost_of_call's reasoning.min(completion) clamp then prices the call at ~half (repro 1.163M vs 2.403M nanos). Grok cost_in_usd_ticks / num_sources_used are not parsed. (2) GeminiUsageMetadata never deserialises toolUsePromptTokenCount (latent: GeminiRequest sends no tools today; repro 430 -> 130). (3) Every adapter runs classify_completion(...)? before mapping usage, so a vendor-billed call classified EmptyCompletion/Refusal yields no TokenUsage, no cost and no ledger settle. OpenAI, Anthropic, DeepSeek and Gemini (thoughts) fold all billed token categories correctly on success. The Commissary reads no response usage."
+  artifacts:
+    - path: "crates/paladin-llm/src/compat/engine.rs"
+      issue: "map_compat_usage (~641) applies one OpenAI-semantics mapping to all compat presets; Grok reasoning outside completion is dropped"
+    - path: "crates/paladin-llm/src/compat/types.rs"
+      issue: "CompatUsage.total_tokens is #[allow(dead_code)] (~126); vendor total never reconciled"
+    - path: "crates/paladin-llm/src/gemini/adapter.rs"
+      issue: "GeminiUsageMetadata (~1331) lacks toolUsePromptTokenCount; totalTokenCount dead_code"
+    - path: "crates/paladin-llm/src/openai/adapter.rs"
+      issue: "vendor total_tokens dead_code (~352)"
+    - path: "crates/paladin-core/src/platform/container/cost.rs"
+      issue: "cost_of_call (~386) clamps reasoning to completion, silently hiding an invariant violation"
+    - path: "crates/paladin-llm (all adapters)"
+      issue: "classify_completion(...)? short-circuits before usage mapping; billed-but-failed calls carry no usage/cost"
+  missing:
+    - "Per-vendor usage mapping that folds every billed category into the inclusive parent (Grok reasoning into completion; Gemini toolUsePromptTokenCount into prompt) so prompt + completion == vendor total"
+    - "Parse the vendor total on every adapter and surface any residual mismatch (warn/metric, optionally an Option field) instead of discarding it; keep D-02"
+    - "Carry usage on billed-but-failed calls (EmptyCompletion/Refusal) so the Treasurer can settle them"
+    - "Per-vendor fixtures where vendor total != prompt + completion, plus a live/probe measurement of Grok reasoning containment"
+  debug_session: ".planning/debug/vendor-token-usage-fidelity.md"
 - gap_id: G-50-5b
   truth: "The OpenAI adapter sends the output-token limit as max_completion_tokens, so the seeded default model gpt-5.4-nano accepts requests built from OpenAIConfig::new / from_env defaults instead of rejecting max_tokens with HTTP 400 (WINDOWS row 75, owner chose option (a))"
   status: failed
   reason: "User reported: Row 75: option (a) -- switch the OpenAI adapter to always send max_completion_tokens."
   severity: major
   test: 5
-  artifacts: []
-  missing: []
+  root_cause: "The private OpenAIRequest struct (crates/paladin-llm/src/openai/adapter.rs:222-248) serializes its max_tokens field (line 229, no serde rename) as the wire key max_tokens; build_request (529-578) is the only constructor and feeds generate, generate_stream and every response_format variant. OpenAIConfig::new/from_env default max_tokens Some(4096) and PromptParameters defaults Some(1000), so the key is always sent and gpt-5.4-nano always 400s. OpenAIVisionApiRequest.max_tokens (openai/vision.rs:112) is a second wire site (unreachable from gpt-5.4-nano today). Not caught because live_vendor_smoke drives gpt-4o-mini, which still accepts max_tokens. No other adapter reuses the struct."
+  artifacts:
+    - path: "crates/paladin-llm/src/openai/adapter.rs"
+      issue: "OpenAIRequest.max_tokens (line 229) emits wire key max_tokens; doc comments 38-43, 109-114, 521-524, 538-539 describe it; wire tests at ~1890, 2382, 2401, 2494, 3021-3042 pin it"
+    - path: "crates/paladin-llm/src/openai/vision.rs"
+      issue: "OpenAIVisionApiRequest.max_tokens (line 112) also emits max_tokens"
+    - path: "docs/src/user-guides/switching-providers.md"
+      issue: "Known-limits bullet (~189-191) documents the HTTP 400"
+    - path: "CHANGELOG.md"
+      issue: "Known limitations item (3) (~1255-1257)"
+    - path: ".planning/WINDOWS.md"
+      issue: "row 75 open"
+  missing:
+    - "Rename the OpenAI wire key to max_completion_tokens (serde rename) on OpenAIRequest and OpenAIVisionApiRequest; keep OpenAIConfig.max_tokens, PromptParameters.max_tokens and check_max_tokens wording"
+    - "Flip the wire tests (red first) and add a gpt-5.4-nano body test across generate, stream and json_schema asserting max_completion_tokens present and max_tokens absent"
+    - "Update docs, CHANGELOG (remove limitation, add Fixed entry noting only gpt-5.4-nano and gpt-4o-mini were measured), close WINDOWS row 75"
+    - "Consider pointing live_vendor_smoke at gpt-5.4-nano"
+  debug_session: ".planning/debug/openai-max-completion-tokens.md"
 - gap_id: G-50-5c
   truth: "The Kimi adapter-wide fallback profile (unseeded Kimi model ids) matches the seeded Kimi profiles: temperature, top_p, frequency_penalty and presence_penalty are not sent, replacing the stale 2026-08-22 Fixed(1.0)/Fixed(0.95)/(-2.0..2.0) declarations that the 2026-10-15 probe contradicts (WINDOWS row 76, owner chose option (a))"
   status: failed
   reason: "User reported: Row 76: option (a) -- align the Kimi adapter-wide fallback profile with the seeded Kimi profiles (temperature, top_p and penalties not sent)."
   severity: minor
   test: 5
-  artifacts: []
-  missing: []
+  root_cause: "KimiAdapter::new (crates/paladin-llm/src/kimi/adapter.rs) builds the adapter-wide fallback from two stale 2026-08-22 sources plan 50-06 left in place when it seeded kimi-k2.6/kimi-k3 as NotSent: (1) the explicit .with_temperature(ParamSupport::Fixed(1.0)).with_top_p(ParamSupport::Fixed(0.95)) overrides (lines 337-339); (2) request_parameters declaring temperature/top_p/frequency_penalty/presence_penalty carried = true (lines 295-301), which registry::fallback_from_compat (registry/mod.rs:662-694) turns into Range(-2.0, 2.0) penalties. No gate compares the fallback with the seeded rows or the probe, and four Kimi unit tests pin the stale values."
+  artifacts:
+    - path: "crates/paladin-llm/src/kimi/adapter.rs"
+      issue: "Fixed(1.0)/Fixed(0.95) overrides (337-339); request_parameters flags true (295-301); temperature_range Some((1.0, 1.0)) (~274); four unit tests pin the stale values (e.g. kimi_model_profile_declares_the_two_measured_single_values, generate_omits_top_p_from_the_moonshot_request_body, get_capabilities_reports_the_measured_degenerate_temperature_range)"
+    - path: "crates/paladin-llm/src/registry/mod.rs"
+      issue: "fallback_from_compat maps carried penalties to Range(-2.0, 2.0)"
+    - path: "docs/src/user-guides/switching-providers.md"
+      issue: "fallback row (~216) and note [f] (~251) describe the stale profile"
+    - path: ".planning/WINDOWS.md"
+      issue: "row 76 open"
+  missing:
+    - "Set the four request_parameters flags false and delete the Fixed overrides (the Grok idiom) so the fallback declares temperature, top_p, frequency_penalty and presence_penalty NotSent, matching seeded.rs kimi-k2.6/kimi-k3"
+    - "Revisit temperature_range in capabilities consistent with the lib.rs test_every_adapter_declares_a_temperature_range invariant"
+    - "Rewrite the four pinning tests (red first) and add a test that the fallback matches the seeded Kimi sampling declarations"
+    - "Update the docs fallback row and note [f], CHANGELOG, close WINDOWS row 76"
+  debug_session: ".planning/debug/kimi-fallback-profile-stale.md"

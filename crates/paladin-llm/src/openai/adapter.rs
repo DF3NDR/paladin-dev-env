@@ -40,6 +40,10 @@ const OPENAI_PROVIDER: &str = "openai";
 /// default). It is the cap OpenAI users have always had, now the documented
 /// [`OpenAIConfig::max_tokens`] knob (D-13). The effective value is checked against the model's
 /// profiled maximum output like any other.
+///
+/// Paladin calls the knob `max_tokens`; the OpenAI wire key is `max_completion_tokens` for every
+/// model (owner decision 2026-10-17, G-50-5b, UAT test 5). Acceptance of that key was measured
+/// for `gpt-5.4-nano` and `gpt-4o-mini` only (2026-10-15).
 pub(crate) const OPENAI_DEFAULT_MAX_TOKENS: u32 = 4096;
 
 /// The most stop sequences the OpenAI chat-completions API accepts (`stop` is an array with
@@ -108,9 +112,15 @@ pub struct OpenAIConfig {
     pub max_retries: u32,
     /// Default output budget (`max_tokens`) sent when a request sets none. [`OpenAIConfig::new`]
     /// and [`OpenAIConfig::from_env`] set `Some(4096)`, the cap this adapter has always sent;
-    /// `None` sends no `max_tokens` key. The value is checked against the model's profiled
+    /// `None` sends no output-cap key. The value is checked against the model's profiled
     /// maximum output exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the
     /// request is refused before any HTTP call.
+    ///
+    /// Paladin names the knob `max_tokens`; on the wire the adapter sends it as
+    /// `max_completion_tokens` for every model (owner decision 2026-10-17, G-50-5b), the key
+    /// `gpt-5.4-nano` requires. Acceptance of that key was measured for `gpt-5.4-nano` and
+    /// `gpt-4o-mini` only (2026-10-15); a server behind `base_url` that accepts only the old
+    /// `max_tokens` key belongs on the `openai-compatible` preset instead.
     pub max_tokens: Option<u32>,
     /// Adapter-wide context window in tokens, the operator's statement for every model. `None`
     /// (the default) keeps the compiled windows. When set it replaces the adapter's declared
@@ -225,7 +235,16 @@ struct OpenAIRequest {
     messages: Vec<OpenAIMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The output-token cap. Paladin calls it `max_tokens` (the field, [`OpenAIConfig::max_tokens`]
+    /// and `PromptParameters::max_tokens` keep that name); on the wire it is
+    /// `max_completion_tokens` for every OpenAI model, because `gpt-5.4-nano` rejects
+    /// `max_tokens` with HTTP 400 `unsupported_parameter` (owner decision 2026-10-17, G-50-5b,
+    /// option (a)). Acceptance of the new key was measured for `gpt-5.4-nano` and `gpt-4o-mini`
+    /// only (2026-10-15); there is deliberately no per-model switch.
+    #[serde(
+        rename = "max_completion_tokens",
+        skip_serializing_if = "Option::is_none"
+    )]
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f32>,
@@ -521,8 +540,10 @@ impl OpenAIAdapter {
     /// inadmissible one is omitted and recorded, never clamped or swapped. `max_tokens` keeps
     /// the configured [`OpenAIConfig::max_tokens`] (4096 from `new`/`from_env`, the cap this
     /// adapter has always sent) and the effective value is checked against the
-    /// profile's maximum output before anything is sent. The `response_format` follows the
-    /// profile through [`sampling::apply_response_format`].
+    /// profile's maximum output before anything is sent. It reaches the wire as
+    /// `max_completion_tokens` for every model (owner decision 2026-10-17, G-50-5b; measured
+    /// accepted on `gpt-5.4-nano` and `gpt-4o-mini` only, 2026-10-15). The `response_format`
+    /// follows the profile through [`sampling::apply_response_format`].
     ///
     /// Shared by [`LlmPort::generate`] and [`LlmPort::generate_stream`], so the two paths cannot
     /// drift.
@@ -536,7 +557,8 @@ impl OpenAIAdapter {
         let profile = self.model_registry.profile(&request.model);
 
         // The caller's value, else the configured default (`Some(4096)` from `new`/`from_env`);
-        // `None` sends no `max_tokens` key. Either is held to the model's maximum output.
+        // `None` sends no output-cap key. Either is held to the model's maximum output. The wire
+        // name is `max_completion_tokens` (the `OpenAIRequest` field's serde rename).
         let max_tokens = params.max_tokens.or(self.config.max_tokens);
         sampling::check_max_tokens(OPENAI_PROVIDER, &request.model, &profile, max_tokens)?;
 
@@ -1887,7 +1909,7 @@ mod tests {
                     "model",
                     "messages",
                     "temperature",
-                    "max_tokens",
+                    "max_completion_tokens",
                     "top_p",
                     "stream"
                 ])
@@ -2379,8 +2401,12 @@ mod tests {
                 "no stop when none was set: {obj:?}"
             );
             assert_eq!(
-                body["max_tokens"], 4096,
-                "max_tokens keeps its documented compiled default"
+                body["max_completion_tokens"], 4096,
+                "the output cap keeps its documented compiled default"
+            );
+            assert!(
+                !obj.contains_key("max_tokens"),
+                "the old wire key is never sent: {obj:?}"
             );
             assert!(
                 !metadata.contains_key(PARAMS_OMITTED_METADATA_KEY),
@@ -2398,7 +2424,11 @@ mod tests {
 
             assert_eq!(body["temperature"], 0.5);
             assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
-            assert_eq!(body["max_tokens"], 777, "the caller's max_tokens wins");
+            assert_eq!(
+                body["max_completion_tokens"], 777,
+                "the caller's max_tokens wins"
+            );
+            assert!(body.get("max_tokens").is_none(), "{body}");
             assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
         }
 
@@ -2491,7 +2521,8 @@ mod tests {
             );
             assert!((body["top_p"].as_f64().unwrap() - 0.9).abs() < 1e-6);
             assert_eq!(body["stop"], json!(["END", "STOP"]));
-            assert_eq!(body["max_tokens"], 4096);
+            assert_eq!(body["max_completion_tokens"], 4096);
+            assert!(body.get("max_tokens").is_none(), "{body}");
             assert_eq!(body["stream"], true);
 
             let mut over = unset();
@@ -2964,6 +2995,54 @@ mod tests {
             ));
         }
     }
+
+    // ── Phase 50 (G-50-5b, owner option (a)): the output cap's wire name ──
+
+    /// The OpenAI adapter sends its output cap as `max_completion_tokens` for every model
+    /// (owner decision 2026-10-17, UAT test 5). `gpt-5.4-nano` -- the first seeded model --
+    /// rejects `max_tokens` with HTTP 400 `unsupported_parameter` (probe 11), and accepts the
+    /// new key (probe 12, `50-SEED-PROBE.md`).
+    mod max_completion_tokens_wiring {
+        use super::*;
+        use crate::test_support::{mock_completion, server};
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        /// A default `PromptItem` for the seeded OpenAI model: nothing about the parameters is
+        /// overridden, so the `PromptParameters` default (1000) is the caller's value.
+        fn nano_request() -> LlmRequest {
+            LlmRequest::new(
+                "gpt-5.4-nano",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        fn config_at(base_url: &str) -> OpenAIConfig {
+            let mut config = OpenAIConfig::new("test-key".to_string());
+            config.base_url = base_url.to_string();
+            config
+        }
+
+        #[tokio::test]
+        async fn openai_gpt_5_4_nano_bodies_carry_max_completion_tokens() {
+            let mut server = server().await;
+            let captured = mock_completion(&mut server).await;
+            let adapter = OpenAIAdapter::new(config_at(&server.url())).unwrap();
+
+            adapter.generate(nano_request()).await.unwrap();
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock endpoint received a request");
+            assert_eq!(body["model"], "gpt-5.4-nano");
+            assert_eq!(body["max_completion_tokens"], 1000, "{body}");
+            assert!(body.get("max_tokens").is_none(), "{body}");
+        }
+    }
 }
 
 /// The PARITY-03 knobs on `OpenAIConfig` (plan 50-08, D-12): each one is read by the adapter.
@@ -3018,27 +3097,31 @@ mod knob_tests {
         let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
             .await
             .unwrap();
-        assert_eq!(body["max_tokens"], 4096, "{body}");
+        assert_eq!(body["max_completion_tokens"], 4096, "{body}");
+        assert!(body.get("max_tokens").is_none(), "{body}");
         // A request's own value wins.
         let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
             .await
             .unwrap();
-        assert_eq!(body["max_tokens"], 512, "{body}");
+        assert_eq!(body["max_completion_tokens"], 512, "{body}");
+        assert!(body.get("max_tokens").is_none(), "{body}");
 
         // The builder replaces the default ...
         let adapter = OpenAIAdapter::new(config(&url).with_max_tokens(2048)).unwrap();
         let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
             .await
             .unwrap();
-        assert_eq!(body["max_tokens"], 2048, "{body}");
+        assert_eq!(body["max_completion_tokens"], 2048, "{body}");
+        assert!(body.get("max_tokens").is_none(), "{body}");
 
-        // ... and `None` sends no `max_tokens` key at all.
+        // ... and `None` sends neither output-cap key at all.
         let mut unbounded = config(&url);
         unbounded.max_tokens = None;
         let adapter = OpenAIAdapter::new(unbounded).unwrap();
         let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
             .await
             .unwrap();
+        assert!(body.get("max_completion_tokens").is_none(), "{body}");
         assert!(body.get("max_tokens").is_none(), "{body}");
     }
 

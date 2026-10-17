@@ -27,7 +27,7 @@ use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
 
-use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
+use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
@@ -273,16 +273,22 @@ impl KimiAdapter {
                 // (`lib.rs`) still holds: `Some(_)`, never `None`.
                 temperature_range: Some((1.0, 1.0)),
             },
-            // History (17-19, closing G-17-4b; superseded by ADR-0061 in Phase 50): Kimi's
-            // request path used to declare `temperature` and `top_p` NOT carried, so the keys
-            // were dropped from every body and the vendor's own single legal value (`1`,
-            // `0.95`) applied server-side. That made an explicit `temperature(1.0)` impossible
-            // to send and the drop invisible. Both are now carried when the per-model profile
-            // admits them: the profile below declares them `Fixed(1.0)` / `Fixed(0.95)`, so an
-            // explicit `1.0` reaches the wire, the framework's fabricated `0.7` / `1.0`
-            // defaults are omitted and recorded (never swapped for the legal value, ADR-0004),
-            // and `max_tokens`, `frequency_penalty` and `presence_penalty` are carried as
-            // before.
+            // Phase 50 (ADR-0061, plan 50-20, closing G-50-5c): `temperature`, `top_p`,
+            // `frequency_penalty` and `presence_penalty` are NOT carried on any Kimi model the
+            // registry does not list, so `fallback_from_compat` below declares each `NotSent`,
+            // exactly as the seeded `kimi-k2.6` and `kimi-k3` rows do. The vendor answers with a
+            // single legal value for each, and that value depends on the thinking mode: on
+            // 2026-08-22 `temperature` was "only 1 is allowed" and `top_p` "only 0.95"; on
+            // 2026-10-15, with thinking disabled, `temperature` was "only 0.6 is allowed",
+            // `top_p` "only 0.95" and both penalties "only 0". No mode-independent value can be
+            // declared, so `NotSent` is the only truthful position: the vendor applies its own
+            // legal value to an omitted field. An explicit value on such a model is refused at
+            // build, and a framework default is omitted and recorded (never swapped for the legal
+            // one, ADR-0004). A seeded entry or a `ModelOverride` still decides what is sent for
+            // its own model (D-04a): only `max_tokens` is gated directly by its flag here. The
+            // 2026-08-22 `Fixed(1.0)` / `Fixed(0.95)` declarations this replaces were
+            // contradicted by the 2026-10-15 probe. `max_tokens` stays carried, so the
+            // configured default output cap still reaches the wire.
             //
             // WR-02: every field stated explicitly. `..CompatRequestParameters::all()`
             // was a struct-update spread, which the type's own invariant
@@ -293,11 +299,11 @@ impl KimiAdapter {
             // field to `true` here, which is exactly how the shipped Grok
             // preset came to send a parameter xAI rejects.
             request_parameters: CompatRequestParameters {
-                temperature: true,
-                top_p: true,
+                temperature: false,
+                top_p: false,
                 max_tokens: true,
-                frequency_penalty: true,
-                presence_penalty: true,
+                frequency_penalty: false,
+                presence_penalty: false,
             },
             fallback_models: KIMI_FALLBACK_MODELS.iter().map(|s| s.to_string()).collect(),
             // No usage-cap (quota) mapping for kimi: its quota-exhaustion body was never captured
@@ -328,15 +334,6 @@ impl KimiAdapter {
             &engine_config.request_parameters,
             StopSupport::Supported { max: None },
         );
-        // Kimi's two measured single values (ADR-0004 A3/A4, the Phase 17-19 live measurement
-        // against `kimi-k3` and `kimi-k2.6`, 2026-08-22): the vendor answers `invalid
-        // temperature: only 1 is allowed for this model` and `invalid top_p: only 0.95 is
-        // allowed for this model`. Declared `Fixed`, so an explicit `1.0` / `0.95` reaches the
-        // wire and any other value is refused at build (explicit) or omitted and recorded
-        // (auto, default, direct) -- never swapped for the legal one.
-        let fallback = fallback
-            .with_temperature(ParamSupport::Fixed(1.0))
-            .with_top_p(ParamSupport::Fixed(0.95));
 
         // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
         // over the seeded table; either one failing construction names the provider and model.
@@ -404,7 +401,7 @@ mod tests {
         PromptItem, PromptParameters, PromptType, UserPrompt,
     };
     use paladin_ports::output::llm_port::FinishReason;
-    use paladin_ports::output::model_profile::SamplingParam;
+    use paladin_ports::output::model_profile::{ParamSupport, SamplingParam};
     use serde_json::json;
 
     fn build_request(model: &str) -> LlmRequest {
@@ -1190,78 +1187,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn generate_omits_top_p_from_the_moonshot_request_body() {
-        // Runs on an unseeded model id, so the adapter-wide fallback profile is what is under
-        // test (the default model has its own seeded entry, covered below).
-        // Same mechanism, second measured constraint (discovered re-running
-        // the live harness after the temperature fix): with `temperature`
-        // no longer sent, `PromptParameters::default()`'s `top_p: Some(1.0)`
-        // became the next value the vendor's per-field validation rejected.
-        use std::sync::{Arc, Mutex};
-
-        let mut server = Server::new_async().await;
-        let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let captured_clone = Arc::clone(&captured);
-        server
-            .mock("POST", "/chat/completions")
-            .with_status(200)
-            .with_body_from_request(move |req| {
-                *captured_clone.lock().unwrap() =
-                    Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
-                json!({
-                    "id": "cmpl-notopp",
-                    "model": UNSEEDED_MODEL,
-                    "choices": [{
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "ok"},
-                        "finish_reason": "stop"
-                    }],
-                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
-                })
-                .to_string()
-                .into_bytes()
-            })
-            .create_async()
-            .await;
-
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            UNSEEDED_MODEL.to_string(),
-        );
-        let adapter = KimiAdapter::new(config).unwrap();
-
-        let result = adapter.generate(build_request(UNSEEDED_MODEL)).await;
-        assert!(
-            result.is_ok(),
-            "mock returned a well-formed response: {result:?}"
-        );
-        let metadata = result.map(|r| r.metadata).unwrap_or_default();
-
-        let body = captured
-            .lock()
-            .unwrap()
-            .take()
-            .expect("mock must have been called exactly once");
-        assert!(
-            !body.contains("top_p"),
-            "the key name itself must not appear on the wire — got body: {body}"
-        );
-        // max_tokens, frequency_penalty and presence_penalty remain
-        // carried — proving this is a targeted omission of two fields, not
-        // an accidental drop of every sampling parameter.
-        assert!(body.contains("max_tokens"));
-        assert!(body.contains("frequency_penalty"));
-        assert!(body.contains("presence_penalty"));
-        assert!(
-            metadata
-                .get(PARAMS_OMITTED_METADATA_KEY)
-                .is_some_and(|omitted| omitted.contains("top_p")),
-            "the omitted default top_p must be recorded: {metadata:?}"
-        );
-    }
-
     /// A model id with no seeded entry: it runs on the adapter-wide fallback profile, which is
     /// what the fixed-value tests below describe. The default model has its own seeded entry
     /// (plan 50-06), covered by the `kimi_default_model_*` tests.
@@ -1302,7 +1227,48 @@ mod tests {
     }
 
     #[test]
-    fn kimi_model_profile_declares_the_two_measured_single_values() {
+    fn kimi_fallback_matches_the_seeded_sampling_declarations() {
+        // The adapter-wide fallback (every Kimi id the registry does not list) must declare
+        // the four sampling parameters exactly as each seeded Kimi row does. Compared against
+        // the seeded table itself, not against restated literals, so a drift in either place
+        // fails here (G-50-5c, owner option (a)).
+        let adapter = KimiAdapter::new(KimiConfig::new(
+            "test-key".to_string(),
+            "https://example.invalid/v1".to_string(),
+            UNSEEDED_MODEL.to_string(),
+        ))
+        .unwrap();
+        let fallback = adapter
+            .model_profile(UNSEEDED_MODEL)
+            .expect("Kimi profiles every model");
+        assert!(!seeded::KIMI.is_empty(), "the Kimi seeded table is empty");
+        for entry in seeded::KIMI {
+            let seeded_profile = (entry.build)();
+            assert_eq!(
+                fallback.temperature, seeded_profile.temperature,
+                "temperature differs from the seeded {}",
+                entry.model
+            );
+            assert_eq!(
+                fallback.top_p, seeded_profile.top_p,
+                "top_p differs from the seeded {}",
+                entry.model
+            );
+            assert_eq!(
+                fallback.frequency_penalty, seeded_profile.frequency_penalty,
+                "frequency_penalty differs from the seeded {}",
+                entry.model
+            );
+            assert_eq!(
+                fallback.presence_penalty, seeded_profile.presence_penalty,
+                "presence_penalty differs from the seeded {}",
+                entry.model
+            );
+        }
+    }
+
+    #[test]
+    fn kimi_fallback_profile_sends_no_sampling_values() {
         let adapter = KimiAdapter::new(KimiConfig::new(
             "test-key".to_string(),
             "https://example.invalid/v1".to_string(),
@@ -1312,35 +1278,58 @@ mod tests {
         let profile = adapter
             .model_profile(UNSEEDED_MODEL)
             .expect("Kimi profiles every model");
-        assert_eq!(profile.temperature, ParamSupport::Fixed(1.0));
-        assert_eq!(profile.top_p, ParamSupport::Fixed(0.95));
+        assert_eq!(profile.temperature, ParamSupport::NotSent);
+        assert_eq!(profile.top_p, ParamSupport::NotSent);
+        assert_eq!(profile.frequency_penalty, ParamSupport::NotSent);
+        assert_eq!(profile.presence_penalty, ParamSupport::NotSent);
         assert_eq!(profile.stop_sequences, StopSupport::Supported { max: None });
-        assert_eq!(
-            profile.support_for(SamplingParam::Temperature),
-            Some(ParamSupport::Fixed(1.0))
+        for param in [
+            SamplingParam::Temperature,
+            SamplingParam::TopP,
+            SamplingParam::FrequencyPenalty,
+            SamplingParam::PresencePenalty,
+        ] {
+            assert_eq!(
+                profile.support_for(param),
+                Some(ParamSupport::NotSent),
+                "{param:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unseeded_kimi_body_carries_no_sampling_values() {
+        // `PromptParameters::default()` sets temperature, top_p and both penalties; none of the
+        // four may reach the wire on a model the registry does not list, while the configured
+        // output cap still does (a targeted omission, not a dropped body).
+        let (body, metadata) = kimi_wire(PromptParameters::default()).await;
+        for key in [
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+        ] {
+            assert!(body.get(key).is_none(), "{key} reached the wire: {body}");
+        }
+        assert!(body.get("max_tokens").is_some(), "{body}");
+        assert!(
+            metadata.contains_key(PARAMS_OMITTED_METADATA_KEY),
+            "the omitted defaults must be recorded: {metadata:?}"
         );
     }
 
     #[tokio::test]
-    async fn kimi_fixed_values_follow_the_profile() {
-        // The vendor's two legal values reach the wire when asked for explicitly ...
+    async fn kimi_explicit_sampling_values_on_an_unseeded_model_are_omitted_and_recorded() {
+        // Even the vendor's once-measured legal values are not sent: the legal value depends on
+        // the thinking mode, so the vendor applies its own to an omitted field.
         let (body, metadata) = kimi_wire(kimi_parameters(1.0, 0.95)).await;
-        assert_eq!(body.get("temperature").and_then(|v| v.as_f64()), Some(1.0));
-        // serde_json writes an `f32` with its shortest round-trip digits, so the vendor sees
-        // the literal `0.95` it asked for.
-        assert_eq!(body.get("top_p").and_then(|v| v.as_f64()), Some(0.95));
-        assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
-
-        // ... and anything else is omitted and recorded -- never replaced by the legal value.
-        let (body, metadata) = kimi_wire(kimi_parameters(0.85, 0.5)).await;
         assert!(body.get("temperature").is_none(), "{body}");
         assert!(body.get("top_p").is_none(), "{body}");
-        assert_eq!(
-            metadata
-                .get(PARAMS_OMITTED_METADATA_KEY)
-                .map(String::as_str),
-            Some("temperature,top_p")
-        );
+        let omitted = metadata
+            .get(PARAMS_OMITTED_METADATA_KEY)
+            .expect("the omitted values are recorded");
+        assert!(omitted.contains("temperature"), "{omitted}");
+        assert!(omitted.contains("top_p"), "{omitted}");
     }
 
     #[test]

@@ -635,6 +635,55 @@ async fn case_fixed_temperature_explicit(name: &'static str) {
     }
 }
 
+/// (c2) A Kimi model id with no seeded entry runs on the adapter-wide fallback, which declares
+/// the same `NotSent` sampling parameters as the seeded rows (plan 50-20, G-50-5c). An explicit
+/// temperature through the `llm.kimi` block path is refused at build naming provider, model and
+/// parameter, while the same agent without one builds and sends no temperature.
+async fn case_unseeded_kimi_refuses_an_explicit_temperature(name: &'static str) {
+    let p = Provider {
+        model: "kimi-unseeded-matrix-model",
+        ..provider(name)
+    };
+    let (vendor, port) = vendor_and_port(&p, 200, success_body(p.wire, "Paris")).await;
+
+    match agent_builder(Arc::clone(&port), p.model)
+        .temperature(0.6)
+        .build()
+        .await
+    {
+        Err(PaladinError::ConfigurationError(message)) => assert!(
+            refusal_names(&message, &p, port.as_ref(), &["temperature"]),
+            "{name}: the refusal must name the provider, the model '{}' and temperature; \
+             it said: {message}",
+            p.model
+        ),
+        Err(other) => panic!(
+            "{name}: an explicit temperature failed with something other than a named refusal: {other}"
+        ),
+        Ok(_) => panic!(
+            "{name}: the fallback admits no temperature but an explicit one built for '{}'",
+            p.model
+        ),
+    }
+
+    let paladin = agent_builder(Arc::clone(&port), p.model)
+        .build()
+        .await
+        .unwrap_or_else(|error| {
+            panic!("{name}: the agent without a temperature must build: {error}")
+        });
+    execution_service(port)
+        .execute(&paladin, MATRIX_QUERY)
+        .await
+        .unwrap_or_else(|error| panic!("{name}: the agent must execute: {error}"));
+    for body in vendor.bodies() {
+        assert!(
+            body.get("temperature").is_none(),
+            "{name}: an unseeded Kimi model must never be sent a temperature; body was {body}"
+        );
+    }
+}
+
 /// (d) With auto temperature on a fixed-temperature provider, no request body carries a
 /// temperature, and a direct call that asks for one gets the omission recorded in the response
 /// metadata.
@@ -867,6 +916,7 @@ matrix_case!(openai_compatible_same_agent_is_equivalent_or_refused_by_name => ca
 // (c) and (d) the fixed-temperature provider
 matrix_case!(kimi_fixed_temperature_explicit => case_fixed_temperature_explicit("kimi"));
 matrix_case!(kimi_fixed_temperature_auto => case_fixed_temperature_auto("kimi"));
+matrix_case!(kimi_unseeded_model_refuses_an_explicit_temperature => case_unseeded_kimi_refuses_an_explicit_temperature("kimi"));
 
 // (e) an empty stop completion is typed -- all nine
 matrix_case!(openai_empty_stop_completion_is_typed => case_empty_stop_completion_is_typed("openai"));

@@ -343,6 +343,11 @@ mod capability_invariants {
     /// `Some((min, max))` temperature range, never silently fall back to `None` (the
     /// framework's `[0.0, 1.0]` default). Catches a future adapter reintroducing the
     /// singular global-clamp assumption the moment it lands.
+    ///
+    /// This module constructs the three adapters that need no feature beyond their own; the
+    /// six compat-era adapters (Kimi, Qwen, Grok, Gemini, Ollama, OpenAI-compatible) are
+    /// covered by `every_new_provider_declares_a_temperature_range` in
+    /// `capability_invariants_new_providers` below.
     #[test]
     fn test_every_adapter_declares_a_temperature_range() {
         let openai = OpenAIAdapter::new(OpenAIConfig::new("test-key".to_string())).unwrap();
@@ -410,6 +415,77 @@ mod capability_invariants_new_providers {
     use crate::qwen::adapter::{QWEN_DEFAULT_BASE_URL, QWEN_DEFAULT_MODEL};
     use crate::qwen::{QwenAdapter, QwenConfig};
     use paladin_ports::output::llm_port::LlmPort;
+
+    /// The temperature-range invariant for the six compat-era adapters, the counterpart of
+    /// `capability_invariants::test_every_adapter_declares_a_temperature_range` (which
+    /// constructs OpenAI, Anthropic and DeepSeek): every shipped adapter declares
+    /// `Some((min, max))`, never `None`.
+    ///
+    /// [`OpenAiCompatibleAdapter`] is the one adapter whose range is the operator's to declare
+    /// (D-04): with an empty declaration it reports `None` by design, so this test constructs it
+    /// the way an operator who declares a range does.
+    #[test]
+    fn every_new_provider_declares_a_temperature_range() {
+        let kimi = KimiAdapter::new(KimiConfig::new(
+            "test-key".to_string(),
+            KIMI_DEFAULT_BASE_URL.to_string(),
+            KIMI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let qwen = QwenAdapter::new(QwenConfig::new(
+            "test-key".to_string(),
+            QWEN_DEFAULT_BASE_URL.to_string(),
+            QWEN_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let grok = GrokAdapter::new(GrokConfig::new(
+            "test-key".to_string(),
+            GROK_DEFAULT_BASE_URL.to_string(),
+            GROK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let ollama = OllamaAdapter::new(OllamaConfig::new(
+            OLLAMA_DEFAULT_BASE_URL.to_string(),
+            OLLAMA_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let gemini = GeminiAdapter::new(GeminiConfig::new(
+            "test-key".to_string(),
+            GEMINI_DEFAULT_BASE_URL.to_string(),
+            GEMINI_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let openai_compatible = OpenAiCompatibleAdapter::new(OpenAiCompatibleConfig::new(
+            "test-key".to_string(),
+            "http://localhost:8080".to_string(),
+            "test-model".to_string(),
+            OpenAiCompatibleCapabilitiesConfig {
+                supports_streaming: true,
+                supports_tool_calling: false,
+                supports_function_calling: false,
+                supports_vision: false,
+                supports_embeddings: false,
+                supports_system_messages: false,
+                max_context_tokens: None,
+                temperature_range: Some((0.0, 2.0)),
+            },
+        ))
+        .unwrap();
+
+        for (name, range) in [
+            ("kimi", kimi.get_capabilities().temperature_range),
+            ("qwen", qwen.get_capabilities().temperature_range),
+            ("grok", grok.get_capabilities().temperature_range),
+            ("ollama", ollama.get_capabilities().temperature_range),
+            ("gemini", gemini.get_capabilities().temperature_range),
+            (
+                "openai-compatible (declared range)",
+                openai_compatible.get_capabilities().temperature_range,
+            ),
+        ] {
+            assert!(range.is_some(), "{name} must declare a temperature_range");
+        }
+    }
 
     /// This phase's own restatement of the sibling module's success criterion 3: a
     /// test asserting the correspondence between the declared tool-calling

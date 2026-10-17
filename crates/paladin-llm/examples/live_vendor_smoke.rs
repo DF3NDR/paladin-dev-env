@@ -310,7 +310,9 @@ const PROVIDERS: [ProviderSpec; 9] = [
         live_model_list: true,
         wire: Wire::OpenAiChat,
         auth: Auth::Bearer,
-        temperature_range: Some((1.0, 1.0)),
+        // Mirrors the adapter: ADR-0004's framework default span, no vendor claim. The next
+        // probe measures the span's ends and middle (thinking on and off).
+        temperature_range: Some((0.0, 1.0)),
         cap_field: "max_tokens",
         acceptance_extras: Some(r#"{"thinking":{"type":"disabled"}}"#),
         build: build_kimi,

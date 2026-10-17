@@ -259,19 +259,15 @@ impl KimiAdapter {
                     .context_window
                     .or(seeded_window(seeded::KIMI, KIMI_DEFAULT_MODEL)),
                 supports_system_messages: true,
-                // Live-measured 2026-08-22 (17-19, closing G-17-4b) against
-                // `kimi-k3` (`KIMI_DEFAULT_MODEL`) and independently
-                // confirmed on `kimi-k2.6`: a request with `temperature`
-                // omitted or `1.0` succeeds; `0.7` (the framework's
-                // `PromptParameters`/`PaladinData` default) is rejected with
-                // the vendor's own `{"message":"invalid temperature: only 1
-                // is allowed for this model","type":"invalid_request_error"}`.
-                // The declared range is therefore the truthful degenerate
-                // `(1.0, 1.0)`, replacing the previous unmeasured
-                // `(0.0, 1.0)` — see 17-19-SUMMARY.md for the full probe
-                // transcript. `test_every_adapter_declares_a_temperature_range`
-                // (`lib.rs`) still holds: `Some(_)`, never `None`.
-                temperature_range: Some((1.0, 1.0)),
+                // ADR-0004's framework default span `(0.0, 1.0)`, declared explicitly because
+                // every shipped adapter must declare `Some(_)` (the `lib.rs` invariant
+                // `every_new_provider_declares_a_temperature_range`). It states NO vendor
+                // measurement: the vendor accepts one legal temperature per thinking mode (see
+                // the `request_parameters` note below), and no admission reads this span while
+                // `model_profile` returns `Some`, which `KimiAdapter` always does (the profile
+                // declares `temperature` `NotSent`). It replaces the 2026-08-22 degenerate
+                // `(1.0, 1.0)`, which the 2026-10-15 probe contradicted.
+                temperature_range: Some((0.0, 1.0)),
             },
             // Phase 50 (ADR-0061, plan 50-20, closing G-50-5c): `temperature`, `top_p`,
             // `frequency_penalty` and `presence_penalty` are NOT carried on any Kimi model the
@@ -1093,14 +1089,13 @@ mod tests {
         assert!(caps.supports_system_messages);
     }
 
-    // ── Live-measured temperature constraint (17-19, closing G-17-4b) ──
+    // ── Declared temperature span (50-20, closing G-50-5c) ──
 
     #[test]
-    fn get_capabilities_reports_the_measured_degenerate_temperature_range() {
+    fn get_capabilities_reports_the_framework_default_temperature_span() {
         // The cross-adapter invariant in `lib.rs`
-        // (`test_every_adapter_declares_a_temperature_range`) requires
-        // `Some(_)`; this pins the exact measured value, not merely its
-        // presence.
+        // (`every_new_provider_declares_a_temperature_range`) requires `Some(_)`; this pins the
+        // exact value, ADR-0004's framework default. It states no vendor measurement.
         let config = KimiConfig::new(
             "test-key".to_string(),
             KIMI_DEFAULT_BASE_URL.to_string(),
@@ -1109,7 +1104,7 @@ mod tests {
         let adapter = KimiAdapter::new(config).unwrap();
         let caps = adapter.get_capabilities();
 
-        assert_eq!(caps.temperature_range, Some((1.0, 1.0)));
+        assert_eq!(caps.temperature_range, Some((0.0, 1.0)));
     }
 
     #[test]

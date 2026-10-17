@@ -1278,16 +1278,20 @@ pub mod cases {
             RefusalShape::ContentFilterOnly(body) => (body, false),
         };
         let mut server = Server::new_async().await;
-        server
+        // A refusal is permanent, so the request must leave the process exactly once: a retry
+        // re-bills the full prompt for an answer the vendor has already declined to give.
+        let mock = server
             .mock("POST", Matcher::Any)
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(body)
+            .expect(1)
             .create_async()
             .await;
 
         let adapter = F::adapter(&server.url());
         let result = adapter.generate(conformance_request()).await;
+        mock.assert_async().await;
 
         if typed {
             match result {

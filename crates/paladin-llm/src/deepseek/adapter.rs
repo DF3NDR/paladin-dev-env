@@ -824,6 +824,7 @@ impl DeepSeekAdapter {
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
                             | LlmError::EmptyCompletion(_)
+                            | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
                             // D-02: surface the first 429; the Cadence decorator waits.
                             | LlmError::RateLimitExceeded { .. }

@@ -681,6 +681,7 @@ impl AnthropicAdapter {
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
                             | LlmError::EmptyCompletion(_)
+                            | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
                             | LlmError::RateLimitExceeded { .. }
                     ) {

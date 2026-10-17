@@ -820,7 +820,7 @@ impl CompatEngine {
     /// Perform an API call with exponential-backoff-plus-jitter retry.
     ///
     /// Non-retryable set: `AuthenticationError | InvalidPrompt |
-    /// EmptyCompletion | UsageLimitExceeded | RateLimitExceeded` — matching
+    /// EmptyCompletion | Refusal | UsageLimitExceeded | RateLimitExceeded` — matching
     /// `deepseek/adapter.rs::call_api_with_retry`'s rationale: these need
     /// operator intervention or will not clear on backoff, so retrying
     /// burns attempts for no benefit.
@@ -853,6 +853,7 @@ impl CompatEngine {
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
                             | LlmError::EmptyCompletion(_)
+                            | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
                             // D-02: surface the first 429; the Cadence decorator waits.
                             | LlmError::RateLimitExceeded { .. }

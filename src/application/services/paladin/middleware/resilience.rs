@@ -47,7 +47,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use paladin_core::platform::container::aegis::RetryPolicy;
-use paladin_llm::fallback::{FallbackChainError, FallbackLlmAdapter};
+use paladin_llm::cadence::CadenceWiring;
+use paladin_llm::fallback::{FallbackChainError, FallbackLlmAdapter, FallbackStep};
 use paladin_ports::output::llm_port::LlmPort;
 
 use crate::application::services::paladin::error::PaladinError;
@@ -80,6 +81,10 @@ use super::{ExecutionMiddleware, MiddlewareFlow, ModelCallContext};
 /// let middleware = ModelFallbackMiddleware::new(vec![primary, backup])?;
 /// # Ok::<(), paladin_llm::fallback::FallbackChainError>(())
 /// ```
+///
+/// [`ModelFallbackMiddleware::new`] hops on a provider `429` at once. To pace the same provider
+/// through its rate limit first (PACE-02, D-03) build the chain with
+/// [`ModelFallbackMiddleware::paced`].
 pub struct ModelFallbackMiddleware {
     adapter: Arc<dyn LlmPort>,
 }
@@ -96,6 +101,104 @@ impl ModelFallbackMiddleware {
     /// (`fallback_chain_construction_validates_up_front`).
     pub fn new(chain: Vec<Arc<dyn LlmPort>>) -> Result<Self, FallbackChainError> {
         let adapter = FallbackLlmAdapter::new(chain)?;
+        Ok(Self {
+            adapter: Arc::new(adapter),
+        })
+    }
+
+    /// As [`ModelFallbackMiddleware::new`], but every hop is paced (PACE-02, D-03): each hop is
+    /// wrapped in the Cadence decorator over `cadence`'s shared port, and a provider `429` is
+    /// retried on the same provider after its gate -- the provider's own retry delay is the
+    /// minimum -- for up to the wiring's `fallback_pace_budget` before the chain hops. A 5xx,
+    /// timeout or network error still hops at once. See
+    /// [`FallbackLlmAdapter::with_cadence`] for the full rule.
+    ///
+    /// Pass the process's shared wiring to share pacing state with every other port in the
+    /// process; a private wiring paces only this chain.
+    ///
+    /// # Errors
+    ///
+    /// [`FallbackChainError::EmptyChain`] if `chain` is empty, exactly as
+    /// [`ModelFallbackMiddleware::new`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::paladin::middleware::ModelFallbackMiddleware;
+    /// use paladin_llm::cadence::{CadenceSettings, CadenceWiring};
+    /// use paladin_llm::mock::MockLlmAdapter;
+    /// use paladin_ports::output::cadence_port::CadencePolicy;
+    /// use paladin_ports::output::llm_port::LlmPort;
+    /// use paladin_storage::cadence::InMemoryCadence;
+    ///
+    /// let cadence = CadenceWiring::new(
+    ///     Arc::new(InMemoryCadence::new(CadencePolicy::default())),
+    ///     CadenceSettings::default(),
+    /// );
+    /// let primary: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_provider_name("openai"));
+    /// let backup: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_provider_name("anthropic"));
+    /// let middleware = ModelFallbackMiddleware::paced(vec![primary, backup], &cadence)?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn paced(
+        chain: Vec<Arc<dyn LlmPort>>,
+        cadence: &CadenceWiring,
+    ) -> Result<Self, FallbackChainError> {
+        let adapter = FallbackLlmAdapter::new(chain)?.with_cadence(cadence);
+        Ok(Self {
+            adapter: Arc::new(adapter),
+        })
+    }
+
+    /// Build a fallback chain whose every hop is sent its own model (D-15, PARITY-06):
+    /// `steps[0]` is tried first, `steps[n-1]` last, and before each hop the request's model is
+    /// rewritten to that step's. [`ModelFallbackMiddleware::new`] sends every hop the request's
+    /// own model, which is wrong when the hops are different vendors.
+    ///
+    /// # Errors
+    ///
+    /// [`FallbackChainError::EmptyChain`] if `steps` is empty and
+    /// [`FallbackChainError::EmptyStepModel`] for a step whose model is empty, both at
+    /// construction (via [`FallbackLlmAdapter::from_steps`]).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use paladin::application::services::paladin::middleware::ModelFallbackMiddleware;
+    /// use paladin_llm::fallback::FallbackStep;
+    /// use paladin_llm::mock::MockLlmAdapter;
+    /// use paladin_ports::output::llm_port::LlmPort;
+    ///
+    /// let anthropic: Arc<dyn LlmPort> =
+    ///     Arc::new(MockLlmAdapter::new().with_provider_name("anthropic"));
+    /// let kimi: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_provider_name("kimi"));
+    /// let middleware = ModelFallbackMiddleware::from_steps(vec![
+    ///     FallbackStep::new(anthropic, "claude-sonnet-4"),
+    ///     FallbackStep::new(kimi, "kimi-k2"),
+    /// ])?;
+    /// # Ok::<(), paladin_llm::fallback::FallbackChainError>(())
+    /// ```
+    pub fn from_steps(steps: Vec<FallbackStep>) -> Result<Self, FallbackChainError> {
+        let adapter = FallbackLlmAdapter::from_steps(steps)?;
+        Ok(Self {
+            adapter: Arc::new(adapter),
+        })
+    }
+
+    /// As [`ModelFallbackMiddleware::from_steps`], but every hop is paced (PACE-02, D-03) under
+    /// its own `(provider, model)`: a 429 on a step gates that step's model only. See
+    /// [`ModelFallbackMiddleware::paced`] and [`FallbackLlmAdapter::with_cadence`].
+    ///
+    /// # Errors
+    ///
+    /// As [`ModelFallbackMiddleware::from_steps`].
+    pub fn paced_steps(
+        steps: Vec<FallbackStep>,
+        cadence: &CadenceWiring,
+    ) -> Result<Self, FallbackChainError> {
+        let adapter = FallbackLlmAdapter::from_steps(steps)?.with_cadence(cadence);
         Ok(Self {
             adapter: Arc::new(adapter),
         })
@@ -192,13 +295,16 @@ mod tests {
     use super::*;
     use crate::application::services::paladin::middleware::PromptAssembly;
     use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData};
     use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
     use paladin_core::platform::container::aegis::RetryPredicate;
+    use paladin_llm::cadence::CadenceSettings;
     use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
+    use paladin_ports::output::cadence_port::CadencePolicy;
     use paladin_ports::output::llm_port::LlmError;
     use paladin_ports::output::trace_sink_port::MiddlewareAction;
+    use paladin_storage::cadence::InMemoryCadence;
     use std::time::Duration;
 
     fn make_paladin(max_loops: u32) -> Paladin {
@@ -207,7 +313,7 @@ mod tests {
             max_loops: MaxLoops::Fixed(max_loops),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn make_service(llm: Arc<dyn LlmPort>) -> PaladinExecutionService {
@@ -287,6 +393,66 @@ mod tests {
         assert!(result.output.contains("served by backup"));
     }
 
+    /// Plan 50-14 (D-15): a `from_steps` middleware sends each hop its own model through the
+    /// real execution service, and the run names the hop that served.
+    #[tokio::test]
+    async fn fallback_steps_middleware_sends_each_hop_its_own_model() {
+        let primary = MockLlmAdapter::new()
+            .with_provider_name("primary")
+            .with_error(transient("primary"));
+        let backup = MockLlmAdapter::new()
+            .with_provider_name("backup")
+            .with_response("served by backup");
+        let middleware = Arc::new(
+            ModelFallbackMiddleware::from_steps(vec![
+                FallbackStep::new(Arc::new(primary.clone()) as Arc<dyn LlmPort>, "model-one"),
+                FallbackStep::new(Arc::new(backup.clone()) as Arc<dyn LlmPort>, "model-two"),
+            ])
+            .unwrap(),
+        );
+        let service_default: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new());
+        let service = make_service(service_default).with_middleware(middleware);
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(result.served_by.as_deref(), Some("backup"));
+        assert_eq!(
+            primary.last_request().map(|request| request.model),
+            Some("model-one".to_string())
+        );
+        assert_eq!(
+            backup.last_request().map(|request| request.model),
+            Some("model-two".to_string())
+        );
+    }
+
+    /// `paced_steps` builds, and rejects what `from_steps` rejects, at construction.
+    #[test]
+    fn fallback_steps_construction_validates_up_front() {
+        assert!(matches!(
+            ModelFallbackMiddleware::from_steps(Vec::new()),
+            Err(FallbackChainError::EmptyChain)
+        ));
+        let cadence = CadenceWiring::new(
+            Arc::new(InMemoryCadence::new(CadencePolicy::default())),
+            CadenceSettings::default(),
+        );
+        assert!(matches!(
+            ModelFallbackMiddleware::paced_steps(Vec::new(), &cadence),
+            Err(FallbackChainError::EmptyChain)
+        ));
+        let port: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new());
+        assert!(matches!(
+            ModelFallbackMiddleware::from_steps(vec![FallbackStep::new(Arc::clone(&port), " ")]),
+            Err(FallbackChainError::EmptyStepModel { index: 0 })
+        ));
+        assert!(
+            ModelFallbackMiddleware::paced_steps(vec![FallbackStep::new(port, "m")], &cadence)
+                .is_ok()
+        );
+    }
+
     /// Test 3: `RetryPolicy { max_attempts: 4, jitter: false, .. }` against
     /// a mock failing transiently 3 times then succeeding makes exactly 4
     /// attempts, with the policy's own delay sequence (500/1000/2000ms) --
@@ -332,7 +498,7 @@ mod tests {
         let llm = Arc::new(MockLlmAdapter::new().with_error(transient("p")));
         let service = make_service(llm.clone());
         let mut paladin = make_paladin(1);
-        paladin.node.max_loops = MaxLoops::Fixed(3);
+        paladin.data.max_loops = MaxLoops::Fixed(3);
 
         let start = tokio::time::Instant::now();
         let result = service.execute(&paladin, "hi").await;
@@ -362,6 +528,58 @@ mod tests {
     #[test]
     fn fallback_chain_construction_validates_up_front() {
         let result = ModelFallbackMiddleware::new(Vec::new());
+        assert!(matches!(result, Err(FallbackChainError::EmptyChain)));
+    }
+
+    fn pacing_wiring() -> CadenceWiring {
+        CadenceWiring::new(
+            Arc::new(InMemoryCadence::new(CadencePolicy::default())),
+            CadenceSettings::default(),
+        )
+    }
+
+    /// PACE-02 / D-03 through the middleware: a paced chain answers a primary 429 by waiting out
+    /// the provider's own delay and serving from the SAME primary, never touching the backup.
+    #[tokio::test(start_paused = true)]
+    async fn paced_middleware_serves_from_the_primary_after_its_gate() {
+        let primary = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("primary")
+                .with_script(vec![
+                    MockScriptEntry::Error(LlmError::rate_limited(Some(Duration::from_secs(7)))),
+                    MockScriptEntry::Text("from primary".to_string()),
+                ]),
+        );
+        let backup = Arc::new(
+            MockLlmAdapter::new()
+                .with_provider_name("backup")
+                .with_response("from backup"),
+        );
+        let chain: Vec<Arc<dyn LlmPort>> = vec![primary.clone(), backup.clone()];
+        let middleware = Arc::new(ModelFallbackMiddleware::paced(chain, &pacing_wiring()).unwrap());
+        let service = make_service(Arc::new(MockLlmAdapter::new())).with_middleware(middleware);
+
+        let start = tokio::time::Instant::now();
+        let result = service.execute(&make_paladin(1), "hi").await.unwrap();
+
+        assert_eq!(result.served_by.as_deref(), Some("primary"));
+        assert_eq!(primary.call_count(), 2, "the same provider is retried once");
+        assert_eq!(
+            backup.call_count(),
+            0,
+            "a paced 429 never reaches the backup"
+        );
+        assert!(
+            start.elapsed() >= Duration::from_secs(7),
+            "the provider's delay is honoured as a minimum, got {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// `paced` validates up front exactly like `new`.
+    #[test]
+    fn paced_rejects_an_empty_chain_like_new() {
+        let result = ModelFallbackMiddleware::paced(Vec::new(), &pacing_wiring());
         assert!(matches!(result, Err(FallbackChainError::EmptyChain)));
     }
 

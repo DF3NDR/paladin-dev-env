@@ -14,19 +14,28 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use paladin_core::platform::container::cost::PriceTable;
 use paladin_core::platform::container::paladin::Paladin;
 use paladin_core::platform::container::paladin_error::PaladinError;
 use paladin_core::platform::container::user::UserRole;
-use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError};
+use paladin_llm::cadence::CadenceWiring;
+use paladin_llm::config::llm::LlmConfig;
+use paladin_llm::provider_factory::{LlmProviderFactory, ProviderFactoryError, provider_names};
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_web::{AgentEntry, AgentRegistry};
 
+use crate::application::services::paladin::middleware::limits::TokenBudget;
 use crate::application::services::paladin::paladin_builder::PaladinBuilder;
-use crate::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+use crate::application::services::paladin::paladin_execution_service::{
+    AgentLoopSettlement, PaladinExecutionService,
+};
+use crate::config::agent_runtime::TokenBudgetConfig;
 use crate::config::agents::AgentDefinition;
 use crate::config::settings::Settings;
+use crate::infrastructure::cadence::{build_cadence, compose_llm};
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 
 /// A built agent: the agent plus its buffered and (optional) streaming executors.
@@ -113,20 +122,78 @@ pub(crate) fn default_provider_name(settings: &Settings) -> String {
 ///
 /// This is the hermetic core of agent construction — it performs no provider lookup, so
 /// it can be exercised in tests with a mock [`LlmPort`].
+///
+/// `treasury_ledger`, when `Some`, installs [`AgentLoopSettlement::EveryCall`] (D-08, 39-05)
+/// on the ONE shared [`PaladinExecutionService`] BEFORE it is split into the buffered and
+/// streaming handles below -- so every priced call this agent makes, buffered or streamed,
+/// settles under this same ledger, regardless of which handle a caller reaches it through.
+///
+/// Production builds go through [`build_agent`], which also carries the provider block's default
+/// temperature (D-02); this thin form (no block value) exists for the hermetic tests below.
+///
+/// `token_budget` is the operator's `agent_runtime.token_budget` (D-11, G12, ALLOW-05). It
+/// installs the ONE [`TokenBudget`] on the same shared service, so the agent loop of every
+/// config-defined and runtime-provisioned agent enforces the tighter of the operator's figure
+/// and the Treasurer's per-run derived figure (tightest wins, a tie goes to the allowance). The
+/// middleware is inert unless the operator enabled it or a call carries a derived figure, so a
+/// deployment with neither is unchanged. The operator's figure therefore now takes effect on
+/// the HTTP agent routes -- before Phase 42 only the preset path honoured it. The shared run
+/// engine's service is built elsewhere and runs Treasurer-only (plan 42-09).
+#[cfg(test)]
 pub(crate) async fn build_agent_with_llm(
     def: &AgentDefinition,
     llm: Arc<dyn LlmPort>,
     breaker: Arc<CircuitBreaker>,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    token_budget: TokenBudgetConfig,
+) -> Result<BuiltAgent, HostBuildError> {
+    build_agent_with_llm_and_block_temperature(
+        def,
+        llm,
+        breaker,
+        treasury_ledger,
+        token_budget,
+        None,
+    )
+    .await
+}
+
+/// A provider block's `default_temperature` and the YAML key that carries it, handed to the
+/// build as an explicit value (D-02).
+struct BlockTemperature {
+    /// The value from `llm.<provider>.default_temperature`.
+    value: f32,
+    /// The key that set it, named in a refusal (`llm.<provider>.default_temperature`).
+    key: String,
+}
+
+/// `build_agent_with_llm` plus the provider block's default temperature (D-02).
+///
+/// When the definition sets no `temperature` of its own and `block_temperature` is `Some`, the
+/// block's value is passed to [`PaladinBuilder::temperature`] -- an *expressed* value, judged
+/// against the model's profile exactly like one the agent wrote. A refusal that names the
+/// temperature then also names the YAML key that set it: `agents[<id>].temperature` or the
+/// block's `llm.<provider>.default_temperature`. An agent that sets none, under a block that sets
+/// none, expresses nothing and nothing is judged (ADR-0004 A1).
+async fn build_agent_with_llm_and_block_temperature(
+    def: &AgentDefinition,
+    llm: Arc<dyn LlmPort>,
+    breaker: Arc<CircuitBreaker>,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    token_budget: TokenBudgetConfig,
+    block_temperature: Option<BlockTemperature>,
 ) -> Result<BuiltAgent, HostBuildError> {
     // One execution service backs both the buffered and streaming handles
     // (`PaladinExecutionService` implements both `PaladinExecutorPort` and
     // `StreamingExecutorPort`).
-    let service = Arc::new(PaladinExecutionService::new(
-        Arc::clone(&llm),
-        breaker,
-        None,
-        None,
-    ));
+    let mut service = PaladinExecutionService::new(Arc::clone(&llm), breaker, None, None);
+    if let Some(ledger) = treasury_ledger {
+        service = service.with_treasury_ledger(ledger, AgentLoopSettlement::EveryCall);
+    }
+    // The one cutoff, installed before the service is split into its two handles so the
+    // buffered and streaming paths share it (inert without an operator or derived figure).
+    service = service.with_middleware(Arc::new(TokenBudget::new(token_budget)));
+    let service = Arc::new(service);
     let executor: Arc<dyn PaladinExecutorPort> = service.clone();
     let streamer: Arc<dyn StreamingExecutorPort> = service;
 
@@ -134,9 +201,18 @@ pub(crate) async fn build_agent_with_llm(
         .name(&def.id)
         .system_prompt(&def.system_prompt)
         .model(&def.model);
-    if let Some(temperature) = def.temperature {
-        builder = builder.temperature(temperature);
-    }
+    // The agent's own value beats the block's default (D-13); either is explicit.
+    let temperature_key = match (def.temperature, &block_temperature) {
+        (Some(temperature), _) => {
+            builder = builder.temperature(temperature);
+            Some(format!("agents[{}].temperature", def.id))
+        }
+        (None, Some(block)) => {
+            builder = builder.temperature(block.value);
+            Some(block.key.clone())
+        }
+        (None, None) => None,
+    };
     if let Some(max_loops) = def.max_loops {
         builder = builder.max_loops(max_loops);
     }
@@ -149,29 +225,96 @@ pub(crate) async fn build_agent_with_llm(
         .await
         .map_err(|source| HostBuildError::Build {
             id: def.id.clone(),
-            source,
+            source: name_temperature_key(source, temperature_key.as_deref()),
         })?;
 
     Ok((paladin, executor, Some(streamer)))
 }
 
+/// Append the YAML key that set the temperature to a builder refusal that names the
+/// `temperature` parameter, so an operator knows which line of the configuration to change.
+/// Any other error, and a refusal when no temperature was expressed, passes through unchanged.
+fn name_temperature_key(error: PaladinError, key: Option<&str>) -> PaladinError {
+    match (error, key) {
+        (PaladinError::ConfigurationError(message), Some(key))
+            if message.contains("temperature") =>
+        {
+            PaladinError::ConfigurationError(format!("{message} (set by `{key}`)"))
+        }
+        (other, _) => other,
+    }
+}
+
 /// Build a `(Paladin, executor)` pair from a definition, resolving the provider via the
 /// factory. Shared by config load and runtime provisioning.
+///
+/// The resolved provider is composed as `Pricing(Cadence(provider))` through [`compose_llm`]
+/// (D-09, ADR-0052; PACE-02, D-08) BEFORE `build_agent_with_llm` composes the execution service,
+/// outside any fallback composition. `price_table` drives the pricing layer -- an empty table
+/// installs none -- and `cadence` the rate-pacing layer: `Some` paces this agent's provider and
+/// model against the one shared gate state in the wiring, `None` installs nothing. Every caller
+/// in a process should pass clones of ONE [`CadenceWiring`] so pacing is process-wide.
+/// `treasury_ledger` is threaded straight
+/// through to `build_agent_with_llm` (D-08, 39-05), as is `token_budget` -- the operator's
+/// `agent_runtime.token_budget`, from which the one [`TokenBudget`] is installed on the agent's
+/// service (D-11, G12).
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_agent(
     def: &AgentDefinition,
     factory: &LlmProviderFactory,
+    llm_config: Option<&LlmConfig>,
     default_provider: &str,
     breaker: Arc<CircuitBreaker>,
+    price_table: &Arc<PriceTable>,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    token_budget: TokenBudgetConfig,
+    cadence: Option<&CadenceWiring>,
 ) -> Result<BuiltAgent, HostBuildError> {
     let provider = resolve_provider(def, default_provider);
+    // An absent `llm:` section is an empty one: no blocks, so every field resolves from the
+    // provider's environment variables exactly as the env-only `create(name)` did.
+    let empty = LlmConfig::default();
+    let config = llm_config.unwrap_or(&empty);
+    // D-12/D-13: the provider block, the agent's own provider and its own model, through the one
+    // public construction path. `def.timeout_seconds` is deliberately NOT consulted here: it is
+    // the per-agent execution timeout applied by the web layer (`register_built`), never the
+    // provider's HTTP client timeout, which only the block, the environment or the adapter's
+    // compiled default set (RESEARCH Pitfall 13).
     let llm = factory
-        .create(&provider)
+        .create_from_config(config, &provider, Some(&def.model))
         .map_err(|source| HostBuildError::Provider {
             id: def.id.clone(),
-            provider,
+            provider: provider.clone(),
             source,
         })?;
-    build_agent_with_llm(def, llm, breaker).await
+    let llm = compose_llm(llm, price_table, cadence);
+    let block_temperature = config
+        .get_provider_config(&provider)
+        .and_then(|block| block.default_temperature)
+        .map(|value| BlockTemperature {
+            value,
+            key: format!("llm.{}.default_temperature", yaml_provider_key(&provider)),
+        });
+    build_agent_with_llm_and_block_temperature(
+        def,
+        llm,
+        breaker,
+        treasury_ledger,
+        token_budget,
+        block_temperature,
+    )
+    .await
+}
+
+/// The key under `llm:` a provider's block lives at: the provider's own name, lower-cased, with
+/// the hyphenated generic provider spelled as the YAML key `openai-compatible` either way.
+fn yaml_provider_key(provider: &str) -> String {
+    let lower = provider.to_lowercase();
+    if lower == "openai_compatible" {
+        "openai-compatible".to_string()
+    } else {
+        lower
+    }
 }
 
 /// Insert a built agent into the registry, rejecting a duplicate id.
@@ -212,8 +355,10 @@ pub fn bind_address(settings: &Settings) -> String {
 /// This is a fast, key-free pre-flight check so misconfiguration fails at startup with a
 /// specific message rather than mid-build. It verifies, for every agent: non-empty `id`,
 /// `model`, and `system_prompt`; no duplicate ids; and that the resolved provider is one
-/// of the providers available in this build. It does **not** verify API keys — those are
-/// checked when the provider is actually created in `build_agent`.
+/// this build registers and has a usable credential, from the operator's `llm.<provider>` block
+/// or the provider's environment variable (`LlmProviderFactory::is_configured`). It does **not**
+/// construct an adapter or check that a key is *valid* — that happens when the provider is
+/// actually created in `build_agent`.
 ///
 /// # Errors
 ///
@@ -244,44 +389,178 @@ pub fn validate_config(settings: &Settings) -> Result<(), HostBuildError> {
         }
     }
 
-    // Pass 2 — provider availability. `list_available_providers` is gated on the
-    // presence of each provider's API key, so this also catches a missing key for the
-    // configured provider (the message lists what is available).
+    // Pass 2 — provider availability, judged by credential through
+    // `LlmProviderFactory::is_configured` over the operator's `llm:` section AND the
+    // environment, so a provider configured only in YAML passes (RESEARCH Pitfall 8) and one with
+    // neither a usable block key nor its environment variable fails here, naming the agent, the
+    // provider and the model, rather than mid-build.
     let default_provider = default_provider_name(settings);
-    let available = LlmProviderFactory::list_available_providers();
+    let llm = settings.llm.as_ref();
+    let registered = provider_names();
     for def in &settings.agents {
         let provider = resolve_provider(def, &default_provider);
-        if !available.iter().any(|p| p == &provider) {
+        if LlmProviderFactory::is_configured(llm, &provider) {
+            continue;
+        }
+        let canonical = provider.to_lowercase().replace('_', "-");
+        if !registered.iter().any(|name| *name == canonical) {
+            // Not a provider this build registers (a typo, or its feature is compiled out).
+            let available = registered
+                .iter()
+                .filter(|name| LlmProviderFactory::is_configured(llm, name))
+                .map(|name| (*name).to_string())
+                .collect();
             return Err(HostBuildError::UnknownProvider {
                 id: def.id.clone(),
                 provider,
-                available: available.clone(),
+                available,
             });
         }
+        // A registered provider with no usable credential: ask the factory for its own error,
+        // which names the provider, the model and the variable or key it looked for (never a
+        // value), and report it against this agent.
+        let empty = LlmConfig::default();
+        let source = match LlmProviderFactory::new().create_from_config(
+            llm.unwrap_or(&empty),
+            &provider,
+            Some(&def.model),
+        ) {
+            Err(source) => source,
+            // `is_configured` and construction disagree only on a field this pre-flight does not
+            // judge; construction in `build_agent` reports it, so do not fail early on a guess.
+            Ok(_) => continue,
+        };
+        return Err(HostBuildError::Provider {
+            id: def.id.clone(),
+            provider,
+            source,
+        });
     }
     Ok(())
 }
 
 /// Build a populated [`AgentRegistry`] from the `agents` section of `settings`.
 ///
-/// Runs [`validate_config`] first (fail-fast), then constructs each agent via
-/// `build_agent`. A validation failure, an unresolvable provider, or a build failure
-/// aborts with a descriptive [`HostBuildError`] naming the agent.
+/// Runs [`validate_config`] first (fail-fast), then builds the operator's `treasurer.pricing`
+/// table (PRICE-01) -- an invalid price aborts here, before any agent or provider is built --
+/// and constructs each agent via `build_agent`, priced by that table. A validation failure, an
+/// invalid treasurer configuration, an unresolvable provider, or a build failure aborts with a
+/// descriptive [`HostBuildError`] naming the agent (or `"treasurer"` for a pricing failure).
+///
+/// Installs no treasury ledger writer -- see
+/// [`build_agent_registry_with_ledger`] for the variant that does.
 ///
 /// # Errors
 ///
 /// Returns [`HostBuildError`] on the first problem encountered.
 pub async fn build_agent_registry(settings: &Settings) -> Result<AgentRegistry, HostBuildError> {
+    build_agent_registry_with_ledger(settings, None).await
+}
+
+/// Build a populated [`AgentRegistry`] from the `agents` section of `settings`, installing
+/// `treasury_ledger` (D-08, 39-05) on every configured agent's execution service.
+///
+/// Identical to [`build_agent_registry`] otherwise -- same validation, same
+/// `treasurer.pricing` table build, same per-agent construction via `build_agent` -- except
+/// every agent's [`PaladinExecutionService`] settles under
+/// [`AgentLoopSettlement::EveryCall`](crate::application::services::paladin::paladin_execution_service::AgentLoopSettlement::EveryCall)
+/// when `treasury_ledger` is `Some`. The ledger is observational (D-08, LEDGR-03): a settle
+/// failure never fails an agent's execution. Every priced call of every configured agent
+/// settles under its own execution id and, for a call made through the HTTP agent routes
+/// (`POST /v1/agents/{id}/execute`, its `/stream` variant and `/jobs`), under the calling
+/// principal's tenant and API key id -- the handlers pass `principal.ledger_scope()` through
+/// `PaladinExecutorPort::execute_scoped` / `StreamingExecutorPort::execute_stream_scoped`
+/// (Phase 40 D-16). The [`LedgerScope::unattributed`](
+/// paladin_core::platform::container::treasury_ledger::LedgerScope::unattributed) sentinel
+/// appears only for a caller that passes no scope at all (embedded library use of the
+/// plain `execute`/`execute_stream` methods, D-10).
+///
+/// Rate pacing (PACE-02, D-08): every agent's provider is composed as
+/// `Pricing(Cadence(provider))`, with ONE wiring built here from `settings.treasurer.cadence`.
+/// A server that also composes other ports (the run engine's, a runtime provisioner's) should
+/// build the wiring once and call [`build_agent_registry_with_cadence`] instead, so a 429 seen
+/// by one port gates the others.
+///
+/// # Errors
+///
+/// Returns [`HostBuildError`] on the first problem encountered; an invalid
+/// `treasurer.cadence` section (or `backend: redis` on a binary built without the
+/// `redis-cadence` feature) is a [`HostBuildError::Build`] naming `treasurer`.
+pub async fn build_agent_registry_with_ledger(
+    settings: &Settings,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+) -> Result<AgentRegistry, HostBuildError> {
+    // Validate first (fail-fast), so a configuration error is reported before a wiring is built.
+    validate_config(settings)?;
+    let cadence = build_cadence(&settings.get_treasurer_config().cadence).map_err(|reason| {
+        HostBuildError::Build {
+            id: "treasurer".to_string(),
+            source: PaladinError::ConfigurationError(reason),
+        }
+    })?;
+    build_agent_registry_with_cadence(settings, treasury_ledger, cadence).await
+}
+
+/// Build a populated [`AgentRegistry`] from the `agents` section of `settings`, pacing every
+/// agent through the supplied `cadence` wiring (PACE-02, D-08).
+///
+/// Identical to [`build_agent_registry_with_ledger`] otherwise. The caller owns the
+/// [`CadenceWiring`]: pass clones of ONE wiring (from
+/// [`build_cadence`](crate::infrastructure::cadence::build_cadence)) to every composition root
+/// in the process so in-process gate state is process-wide, or `None` to install no pacing
+/// (`treasurer.cadence.enabled: false`). The wiring is not re-derived from `settings`, so this
+/// function does not validate `treasurer.cadence`; building the wiring does.
+///
+/// # Errors
+///
+/// Returns [`HostBuildError`] on the first problem encountered.
+///
+/// # Examples
+///
+/// ```no_run
+/// use paladin::config::settings::Settings;
+/// use paladin::infrastructure::cadence::build_cadence;
+/// use paladin::infrastructure::web::agent_host::build_agent_registry_with_cadence;
+///
+/// # async fn demo(settings: Settings) -> Result<(), Box<dyn std::error::Error>> {
+/// // One wiring for the whole process; clone it into every composition root.
+/// let cadence = build_cadence(&settings.get_treasurer_config().cadence)?;
+/// let registry = build_agent_registry_with_cadence(&settings, None, cadence.clone()).await?;
+/// # let _ = registry;
+/// # Ok(())
+/// # }
+/// ```
+pub async fn build_agent_registry_with_cadence(
+    settings: &Settings,
+    treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
+    cadence: Option<CadenceWiring>,
+) -> Result<AgentRegistry, HostBuildError> {
     validate_config(settings)?;
 
     let factory = LlmProviderFactory::new();
     let default_provider = default_provider_name(settings);
     let breaker = default_circuit_breaker();
+    let price_table = Arc::new(settings.get_treasurer_config().price_table().map_err(
+        |reason| HostBuildError::Build {
+            id: "treasurer".to_string(),
+            source: PaladinError::ConfigurationError(reason),
+        },
+    )?);
 
     let registry = AgentRegistry::new();
     for def in &settings.agents {
-        let (paladin, executor, streamer) =
-            build_agent(def, &factory, &default_provider, Arc::clone(&breaker)).await?;
+        let (paladin, executor, streamer) = build_agent(
+            def,
+            &factory,
+            settings.llm.as_ref(),
+            &default_provider,
+            Arc::clone(&breaker),
+            &price_table,
+            treasury_ledger.clone(),
+            settings.agent_runtime.token_budget.clone(),
+            cadence.as_ref(),
+        )
+        .await?;
         register_built(
             &registry,
             &def.id,
@@ -298,7 +577,15 @@ pub async fn build_agent_registry(settings: &Settings) -> Result<AgentRegistry, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_core::platform::container::cost::{CurrencyCode, PriceRow};
+    use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_llm::mock::MockLlmAdapter;
+    use paladin_llm::pricing::with_pricing;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+
+    fn empty_price_table() -> Arc<PriceTable> {
+        Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()))
+    }
 
     fn base(id: &str) -> AgentDefinition {
         AgentDefinition {
@@ -335,13 +622,18 @@ mod tests {
         def.temperature = Some(0.5);
         def.max_loops = Some(2);
 
-        let (paladin, _executor, streamer) =
-            build_agent_with_llm(&def, mock_llm(), default_circuit_breaker())
-                .await
-                .expect("builds");
+        let (paladin, _executor, streamer) = build_agent_with_llm(
+            &def,
+            mock_llm(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
 
-        assert_eq!(paladin.node.name, "researcher");
-        assert_eq!(paladin.node.model, "gpt-4o");
+        assert_eq!(paladin.data.name, "researcher");
+        assert_eq!(paladin.data.model, "gpt-4o");
         assert!(streamer.is_some(), "execution service is streaming-capable");
     }
 
@@ -353,7 +645,18 @@ mod tests {
 
         // Note: `(Paladin, Arc<dyn PaladinExecutorPort>)` is not `Debug`, so we match on
         // the result rather than using `expect_err`.
-        let result = build_agent(&def, &factory, "openai", default_circuit_breaker()).await;
+        let result = build_agent(
+            &def,
+            &factory,
+            None,
+            "openai",
+            default_circuit_breaker(),
+            &empty_price_table(),
+            None,
+            TokenBudgetConfig::default(),
+            None,
+        )
+        .await;
         assert!(
             matches!(result, Err(HostBuildError::Provider { .. })),
             "unknown provider must yield a Provider error"
@@ -361,19 +664,139 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_agent_registry_rejects_invalid_cadence_naming_its_key() {
+        let mut settings = Settings::default(); // agents is empty
+        settings.treasurer.cadence.base_backoff_ms = 0;
+
+        let err = build_agent_registry_with_ledger(&settings, None)
+            .await
+            .err()
+            .expect("an invalid treasurer.cadence must error");
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
+        assert!(
+            err.to_string()
+                .contains("treasurer.cadence.base_backoff_ms"),
+            "error must name the offending config path: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_agent_registry_accepts_pacing_on_and_off() {
+        let mut settings = Settings::default();
+        assert!(
+            settings.treasurer.cadence.enabled,
+            "pacing is on by default"
+        );
+        assert!(
+            build_agent_registry_with_ledger(&settings, None)
+                .await
+                .is_ok(),
+            "default pacing builds"
+        );
+        settings.treasurer.cadence.enabled = false;
+        assert!(
+            build_agent_registry_with_ledger(&settings, None)
+                .await
+                .is_ok(),
+            "pacing off builds"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_agent_registry_rejects_invalid_treasurer_price() {
+        let mut settings = Settings::default(); // agents is empty
+        settings.treasurer.pricing.insert(
+            "gpt-4".to_string(),
+            crate::config::PriceRowConfig {
+                prompt: "-1".to_string(),
+                completion: "1.00".to_string(),
+                cache_read: None,
+                cache_write: None,
+                reasoning: None,
+            },
+        );
+
+        let err = build_agent_registry(&settings)
+            .await
+            .err()
+            .expect("an invalid treasurer price must abort registry build");
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
+        assert!(
+            err.to_string().contains("treasurer.pricing.gpt-4.prompt"),
+            "error must name the offending config path: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn priced_agent_stream_reports_cost() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock: Arc<dyn LlmPort> = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let priced = with_pricing(mock, &table);
+
+        let (paladin, _executor, streamer) = build_agent_with_llm(
+            &base("gpt-4"),
+            priced,
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
+        let streamer = streamer.expect("execution service is streaming-capable");
+
+        let mut stream = streamer
+            .execute_stream(&paladin, "hi")
+            .await
+            .expect("stream starts");
+        let metadata = loop {
+            let item = stream.recv().await.expect("stream must emit a final chunk");
+            let chunk = item.expect("chunk must not error");
+            if chunk.is_final {
+                break chunk
+                    .metadata
+                    .expect("the final chunk must carry ChunkMetadata");
+            }
+        };
+
+        let cost = metadata
+            .cost
+            .as_ref()
+            .expect("the exact composition build_agent performs must carry a cost");
+        assert_eq!(cost.nanos(), 22_500_000);
+        assert_eq!(cost.currency().as_str(), "USD");
+    }
+
+    #[tokio::test]
     async fn register_built_rejects_duplicate_id() {
         let registry = AgentRegistry::new();
 
-        let (p1, e1, s1) =
-            build_agent_with_llm(&base("dup"), mock_llm(), default_circuit_breaker())
-                .await
-                .unwrap();
+        let (p1, e1, s1) = build_agent_with_llm(
+            &base("dup"),
+            mock_llm(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .unwrap();
         register_built(&registry, "dup", p1, e1, s1, None, Vec::new()).expect("first insert ok");
 
-        let (p2, e2, s2) =
-            build_agent_with_llm(&base("dup"), mock_llm(), default_circuit_breaker())
-                .await
-                .unwrap();
+        let (p2, e2, s2) = build_agent_with_llm(
+            &base("dup"),
+            mock_llm(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .unwrap();
         let err = register_built(&registry, "dup", p2, e2, s2, None, Vec::new())
             .expect_err("duplicate must error");
         assert!(matches!(err, HostBuildError::DuplicateId(_)), "got {err:?}");
@@ -433,5 +856,790 @@ mod tests {
             matches!(err, HostBuildError::UnknownProvider { .. }),
             "got {err:?}"
         );
+    }
+
+    /// D-08 (39-05): a ledger installed via `build_agent_with_llm`'s `treasury_ledger`
+    /// parameter settles a priced call made through the returned executor.
+    #[tokio::test]
+    async fn build_agent_with_llm_settles_priced_calls_when_a_ledger_is_installed() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock: Arc<dyn LlmPort> = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("hi there")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let priced = with_pricing(mock, &table);
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+
+        let (paladin, executor, _streamer) = build_agent_with_llm(
+            &base("gpt-4"),
+            priced,
+            default_circuit_breaker(),
+            Some(ledger.clone()),
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
+
+        executor
+            .execute(&paladin, "hi")
+            .await
+            .expect("execution succeeds");
+
+        let rows = ledger
+            .spend(paladin_core::platform::container::treasury_ledger::SpendQuery::default())
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(rows.len(), 1, "the priced call must have settled");
+    }
+
+    /// The converse: with no `treasury_ledger` argument, an otherwise-identical priced call
+    /// performs no ledger call at all.
+    #[tokio::test]
+    async fn build_agent_with_llm_without_a_ledger_settles_nothing() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock: Arc<dyn LlmPort> = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("hi there")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let priced = with_pricing(mock, &table);
+
+        let (paladin, executor, _streamer) = build_agent_with_llm(
+            &base("gpt-4"),
+            priced,
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
+
+        let result = executor
+            .execute(&paladin, "hi")
+            .await
+            .expect("execution succeeds");
+        assert!(
+            result.cost.is_some(),
+            "pricing is still installed even with no ledger"
+        );
+        // No ledger was installed at all -- nothing to assert against a store; this test's
+        // purpose is documented by its name and the absence of any ledger construction here.
+    }
+
+    // -- The one cutoff on every per-agent service (D-11, G12, ALLOW-05) ----------------------
+
+    /// A looping agent over a mock that reports 100 tokens per response, so cumulative usage
+    /// is 100, 200, 300 ... and nothing but a budget or `max_loops` ends the run.
+    fn looping_agent_def(id: &str) -> AgentDefinition {
+        AgentDefinition {
+            max_loops: Some(10),
+            ..base(id)
+        }
+    }
+
+    fn hundred_token_llm() -> Arc<MockLlmAdapter> {
+        Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        )
+    }
+
+    fn derived_scope(max_tokens: u32) -> paladin_core::platform::container::run_scope::RunScope {
+        use chrono::{TimeZone, Utc};
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+        };
+        use paladin_core::platform::container::cost::Cost;
+        let usd = CurrencyCode::new("USD").expect("USD is valid");
+        let figures = AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(5_000, usd.clone()),
+            ceiling: Cost::new(5_000, usd),
+            window: None,
+            evaluated_at: Utc
+                .with_ymd_and_hms(2026, 10, 6, 12, 0, 0)
+                .single()
+                .expect("valid instant"),
+        };
+        paladin_core::platform::container::run_scope::RunScope::default()
+            .with_derived_token_budget(DerivedTokenBudget::new(max_tokens, figures))
+    }
+
+    /// With the default (disabled) operator budget and no derived figure on the call, the
+    /// installed middleware never cuts: the run goes past any token count.
+    #[tokio::test]
+    async fn built_agent_without_any_budget_runs_as_before() {
+        use paladin_core::platform::container::execution_result::StopReason;
+        let llm = hundred_token_llm();
+        let (paladin, executor, _streamer) = build_agent_with_llm(
+            &looping_agent_def("plain"),
+            llm.clone(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
+
+        let result = executor
+            .execute(&paladin, "hi")
+            .await
+            .expect("execution succeeds");
+
+        assert_eq!(llm.call_count(), 10, "only max_loops ends the run");
+        assert_eq!(result.usage.total_tokens, 1_000);
+        assert!(!matches!(
+            result.stop_reason,
+            StopReason::TokenBudget | StopReason::AllowanceHalted(_)
+        ));
+    }
+
+    /// A call carrying a derived figure is cut after the crossing response by the one
+    /// middleware `build_agent_with_llm` installed -- with the operator budget disabled.
+    #[tokio::test]
+    async fn built_agent_cuts_a_derived_budget() {
+        use paladin_core::platform::container::execution_result::StopReason;
+        let llm = hundred_token_llm();
+        let (paladin, executor, _streamer) = build_agent_with_llm(
+            &looping_agent_def("derived"),
+            llm.clone(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig::default(),
+        )
+        .await
+        .expect("builds");
+
+        let result = executor
+            .execute_scoped(&paladin, "hi", &derived_scope(150))
+            .await
+            .expect("execution succeeds");
+
+        assert_eq!(
+            llm.call_count(),
+            2,
+            "cumulative 100 continues, 200 crosses 150"
+        );
+        assert!(matches!(result.stop_reason, StopReason::AllowanceHalted(_)));
+        assert!(!result.stop_reason.is_successful());
+    }
+
+    /// The operator's `agent_runtime.token_budget` now takes effect on a built agent: below the
+    /// scripted usage, with no derived figure on the call, the run ends with `TokenBudget`.
+    #[tokio::test]
+    async fn built_agent_honours_the_operator_budget() {
+        use paladin_core::platform::container::execution_result::StopReason;
+        let llm = hundred_token_llm();
+        let (paladin, executor, _streamer) = build_agent_with_llm(
+            &looping_agent_def("operator"),
+            llm.clone(),
+            default_circuit_breaker(),
+            None,
+            TokenBudgetConfig {
+                enabled: true,
+                max_tokens: 150,
+            },
+        )
+        .await
+        .expect("builds");
+
+        let result = executor
+            .execute(&paladin, "hi")
+            .await
+            .expect("execution succeeds");
+
+        assert_eq!(llm.call_count(), 2);
+        assert_eq!(result.stop_reason, StopReason::TokenBudget);
+    }
+    // -- End to end: the real agent router, the real agent service, a priced Treasurer ---------
+
+    /// The mock-priced table the end-to-end test derives from: `gpt-4` costs 30 USD per 1M
+    /// tokens on its dearest (completion) axis; `mystery` has no row.
+    fn e2e_prices() -> Arc<PriceTable> {
+        Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(10_000_000_000, 30_000_000_000).unwrap(),
+        ))
+    }
+
+    /// `x-api-key` map for the principals the end-to-end test calls as.
+    fn e2e_auth(keys: &[(&str, &str)]) -> paladin_web::AgentAuthConfig {
+        let api_keys = keys
+            .iter()
+            .map(|(secret, name)| {
+                (
+                    (*secret).to_string(),
+                    paladin_web::Principal::new(
+                        *name,
+                        paladin_core::platform::container::user::UserRole::User,
+                        paladin_core::platform::container::principal::TenantId::new("acme")
+                            .expect("tenant id"),
+                    ),
+                )
+            })
+            .collect();
+        paladin_web::AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        }
+    }
+
+    async fn post_json(
+        app: &axum::Router,
+        uri: &str,
+        key: &str,
+    ) -> (axum::http::StatusCode, serde_json::Value, String) {
+        use tower::ServiceExt;
+        let response = app
+            .clone()
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri(uri)
+                    .header("content-type", "application/json")
+                    .header("x-api-key", key)
+                    .body(axum::body::Body::from(r#"{"input":"hello"}"#))
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body reads");
+        let raw = String::from_utf8(bytes.to_vec()).expect("utf8 body");
+        let json = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+        (status, json, raw)
+    }
+
+    /// ALLOW-05 over HTTP, end to end (D-09 to D-13): a real `build_agent_with_llm` agent over a
+    /// scripted model that reports 100 tokens per response, behind the real agent router and a
+    /// real Treasurer with a price table and an in-memory ledger.
+    ///
+    /// - `svc-a` has a 4_500_000-nano ceiling: at 30 USD per 1M tokens that derives 150 tokens,
+    ///   so the run is cut on response 2 (cumulative 200 > 150) with `allowance_halted`, the
+    ///   partial output and the truncation notice;
+    /// - the same allowance with a smaller operator budget stops as `token_budget`, no
+    ///   `halt_reason`;
+    /// - `svc-z`'s 29_999-nano ceiling derives 0 tokens: `429 allowance_exhausted`;
+    /// - an unpriced model under a ceiling is `422 model_unpriced`;
+    /// - `svc-free` has no ceiling and is unaffected;
+    /// - `jobs` records the same halt on the job result.
+    #[tokio::test]
+    async fn agent_execute_halts_on_the_derived_budget() {
+        use crate::application::services::treasurer::{AllowancePolicy, ScopeAllowance, Treasurer};
+        use paladin_web::{AgentApiState, agent_router};
+        use tower::ServiceExt;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let policy = AllowancePolicy::new(usd, 80)
+            .with_api_key("svc-a", ScopeAllowance::new(86_400, 4_500_000))
+            .with_api_key("svc-z", ScopeAllowance::new(86_400, 29_999));
+        let ledger: Arc<dyn TreasuryLedgerPort> = Arc::new(InMemoryTreasuryLedger::new());
+        let treasurer = Arc::new(Treasurer::new(policy, ledger).with_pricing(e2e_prices()));
+
+        let registry = AgentRegistry::new();
+        let agents: [(&str, &str, TokenBudgetConfig); 3] = [
+            ("scripted", "gpt-4", TokenBudgetConfig::default()),
+            (
+                "operator-tight",
+                "gpt-4",
+                TokenBudgetConfig {
+                    enabled: true,
+                    max_tokens: 120,
+                },
+            ),
+            ("unpriced", "mystery", TokenBudgetConfig::default()),
+        ];
+        for (id, model, token_budget) in agents {
+            let def = AgentDefinition {
+                model: model.to_string(),
+                max_loops: Some(10),
+                ..base(id)
+            };
+            let (paladin, executor, streamer) = build_agent_with_llm(
+                &def,
+                hundred_token_llm(),
+                default_circuit_breaker(),
+                None,
+                token_budget,
+            )
+            .await
+            .expect("builds");
+            register_built(&registry, id, paladin, executor, streamer, None, Vec::new())
+                .expect("registers");
+        }
+        let state = AgentApiState::new(Arc::new(registry))
+            .with_auth(e2e_auth(&[
+                ("key-a", "svc-a"),
+                ("key-z", "svc-z"),
+                ("key-free", "svc-free"),
+            ]))
+            .with_treasurer(treasurer);
+        let jobs = Arc::clone(&state.jobs);
+        let app = agent_router(state);
+
+        // 1. The derived budget cuts the loop: 200 tokens > 150, partial output kept.
+        let (status, body, raw) = post_json(&app, "/v1/agents/scripted/execute", "key-a").await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{raw}");
+        assert_eq!(body["stop_reason"], "allowance_halted", "{raw}");
+        assert_eq!(
+            body["halt_reason"]["reason"], "allowance_exhausted",
+            "{raw}"
+        );
+        assert_eq!(body["halt_reason"]["ceiling"], "0.0045 USD", "{raw}");
+        assert_eq!(body["halt_reason"]["scope"], "api_key", "{raw}");
+        assert_eq!(body["usage"]["total_tokens"], 200, "{raw}");
+        let output = body["output"].as_str().expect("output text");
+        assert!(output.contains("chunk"), "partial output is kept: {raw}");
+        assert!(
+            output.contains("[budget] Allowance reached"),
+            "the allowance-halt notice is on the output: {raw}"
+        );
+        assert!(!raw.contains("key-a"), "no key value in the body: {raw}");
+
+        // 2. A smaller operator budget wins: today's label, no halt_reason key at all.
+        let (status, body, raw) =
+            post_json(&app, "/v1/agents/operator-tight/execute", "key-a").await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{raw}");
+        assert_eq!(body["stop_reason"], "token_budget", "{raw}");
+        assert!(body.get("halt_reason").is_none(), "{raw}");
+
+        // 3. A derived budget of zero is refused with the binding ceiling's figures.
+        let (status, body, raw) = post_json(&app, "/v1/agents/scripted/execute", "key-z").await;
+        assert_eq!(status, axum::http::StatusCode::TOO_MANY_REQUESTS, "{raw}");
+        assert_eq!(body["error"]["code"], "allowance_exhausted", "{raw}");
+        assert_eq!(body["error"]["details"]["scope"], "api_key", "{raw}");
+        assert_eq!(body["error"]["details"]["kind"], "window", "{raw}");
+        assert!(body["error"]["details"]["window_end"].is_string(), "{raw}");
+
+        // 4. An unpriced model under a ceiling is refused before the agent runs, on all three
+        //    routes, naming the model and carrying no Retry-After.
+        for uri in [
+            "/v1/agents/unpriced/execute",
+            "/v1/agents/unpriced/execute/stream",
+            "/v1/agents/unpriced/jobs",
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    axum::http::Request::builder()
+                        .method("POST")
+                        .uri(uri)
+                        .header("content-type", "application/json")
+                        .header("x-api-key", "key-a")
+                        .body(axum::body::Body::from(r#"{"input":"hello"}"#))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(
+                response.status(),
+                axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                "{uri}"
+            );
+            assert!(response.headers().get("retry-after").is_none(), "{uri}");
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("body reads");
+            let raw = String::from_utf8(bytes.to_vec()).expect("utf8 body");
+            let body: serde_json::Value = serde_json::from_str(&raw).expect("json body");
+            assert_eq!(body["error"]["code"], "model_unpriced", "{uri}: {raw}");
+            assert_eq!(body["error"]["details"]["model"], "mystery", "{uri}: {raw}");
+            assert!(
+                !raw.contains("key-a") && !raw.contains("svc-a"),
+                "{uri}: {raw}"
+            );
+        }
+
+        // 5. A principal with no ceiling is unaffected: nothing is derived, the run is bounded
+        //    only by max_loops, and even the unpriced model runs.
+        let (status, body, raw) = post_json(&app, "/v1/agents/scripted/execute", "key-free").await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{raw}");
+        assert_ne!(body["stop_reason"], "allowance_halted", "{raw}");
+        assert!(body.get("halt_reason").is_none(), "{raw}");
+        assert_eq!(body["usage"]["total_tokens"], 1_000, "{raw}");
+        let (status, _, raw) = post_json(&app, "/v1/agents/unpriced/execute", "key-free").await;
+        assert_eq!(status, axum::http::StatusCode::OK, "{raw}");
+
+        // 6. jobs: the same halt lands on the job result.
+        let (status, body, raw) = post_json(&app, "/v1/agents/scripted/jobs", "key-a").await;
+        assert_eq!(status, axum::http::StatusCode::ACCEPTED, "{raw}");
+        let job_id = body["job_id"].as_str().expect("job id").to_string();
+        let mut result = None;
+        for _ in 0..200 {
+            let record = serde_json::to_value(jobs.get(&job_id).expect("job exists"))
+                .expect("job serializes");
+            if record["result"].is_object() {
+                result = Some(record["result"].clone());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let result = result.expect("the job completes");
+        assert_eq!(result["stop_reason"], "allowance_halted");
+        assert_eq!(result["halt_reason"]["reason"], "allowance_exhausted");
+    }
+}
+
+/// Phase 50 (PARITY-03, D-12/D-13/D-02): agents are built through
+/// `LlmProviderFactory::create_from_config`, so the `llm.<provider>` blocks, the agent's own
+/// `provider` and `model`, and a block's `default_temperature` all take effect.
+#[cfg(test)]
+mod config_driven_tests {
+    use super::*;
+    use mockito::Matcher;
+    use paladin_llm::config::llm::LlmProviderConfig;
+    use serde_json::json;
+
+    /// A block key no assertion may ever find in an error or a log line.
+    const SECRET: &str = "sk-block-secret-do-not-leak";
+
+    fn agent(id: &str, provider: &str, model: &str) -> AgentDefinition {
+        AgentDefinition {
+            id: id.to_string(),
+            model: model.to_string(),
+            system_prompt: "You are a test agent.".to_string(),
+            provider: Some(provider.to_string()),
+            temperature: None,
+            max_loops: Some(1),
+            stop_words: vec![],
+            timeout_seconds: None,
+            allowed_roles: vec![],
+        }
+    }
+
+    fn empty_price_table() -> Arc<PriceTable> {
+        use paladin_core::platform::container::cost::CurrencyCode;
+        Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()))
+    }
+
+    async fn build(
+        def: &AgentDefinition,
+        llm: Option<&LlmConfig>,
+        default_provider: &str,
+    ) -> Result<BuiltAgent, HostBuildError> {
+        build_agent(
+            def,
+            &LlmProviderFactory::new(),
+            llm,
+            default_provider,
+            default_circuit_breaker(),
+            &empty_price_table(),
+            None,
+            TokenBudgetConfig::default(),
+            None,
+        )
+        .await
+    }
+
+    fn chat_completion(text: &str) -> String {
+        json!({
+            "id": "chatcmpl-host",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "host",
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": text },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2 }
+        })
+        .to_string()
+    }
+
+    fn deepseek_llm(base_url: &str) -> LlmConfig {
+        LlmConfig {
+            deepseek: Some(LlmProviderConfig::new(SECRET).with_base_url(base_url)),
+            ..LlmConfig::default()
+        }
+    }
+
+    fn anthropic_llm(block: LlmProviderConfig) -> LlmConfig {
+        LlmConfig {
+            anthropic: Some(block),
+            ..LlmConfig::default()
+        }
+    }
+
+    fn settings(llm: LlmConfig, agents: Vec<AgentDefinition>) -> Settings {
+        Settings {
+            llm: Some(llm),
+            agents,
+            ..Settings::default()
+        }
+    }
+
+    /// D-12/D-13: an agent naming a provider is built from that provider's block (host and key)
+    /// and the agent's own model, with no environment variable involved.
+    #[tokio::test]
+    async fn an_agent_is_built_from_its_providers_block_and_its_own_model() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", Matcher::Any)
+            .match_header("authorization", format!("Bearer {SECRET}").as_str())
+            .match_body(Matcher::PartialJson(json!({ "model": "agent-model-x" })))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(chat_completion("from the block"))
+            .expect(1)
+            .create_async()
+            .await;
+        let llm = deepseek_llm(&server.url());
+
+        let def = agent("a1", "deepseek", "agent-model-x");
+        let Ok((paladin, executor, _)) = build(&def, Some(&llm), "openai").await else {
+            panic!("an agent whose provider block names a key and a host must build");
+        };
+        executor
+            .execute(&paladin, "hello")
+            .await
+            .expect("the call reaches the block's endpoint");
+        mock.assert_async().await;
+    }
+
+    /// D-02: a block's `default_temperature` is an explicit value; a model that does not take it
+    /// refuses the build and the refusal names provider, model, parameter and the YAML key.
+    #[tokio::test]
+    async fn a_blocks_default_temperature_is_explicit_and_a_refusal_names_its_key() {
+        let llm = anthropic_llm(LlmProviderConfig::new(SECRET).with_default_temperature(0.5));
+        let def = agent("a1", "anthropic", "claude-haiku-5-5");
+
+        let err = build(&def, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("claude-haiku-5-5 takes only temperature 1.0, so 0.5 must be refused");
+        assert!(matches!(err, HostBuildError::Build { .. }), "got {err:?}");
+        let text = err.to_string();
+        for needle in [
+            "anthropic",
+            "claude-haiku-5-5",
+            "temperature",
+            "llm.anthropic.default_temperature",
+        ] {
+            assert!(text.contains(needle), "missing '{needle}' in: {text}");
+        }
+        assert!(!text.contains(SECRET), "no key in the error: {text}");
+    }
+
+    /// The same value set on the agent names the agent's own key.
+    #[tokio::test]
+    async fn an_agents_own_temperature_refusal_names_the_agent_key() {
+        let llm = anthropic_llm(LlmProviderConfig::new(SECRET));
+        let mut def = agent("researcher", "anthropic", "claude-haiku-5-5");
+        def.temperature = Some(0.5);
+
+        let err = build(&def, Some(&llm), "openai")
+            .await
+            .err()
+            .expect("0.5 is refused");
+        let text = err.to_string();
+        assert!(text.contains("agents[researcher].temperature"), "{text}");
+        assert!(!text.contains("default_temperature"), "{text}");
+        assert!(!text.contains(SECRET), "{text}");
+    }
+
+    /// The agent's own temperature wins over the block's default, and a block that sets none
+    /// expresses nothing (so a narrow model profile cannot deny service).
+    #[tokio::test]
+    async fn the_agents_temperature_beats_the_blocks_and_silence_expresses_nothing() {
+        let block = LlmProviderConfig::new(SECRET).with_default_temperature(0.5);
+        let mut own = agent("a1", "anthropic", "claude-haiku-5-5");
+        own.temperature = Some(1.0);
+        assert!(
+            build(&own, Some(&anthropic_llm(block)), "openai")
+                .await
+                .is_ok(),
+            "the agent's admitted 1.0 must beat the block's refused 0.5"
+        );
+
+        let silent = agent("a2", "anthropic", "claude-haiku-5-5");
+        assert!(
+            build(
+                &silent,
+                Some(&anthropic_llm(LlmProviderConfig::new(SECRET))),
+                "openai"
+            )
+            .await
+            .is_ok(),
+            "nothing expressed, nothing judged"
+        );
+    }
+
+    /// An absent `llm:` section resolves from the environment exactly as `create(name)` did: an
+    /// unknown provider still surfaces as a `Provider` error.
+    #[tokio::test]
+    async fn an_unknown_provider_with_no_llm_section_is_a_provider_error() {
+        let def = agent("x", "no-such-provider", "m");
+        let result = build(&def, None, "openai").await;
+        assert!(
+            matches!(result, Err(HostBuildError::Provider { .. })),
+            "unknown provider must yield a Provider error"
+        );
+    }
+
+    /// Pitfall 13: `timeout_seconds` on the definition is the per-agent execution timeout. It is
+    /// never mapped onto the provider's HTTP client timeout: a 1 s agent timeout with a slower
+    /// vendor and a 30 s block timeout still completes.
+    #[tokio::test]
+    async fn the_agent_timeout_does_not_become_the_http_client_timeout() {
+        let mut server = mockito::Server::new_async().await;
+        let body = chat_completion("slow but fine");
+        let _mock = server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body_from_request(move |_| {
+                std::thread::sleep(Duration::from_millis(1_300));
+                body.clone().into_bytes()
+            })
+            .create_async()
+            .await;
+        let llm = LlmConfig {
+            deepseek: Some(
+                LlmProviderConfig::new(SECRET)
+                    .with_base_url(server.url())
+                    .with_timeout_seconds(30),
+            ),
+            ..LlmConfig::default()
+        };
+        let mut def = agent("slow", "deepseek", "agent-model-x");
+        def.timeout_seconds = Some(1);
+
+        let Ok((paladin, executor, _)) = build(&def, Some(&llm), "openai").await else {
+            panic!("must build");
+        };
+        executor
+            .execute(&paladin, "hello")
+            .await
+            .expect("the HTTP client keeps the block's 30 s timeout, not the agent's 1 s");
+    }
+
+    /// T-50-10-03 / RESEARCH Pitfall 7: the shipped `config.example.yml` must not refuse itself.
+    /// For every provider block it carries (and this build compiles), an agent on that provider's
+    /// default model builds under the block's own `default_temperature`; and the two agents the
+    /// file defines build from its `llm:` section. Keys are replaced by a literal so the check
+    /// reads no environment variable.
+    #[tokio::test]
+    async fn the_shipped_example_config_builds_every_agent_it_describes() {
+        #[derive(serde::Deserialize)]
+        struct Example {
+            llm: LlmConfig,
+            agents: Vec<AgentDefinition>,
+        }
+        let example: Example = config::Config::builder()
+            .add_source(config::File::new(
+                "config.example.yml",
+                config::FileFormat::Yaml,
+            ))
+            .build()
+            .unwrap_or_else(|e| panic!("config.example.yml must build: {e}"))
+            .try_deserialize()
+            .unwrap_or_else(|e| panic!("config.example.yml's llm/agents must deserialize: {e}"));
+
+        // No environment: every non-empty key becomes a literal, a placeholder included.
+        let mut llm = example.llm;
+        for block in [
+            &mut llm.openai,
+            &mut llm.deepseek,
+            &mut llm.anthropic,
+            &mut llm.kimi,
+            &mut llm.qwen,
+            &mut llm.grok,
+            &mut llm.gemini,
+            &mut llm.openai_compatible,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            block.api_key = "example-literal-key".to_string();
+        }
+
+        let mut checked = 0;
+        for name in provider_names() {
+            let Some(block) = llm.get_provider_config(name) else {
+                panic!("config.example.yml has no `llm.{name}` block for a compiled provider");
+            };
+            let model = block
+                .default_model
+                .clone()
+                .unwrap_or_else(|| panic!("`llm.{name}` names a default_model"));
+            let def = agent("example", name, &model);
+            if let Err(err) = build(&def, Some(&llm), "openai").await {
+                panic!("the example's `llm.{name}` block refuses its own default model: {err}");
+            }
+            checked += 1;
+        }
+        assert!(checked >= 3, "at least the three default-feature providers");
+
+        for def in &example.agents {
+            let provider = resolve_provider(def, &default_provider_name_for(&llm));
+            if let Err(err) = build(def, Some(&llm), &provider).await {
+                panic!("example agent '{}' must build: {err}", def.id);
+            }
+        }
+    }
+
+    /// The provider an example agent falls back to: the example's own `llm.default_provider`.
+    fn default_provider_name_for(llm: &LlmConfig) -> String {
+        llm.default_provider
+            .clone()
+            .unwrap_or_else(|| "openai".to_string())
+    }
+
+    /// Pitfall 8: a provider configured only in YAML passes the pre-flight check.
+    #[test]
+    fn validate_config_accepts_a_provider_configured_only_in_yaml() {
+        let llm = LlmConfig {
+            default_provider: Some("deepseek".to_string()),
+            ..deepseek_llm("http://127.0.0.1:1")
+        };
+        let settings = settings(llm, vec![agent("a1", "deepseek", "m1")]);
+        validate_config(&settings).expect("a YAML-only provider is available");
+    }
+
+    /// A provider whose block names an unset `${VAR}` is not available; the error names the agent,
+    /// the provider, the model and the variable, never a value.
+    #[test]
+    fn validate_config_rejects_an_unconfigured_provider_naming_agent_provider_and_model() {
+        let llm = LlmConfig {
+            deepseek: Some(LlmProviderConfig::new("${PALADIN_TEST_UNSET_VAR_50_10}")),
+            ..LlmConfig::default()
+        };
+        let settings = settings(llm, vec![agent("planner", "deepseek", "model-p")]);
+        let err = validate_config(&settings).expect_err("an unset placeholder is not configured");
+        let text = err.to_string();
+        for needle in [
+            "planner",
+            "deepseek",
+            "model-p",
+            "PALADIN_TEST_UNSET_VAR_50_10",
+        ] {
+            assert!(text.contains(needle), "missing '{needle}' in: {text}");
+        }
+    }
+
+    /// The env-only default provider needs no block in `llm:` (50-09's observation): the block
+    /// is optional, so a default provider without one is a valid configuration.
+    #[test]
+    fn llm_config_validate_accepts_a_default_provider_with_no_block() {
+        let llm = LlmConfig {
+            default_provider: Some("deepseek".to_string()),
+            ..LlmConfig::default()
+        };
+        llm.validate()
+            .expect("env-only construction works through create_from_config");
     }
 }

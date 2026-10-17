@@ -133,12 +133,21 @@ impl TestEnvironment {
     }
 
     /// Check if a service is available on host:port
+    ///
+    /// The host may be an IP literal or a hostname (`localhost`, `redis-test`,
+    /// `rustfs-test`); it is resolved with `ToSocketAddrs`. A host that does not
+    /// resolve is simply "not available".
     pub fn check_service_availability(host: &str, port: u16) -> bool {
-        std::net::TcpStream::connect_timeout(
-            &format!("{}:{}", host, port).parse().unwrap(),
-            Duration::from_secs(1),
-        )
-        .is_ok()
+        use std::net::ToSocketAddrs;
+
+        let Some(addr) = (host, port)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut addrs| addrs.next())
+        else {
+            return false;
+        };
+        std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(1)).is_ok()
     }
 
     /// Configuration for external services (CI/CD)
@@ -172,9 +181,10 @@ impl TestEnvironment {
         Self {
             redis_host: "localhost".to_string(),
             redis_port: 6379, // Will be overridden by testcontainers
-            minio_endpoint: "localhost:9000".to_string(), // Will be overridden
-            minio_access_key: "minioadmin".to_string(),
-            minio_secret_key: "minioadmin".to_string(),
+            minio_endpoint: "localhost:9000".to_string(), // Overridden by the mapped RustFS port
+            // Throwaway literals, never a real credential or the RustFS default (D-00a)
+            minio_access_key: "testuser".to_string(),
+            minio_secret_key: "testpass123".to_string(),
             use_external_services: false,
         }
     }

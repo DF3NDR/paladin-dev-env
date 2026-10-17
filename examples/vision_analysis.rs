@@ -30,13 +30,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📋 Step 1: Configuring OpenAI with GPT-4o (vision-capable)...");
     let api_key = env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
 
-    let config = OpenAIConfig {
-        api_key,
-        base_url: "https://api.openai.com/v1".to_string(),
-        organization: None,
-        timeout_seconds: 300,
-        max_retries: 3,
-    };
+    // `OpenAIConfig` is `#[non_exhaustive]`: build it with `new` and set what differs.
+    let mut config = OpenAIConfig::new(api_key);
+    config.base_url = "https://api.openai.com/v1".to_string();
+    config.organization = None;
+    config.timeout_seconds = 300;
+    config.max_retries = 3;
 
     let llm_adapter: Arc<dyn LlmPort> =
         Arc::new(OpenAIAdapter::new(config).expect("Failed to create OpenAI adapter"));
@@ -79,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!(
         "✅ Paladin '{}' created with vision enabled\n",
-        paladin.node.name
+        paladin.data.name
     );
 
     // Step 4: Create execution service
@@ -228,7 +227,7 @@ async fn analyze_image(
     println!("{}", "─".repeat(80));
     println!("📊 ANALYSIS RESULTS");
     println!("{}", "─".repeat(80));
-    println!("🤖 Paladin: {}", paladin.node.name);
+    println!("🤖 Paladin: {}", paladin.data.name);
     println!("⏱️  Execution Time: {:.2}s", duration.as_secs_f64());
     println!("🔄 Loops: {}", result.loop_count);
     println!("🎫 Tokens: {}", result.usage.total_tokens);

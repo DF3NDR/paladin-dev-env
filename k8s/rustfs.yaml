@@ -1,0 +1,94 @@
+# RustFS Deployment for Paladin
+# S3-compatible object storage. Single-node, emptyDir, a reference/smoke manifest
+# (not HA); use AWS S3 or a managed endpoint in production (ADR-0055).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paladin-rustfs
+  namespace: paladin
+  labels:
+    app: rustfs
+    component: storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rustfs
+  template:
+    metadata:
+      labels:
+        app: rustfs
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: rustfs
+          # Exact tag, manifest-list digest sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+          # (a re-pin is a deliberate commit, Phase 45 D-03). No args: the entrypoint appends /data.
+          image: rustfs/rustfs:1.0.0
+          securityContext:
+            allowPrivilegeEscalation: false
+          env:
+            - name: RUSTFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: paladin-secrets
+                  key: RUSTFS_ACCESS_KEY
+            - name: RUSTFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: paladin-secrets
+                  key: RUSTFS_SECRET_KEY
+            # Console off: not needed here, and the image console CORS default is `*`.
+            - name: RUSTFS_CONSOLE_ENABLE
+              value: "false"
+          ports:
+            - name: api
+              containerPort: 9000
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: api
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir:
+            sizeLimit: 10Gi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paladin-rustfs
+  namespace: paladin
+  labels:
+    app: rustfs
+spec:
+  type: ClusterIP
+  selector:
+    app: rustfs
+  ports:
+    - name: api
+      port: 9000
+      targetPort: api

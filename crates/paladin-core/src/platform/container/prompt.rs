@@ -1,4 +1,4 @@
-use crate::base::entity::node::Node;
+use crate::base::entity::Entity;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -8,12 +8,14 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PromptItem {
-    pub node: Node<PromptData>,
+    /// The wrapped entity; read under its v0.10 key `node` too, written as `entity`.
+    #[serde(alias = "node")]
+    pub entity: Entity<PromptData>,
 }
 
 impl Hash for PromptItem {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.node.hash(state);
+        self.entity.hash(state);
     }
 }
 
@@ -211,8 +213,8 @@ impl PromptItem {
             metadata: BTreeMap::new(),
         };
 
-        let node = Node::new(prompt_data, None);
-        Ok(PromptItem { node })
+        let entity = Entity::new(prompt_data, None);
+        Ok(PromptItem { entity })
     }
 
     pub fn new_with_title(prompt_type: PromptType, title: String) -> Result<Self, PromptItemError> {
@@ -228,40 +230,40 @@ impl PromptItem {
             metadata: BTreeMap::new(),
         };
 
-        let node = Node::new(prompt_data, Some(title));
-        Ok(PromptItem { node })
+        let entity = Entity::new(prompt_data, Some(title));
+        Ok(PromptItem { entity })
     }
 
     // Getters and setters
     pub fn uuid(&self) -> Uuid {
-        self.node.uuid
+        self.entity.uuid
     }
     pub fn title(&self) -> Option<&String> {
-        self.node.name.as_ref()
+        self.entity.name.as_ref()
     }
     pub fn prompt_type(&self) -> &PromptType {
-        &self.node.node.prompt_type
+        &self.entity.data.prompt_type
     }
     pub fn parameters(&self) -> &PromptParameters {
-        &self.node.node.parameters
+        &self.entity.data.parameters
     }
     pub fn content_attachments(&self) -> &[Uuid] {
-        &self.node.node.content_attachments
+        &self.entity.data.content_attachments
     }
 
     pub fn add_content_attachment(&mut self, content_id: Uuid) {
-        self.node.node.content_attachments.push(content_id);
-        self.node.modified = Utc::now();
+        self.entity.data.content_attachments.push(content_id);
+        self.entity.modified = Utc::now();
     }
 
     pub fn set_parameters(&mut self, parameters: PromptParameters) {
-        self.node.node.parameters = parameters;
-        self.node.modified = Utc::now();
+        self.entity.data.parameters = parameters;
+        self.entity.modified = Utc::now();
     }
 
     pub fn set_context(&mut self, context: Option<String>) {
-        self.node.node.context = context;
-        self.node.modified = Utc::now();
+        self.entity.data.context = context;
+        self.entity.modified = Utc::now();
     }
 }
 
@@ -371,7 +373,7 @@ mod tests {
         // Test setting context
         prompt_item.set_context(Some("Test context".to_string()));
         assert_eq!(
-            prompt_item.node.node.context,
+            prompt_item.entity.data.context,
             Some("Test context".to_string())
         );
     }

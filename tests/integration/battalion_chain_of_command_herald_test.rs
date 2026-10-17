@@ -18,7 +18,7 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::chain_of_command_service::ChainOfCommandExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::chain_of_command::{
     ChainOfCommand, DelegationStrategy,
@@ -58,9 +58,9 @@ impl PaladinPort for HeraldMockPaladinPort {
             .outputs
             .lock()
             .unwrap()
-            .get(&paladin.node.name)
+            .get(&paladin.data.name)
             .cloned()
-            .unwrap_or_else(|| format!("{} processed: {}", paladin.node.name, input));
+            .unwrap_or_else(|| format!("{} processed: {}", paladin.data.name, input));
 
         Ok(PaladinResult {
             output,
@@ -101,7 +101,7 @@ fn create_test_paladin(name: &str) -> Paladin {
         ..Default::default()
     };
 
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[tokio::test]

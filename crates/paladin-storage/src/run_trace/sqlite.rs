@@ -50,6 +50,10 @@ const READ_QUERY: &str = r#"
 /// than the caller's boundary.
 const PRUNE_QUERY: &str = "DELETE FROM run_traces WHERE thread_id = ? AND superstep < ?";
 
+/// `max_seq`: the thread's highest `seq`, `0` when it has no rows. Served by the
+/// `(thread_id, seq)` primary key, so it is an index lookup, never a scan.
+const MAX_SEQ_QUERY: &str = "SELECT COALESCE(MAX(seq), 0) FROM run_traces WHERE thread_id = ?";
+
 /// Test-only raw upsert (see [`RawSchemaVersionWriter`]): writes `record`
 /// with an ARBITRARY `schema_version`, bypassing [`APPEND_QUERY`]'s
 /// always-current stamping.
@@ -196,6 +200,15 @@ impl RunTracePort for SqliteRunTraceStore {
             .map_err(|e| self.wrap_error(e))?;
         Ok(result.rows_affected())
     }
+
+    async fn max_seq(&self, thread: &ThreadId) -> Result<u64, RunTraceError> {
+        let max: i64 = sqlx::query_scalar(MAX_SEQ_QUERY)
+            .bind(thread.as_str())
+            .fetch_one(&self.pool)
+            .await
+            .map_err(|e| self.wrap_error(e))?;
+        Ok(u64::try_from(max).unwrap_or(0))
+    }
 }
 
 #[async_trait]
@@ -237,6 +250,11 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_started_with_a_run_id_round_trips() {
+        contract_tests::run_started_with_a_run_id_round_trips(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
     async fn read_paginates_by_after_seq() {
         contract_tests::read_paginates_by_after_seq(&fresh_store().await).await;
     }
@@ -257,8 +275,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn max_seq_lets_a_second_run_on_a_thread_keep_its_records() {
+        contract_tests::max_seq_lets_a_second_run_on_a_thread_keep_its_records(
+            &fresh_store().await,
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn prune_thread_removes_only_older_supersteps() {
         contract_tests::prune_thread_removes_only_older_supersteps(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn run_finished_halt_reason_round_trips() {
+        contract_tests::run_finished_halt_reason_round_trips(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn legacy_run_finished_row_reads_back_without_a_halt_reason() {
+        contract_tests::legacy_run_finished_row_reads_back_without_a_halt_reason(
+            &fresh_store().await,
+        )
+        .await;
     }
 
     #[tokio::test]

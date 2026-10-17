@@ -98,6 +98,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
+use crate::redis_url::redact_connection_url;
 use paladin_ports::output::run_queue_port::{
     LeaseToken, LeasedRun, QueueError, QueuedRun, RunQueuePort,
 };
@@ -300,22 +301,6 @@ impl std::fmt::Debug for RedisRunQueueConfig {
             )
             .field("key_prefix", &self.key_prefix)
             .finish()
-    }
-}
-
-/// Render `url` with any embedded password replaced by a fixed placeholder,
-/// or a fixed placeholder for the whole value if it does not even parse as
-/// a URL (never echo an unparsable value verbatim -- it could still be, or
-/// contain, a credential).
-fn redact_connection_url(url: &str) -> String {
-    match url::Url::parse(url) {
-        Ok(mut parsed) => {
-            if parsed.password().is_some() {
-                let _ = parsed.set_password(Some("REDACTED"));
-            }
-            parsed.to_string()
-        }
-        Err(_) => "[REDACTED: unparsable connection url]".to_string(),
     }
 }
 

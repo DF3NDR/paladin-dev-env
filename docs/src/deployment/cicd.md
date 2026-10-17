@@ -66,7 +66,7 @@ blocking a merge into `main`.
 | `test` | Unit Tests (stable / beta) | `cargo test --workspace --lib --bins` and `cargo test --workspace --doc`, matrixed over stable and beta | Required |
 | `examples` | Example Muster (Feature Matrix) | Builds all 47 `examples/*.rs` targets across a 4-invocation feature matrix | Required |
 | `crate-isolation` | Crate Isolation (`<crate>`) | Each of the 10 matrixed workspace crates builds and tests independently, with and without default features | Required |
-| `integration-tests` | Integration Tests | Redis + MinIO `--ignored` suites, plus the broad `--features integration-tests` workspace sweep | Required |
+| `integration-tests` | Integration Tests | Redis `--ignored` suite, the `FileStoragePort` contract suite against a pinned RustFS service container (compiled-in and passed counts both asserted), plus the broad `--features integration-tests` workspace sweep | Required |
 | `docker-integration` | Docker Integration Tests | Runs the Docker Compose test stack's `integration-tests` service | Required |
 | `ollama-integration` | Ollama Integration Tests (live server) | Live Ollama server suite (`ollama_docker`) | Advisory |
 | `postgres-integration` | Postgres Storage Contract Suites (live server) | Every `*::postgres` contract suite against a live Postgres container | Advisory |
@@ -180,66 +180,68 @@ former standalone `integration-tests` workflow file (deleted in commit `2cf9919`
 `ci.yml`'s trigger shown above rather than defining its own `on:` block.
 
 ```yaml
+# excerpt: .github/workflows/ci.yml — job: integration-tests
 jobs:
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
-
     services:
       redis:
         image: redis:7-alpine
+        ports:
+          - 6380:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-        ports:
-          - 6379:6379
 
-      minio:
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
-        env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
-        options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+      rustfs:
+        # Manifest-list digest (in the live file's comment):
+        # sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+        image: rustfs/rustfs:1.0.0
         ports:
-          - 9000:9000
+          - 9010:9000
+        env:
+          RUSTFS_ACCESS_KEY: testuser
+          RUSTFS_SECRET_KEY: testpass123
+          RUSTFS_CONSOLE_ENABLE: "false"
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/health/ready"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 5s
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Wait for services
-        run: |
-          timeout 60 bash -c 'until curl -f http://localhost:9000/minio/health/live; do sleep 2; done'
-          timeout 60 bash -c 'until redis-cli -h localhost ping; do sleep 2; done'
-
-      - name: Run integration tests
-        run: cargo test --features integration-tests --test '*_integration_test'
+      - name: Run file storage contract suite (RustFS)
         env:
-          REDIS_URL: redis://localhost:6379
-          MINIO_ENDPOINT: localhost:9000
-          MINIO_ACCESS_KEY: minioadmin
-          MINIO_SECRET_KEY: minioadmin
-          RUST_LOG: debug
-
-      - name: Integration test coverage
+          USE_EXTERNAL_TEST_SERVICES: "true"
+          TEST_REDIS_HOST: localhost
+          TEST_REDIS_PORT: 6380
+          TEST_MINIO_ENDPOINT: localhost:9010
+          TEST_MINIO_ACCESS_KEY: testuser
+          TEST_MINIO_SECRET_KEY: testpass123
         run: |
-          cargo install cargo-llvm-cov
-          cargo llvm-cov --features integration-tests --test '*_integration_test' --lcov --output-path integration-lcov.info
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          files: integration-lcov.info
-          flags: integration
+          set -o pipefail
+          cargo test --test lib --features integration-tests,s3-storage file_storage_integration_tests -- --ignored --test-threads=1 --nocapture 2>&1 | tee file-storage-suite.log
+          # then: fail unless `test result: ok. N passed` with N >= 11
 ```
+
+The object store is **RustFS** (`rustfs/rustfs:1.0.0`, Apache-2.0, multi-arch), pinned to an exact
+tag with the manifest-list digest recorded in an adjacent comment; a re-pin is a deliberate commit,
+never automatic. The community MinIO images are gone (Docker Hub deleted them on 2026-09-12 and
+quay.io locked anonymous pulls on 2026-09-24). The service is health-checked on
+`/health/ready`, has no `command:` key (the image entrypoint appends `/data`), and runs with the
+console disabled. There is no client-binary bootstrap: the former MinIO client install and bucket
+setup steps were deleted, because `MinioAdapter::new` creates the bucket it needs.
+
+The contract suite runs through two dedicated steps so it cannot pass vacuously. Without
+`s3-storage` a `file_storage_integration_tests` filter matches zero tests and exits green, so
+"Assert the file storage contract suite is compiled in" first counts the listed cases (at least 11)
+and "Run file storage contract suite (RustFS)" then requires `test result: ok` with at least 11
+passed. The Docker Integration Tests and End-to-End jobs run the same suite inside the compose
+network against `rustfs-test` / `rustfs`.
 
 ## Security Scanning
 

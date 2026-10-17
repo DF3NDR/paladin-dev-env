@@ -10,8 +10,9 @@
 use async_trait::async_trait;
 use thiserror::Error;
 
+use paladin_core::platform::container::allowance::AllowanceRefusal;
+use paladin_core::platform::container::principal::{PrincipalRef, RunAttribution};
 use paladin_core::platform::container::run::{RunId, RunStatus, WebhookSpec};
-use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::{ThreadId, WaypointId};
 
 /// A run submission request (D-12).
@@ -28,8 +29,19 @@ pub struct SubmitRun {
     pub input: serde_json::Value,
     /// An optional webhook delivery target for this run's lifecycle events.
     pub webhook: Option<WebhookSpec>,
-    /// The identity and role of the submitting principal, if known.
-    pub requested_by: Option<(String, UserRole)>,
+    /// The submitting principal's API key id, tenant and role (D-04), if known.
+    /// `None` means an internal caller with no principal (skips the role check).
+    /// The tenant is server-derived -- never taken from the request.
+    pub requested_by: Option<PrincipalRef>,
+    /// Identity used for a principal-less submission (schedule-fired runs, D-08).
+    ///
+    /// Consulted only when `requested_by` is `None`: it is then stamped onto the run as
+    /// `submitted_by` and is the subject the allowance admission gate checks. It carries a
+    /// tenant id and an API key name only -- it never grants, implies or bypasses a role, and
+    /// the invocation role check reads `requested_by` alone (a schedule-fired run therefore
+    /// keeps skipping the role check, exactly as before). When `requested_by` is `Some`, this
+    /// field is ignored.
+    pub attributed_to: Option<RunAttribution>,
 }
 
 /// A request to fork a NEW run from a specific Waypoint on an existing
@@ -47,8 +59,10 @@ pub struct ForkRun {
     /// An optional webhook delivery target for the forked run's lifecycle
     /// events.
     pub webhook: Option<WebhookSpec>,
-    /// The identity and role of the submitting principal, if known.
-    pub requested_by: Option<(String, UserRole)>,
+    /// The submitting principal's API key id, tenant and role (D-04), if known.
+    /// `None` means an internal caller with no principal (skips the role check).
+    /// The tenant is server-derived -- never taken from the request.
+    pub requested_by: Option<PrincipalRef>,
 }
 
 /// The accepted handle [`RunSubmissionPort::submit`] returns on success.
@@ -82,7 +96,8 @@ pub struct CancelOutcome {
 /// Every way [`RunSubmissionPort::submit`] can reject a request (D-12).
 ///
 /// `#[non_exhaustive]`: 27-07 adds `cancel`-shaped variants, 27-13 adds
-/// `WebhookRejected`, 27-15 adds fork-shaped variants.
+/// `WebhookRejected`, 27-15 adds fork-shaped variants, 41-01 adds
+/// `AllowanceExhausted`, 42-09 adds `ModelUnpriced`.
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum RunSubmissionError {
@@ -168,6 +183,22 @@ pub enum RunSubmissionError {
     /// No run store/queue is configured (the D-24 501 precedent).
     #[error("run submission is not wired: configure run_store and run_queue")]
     NotWired,
+    /// The caller's tenant or API-key allowance is exhausted: a balance has reached a
+    /// configured ceiling (Phase 41, ALLOW-02). Nothing was persisted -- no run row, no queue
+    /// entry. `paladin-web` renders this as `429 allowance_exhausted` (D-12, D-14).
+    #[error("{0}")]
+    AllowanceExhausted(AllowanceRefusal),
+    /// The principal has a configured allowance ceiling but the agent-kind assistant's model has
+    /// no `treasurer.pricing` row, so no token budget can be derived and the run cannot be
+    /// metered (Phase 42, D-10). Nothing was persisted -- no run row, no queue entry.
+    ///
+    /// A configuration incoherence rather than quota exhaustion: `paladin-web` renders it as
+    /// `422 model_unpriced` without `Retry-After`, never as the pacing-shaped `429`.
+    #[error("model {model} has no treasurer.pricing row, so an allowance cannot meter it")]
+    ModelUnpriced {
+        /// The model name that has no price row.
+        model: String,
+    },
 }
 
 /// Port trait for submitting a run (D-12).
@@ -181,8 +212,8 @@ pub enum RunSubmissionError {
 ///
 /// ```
 /// use async_trait::async_trait;
+/// use paladin_core::platform::container::principal::PrincipalRef;
 /// use paladin_core::platform::container::run::RunId;
-/// use paladin_core::platform::container::user::UserRole;
 /// use paladin_core::platform::container::waypoint::ThreadId;
 /// use paladin_ports::input::run_submission_port::{
 ///     CancelOutcome, ForkRun, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
@@ -202,7 +233,7 @@ pub enum RunSubmissionError {
 ///     async fn cancel(
 ///         &self,
 ///         run_id: &RunId,
-///         _requested_by: Option<(String, UserRole)>,
+///         _requested_by: Option<PrincipalRef>,
 ///     ) -> Result<CancelOutcome, RunSubmissionError> {
 ///         Err(RunSubmissionError::NotFound {
 ///             run_id: run_id.clone(),
@@ -227,6 +258,7 @@ pub enum RunSubmissionError {
 ///         input: serde_json::json!({}),
 ///         webhook: None,
 ///         requested_by: None,
+///         attributed_to: None,
 ///     };
 ///
 ///     let accepted = port.submit(request).await?;
@@ -252,17 +284,18 @@ pub trait RunSubmissionPort: Send + Sync {
     /// does not exist, and [`RunSubmissionError::AlreadyTerminal`] when the
     /// run has already reached a terminal status.
     ///
-    /// `requested_by` is the invoking principal's identity/role (D-46):
-    /// when `Some`, an implementor authorizes the request against the
-    /// run's own assistant `allowed_roles` (empty means any authenticated
-    /// caller), returning [`RunSubmissionError::Forbidden`] on a mismatch,
-    /// BEFORE the durable cancel flag is written. `None` skips this check
-    /// (a same-process/internal caller with no principal to authorize
-    /// against).
+    /// `requested_by` is the invoking principal's API key id, tenant and
+    /// role (D-46, D-04): when `Some`, an implementor authorizes the
+    /// request against the run's own assistant `allowed_roles` (empty
+    /// means any authenticated caller), returning
+    /// [`RunSubmissionError::Forbidden`] on a mismatch, BEFORE the durable
+    /// cancel flag is written. `None` skips this check (a same-process/
+    /// internal caller with no principal to authorize against). The
+    /// tenant is server-derived -- never taken from the request.
     async fn cancel(
         &self,
         run_id: &RunId,
-        requested_by: Option<(String, UserRole)>,
+        requested_by: Option<PrincipalRef>,
     ) -> Result<CancelOutcome, RunSubmissionError>;
 
     /// Fork a NEW run from `request.from_waypoint_id` onto
@@ -291,7 +324,7 @@ mod tests {
         async fn cancel(
             &self,
             _run_id: &RunId,
-            _requested_by: Option<(String, UserRole)>,
+            _requested_by: Option<PrincipalRef>,
         ) -> Result<CancelOutcome, RunSubmissionError> {
             Err(RunSubmissionError::NotWired)
         }
@@ -316,6 +349,7 @@ mod tests {
             input: serde_json::json!({}),
             webhook: None,
             requested_by: None,
+            attributed_to: None,
         };
         let err = port.submit(request).await.unwrap_err();
         assert!(matches!(err, RunSubmissionError::NotWired));

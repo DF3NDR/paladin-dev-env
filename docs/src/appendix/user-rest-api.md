@@ -92,7 +92,7 @@ CLI Usage Examples:
 /*
 Integration Checklist:
 
-1. ✅ Domain Layer - User entity built on Node with Email value object
+1. ✅ Domain Layer - User entity built on Entity with Email value object
 2. ✅ Application Layer - UserService with business logic
 3. ✅ Infrastructure Layer - SQLite repository implementation  
 4. ✅ Presentation Layer - REST API endpoints
@@ -119,12 +119,12 @@ Integration with Existing Services:
 - ✅ Uses existing NotificationPublisherService from notification_port.rs
 - ✅ Uses existing LogPort for logging
 - ✅ Uses existing Settings struct for configuration
-- ✅ Uses existing Node infrastructure for versioning
+- ✅ Uses existing Entity infrastructure for versioning
 - ✅ Uses existing Message system for event publishing
 
 Database Migration:
 The SQLite repository automatically creates the users table with proper indexes.
-The table schema includes all necessary fields and follows the Node pattern.
+The table schema includes all necessary fields and follows the Entity pattern.
 
 Security Features:
 - Argon2 password hashing with salt
@@ -134,14 +134,14 @@ Security Features:
 - Proper error handling without information leakage
 
 Versioning Support:
-The User type is built on Node, automatically inheriting versioning capabilities.
+The User type is built on Entity, automatically inheriting versioning capabilities.
 All user changes can be tracked through the existing versioning system.
 
 Integration Points:
 - LogPort for user action logging (existing)
 - NotificationPublisherService for welcome emails (existing)
 - Settings struct for database configuration (existing)
-- Existing Node infrastructure for versioning (existing)
+- Existing Entity infrastructure for versioning (existing)
 - Message system for event publishing (existing)
 
 This implementation provides a complete, production-ready user management system

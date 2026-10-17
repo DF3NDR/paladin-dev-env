@@ -22,11 +22,13 @@ use chrono::Utc;
 use paladin::application::services::battalion::formation_service::FormationExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
+use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::formation::Formation;
-use paladin::core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
 use paladin::core::platform::container::herald::Herald;
 use paladin::core::platform::container::paladin::Paladin;
 use paladin::infrastructure::adapters::herald::{JsonHerald, MarkdownHerald, TableHerald};
+use paladin_core::platform::container::aegis::{Aegis, ErrorHandlerSpec};
+use paladin_core::platform::container::battlefield::StateDelta;
 use paladin_ports::output::llm_port::{
     FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, TokenUsage as LlmTokenUsage,
 };
@@ -52,9 +54,11 @@ impl LlmPort for MockLlmPort {
             content: "unused".to_string(),
             finish_reason: FinishReason::Stop,
             usage: LlmTokenUsage::new(0, 0),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         })
     }
 
@@ -133,20 +137,20 @@ impl PaladinPort for FormationMockPaladinPort {
         self.execution_log
             .lock()
             .unwrap()
-            .push(paladin.node.name.clone());
+            .push(paladin.data.name.clone());
 
-        if self.fail_names.lock().unwrap().contains(&paladin.node.name) {
+        if self.fail_names.lock().unwrap().contains(&paladin.data.name) {
             return Err(PaladinError::ExecutionError(format!(
                 "Simulated failure for {}",
-                paladin.node.name
+                paladin.data.name
             )));
         }
 
         let (output, token_count, execution_time_ms) = self
             .responses
-            .get(&paladin.node.name)
+            .get(&paladin.data.name)
             .cloned()
-            .unwrap_or_else(|| panic!("No mock response configured for {}", paladin.node.name));
+            .unwrap_or_else(|| panic!("No mock response configured for {}", paladin.data.name));
 
         Ok(PaladinResult {
             output,
@@ -302,10 +306,14 @@ async fn test_formation_partial_results_through_all_three_heralds() {
             .with_failures(vec!["Skirmisher".to_string()]),
     );
 
-    // Continue-on-error is required: fail-fast returns Err and produces no partial result to
+    // The Absorb handler is required: fail-fast returns Err and produces no partial result to
     // render, which is not what this criterion is about.
-    let config = BattalionConfig::new("partial_formation")
-        .with_error_strategy(ErrorStrategy::ContinueOnError);
+    let config = BattalionConfig::new("partial_formation").with_aegis(Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        ..Aegis::default()
+    });
 
     let formation = Formation::new(vec![paladin1, paladin2, paladin3], config)
         .expect("Failed to create Formation");
@@ -315,13 +323,13 @@ async fn test_formation_partial_results_through_all_three_heralds() {
     let result = service
         .execute(&formation, "Hold the position")
         .await
-        .expect("ContinueOnError should return a partial result, not an Err");
+        .expect("Absorb should return a partial result, not an Err");
 
     assert_eq!(result.paladin_success_count, 2);
     assert_eq!(result.paladin_failure_count, 1);
     assert_eq!(result.node_errors.len(), 1);
-    assert_eq!(result.node_errors[0].node_name, "Skirmisher");
-    assert!(result.node_errors[0].error.contains("Skirmisher"));
+    assert_eq!(result.node_errors[0].node_id.as_str(), "Skirmisher");
+    assert!(result.node_errors[0].to_string().contains("Skirmisher"));
 
     // --- JSON Herald ---
     let json_herald = JsonHerald::new();
@@ -347,7 +355,7 @@ async fn test_formation_partial_results_through_all_three_heralds() {
         .as_array()
         .expect("node_errors should be an array");
     assert_eq!(node_errors_json.len(), 1);
-    assert_eq!(node_errors_json[0]["node_name"], "Skirmisher");
+    assert_eq!(node_errors_json[0]["node_id"], "Skirmisher");
 
     // --- Markdown Herald ---
     let markdown_herald = MarkdownHerald::new();

@@ -325,7 +325,7 @@ fn condition_label_doc(condition: &Option<EdgeConditionDoc>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use paladin_core::base::entity::node::Node;
+    use paladin_core::base::entity::Entity;
     use paladin_core::platform::container::battlefield::{
         BattlefieldSchema, DispatchRule, FieldName, FieldSpec,
     };
@@ -359,7 +359,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     fn linear_doc() -> WarGraphDoc {

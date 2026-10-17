@@ -2,14 +2,14 @@
 /*
 User Container
 
-User type built on the core base entity Node type to utilize the versioning system
+User type built on the core base Entity type to utilize the versioning system
 through composition. It represents a user entity in the system with all needed values
 including username, email, and password hash.
 
-This follows Domain-Driven Design principles and leverages the existing Node infrastructure.
+This follows Domain-Driven Design principles and leverages the existing Entity infrastructure.
 */
 
-use crate::base::entity::node::Node;
+use crate::base::entity::Entity;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
@@ -114,7 +114,7 @@ impl std::fmt::Display for UserRole {
     }
 }
 
-/// User data structure that will be wrapped by Node
+/// User data structure that will be wrapped by Entity
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserData {
     pub username: String,
@@ -161,8 +161,8 @@ impl Hash for UserData {
     }
 }
 
-/// User type built on Node for versioning and consistency
-pub type User = Node<UserData>;
+/// User type built on Entity for versioning and consistency
+pub type User = Entity<UserData>;
 
 impl User {
     /// Creates a new User with UserData
@@ -183,47 +183,47 @@ impl User {
         };
 
         let name = Some(format!("User: {}", user_data.username.clone()));
-        Node::new(user_data, name)
+        Entity::new(user_data, name)
     }
 
     /// Gets the username
     pub fn username(&self) -> &str {
-        &self.node.username
+        &self.data.username
     }
 
     /// Gets the email
     pub fn email(&self) -> &Email {
-        &self.node.email
+        &self.data.email
     }
 
     /// Gets the password hash
     pub fn password_hash(&self) -> &str {
-        &self.node.password_hash
+        &self.data.password_hash
     }
 
     /// Checks if user is active
     pub fn is_active(&self) -> bool {
-        self.node.is_active
+        self.data.is_active
     }
 
     /// Checks if user is verified
     pub fn is_verified(&self) -> bool {
-        self.node.is_verified
+        self.data.is_verified
     }
 
     /// Gets the user profile
     pub fn profile(&self) -> &UserProfile {
-        &self.node.profile
+        &self.data.profile
     }
 
     /// Gets the user's role.
     pub fn role(&self) -> UserRole {
-        self.node.role
+        self.data.role
     }
 
     /// Sets the user's role and updates the modified timestamp.
     pub fn set_role(&mut self, role: UserRole) {
-        self.node.role = role;
+        self.data.role = role;
         self.modified = Utc::now();
     }
 
@@ -245,46 +245,46 @@ impl User {
             ));
         }
 
-        self.node.username = new_username;
+        self.data.username = new_username;
         self.modified = Utc::now(); // Update modified timestamp directly
         Ok(())
     }
 
     /// Updates email
     pub fn update_email(&mut self, new_email: Email) -> Result<(), UserError> {
-        self.node.email = new_email;
-        self.node.is_verified = false; // Reset verification on email change
+        self.data.email = new_email;
+        self.data.is_verified = false; // Reset verification on email change
         self.modified = Utc::now(); // Update modified timestamp directly
         Ok(())
     }
 
     /// Updates password hash
     pub fn update_password_hash(&mut self, new_password_hash: String) {
-        self.node.password_hash = new_password_hash;
+        self.data.password_hash = new_password_hash;
         self.modified = Utc::now(); // Update modified timestamp directly
     }
 
     /// Activates the user
     pub fn activate(&mut self) {
-        self.node.is_active = true;
+        self.data.is_active = true;
         self.modified = Utc::now(); // Update modified timestamp directly
     }
 
     /// Deactivates the user
     pub fn deactivate(&mut self) {
-        self.node.is_active = false;
+        self.data.is_active = false;
         self.modified = Utc::now(); // Update modified timestamp directly
     }
 
     /// Verifies the user
     pub fn verify(&mut self) {
-        self.node.is_verified = true;
+        self.data.is_verified = true;
         self.modified = Utc::now(); // Update modified timestamp directly
     }
 
     /// Updates the user profile
     pub fn update_profile(&mut self, profile: UserProfile) {
-        self.node.profile = profile;
+        self.data.profile = profile;
         self.modified = Utc::now(); // Update modified timestamp directly
     }
 }
@@ -519,8 +519,8 @@ mod tests {
         // Test deserialization
         let deserialized: User = serde_json::from_str(&serialized).unwrap();
         assert_eq!(user.uuid, deserialized.uuid);
-        assert_eq!(user.node.username, deserialized.node.username);
-        assert_eq!(user.node.email.value(), deserialized.node.email.value());
+        assert_eq!(user.data.username, deserialized.data.username);
+        assert_eq!(user.data.email.value(), deserialized.data.email.value());
     }
 
     #[test]

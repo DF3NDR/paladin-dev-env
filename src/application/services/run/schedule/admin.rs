@@ -179,6 +179,10 @@ impl ScheduleAdminPort for ScheduleService {
         if !create.enabled {
             schedule = schedule.disabled();
         }
+        // D-08: the creator is stamped exactly once, here; `update` never touches it.
+        if let Some(attribution) = create.created_by {
+            schedule = schedule.with_created_by(attribution);
+        }
 
         self.repo
             .insert(schedule.clone())

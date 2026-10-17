@@ -354,32 +354,12 @@ citadel:
 
 ## Battalion (Multi-agent Orchestration)
 
-```yaml
-battalion:
-  default_timeout_seconds: 300     # Per-battalion execution timeout
-  error_strategy: "fail_fast"      # fail_fast | continue_on_error | retry_then_continue
-  max_concurrent_paladins: 10      # Phalanx concurrency limit
-  metadata_output_enabled: false   # Write execution metadata to files
-
-  retry:                           # Used when error_strategy = retry_then_continue
-    max_attempts: 3
-    exponential_backoff: true
-    jitter: true
-    base_delay_ms: 100
-    max_delay_seconds: 10
-
-  maneuver:                        # Flow DSL (Maneuver pattern)
-    error_strategy: "fail_fast"    # fail_fast | continue_parallel | ignore_errors
-    output_format: "combined_text" # combined_text | structured_json
-    pass_output_as_input: true
-    timeout_seconds: 300
-    collect_timing_metrics: true
-    max_agents: 30
-    max_depth: 5
-```
-
-**Env vars:** `APP_BATTALION_DEFAULT_TIMEOUT_SECONDS`, `APP_BATTALION_ERROR_STRATEGY`,
-`APP_BATTALION_MAX_CONCURRENT_PALADINS`, `APP_BATTALION_RETRY_MAX_ATTEMPTS`, etc.
+Battalion fault handling (retry, per-attempt timeout and error handler) is configured in code
+through `BattalionConfig.aegis`, set with `BattalionConfig::with_aegis`; see the
+[Configuration Reference](../user-guides/orchestration.md#configuration-reference) in the
+orchestration guide. `config.yml` has no `battalion:` section. The Maneuver flow DSL is
+configured through `ManeuverConfig`; see the [Maneuver Flow DSL](../user-guides/maneuver-flow-dsl.md)
+guide.
 
 See [Battalion Patterns](../user-guides/battalion-patterns.md) for Formation,
 Phalanx, Campaign, and Chain of Command details.
@@ -406,6 +386,214 @@ herald:
 **Env vars:** `APP_HERALD_DEFAULT_FORMATTER`, `APP_HERALD_JSON_PRETTY`,
 `APP_HERALD_MARKDOWN_INCLUDE_COLORS`, `APP_HERALD_TABLE_BORDER_STYLE`
 
+## Treasurer allowances
+
+`treasurer.allowance` caps how much an API key or a tenant may spend, enforced when a run is
+submitted: a request whose scope has already reached a ceiling is refused with
+`429 allowance_exhausted` before anything is persisted. Amounts are operator-currency figures
+(`treasurer.currency`), never token counts. Omit the section and nothing is enforced.
+
+```yaml
+treasurer:
+  currency: "USD"
+  allowance:
+    warn_at: 80
+    webhook:
+      url: "https://ops.example.com/paladin-allowance"
+    tenants:
+      acme:
+        period: "24h"
+        amount: "25.00"
+        lifetime: "500.00"
+    api_keys:
+      ci-runner:
+        period: "1h"
+        amount: "2.50"
+        warn_at: 90
+```
+
+| Key | Type | Default | Env override |
+| --- | --- | --- | --- |
+| `treasurer.allowance.warn_at` | integer percent `0..=100` | `80` | `APP_TREASURER_ALLOWANCE_WARN_AT` |
+| `treasurer.allowance.webhook.url` | non-empty `http(s)` URL | none | none |
+| `treasurer.allowance.webhook.secret` | string, never rendered or serialised | none | `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET` (applied only when a `webhook` exists) |
+| `treasurer.allowance.tenants.<id>` | entry | none | none (config file only) |
+| `treasurer.allowance.api_keys.<name>` | entry | none | none (config file only) |
+| entry `period` (required) | `<integer><m\|h\|d>`, `1m` to `366d` | none | none |
+| entry `amount` (required) | decimal string, whole currency units | none | none |
+| entry `lifetime` | decimal string, whole currency units | none | none |
+| entry `warn_at` | integer percent `0..=100` | the global `warn_at` | none |
+
+Decimal strings are exact: up to nine digits after the point, no sign, exponent, separator or
+whitespace, positive, and at most `9223372036.854775807`. `"25.00"` is twenty-five units;
+`"0.000000001"` is one nano-unit. A value that does not fit is a boot error naming its full path,
+never rounded or clamped. A `${VAR}` placeholder in the YAML file is **not** expanded -- the
+`webhook.secret` is supplied with `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`. A lifetime-only entry
+is not expressible: every entry carries a window `period` and `amount`.
+
+### Window and limit model
+
+Windows are tumbling and aligned to the UTC epoch, computed from the ledger's own clock, so a
+scope's spend resets on the boundary and can reach twice an allowance across one boundary. A
+caller can hold up to four ceilings, evaluated in a fixed order: API-key window, API-key
+lifetime, tenant window, tenant lifetime. A balance at or above a ceiling is exhausted (`>=`),
+and the first exhausted ceiling decides the refusal. Admin keys are bound like any other key.
+
+### Warn threshold
+
+`warn_at` is a percent of a ceiling. `0` disables warnings for the entry. `100` never notifies,
+because a balance at the ceiling is refused rather than warned about. A value above `100` is
+rejected, never clamped.
+
+### Boot coherence
+
+`paladin-server` refuses to start, naming the offending path, when:
+
+- `treasurer.allowance` has any entry while `run_store.backend` is `disabled` -- allowances are
+  enforced against the spend ledger, which needs a run store;
+- an `api_keys.<name>` entry names no key in `http.auth.api_keys`;
+- a `tenants.<id>` entry names a tenant that no `http.auth.api_keys` entry or
+  `http.auth.bearer_token.tenant` maps to;
+- any key under `treasurer:` is misspelled (`allowence:`, `api_key:`, `perid:`).
+
+With `http.auth.enabled: false` the open-access principal is the key `anonymous` in the tenant
+`open-access`, so `api_keys.anonymous` and `tenants.open-access` are accepted.
+
+### The derived token budget on agent routes
+
+On `POST /v1/agents/{id}/execute`, `execute/stream` and `jobs`, a principal with an `allowance`
+ceiling gets a per-run token budget derived at admission: the **tightest** remaining headroom
+across its ceilings, divided by the agent model's price. Every token is billed at the model's
+dearest `treasurer.pricing` axis (prompt, completion, cache read, cache write or reasoning), so a
+prompt-heavy agent stops earlier than its true spend would require. The agent loop ends after the
+model response that crosses the figure -- the overshoot is at most one response -- and the call
+answers `stop_reason: "allowance_halted"` with a `halt_reason` object and the partial output.
+
+One `TokenBudget` enforces both figures. The effective limit is the **tightest** of
+`agent_runtime.token_budget.max_tokens` (when `enabled`) and the derived figure, and a tie goes to
+the allowance. When the operator figure is the tighter one the stop is the familiar
+`stop_reason: "token_budget"`. The middleware is inert without either, so a deployment with the
+operator budget disabled and no `allowance` is unchanged. Note that the operator's
+`agent_runtime.token_budget` now takes effect on the HTTP agent routes: it was not applied to
+agents served over HTTP before, so enabling it now caps each of their runs.
+
+**Worker-dispatched agent-kind runs honour only the derived figure.** A run of an agent-kind
+assistant submitted through `POST /v1/runs` is executed by the run engine's shared service, which
+also executes every engine node. That service installs the budget in a Treasurer-only mode: the
+operator's `agent_runtime.token_budget` is forced off there, so it applies to the HTTP agent routes
+above and never to a worker-dispatched run. The worker re-derives the allowance figure at dispatch
+and only a run carrying one is ever cut; an engine node never is (an operator budget on the shared
+service would cap a node mid-flight and hand a successful partial result to a Battlefield).
+
+Two limits to know about:
+
+- Every model a metered principal can reach needs a `treasurer.pricing` row. A principal with a
+  ceiling calling an agent whose model has none is refused `422 model_unpriced` (naming the
+  model, with no `Retry-After`) before the agent runs, because spend that cannot be metered
+  cannot be bounded. A principal with no ceiling is unaffected.
+- A single streamed `execute/stream` call is one provider call and is not cut mid-flight. It is
+  admitted or refused up front like any other call. Its terminal `done` event stays
+  `{ "done": true, "usage": ... }` unless the final chunk's usage exceeded the derived figure,
+  in which case it also carries an informational `halt_reason` reporting the crossing. An agent
+  with no streaming backend is buffered, and its `done` carries `stop_reason` and `halt_reason`
+  as `execute` does.
+
+A derived figure of zero tokens is refused `429 allowance_exhausted`, like an exhausted ceiling.
+
+### Caveats
+
+Changing `treasurer.currency` while allowances are in force makes every allowanced principal's
+admission fail closed until the ledger is migrated: its history is in the old currency. The
+operator webhook target must pass the same address guard as run webhooks, so a private address
+needs `webhooks.allow_private: true`; `paladin-server` checks it at boot and refuses to start,
+naming `treasurer.allowance.webhook.url`, when it is rejected. Each warn-threshold notice is then
+delivered once to that URL as a signed `allowance_warning` webhook through the same durable queue
+the run webhooks use (payload, headers and signature: [Operator allowance
+notices](../api-reference/platform-api.md#operator-allowance-notices)). Enable `webhook` only after
+every replica runs the release that understands `allowance_warning` (see the [HTTP service
+host](../deployment-topologies/http-service-host.md#treasurer-allowances) rollout note).
+
+## Treasurer rate pacing (Cadence)
+
+`treasurer.cadence` paces every LLM call `paladin-server` makes after a provider answers
+`429 Too Many Requests`. It is **reactive**: nothing is gated until a provider says slow down.
+After a 429, later calls to the same provider and model wait out a gate -- the provider's own
+`Retry-After` when it sent one, otherwise exponential back-off with full jitter -- and the 429
+itself is surfaced to the caller unchanged, never retried inside the pacing layer. Pacing is
+**on by default**: omit the section and every agent port (config-loaded agents, runtime-provisioned
+agents and the run engine's port) is paced over one in-process gate state shared by the whole
+server process. `enabled: false` installs nothing and restores the previous behaviour.
+
+```yaml
+# Defaults, in process (what you get when the section is omitted):
+treasurer:
+  cadence:
+    backend: in_process
+    base_backoff_ms: 500
+    max_backoff_ms: 30000
+    max_wait_secs: 300
+```
+
+To share pacing state across a worker fleet, name the environment variable that holds the Redis
+URL (never the URL itself -- it may carry a password):
+
+```yaml
+treasurer:
+  cadence:
+    backend:
+      redis:
+        url_env: CADENCE_REDIS_URL   # export CADENCE_REDIS_URL=redis://:password@redis.internal:6379/2
+    degraded_multiplier: 2.0
+```
+
+The `redis` backend needs a binary built with `--features redis-cadence`; on a binary built
+without it `paladin-server` refuses to start, naming the feature, rather than quietly pacing
+in-process. See [Fleet-wide pacing with
+Redis](../deployment-topologies/http-service-host.md#fleet-wide-pacing-with-redis) for the
+rollout and outage behaviour.
+
+| Key | Type | Default | Env override |
+| --- | --- | --- | --- |
+| `treasurer.cadence.enabled` | bool | `true` | `APP_TREASURER_CADENCE_ENABLED` |
+| `treasurer.cadence.backend` | `in_process` or `{ redis: { url_env: NAME } }` | `in_process` | none (config file only) |
+| `treasurer.cadence.backend.redis.url_env` | non-empty name of an environment variable that is set at boot | none | none |
+| `treasurer.cadence.base_backoff_ms` | integer, greater than zero | `500` | `APP_TREASURER_CADENCE_BASE_BACKOFF_MS` |
+| `treasurer.cadence.max_backoff_ms` | integer, at least `base_backoff_ms` | `30000` | `APP_TREASURER_CADENCE_MAX_BACKOFF_MS` |
+| `treasurer.cadence.max_wait_secs` | integer, greater than zero | `300` | `APP_TREASURER_CADENCE_MAX_WAIT_SECS` |
+| `treasurer.cadence.degraded_multiplier` | finite number, at least `1.0` | `2.0` | `APP_TREASURER_CADENCE_DEGRADED_MULTIPLIER` |
+| `treasurer.cadence.fallback_pace_budget_secs` | integer, greater than zero | `60` | `APP_TREASURER_CADENCE_FALLBACK_PACE_BUDGET_SECS` |
+| `treasurer.cadence.lock_ttl_secs` | integer, greater than zero | `120` | `APP_TREASURER_CADENCE_LOCK_TTL_SECS` |
+
+- **`base_backoff_ms` / `max_backoff_ms`:** a 429 with no usable retry delay gates the key for a
+  random time up to `base_backoff_ms`, doubling per consecutive 429 on that key up to
+  `max_backoff_ms`; the first success resets it.
+- **`max_wait_secs`:** the longest a single call waits on a gate. A provider delay beyond it is
+  not slept on: the call surfaces the rate-limit error immediately, carrying the full delay, so a
+  worker lease is never held for an hour in silence.
+- **`degraded_multiplier`:** while a shared Redis is unreachable, each worker paces itself
+  in-process with every delay multiplied by this factor, because it can no longer see the fleet's
+  429s. It has no effect with `backend: in_process`.
+- **`fallback_pace_budget_secs`:** a provider fallback chain (`ModelFallbackMiddleware`) stays on
+  the same provider and waits out its gate for up to this long before a 429 moves the chain to the
+  next provider. Other failures (5xx, timeouts, network errors) hop immediately, as before.
+- **`lock_ttl_secs`:** the lifetime of the cache stampede lock a library-built `WarEngine` takes
+  around a cached node (`WarEngine::with_cadence`, shipped in the same release). Choose a value
+  above the p99 duration of a cached node including its retries: the lock is not renewed, and a
+  waiter that outlasts it runs the node itself. `paladin-server` attaches no node cache, so the key
+  has no effect on the shipped server today.
+
+`backend` has no environment override: the Redis URL travels only through the variable
+`url_env` names, so it never appears in a config file, a serialised config or a log line. A
+misspelled key anywhere under `treasurer.cadence` -- including inside `redis:` -- is a load
+error, and an empty `url_env`, or one naming an unset variable, stops the server at boot naming
+`treasurer.cadence.backend.redis.url_env`. An unparseable environment value (for example
+`APP_TREASURER_CADENCE_BASE_BACKOFF_MS=fast`) is ignored and the file value stays.
+
+**Key namespace.** The Redis backend keeps its state under the fixed key prefix
+`paladin:cadence`. Two independent fleets pointed at one Redis server therefore share pacing
+state for the same provider and model: a 429 seen by one slows the other. Give each fleet its own
+Redis server or logical database (`redis://host:6379/2` selects database 2).
+
 ## Token Budget Terminology
 
 Paladin uses `max_tokens` in four independent, non-overlapping senses:
@@ -417,7 +605,7 @@ Paladin uses `max_tokens` in four independent, non-overlapping senses:
 | Per-request completion cap | `LlmRequest` metadata `"max_tokens"` (OpenAI/DeepSeek fallback-override); `ANTHROPIC_MAX_TOKENS` env var, read by `AnthropicConfig::from_env()` (Anthropic, required, env-only — no YAML key) | provider adapters (`crates/paladin-llm/src/openai/adapter.rs`, `crates/paladin-llm/src/anthropic/adapter.rs`) |
 | Run-level budget cap | `agent_runtime.token_budget.max_tokens` | `src/application/services/paladin/middleware/limits.rs` |
 
-Any future spend-governance cap uses a distinct key, `allowance`, never `max_tokens`.
+The spend-governance cap is a distinct key, `treasurer.allowance` (operator-currency amounts, never a token count), described in [Treasurer allowances](#treasurer-allowances). On the HTTP agent routes the run-level budget and the allowance meet: the run is capped at the tightest of `agent_runtime.token_budget.max_tokens` and the token figure derived from the caller's remaining allowance (see [The derived token budget on agent routes](#the-derived-token-budget-on-agent-routes)).
 
 ## Autonomous Features
 
@@ -494,13 +682,6 @@ arsenal:
       server_type: "stdio"
       command: "uvx"
       args: ["mcp-web-search"]
-
-battalion:
-  error_strategy: "retry_then_continue"
-  max_concurrent_paladins: 10
-  retry:
-    max_attempts: 3
-    exponential_backoff: true
 
 herald:
   default_formatter: "markdown"

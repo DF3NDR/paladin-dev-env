@@ -2,15 +2,15 @@
 Field Version Service
 
 The Field Version Service manages versioning for Field entities. Fields are child
-entities of Nodes and can have independent versioning enabled. This service tracks
+entities of Entities and can have independent versioning enabled. This service tracks
 changes to individual fields and maintains their history.
 
-This allows for granular version control where only specific fields of a node
+This allows for granular version control where only specific fields of an entity
 are versioned, similar to Drupal's field-level revision system.
 */
 
 use crate::base::entity::field::Field;
-use crate::base::service::node_version_service::{ChangeType, HashAlgorithm, VersioningError};
+use crate::base::service::entity_version_service::{ChangeType, HashAlgorithm, VersioningError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -97,7 +97,7 @@ pub trait FieldVersionRepository<T> {
 /// use paladin_core::base::service::field_version_service::{
 ///     FieldVersion, FieldVersionRepository, FieldVersionService,
 /// };
-/// use paladin_core::base::service::node_version_service::VersioningError;
+/// use paladin_core::base::service::entity_version_service::VersioningError;
 /// use std::sync::Arc;
 /// use uuid::Uuid;
 ///

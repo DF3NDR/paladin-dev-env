@@ -188,7 +188,7 @@ setup_docker_environment() {
 
     # Start test services
     log_step "Starting test services..."
-    docker compose -f "$DOCKER_COMPOSE_TEST_FILE" up -d redis-test minio-test minio-test-init
+    docker compose -f "$DOCKER_COMPOSE_TEST_FILE" up -d --wait redis-test rustfs-test
 
     # Export the service coordinates before waiting: wait_for_services reads
     # USE_EXTERNAL_TEST_SERVICES and the TEST_* host/port vars, and the script
@@ -243,22 +243,22 @@ wait_for_services() {
             sleep 1
         done
 
-        # Wait for MinIO
+        # Wait for the object store (RustFS in dev/test/CI; the TEST_MINIO_* names are unchanged)
         local minio_host minio_port
         minio_host=$(echo "$TEST_MINIO_ENDPOINT" | cut -d: -f1)
         minio_port=$(echo "$TEST_MINIO_ENDPOINT" | cut -d: -f2)
 
-        log_info "Checking MinIO at $TEST_MINIO_ENDPOINT"
+        log_info "Checking RustFS at $TEST_MINIO_ENDPOINT"
         for i in {1..30}; do
-            if curl -f "http://$TEST_MINIO_ENDPOINT/minio/health/live" &> /dev/null; then
-                log_success "MinIO is ready"
+            if curl -f "http://$TEST_MINIO_ENDPOINT/health/ready" &> /dev/null; then
+                log_success "RustFS is ready"
                 break
             elif nc -z "$minio_host" "$minio_port" &> /dev/null; then
-                log_info "MinIO port is open, waiting for service..."
+                log_info "RustFS port is open, waiting for service..."
             fi
 
             if [[ $i -eq 30 ]]; then
-                log_error "MinIO not available after 30 attempts"
+                log_error "RustFS not available after 30 attempts"
                 exit 1
             fi
 

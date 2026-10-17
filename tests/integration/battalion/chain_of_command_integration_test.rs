@@ -39,7 +39,7 @@ impl PaladinPort for IntegrationMockPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
         // Log the call
         let mut log = self.call_log.lock().await;
-        log.push((paladin.node.name.clone(), input.to_string()));
+        log.push((paladin.data.name.clone(), input.to_string()));
         drop(log);
 
         // Get next response
@@ -47,7 +47,7 @@ impl PaladinPort for IntegrationMockPort {
         let response = if !responses.is_empty() {
             responses.remove(0)
         } else {
-            format!("{} processed: {}", paladin.node.name, input)
+            format!("{} processed: {}", paladin.data.name, input)
         };
 
         Ok(PaladinResult {

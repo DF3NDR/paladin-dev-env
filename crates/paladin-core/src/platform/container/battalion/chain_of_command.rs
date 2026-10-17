@@ -206,7 +206,7 @@ impl ChainOfCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::base::entity::node::Node;
+    use crate::base::entity::Entity;
     use crate::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 
     fn create_test_paladin(name: &str) -> Paladin {
@@ -222,7 +222,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     #[test]
@@ -302,9 +302,9 @@ mod tests {
 
         let chain = ChainOfCommand::new(commander, vec![specialist], config).unwrap();
 
-        assert_eq!(chain.commander().node.name, "Commander");
+        assert_eq!(chain.commander().data.name, "Commander");
         assert_eq!(chain.specialists().len(), 1);
-        assert_eq!(chain.specialists()[0].node.name, "Specialist");
+        assert_eq!(chain.specialists()[0].data.name, "Specialist");
         assert_eq!(chain.config().name, "test_chain");
     }
 }

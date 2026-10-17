@@ -8,8 +8,8 @@
     8080, // Main application
     9092, // Metrics/monitoring (host port, remapped from 9090)
     6379, // Redis
-    9000, // MinIO API
-    9001 // MinIO Console
+    9000, // RustFS API
+    9001 // RustFS Console
   ],
   "portsAttributes": {
     "8080": {
@@ -25,11 +25,11 @@
       "onAutoForward": "silent"
     },
     "9000": {
-      "label": "MinIO API",
+      "label": "RustFS API",
       "onAutoForward": "silent"
     },
     "9001": {
-      "label": "MinIO Console",
+      "label": "RustFS Console",
       "onAutoForward": "notify"
     }
   },

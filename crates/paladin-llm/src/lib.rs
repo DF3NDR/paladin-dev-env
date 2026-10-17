@@ -48,6 +48,11 @@
 #![warn(missing_docs)]
 #![allow(rustdoc::broken_intra_doc_links)]
 
+/// Rate pacing (PACE-02, D-01/D-07/D-08): [`cadence::CadenceLlmAdapter`] decorates an
+/// `Arc<dyn LlmPort>` with a per-(provider, model) gate that a provider 429 opens, over the shared
+/// [`paladin_ports::output::cadence_port::CadencePort`]. Not feature-gated -- it needs no provider
+/// adapter itself, mirroring [`pricing`] and [`fallback`].
+pub mod cadence;
 /// Shared configuration types for LLM providers and request behavior.
 #[allow(missing_docs)]
 pub mod config;
@@ -89,13 +94,27 @@ pub mod http_status;
 /// LLM-backed content analysis service orchestration.
 #[allow(missing_docs)]
 pub mod llm_analysis_service;
+/// Treasurer per-call pricing (D-08/D-09, ADR-0052): [`pricing::PricingLlmAdapter`] decorates
+/// an `Arc<dyn LlmPort>` with cost from an operator [`paladin_core::platform::container::cost::PriceTable`].
+/// Not feature-gated — it needs no provider adapter itself, mirroring [`fallback`].
+pub mod pricing;
 /// Factory for selecting provider adapters from runtime configuration.
 #[allow(missing_docs)]
 pub mod provider_factory;
+// Documented by its own inner `//!` block (a `pub mod` carries one doc form, never both).
+pub mod rate_limit_headers;
 /// Credential redaction shared by every provider adapter (not feature-gated
 /// — reused by the shared compatible core and by bespoke adapters alike).
 #[allow(missing_docs)]
 pub mod redaction;
+/// The per-model profile registry (ADR-0061, D-05..D-07): seeded entry, config
+/// [`registry::ModelOverride`], adapter-wide fallback, and the visible unknown-model fallback.
+/// Not feature-gated -- every adapter resolves its profile through it.
+pub mod registry;
+/// The one wire-time sampling filter every request builder calls (ADR-0061): a set parameter is
+/// sent only when the model's profile admits it, every omission is logged once and recorded under
+/// [`sampling::PARAMS_OMITTED_METADATA_KEY`]. Not feature-gated.
+pub mod sampling;
 /// Application-layer services composing this crate's ports (provider capabilities,
 /// [`paladin_ports::output::token_counter_port::TokenCounterPort`]) rather than
 /// implementing a provider adapter themselves. Houses [`services::commissary`], the
@@ -103,6 +122,61 @@ pub mod redaction;
 /// priority-ordered allocator with explicit truncation markers).
 #[allow(missing_docs)]
 pub mod services;
+// The one user-turn text helper every provider adapter's request builder calls (PARITY-08,
+// handoff B-4). Crate-private; documented by its own inner `//!` block; compiled only when a
+// provider adapter is.
+#[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "gemini",
+    feature = "openai-compatible"
+))]
+mod turn;
+// The one rule deciding what a completion's text and finish reason mean: refusal, content filter,
+// function call, empty on any stop (PARITY-05, D-09/D-11a). Crate-private; documented by its own
+// inner `//!` block; compiled only when an adapter that calls it is.
+#[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod response_guards;
+// Reassembles complete SSE lines from arbitrarily split network reads so a frame that straddles
+// two reads is not dropped (CR-02). Crate-private; compiled with the adapters that stream.
+#[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod sse;
+// The shared saturating exponential back-off for the retrying adapters (WR-02). Crate-private.
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod backoff;
 /// The shared context-window precedence resolver (PRIM-04, D-01/D-02): one
 /// pure function, [`window::resolve_context_window`], that every consumer of
 /// [`paladin_ports::output::llm_port::ProviderCapabilities`] calls through
@@ -110,6 +184,10 @@ pub mod services;
 /// feature-gated — both [`services::commissary`] and the facade's
 /// `HistoryTrimmer` need it unconditionally.
 pub mod window;
+
+// Mock-endpoint plumbing shared by every adapter's wire tests; not gated on any adapter feature.
+#[cfg(test)]
+mod test_support;
 
 #[cfg(any(
     feature = "kimi",

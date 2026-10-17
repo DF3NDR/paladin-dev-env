@@ -219,6 +219,7 @@ impl ExecutionOverlay {
                     duration_ms,
                     usage,
                     cache_hit,
+                    ..
                 } => {
                     visits.entry(node_id.clone()).or_default().push(Visit {
                         superstep: *superstep,
@@ -577,6 +578,7 @@ mod tests {
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 10,
                     usage: TokenUsage::new(5, 0),
+                    cost: None,
                     cache_hit: false,
                 },
             ),
@@ -672,6 +674,7 @@ mod tests {
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 10,
                     usage: TokenUsage::new(5, 0),
+                    cost: None,
                     cache_hit: false,
                 },
             ),
@@ -736,6 +739,7 @@ mod tests {
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 10,
                     usage: TokenUsage::new(5, 0),
+                    cost: None,
                     cache_hit: false,
                 },
             ),
@@ -766,6 +770,7 @@ mod tests {
                     outcome: NodeOutcomeKind::Succeeded,
                     duration_ms: 10,
                     usage: TokenUsage::new(5, 0),
+                    cost: None,
                     cache_hit: false,
                 },
             ),

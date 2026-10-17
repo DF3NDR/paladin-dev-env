@@ -289,8 +289,8 @@ impl ChainOfCommandExecutionService {
             .map(|p| {
                 format!(
                     "- {}: {}",
-                    p.node.name,
-                    p.node.system_prompt.lines().next().unwrap_or("")
+                    p.data.name,
+                    p.data.system_prompt.lines().next().unwrap_or("")
                 )
             })
             .collect();
@@ -336,7 +336,7 @@ Important: Use the exact specialist names shown above. Separate multiple special
                     chain
                         .specialists()
                         .iter()
-                        .find(|s| s.node.name == *name)
+                        .find(|s| s.data.name == *name)
                         .ok_or_else(|| {
                             BattalionError::ExecutionError(format!(
                                 "Commander selected non-existent specialist: {}",
@@ -430,7 +430,7 @@ Important: Use the exact specialist names shown above. Separate multiple special
             join_set.spawn(async move {
                 let result: Result<PaladinResult, PaladinError> =
                     port_clone.execute(&specialist_clone, &input_clone).await;
-                (specialist_clone.node.name.clone(), result)
+                (specialist_clone.data.name.clone(), result)
             });
         }
 
@@ -493,10 +493,10 @@ Important: Use the exact specialist names shown above. Separate multiple special
         // Generate a unique ID for this chain based on commander + specialists
         let chain_id = format!(
             "{}:{}",
-            chain.commander().node.name,
+            chain.commander().data.name,
             specialists
                 .iter()
-                .map(|s| s.node.name.as_str())
+                .map(|s| s.data.name.as_str())
                 .collect::<Vec<_>>()
                 .join(",")
         );
@@ -518,7 +518,7 @@ Important: Use the exact specialist names shown above. Separate multiple special
             .await?;
 
         Ok(DelegationResult {
-            selected_specialists: vec![selected_specialist.node.name.clone()],
+            selected_specialists: vec![selected_specialist.data.name.clone()],
             reasoning: format!(
                 "Round-robin delegation selected specialist {} of {}",
                 current_index + 1,
@@ -566,7 +566,7 @@ Important: Use the exact specialist names shown above. Separate multiple special
             .await?;
 
         Ok(DelegationResult {
-            selected_specialists: vec![selected_specialist.node.name.clone()],
+            selected_specialists: vec![selected_specialist.data.name.clone()],
             reasoning: format!("Custom delegation using custom logic: {}", logic),
             outputs: vec![result.output],
         })

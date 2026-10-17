@@ -6,8 +6,10 @@
 //!
 //! `resolve_limit` is a thin call-through to
 //! [`paladin_llm::window::resolve_context_window`] -- the config table
-//! (`config.model_context_limits.get(model)`), then the constructor's own
-//! `llm_port.get_capabilities().max_context_tokens`, then
+//! (`config.model_context_limits.get(model)`), then the port's window for THIS model
+//! (`paladin_llm::window::effective_capabilities`: the model profile's
+//! `context_window` when the port has one, else
+//! `llm_port.get_capabilities().max_context_tokens`; ADR-0061, D-05), then
 //! `config.default_context_tokens` under the lenient
 //! [`paladin_llm::window::WindowFallbackPolicy::Default`] policy, which
 //! always resolves. The resolved value AND which step produced it are
@@ -56,7 +58,9 @@ use log::{debug, warn};
 use crate::application::services::paladin::error::PaladinError;
 use crate::config::agent_runtime::HistoryTrimmerConfig;
 use crate::core::platform::container::garrison::GarrisonEntry;
-use paladin_llm::window::{WindowFallbackPolicy, WindowSource, resolve_context_window};
+use paladin_llm::window::{
+    WindowFallbackPolicy, WindowSource, effective_capabilities, resolve_context_window,
+};
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_ports::output::token_counter_port::TokenCounterPort;
 
@@ -76,7 +80,8 @@ impl HistoryTrimmer {
     /// Construct a `HistoryTrimmer`.
     ///
     /// `llm_port` is the SERVICE's own port -- D-14's "the service port's
-    /// `get_capabilities()`" -- consulted only when `model` has no entry in
+    /// `get_capabilities()`", overlaid with the per-model profile window when it
+    /// has one -- consulted only when `model` has no entry in
     /// `config.model_context_limits`.
     pub fn new(
         config: HistoryTrimmerConfig,
@@ -95,7 +100,7 @@ impl HistoryTrimmer {
     /// [`resolve_context_window`] under the lenient
     /// [`WindowFallbackPolicy::Default`] policy, which always resolves.
     fn resolve_limit(&self, model: &str) -> (u32, WindowSource) {
-        let capabilities = self.llm_port.get_capabilities();
+        let capabilities = effective_capabilities(self.llm_port.as_ref(), model);
         match resolve_context_window(
             model,
             Some(&self.config.model_context_limits),
@@ -142,7 +147,7 @@ impl ExecutionMiddleware for HistoryTrimmer {
             return Ok(MiddlewareFlow::Continue);
         }
 
-        let model = cx.paladin().node.model.clone();
+        let model = cx.paladin().data.model.clone();
         let (limit, source) = self.resolve_limit(&model);
         let budget = limit.saturating_sub(self.config.reserve_for_response);
         debug!(
@@ -195,11 +200,11 @@ mod tests {
     use crate::application::services::paladin::middleware::{
         ModelCallContext, PromptAssembly, PromptSection, SectionPlacement,
     };
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
     use crate::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData};
     use paladin_ports::output::llm_port::{
-        LlmError, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
+        LlmError, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities, StreamingResponse,
     };
     use std::collections::HashMap;
 
@@ -208,6 +213,9 @@ mod tests {
     /// never called by these tests and returns a `ProcessingError`.
     struct CapabilityOnlyLlmPort {
         max_context_tokens: Option<u32>,
+        /// The `context_window` of the model profile the port reports for the model id
+        /// `"m"` (and only that id); `None` means the port reports no profile at all.
+        profile_window: Option<u32>,
     }
 
     #[async_trait::async_trait]
@@ -250,6 +258,13 @@ mod tests {
                 ..ProviderCapabilities::default()
             }
         }
+
+        fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+            match (model, self.profile_window) {
+                ("m", Some(window)) => Some(ModelProfile::new().with_context_window(window)),
+                _ => None,
+            }
+        }
     }
 
     fn make_paladin(model: &str) -> Paladin {
@@ -259,7 +274,7 @@ mod tests {
             max_loops: MaxLoops::Fixed(1),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn make_counter() -> Arc<dyn TokenCounterPort> {
@@ -267,7 +282,22 @@ mod tests {
     }
 
     fn make_llm_port(max_context_tokens: Option<u32>) -> Arc<dyn LlmPort> {
-        Arc::new(CapabilityOnlyLlmPort { max_context_tokens })
+        Arc::new(CapabilityOnlyLlmPort {
+            max_context_tokens,
+            profile_window: None,
+        })
+    }
+
+    /// As [`make_llm_port`], but the port also reports a model profile with `profile_window`
+    /// for the model id `"m"`.
+    fn make_profiled_llm_port(
+        max_context_tokens: Option<u32>,
+        profile_window: Option<u32>,
+    ) -> Arc<dyn LlmPort> {
+        Arc::new(CapabilityOnlyLlmPort {
+            max_context_tokens,
+            profile_window,
+        })
     }
 
     fn base_config() -> HistoryTrimmerConfig {
@@ -333,6 +363,60 @@ mod tests {
         let (limit, source) = trimmer.resolve_limit("gpt-4");
         assert_eq!(limit, 500);
         assert!(source.as_str().contains("default"));
+    }
+
+    /// ADR-0061, D-05 (plan 50-07): a port whose profile for `m` declares a window larger
+    /// than its adapter-wide capability makes the trimmer ration against the profile window,
+    /// reported as the provider-capabilities step; a model the port has no profile for keeps
+    /// the adapter-wide window.
+    #[test]
+    fn history_trimmer_reads_the_per_model_window() {
+        let trimmer = HistoryTrimmer::new(
+            base_config(),
+            make_counter(),
+            make_profiled_llm_port(Some(8_000), Some(1_048_576)),
+        );
+
+        let (limit, source) = trimmer.resolve_limit("m");
+        assert_eq!(limit, 1_048_576);
+        assert_eq!(source, WindowSource::ProviderCapabilities);
+
+        let (other_limit, other_source) = trimmer.resolve_limit("other");
+        assert_eq!(other_limit, 8_000);
+        assert_eq!(other_source, WindowSource::ProviderCapabilities);
+    }
+
+    /// The trimmer's own config table still wins over a profile window when it names the
+    /// model.
+    #[test]
+    fn the_config_table_still_beats_the_profile_window() {
+        let mut config = base_config();
+        config.model_context_limits.insert("m".to_string(), 1_000);
+        let trimmer = HistoryTrimmer::new(
+            config,
+            make_counter(),
+            make_profiled_llm_port(Some(8_000), Some(1_048_576)),
+        );
+
+        let (limit, source) = trimmer.resolve_limit("m");
+        assert_eq!(limit, 1_000);
+        assert_eq!(source, WindowSource::ConfigTable);
+    }
+
+    /// The `Default` policy still applies when neither the port nor its profile declares a
+    /// window, and a profile that declares no window changes nothing.
+    #[test]
+    fn the_default_policy_still_applies_when_nothing_declares_a_window() {
+        let trimmer = HistoryTrimmer::new(
+            base_config(),
+            make_counter(),
+            make_profiled_llm_port(None, None),
+        );
+        assert_eq!(
+            trimmer.resolve_limit("m"),
+            (500, WindowSource::Default),
+            "no port window and no profile: the configured default"
+        );
     }
 
     /// Test 4: system prompt, retrieved context, current input and

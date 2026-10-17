@@ -82,18 +82,23 @@ jobs:
           --health-timeout 5s
           --health-retries 5
 
-      minio:
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+      rustfs:
+        # Pinned exact tag; manifest-list digest
+        # sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff
+        # (no `command:` key: the image entrypoint appends /data)
+        image: rustfs/rustfs:1.0.0
         ports:
           - 9000:9000
         env:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
+          RUSTFS_ACCESS_KEY: testuser
+          RUSTFS_SECRET_KEY: testpass123
+          RUSTFS_CONSOLE_ENABLE: "false"
         options: >-
-          --health-cmd "curl -f http://localhost:9000/minio/health/live"
-          --health-interval 30s
-          --health-timeout 20s
-          --health-retries 3
+          --health-cmd "curl -f http://localhost:9000/health/ready"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+          --health-start-period 5s
 
       mysql:
         image: mysql:8.0
@@ -142,7 +147,7 @@ jobs:
       - name: Run tests
         env:
           REDIS_URL: redis://redis:6379
-          MINIO_ENDPOINT: minio:9000
+          MINIO_ENDPOINT: rustfs:9000
           DATABASE_URL: mysql://paladin:paladinpass@mysql:3306/paladin
         run: cargo test --all-features
 ```
@@ -229,11 +234,15 @@ test:
   stage: test
   services:
     - redis:7-alpine
-    - quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+    - name: rustfs/rustfs:1.0.0
+      alias: rustfs
     - mysql:8.0
   variables:
+    RUSTFS_ACCESS_KEY: "testuser"
+    RUSTFS_SECRET_KEY: "testpass123"
+    RUSTFS_CONSOLE_ENABLE: "false"
     REDIS_URL: "redis://redis:6379"
-    MINIO_ENDPOINT: "minio:9000"
+    MINIO_ENDPOINT: "rustfs:9000"
     MYSQL_ROOT_PASSWORD: "rootpassword"
     MYSQL_DATABASE: "paladin"
     DATABASE_URL: "mysql://root:rootpassword@mysql:3306/paladin"
@@ -324,11 +333,11 @@ jobs:
     docker:
       - image: rust:1.93-slim-bullseye
       - image: redis:7-alpine
-      - image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
-        command: server /data
+      - image: rustfs/rustfs:1.0.0
         environment:
-          MINIO_ROOT_USER: minioadmin
-          MINIO_ROOT_PASSWORD: minioadmin
+          RUSTFS_ACCESS_KEY: testuser
+          RUSTFS_SECRET_KEY: testpass123
+          RUSTFS_CONSOLE_ENABLE: "false"
       - image: mysql:8.0
         environment:
           MYSQL_ROOT_PASSWORD: rootpassword
@@ -504,8 +513,11 @@ jobs:
     services:
       redis:
         image: redis:7-alpine
-      minio:
-        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
+      rustfs:
+        image: rustfs/rustfs:1.0.0
+        env:
+          RUSTFS_ACCESS_KEY: testuser
+          RUSTFS_SECRET_KEY: testpass123
       mysql:
         image: mysql:8.0
         env:
@@ -587,7 +599,7 @@ container:
 - name: Wait for services
   run: |
     until nc -z redis 6379; do sleep 1; done
-    until nc -z minio 9000; do sleep 1; done
+    until nc -z rustfs 9000; do sleep 1; done
 ```
 
 ## Resources

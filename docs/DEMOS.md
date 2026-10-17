@@ -42,7 +42,7 @@ end-to-end Paladin run.
 
 Runs three `Formation` pipelines — sequential Paladin execution where each Paladin's output
 becomes the next Paladin's input — covering a research→analysis→summary chain, a formation with
-shared context, and a `ContinueOnError` resilience strategy.
+shared context, and an `Absorb` error handler that continues past a failed Paladin.
 
 ![Battalion Formation: three sequential pipelines of Paladins, each stage's output feeding the next stage's input](assets/recordings/battalion-formation.gif)
 

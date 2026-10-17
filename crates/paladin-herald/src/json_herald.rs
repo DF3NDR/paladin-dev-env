@@ -202,7 +202,7 @@ impl Herald for JsonHerald {
         // "usage" carries the full TokenUsage split (D-21); "total_tokens" is
         // kept beside it as a derived convenience for existing consumers
         // (D-08 permits coexistence as long as it is never the sole carrier).
-        let json = json!({
+        let mut json = json!({
             "type": "metadata",
             "execution_id": metadata.execution_id,
             "duration_ms": metadata.duration_ms,
@@ -210,8 +210,19 @@ impl Herald for JsonHerald {
             "usage": metadata.token_usage,
             "total_tokens": metadata.token_usage.total_tokens,
             "cost_estimate": metadata.cost_estimate,
+            "currency": metadata.cost_currency(),
             "timestamp": chrono::Utc::now().to_rfc3339(),
         });
+        // D-18: the allowance line is added only when a warning was won, so a run without one
+        // renders the exact same object as before.
+        if let Some(line) = metadata.allowance_warning_display() {
+            json["allowance_warning"] = Value::String(line);
+        }
+        // D-19: the halt line follows the same convention -- added only when the Treasurer halted
+        // the run, so a run without a halt reason renders the exact same object as before.
+        if let Some(line) = metadata.halt_reason_display() {
+            json["halt_reason"] = Value::String(line);
+        }
 
         let serialized = serde_json::to_string(&json).map_err(|e| {
             HeraldError::SerializationError(format!("Metadata serialization failed: {}", e))
@@ -246,8 +257,11 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use paladin_core::platform::container::battalion::{
-        BattalionStatus, BattalionStrategy, NodeError, TokenUsage,
+        BattalionStatus, BattalionStrategy, TokenUsage,
     };
+    use paladin_core::platform::container::node_error::{NodeError, NodeErrorSource};
+    use paladin_core::platform::container::transience::Transience;
+    use paladin_core::platform::container::waypoint::NodeId;
     use paladin_ports::output::paladin_port::StopReason;
     use uuid::Uuid;
 
@@ -430,8 +444,12 @@ mod tests {
             paladin_success_count: 2,
             paladin_failure_count: 1,
             node_errors: vec![NodeError {
-                node_name: "Herald".to_string(),
-                error: "connection refused".to_string(),
+                node_id: NodeId::new("Herald"),
+                attempt: 1,
+                transience: Transience::Transient,
+                source: NodeErrorSource::Function {
+                    message: "connection refused".to_string(),
+                },
             }],
         };
 
@@ -447,8 +465,54 @@ mod tests {
             263
         );
         assert_eq!(parsed["node_errors"].as_array().unwrap().len(), 1);
-        assert_eq!(parsed["node_errors"][0]["node_name"], "Herald");
-        assert_eq!(parsed["node_errors"][0]["error"], "connection refused");
+        assert_eq!(parsed["node_errors"][0]["node_id"], "Herald");
+        assert_eq!(parsed["node_errors"][0]["attempt"], 1);
+        assert_eq!(parsed["node_errors"][0]["transience"], "Transient");
+        assert!(parsed["node_errors"][0]["source"].is_object());
+    }
+
+    #[test]
+    fn json_herald_serialises_structured_node_errors() {
+        use paladin_core::platform::container::node_error::TimeoutKind;
+
+        let herald = JsonHerald::new();
+        let mut result = create_test_battalion_result();
+        result.node_errors = vec![
+            NodeError {
+                node_id: NodeId::new("Scout"),
+                attempt: 2,
+                transience: Transience::Transient,
+                source: NodeErrorSource::Timeout(TimeoutKind::Run),
+            },
+            NodeError {
+                node_id: NodeId::new("Sentinel"),
+                attempt: 1,
+                transience: Transience::Permanent,
+                source: NodeErrorSource::Llm {
+                    kind: "LlmFailure".to_string(),
+                    status: Some(401),
+                    provider: Some("openai".to_string()),
+                    message: "[REDACTED] rejected".to_string(),
+                },
+            },
+        ];
+
+        let formatted = herald.format_battalion_result(&result).unwrap();
+        let parsed: Value = serde_json::from_str(&formatted).unwrap();
+
+        let errors = parsed["node_errors"].as_array().unwrap();
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0]["node_id"], "Scout");
+        assert_eq!(errors[0]["attempt"], 2);
+        assert_eq!(errors[0]["transience"], "Transient");
+        assert_eq!(errors[0]["source"]["Timeout"], "Run");
+        assert_eq!(errors[1]["node_id"], "Sentinel");
+        assert_eq!(errors[1]["transience"], "Permanent");
+        assert!(errors[1]["source"].is_object());
+        assert_eq!(errors[1]["source"]["Llm"]["status"], 401);
+        // The v0.10 keys are gone.
+        assert!(errors[0].get("node_name").is_none());
+        assert!(errors[0].get("error").is_none());
     }
 
     #[test]
@@ -740,6 +804,61 @@ mod tests {
         assert_eq!(meta["total_tokens"], meta["usage"]["total_tokens"]);
     }
 
+    // --- PRICE-03 / D-04: currency sibling field beside cost_estimate ------
+
+    #[test]
+    fn finalize_stream_emits_currency_beside_cost_estimate() {
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = JsonHerald::new();
+        let cost = Cost::new(45_000_000, CurrencyCode::new("USD").unwrap());
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("gpt-4".to_string())
+            .token_usage(TokenUsage::new(1_000, 2_000))
+            .cost(&cost)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+        let parsed: Value = serde_json::from_str(formatted.trim_end()).unwrap();
+
+        assert_eq!(parsed["cost_estimate"], 0.045);
+        assert_eq!(parsed["currency"], "USD");
+    }
+
+    #[test]
+    fn finalize_stream_unpriced_has_null_currency() {
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let herald = JsonHerald::new();
+        let metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::new_v4())
+            .start_time(chrono::Utc::now())
+            .model_used("gpt-4".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .duration_ms(1234)
+            .build()
+            .unwrap();
+
+        let formatted = herald.finalize_stream(&metadata).unwrap();
+        let parsed: Value = serde_json::from_str(formatted.trim_end()).unwrap();
+
+        assert!(parsed["cost_estimate"].is_null());
+        assert!(parsed["currency"].is_null());
+
+        // Every pre-existing key is still present.
+        assert_eq!(parsed["type"], "metadata");
+        assert!(parsed["execution_id"].is_string());
+        assert_eq!(parsed["duration_ms"], 1234);
+        assert_eq!(parsed["model_used"], "gpt-4");
+        assert!(parsed["usage"].is_object());
+        assert_eq!(parsed["total_tokens"], 500);
+        assert!(parsed["timestamp"].is_string());
+    }
+
     // --- ACCT-04 / D-21: stable six-key usage object -----------------------
 
     #[test]
@@ -856,5 +975,90 @@ mod tests {
 
         let roundtripped: TokenUsage = serde_json::from_value(parsed["usage"].clone()).unwrap();
         assert_eq!(roundtripped, original_usage);
+    }
+
+    fn allowance_metadata(with_warning: bool) -> ExecutionMetadata {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceScopeKind, AllowanceWarning,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        use paladin_ports::output::llm_port::TokenUsage;
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let cost = Cost::new(45_000_000, usd.clone());
+        let mut metadata = ExecutionMetadata::builder()
+            .execution_id(uuid::Uuid::nil())
+            .start_time(chrono::DateTime::UNIX_EPOCH)
+            .model_used("gpt-4".to_string())
+            .token_usage(TokenUsage::new(300, 200))
+            .cost(&cost)
+            .build()
+            .unwrap();
+        if with_warning {
+            metadata.with_allowance_warnings(&[AllowanceWarning {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(20_500_000_000, usd.clone()),
+                ceiling: Cost::new(25_000_000_000, usd),
+                window_start: None,
+                window_end: None,
+                warn_at: 80,
+            }]);
+        }
+        metadata
+    }
+
+    #[test]
+    fn finalize_stream_adds_the_allowance_key_only_when_present() {
+        let herald = JsonHerald::new();
+        let with = herald.finalize_stream(&allowance_metadata(true)).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        let with: Value = serde_json::from_str(with.trim_end()).unwrap();
+        let without: Value = serde_json::from_str(without.trim_end()).unwrap();
+        assert_eq!(
+            with["allowance_warning"],
+            "\u{26A0} allowance: 82% of 25.0000 USD (tenant, lifetime cap)"
+        );
+        assert_eq!(
+            with.to_string().matches("allowance:").count(),
+            1,
+            "exactly one allowance line"
+        );
+        assert!(without.get("allowance_warning").is_none());
+        // Same key set as before the change, plus the one new key.
+        let mut with_keys: Vec<_> = with.as_object().unwrap().keys().cloned().collect();
+        with_keys.retain(|k| k != "allowance_warning");
+        let without_keys: Vec<_> = without.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(with_keys, without_keys);
+    }
+
+    /// D-19: the halt key is added only when the run was halted; every other key is unchanged.
+    #[test]
+    fn finalize_stream_adds_the_halt_key_only_when_present() {
+        use paladin_core::platform::container::allowance::HaltReason;
+
+        let herald = JsonHerald::new();
+        let mut halted = allowance_metadata(false);
+        halted.with_halt_reason(&HaltReason::LedgerUnavailable);
+        let with = herald.finalize_stream(&halted).unwrap();
+        let without = herald.finalize_stream(&allowance_metadata(false)).unwrap();
+
+        let with: Value = serde_json::from_str(with.trim_end()).unwrap();
+        let without: Value = serde_json::from_str(without.trim_end()).unwrap();
+        assert_eq!(
+            with["halt_reason"],
+            "\u{26D4} halted: allowance could not be evaluated (ledger unavailable)"
+        );
+        assert_eq!(
+            with.to_string().matches("halted:").count(),
+            1,
+            "exactly one halt line"
+        );
+        assert!(without.get("halt_reason").is_none());
+        let mut with_keys: Vec<_> = with.as_object().unwrap().keys().cloned().collect();
+        with_keys.retain(|k| k != "halt_reason");
+        let without_keys: Vec<_> = without.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(with_keys, without_keys);
     }
 }

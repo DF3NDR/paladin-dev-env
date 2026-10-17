@@ -7,6 +7,118 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- `HaltReason::herald_line` and `AllowanceWarning::herald_line` no longer render a window ceiling
+  that has no recorded window end as a `lifetime cap`; it now reads `window` (Phase 42 review
+  IN-4). Lifetime and dated window lines are unchanged.
+
+### Added
+
+- Phase 42 (mid-run halt and terminal status, ALLOW-03, ALLOW-05, PLAT-09; ADR-0057):
+  `HaltReason` (`AllowanceExhausted`, `LedgerUnavailable`; `as_str`, `wire_json`, `herald_line`) and
+  `AllowanceRefusal::details_json`; `RunFinishStatus::Cancelled` (the enum is now
+  `#[non_exhaustive]`) and `TraceEvent::RunFinished.halt_reason`; `StopReason::AllowanceHalted`;
+  `DerivedTokenBudget`, `RunScope.derived_token_budget` and `with_derived_token_budget`, and
+  `Admission::with_derived_budget` / `derived_budget`; `Run.halt_reason`; `NoticeKind` (a `kind`
+  field on `NoticeRecord` and `AllowanceNotice`) and `RunEventKind::AllowanceHalted`; the herald
+  helpers `HALT_REASON_METADATA_KEY`, `ExecutionMetadata::with_halt_reason` and
+  `halt_reason_display` (see `MIGRATION.md` §9.2).
+
+- Phase 41 (allowance admission, ALLOW-01/02/04): `platform::container::allowance` module with
+  `AllowanceScopeKind`, `AllowanceLimitKind`, `AllowanceRefusal`, `AllowanceWarning`,
+  `AllowanceNotice`, `Admission`, `NoticeRecord`, `NoticeOutcome`, `LIFETIME_WINDOW_START` and the
+  integer-only `crosses_warn_threshold`; `BalanceQuery` in `treasury_ledger`.
+- `TraceEvent::AllowanceWarning` (the thirteenth variant) and `RunEventKind::AllowanceWarning`
+  (`RunEventKind` is now `#[non_exhaustive]` and gains `as_str`, the one to-string source).
+- `RunSchedule.created_by: Option<RunAttribution>` and `with_created_by`; `RunScope.allowance_warnings`
+  and `with_allowance_warnings`; `ExecutionMetadata::with_allowance_warnings` and
+  `allowance_warning_display` (see `MIGRATION.md` §9.2).
+
+- `platform::container::cost` module: `Cost`, `CurrencyCode`, `CostError`, `PriceRow`,
+  `PriceTable`, `cost_of_call`, `CostTally` — pure `i64` nano-unit fixed-point cost arithmetic, no
+  floating point anywhere in the module (PRICE-02).
+- `PaladinResult.cost: Option<Cost>` and `TraceEvent::NodeFinished`/`RunFinished.cost:
+  Option<Cost>` additive fields, riding beside `usage` everywhere it travels (PRICE-03; see the
+  root `CHANGELOG.md` and `MIGRATION.md` §9.2).
+- `TraceDispatcher::total_cost()`, the synchronous twin of `total_usage()`.
+- `ExecutionMetadataBuilder::cost`, `ExecutionMetadata::cost_currency`/`cost_display`, and
+  `ExecutionMetadata::from_run_finished(record, model_used)` — the engine-path producer built
+  from a completed run's `TraceEvent::RunFinished`.
+- `platform::container::treasury_ledger` module: `LedgerScope` (with the `unattributed()`
+  sentinel), `ReservationId`, `SettlementKey`, `LedgerEntryKind`, `ReserveRequest`/`SettleRequest`/
+  `SettleOutcome`, `SpendGroupBy`/`SpendQuery`/`SpendRow`, `SettlementContext`, and `format_cost`
+  — the ledger's domain value types (LEDGR-01), re-exported from the facade as
+  `core::platform::container::treasury_ledger`.
+- `RunScope.run_id: Option<RunId>` and `RunScope::with_run_id` — additive; `RunScope` stays
+  `#[non_exhaustive]` (LEDGR-04).
+
+- `platform::container::principal` module: `TenantId` (with `TENANT_ID_MAX_LEN` and
+  `TenantIdError`), `PrincipalRef`, `RunAttribution` and `RunReadScope` — the tenant identifier, the
+  principal reference every run submission carries, the persisted attribution and the one shared
+  tenant read-scope rule (TENANT-01, PLAT-07); re-exported from the facade as
+  `core::platform::container::principal`.
+- `Run.submitted_by: Option<RunAttribution>` and `Run::with_submitted_by` — additive under
+  `#[non_exhaustive]`, `#[serde(default, skip_serializing_if)]`, `RUN_SCHEMA_VERSION` unchanged
+  (TENANT-02).
+- `RunScope.ledger_scope: Option<LedgerScope>` and `RunScope::with_ledger_scope` — the ledger
+  scope an agent-kind run or an HTTP agent-execute call settles under (TENANT-02).
+- `LedgerScope::from_attribution(Option<&RunAttribution>)` — the one mapping from a recorded
+  principal to a ledger scope; `None` yields the `unattributed` sentinel (TENANT-02).
+
+### Changed
+
+- Phase 48 (base entity rename, ENTITY-03; ADR-0060): `base::service::node_version_service`
+  becomes `entity_version_service` and its family becomes `EntityVersion`,
+  `EntityVersionMetadata`, `EntityVersionRepository`, `EntityVersionService` and
+  `InMemoryEntityVersionRepository`; `VersioningError::NodeNotFound` becomes `EntityNotFound`; the
+  record's `node_id` / `node_data` become `entity_id` / `entity_data` (also on `VersionHistory` and
+  `VersionComparison`), and `VersioningConfig.max_versions_per_node` becomes
+  `max_versions_per_entity`. `EntityVersion` keeps serde read-aliases for the v0.10 keys so stored
+  version records still load. The unused `Field`, `CollectionType` / `Item`, `element`,
+  `FieldVersionService` and `CollectionVersionService` are retained pending review (D-05); the
+  `base` module rustdoc says why.
+- Phase 48 (base entity rename, ENTITY-01; ADR-0060): persisted entity JSON is written with the
+  new keys and still reads the v0.10 ones. `Entity<T>` stores its payload under `data` (read-alias
+  `node`), `ContentItem` and `PromptItem` store their entity under `entity` (read-alias `node`), and
+  `EntityVersion` stores `entity_id` / `entity_data`. A document carrying both spellings is
+  rejected; a v0.10 binary cannot read v0.11 output. See `MIGRATION.md` 9.1 M-B-12 and 9.4.
+- The `cost_estimate`/`total_cost()` rustdoc reserved-note on `ExecutionMetadata` now reads
+  "produced by the Treasurer" instead of "no in-tree producer yet" (D-12).
+- Phase 44 (legacy clean break, LEGACY-01, LEGACY-02; ADR-0059): `BattalionConfig` gains
+  `#[serde(default)] aegis: Aegis`, `with_aegis` and `validate_aegis` (rejects `max_attempts == 0`,
+  `Route` and `Custom` handlers, `RetryPredicate::Custom` and zero-length durations, and ignores
+  `cache`). The `aegis` rustdoc is the per-pattern contract: a per-attempt timeout, a retry whose
+  `max_attempts` counts total attempts, and `Absorb` to continue past a failure. A v0.10
+  `BattalionConfig` document still deserializes; its removed keys are ignored and `aegis` is
+  `Aegis::default()`. `BattalionConfig::new` arms no timeout. See `MIGRATION.md` 9.1 M-B-06 and
+  M-B-07 and the Phase 44 9.2 rows.
+- Phase 44 (LEGACY-01; ADR-0059; one-way): `BattalionResult.node_errors` is retyped from
+  `Vec<battalion::NodeError>` to `Vec<node_error::NodeError>`, whose element is
+  `{ node_id, attempt, transience, source }`. A stored v0.10 document with a non-empty
+  `node_errors` no longer deserializes; an empty or absent array still does. See `MIGRATION.md`
+  9.1 M-B-08 and 9.4.
+
+### Removed
+
+- Phase 44 (LEGACY-01, LEGACY-02, LEGACY-03; ADR-0059; a clean break with no shim, see `MIGRATION.md`
+  9.2): the legacy Battalion `RetryPolicy`, `ErrorStrategy` and `NodeError`; `BattalionConfig`'s
+  `timeout_seconds`, `retry_policy` and `error_strategy` fields and its `with_timeout`,
+  `with_retry_policy` and `with_error_strategy` builders; `BattalionError::Timeout`;
+  `ConclaveError::Timeout`; `ConclaveConfig::timeout_seconds` and `ConclaveConfig::with_timeout`
+  (`Conclave::validate` now delegates the timeout and retry-policy checks to `validate_aegis`); and
+  `PaladinError::LlmError`, `PaladinError::is_retryable` and `PaladinError::is_terminal`. Use
+  `BattalionConfig.aegis`, the structured `node_error::NodeError`, `PaladinError::LlmFailure` and
+  `PaladinError::transience()`.
+- Phase 48 (ENTITY-01..05; ADR-0060; a clean break with no shim, see `MIGRATION.md` 9.2): the
+  generic base wrapper `Node<T>` and `base::entity::node`, replaced by `base::entity::Entity<T>` with
+  payload `data`; the `NodeVersion*` family and `base::service::node_version_service`, replaced by
+  `EntityVersion*` in `entity_version_service`; the Citadel module's placeholder `PaladinData`,
+  `PaladinStatus` and `Paladin` alias, replaced by the real `platform::container::paladin` types
+  (`PaladinState.paladin` is the real `Paladin`; the real `PaladinStatus` adds `Reasoning`); and
+  `ContentItem.node` / `PromptItem.node`, replaced by `.entity`. Graph items such as `NodeId`,
+  `NodeSpec`, `StateNode` and the structured `NodeError` are different and unchanged.
+
 ## [0.10.1] - 2026-09-20
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source

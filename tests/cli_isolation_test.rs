@@ -23,7 +23,7 @@
 // Any such import would mean the test only compiles with `--features cli`,
 // which would defeat the purpose of this suite.
 
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::paladin::MaxLoops;
 use paladin::{BattalionConfig, BattalionError, PaladinConfig, PaladinData, PaladinStatus};
 
@@ -102,7 +102,7 @@ fn test_battalion_error_configuration_variant_without_cli() {
 
 #[test]
 fn test_node_pattern_accessible_without_cli() {
-    // Node<T> is the core entity wrapper used throughout the framework.
+    // Entity<T> is the core entity wrapper used throughout the framework.
     // It must remain available without cli.
     let data = PaladinData {
         name: "NodeTest".to_string(),
@@ -119,9 +119,9 @@ fn test_node_pattern_accessible_without_cli() {
         agent_description: String::new(),
         dynamic_temperature: false,
     };
-    // Paladin is Node<PaladinData>; constructing it exercises the Node pattern.
-    let paladin = Node::new(data, Some("NodeTest".to_string()));
-    assert_eq!(paladin.node.name, "NodeTest");
+    // Paladin is Entity<PaladinData>; constructing it exercises the Entity pattern.
+    let paladin = Entity::new(data, Some("NodeTest".to_string()));
+    assert_eq!(paladin.data.name, "NodeTest");
 }
 
 // ============================================================================

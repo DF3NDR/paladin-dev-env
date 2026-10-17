@@ -1,5 +1,5 @@
 use crate::application::services::paladin::error::PaladinError;
-use crate::core::base::entity::node::Node;
+use crate::core::base::entity::Entity;
 use crate::core::platform::container::prompt::{
     PromptData, PromptItem, PromptParameters, PromptType, UserPrompt,
 };
@@ -141,7 +141,7 @@ impl TemperatureService {
         let request = LlmRequest::new(
             "gpt-4", // Use consistent model for classification
             PromptItem {
-                node: Node::new(
+                entity: Entity::new(
                     PromptData {
                         prompt_type: PromptType::User(UserPrompt {
                             query: prompt.clone(),
@@ -329,9 +329,11 @@ mod tests {
                 content: self.response.lock().unwrap().clone(),
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(10, 5),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
 
@@ -421,10 +423,9 @@ mod tests {
         LlmError::AuthenticationError("invalid API key".to_string())
     }
 
-    /// Plan 25-06 Test 4 (D-02, X-03): the temperature-detection site
-    /// surfaces a real `LlmError` as the structured `LlmFailure` -- typed
-    /// transience/status/provider intact -- while rendering exactly what the
-    /// legacy `PaladinError::LlmError(e.to_string())` rendered.
+    /// Plan 25-06 Test 4 (D-02): the temperature-detection site surfaces a
+    /// real `LlmError` as the structured `LlmFailure` -- typed
+    /// transience/status/provider intact -- rendering `LLM error: {e}`.
     #[tokio::test]
     async fn temperature_service_surfaces_structured_llm_failure() {
         use paladin_core::platform::container::transience::Transience;

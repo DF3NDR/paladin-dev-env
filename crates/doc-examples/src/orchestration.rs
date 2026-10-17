@@ -7,8 +7,10 @@ use crate::support::{create_paladin, mock_orchestrator, mock_paladin_port, mock_
 
 // ANCHOR: formation
 use paladin_battalion::formation_service::FormationExecutionService;
+use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
+use paladin_core::platform::container::battalion::BattalionConfig;
 use paladin_core::platform::container::battalion::formation::Formation;
-use paladin_core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
+use std::time::Duration;
 
 /// Run three Paladins in sequence; each one's output feeds the next.
 pub async fn run_formation() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,10 +19,15 @@ pub async fn run_formation() -> Result<(), Box<dyn std::error::Error>> {
     let analyzer = create_paladin("Analyzer");
     let writer = create_paladin("Writer");
 
-    let config = BattalionConfig {
-        error_strategy: ErrorStrategy::FailFast, // first failure aborts the chain
-        ..Default::default()
-    };
+    // No on_error handler: the first failure aborts the chain; each Paladin
+    // attempt is bounded at 60 s.
+    let config = BattalionConfig::new("earnings_pipeline").with_aegis(Aegis {
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(Duration::from_secs(60)),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    });
     let formation = Formation::new(vec![extractor, analyzer, writer], config)?;
 
     let service = FormationExecutionService::new(paladin_port);

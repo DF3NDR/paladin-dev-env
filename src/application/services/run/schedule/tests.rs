@@ -13,11 +13,11 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 
 use paladin_core::platform::container::assistant::AssistantSource;
+use paladin_core::platform::container::principal::PrincipalRef;
 use paladin_core::platform::container::run::{AssistantRef, RunId, WebhookSpec};
 use paladin_core::platform::container::run_schedule::{
     OnMissed, RunSchedule, RunScheduleId, RunScheduleUpdate, ThreadStrategy,
 };
-use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_ports::input::run_submission_port::{
     CancelOutcome, ForkRun, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
@@ -72,7 +72,7 @@ impl RunSubmissionPort for RecordingSubmission {
     async fn cancel(
         &self,
         _run_id: &RunId,
-        _requested_by: Option<(String, UserRole)>,
+        _requested_by: Option<PrincipalRef>,
     ) -> Result<CancelOutcome, RunSubmissionError> {
         Err(RunSubmissionError::NotWired)
     }
@@ -514,7 +514,7 @@ impl AssistantResolver for MockResolver {
                 assistant_id: assistant_id.to_string(),
                 version: resolved_version,
             },
-            runnable: Runnable::Agent(Arc::new(paladin_core::base::entity::node::Node::new(
+            runnable: Runnable::Agent(Arc::new(paladin_core::base::entity::Entity::new(
                 paladin_core::platform::container::paladin::PaladinData::default(),
                 Some(assistant_id.to_string()),
             ))),
@@ -551,7 +551,57 @@ fn create_request(assistant_id: &str, cron: &str) -> CreateRunSchedule {
         thread_strategy: None,
         on_missed: None,
         webhook: None,
+        created_by: None,
     }
+}
+
+#[tokio::test]
+async fn create_stamps_the_creators_attribution() {
+    use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+    let creator = RunAttribution::new(TenantId::new("acme").unwrap(), "ops");
+
+    let mut request = create_request("assistant-1", "*/1 * * * *");
+    request.created_by = Some(creator.clone());
+    let created = service.create(request).await.unwrap();
+
+    assert_eq!(created.created_by, Some(creator.clone()));
+    let stored = repo.get(&created.schedule_id).await.unwrap().unwrap();
+    assert_eq!(stored.created_by, Some(creator.clone()));
+
+    // A patch never re-assigns the creator (D-08).
+    service
+        .patch(
+            &created.schedule_id,
+            RunScheduleUpdate {
+                cron: Some("0 * * * *".to_string()),
+                enabled: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let patched = repo.get(&created.schedule_id).await.unwrap().unwrap();
+    assert_eq!(patched.created_by, Some(creator));
+}
+
+#[tokio::test]
+async fn create_without_a_creator_stores_none() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let clock = AtomicClock::new(base_time());
+    let service = admin_service(Arc::clone(&repo), &clock);
+
+    let created = service
+        .create(create_request("assistant-1", "*/1 * * * *"))
+        .await
+        .unwrap();
+
+    assert!(created.created_by.is_none());
+    let stored = repo.get(&created.schedule_id).await.unwrap().unwrap();
+    assert!(stored.created_by.is_none());
 }
 
 #[tokio::test]
@@ -808,4 +858,311 @@ async fn list_pages_created_schedules() {
 
     let page = service.list(10, None).await.unwrap();
     assert_eq!(page.items.len(), 2);
+}
+
+// ── Phase 41 (41-05, D-08): schedule-fired runs are attributed and admitted ──
+
+mod allowance {
+    use super::*;
+
+    use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+    use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
+    use paladin_ports::output::run_queue_port::RunQueuePort;
+    use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryPort};
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+    use paladin_storage::run::in_memory::InMemoryRunRepository;
+    use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+    use paladin_storage::treasury::contract_tests::{settle_request, usd};
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+
+    use crate::application::services::run::submission::RunSubmissionService;
+    use crate::application::services::treasurer::Treasurer;
+    use crate::config::treasurer::TreasurerConfig;
+
+    fn attribution(tenant: &str, key: &str) -> RunAttribution {
+        RunAttribution::new(TenantId::new(tenant).unwrap(), key)
+    }
+
+    /// A real `RunSubmissionService` over in-memory stores with a real `Treasurer` built from
+    /// `allowance` (the `treasurer.allowance` JSON an operator would write).
+    struct Harness {
+        submission: Arc<dyn RunSubmissionPort>,
+        runs: Arc<dyn RunRepositoryPort>,
+        queue: Arc<dyn RunQueuePort>,
+        ledger: Arc<dyn TreasuryLedgerPort>,
+        repo: Arc<dyn RunScheduleRepositoryPort>,
+    }
+
+    impl Harness {
+        fn new(allowance: serde_json::Value) -> Self {
+            let runs: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+            let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+            let ledger: Arc<dyn TreasuryLedgerPort> = Arc::new(InMemoryTreasuryLedger::new());
+            let resolver: Arc<dyn AssistantResolver> = Arc::new(MockResolver {
+                known: vec![("assistant-1".to_string(), 3)],
+            });
+            // The scheduled assistant is agent-kind (`MockResolver`), and an agent-kind
+            // submission under a ceiling is admitted WITH its model (Phase 42 D-10): the
+            // model must carry a `treasurer.pricing` row or the tick is refused.
+            let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+                "currency": "USD",
+                "pricing": { "gpt-4": { "prompt": "10.00", "completion": "10.00" } },
+                "allowance": allowance,
+            }))
+            .unwrap();
+            let treasurer = Treasurer::new(config.allowance_policy().unwrap(), Arc::clone(&ledger))
+                .with_pricing(Arc::new(config.price_table().unwrap()));
+            let submission: Arc<dyn RunSubmissionPort> = Arc::new(
+                RunSubmissionService::new(Arc::clone(&runs), Arc::clone(&queue), resolver)
+                    .with_treasurer(Arc::new(treasurer)),
+            );
+            Self {
+                submission,
+                runs,
+                queue,
+                ledger,
+                repo: Arc::new(InMemoryRunScheduleRepository::new()),
+            }
+        }
+
+        /// Spend `2.50` USD under `(tenant, key)` -- the whole ceiling the fixtures grant.
+        async fn spend_everything(&self, tenant: &str, key: &str) {
+            self.ledger
+                .settle(settle_request(
+                    LedgerScope::new(tenant, key),
+                    SettlementKey::new(RunId::new_v7(), 0, 0),
+                    2_500_000_000,
+                    usd(),
+                    "gpt-4",
+                ))
+                .await
+                .unwrap();
+        }
+
+        /// Insert a due schedule created by `created_by` and tick once.
+        async fn tick(
+            &self,
+            created_by: Option<RunAttribution>,
+        ) -> (RunScheduleId, Vec<ScheduleTickOutcome>) {
+            let t0 = base_time();
+            let mut schedule =
+                RunSchedule::new(RunScheduleId::new_v7(), "assistant-1", "*/1 * * * *")
+                    .with_next_tick(t0);
+            if let Some(creator) = created_by {
+                schedule = schedule.with_created_by(creator);
+            }
+            let schedule_id = schedule.schedule_id.clone();
+            self.repo.insert(schedule).await.unwrap();
+
+            let clock = AtomicClock::new(t0);
+            let service = ScheduleService::new(
+                Arc::clone(&self.repo),
+                Arc::clone(&self.submission),
+                options_with(&clock, 60),
+            );
+            (schedule_id, service.tick_once().await)
+        }
+
+        async fn run_count(&self) -> usize {
+            self.runs
+                .list(RunQuery::default())
+                .await
+                .unwrap()
+                .items
+                .len()
+        }
+    }
+
+    fn api_key_ceiling(key: &str) -> serde_json::Value {
+        serde_json::json!({ "api_keys": { key: {
+            "period": "1d", "amount": "2.50", "lifetime": "2.50"
+        } } })
+    }
+
+    fn tenant_ceiling(tenant: &str) -> serde_json::Value {
+        serde_json::json!({ "tenants": { tenant: {
+            "period": "1d", "amount": "2.50", "lifetime": "2.50"
+        } } })
+    }
+
+    #[tokio::test]
+    async fn tick_for_an_exhausted_creator_is_skipped_and_counted() {
+        let harness = Harness::new(api_key_ceiling("ops"));
+        harness.spend_everything("acme", "ops").await;
+
+        let (schedule_id, outcomes) = harness.tick(Some(attribution("acme", "ops"))).await;
+
+        assert_eq!(
+            outcomes,
+            vec![ScheduleTickOutcome::Skipped {
+                schedule_id: schedule_id.clone(),
+                reason: SkipReason::AllowanceExhausted,
+            }]
+        );
+        let reloaded = harness.repo.get(&schedule_id).await.unwrap().unwrap();
+        assert_eq!(reloaded.skipped_ticks, 1, "the skip must be counted");
+        assert_eq!(harness.run_count().await, 0, "no run row may be written");
+        assert_eq!(
+            harness.queue.depth().await.unwrap(),
+            0,
+            "nothing may be queued"
+        );
+    }
+
+    #[tokio::test]
+    async fn tick_for_a_schedule_without_a_creator_fires_unattributed_and_ungated() {
+        // Even with the only ceiling in the policy fully spent, a schedule with no recorded
+        // creator behaves exactly as before Phase 41: unattributed and never gated.
+        let harness = Harness::new(api_key_ceiling("ops"));
+        harness.spend_everything("acme", "ops").await;
+
+        let (schedule_id, outcomes) = harness.tick(None).await;
+
+        let [ScheduleTickOutcome::Fired { run_id, .. }] = outcomes.as_slice() else {
+            panic!("expected one Fired outcome, got {outcomes:?}");
+        };
+        let run = harness.runs.get(run_id).await.unwrap().unwrap();
+        assert!(
+            run.submitted_by.is_none(),
+            "a legacy schedule fires unattributed"
+        );
+        let reloaded = harness.repo.get(&schedule_id).await.unwrap().unwrap();
+        assert_eq!(reloaded.skipped_ticks, 0);
+    }
+
+    #[tokio::test]
+    async fn tick_fires_attributed_to_the_creator() {
+        // The fire site hands the creator over as identity only: `requested_by` stays `None`.
+        let repo: Arc<dyn RunScheduleRepositoryPort> =
+            Arc::new(InMemoryRunScheduleRepository::new());
+        let submission = Arc::new(RecordingSubmission::default());
+        let t0 = base_time();
+        let creator = attribution("acme", "ops");
+        let schedule = RunSchedule::new(RunScheduleId::new_v7(), "assistant-1", "*/1 * * * *")
+            .with_next_tick(t0)
+            .with_created_by(creator.clone());
+        repo.insert(schedule).await.unwrap();
+
+        let clock = AtomicClock::new(t0);
+        let service = ScheduleService::new(
+            Arc::clone(&repo),
+            Arc::clone(&submission) as Arc<dyn RunSubmissionPort>,
+            options_with(&clock, 60),
+        );
+        let outcomes = service.tick_once().await;
+        assert!(matches!(
+            outcomes.as_slice(),
+            [ScheduleTickOutcome::Fired { .. }]
+        ));
+
+        {
+            let submitted = submission.submitted.lock().unwrap();
+            assert_eq!(submitted.len(), 1);
+            assert!(submitted[0].requested_by.is_none());
+            assert_eq!(submitted[0].attributed_to, Some(creator));
+        }
+
+        // Through the real service the run carries the creator, so its spend settles under it.
+        let harness = Harness::new(api_key_ceiling("ops"));
+        let (_, outcomes) = harness.tick(Some(attribution("acme", "ops"))).await;
+        let [ScheduleTickOutcome::Fired { run_id, .. }] = outcomes.as_slice() else {
+            panic!("expected one Fired outcome, got {outcomes:?}");
+        };
+        let run = harness.runs.get(run_id).await.unwrap().unwrap();
+        assert_eq!(run.submitted_by, Some(attribution("acme", "ops")));
+    }
+
+    #[tokio::test]
+    async fn removed_creator_key_is_gated_by_its_tenant_allowance_only() {
+        // The policy has only a tenant entry: the creator's key (`gone-key`) was removed from
+        // `treasurer.allowance.api_keys`. The schedule stays attributed by its persisted names.
+        let exhausted = Harness::new(tenant_ceiling("acme"));
+        exhausted.spend_everything("acme", "someone-else").await;
+        let (schedule_id, outcomes) = exhausted.tick(Some(attribution("acme", "gone-key"))).await;
+        assert_eq!(
+            outcomes,
+            vec![ScheduleTickOutcome::Skipped {
+                schedule_id,
+                reason: SkipReason::AllowanceExhausted,
+            }],
+            "an exhausted tenant allowance still gates the removed key's schedule"
+        );
+        assert_eq!(exhausted.run_count().await, 0);
+
+        let headroom = Harness::new(tenant_ceiling("acme"));
+        let (_, outcomes) = headroom.tick(Some(attribution("acme", "gone-key"))).await;
+        let [ScheduleTickOutcome::Fired { run_id, .. }] = outcomes.as_slice() else {
+            panic!("expected one Fired outcome, got {outcomes:?}");
+        };
+        let run = headroom.runs.get(run_id).await.unwrap().unwrap();
+        assert_eq!(
+            run.submitted_by,
+            Some(attribution("acme", "gone-key")),
+            "the run is attributed by the persisted names"
+        );
+    }
+}
+
+/// A [`RunSubmissionPort`] whose `submit` always refuses with `ModelUnpriced` (Phase 42 D-10):
+/// the scheduled assistant is agent-kind, its creator has a ceiling and its model lost its row.
+struct UnpricedModelSubmission;
+
+#[async_trait]
+impl RunSubmissionPort for UnpricedModelSubmission {
+    async fn submit(&self, _request: SubmitRun) -> Result<RunAccepted, RunSubmissionError> {
+        Err(RunSubmissionError::ModelUnpriced {
+            model: "mystery-model".to_string(),
+        })
+    }
+
+    async fn cancel(
+        &self,
+        _run_id: &RunId,
+        _requested_by: Option<PrincipalRef>,
+    ) -> Result<CancelOutcome, RunSubmissionError> {
+        Err(RunSubmissionError::NotWired)
+    }
+
+    async fn fork(&self, _request: ForkRun) -> Result<RunAccepted, RunSubmissionError> {
+        Err(RunSubmissionError::NotWired)
+    }
+}
+
+/// 42-09: a schedule-fired agent-kind run refused as `ModelUnpriced` is a submission error --
+/// logged and left claimed like the schedule's other non-allowance failures -- and is never
+/// reported or counted as an allowance skip.
+#[tokio::test]
+async fn tick_with_an_unpriced_agent_model_is_a_submission_error_not_an_allowance_skip() {
+    let repo: Arc<dyn RunScheduleRepositoryPort> = Arc::new(InMemoryRunScheduleRepository::new());
+    let t0 = base_time();
+    let schedule =
+        RunSchedule::new(RunScheduleId::new_v7(), "assistant-1", "*/1 * * * *").with_next_tick(t0);
+    let schedule_id = schedule.schedule_id.clone();
+    repo.insert(schedule).await.unwrap();
+
+    let clock = AtomicClock::new(t0);
+    let service = ScheduleService::new(
+        Arc::clone(&repo),
+        Arc::new(UnpricedModelSubmission) as Arc<dyn RunSubmissionPort>,
+        options_with(&clock, 60),
+    );
+    let outcomes = service.tick_once().await;
+
+    assert_eq!(
+        outcomes,
+        vec![ScheduleTickOutcome::Skipped {
+            schedule_id: schedule_id.clone(),
+            reason: SkipReason::SubmissionError,
+        }],
+        "never SkipReason::AllowanceExhausted"
+    );
+    let reloaded = repo.get(&schedule_id).await.unwrap().unwrap();
+    assert_eq!(
+        reloaded.skipped_ticks, 0,
+        "counted like every other non-allowance submission failure, not as an allowance skip"
+    );
+    assert!(
+        reloaded.next_tick.is_some_and(|next| next > t0),
+        "the tick stays claimed: the schedule is next tried at its next natural due time"
+    );
 }

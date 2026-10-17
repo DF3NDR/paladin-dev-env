@@ -14,3 +14,11 @@ pub mod types;
 pub mod engine;
 
 pub use engine::{CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters};
+
+/// Test-only plumbing shared by the five presets' wire tests; the helpers themselves live in
+/// the crate-level [`crate::test_support`] so the bespoke adapters' tests can use them without
+/// compiling this module.
+#[cfg(test)]
+pub(crate) mod test_support {
+    pub(crate) use crate::test_support::*;
+}

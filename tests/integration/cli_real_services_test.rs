@@ -1,6 +1,6 @@
 //! CLI Integration Tests - Tier 2: Docker-Gated Service Tests
 //!
-//! These tests require Docker services running (Redis, MinIO).
+//! These tests require Docker services running (Redis, RustFS).
 //! Run with: `cargo test --test lib integration::cli_real_services_test -- --ignored`
 //! Start services with: `make services-up`
 //!
@@ -24,7 +24,7 @@ fn redis_url() -> String {
     env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6380".to_string())
 }
 
-/// Get MinIO endpoint from environment or default
+/// Get the object-store (RustFS) endpoint from environment or default
 fn minio_endpoint() -> String {
     env::var("MINIO_ENDPOINT").unwrap_or_else(|_| "http://localhost:9010".to_string())
 }
@@ -88,7 +88,7 @@ async fn test_setup_check_redis_connection() {
 }
 
 // =============================================================================
-// 5.2.4: Test setup-check with real MinIO connection
+// 5.2.4: Test setup-check with real object-store (RustFS) connection
 // =============================================================================
 
 #[tokio::test]
@@ -96,25 +96,25 @@ async fn test_setup_check_redis_connection() {
 async fn test_setup_check_minio_connection() {
     let endpoint = minio_endpoint();
 
-    // Check MinIO health endpoint
+    // Check the RustFS health endpoint
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .expect("Failed to create HTTP client");
 
-    let health_url = format!("{}/minio/health/live", endpoint);
+    let health_url = format!("{}/health/ready", endpoint);
     let result = client.get(&health_url).send().await;
 
     assert!(
         result.is_ok(),
-        "MinIO health check should succeed. Is MinIO running at {}?",
+        "RustFS health check should succeed. Is RustFS running at {}?",
         endpoint
     );
 
     let response = result.unwrap();
     assert!(
         response.status().is_success(),
-        "MinIO health check should return success status"
+        "RustFS health check should return success status"
     );
 }
 
@@ -144,7 +144,7 @@ fn test_all_services_health_check() {
         if redis_ok { "✅ UP" } else { "❌ DOWN" }
     );
     println!(
-        "  MinIO (port {}): {}",
+        "  RustFS (port {}): {}",
         minio_port,
         if minio_ok { "✅ UP" } else { "❌ DOWN" }
     );

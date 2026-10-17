@@ -59,9 +59,11 @@ impl LlmPort for MockLlmWithFunctionCalls {
                 content: "No more responses".to_string(),
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(5, 5),
+                cost: None,
                 created_at: Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
     }
@@ -237,6 +239,7 @@ async fn test_tool_call_detection() {
             content: "I'll calculate that for you.".to_string(),
             finish_reason: FinishReason::FunctionCall,
             usage: TokenUsage::new(10, 10),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: Some(FunctionCall {
@@ -248,6 +251,7 @@ async fn test_tool_call_detection() {
                 })
                 .to_string(),
             }),
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -256,9 +260,11 @@ async fn test_tool_call_detection() {
             content: "The answer is 8.".to_string(),
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(10, 5),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -267,9 +273,11 @@ async fn test_tool_call_detection() {
             content: "The answer is 8.".to_string(),
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(10, 5),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 
@@ -319,6 +327,7 @@ async fn test_tool_invocation_and_injection() {
             content: "I'll calculate that for you.".to_string(),
             finish_reason: FinishReason::FunctionCall,
             usage: TokenUsage::new(10, 10),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: Some(FunctionCall {
@@ -330,6 +339,7 @@ async fn test_tool_invocation_and_injection() {
                 })
                 .to_string(),
             }),
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -338,9 +348,11 @@ async fn test_tool_invocation_and_injection() {
             content: "The result is 42.".to_string(),
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(10, 5),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 
@@ -386,12 +398,14 @@ async fn test_paladin_continues_after_tool_failure() {
             content: "Let me look that up.".to_string(),
             finish_reason: FinishReason::FunctionCall,
             usage: TokenUsage::new(10, 10),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: Some(FunctionCall {
                 name: "nonexistent_tool".to_string(),
                 arguments: json!({"query": "test"}).to_string(),
             }),
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -400,9 +414,11 @@ async fn test_paladin_continues_after_tool_failure() {
             content: "I apologize, that tool is not available. Let me answer directly.".to_string(),
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(15, 10),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
         LlmResponse {
             id: Uuid::new_v4(),
@@ -411,9 +427,11 @@ async fn test_paladin_continues_after_tool_failure() {
             content: "I apologize, that tool is not available. Let me answer directly.".to_string(),
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(15, 10),
+            cost: None,
             created_at: Utc::now(),
             metadata: HashMap::new(),
             function_call: None,
+            reasoning: None,
         },
     ];
 

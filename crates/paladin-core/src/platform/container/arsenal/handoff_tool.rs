@@ -54,7 +54,7 @@ impl HandoffTool {
         let agent_names: Vec<Value> = self
             .specialists
             .iter()
-            .map(|p| json!(p.node.name.clone()))
+            .map(|p| json!(p.data.name.clone()))
             .collect();
 
         json!({
@@ -121,7 +121,7 @@ impl HandoffTool {
             })?;
 
         // Check agent exists in specialists
-        let agent_exists = self.specialists.iter().any(|p| p.node.name == agent_name);
+        let agent_exists = self.specialists.iter().any(|p| p.data.name == agent_name);
         if !agent_exists {
             return Err(HandoffError::InvalidAgent {
                 agent_name: agent_name.to_string(),

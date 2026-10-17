@@ -49,6 +49,7 @@
 
 use crate::application::services::paladin::error::PaladinError;
 use log::{debug, info, warn};
+use paladin_core::platform::container::transience::Transience;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
@@ -84,6 +85,17 @@ pub enum CircuitState {
 /// Implements the Circuit Breaker pattern to prevent cascading failures
 /// by monitoring operation failures and temporarily blocking requests when
 /// a failure threshold is exceeded.
+///
+/// # Which failures count
+///
+/// A failed operation counts toward tripping the circuit if and only if
+/// [`PaladinError::transience`] classifies it as
+/// [`Transience::Transient`] (D-14): a timeout, an open downstream breaker, a
+/// `LlmFailure` the adapter marked transient, a Garrison storage failure or
+/// an Arsenal timeout. `Unknown` and `Permanent` failures (for example an
+/// `ExecutionError`, a bad API key or a configuration error) are returned to
+/// the caller without affecting the circuit. The classification reads the
+/// typed variant only, never the failure's message text.
 ///
 /// # Thread Safety
 ///
@@ -220,8 +232,10 @@ impl CircuitBreaker {
                         Ok(result)
                     }
                     Err(e) => {
-                        // Only count retryable errors as failures for circuit breaker
-                        if e.is_retryable() {
+                        // Only Transient failures count toward tripping (D-14).
+                        // `transience()` is the single classification source and
+                        // never reads message text.
+                        if e.transience() == Transience::Transient {
                             self.on_failure();
                         }
                         Err(e)
@@ -277,8 +291,10 @@ impl CircuitBreaker {
                         Ok(result)
                     }
                     Err(e) => {
-                        // Only count retryable errors as failures for circuit breaker
-                        if e.is_retryable() {
+                        // Only Transient failures count toward tripping (D-14).
+                        // `transience()` is the single classification source and
+                        // never reads message text.
+                        if e.transience() == Transience::Transient {
                             self.on_failure();
                         }
                         Err(e)
@@ -473,10 +489,134 @@ mod tests {
         // Initial state is Closed
         assert!(matches!(cb.get_state(), CircuitState::Closed { .. }));
 
-        // Two failures should open the circuit
-        let _ = cb.call(|| Err::<(), _>(PaladinError::ExecutionError("fail".into())));
-        let _ = cb.call(|| Err::<(), _>(PaladinError::ExecutionError("fail".into())));
+        // Two Transient failures should open the circuit
+        let _ = cb.call(|| Err::<(), _>(PaladinError::Timeout(1)));
+        let _ = cb.call(|| Err::<(), _>(PaladinError::Timeout(1)));
 
+        assert!(matches!(cb.get_state(), CircuitState::Open { .. }));
+    }
+
+    /// A `LlmFailure` carrying the given classification. The message text is
+    /// chosen by the caller so the tests can prove it is never read.
+    fn llm_failure(transience: Transience, message: &str) -> PaladinError {
+        PaladinError::LlmFailure {
+            transience,
+            status: None,
+            provider: Some("test".to_string()),
+            message: message.to_string(),
+        }
+    }
+
+    /// D-14 (sync): only `Transience::Transient` failures count toward
+    /// tripping; the failure text is never read.
+    #[test]
+    fn circuit_breaker_counts_transient_failures_only() {
+        // Two `Timeout` failures open a threshold-2 breaker, and the next
+        // call fails fast without running its closure.
+        let cb = CircuitBreaker::new(2, 1, Duration::from_secs(30));
+        let _ = cb.call(|| Err::<(), _>(PaladinError::Timeout(1)));
+        let _ = cb.call(|| Err::<(), _>(PaladinError::Timeout(1)));
+        assert!(matches!(cb.get_state(), CircuitState::Open { .. }));
+        let mut ran = false;
+        let result = cb.call(|| {
+            ran = true;
+            Ok::<_, PaladinError>(())
+        });
+        assert!(matches!(result, Err(PaladinError::CircuitBreakerOpen)));
+        assert!(!ran, "an open breaker must not run the operation");
+
+        // Unknown: five `ExecutionError` failures leave the breaker closed.
+        let cb = CircuitBreaker::new(2, 1, Duration::from_secs(30));
+        for _ in 0..5 {
+            let _ = cb.call(|| Err::<(), _>(PaladinError::ExecutionError("boom".into())));
+        }
+        assert!(
+            matches!(cb.get_state(), CircuitState::Closed { failures: 0 }),
+            "ExecutionError is Unknown and must not count"
+        );
+
+        // Permanent with retry-ish message text must not count.
+        let cb = CircuitBreaker::new(2, 1, Duration::from_secs(30));
+        for _ in 0..5 {
+            let _ = cb.call(|| {
+                Err::<(), _>(llm_failure(
+                    Transience::Permanent,
+                    "429 rate limit timeout 503 network connection",
+                ))
+            });
+        }
+        assert!(
+            matches!(cb.get_state(), CircuitState::Closed { failures: 0 }),
+            "a Permanent LlmFailure must not count whatever its message says"
+        );
+
+        // Unknown LlmFailure must not count.
+        let cb = CircuitBreaker::new(2, 1, Duration::from_secs(30));
+        for _ in 0..5 {
+            let _ = cb.call(|| Err::<(), _>(llm_failure(Transience::Unknown, "processing")));
+        }
+        assert!(matches!(
+            cb.get_state(),
+            CircuitState::Closed { failures: 0 }
+        ));
+
+        // Transient with an empty message counts.
+        let cb = CircuitBreaker::new(2, 1, Duration::from_secs(30));
+        let _ = cb.call(|| Err::<(), _>(llm_failure(Transience::Transient, "")));
+        let _ = cb.call(|| Err::<(), _>(llm_failure(Transience::Transient, "")));
+        assert!(
+            matches!(cb.get_state(), CircuitState::Open { .. }),
+            "a Transient LlmFailure counts whatever its message says"
+        );
+    }
+
+    /// D-14 (async): same accounting as the sync path.
+    #[tokio::test]
+    async fn circuit_breaker_async_counts_transient_failures_only() {
+        let cb = CircuitBreaker::new(2, 1, Duration::from_secs(30));
+        let _ = cb
+            .call_async(async { Err::<(), _>(PaladinError::Timeout(1)) })
+            .await;
+        let _ = cb
+            .call_async(async { Err::<(), _>(PaladinError::Timeout(1)) })
+            .await;
+        assert!(matches!(cb.get_state(), CircuitState::Open { .. }));
+        let result = cb.call_async(async { Ok::<_, PaladinError>(()) }).await;
+        assert!(matches!(result, Err(PaladinError::CircuitBreakerOpen)));
+
+        let cb = CircuitBreaker::new(2, 1, Duration::from_secs(30));
+        for _ in 0..5 {
+            let _ = cb
+                .call_async(async { Err::<(), _>(PaladinError::ExecutionError("boom".into())) })
+                .await;
+        }
+        assert!(matches!(
+            cb.get_state(),
+            CircuitState::Closed { failures: 0 }
+        ));
+
+        let cb = CircuitBreaker::new(2, 1, Duration::from_secs(30));
+        for _ in 0..5 {
+            let _ = cb
+                .call_async(async {
+                    Err::<(), _>(llm_failure(
+                        Transience::Permanent,
+                        "429 rate limit timeout 503 network connection",
+                    ))
+                })
+                .await;
+        }
+        assert!(matches!(
+            cb.get_state(),
+            CircuitState::Closed { failures: 0 }
+        ));
+
+        let cb = CircuitBreaker::new(2, 1, Duration::from_secs(30));
+        for _ in 0..2 {
+            let _ = cb
+                .call_async(async { Err::<(), _>(llm_failure(Transience::Transient, "")) })
+                .await;
+        }
         assert!(matches!(cb.get_state(), CircuitState::Open { .. }));
     }
 }

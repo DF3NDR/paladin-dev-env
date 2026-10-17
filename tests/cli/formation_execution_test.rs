@@ -4,7 +4,7 @@
 //! to verify proper output chaining and orchestration.
 
 use paladin::application::services::battalion::formation_service::FormationExecutionService;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::formation::Formation;
 use paladin::core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
@@ -37,7 +37,7 @@ async fn test_formation_basic_sequential_execution() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin1 = Node::new(paladin1_data, None);
+    let paladin1 = Entity::new(paladin1_data, None);
 
     // Create second Paladin (refiner)
     let paladin2_data = PaladinData {
@@ -52,7 +52,7 @@ async fn test_formation_basic_sequential_execution() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin2 = Node::new(paladin2_data, None);
+    let paladin2 = Entity::new(paladin2_data, None);
 
     // Create third Paladin (synthesizer)
     let paladin3_data = PaladinData {
@@ -67,7 +67,7 @@ async fn test_formation_basic_sequential_execution() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin3 = Node::new(paladin3_data, None);
+    let paladin3 = Entity::new(paladin3_data, None);
 
     // Create Formation
     let paladins = vec![paladin1, paladin2, paladin3];
@@ -128,7 +128,7 @@ async fn test_formation_output_chaining() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin1 = Node::new(paladin1_data, None);
+    let paladin1 = Entity::new(paladin1_data, None);
 
     let paladin2_data = PaladinData {
         system_prompt: "Process the previous output.".to_string(),
@@ -142,7 +142,7 @@ async fn test_formation_output_chaining() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin2 = Node::new(paladin2_data, None);
+    let paladin2 = Entity::new(paladin2_data, None);
 
     // Create Formation
     let paladins = vec![paladin1, paladin2];
@@ -199,7 +199,7 @@ async fn test_formation_with_shared_context() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin1 = Node::new(paladin1_data, None);
+    let paladin1 = Entity::new(paladin1_data, None);
 
     let paladin2_data = PaladinData {
         system_prompt: "Process input.".to_string(),
@@ -213,7 +213,7 @@ async fn test_formation_with_shared_context() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin2 = Node::new(paladin2_data, None);
+    let paladin2 = Entity::new(paladin2_data, None);
 
     // Create Formation with shared context
     let paladins = vec![paladin1, paladin2];
@@ -248,7 +248,9 @@ async fn test_formation_error_propagation() {
 
     // First Paladin succeeds, second fails
     mock_llm.add_success("First step succeeded");
-    mock_llm.add_failure(paladin_ports::output::llm_port::LlmError::RateLimitExceeded);
+    mock_llm.add_failure(paladin_ports::output::llm_port::LlmError::rate_limited(
+        None,
+    ));
 
     // Create 2 Paladins
     let paladin1_data = PaladinData {
@@ -263,7 +265,7 @@ async fn test_formation_error_propagation() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin1 = Node::new(paladin1_data, None);
+    let paladin1 = Entity::new(paladin1_data, None);
 
     let paladin2_data = PaladinData {
         system_prompt: "Second step.".to_string(),
@@ -277,7 +279,7 @@ async fn test_formation_error_propagation() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin2 = Node::new(paladin2_data, None);
+    let paladin2 = Entity::new(paladin2_data, None);
 
     // Create Formation
     let paladins = vec![paladin1, paladin2];

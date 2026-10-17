@@ -1,28 +1,15 @@
 # actionlint configuration.
 #
 # Narrowly-scoped suppression only -- do not add a rule-class-wide or
-# file-wide ignore here. The one entry below documents exactly why it
-# exists and which construct it covers; the actionlint CI job (ci.yml,
-# job id `actionlint`) has no `continue-on-error` and fails the build on
-# any finding this file does not explicitly and narrowly excuse.
+# file-wide ignore here; document exactly why any entry exists and which
+# construct it covers. The actionlint CI job (ci.yml, job id
+# `actionlint`) has no `continue-on-error` and fails the build on any
+# finding this file does not explicitly and narrowly excuse. No `paths:`
+# suppression is needed today: no workflow service container carries a
+# `command:` key (the pinned RustFS image starts with its default
+# entrypoint).
 self-hosted-runner:
   # No self-hosted runners are used anywhere in this repository; left
   # empty deliberately rather than omitted, so a future self-hosted label
   # addition is a one-line change here instead of a rediscovery.
   labels: []
-
-paths:
-  # `command:` on a `services.<id>` block is not part of actionlint's
-  # strict schema for GitHub Actions service containers, so the
-  # syntax-check rule flags every occurrence as an "unexpected key". It
-  # is nonetheless required at runtime: the official `minio/minio`
-  # image's entrypoint prints usage and exits without an explicit
-  # `server /data` command argument (see the inline comment next to each
-  # `command:` line in ci.yml and integration-tests.yml). Suppressed by
-  # message text rather than by removing the key, since removing it
-  # would silently break MinIO service-container startup in three jobs
-  # (`integration-tests` and `coverage` in ci.yml, `integration-tests`
-  # in integration-tests.yml).
-  .github/workflows/*.yml:
-    ignore:
-      - 'unexpected key "command" for "services" section'

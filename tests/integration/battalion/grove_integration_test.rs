@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::grove_service::GroveExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::grove::{
     GroveBuilder, RoutingStrategy, Tree, TreeAgent,
 };
@@ -39,14 +39,14 @@ impl GroveMockPaladinPort {
 impl PaladinPort for GroveMockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
         // Log execution
-        let log_entry = format!("Agent '{}' handling task", paladin.node.name);
+        let log_entry = format!("Agent '{}' handling task", paladin.data.name);
         self.execution_log.lock().unwrap().push(log_entry);
 
         // Simulate processing delay
         tokio::time::sleep(Duration::from_millis(10)).await;
 
         Ok(PaladinResult {
-            output: format!("[{}]: Handled task: {}", paladin.node.name, input),
+            output: format!("[{}]: Handled task: {}", paladin.data.name, input),
             usage: paladin_ports::output::llm_port::TokenUsage::new(100, 0),
             execution_time_ms: 10,
             loop_count: 1,
@@ -86,7 +86,7 @@ fn create_specialist_paladin(name: &str, expertise: &str, _keywords: Vec<&str>) 
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 /// Helper to create TreeAgent
@@ -141,7 +141,7 @@ async fn test_grove_keyword_match_routing() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -216,7 +216,7 @@ async fn test_grove_semantic_similarity_routing() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -261,7 +261,7 @@ async fn test_grove_llm_routing() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -336,9 +336,11 @@ impl paladin_ports::output::llm_port::LlmPort for RecordingRoutingLlmMock {
             content: response_json.to_string(),
             finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
             usage: paladin_ports::output::llm_port::TokenUsage::new(100, 50),
+            cost: None,
             created_at: chrono::Utc::now(),
             metadata: std::collections::HashMap::new(),
             function_call: None,
+            reasoning: None,
         })
     }
 
@@ -410,7 +412,7 @@ async fn test_grove_llm_routing_errors_when_routing_model_absent_through_execute
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -474,7 +476,7 @@ async fn test_grove_llm_routing_falls_back_when_llm_port_absent_but_routing_mode
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -522,7 +524,7 @@ async fn test_grove_fallback_behavior() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -567,7 +569,7 @@ async fn test_grove_no_fallback_default_behavior() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -627,7 +629,7 @@ async fn test_grove_multiple_trees() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -667,14 +669,14 @@ async fn test_grove_error_handling() {
             paladin: &Paladin,
             _input: &str,
         ) -> Result<PaladinResult, PaladinError> {
-            if paladin.node.name == "agent_1" {
+            if paladin.data.name == "agent_1" {
                 return Err(PaladinError::ExecutionError(
                     "Simulated failure".to_string(),
                 ));
             }
 
             Ok(PaladinResult {
-                output: format!("[{}]: Success", paladin.node.name),
+                output: format!("[{}]: Success", paladin.data.name),
                 usage: paladin_ports::output::llm_port::TokenUsage::new(50, 0),
                 execution_time_ms: 10,
                 loop_count: 1,
@@ -719,7 +721,7 @@ async fn test_grove_error_handling() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 
@@ -746,7 +748,7 @@ async fn test_grove_llm_routing_end_to_end() {
     impl LlmPort for RoutingLlmMock {
         async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
             // Extract the prompt to determine which agent to route to
-            let prompt_text = match &request.prompt.node.node.prompt_type {
+            let prompt_text = match &request.prompt.entity.data.prompt_type {
                 paladin::core::platform::container::prompt::PromptType::User(user_prompt) => {
                     &user_prompt.query
                 }
@@ -795,9 +797,11 @@ async fn test_grove_llm_routing_end_to_end() {
                 content: response_json.to_string(),
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(150, 80),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 metadata: std::collections::HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
 
@@ -873,7 +877,7 @@ async fn test_grove_llm_routing_end_to_end() {
     let registry = HashMapPaladinRegistry::new();
     for paladin in &paladins {
         registry
-            .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+            .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
             .expect("Registry should accept paladin");
     }
 

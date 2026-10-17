@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 use paladin::application::services::battalion::campaign_service::CampaignExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::campaign::{
     Campaign, CampaignEdge, EdgeCondition,
 };
@@ -57,7 +57,7 @@ impl MockPaladinPort {
 #[async_trait]
 impl PaladinPort for MockPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        let name = paladin.node.name.clone();
+        let name = paladin.data.name.clone();
 
         // Record call order
         {
@@ -127,13 +127,11 @@ fn create_test_paladin(name: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 fn create_test_config() -> BattalionConfig {
-    BattalionConfig::new("test_campaign")
-        .with_description("Test Campaign")
-        .with_timeout(300)
+    BattalionConfig::new("test_campaign").with_description("Test Campaign")
 }
 
 // ============================================================================

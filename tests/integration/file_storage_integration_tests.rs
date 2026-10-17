@@ -1,23 +1,47 @@
 use super::{TestContext, TestEnvironment};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
-use testcontainers::{ContainerAsync, runners::AsyncRunner};
-use testcontainers_modules::minio::MinIO;
+use testcontainers::{
+    ContainerAsync, GenericImage, ImageExt, core::IntoContainerPort, runners::AsyncRunner,
+};
 
 use paladin::infrastructure::adapters::file_storage::minio::{MinioAdapter, MinioConfig};
-use paladin::infrastructure::adapters::logs::system_log_adapter::SystemLogAdapter;
 use paladin_ports::output::file_storage_port::{
     AdvancedFileStoragePort, BatchFileStoragePort, FileStoragePort, ListOptions, UploadOptions,
 };
-use paladin_ports::output::log_port::LogPort;
+
+// Pinned image: rustfs/rustfs:1.0.0 (manifest-list digest sha256:8cc9801755448b71a786705ce76692c77e14936cccd87cf2fc31842e58f4d1ff) -- keep in lockstep with ci.yml, the compose files and k8s/rustfs.yaml (Phase 45 D-03).
+const RUSTFS_IMAGE: &str = "rustfs/rustfs";
+const RUSTFS_TAG: &str = "1.0.0";
+
+/// Poll RustFS's readiness endpoint until it answers 2xx or `deadline` passes.
+///
+/// RustFS logs to files, not stdout, so a log-line wait would never fire; the API port's
+/// `/health/ready` answers 503 until storage and IAM are ready.
+async fn wait_until_ready(url: &str, deadline: Duration) -> Result<(), Box<dyn std::error::Error>> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    let started = tokio::time::Instant::now();
+    loop {
+        if let Ok(response) = client.get(url).send().await
+            && response.status().is_success()
+        {
+            return Ok(());
+        }
+        if started.elapsed() >= deadline {
+            return Err(format!("object store not ready at {url} within {deadline:?}").into());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
 
 pub struct FileStorageTestContext {
     pub adapter: MinioAdapter,
     pub env: TestEnvironment,
     #[allow(dead_code)]
-    container: Option<ContainerAsync<MinIO>>,
+    container: Option<ContainerAsync<GenericImage>>,
 }
 
 #[async_trait::async_trait]
@@ -46,9 +70,6 @@ impl TestContext for FileStorageTestContext {
 impl FileStorageTestContext {
     /// Create context using external services (CI/CD)
     async fn new_external(env: TestEnvironment) -> Result<Self, Box<dyn std::error::Error>> {
-        let log_adapter = SystemLogAdapter::new(Default::default())?;
-        let log_adapter = Arc::new(log_adapter) as Arc<dyn LogPort>;
-
         let minio_config = MinioConfig {
             endpoint: env.minio_endpoint.clone(),
             access_key: env.minio_access_key.clone(),
@@ -63,7 +84,7 @@ impl FileStorageTestContext {
             max_idle_conns: 10,
         };
 
-        let adapter = MinioAdapter::new(minio_config, Some(log_adapter)).await?;
+        let adapter = MinioAdapter::new(minio_config, None).await?;
 
         Ok(Self {
             adapter,
@@ -74,16 +95,23 @@ impl FileStorageTestContext {
 
     /// Create context using local containers (development)
     async fn new_local(mut env: TestEnvironment) -> Result<Self, Box<dyn std::error::Error>> {
-        let container = MinIO::default().start().await?;
+        let container = GenericImage::new(RUSTFS_IMAGE, RUSTFS_TAG)
+            .with_exposed_port(9000.tcp())
+            .with_env_var("RUSTFS_ACCESS_KEY", env.minio_access_key.clone())
+            .with_env_var("RUSTFS_SECRET_KEY", env.minio_secret_key.clone())
+            .with_env_var("RUSTFS_CONSOLE_ENABLE", "false")
+            .start()
+            .await?;
         let port = container.get_host_port_ipv4(9000).await?;
 
         env.minio_endpoint = format!("localhost:{}", port);
 
-        // Wait for MinIO to start
-        tokio::time::sleep(Duration::from_secs(3)).await;
-
-        let log_adapter = SystemLogAdapter::new(Default::default())?;
-        let log_adapter = Arc::new(log_adapter) as Arc<dyn LogPort>;
+        // Wait for RustFS to become ready (no fixed sleep)
+        wait_until_ready(
+            &format!("http://{}/health/ready", env.minio_endpoint),
+            Duration::from_secs(60),
+        )
+        .await?;
 
         let minio_config = MinioConfig {
             endpoint: env.minio_endpoint.clone(),
@@ -99,7 +127,7 @@ impl FileStorageTestContext {
             max_idle_conns: 10,
         };
 
-        let adapter = MinioAdapter::new(minio_config, Some(log_adapter)).await?;
+        let adapter = MinioAdapter::new(minio_config, None).await?;
 
         Ok(Self {
             adapter,
@@ -151,6 +179,15 @@ pub async fn run_all_file_storage_tests() -> Result<(), Box<dyn std::error::Erro
         ("file_operations", tests::test_file_operations_full_cycle()),
         ("batch_operations", tests::test_batch_operations()),
         ("presigned_urls", tests::test_presigned_urls()),
+        ("multipart_upload", tests::test_multipart_upload_lifecycle()),
+        (
+            "multipart_abort",
+            tests::test_multipart_abort_leaves_no_object(),
+        ),
+        (
+            "etag_opaque_token",
+            tests::test_etag_is_an_opaque_stable_token(),
+        ),
         ("storage_stats", tests::test_storage_statistics()),
         ("error_handling", tests::test_error_handling()),
         (
@@ -347,6 +384,7 @@ mod tests {
     #[ignore]
     pub async fn test_presigned_urls() -> Result<(), Box<dyn std::error::Error>> {
         let ctx = FileStorageTestContext::new().await?;
+        let http = reqwest::Client::new();
 
         let file_path = PathBuf::from("presigned/test.txt");
         let content = b"Test content for presigned URLs";
@@ -354,25 +392,155 @@ mod tests {
         // Upload file first
         ctx.adapter.upload_file(&file_path, content, None).await?;
 
-        // Test presigned download URL generation
+        // Presigned download URL: a real GET through it returns the exact bytes.
         let download_url = ctx
             .adapter
             .generate_download_url(&file_path, Duration::from_secs(3600), None)
             .await?;
 
-        assert!(download_url.contains(ctx.env.minio_endpoint.split(':').next().unwrap()));
-        println!("✅ Generated presigned download URL: {}", download_url);
+        // A presigned URL embeds the access key id and a live signature, so only the part
+        // before the query string is ever printed (the suite output lands in CI logs).
+        println!(
+            "✅ Generated presigned download URL for {}",
+            download_url.split('?').next().unwrap_or_default()
+        );
+        let response = http.get(&download_url).send().await?;
+        assert!(response.status().is_success());
+        assert_eq!(response.bytes().await?.as_ref(), content);
 
-        // Test presigned upload URL generation
+        // Presigned upload URL: a real PUT through it, then read the object back.
         let upload_path = PathBuf::from("presigned/upload.txt");
+        let upload_content = b"Uploaded through a presigned PUT".to_vec();
         let upload_url = ctx
             .adapter
             .generate_upload_url(&upload_path, Duration::from_secs(3600), None)
             .await?;
 
-        assert!(upload_url.contains(ctx.env.minio_endpoint.split(':').next().unwrap()));
-        println!("✅ Generated presigned upload URL: {}", upload_url);
+        println!(
+            "✅ Generated presigned upload URL for {}",
+            upload_url.split('?').next().unwrap_or_default()
+        );
+        let response = http
+            .put(&upload_url)
+            .body(upload_content.clone())
+            .send()
+            .await?;
+        assert!(response.status().is_success());
 
+        // Read it back through a presigned download URL for the same path.
+        let readback_url = ctx
+            .adapter
+            .generate_download_url(&upload_path, Duration::from_secs(3600), None)
+            .await?;
+        let response = http.get(&readback_url).send().await?;
+        assert!(response.status().is_success());
+        assert_eq!(response.bytes().await?.as_ref(), upload_content.as_slice());
+
+        ctx.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    pub async fn test_multipart_upload_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = FileStorageTestContext::new().await?;
+        let path = PathBuf::from("multipart/big.bin");
+
+        // The S3 and RustFS minimum for every non-final part is 5 MiB.
+        let part_one = vec![b'a'; 5 * 1024 * 1024];
+        let part_two = vec![b'b'; 1024];
+
+        let upload_id = ctx.adapter.create_multipart_upload(&path, None).await?;
+        let etag_one = ctx.adapter.upload_part(&upload_id, 1, &part_one).await?;
+        let etag_two = ctx.adapter.upload_part(&upload_id, 2, &part_two).await?;
+
+        let item = ctx
+            .adapter
+            .complete_multipart_upload(&upload_id, vec![(1, etag_one), (2, etag_two)])
+            .await?;
+        assert_eq!(item.size, (part_one.len() + part_two.len()) as u64);
+
+        // Compare, never print, the payload.
+        let mut expected = part_one;
+        expected.extend_from_slice(&part_two);
+        let downloaded = ctx.adapter.download_file(&path, None).await?;
+        assert_eq!(downloaded.len(), expected.len());
+        assert!(downloaded == expected, "downloaded bytes differ");
+
+        println!("✅ Multipart upload lifecycle test passed");
+        ctx.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    pub async fn test_multipart_abort_leaves_no_object() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = FileStorageTestContext::new().await?;
+        let path = PathBuf::from("multipart/aborted.bin");
+
+        let upload_id = ctx.adapter.create_multipart_upload(&path, None).await?;
+        ctx.adapter
+            .upload_part(&upload_id, 1, &vec![b'x'; 1024])
+            .await?;
+        ctx.adapter.abort_multipart_upload(&upload_id).await?;
+
+        assert!(!ctx.adapter.file_exists(&path).await?);
+
+        println!("✅ Multipart abort test passed");
+        ctx.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore]
+    pub async fn test_etag_is_an_opaque_stable_token() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = FileStorageTestContext::new().await?;
+        let path = PathBuf::from("etag/a.txt");
+
+        let overwrite = ctx.create_upload_options(Vec::new());
+        ctx.adapter
+            .upload_file(&path, b"first body", Some(overwrite.clone()))
+            .await?;
+
+        // The ETag is an opaque, quote-stripped change token, never compared with an MD5
+        // of the content (it is composite after a multipart upload).
+        let via_head = ctx
+            .adapter
+            .get_file_info(&path)
+            .await?
+            .md5_hash
+            .ok_or("get_file_info reported no ETag")?;
+        assert!(!via_head.is_empty());
+        assert!(!via_head.contains('"'));
+
+        let listing = ctx
+            .adapter
+            .list_files(Some(ListOptions {
+                prefix: Some("etag/".to_string()),
+                ..Default::default()
+            }))
+            .await?;
+        let via_list = listing
+            .files
+            .iter()
+            .find(|item| item.path == path)
+            .and_then(|item| item.md5_hash.clone())
+            .ok_or("list_files reported no ETag for the object")?;
+        assert_eq!(via_head, via_list);
+
+        // Re-uploading different bytes to the same path changes the token.
+        ctx.adapter
+            .upload_file(&path, b"second, different body", Some(overwrite))
+            .await?;
+        let after_overwrite = ctx
+            .adapter
+            .get_file_info(&path)
+            .await?
+            .md5_hash
+            .ok_or("get_file_info reported no ETag after overwrite")?;
+        assert_ne!(via_head, after_overwrite);
+
+        println!("✅ ETag opaque token test passed");
         ctx.cleanup().await?;
         Ok(())
     }

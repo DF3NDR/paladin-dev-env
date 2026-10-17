@@ -54,7 +54,7 @@ data:
 
     minio:
       enabled: true
-      endpoint: "paladin-minio:9000"
+      endpoint: "paladin-rustfs:9000"
       bucket: "paladin"
       region: "us-east-1"
       use_ssl: false

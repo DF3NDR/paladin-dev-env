@@ -44,7 +44,7 @@ cargo --version
 
 ## Quick Start
 
-> **Development shortcut**: For local development use `make dev` (starts all services via `docker/docker-compose.dev.yml`) or `make services-up` (starts Redis + MinIO only). See `make help` for all targets.
+> **Development shortcut**: For local development use `make dev` (starts all services via `docker/docker-compose.dev.yml`) or `make services-up` (starts Redis + RustFS only). See `make help` for all targets.
 
 ### Run Prebuilt Image
 
@@ -225,9 +225,9 @@ llm:
     base_url: "https://api.anthropic.com/v1"
 
 file_storage:
-  minio_endpoint: "minio:9000"
-  minio_access_key: "minioadmin"
-  minio_secret_key: "minioadmin"
+  minio_endpoint: "rustfs:9000"
+  minio_access_key: "paladin-dev"
+  minio_secret_key: "paladin-dev-secret"
   minio_bucket: "paladin"
   minio_secure: false
 
@@ -259,13 +259,14 @@ ANTHROPIC_API_KEY=your_key_here
 # Redis (queue) — read by the Paladin binary as APP_REDIS_PASSWORD
 APP_REDIS_PASSWORD=changeme
 
-# MinIO (object storage) — read by the Paladin binary as APP_MINIO_ACCESS_KEY/APP_MINIO_SECRET_KEY.
-# MINIO_ROOT_USER/MINIO_ROOT_PASSWORD below are consumed by the MinIO *container* itself
-# (its own bootstrap credentials), not by the Paladin binary.
-APP_MINIO_ACCESS_KEY=minioadmin
-APP_MINIO_SECRET_KEY=minioadmin
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=minioadmin
+# Object storage (S3-compatible; RustFS in the dev stack) — read by the Paladin binary as
+# APP_MINIO_ACCESS_KEY/APP_MINIO_SECRET_KEY (the application-side names keep the MinIO prefix).
+# RUSTFS_ACCESS_KEY/RUSTFS_SECRET_KEY below are consumed by the RustFS *container* itself
+# (its root credentials), not by the Paladin binary. Use throwaway values, never the image default.
+APP_MINIO_ACCESS_KEY=paladin-dev
+APP_MINIO_SECRET_KEY=paladin-dev-secret
+RUSTFS_ACCESS_KEY=paladin-dev
+RUSTFS_SECRET_KEY=paladin-dev-secret
 ```
 
 ### Optional Variables
@@ -394,7 +395,7 @@ docker run -d \
 
 ### Docker Compose
 
-Complete setup with Redis, MinIO, and Paladin:
+Complete setup with Redis, RustFS (S3-compatible object storage), and Paladin:
 
 ```yaml
 # docker-compose.yml
@@ -415,23 +416,24 @@ services:
       timeout: 3s
       retries: 5
 
-  minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772
-    container_name: paladin-minio
+  rustfs:
+    image: rustfs/rustfs:1.0.0
+    container_name: paladin-rustfs
     ports:
-      - "9000:9000"  # API
+      - "9000:9000"  # S3 API
       - "9001:9001"  # Console
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-paladin-dev}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-paladin-dev-secret}
+      RUSTFS_CONSOLE_ENABLE: "true"
     volumes:
-      - minio-data:/data
-    command: server /data --console-address ":9001"
+      - rustfs_data:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/health/ready" ]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+      start_period: 30s
 
   paladin:
     image: ghcr.io/your-org/paladin:latest
@@ -452,7 +454,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      minio:
+      rustfs:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -462,10 +464,23 @@ services:
 
 volumes:
   redis-data:
-  minio-data:
+  rustfs_data:
   paladin-data:
   paladin-logs:
 ```
+
+Notes on the object store:
+
+- The RustFS console is at `http://localhost:9001/rustfs/console/index.html`; sign in with
+  `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY`.
+- There is no bucket-init container. The Paladin adapter creates its bucket (`paladin-files`)
+  itself on start, so nothing else needs to run before the application.
+- The volume is named `rustfs_data`. The MinIO volume from before Phase 45 holds MinIO-formatted
+  data and is **not** migrated; list it with `docker volume ls` and remove it with
+  `docker volume rm` once you no longer need it.
+- A local `.env` from before Phase 45 must rename its two store-side root-credential variables
+  to `RUSTFS_ACCESS_KEY` and `RUSTFS_SECRET_KEY`. The application-side `APP_MINIO_*` names are
+  unchanged.
 
 ### Running with Compose
 
@@ -742,7 +757,7 @@ docker run --user $(id -u):$(id -g) paladin
 docker exec paladin curl -f http://localhost:8080/health
 
 # Check service dependencies
-docker-compose ps  # Are Redis/MinIO healthy?
+docker-compose ps  # Are Redis/RustFS healthy?
 
 # Increase health check timeout
 docker run -d \
@@ -774,7 +789,7 @@ garrison:
 ```bash
 # Test network connectivity
 docker exec paladin ping redis
-docker exec paladin curl -v http://minio:9000
+docker exec paladin curl -v http://rustfs:9000/health/ready
 
 # Check DNS resolution
 docker exec paladin nslookup redis

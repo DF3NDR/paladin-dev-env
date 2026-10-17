@@ -43,9 +43,13 @@ repos:
         args: [--markdown-linebreak-ext=md]
         # Rust files are governed by `cargo fmt`; excluding them here avoids an
         # oscillation between end-of-file-fixer and rustfmt on empty modules.
-        exclude: \.rs$
+        # Reference patches filed verbatim under .planning/ (e.g.
+        # 49-REFERENCE-adoption.diff) are excluded too: a blank context line in
+        # unified-diff syntax is a single space, and stripping it corrupts the
+        # patch.
+        exclude: \.(rs|diff|patch)$
       - id: end-of-file-fixer
-        exclude: \.rs$
+        exclude: \.(rs|diff|patch)$
 
   # --- Secrets detection ------------------------------------------------------
   - repo: https://github.com/gitleaks/gitleaks

@@ -26,7 +26,7 @@ use paladin_battalion::engine::{
     EngineLimits, InputMapping, InterceptDecision, NodeContext, NodeInterceptor, NodeSpec,
     RunOutcome, WarEngine, WarGraph,
 };
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::battlefield::{
     Battlefield, BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
 };
@@ -145,7 +145,7 @@ fn make_paladin(name: &str) -> Paladin {
         max_loops: MaxLoops::Fixed(1),
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 fn one_field_schema() -> BattlefieldSchema {

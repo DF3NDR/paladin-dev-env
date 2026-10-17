@@ -489,6 +489,7 @@ impl TraceSink for OtelTraceSink {
                 duration_ms,
                 usage,
                 cache_hit,
+                ..
             } => {
                 self.finish_attempt_span(
                     &thread_id,
@@ -556,6 +557,7 @@ impl TraceSink for OtelTraceSink {
                 usage,
                 duration_ms,
                 trace_dropped_total,
+                ..
             } => {
                 self.finish_run_span(
                     &thread_id,
@@ -663,6 +665,8 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
                 usage: TokenUsage::new(0, 0),
+                cost: None,
+                halt_reason: None,
                 duration_ms: 500,
                 trace_dropped_total: 0,
             },
@@ -717,6 +721,8 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 0,
                 usage: TokenUsage::new(0, 0),
+                cost: None,
+                halt_reason: None,
                 duration_ms: 10,
                 trace_dropped_total: 0,
             },
@@ -787,6 +793,7 @@ mod tests {
                     outcome,
                     duration_ms: 5,
                     usage: TokenUsage::new(3, 0),
+                    cost: None,
                     cache_hit: false,
                 },
             ))
@@ -801,6 +808,8 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
                 usage: TokenUsage::new(3, 0),
+                cost: None,
+                halt_reason: None,
                 duration_ms: 100,
                 trace_dropped_total: 0,
             },
@@ -880,6 +889,7 @@ mod tests {
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
                 usage: TokenUsage::new(42, 0),
+                cost: None,
                 cache_hit: true,
             },
         ))
@@ -1013,6 +1023,7 @@ mod tests {
                     outcome,
                     duration_ms: 5,
                     usage: TokenUsage::new(1, 0),
+                    cost: None,
                     cache_hit: false,
                 },
             ))
@@ -1045,6 +1056,7 @@ mod tests {
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
                 usage: TokenUsage::new(2, 0),
+                cost: None,
                 cache_hit: false,
             },
         ))
@@ -1078,6 +1090,8 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 2,
                 usage: TokenUsage::new(3, 0),
+                cost: None,
+                halt_reason: None,
                 duration_ms: 50,
                 trace_dropped_total: 0,
             },
@@ -1164,6 +1178,7 @@ mod tests {
                 outcome: NodeOutcomeKind::Succeeded,
                 duration_ms: 5,
                 usage: TokenUsage::new(0, 0),
+                cost: None,
                 cache_hit: false,
             },
         ))
@@ -1201,6 +1216,8 @@ mod tests {
                 status: RunFinishStatus::Completed,
                 total_supersteps: 1,
                 usage: TokenUsage::new(0, 0),
+                cost: None,
+                halt_reason: None,
                 duration_ms: 15,
                 trace_dropped_total: 0,
             },

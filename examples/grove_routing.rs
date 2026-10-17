@@ -108,13 +108,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     println!("🌳 Grove Configuration:");
-    println!("   • Name: {}", grove.node.name);
-    println!("   • Trees: {}", grove.node.trees.len());
+    println!("   • Name: {}", grove.data.name);
+    println!("   • Trees: {}", grove.data.trees.len());
     println!(
         "   • Routing Strategy: {:?}",
-        grove.node.config.routing_strategy
+        grove.data.config.routing_strategy
     );
-    println!("   • Fallback Tree: {:?}", grove.node.config.fallback_tree);
+    println!("   • Fallback Tree: {:?}", grove.data.config.fallback_tree);
     println!();
 
     println!("────────────────────────────────────────────────────────────────");
@@ -179,13 +179,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     println!("📊 Grove Statistics:");
-    println!("   • Total Trees: {}", grove.node.trees.len());
+    println!("   • Total Trees: {}", grove.data.trees.len());
 
-    let total_agents: usize = grove.node.trees.iter().map(|tree| tree.agents.len()).sum();
+    let total_agents: usize = grove.data.trees.iter().map(|tree| tree.agents.len()).sum();
     println!("   • Total Agents: {}", total_agents);
 
     let total_keywords: usize = grove
-        .node
+        .data
         .trees
         .iter()
         .flat_map(|tree| tree.agents.iter())

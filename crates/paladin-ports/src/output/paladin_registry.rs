@@ -14,13 +14,13 @@
 //! ```rust
 //! use paladin_ports::output::paladin_registry::PaladinRegistry;
 //! use paladin_core::platform::container::paladin::{PaladinData, Paladin};
-//! use paladin_core::base::entity::node::Node;
+//! use paladin_core::base::entity::Entity;
 //! use std::sync::Arc;
 //!
 //! # fn example(registry: impl PaladinRegistry) {
 //! // Register a Paladin
 //! let paladin_data = PaladinData::default();
-//! let paladin = Node::new(paladin_data, Some("analyzer".to_string()));
+//! let paladin = Entity::new(paladin_data, Some("analyzer".to_string()));
 //! let result = registry.register("analyzer".to_string(), Arc::new(paladin));
 //!
 //! // Retrieve a Paladin
@@ -110,11 +110,11 @@ pub trait PaladinRegistry: Send + Sync {
     /// ```rust
     /// # use paladin_ports::output::paladin_registry::PaladinRegistry;
     /// # use paladin_core::platform::container::paladin::{PaladinData, Paladin};
-    /// # use paladin_core::base::entity::node::Node;
+    /// # use paladin_core::base::entity::Entity;
     /// # use std::sync::Arc;
     /// # fn example(registry: impl PaladinRegistry) {
     /// let paladin_data = PaladinData::default();
-    /// let paladin = Node::new(paladin_data, Some("analyzer".to_string()));
+    /// let paladin = Entity::new(paladin_data, Some("analyzer".to_string()));
     /// let result = registry.register("analyzer".to_string(), Arc::new(paladin));
     /// assert!(result.is_ok());
     /// # }

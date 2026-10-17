@@ -2,7 +2,7 @@
 //!
 //! Tests the Formation struct and its behavior following TDD methodology.
 
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::formation::Formation;
 use paladin::core::platform::container::battalion::{BattalionConfig, BattalionError};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
@@ -21,7 +21,7 @@ fn create_test_paladin(name: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[cfg(test)]
@@ -84,11 +84,10 @@ mod formation_builder_tests {
         let paladin2 = create_test_paladin("Paladin2");
         let paladins = vec![paladin1, paladin2];
 
-        let custom_config = BattalionConfig::new("custom_formation").with_timeout(600);
+        let custom_config = BattalionConfig::new("custom_formation");
 
         let formation = Formation::new(paladins, custom_config).unwrap();
         assert_eq!(formation.config.name, "custom_formation");
-        assert_eq!(formation.config.timeout_seconds, 600);
     }
 
     #[test]
@@ -116,7 +115,6 @@ mod formation_builder_tests {
         let paladins = vec![paladin1, paladin2, paladin3];
 
         let config = BattalionConfig::new("chained_formation")
-            .with_timeout(900)
             .with_description("Test formation with chained builders");
 
         let formation = Formation::new(paladins, config)
@@ -124,7 +122,6 @@ mod formation_builder_tests {
             .with_shared_context("Global context for all Paladins".to_string());
 
         assert_eq!(formation.paladins.len(), 3);
-        assert_eq!(formation.config.timeout_seconds, 900);
         assert!(formation.shared_context.is_some());
     }
 }

@@ -4,7 +4,7 @@
 //! using MockLlmAdapter to avoid external API dependencies.
 
 use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use paladin_ports::output::llm_port::LlmPort;
@@ -33,7 +33,7 @@ async fn test_paladin_basic_execution() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     // Create circuit breaker and execution service
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
@@ -88,7 +88,7 @@ async fn test_paladin_multiple_loops() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let execution_service = PaladinExecutionService::new(
@@ -130,7 +130,7 @@ async fn test_paladin_with_stop_word() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let execution_service = PaladinExecutionService::new(
@@ -166,7 +166,9 @@ async fn test_paladin_with_stop_word() {
 async fn test_paladin_error_handling() {
     // Arrange: Create mock that simulates an error
     let mock_llm = Arc::new(MockLlmAdapter::new());
-    mock_llm.add_failure(paladin_ports::output::llm_port::LlmError::RateLimitExceeded);
+    mock_llm.add_failure(paladin_ports::output::llm_port::LlmError::rate_limited(
+        None,
+    ));
 
     let paladin_data = PaladinData {
         system_prompt: "You are a test assistant.".to_string(),
@@ -180,7 +182,7 @@ async fn test_paladin_error_handling() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let execution_service = PaladinExecutionService::new(
@@ -216,7 +218,7 @@ async fn test_paladin_with_helper_factory() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let execution_service = PaladinExecutionService::new(
@@ -255,7 +257,7 @@ async fn test_paladin_invocation_tracking() {
         vision_enabled: false,
         ..Default::default()
     };
-    let paladin = Node::new(paladin_data, None);
+    let paladin = Entity::new(paladin_data, None);
 
     let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
     let execution_service = PaladinExecutionService::new(

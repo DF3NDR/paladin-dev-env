@@ -4,25 +4,34 @@
 //! Supports standard completions, streaming, and all core LlmPort functionality.
 
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::{Stream, StreamExt};
 use reqwest::{
     Client,
     header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::env;
-use std::time::Duration;
-use uuid::Uuid;
+use std::time::{Duration, SystemTime};
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType};
 use paladin_ports::output::llm_port::{
-    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, ResponseFormat,
-    StreamingResponse, TokenUsage,
+    FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ParamSupport,
+    ProviderCapabilities, StopSupport, StreamingResponse, TokenUsage,
 };
+use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
-use crate::http_status::map_http_status;
+use crate::backoff::exponential_backoff;
+use crate::http_status::map_http_status_with_hints;
+use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
+use crate::redaction::RedactedKey;
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, seeded, seeded_window,
+};
+use crate::response_guards::{StreamCompletion, classify_completion};
+use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
+use crate::sse::SseLines;
 // WR-01 (`25-REVIEW.md`): this adapter previously carried its own
 // byte-for-byte copy of the crate's shared credential-redaction routine
 // (`RESPONSE_EXCERPT_CHAR_BUDGET`, `CREDENTIAL_PLACEHOLDER`,
@@ -38,18 +47,92 @@ use crate::redaction::{RESPONSE_EXCERPT_CHAR_BUDGET, bounded_excerpt, redact_cre
 /// and stamps on every [`LlmError::ProviderError`] it emits.
 const DEEPSEEK_PROVIDER: &str = "deepseek";
 
+/// Default DeepSeek model requested when `DEEPSEEK_MODEL` is unset.
+///
+/// `deepseek-flash`: the general-purpose model in the live `GET /models` listing of the
+/// 2026-10-15 probe and the operator-identified current default (`registry/seeded.rs`,
+/// `verified_on` 2026-10-15). It replaces `deepseek-chat`, which is absent from that listing
+/// and from the vendor's pricing page (an undocumented alias that still answered 200 at probe
+/// time). Pin `DEEPSEEK_MODEL` to keep `deepseek-chat`.
+pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-flash";
+
+/// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
+///
+/// Must run BEFORE `response.text()` consumes the response (research Pitfall 2). Only a 429
+/// is parsed, and no credential header is read.
+fn snapshot_rate_limit_hints(
+    status: reqwest::StatusCode,
+    headers: &HeaderMap,
+) -> Option<RateLimitHints> {
+    if status != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return None;
+    }
+    hints_from_headers(RateLimitHeaderFamily::Generic, SystemTime::now(), |name| {
+        headers.get(name).and_then(|v| v.to_str().ok())
+    })
+}
+
 /// Configuration for DeepSeek LLM adapter.
-#[derive(Debug, Clone)]
+///
+/// Marked `#[non_exhaustive]` (owner decision, Phase 50 plan 50-08, option-a): build one with
+/// [`DeepSeekConfig::new`] or [`DeepSeekConfig::from_env`] and set fields or call the `with_*`
+/// builders, so a later field is not another break for callers.
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct DeepSeekConfig {
     /// API key for DeepSeek authentication.
     pub api_key: String,
     /// Base URL for DeepSeek API.
     pub base_url: String,
-    /// Default model to use.
+    /// Default model to use; [`DEEPSEEK_DEFAULT_MODEL`] when constructed from the environment
+    /// with `DEEPSEEK_MODEL` unset.
     pub model: String,
-    /// Request timeout in seconds.
+    /// Request timeout in seconds. [`DeepSeekConfig::new`] and [`DeepSeekConfig::from_env`]
+    /// default it to 300 for a seeded reasoning model and to 60 otherwise (D-13); an explicit
+    /// `DEEPSEEK_TIMEOUT_SECONDS` or field assignment always wins. A model marked `reasoning`
+    /// only through [`model_overrides`](Self::model_overrides) does not change this default
+    /// here: set this field in the same place.
     pub timeout_seconds: u64,
+    /// Default output budget (`max_tokens`) sent when a request sets none. `None` (the default)
+    /// sends no `max_tokens`. The value is checked against the model's profiled maximum output
+    /// exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the request is
+    /// refused before any HTTP call.
+    pub max_tokens: Option<u32>,
+    /// How many times a retryable error is retried after the first attempt. Defaults to `3`
+    /// (up to four calls); `0` sends each request once. A 429 is never retried here (the Cadence
+    /// decorator waits) and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model. `None`
+    /// (the default) keeps the compiled windows. When set it replaces the adapter's declared
+    /// window, the fallback profile's window and every seeded model's window; a
+    /// `context_window` in [`model_overrides`](Self::model_overrides) still wins for that model.
+    /// Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
 }
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for DeepSeekConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeepSeekConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("max_tokens", &self.max_tokens)
+            .field("max_retries", &self.max_retries)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .finish()
+    }
+}
+
+config_knob_builders!(DeepSeekConfig);
 
 impl DeepSeekConfig {
     /// Load configuration from environment variables.
@@ -58,7 +141,8 @@ impl DeepSeekConfig {
     /// - `DEEPSEEK_API_KEY` (required): DeepSeek API key
     /// - `DEEPSEEK_BASE_URL` (optional): API base URL
     /// - `DEEPSEEK_MODEL` (optional): Default model
-    /// - `DEEPSEEK_TIMEOUT_SECONDS` (optional): Request timeout
+    /// - `DEEPSEEK_TIMEOUT_SECONDS` (optional): Request timeout, 300 for a seeded reasoning
+    ///   model and 60 otherwise
     ///
     /// # Errors
     /// Returns error if required environment variables are missing or invalid.
@@ -69,18 +153,25 @@ impl DeepSeekConfig {
         let base_url = env::var("DEEPSEEK_BASE_URL")
             .unwrap_or_else(|_| "https://api.deepseek.com/v1".to_string());
 
-        let model = env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| "deepseek-chat".to_string());
+        let model =
+            env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| DEEPSEEK_DEFAULT_MODEL.to_string());
 
-        let timeout_seconds = env::var("DEEPSEEK_TIMEOUT_SECONDS")
-            .unwrap_or_else(|_| "60".to_string())
-            .parse()
-            .map_err(|_| "Invalid DEEPSEEK_TIMEOUT_SECONDS value")?;
+        let timeout_seconds = match env::var("DEEPSEEK_TIMEOUT_SECONDS") {
+            Ok(value) => value
+                .parse()
+                .map_err(|_| "Invalid DEEPSEEK_TIMEOUT_SECONDS value")?,
+            Err(_) => default_timeout_seconds(DEEPSEEK_PROVIDER, &model, 60),
+        };
 
         let config = Self {
             api_key,
             base_url,
             model,
             timeout_seconds,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         };
 
         config.validate()?;
@@ -89,11 +180,16 @@ impl DeepSeekConfig {
 
     /// Create configuration with custom values.
     pub fn new(api_key: String, base_url: String, model: String) -> Self {
+        let timeout_seconds = default_timeout_seconds(DEEPSEEK_PROVIDER, &model, 60);
         Self {
             api_key,
             base_url,
             model,
-            timeout_seconds: 60,
+            timeout_seconds,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 
@@ -131,6 +227,10 @@ struct DeepSeekRequest {
     frequency_penalty: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     presence_penalty: Option<f32>,
+    /// The caller's stop sequences, in declared order with duplicates kept, when the model's
+    /// profile admits their count (ADR-0061 (a), D-11a). Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop: Option<Vec<String>>,
     stream: bool,
     /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
     /// entirely when the caller sets no hint, keeping the body byte
@@ -258,32 +358,9 @@ struct DeepSeekStreamChoice {
 #[derive(Debug, Deserialize)]
 struct DeepSeekStreamDelta {
     content: Option<String>,
-}
-
-/// Detect a completion truncated before any content was produced.
-///
-/// Reasoning models (e.g. DeepSeek's `-flash`/`-pro` variants) share their
-/// `max_tokens` budget between hidden `reasoning_content` and the visible
-/// `content`. When the hidden reasoning alone consumes the whole budget, the
-/// API returns `content:""` with `finish_reason:"length"` — a truncation that
-/// looks, to a naive caller, like a valid-but-empty answer.
-///
-/// This detection is deliberately narrow: it only fires when `finish_reason`
-/// is [`FinishReason::Length`] AND `content` is empty or whitespace-only.
-/// A legitimate empty completion with `finish_reason:"stop"`, or any
-/// non-empty content (regardless of finish reason), is left untouched.
-///
-/// Returns `Some(LlmError::EmptyCompletion(..))` when the truncation
-/// signature is detected, `None` otherwise.
-fn detect_empty_completion(content: &str, finish_reason: &FinishReason) -> Option<LlmError> {
-    if matches!(finish_reason, FinishReason::Length) && content.trim().is_empty() {
-        Some(LlmError::EmptyCompletion(format!(
-            "finish_reason=length with empty content ({} raw chars) — reasoning likely consumed the entire max_tokens budget; retry with a larger max_tokens",
-            content.len()
-        )))
-    } else {
-        None
-    }
+    /// Hidden chain-of-thought text streamed on this delta, in wire order (D-11).
+    #[serde(default)]
+    reasoning_content: Option<String>,
 }
 
 /// Map a wire-reported [`DeepSeekUsage`] into [`TokenUsage`], applying the
@@ -315,13 +392,13 @@ fn map_usage(usage: DeepSeekUsage) -> TokenUsage {
 /// completion budget on a well-sized prompt". `prompt_tokens` is the number
 /// that distinguishes them — before this function existed, `api_response.usage`
 /// was deserialized and then thrown away on exactly the failure path where it
-/// mattered (`detect_empty_completion` returns its error, at the call site
+/// mattered (`classify_completion` returns its error, at the call site
 /// below, BEFORE the `LlmResponse` carrying `usage` is ever constructed).
 ///
 /// Deliberately additive and narrow: every non-`EmptyCompletion` variant
 /// passes through byte-identical (no reconstruction), and this does NOT
-/// change [`detect_empty_completion`]'s own signature — five existing tests
-/// call it with two arguments and are left untouched.
+/// change `classify_completion`'s signature: the usage rides on the
+/// `EmptyCompletion` payload only on this adapter's buffered path.
 ///
 /// Recording `prompt_tokens`/`completion_tokens`/`total_tokens` here is a
 /// strictly smaller, separately-scoped change from full [`TokenUsage`]
@@ -345,7 +422,7 @@ fn annotate_with_usage(err: LlmError, usage: &DeepSeekUsage) -> LlmError {
 /// `reasoning_content` and visible `content`. When the hidden reasoning
 /// consumes the entire budget, the API may report the empty answer as either
 /// `"content": ""` or `"content": null`. The `""` form is classified by
-/// [`detect_empty_completion`] into an actionable
+/// `classify_completion` into an actionable
 /// [`LlmError::EmptyCompletion`]; the `null` form previously aborted
 /// DESERIALIZATION — which happens strictly earlier — so that classifier never
 /// ran and the truncation surfaced as an opaque body-decode failure instead.
@@ -367,6 +444,58 @@ where
 pub struct DeepSeekAdapter {
     client: Client,
     config: DeepSeekConfig,
+    /// Resolves the request model to the profile that decides what reaches the wire (ADR-0061).
+    model_registry: ModelRegistry,
+    /// Which (model, parameter) omissions this instance has already warned about.
+    omissions: OmissionLog,
+    /// Which (model, adjustment) `response_format` changes this instance has already warned
+    /// about.
+    format_log: FormatLog,
+}
+
+/// What this adapter's request builder carries today, stated once so the adapter-wide fallback
+/// profile and [`LlmPort::get_capabilities`] cannot drift apart.
+fn declared_capabilities(context_window: Option<u32>) -> ProviderCapabilities {
+    ProviderCapabilities {
+        supports_streaming: true,
+        supports_tool_calling: false,
+        supports_function_calling: false,
+        supports_vision: false,
+        supports_embeddings: false,
+        // The default model's seeded window (`seeded::DEEPSEEK`, `deepseek-flash`, verified
+        // 2026-10-15: listing `context_window`), replacing the unevidenced 64,000.
+        // The operator's adapter-wide window (PARITY-03) replaces it when set.
+        max_context_tokens: context_window
+            .or(seeded_window(seeded::DEEPSEEK, DEEPSEEK_DEFAULT_MODEL)),
+        supports_system_messages: true,
+        temperature_range: Some((0.0, 2.0)),
+    }
+}
+
+/// The adapter-wide fallback profile, derived from what this adapter's request builder sends
+/// (ADR-0061, D-05): a field it sends maps to `Range`, a field it never sends maps to `NotSent`.
+///
+/// - `temperature`: `Range` over the declared `temperature_range`; `top_p`: `Range(0.0, 1.0)`;
+///   both penalties: `Range(-2.0, 2.0)` -- [`DeepSeekRequest`] carries all four.
+/// - `stop`: `Supported { max: None }` (the vendor's documented limit is not carried here; the
+///   per-model seeded entries of plan 50-06 may state one).
+/// - `json_object` true and `json_schema` false: every `ResponseFormat` compiles down to
+///   DeepSeek's plain JSON-object form today, so a schema request is a recorded downgrade.
+fn fallback_profile(context_window: Option<u32>) -> ModelProfile {
+    let caps = declared_capabilities(context_window);
+    let (low, high) = caps.temperature_range.unwrap_or((0.0, 1.0));
+    let mut profile = ModelProfile::new()
+        .with_temperature(ParamSupport::Range(low, high))
+        .with_top_p(ParamSupport::Range(0.0, 1.0))
+        .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+        .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+        .with_stop_sequences(StopSupport::Supported { max: None })
+        .with_json_object(true)
+        .with_json_schema(false);
+    if let Some(window) = caps.max_context_tokens {
+        profile = profile.with_context_window(window);
+    }
+    profile
 }
 
 impl DeepSeekAdapter {
@@ -405,32 +534,83 @@ impl DeepSeekAdapter {
             .build()
             .map_err(|e| LlmError::NetworkError(format!("Failed to create HTTP client: {}", e)))?;
 
-        Ok(Self { client, config })
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let model_registry = ModelRegistry::new(
+            DEEPSEEK_PROVIDER,
+            seeded::DEEPSEEK,
+            fallback_profile(config.context_window),
+        )
+        .with_context_window(config.context_window)
+        .and_then(|registry| registry.with_overrides(config.model_overrides.clone()))
+        .map_err(|e| {
+            LlmError::AuthenticationError(format!("Invalid DeepSeek configuration: {e}"))
+        })?;
+
+        Ok(Self {
+            client,
+            config,
+            model_registry,
+            omissions: OmissionLog::new(),
+            format_log: FormatLog::new(),
+        })
     }
 
-    /// Build DeepSeek API request from LlmRequest.
-    fn build_request(&self, request: &LlmRequest) -> Result<DeepSeekRequest, LlmError> {
+    /// Build DeepSeek API request from LlmRequest, plus the notes the buffered path records on
+    /// its response.
+    ///
+    /// What reaches the wire is decided by the request model's [`ModelProfile`] (ADR-0061,
+    /// D-01): [`sampling::apply`] sends a sampling parameter or the stop sequences only when
+    /// the caller set them **and** the profile admits them; a set but inadmissible one is
+    /// omitted and recorded (one `warn!` per instance per model and parameter, and
+    /// `paladin.params_omitted` on the response), never clamped or swapped. A `max_tokens`
+    /// above the profile's maximum output is refused before anything is sent. The
+    /// `response_format` follows the profile through [`sampling::apply_response_format`].
+    fn build_request(
+        &self,
+        request: &LlmRequest,
+    ) -> Result<(DeepSeekRequest, RequestNotes), LlmError> {
         let messages = self.convert_prompt_to_messages(&request.prompt)?;
-        let params = &request.prompt.node.node.parameters;
+        let params = &request.prompt.entity.data.parameters;
+        let profile = self.model_registry.profile(&request.model);
 
-        // D-28: any `ResponseFormat` variant degrades to DeepSeek's plain
-        // JSON-object form — see `DeepSeekResponseFormat`'s rustdoc.
-        let response_format =
-            request
-                .response_format
-                .as_ref()
-                .map(|_: &ResponseFormat| DeepSeekResponseFormat {
-                    kind: "json_object",
-                });
+        // The caller's value, else the configured default; either is held to the model's
+        // maximum output before anything is sent.
+        let max_tokens = params.max_tokens.or(self.config.max_tokens);
+        sampling::check_max_tokens(DEEPSEEK_PROVIDER, &request.model, &profile, max_tokens)?;
 
-        Ok(DeepSeekRequest {
+        let applied = sampling::apply(&profile, params);
+        let params_omitted = self
+            .omissions
+            .record(DEEPSEEK_PROVIDER, &request.model, &applied);
+
+        // D-28 / ADR-0061 (i): DeepSeek has one native JSON mode, the plain JSON-object form,
+        // so an effective format -- object or schema -- maps to it. The fallback profile
+        // (`json_object` true, `json_schema` false) makes a schema request a recorded
+        // downgrade (`paladin.response_format_adjusted = json_object`).
+        let (effective_format, adjustment) =
+            sampling::apply_response_format(&profile, request.response_format.as_ref());
+        let format_adjusted = self
+            .format_log
+            .record(DEEPSEEK_PROVIDER, &request.model, adjustment);
+        let response_format = effective_format.map(|_| DeepSeekResponseFormat {
+            kind: "json_object",
+        });
+
+        let unprofiled_model = self
+            .model_registry
+            .note_unprofiled(&request.model)
+            .then(|| request.model.clone());
+
+        let body = DeepSeekRequest {
             model: request.model.clone(),
             messages,
-            temperature: params.temperature,
-            max_tokens: params.max_tokens,
-            top_p: params.top_p,
-            frequency_penalty: params.frequency_penalty,
-            presence_penalty: params.presence_penalty,
+            temperature: applied.temperature,
+            max_tokens,
+            top_p: applied.top_p,
+            frequency_penalty: applied.frequency_penalty,
+            presence_penalty: applied.presence_penalty,
+            stop: applied.stop,
             stream: request.stream,
             response_format,
             // Set unconditionally to `None` here; `generate_stream` forces
@@ -438,7 +618,13 @@ impl DeepSeekAdapter {
             // existing defensive `api_request.stream = true` override below
             // (D-15).
             stream_options: None,
-        })
+        };
+        let notes = RequestNotes {
+            params_omitted,
+            format_adjusted,
+            unprofiled_model,
+        };
+        Ok((body, notes))
     }
 
     /// Convert PromptItem to DeepSeek messages.
@@ -448,7 +634,7 @@ impl DeepSeekAdapter {
     ) -> Result<Vec<DeepSeekMessage>, LlmError> {
         let mut messages = Vec::new();
 
-        match &prompt.node.node.prompt_type {
+        match &prompt.entity.data.prompt_type {
             PromptType::System(system_prompt) => {
                 messages.push(DeepSeekMessage {
                     role: "system".to_string(),
@@ -459,7 +645,7 @@ impl DeepSeekAdapter {
             PromptType::User(user_prompt) => {
                 messages.push(DeepSeekMessage {
                     role: "user".to_string(),
-                    content: user_prompt.query.clone(),
+                    content: crate::turn::user_turn_text(user_prompt),
                     reasoning_content: None,
                 });
             }
@@ -528,21 +714,36 @@ impl DeepSeekAdapter {
         bounded_excerpt(&redacted, RESPONSE_EXCERPT_CHAR_BUDGET)
     }
 
-    /// Map a non-2xx DeepSeek response to [`LlmError`].
+    /// Map a non-2xx DeepSeek response to [`LlmError`] with no rate-limit headers.
+    ///
+    /// A thin wrapper over [`Self::map_error_with_hints`], kept so the status-mapping unit
+    /// tests read the same as before PACE-01. Production paths call the hints variant.
+    #[cfg(test)]
+    fn map_error(&self, status: u16, body: &str) -> LlmError {
+        self.map_error_with_hints(status, body, None)
+    }
+
+    /// Map a non-2xx DeepSeek response to [`LlmError`], carrying the parsed rate-limit
+    /// headers of a `429` (PACE-01).
     ///
     /// `300..=399` is named explicitly (CR-02, mirroring
     /// `CompatEngine::map_error`/`GeminiAdapter::map_error`) because this
     /// client's redirect policy is `none` (see [`Self::new`]), so a `3xx`
     /// response is never followed — it arrives here as an ordinary
     /// non-success status instead. Everything else delegates wholesale to
-    /// the crate-wide [`map_http_status`] (Phase 25 D-03, FT-FR-01): `body`
+    /// the crate-wide [`map_http_status_with_hints`] (Phase 25 D-03, FT-FR-01): `body`
     /// is the RAW response text, redacted and bounded once inside the
     /// helper — never pre-excerpted here, which would bound twice.
     /// DeepSeek's documented insufficient-balance status is 402; the
     /// helper's 402 arm carries `regain_hint: None` because DeepSeek's 402
     /// body shape is not first-party-confirmed (Phase 41 RESEARCH
     /// Assumption A1), so there is no prose to parse yet.
-    fn map_error(&self, status: u16, body: &str) -> LlmError {
+    fn map_error_with_hints(
+        &self,
+        status: u16,
+        body: &str,
+        hints: Option<RateLimitHints>,
+    ) -> LlmError {
         match status {
             300..=399 => LlmError::ProviderError {
                 provider: DEEPSEEK_PROVIDER.to_string(),
@@ -556,7 +757,13 @@ impl DeepSeekAdapter {
                     self.diagnostic_excerpt(body)
                 ),
             },
-            _ => map_http_status(DEEPSEEK_PROVIDER, status, body, &self.config.api_key),
+            _ => map_http_status_with_hints(
+                DEEPSEEK_PROVIDER,
+                status,
+                body,
+                &self.config.api_key,
+                hints,
+            ),
         }
     }
 
@@ -578,9 +785,18 @@ impl DeepSeekAdapter {
     /// - The two adapters' retryable SETS must stay in lockstep: changing one
     ///   without the other is the exact bug this change fixed (D-02). Today
     ///   both retry `NetworkError | Timeout | ProcessingError |
-    ///   RateLimitExceeded | ModelNotAvailable | TokenLimitExceeded` and
-    ///   never retry `AuthenticationError | InvalidPrompt | EmptyCompletion |
-    ///   UsageLimitExceeded`.
+    ///   ModelNotAvailable | TokenLimitExceeded` and never retry
+    ///   `AuthenticationError | InvalidPrompt | EmptyCompletion |
+    ///   UsageLimitExceeded | RateLimitExceeded`.
+    ///
+    /// **A 429 is surfaced on the first attempt (Phase 43 D-02).** Before
+    /// PACE-01 this loop retried `RateLimitExceeded` with a 100 ms-scale
+    /// backoff, which re-sent into a limit the provider had just announced.
+    /// A 429 is the one error whose cure is waiting, and the Cadence
+    /// decorator above this adapter owns waiting with a gate shared by every
+    /// caller of the same provider and model; the error now carries the
+    /// provider's own `Retry-After` for it to honour. Network, timeout, 5xx
+    /// and decode retries are unchanged.
     async fn call_api_with_retry<F, Fut, T>(
         &self,
         operation: F,
@@ -610,7 +826,10 @@ impl DeepSeekAdapter {
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
                             | LlmError::EmptyCompletion(_)
+                            | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
+                            // D-02: surface the first 429; the Cadence decorator waits.
+                            | LlmError::RateLimitExceeded { .. }
                     ) {
                         return Err(e);
                     }
@@ -619,7 +838,11 @@ impl DeepSeekAdapter {
                         return Err(e);
                     }
 
-                    let backoff = Duration::from_millis(100 * 2_u64.pow(attempt));
+                    let backoff = exponential_backoff(
+                        Duration::from_millis(100),
+                        attempt,
+                        Duration::from_secs(10),
+                    );
                     let jitter = Duration::from_millis(rand::random::<u64>() % 100);
                     tokio::time::sleep(backoff + jitter).await;
                     last_error = Some(e);
@@ -636,7 +859,7 @@ impl DeepSeekAdapter {
 #[async_trait]
 impl LlmPort for DeepSeekAdapter {
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let api_request = self.build_request(&request)?;
+        let (api_request, notes) = self.build_request(&request)?;
         let url = format!("{}/chat/completions", self.config.base_url);
 
         let operation = || async {
@@ -660,11 +883,14 @@ impl LlmPort for DeepSeekAdapter {
             let status = response.status();
 
             if !status.is_success() {
+                // Snapshot the 429 headers BEFORE `.text()` consumes the response
+                // (research Pitfall 2).
+                let hints = snapshot_rate_limit_hints(status, response.headers());
                 let error_text = response
                     .text()
                     .await
                     .unwrap_or_else(|_| "Unknown error".to_string());
-                return Err(self.map_error(status.as_u16(), &error_text));
+                return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
             }
 
             // Read the body to text FIRST, then deserialize it separately.
@@ -709,34 +935,53 @@ impl LlmPort for DeepSeekAdapter {
 
             let finish_reason = Self::map_finish_reason(choice.finish_reason.clone());
 
-            if let Some(err) = detect_empty_completion(&choice.message.content, &finish_reason) {
+            // One rule for refusal, content filter, function call and empty text on any
+            // finish reason (PARITY-05, D-11a); this adapter's private copy is gone. DeepSeek
+            // sends no dedicated refusal field, so there is none to pass.
+            if let Err(err) = classify_completion(
+                self.get_provider_name(),
+                &request.model,
+                &choice.message.content,
+                &finish_reason,
+                None,
+                &self.config.api_key,
+            ) {
                 return Err(annotate_with_usage(err, &api_response.usage));
             }
 
             let content = choice.message.content.clone();
             let usage = map_usage(api_response.usage);
 
-            Ok(LlmResponse {
-                id: Uuid::new_v4(),
-                request_id: request.id,
-                model: api_response.model,
+            let mut llm_response = LlmResponse::new(
+                request.id,
+                api_response.model,
                 content,
                 finish_reason,
                 usage,
-                created_at: Utc::now(),
-                metadata: HashMap::new(),
-                function_call: None,
-            })
+            );
+            if let Some(reasoning) = &choice.message.reasoning_content {
+                llm_response = llm_response.with_reasoning(reasoning.as_str());
+            }
+            Ok(llm_response)
         };
 
-        self.call_api_with_retry(operation, 3).await
+        let mut response = self
+            .call_api_with_retry(operation, self.config.max_retries)
+            .await?;
+        // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
+        response.metadata = notes.into_metadata();
+        Ok(response)
     }
 
     async fn generate_stream(
         &self,
         request: LlmRequest,
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
-        let mut api_request = self.build_request(&request)?;
+        // ADR-0061 (h), owner reading R-1 (option-b): the omissions, format changes and
+        // unprofiled model `build_request` `warn!`s about are also stamped on the stream's
+        // terminal chunk (only that chunk), as the buffered path stamps `LlmResponse.metadata`.
+        let (mut api_request, notes) = self.build_request(&request)?;
+        let stream_metadata = notes.into_metadata();
         api_request.stream = true;
         api_request.stream_options = Some(DeepSeekStreamOptions {
             include_usage: true,
@@ -766,11 +1011,13 @@ impl LlmPort for DeepSeekAdapter {
 
         let status = response.status();
         if !status.is_success() {
+            // Same header snapshot as the buffered path, taken before the body read.
+            let hints = snapshot_rate_limit_hints(status, response.headers());
             let error_text = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(self.map_error(status.as_u16(), &error_text));
+            return Err(self.map_error_with_hints(status.as_u16(), &error_text, hints));
         }
 
         let stream = response.bytes_stream();
@@ -790,58 +1037,94 @@ impl LlmPort for DeepSeekAdapter {
         let mut held_finish_reason: Option<FinishReason> = None;
         let mut held_usage: Option<TokenUsage> = None;
 
-        let llm_stream = stream.flat_map(move |chunk_result| {
-            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).into_owned();
-                    let mut items = Vec::new();
+        // D-11a on the streaming path: the terminal chunk is decided by the same
+        // `classify_completion` the buffered path uses, over what the stream accumulated.
+        let provider = self.get_provider_name();
+        let model = request.model.clone();
+        let api_key = self.config.api_key.clone();
+        let mut completion = StreamCompletion::default();
 
-                    for line in text.lines() {
-                        let Some(json_str) = line.strip_prefix("data: ") else {
-                            continue;
-                        };
+        // A network read can end inside a `data:` line (or inside a multi-byte character), so the
+        // bytes are reassembled into whole lines before any line is parsed (CR-02).
+        let mut sse = SseLines::default();
+        let llm_stream = stream
+            .map(Some)
+            .chain(futures::stream::iter([None]))
+            .flat_map(move |chunk_option| {
+                // `None` is the end of the body: it releases a final line that had no newline.
+                let chunk_result = match chunk_option {
+                    Some(read) => read.map(|bytes| sse.push(&bytes)),
+                    None => Ok(sse.finish()),
+                };
+                let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
+                    Ok(lines) => {
+                        let mut items = Vec::new();
 
-                        if json_str.trim() == "[DONE]" {
-                            let mut terminal = StreamingResponse::terminal(
-                                held_finish_reason.take().unwrap_or(FinishReason::Stop),
-                            );
-                            if let Some(usage) = held_usage.take() {
-                                terminal = terminal.with_usage(usage);
-                            }
-                            items.push(Ok(terminal));
-                            continue;
-                        }
+                        for line in &lines {
+                            let Some(json_str) = line.strip_prefix("data: ") else {
+                                continue;
+                            };
 
-                        match serde_json::from_str::<DeepSeekStreamResponse>(json_str) {
-                            Ok(response) => {
-                                if let Some(usage) = response.usage {
-                                    held_usage = Some(map_usage(usage));
-                                }
-                                if let Some(choice) = response.choices.first() {
-                                    if let Some(reason) = &choice.finish_reason {
-                                        held_finish_reason =
-                                            Some(Self::map_finish_reason(Some(reason.clone())));
+                            if json_str.trim() == "[DONE]" {
+                                let finish_reason =
+                                    held_finish_reason.take().unwrap_or(FinishReason::Stop);
+                                match completion.finish(provider, &model, &finish_reason, &api_key)
+                                {
+                                    Ok(()) => {
+                                        let mut terminal =
+                                            StreamingResponse::terminal(finish_reason);
+                                        if let Some(usage) = held_usage.take() {
+                                            terminal = terminal.with_usage(usage);
+                                        }
+                                        for (key, value) in &stream_metadata {
+                                            terminal = terminal
+                                                .with_metadata(key.as_str(), value.as_str());
+                                        }
+                                        items.push(Ok(terminal));
                                     }
-                                    let content = choice.delta.content.clone().unwrap_or_default();
-                                    items.push(Ok(StreamingResponse::delta(content)));
+                                    // An empty answer replaces the terminal chunk; deltas already
+                                    // yielded (reasoning included) stay yielded.
+                                    Err(error) => items.push(Err(error)),
+                                }
+                                continue;
+                            }
+
+                            match serde_json::from_str::<DeepSeekStreamResponse>(json_str) {
+                                Ok(response) => {
+                                    if let Some(usage) = response.usage {
+                                        held_usage = Some(map_usage(usage));
+                                    }
+                                    if let Some(choice) = response.choices.first() {
+                                        if let Some(reason) = &choice.finish_reason {
+                                            held_finish_reason =
+                                                Some(Self::map_finish_reason(Some(reason.clone())));
+                                        }
+                                        let content =
+                                            choice.delta.content.clone().unwrap_or_default();
+                                        completion.observe_content(&content);
+                                        let mut delta = StreamingResponse::delta(content);
+                                        if let Some(reasoning) = &choice.delta.reasoning_content {
+                                            delta = delta.with_reasoning(reasoning.as_str());
+                                        }
+                                        items.push(Ok(delta));
+                                    }
+                                }
+                                Err(e) => {
+                                    items.push(Err(LlmError::ProcessingError(format!(
+                                        "Failed to parse streaming response: {}",
+                                        e
+                                    ))));
                                 }
                             }
-                            Err(e) => {
-                                items.push(Err(LlmError::ProcessingError(format!(
-                                    "Failed to parse streaming response: {}",
-                                    e
-                                ))));
-                            }
                         }
+
+                        items
                     }
+                    Err(e) => vec![Err(LlmError::NetworkError(format!("Stream error: {}", e)))],
+                };
 
-                    items
-                }
-                Err(e) => vec![Err(LlmError::NetworkError(format!("Stream error: {}", e)))],
-            };
-
-            futures::stream::iter(items)
-        });
+                futures::stream::iter(items)
+            });
 
         Ok(Box::new(llm_stream))
     }
@@ -851,11 +1134,14 @@ impl LlmPort for DeepSeekAdapter {
         Ok(available_models.contains(&model.to_string()))
     }
 
+    /// The ids in the dated DeepSeek table (`seeded::DEEPSEEK`), so the list always includes
+    /// [`DEEPSEEK_DEFAULT_MODEL`]. `deepseek-chat` and `deepseek-coder` are not listed: the
+    /// 2026-10-15 probe found them in neither the live listing nor the vendor's pricing page.
     async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
-        Ok(vec![
-            "deepseek-chat".to_string(),
-            "deepseek-coder".to_string(),
-        ])
+        Ok(seeded::DEEPSEEK
+            .iter()
+            .map(|entry| entry.model.to_string())
+            .collect())
     }
 
     fn get_provider_name(&self) -> &'static str {
@@ -863,22 +1149,18 @@ impl LlmPort for DeepSeekAdapter {
     }
 
     fn get_capabilities(&self) -> ProviderCapabilities {
-        ProviderCapabilities {
-            supports_streaming: true,
-            supports_tool_calling: false,
-            supports_function_calling: false,
-            supports_vision: false,
-            supports_embeddings: false,
-            max_context_tokens: Some(64000),
-            supports_system_messages: true,
-            temperature_range: Some((0.0, 2.0)),
-        }
+        declared_capabilities(self.config.context_window)
+    }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.model_registry.profile(model))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use paladin_ports::output::llm_port::ResponseFormat;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -937,36 +1219,92 @@ mod tests {
         assert!(!capabilities.supports_tool_calling);
         assert!(!capabilities.supports_vision);
         assert!(capabilities.supports_system_messages);
-        assert_eq!(capabilities.max_context_tokens, Some(64000));
+        assert_eq!(capabilities.max_context_tokens, Some(1_048_576));
         assert_eq!(capabilities.temperature_range, Some((0.0, 2.0)));
         assert_eq!(adapter.get_provider_name(), "deepseek");
     }
 
     #[test]
-    fn test_detect_empty_completion_length_and_empty_is_truncation() {
-        let result = detect_empty_completion("", &FinishReason::Length);
-        assert!(matches!(result, Some(LlmError::EmptyCompletion(_))));
+    fn deepseek_default_model_is_seeded() {
+        let adapter = DeepSeekAdapter::new(DeepSeekConfig::new(
+            "test-key".to_string(),
+            "https://api.deepseek.com/v1".to_string(),
+            DEEPSEEK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let (profile, origin) = adapter.model_registry.resolve(DEEPSEEK_DEFAULT_MODEL);
+        assert_eq!(
+            origin,
+            crate::registry::ProfileOrigin::Seeded {
+                verified_on: "2026-10-15"
+            }
+        );
+        assert_eq!(profile.context_window, Some(1_048_576));
+        assert_eq!(profile.max_output_tokens, Some(393_216));
     }
 
     #[test]
-    fn test_detect_empty_completion_length_and_whitespace_is_truncation() {
-        let result = detect_empty_completion("   \n\t", &FinishReason::Length);
-        assert!(matches!(result, Some(LlmError::EmptyCompletion(_))));
+    fn deepseek_default_model_is_the_operator_identified_current_model() {
+        assert_eq!(DEEPSEEK_DEFAULT_MODEL, "deepseek-flash");
+    }
+
+    #[tokio::test]
+    async fn deepseek_available_models_come_from_the_seeded_table_and_include_the_default() {
+        let adapter = DeepSeekAdapter::new(DeepSeekConfig::new(
+            "test-key".to_string(),
+            "https://api.deepseek.com/v1".to_string(),
+            DEEPSEEK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let models = adapter.get_available_models().await.unwrap();
+        assert!(models.contains(&DEEPSEEK_DEFAULT_MODEL.to_string()));
+        assert!(
+            adapter
+                .validate_model(DEEPSEEK_DEFAULT_MODEL)
+                .await
+                .unwrap()
+        );
+        assert!(!adapter.validate_model("deepseek-coder").await.unwrap());
+    }
+
+    /// The shared guard, as this adapter calls it: no refusal field, the adapter's own key.
+    fn classify(content: &str, finish: &FinishReason) -> Result<(), LlmError> {
+        classify_completion(
+            DEEPSEEK_PROVIDER,
+            "deepseek-test",
+            content,
+            finish,
+            None,
+            "k",
+        )
     }
 
     #[test]
-    fn test_detect_empty_completion_non_empty_content_is_never_truncation() {
+    fn test_empty_completion_length_and_empty_is_truncation() {
+        let result = classify("", &FinishReason::Length);
+        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
+    }
+
+    #[test]
+    fn test_empty_completion_length_and_whitespace_is_truncation() {
+        let result = classify("   \n\t", &FinishReason::Length);
+        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
+    }
+
+    #[test]
+    fn test_empty_completion_non_empty_content_is_never_truncation() {
         // Non-empty content is not a truncation regardless of finish_reason.
-        assert!(detect_empty_completion("some answer", &FinishReason::Length).is_none());
-        assert!(detect_empty_completion("some answer", &FinishReason::Stop).is_none());
+        assert!(classify("some answer", &FinishReason::Length).is_ok());
+        assert!(classify("some answer", &FinishReason::Stop).is_ok());
     }
 
+    /// D-11a deliberate flip: this pinned the opposite before Phase 50 plan 50-12 (an empty
+    /// `stop` was a legitimate empty answer). Empty text is now an `EmptyCompletion` on any
+    /// finish reason.
     #[test]
-    fn test_detect_empty_completion_empty_but_stop_is_not_truncation() {
-        // A legitimate empty completion with finish_reason=stop is NOT a truncation
-        // — detection is narrow to Length+empty only.
-        let result = detect_empty_completion("", &FinishReason::Stop);
-        assert!(result.is_none());
+    fn test_empty_completion_empty_but_stop_is_empty_completion() {
+        let result = classify("", &FinishReason::Stop);
+        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
     }
 
     #[test]
@@ -1043,9 +1381,9 @@ mod tests {
     /// RED probe (debug session `deepseek-body-decode-persist`): a reasoning
     /// model that spends its whole `max_tokens` budget on hidden reasoning can
     /// return `"content": null` rather than `"content": ""`. The `""` form is
-    /// handled by `detect_empty_completion`; the `null` form must not blow up
+    /// handled by `classify_completion`; the `null` form must not blow up
     /// in DESERIALIZATION, because that happens strictly before
-    /// `detect_empty_completion` ever runs.
+    /// `classify_completion` ever runs.
     #[test]
     fn deepseek_response_deserializes_reasoning_payload_with_null_content() {
         let json = r#"{
@@ -1071,7 +1409,7 @@ mod tests {
             .expect("payload declares one choice");
         assert_eq!(
             choice.message.content, "",
-            "null content must normalize to empty string so detect_empty_completion can \
+            "null content must normalize to empty string so classify_completion can \
              classify it as a truncation"
         );
     }
@@ -1094,8 +1432,8 @@ mod tests {
         let json = r#"{"role":"assistant","content":null}"#;
         let message: DeepSeekMessage = serde_json::from_str(json).expect("should deserialize");
 
-        let detected = detect_empty_completion(&message.content, &FinishReason::Length);
-        assert!(matches!(detected, Some(LlmError::EmptyCompletion(_))));
+        let detected = classify(&message.content, &FinishReason::Length);
+        assert!(matches!(detected, Err(LlmError::EmptyCompletion(_))));
     }
 
     #[test]
@@ -1266,7 +1604,7 @@ mod tests {
         ));
         assert!(matches!(
             adapter.map_error(429, "slow down"),
-            LlmError::RateLimitExceeded
+            LlmError::RateLimitExceeded { .. }
         ));
         assert!(matches!(
             adapter.map_error(404, "no model"),
@@ -1469,7 +1807,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn call_api_with_retry_still_retries_rate_limit_exceeded() {
+    async fn call_api_with_retry_surfaces_rate_limit_exceeded_on_the_first_attempt() {
         let adapter = test_adapter();
         let calls = Arc::new(AtomicU32::new(0));
         let calls_clone = Arc::clone(&calls);
@@ -1480,19 +1818,93 @@ mod tests {
                     let calls = Arc::clone(&calls_clone);
                     async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Err(LlmError::RateLimitExceeded)
+                        Err(LlmError::rate_limited(None))
                     }
                 },
                 3,
             )
             .await;
 
-        assert!(result.is_err());
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
         assert_eq!(
             calls.load(Ordering::SeqCst),
-            4,
-            "RateLimitExceeded retry behavior must not regress"
+            1,
+            "a 429 is surfaced on the first attempt (D-02): the Cadence decorator owns waiting, \
+             so this loop must not re-send into a limit the provider just announced"
         );
+    }
+
+    // ── PACE-01: a 429 carries the provider's Retry-After, buffered and streamed ──
+
+    #[tokio::test]
+    async fn deepseek_429_carries_retry_after_from_the_header() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(r#"{"error":{"message":"rate limit"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter_at(&server.url());
+        let err = adapter
+            .generate(build_response_format_request(None))
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        mock.assert_async().await;
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+    }
+
+    #[tokio::test]
+    async fn deepseek_stream_open_429_carries_retry_after_from_the_header() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_header("retry-after", "7")
+            .with_body(r#"{"error":{"message":"rate limit"}}"#)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter_at(&server.url());
+        let result = adapter
+            .generate_stream(build_response_format_request(None))
+            .await;
+
+        mock.assert_async().await;
+        match &result {
+            Err(err @ LlmError::RateLimitExceeded { .. }) => {
+                assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+            }
+            Ok(_) => panic!("expected a rate-limit error, got Ok(<stream>)"),
+            Err(other) => panic!("expected a rate-limit error, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn deepseek_429_without_retry_after_carries_no_delay() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(429)
+            .with_body("{}")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let adapter = test_adapter_at(&server.url());
+        let err = adapter
+            .generate(build_response_format_request(None))
+            .await
+            .expect_err("a 429 must surface as an error");
+
+        assert!(matches!(err, LlmError::RateLimitExceeded { .. }));
+        assert_eq!(err.retry_after(), None);
     }
 
     // ── Phase 26 (RT-05, D-28): response_format reaches the wire ──────────
@@ -1519,7 +1931,7 @@ mod tests {
         let adapter = test_adapter();
         let request = build_response_format_request(Some(ResponseFormat::JsonObject));
 
-        let api_request = adapter.build_request(&request).unwrap();
+        let api_request = adapter.build_request(&request).unwrap().0;
         let body = serde_json::to_value(&api_request).unwrap();
 
         assert_eq!(
@@ -1537,7 +1949,7 @@ mod tests {
             strict: true,
         }));
 
-        let api_request = adapter.build_request(&request).unwrap();
+        let api_request = adapter.build_request(&request).unwrap().0;
         let body = serde_json::to_value(&api_request).unwrap();
 
         assert_eq!(
@@ -1553,12 +1965,39 @@ mod tests {
         let adapter = test_adapter();
         let request = build_response_format_request(None);
 
-        let api_request = adapter.build_request(&request).unwrap();
+        let api_request = adapter.build_request(&request).unwrap().0;
         let body = serde_json::to_value(&api_request).unwrap();
 
         assert!(
             body.as_object().unwrap().get("response_format").is_none(),
             "absent response_format must not appear on the wire, got: {body:?}"
+        );
+    }
+
+    /// Phase 50 (PARITY-08): a present context is appended to the query by the shared
+    /// `user_turn_text` helper; an absent one leaves the query unchanged.
+    #[test]
+    fn deepseek_user_turn_appends_context() {
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        let adapter = test_adapter();
+        let user_turn = |context: Option<&str>| -> serde_json::Value {
+            let request = LlmRequest::new(
+                "deepseek-chat",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "What is 2+2?".to_string(),
+                    context: context.map(str::to_string),
+                }))
+                .unwrap(),
+            );
+            let body = serde_json::to_value(adapter.build_request(&request).unwrap().0).unwrap();
+            body["messages"][0]["content"].clone()
+        };
+
+        assert_eq!(user_turn(None), "What is 2+2?");
+        assert_eq!(
+            user_turn(Some("Extra context.")),
+            "What is 2+2?\n\nExtra context."
         );
     }
 
@@ -1718,8 +2157,463 @@ mod tests {
         assert_eq!(assembled, "Hello");
     }
 
+    // ── Phase 50 (PARITY-02, ADR-0061, D-01): the per-model parameter policy ──
+
+    mod parameter_policy {
+        use super::*;
+        use crate::registry::UNPROFILED_MODEL_METADATA_KEY;
+        use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
+        use paladin_core::platform::container::prompt::{PromptParameters, UserPrompt};
+        use serde_json::{Value, json};
+        use std::sync::Mutex;
+
+        fn request_with(parameters: PromptParameters) -> LlmRequest {
+            let mut request = LlmRequest::new(
+                "deepseek-chat",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            );
+            request.prompt.entity.data.parameters = parameters;
+            request
+        }
+
+        fn unset() -> PromptParameters {
+            PromptParameters {
+                max_tokens: None,
+                temperature: None,
+                top_p: None,
+                frequency_penalty: None,
+                presence_penalty: None,
+                stop_sequences: None,
+            }
+        }
+
+        fn completion_json() -> Vec<u8> {
+            json!({
+                "id": "cmpl-1",
+                "model": "deepseek-chat",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+            .into_bytes()
+        }
+
+        /// Runs `generate()` against a mock endpoint, returning the outgoing JSON body and the
+        /// response metadata.
+        async fn generate_capture(
+            request: LlmRequest,
+        ) -> (Value, std::collections::HashMap<String, String>) {
+            let mut server = mockito::Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    completion_json()
+                })
+                .create_async()
+                .await;
+
+            let response = test_adapter_at(&server.url())
+                .generate(request)
+                .await
+                .expect("the mock answers a well-formed completion");
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            (
+                serde_json::from_str(&body).expect("the body must be JSON"),
+                response.metadata,
+            )
+        }
+
+        async fn stream_capture(request: LlmRequest) -> Value {
+            let mut server = mockito::Server::new_async().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    b"data: [DONE]\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+
+            let stream = test_adapter_at(&server.url())
+                .generate_stream(request)
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock must have been called once");
+            serde_json::from_str(&body).expect("the body must be JSON")
+        }
+
+        #[tokio::test]
+        async fn deepseek_stop_sequences_keep_declared_order() {
+            let mut parameters = unset();
+            // A duplicate, deliberately: order and duplicates are the caller's.
+            parameters.stop_sequences = Some(vec![
+                "END".to_string(),
+                "STOP".to_string(),
+                "END".to_string(),
+            ]);
+            let (body, metadata) = generate_capture(request_with(parameters)).await;
+
+            assert_eq!(body["stop"], json!(["END", "STOP", "END"]));
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn deepseek_stream_stop_sequences_keep_declared_order() {
+            let mut parameters = unset();
+            parameters.stop_sequences = Some(vec!["END".to_string(), "STOP".to_string()]);
+            let body = stream_capture(request_with(parameters)).await;
+
+            assert_eq!(body["stop"], json!(["END", "STOP"]));
+            assert_eq!(body["stream"], true);
+        }
+
+        #[tokio::test]
+        async fn deepseek_unset_sampling_values_are_absent() {
+            let (body, metadata) = generate_capture(request_with(unset())).await;
+            let obj = body.as_object().expect("body must be a JSON object");
+
+            for key in [
+                "temperature",
+                "top_p",
+                "frequency_penalty",
+                "presence_penalty",
+                "stop",
+                "max_tokens",
+            ] {
+                assert!(!obj.contains_key(key), "{key} was never set: {obj:?}");
+            }
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+        }
+
+        #[tokio::test]
+        async fn deepseek_out_of_range_temperature_is_omitted_and_recorded() {
+            let mut at_edge = unset();
+            at_edge.temperature = Some(2.0);
+            let (body, metadata) = generate_capture(request_with(at_edge)).await;
+            assert_eq!(body["temperature"], 2.0, "the declared maximum is admitted");
+            assert!(!metadata.contains_key(PARAMS_OMITTED_METADATA_KEY));
+
+            let mut past_edge = unset();
+            past_edge.temperature = Some(2.1);
+            let (body, metadata) = generate_capture(request_with(past_edge)).await;
+            assert!(
+                body.get("temperature").is_none(),
+                "2.1 is omitted, never clamped to 2.0: {body}"
+            );
+            assert_eq!(
+                metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+        }
+
+        #[tokio::test]
+        async fn deepseek_schema_request_is_recorded_as_downgraded() {
+            let request = request_with(unset()).with_response_format(ResponseFormat::JsonSchema {
+                name: "answer".to_string(),
+                schema: json!({"type": "object"}),
+                strict: true,
+            });
+            let (body, metadata) = generate_capture(request).await;
+
+            assert_eq!(body["response_format"], json!({"type": "json_object"}));
+            assert_eq!(
+                metadata
+                    .get(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("json_object"),
+                "the schema-to-object downgrade is now visible on the response"
+            );
+
+            let request = request_with(unset()).with_response_format(ResponseFormat::JsonObject);
+            let (_, metadata) = generate_capture(request).await;
+            assert!(
+                !metadata.contains_key(RESPONSE_FORMAT_ADJUSTED_METADATA_KEY),
+                "a plain object request is sent as asked, so nothing is recorded"
+            );
+        }
+
+        /// Phase 50, owner reading R-1 (option-b): a streamed call stamps the visibility keys
+        /// the buffered path would, on the terminal chunk only.
+        #[tokio::test]
+        async fn deepseek_stream_terminal_chunk_carries_metadata() {
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(
+                    "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n\
+                     data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"\"},\"finish_reason\":\"stop\"}]}\n\n\
+                     data: [DONE]\n\n",
+                )
+                .create_async()
+                .await;
+
+            let mut parameters = unset();
+            parameters.temperature = Some(2.5); // above the profile's (0.0, 2.0)
+            let stream = test_adapter_at(&server.url())
+                .generate_stream(request_with(parameters))
+                .await
+                .expect("the stream must open");
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every scripted item is Ok"));
+            }
+
+            let terminal = chunks.last().expect("a terminal chunk");
+            assert!(terminal.finish_reason.is_some());
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(PARAMS_OMITTED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("temperature")
+            );
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some("deepseek-chat")
+            );
+            for content in &chunks[..chunks.len() - 1] {
+                assert!(content.metadata.is_empty(), "content chunk: {content:?}");
+            }
+        }
+
+        #[tokio::test]
+        async fn deepseek_unprofiled_model_is_stamped() {
+            let (_, metadata) = generate_capture(request_with(unset())).await;
+            assert_eq!(
+                metadata
+                    .get(UNPROFILED_MODEL_METADATA_KEY)
+                    .map(String::as_str),
+                Some("deepseek-chat"),
+                "`deepseek-chat` has no seeded entry (an undocumented alias), so it runs on the adapter-wide fallback"
+            );
+        }
+
+        #[test]
+        fn deepseek_model_profile_is_always_some_and_matches_what_the_wire_sends() {
+            let profile = test_adapter()
+                .model_profile("any-model")
+                .expect("deepseek profiles every model");
+            assert_eq!(profile.temperature, ParamSupport::Range(0.0, 2.0));
+            assert_eq!(profile.top_p, ParamSupport::Range(0.0, 1.0));
+            assert_eq!(profile.frequency_penalty, ParamSupport::Range(-2.0, 2.0));
+            assert_eq!(profile.presence_penalty, ParamSupport::Range(-2.0, 2.0));
+            assert_eq!(profile.stop_sequences, StopSupport::Supported { max: None });
+            assert!(profile.json_object);
+            assert!(!profile.json_schema);
+        }
+
+        #[test]
+        fn deepseek_max_tokens_above_a_profiled_maximum_is_refused_by_name() {
+            use crate::registry::{ModelOverride, ModelRegistry};
+            use std::collections::BTreeMap;
+
+            let mut adapter = test_adapter();
+            let over = ModelOverride {
+                max_output_tokens: Some(1000),
+                ..ModelOverride::default()
+            };
+            adapter.model_registry =
+                ModelRegistry::new(DEEPSEEK_PROVIDER, &[], fallback_profile(None))
+                    .with_overrides(BTreeMap::from([("deepseek-chat".to_string(), over)]))
+                    .expect("a plain max_output_tokens override is valid");
+
+            let mut parameters = unset();
+            parameters.max_tokens = Some(4000);
+            match adapter.build_request(&request_with(parameters)) {
+                Err(LlmError::InvalidPrompt(message)) => {
+                    assert!(message.contains("deepseek"), "{message}");
+                    assert!(message.contains("deepseek-chat"), "{message}");
+                    assert!(message.contains("max_tokens"), "{message}");
+                }
+                other => panic!("expected InvalidPrompt, got {other:?}"),
+            }
+        }
+    }
+
     // ── Shared conformance suite (D-19, plan 31-04) ──
     //
+    /// PARITY-05: reasoning text and the empty-output rule on both paths (D-11, D-11a).
+    mod response_guard_wiring {
+        use super::*;
+        use futures::StreamExt;
+        use serde_json::{Value, json};
+
+        fn body(message: Value, finish_reason: &str) -> String {
+            json!({
+                "id": "cmpl-1",
+                "model": "deepseek-chat",
+                "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+            })
+            .to_string()
+        }
+
+        async fn generate_from(body: String) -> Result<LlmResponse, LlmError> {
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(body)
+                .create_async()
+                .await;
+            test_adapter_at(&server.url())
+                .generate(build_response_format_request(None))
+                .await
+        }
+
+        async fn stream_from(sse: &str) -> Vec<Result<StreamingResponse, LlmError>> {
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = test_adapter_at(&server.url())
+                .generate_stream(build_response_format_request(None))
+                .await
+                .unwrap();
+            let mut stream = Box::into_pin(stream);
+            let mut items = Vec::new();
+            while let Some(item) = stream.next().await {
+                items.push(item);
+            }
+            items
+        }
+
+        #[tokio::test]
+        async fn deepseek_buffered_reasoning_text_is_surfaced() {
+            let response = generate_from(body(
+                json!({"role": "assistant", "content": "ok", "reasoning_content": "think"}),
+                "stop",
+            ))
+            .await
+            .unwrap();
+            assert_eq!(response.reasoning.as_deref(), Some("think"));
+
+            let blank = generate_from(body(
+                json!({"role": "assistant", "content": "ok", "reasoning_content": "  "}),
+                "stop",
+            ))
+            .await
+            .unwrap();
+            assert_eq!(blank.reasoning, None);
+        }
+
+        #[tokio::test]
+        async fn deepseek_empty_stop_completion_is_empty_completion_with_usage() {
+            let result =
+                generate_from(body(json!({"role": "assistant", "content": ""}), "stop")).await;
+            match result {
+                Err(LlmError::EmptyCompletion(msg)) => {
+                    assert!(msg.contains("finish_reason=stop"), "{msg}");
+                    assert!(
+                        msg.contains("provider-reported usage"),
+                        "the buffered path still annotates usage: {msg}"
+                    );
+                }
+                other => panic!("expected EmptyCompletion, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn deepseek_stream_reasoning_keeps_wire_order() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"a \"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"b\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let chunks: Vec<StreamingResponse> = stream_from(sse)
+                .await
+                .into_iter()
+                .map(|item| item.unwrap())
+                .collect();
+            let reasoning: Vec<Option<&str>> =
+                chunks.iter().map(|c| c.reasoning.as_deref()).collect();
+            assert_eq!(reasoning, vec![Some("a "), None, Some("b"), None]);
+            let content: Vec<&str> = chunks.iter().map(|c| c.delta.as_str()).collect();
+            assert_eq!(content, vec!["", "Hi", "", ""]);
+        }
+
+        #[tokio::test]
+        async fn deepseek_empty_stream_is_empty_completion() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm\"},\"finish_reason\":null}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\" \"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            let (last, yielded) = items.split_last().unwrap();
+            assert!(
+                matches!(last, Err(LlmError::EmptyCompletion(_))),
+                "got {last:?}"
+            );
+            assert_eq!(
+                yielded[0].as_ref().unwrap().reasoning.as_deref(),
+                Some("hmm"),
+                "reasoning already yielded stays yielded"
+            );
+            assert!(
+                items
+                    .iter()
+                    .all(|item| !matches!(item, Ok(chunk) if chunk.finish_reason.is_some())),
+                "no Ok terminal chunk is emitted"
+            );
+        }
+
+        #[tokio::test]
+        async fn deepseek_content_filter_stream_with_no_text_stays_ok() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"content_filter\"}]}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let items = stream_from(sse).await;
+            let terminal = items.last().unwrap().as_ref().expect("no error item");
+            assert!(matches!(
+                terminal.finish_reason,
+                Some(FinishReason::ContentFilter)
+            ));
+        }
+    }
+
     // Nested in its own module (rather than inline in `mod tests`) so every generated test's
     // full path contains "conformance" -- `cargo test --lib conformance` (the plan's own
     // acceptance criterion) selects it by that substring.
@@ -1731,6 +2625,14 @@ mod tests {
 
         impl crate::conformance::ConformanceFixture for DeepSeekFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
+
+            fn default_model() -> &'static str {
+                DEEPSEEK_DEFAULT_MODEL
+            }
+
+            fn provider_name() -> &'static str {
+                "deepseek"
+            }
 
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 let config = DeepSeekConfig::new(
@@ -1768,6 +2670,37 @@ mod tests {
                 .to_string()
             }
 
+            // DeepSeek's wire has no dedicated refusal field (A3-50-12): a blocked answer is
+            // `finish_reason: content_filter` with no text, which stays `Ok(ContentFilter)`.
+            fn refusal_shape(_secret: &str) -> crate::conformance::RefusalShape {
+                crate::conformance::RefusalShape::ContentFilterOnly(
+                    crate::conformance::wire_defaults::chat_content_filter_body(),
+                )
+            }
+
+            // DeepSeek reports the cache hit as top-level `prompt_cache_hit_tokens` (with a
+            // `prompt_cache_miss_tokens` companion), not OpenAI's `prompt_tokens_details`.
+            fn usage_body() -> String {
+                json!({
+                    "id": "cmpl-1",
+                    "model": DEEPSEEK_DEFAULT_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 40,
+                        "total_tokens": 140,
+                        "prompt_cache_hit_tokens": 30,
+                        "prompt_cache_miss_tokens": 70,
+                        "completion_tokens_details": {"reasoning_tokens": 15}
+                    }
+                })
+                .to_string()
+            }
+
             fn error_body(status: u16) -> String {
                 json!({"error": {"message": format!("mock error for status {status}"), "type": "mock_error"}})
                     .to_string()
@@ -1775,5 +2708,229 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(DeepSeekFixture);
+    }
+}
+
+/// The PARITY-03 knobs on `DeepSeekConfig` (plan 50-08, D-12): each one is read by the adapter.
+#[cfg(test)]
+mod knob_tests {
+    use super::*;
+    use crate::test_support::{
+        attempts_against_a_failing_endpoint, mock_completion, send_with_max_tokens, server,
+    };
+    use crate::window::effective_capabilities;
+
+    const UNSEEDED: &str = "deepseek-unseeded-test-model";
+
+    fn config(base_url: &str, model: &str) -> DeepSeekConfig {
+        DeepSeekConfig::new(
+            "test-key".to_string(),
+            base_url.to_string(),
+            model.to_string(),
+        )
+    }
+
+    fn window_override(window: u32) -> ModelOverride {
+        ModelOverride {
+            context_window: Some(window),
+            ..ModelOverride::default()
+        }
+    }
+
+    fn error_of(config: DeepSeekConfig) -> String {
+        match DeepSeekAdapter::new(config) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("construction must fail"),
+        }
+    }
+
+    #[tokio::test]
+    async fn deepseek_max_tokens_default_reaches_the_wire() {
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let url = server.url();
+
+        let adapter = DeepSeekAdapter::new(config(&url, UNSEEDED).with_max_tokens(2048)).unwrap();
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 2048, "{body}");
+        // A request's own value wins.
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 512, "{body}");
+
+        // No configured default: no `max_tokens` key, as before PARITY-03.
+        let plain = DeepSeekAdapter::new(config(&url, UNSEEDED)).unwrap();
+        let body = send_with_max_tokens(&plain, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert!(body.get("max_tokens").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn deepseek_max_tokens_default_is_checked_against_the_profile() {
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        // `deepseek-flash` is seeded with a 393,216-token maximum output.
+        let adapter =
+            DeepSeekAdapter::new(config(&server.url(), "deepseek-flash").with_max_tokens(500_000))
+                .unwrap();
+        let Err(LlmError::InvalidPrompt(message)) =
+            send_with_max_tokens(&adapter, &captured, "deepseek-flash", None).await
+        else {
+            panic!("a default above the model's maximum output must be InvalidPrompt");
+        };
+        for needle in ["max_tokens", "500000", "393216"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+        assert!(captured.lock().unwrap().is_none(), "nothing was sent");
+    }
+
+    #[tokio::test]
+    async fn deepseek_max_retries_is_read_by_the_adapter() {
+        // The loop retries up to `max_retries` times after the first attempt.
+        for retries in [0_u32, 1] {
+            let server = server().await;
+            let adapter =
+                DeepSeekAdapter::new(config(&server.url(), UNSEEDED).with_max_retries(retries))
+                    .unwrap();
+            attempts_against_a_failing_endpoint(server, &adapter, UNSEEDED, retries as usize + 1)
+                .await;
+        }
+    }
+
+    #[test]
+    fn deepseek_context_window_override_is_declared() {
+        let adapter = DeepSeekAdapter::new(
+            config("https://example.invalid/v1", UNSEEDED).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(500_000)
+        );
+    }
+
+    #[test]
+    fn context_window_override_beats_a_seeded_window_on_deepseek() {
+        let base = || config("https://example.invalid/v1", "deepseek-flash");
+        let seeded = DeepSeekAdapter::new(base()).unwrap();
+        assert_eq!(
+            seeded
+                .model_profile("deepseek-flash")
+                .unwrap()
+                .context_window,
+            Some(1_048_576)
+        );
+
+        // The operator's adapter-wide statement beats the compiled seeded fact ...
+        let adapter = DeepSeekAdapter::new(base().with_context_window(500_000)).unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("deepseek-flash")
+                .unwrap()
+                .context_window,
+            Some(500_000)
+        );
+        assert_eq!(
+            effective_capabilities(&adapter, "deepseek-flash").max_context_tokens,
+            Some(500_000)
+        );
+
+        // ... and a per-model override beats both.
+        let adapter =
+            DeepSeekAdapter::new(base().with_context_window(500_000).with_model_overrides(
+                BTreeMap::from([("deepseek-flash".to_string(), window_override(900_000))]),
+            ))
+            .unwrap();
+        assert_eq!(
+            adapter
+                .model_profile("deepseek-flash")
+                .unwrap()
+                .context_window,
+            Some(900_000)
+        );
+
+        // A window below the seeded maximum output is refused, never clamped.
+        let message = error_of(base().with_context_window(100_000));
+        for needle in ["deepseek", "deepseek-flash", "100000", "393216"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn deepseek_invalid_override_fails_construction_naming_provider_and_model() {
+        let with_override = |over: ModelOverride| {
+            config("https://example.invalid/v1", UNSEEDED)
+                .with_model_overrides(BTreeMap::from([(UNSEEDED.to_string(), over)]))
+        };
+        let adapter = DeepSeekAdapter::new(with_override(window_override(900_000))).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+        for over in [
+            window_override(0),
+            ModelOverride {
+                context_window: Some(1_000),
+                max_output_tokens: Some(2_000_000),
+                ..ModelOverride::default()
+            },
+        ] {
+            let message = error_of(with_override(over));
+            assert!(
+                message.contains("deepseek") && message.contains(UNSEEDED),
+                "the error must name the provider and the model: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn deepseek_config_defaults_a_reasoning_model_to_300s() {
+        // (model, expected default timeout): `deepseek-flash` is a seeded reasoning model.
+        for (model, expected) in [
+            ("deepseek-flash", 300),
+            ("deepseek-chat", 60),
+            (UNSEEDED, 60),
+        ] {
+            assert_eq!(
+                config("https://example.invalid/v1", model).timeout_seconds,
+                expected,
+                "new({model})"
+            );
+        }
+        assert_eq!(
+            config("https://example.invalid/v1", DEEPSEEK_DEFAULT_MODEL).timeout_seconds,
+            300,
+            "the default model is a seeded reasoning model"
+        );
+        let mut explicit = config("https://example.invalid/v1", "deepseek-flash");
+        explicit.timeout_seconds = 45;
+        assert_eq!(explicit.timeout_seconds, 45);
+    }
+
+    #[test]
+    fn deepseek_config_debug_redacts_the_api_key() {
+        let config = config("https://api.example.invalid/v1", "deepseek-flash");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+            "max_tokens",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
     }
 }

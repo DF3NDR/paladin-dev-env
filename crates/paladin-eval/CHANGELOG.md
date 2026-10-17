@@ -7,6 +7,12 @@ and this project follows lockstep workspace versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Phase 42 (ALLOW-03, PLAT-09): source patterns updated for the new `TraceEvent::RunFinished.halt_reason`
+  field and the `cause` on `RunOutcome::Halted`; no public item is added or changed. An eval scenario
+  cannot yet assert `run_status: cancelled` (`RunStatusValue` has no `Cancelled` value), a deferred item.
+
 ## [0.10.1] - 2026-09-20
 
 Patch release carried by the workspace-wide version bump (0.10.0 -> 0.10.1). No source

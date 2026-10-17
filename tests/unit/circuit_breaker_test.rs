@@ -35,9 +35,7 @@ fn test_circuit_breaker_opens_after_threshold_failures() {
 
     // First 2 failures should keep circuit closed
     for _ in 0..2 {
-        let result = circuit_breaker.call(|| {
-            Err::<String, PaladinError>(PaladinError::ExecutionError("test failure".to_string()))
-        });
+        let result = circuit_breaker.call(|| Err::<String, PaladinError>(PaladinError::Timeout(1)));
         assert!(result.is_err());
         assert!(matches!(
             circuit_breaker.get_state(),
@@ -46,9 +44,7 @@ fn test_circuit_breaker_opens_after_threshold_failures() {
     }
 
     // 3rd failure should open the circuit
-    let result = circuit_breaker.call(|| {
-        Err::<String, PaladinError>(PaladinError::ExecutionError("test failure".to_string()))
-    });
+    let result = circuit_breaker.call(|| Err::<String, PaladinError>(PaladinError::Timeout(1)));
     assert!(result.is_err());
 
     // Circuit should now be Open
@@ -68,9 +64,7 @@ fn test_circuit_breaker_half_open_state() {
 
     // Force circuit to open by exceeding failure threshold
     for _ in 0..3 {
-        let _ = circuit_breaker.call(|| {
-            Err::<String, PaladinError>(PaladinError::ExecutionError("test failure".to_string()))
-        });
+        let _ = circuit_breaker.call(|| Err::<String, PaladinError>(PaladinError::Timeout(1)));
     }
 
     assert!(matches!(
@@ -103,9 +97,7 @@ fn test_circuit_breaker_closes_after_success() {
 
     // Force circuit to open
     for _ in 0..3 {
-        let _ = circuit_breaker.call(|| {
-            Err::<String, PaladinError>(PaladinError::ExecutionError("test failure".to_string()))
-        });
+        let _ = circuit_breaker.call(|| Err::<String, PaladinError>(PaladinError::Timeout(1)));
     }
 
     // Wait for timeout
@@ -150,9 +142,7 @@ fn test_circuit_breaker_concurrent_access() {
             let result = if i % 2 == 0 {
                 cb.call(|| Ok::<String, PaladinError>("success".to_string()))
             } else {
-                cb.call(|| {
-                    Err::<String, PaladinError>(PaladinError::ExecutionError("fail".to_string()))
-                })
+                cb.call(|| Err::<String, PaladinError>(PaladinError::Timeout(1)))
             };
 
             if result.is_ok() {
@@ -181,4 +171,23 @@ fn test_circuit_breaker_concurrent_access() {
         ),
         "Circuit breaker should be in a valid state"
     );
+}
+
+#[test]
+fn test_circuit_breaker_ignores_unknown_failures() {
+    let circuit_breaker = CircuitBreaker::new(3, 2, Duration::from_millis(100));
+
+    // `ExecutionError` classifies as Unknown, so it never counts toward
+    // tripping (D-14) however many occur.
+    for _ in 0..10 {
+        let result = circuit_breaker.call(|| {
+            Err::<String, PaladinError>(PaladinError::ExecutionError("test failure".to_string()))
+        });
+        assert!(matches!(result, Err(PaladinError::ExecutionError(_))));
+    }
+
+    assert!(matches!(
+        circuit_breaker.get_state(),
+        CircuitState::Closed { .. }
+    ));
 }

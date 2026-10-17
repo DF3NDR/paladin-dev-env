@@ -17,13 +17,14 @@ use paladin_ports::output::llm_port::{LlmPort, LlmRequest};
 /// (`#[tokio::test]`).
 async fn setup_mock_server() -> (ServerGuard, AnthropicAdapter) {
     let server = Server::new_async().await;
-    let config = AnthropicConfig {
-        api_key: "test-api-key".to_string(),
-        base_url: server.url(),
-        model: "claude-3-5-sonnet-20241022".to_string(),
-        max_tokens: 4096,
-        timeout_seconds: 30,
-    };
+    // `AnthropicConfig` is `#[non_exhaustive]`: build it with `new` and set what differs.
+    let mut config = AnthropicConfig::new(
+        "test-api-key".to_string(),
+        server.url(),
+        "claude-3-5-sonnet-20241022".to_string(),
+        4096,
+    );
+    config.timeout_seconds = 30;
     let adapter = AnthropicAdapter::new(config).unwrap();
     (server, adapter)
 }
@@ -250,7 +251,7 @@ async fn test_anthropic_rate_limit_429() {
     let error = response.unwrap_err();
     assert!(matches!(
         error,
-        paladin_ports::output::llm_port::LlmError::RateLimitExceeded
+        paladin_ports::output::llm_port::LlmError::RateLimitExceeded { .. }
     ));
 }
 

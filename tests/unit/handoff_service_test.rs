@@ -11,7 +11,7 @@
 use paladin::application::errors::handoff_error::HandoffError;
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::application::services::paladin::handoff_service::HandoffService;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::autonomous_config::{HandoffConfig, HandoffRetryConfig};
 use paladin::core::platform::container::handoff::{HandoffContext, HandoffStrategy};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
@@ -405,12 +405,14 @@ impl PaladinExecutorPort for SuccessExecutor {
         Ok(PaladinResult {
             output: "Specialist result".to_string(),
             usage: paladin_ports::output::llm_port::TokenUsage::new(100, 0),
+            cost: None,
             execution_time_ms: 50,
             loop_count: 1,
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         })
     }
 }
@@ -468,12 +470,14 @@ impl PaladinExecutorPort for TransientThenSuccessExecutor {
             Ok(PaladinResult {
                 output: "Recovered result".to_string(),
                 usage: paladin_ports::output::llm_port::TokenUsage::new(80, 0),
+                cost: None,
                 execution_time_ms: 40,
                 loop_count: 1,
                 stop_reason: StopReason::Completed,
                 plan: None,
                 handoff_history: Vec::new(),
                 served_by: None,
+                run_metadata: std::collections::BTreeMap::new(),
             })
         }
     }
@@ -512,7 +516,7 @@ impl PaladinExecutorPort for AlwaysTransientFailExecutor {
 
 /// Helper: create a test Paladin
 fn create_test_paladin(name: &str) -> Paladin {
-    Node::new(
+    Entity::new(
         PaladinData {
             system_prompt: format!("You are {name}"),
             name: name.to_string(),

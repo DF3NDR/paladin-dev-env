@@ -26,7 +26,7 @@ Pre-configured with essential extensions:
 
 The DevContainer includes Docker Compose configuration for:
 - **Redis**: Queue management and caching
-- **MinIO**: S3-compatible object storage
+- **RustFS**: S3-compatible object storage
 - **MySQL**: Persistent database
 
 ### ⚙️ Configured Features
@@ -230,7 +230,7 @@ pd-examples   # cd to examples/
 
 ### Starting Services
 
-The DevContainer can run alongside Redis, MinIO, and MySQL:
+The DevContainer can run alongside Redis, RustFS, and MySQL:
 
 ```bash
 # Start all services
@@ -246,8 +246,8 @@ When services are running:
 - **Paladin API**: http://localhost:8080
 - **Metrics**: http://localhost:9090
 - **Redis**: localhost:6379
-- **MinIO API**: http://localhost:9000
-- **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
+- **RustFS API**: http://localhost:9000
+- **RustFS Console**: http://localhost:9001/rustfs/console/index.html (paladin-dev/paladin-dev-secret)
 - **MySQL**: localhost:3306 (paladin/paladinpass)
 
 ### Running Tests
@@ -307,9 +307,9 @@ ANTHROPIC_API_KEY=your_key_here
 
 # Services
 REDIS_URL=redis://redis:6379
-MINIO_ENDPOINT=minio:9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
+MINIO_ENDPOINT=rustfs:9000
+MINIO_ACCESS_KEY=paladin-dev
+MINIO_SECRET_KEY=paladin-dev-secret
 
 # Database
 DATABASE_URL=mysql://paladin:paladinpass@mysql:3306/paladin

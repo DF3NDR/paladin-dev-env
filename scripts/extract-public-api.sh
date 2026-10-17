@@ -17,15 +17,17 @@
 # with no public item added, removed or changed. The nightly is therefore
 # chosen through ONE variable. CI sets it to a dated nightly in the
 # api-surface job of .github/workflows/ci.yml and installs that same name;
-# unset, it is the local `nightly`, exactly as before.
+# the Makefile defaults it to the same dated nightly for `make api-surface`
+# and `make api-surface-update`; unset (the script run directly), it is the
+# local `nightly`, exactly as before.
 #
 # cargo-public-api 0.52.0 has no --toolchain flag. It reads RUSTUP_TOOLCHAIN,
 # which `cargo +<toolchain>` sets, honours it when it is a nightly, and
 # otherwise warns and SILENTLY switches to plain `nightly`. A non-nightly value
 # would look applied and not be, so it is refused here instead.
 #
-# To move the pin: set PUBLIC_API_TOOLCHAIN in ci.yml to the new dated nightly,
-# regenerate the baseline with that same toolchain
+# To move the pin: set PUBLIC_API_TOOLCHAIN in ci.yml AND the Makefile to the
+# new dated nightly, regenerate the baseline with that same toolchain
 #   PUBLIC_API_TOOLCHAIN=nightly-YYYY-MM-DD ./scripts/extract-public-api.sh .project/current-exports.txt
 # and commit both together.
 set -euo pipefail

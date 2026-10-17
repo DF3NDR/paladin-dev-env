@@ -32,7 +32,7 @@
 use crate::application::services::paladin::error::PaladinError;
 use crate::application::services::sanctum::memory_extraction_service::MemoryExtractionStrategy;
 use crate::config::arsenal::MCPServerConfig;
-use crate::core::base::entity::node::Node;
+use crate::core::base::entity::Entity;
 use crate::core::platform::container::arsenal::Armament;
 use crate::core::platform::container::herald::Herald;
 use crate::core::platform::container::paladin::MaxLoops;
@@ -44,6 +44,9 @@ use paladin_ports::output::citadel_port::CitadelPort;
 use paladin_ports::output::embedding_port::EmbeddingPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
 use paladin_ports::output::llm_port::LlmPort;
+use paladin_ports::output::model_profile::{
+    ModelProfile, ParamSupport, SamplingParam, StopSupport,
+};
 use paladin_ports::output::sanctum_port::SanctumPort;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1075,13 +1078,13 @@ impl PaladinBuilder {
             })?;
 
         // Restore data from state
-        self.data.system_prompt = state.paladin.node.system_prompt.clone();
-        self.data.name = state.paladin.node.name.clone();
-        self.data.user_name = state.paladin.node.user_name.clone();
-        self.data.model = state.paladin.node.model.clone();
-        self.data.temperature = state.paladin.node.temperature;
-        self.data.max_loops = state.paladin.node.max_loops;
-        self.data.stop_words = state.paladin.node.stop_words.clone();
+        self.data.system_prompt = state.paladin.data.system_prompt.clone();
+        self.data.name = state.paladin.data.name.clone();
+        self.data.user_name = state.paladin.data.user_name.clone();
+        self.data.model = state.paladin.data.model.clone();
+        self.data.temperature = state.paladin.data.temperature;
+        self.data.max_loops = state.paladin.data.max_loops;
+        self.data.stop_words = state.paladin.data.stop_words.clone();
 
         // Note: Config fields (retry_attempts, timeout_seconds) are not part of PaladinData
         // They would need to be stored separately if we want to restore them
@@ -1089,23 +1092,87 @@ impl PaladinBuilder {
         Ok(self)
     }
 
+    /// The one refusal message for an explicit sampling value the model does not accept
+    /// (ADR-0061): names the model, the provider, the parameter and the value, then says why.
+    fn parameter_refusal(&self, param: SamplingParam, value: &str, reason: &str) -> PaladinError {
+        PaladinError::ConfigurationError(format!(
+            "model '{}' on provider '{}' does not accept parameter '{}' = {}: {}",
+            self.data.model,
+            self.llm_port.get_provider_name(),
+            param.as_str(),
+            value,
+            reason
+        ))
+    }
+
+    /// Why a numeric parameter's support rejected a value.
+    fn support_reason(support: ParamSupport) -> String {
+        match support {
+            ParamSupport::Range(lo, hi) => format!("it accepts {lo} to {hi}"),
+            ParamSupport::Fixed(only) => format!("it takes only {only}"),
+            // `ParamSupport` is not `#[non_exhaustive]`, so `NotSent` is the last known arm; a
+            // future variant is a compile error here, which is the point.
+            ParamSupport::NotSent => "it does not take this parameter; remove it".to_string(),
+        }
+    }
+
+    /// Why stop sequences were rejected.
+    fn stop_reason(support: StopSupport) -> String {
+        match support {
+            StopSupport::NotSent => "it does not take this parameter; remove it".to_string(),
+            StopSupport::Supported { max: Some(max) } => {
+                format!("it accepts at most {max} stop sequences")
+            }
+            StopSupport::Supported { max: None } => {
+                "it accepts any number of stop sequences".to_string()
+            }
+        }
+    }
+
+    /// Whether `temperature` is acceptable for this builder's model: the profile's verdict, or
+    /// -- for a port that reports no profile -- the provider's declared range (`[0.0, 1.0]` when
+    /// it declares none).
+    fn temperature_admitted(&self, temperature: f32, profile: Option<&ModelProfile>) -> bool {
+        match profile {
+            Some(profile) => profile.temperature.admits(temperature),
+            None => {
+                let (min_temp, max_temp) = self
+                    .llm_port
+                    .get_capabilities()
+                    .temperature_range
+                    .unwrap_or((0.0, 1.0));
+                temperature >= min_temp && temperature <= max_temp
+            }
+        }
+    }
+
     /// Validates all configuration parameters
     ///
     /// # Validation Rules
     ///
     /// - `system_prompt` must be non-empty
-    /// - **A temperature the caller actually expressed** (via [`Self::temperature`], or
-    ///   the auto-temperature branch in [`Self::build`]) must fall within the selected
-    ///   provider's declared `temperature_range` (both endpoints inclusive); providers
-    ///   that declare no range fall back to `[0.0, 1.0]` (ADR-0004). **Refined 2026-08-22
-    ///   (17-19, closing G-17-4b):** ADR-0004 validates "whatever temperature the caller
-    ///   ultimately supplies" — a caller who never called `.temperature()` supplied
-    ///   nothing; the `0.7` `validate()` would otherwise see is
-    ///   `PaladinData::default()`'s framework fabrication, not a request. This gate now
-    ///   fires only when `manual_temperature_override` is set, so a provider's truthful,
-    ///   narrow declaration (e.g. a degenerate `(1.0, 1.0)`) cannot deny service to a
-    ///   caller who said nothing about temperature — while a caller who did ask for an
-    ///   illegal value is still refused by name, unchanged.
+    /// - **A sampling parameter the caller actually expressed** (a temperature via
+    ///   [`Self::temperature`], stop sequences via [`Self::add_stop_word`]) must be one the
+    ///   selected model accepts (ADR-0061, amending ADR-0004). The builder asks
+    ///   `llm_port.model_profile(model)` first: a temperature must be admitted by the profile
+    ///   (`Range` inclusive at both ends, `Fixed` only that exact value, `NotSent` nothing) and
+    ///   the stop-word count by its stop support. A port with no profile (`None`, a third-party
+    ///   adapter) falls back to the provider's declared `temperature_range`, `[0.0, 1.0]` when it
+    ///   declares none, exactly as before. A refusal is a
+    ///   [`PaladinError::ConfigurationError`] naming the provider, the model and the parameter
+    ///   and saying why -- never a silent clamp or substitution.
+    ///
+    ///   **Nothing is judged when nothing was expressed (ADR-0004 A1, refined 2026-08-22,
+    ///   17-19):** a caller who never called `.temperature()` supplied nothing; the `0.7`
+    ///   `validate()` would otherwise see is `PaladinData::default()`'s framework fabrication,
+    ///   not a request. The gate fires only when `manual_temperature_override` is set, so a
+    ///   model's truthful, narrow profile (Kimi's `Fixed(1.0)`) cannot deny service to a caller
+    ///   who said nothing about temperature.
+    ///
+    ///   **An auto-selected temperature is never refused here (ADR-0061 supersedes ADR-0004
+    ///   A2):** [`Self::build`] logs a warning when the model's profile does not admit it, and
+    ///   the value is omitted from requests by the adapter's wire filter, visibly -- recorded
+    ///   as `paladin.params_omitted` on the response.
     /// - `max_loops` must be in range [1, 100]
     /// - If `autosave_enabled` is true, `state_dir` must be set or Citadel must be configured
     /// - If `sanctum_port` is set, `embedding_port` must also be set (required for RAG)
@@ -1121,33 +1188,67 @@ impl PaladinBuilder {
             ));
         }
 
-        // Validate temperature against the selected provider's declared range, falling
-        // back to [0.0, 1.0] when the provider has not declared one (ADR-0004). Both
-        // endpoints are inclusive; no epsilon, no rounding, no clamping — an
-        // out-of-range value is reported to the caller rather than silently corrected.
+        // ADR-0061 (a)/(b): an EXPLICIT sampling value must be one the target model accepts,
+        // or the build is refused by name (provider, model, parameter). The model's profile is
+        // the authority; a port with no profile keeps ADR-0004's range check (the provider's
+        // declared `temperature_range`, `[0.0, 1.0]` when it declares none -- both endpoints
+        // inclusive, no epsilon, no rounding, no clamping).
         //
-        // Refined 2026-08-22 (17-19, closing G-17-4b, T-17-78): only checked when the
-        // caller actually expressed a temperature (`manual_temperature_override`). A
-        // provider's own declared range is not the caller's business until the caller
-        // asks for something; `PaladinData::default()`'s fabricated `0.7` is not a
-        // request and must not be judged against a narrow provider declaration such as
-        // Kimi's measured `(1.0, 1.0)`. This is a narrowing of what the gate checks, not
-        // a weakening of it: an expressed out-of-range value is still rejected below,
-        // unchanged.
+        // Only expressed values are judged (ADR-0004 A1, refined 17-19, T-17-78): the framework's
+        // fabricated `0.7` is not a request and must not be judged against a narrow model
+        // profile such as Kimi's `Fixed(1.0)`. This is a narrowing of what the gate checks, not a
+        // weakening: an expressed inadmissible value is still rejected below.
+        let profile = self.llm_port.model_profile(&self.data.model);
+
         if self.manual_temperature_override {
-            let (min_temp, max_temp) = self
-                .llm_port
-                .get_capabilities()
-                .temperature_range
-                .unwrap_or((0.0, 1.0));
-            if !(self.data.temperature >= min_temp && self.data.temperature <= max_temp) {
-                return Err(PaladinError::ConfigurationError(format!(
-                    "temperature must be between {} and {} for provider '{}', got {}",
-                    min_temp,
-                    max_temp,
-                    self.llm_port.get_provider_name(),
-                    self.data.temperature
-                )));
+            match &profile {
+                Some(profile) => {
+                    if !profile.temperature.admits(self.data.temperature) {
+                        return Err(self.parameter_refusal(
+                            SamplingParam::Temperature,
+                            &self.data.temperature.to_string(),
+                            &Self::support_reason(profile.temperature),
+                        ));
+                    }
+                }
+                None => {
+                    let (min_temp, max_temp) = self
+                        .llm_port
+                        .get_capabilities()
+                        .temperature_range
+                        .unwrap_or((0.0, 1.0));
+                    if !(self.data.temperature >= min_temp && self.data.temperature <= max_temp) {
+                        return Err(PaladinError::ConfigurationError(format!(
+                            "temperature must be between {} and {} for model '{}' on provider \
+                             '{}', got {}",
+                            min_temp,
+                            max_temp,
+                            self.data.model,
+                            self.llm_port.get_provider_name(),
+                            self.data.temperature
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Stop words are enforced client-side by `PaladinExecutionService::check_stop_words`,
+        // which scans the accumulated output and aborts with `StopWordDetected`. That check is the
+        // source of truth, so a model that takes no wire `stop` (`StopSupport::NotSent`) is not a
+        // build refusal: the sampler omits the unsupported parameter at send time and records the
+        // omission, and the client-side check still enforces the list. Only a count above a
+        // numeric maximum is refused here.
+        if !self.data.stop_words.is_empty()
+            && let Some(profile) = &profile
+            && !matches!(profile.stop_sequences, StopSupport::NotSent)
+        {
+            let count = self.data.stop_words.len();
+            if !profile.stop_sequences.admits(count) {
+                return Err(self.parameter_refusal(
+                    SamplingParam::StopSequences,
+                    &format!("{count} stop sequence(s)"),
+                    &Self::stop_reason(profile.stop_sequences),
+                ));
             }
         }
 
@@ -1208,7 +1309,7 @@ impl PaladinBuilder {
         let specialist_names: Vec<String> = self
             .specialist_agents
             .iter()
-            .map(|p| p.node.name.clone())
+            .map(|p| p.data.name.clone())
             .collect();
 
         // Create JSON schema for handoff tool with specialist names as enum
@@ -1311,36 +1412,23 @@ impl PaladinBuilder {
                     .await
                 {
                     Ok(optimal_temp) => {
-                        // CR-01: validate() runs BEFORE this branch and, since
-                        // 17-19, fires only on `manual_temperature_override` --
-                        // which the auto path deliberately does not set. An
-                        // LLM-chosen temperature therefore reached `data` with no
-                        // ADR-0004 check at all, while validate()'s own rustdoc
-                        // claimed to cover "the auto-temperature branch in
-                        // Self::build". The gap predates 17-19 but only became
-                        // reachable when Kimi began declaring a degenerate
-                        // (1.0, 1.0): before that no provider had a range an
-                        // auto-selected value could fall outside.
-                        //
-                        // ADR-0004 refuses rather than substitutes, so an
-                        // out-of-range auto selection is an error naming the
-                        // legal endpoints -- never a silent clamp the caller
-                        // cannot discover.
-                        let (min_temp, max_temp) = self
-                            .llm_port
-                            .get_capabilities()
-                            .temperature_range
-                            .unwrap_or((0.0, 1.0));
-                        if !(optimal_temp >= min_temp && optimal_temp <= max_temp) {
-                            return Err(PaladinError::ConfigurationError(format!(
-                                "auto-selected temperature {} is outside the range {} to {} \
-                                 declared by provider '{}'. Set an explicit temperature within \
-                                 that range, or disable auto_temperature for this provider.",
+                        // ADR-0061 (b), superseding ADR-0004 A2 and CR-01's refusal: validate()
+                        // judges only an EXPLICIT temperature, and an LLM-chosen one is not a
+                        // request the operator made. When the model's profile (or, for a port
+                        // with no profile, the provider's declared range) does not admit it, the
+                        // value is not refused and not swapped: it is kept, and the adapter's
+                        // wire filter omits it from every request and records the omission
+                        // (`paladin.params_omitted`). Say so once, here, at build time.
+                        let profile = self.llm_port.model_profile(&self.data.model);
+                        if !self.temperature_admitted(optimal_temp, profile.as_ref()) {
+                            log::warn!(
+                                target: "paladin::sampling",
+                                "auto-selected temperature {} is not accepted by model '{}' on \
+                                 provider '{}'; it will be omitted from requests (ADR-0061)",
                                 optimal_temp,
-                                min_temp,
-                                max_temp,
+                                self.data.model,
                                 self.llm_port.get_provider_name()
-                            )));
+                            );
                         }
                         log::info!(
                             "Auto-selected temperature {} for agent based on task type",
@@ -1391,14 +1479,14 @@ impl PaladinBuilder {
             self.citadel_port = Some(Arc::new(file_citadel));
         }
 
-        // Create Paladin using Node pattern with name
+        // Create Paladin using Entity pattern with name
         let name = if self.data.name.is_empty() {
             None
         } else {
             Some(self.data.name.clone())
         };
 
-        Ok(Node::new(self.data, name))
+        Ok(Entity::new(self.data, name))
     }
 }
 
@@ -1481,30 +1569,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auto_selected_temperature_is_validated_against_the_provider_range() {
-        // CR-01. `validate()` runs before build()'s auto-temperature branch and,
-        // since 17-19, fires only on `manual_temperature_override` -- which the
-        // auto path does not set. An LLM-chosen temperature therefore reached
-        // `data` unchecked. The mock classifies as CREATIVE -> 0.85, outside the
-        // degenerate (1.0, 1.0) Kimi's live measurement produces.
+    async fn auto_temperature_outside_profile_is_omitted_not_refused() {
+        // ADR-0061 supersedes ADR-0004 A2 (and CR-01's refusal). The mock classifies as CREATIVE
+        // -> 0.85, which the Kimi-shaped `Fixed(1.0)` profile does not admit. The build must
+        // succeed: an auto-selected value is not an operator request, so it is neither refused
+        // nor swapped for 1.0 -- it stays on the agent, and the adapter's wire filter omits it
+        // and records the omission.
+        let port = Arc::new(MockLlmPortWithProfile(
+            ModelProfile::new().with_temperature(ParamSupport::Fixed(1.0)),
+        ));
+        let paladin = PaladinBuilder::new(port)
+            .system_prompt("Test")
+            .agent_description("write an imaginative short story")
+            .auto_temperature(true)
+            .build()
+            .await
+            .expect("an inadmissible auto temperature must build (ADR-0061)");
+
+        assert_eq!(
+            paladin.data.temperature, 0.85,
+            "the auto value is kept as chosen -- never replaced by the profile's 1.0"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_temperature_outside_the_declared_range_of_a_profileless_port_also_builds() {
+        // A4-50-03: a port that reports no profile is still not refused for an auto value (it is
+        // warned about); such an adapter has no wire filter, which ADR-0061 (e) records.
         let result = PaladinBuilder::new(Arc::new(MockLlmPortWithTemperatureRange((1.0, 1.0))))
             .system_prompt("Test")
             .agent_description("write an imaginative short story")
             .auto_temperature(true)
             .build()
             .await;
-
-        let err = result.expect_err("0.85 is outside (1.0, 1.0) and must be refused");
-        let msg = err.to_string();
         assert!(
-            msg.contains("auto-selected temperature"),
-            "error must name the auto path, got: {msg}"
-        );
-        // ADR-0004 refuses by name and states the legal endpoints rather than
-        // silently substituting a value the caller cannot discover.
-        assert!(
-            msg.contains('1'),
-            "error must state the legal range, got: {msg}"
+            result.is_ok(),
+            "an auto temperature is never refused: {result:?}"
         );
     }
 
@@ -1520,6 +1620,165 @@ mod tests {
             .build()
             .await;
         assert!(result.is_ok(), "0.85 is inside (0.0, 1.0) and must build");
+    }
+
+    // ── ADR-0061 (plan 50-03): the model's profile is asked first ──
+
+    fn kimi_shaped_port() -> Arc<dyn LlmPort> {
+        Arc::new(MockLlmPortWithProfile(
+            ModelProfile::new()
+                .with_temperature(ParamSupport::Fixed(1.0))
+                .with_stop_sequences(StopSupport::Supported { max: None }),
+        ))
+    }
+
+    fn configuration_error(result: Result<Paladin, PaladinError>) -> String {
+        match result {
+            Err(PaladinError::ConfigurationError(message)) => message,
+            other => panic!("expected a ConfigurationError, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_profile_accepts_exactly_its_value_and_refuses_others_by_name() {
+        PaladinBuilder::new(kimi_shaped_port())
+            .system_prompt("Test")
+            .model("kimi-k3")
+            .temperature(1.0)
+            .build()
+            .await
+            .expect("the one value the model takes must build");
+
+        let message = configuration_error(
+            PaladinBuilder::new(kimi_shaped_port())
+                .system_prompt("Test")
+                .model("kimi-k3")
+                .temperature(0.5)
+                .build()
+                .await,
+        );
+        for needle in ["MockWithProfile", "kimi-k3", "temperature", "takes only 1"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn fixed_profile_separates_adjacent_floats() {
+        // Equal values merge, adjacent ones separate: the next representable f32 above 1.0 is
+        // refused, with no epsilon.
+        let just_above_one = f32::from_bits(1.0_f32.to_bits() + 1);
+        let message = configuration_error(
+            PaladinBuilder::new(kimi_shaped_port())
+                .system_prompt("Test")
+                .model("kimi-k3")
+                .temperature(just_above_one)
+                .build()
+                .await,
+        );
+        assert!(message.contains("temperature"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn not_sent_temperature_refuses_naming_the_parameter() {
+        let port = Arc::new(MockLlmPortWithProfile(ModelProfile::new()));
+        let message = configuration_error(
+            PaladinBuilder::new(port)
+                .system_prompt("Test")
+                .model("reasoner")
+                .temperature(0.7)
+                .build()
+                .await,
+        );
+        for needle in [
+            "MockWithProfile",
+            "reasoner",
+            "temperature",
+            "does not take",
+        ] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stop_words_on_a_model_that_sends_no_stop_still_build() {
+        // WR-01: the client-side check enforces the list, so a profile that does not take a wire
+        // `stop` must not turn an agent's stop words into a build refusal.
+        let port = Arc::new(MockLlmPortWithProfile(ModelProfile::new()));
+        PaladinBuilder::new(port)
+            .system_prompt("Test")
+            .model("reasoner")
+            .add_stop_word("END")
+            .build()
+            .await
+            .expect("stop words are enforced client-side, so NotSent must not refuse the build");
+    }
+
+    #[tokio::test]
+    async fn stop_words_above_the_profile_maximum_are_refused_with_the_count() {
+        let port = Arc::new(MockLlmPortWithProfile(
+            ModelProfile::new().with_stop_sequences(StopSupport::Supported { max: Some(1) }),
+        ));
+        let message = configuration_error(
+            PaladinBuilder::new(port)
+                .system_prompt("Test")
+                .model("small")
+                .add_stop_word("END")
+                .add_stop_word("STOP")
+                .build()
+                .await,
+        );
+        assert!(
+            message.contains("stop") && message.contains('2') && message.contains("at most 1"),
+            "the refusal must name the parameter, the count and the limit: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_words_within_the_profile_build() {
+        let port = Arc::new(MockLlmPortWithProfile(
+            ModelProfile::new().with_stop_sequences(StopSupport::Supported { max: Some(2) }),
+        ));
+        PaladinBuilder::new(port)
+            .system_prompt("Test")
+            .add_stop_word("END")
+            .add_stop_word("STOP")
+            .build()
+            .await
+            .expect("two stop words within a maximum of two must build");
+    }
+
+    #[tokio::test]
+    async fn an_unexpressed_temperature_is_not_judged_against_a_profile() {
+        // A1 stands: the framework default 0.7 is not a request, so a Fixed(1.0) model builds.
+        PaladinBuilder::new(kimi_shaped_port())
+            .system_prompt("Test")
+            .build()
+            .await
+            .expect("nothing expressed, nothing judged");
+    }
+
+    #[tokio::test]
+    async fn a_profileless_port_keeps_the_range_check_and_now_names_model_and_parameter() {
+        let message = configuration_error(
+            PaladinBuilder::new(Arc::new(MockLlmPort))
+                .system_prompt("Test")
+                .model("some-model")
+                .temperature(1.8)
+                .build()
+                .await,
+        );
+        for needle in ["Mock", "some-model", "temperature", "1.8"] {
+            assert!(
+                message.contains(needle),
+                "'{needle}' missing from: {message}"
+            );
+        }
     }
 
     /// Builds a DeepSeek-backed `Arc<dyn LlmPort>` for the provider-aware temperature
@@ -2019,9 +2278,11 @@ mod tests {
                 content: "CREATIVE".to_string(),
                 finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
                 usage: Default::default(),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 function_call: None,
                 metadata: Default::default(),
+                reasoning: None,
             })
         }
 
@@ -2064,6 +2325,77 @@ mod tests {
                 temperature_range: Some(self.0),
                 ..Default::default()
             }
+        }
+    }
+
+    /// Mock LLM port that reports a fixed [`ModelProfile`] for every model (ADR-0061), and
+    /// answers the auto-temperature classification with `CREATIVE` (-> 0.85).
+    struct MockLlmPortWithProfile(ModelProfile);
+
+    #[async_trait::async_trait]
+    impl LlmPort for MockLlmPortWithProfile {
+        async fn generate(
+            &self,
+            request: paladin_ports::output::llm_port::LlmRequest,
+        ) -> Result<
+            paladin_ports::output::llm_port::LlmResponse,
+            paladin_ports::output::llm_port::LlmError,
+        > {
+            Ok(paladin_ports::output::llm_port::LlmResponse {
+                id: uuid::Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model.clone(),
+                content: "CREATIVE".to_string(),
+                finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
+                usage: Default::default(),
+                cost: None,
+                created_at: chrono::Utc::now(),
+                function_call: None,
+                metadata: Default::default(),
+                reasoning: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: paladin_ports::output::llm_port::LlmRequest,
+        ) -> Result<
+            Box<
+                dyn futures::Stream<
+                        Item = Result<
+                            paladin_ports::output::llm_port::StreamingResponse,
+                            paladin_ports::output::llm_port::LlmError,
+                        >,
+                    > + Send,
+            >,
+            paladin_ports::output::llm_port::LlmError,
+        > {
+            unimplemented!()
+        }
+
+        async fn validate_model(
+            &self,
+            _model: &str,
+        ) -> Result<bool, paladin_ports::output::llm_port::LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(
+            &self,
+        ) -> Result<Vec<String>, paladin_ports::output::llm_port::LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "MockWithProfile"
+        }
+
+        fn get_capabilities(&self) -> paladin_ports::output::llm_port::ProviderCapabilities {
+            paladin_ports::output::llm_port::ProviderCapabilities::default()
+        }
+
+        fn model_profile(&self, _model: &str) -> Option<ModelProfile> {
+            Some(self.0.clone())
         }
     }
 
@@ -2137,7 +2469,7 @@ mod tests {
         > {
             if state_id == Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap() {
                 // Create PaladinData
-                let data = crate::core::platform::container::citadel::PaladinData {
+                let data = crate::core::platform::container::paladin::PaladinData {
                     system_prompt: "Restored prompt".to_string(),
                     name: "RestoredPaladin".to_string(),
                     user_name: "User".to_string(),
@@ -2145,13 +2477,13 @@ mod tests {
                     temperature: 0.8,
                     max_loops: MaxLoops::Fixed(5),
                     stop_words: vec![],
-                    status: crate::core::platform::container::citadel::PaladinStatus::Idle,
+                    status: crate::core::platform::container::paladin::PaladinStatus::Idle,
                     vision_enabled: false,
                     ..Default::default()
                 };
 
-                // Create Paladin (Node<PaladinData>)
-                let paladin = Node::new(data, Some("RestoredPaladin".to_string()));
+                // Create Paladin (Entity<PaladinData>)
+                let paladin = Entity::new(data, Some("RestoredPaladin".to_string()));
 
                 Ok(Some(
                     crate::core::platform::container::citadel::PaladinState {

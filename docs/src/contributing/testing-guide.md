@@ -11,7 +11,7 @@ cargo test --workspace --lib
 # All tests (unit + integration)
 make test-all
 
-# Integration tests with Docker services (Redis, MinIO, MySQL)
+# Integration tests with Docker services (Redis, RustFS, MySQL)
 make test-integration-docker
 
 # Doc tests only
@@ -285,40 +285,61 @@ async fn test_redis_queue_enqueue_dequeue() {
 }
 ```
 
-### MinIO Integration Test
+### Object store (RustFS) integration test
+
+The file storage contract suite runs the S3-compatible adapter against RustFS. In local
+mode it starts the pinned image with `testcontainers`, then polls the readiness endpoint
+(RustFS logs to files, so a stdout wait never fires):
 
 ```rust,ignore
-// tests/integration/minio_storage_test.rs
+// tests/integration/file_storage_integration_tests.rs
 
-use paladin::infrastructure::adapters::file_storage::MinioAdapter;
-use testcontainers::{clients, GenericImage};
+use paladin::infrastructure::adapters::file_storage::minio::{MinioAdapter, MinioConfig};
+use testcontainers::{GenericImage, ImageExt, core::IntoContainerPort, runners::AsyncRunner};
 
 #[tokio::test]
-#[serial]
-async fn test_minio_upload_download() {
-    // Arrange: Start MinIO container
-    let docker = clients::Cli::default();
-    let minio = docker.run(
-        GenericImage::new("quay.io/minio/minio", "RELEASE.2025-09-07T16-13-09Z.hotfix.7aa24e772")
-            .with_env_var("MINIO_ROOT_USER", "minioadmin")
-            .with_env_var("MINIO_ROOT_PASSWORD", "minioadmin")
-            .with_wait_for(WaitFor::message_on_stdout("API:"))
-    );
+#[ignore]
+async fn test_object_store_upload_download() -> Result<(), Box<dyn std::error::Error>> {
+    // Arrange: start the pinned RustFS image with throwaway credentials
+    let container = GenericImage::new("rustfs/rustfs", "1.0.0")
+        .with_exposed_port(9000.tcp())
+        .with_env_var("RUSTFS_ACCESS_KEY", "testuser")
+        .with_env_var("RUSTFS_SECRET_KEY", "testpass123")
+        .with_env_var("RUSTFS_CONSOLE_ENABLE", "false")
+        .start()
+        .await?;
+    let port = container.get_host_port_ipv4(9000).await?;
+    let endpoint = format!("localhost:{port}");
 
+    // Poll `http://<endpoint>/health/ready` until it answers 2xx (60 s deadline)
+    wait_until_ready(&format!("http://{endpoint}/health/ready"), Duration::from_secs(60)).await?;
+
+    // The adapter creates the bucket itself on construction (path-style)
     let adapter = MinioAdapter::new(
-        "localhost:9000",
-        "minioadmin",
-        "minioadmin",
-        "test-bucket",
-    ).await.unwrap();
+        MinioConfig {
+            endpoint,
+            access_key: "testuser".to_string(),
+            secret_key: "testpass123".to_string(),
+            bucket: "test-bucket".to_string(),
+            region: Some("us-east-1".to_string()),
+            secure: false,
+            path_style: true,
+            connection_timeout: Duration::from_secs(10),
+            request_timeout: Duration::from_secs(60),
+            max_retries: 3,
+            max_idle_conns: 10,
+        },
+        None,
+    )
+    .await?;
 
-    // Act: Upload file
-    let content = b"Test content";
-    adapter.upload("test.txt", content).await.unwrap();
+    // Act: upload, then download
+    let path = PathBuf::from("test/hello.txt");
+    adapter.upload_file(&path, b"Test content", None).await?;
 
-    // Assert: Download file
-    let downloaded = adapter.download("test.txt").await.unwrap();
-    assert_eq!(downloaded, content);
+    // Assert
+    assert_eq!(adapter.download_file(&path, None).await?, b"Test content");
+    Ok(())
 }
 ```
 
@@ -455,7 +476,7 @@ cargo binstall cargo-llvm-cov
 ```
 
 The gated measurement runs against `--features integration-tests`, which needs live Redis and
-MinIO. **Start them first** — `make services-up` — or your local figure will not match CI's.
+RustFS. **Start them first** — `make services-up` — or your local figure will not match CI's.
 
 ### Local generation
 
@@ -463,7 +484,7 @@ Two-step sequence — measuring does not implicitly start services (a Make depen
 containers as a side effect of reading a number would be surprising):
 
 ```bash
-# 1. Start Redis and MinIO (once per session)
+# 1. Start Redis and RustFS (once per session)
 make services-up
 
 # 2. Measure coverage — LCOV report plus the fail-under-lines threshold check
@@ -490,7 +511,7 @@ without the aggregate `llm-all` feature silently excludes the other six adapters
 the numerator and the denominator — see the full job table on
 [CI/CD Guide](../deployment/cicd.md) for where this invocation runs in CI.
 
-If `make coverage` fails with a Redis/MinIO connection error, that is `make coverage` itself
+If `make coverage` fails with a Redis/RustFS connection error, that is `make coverage` itself
 telling you to run `make services-up` first — it fails loudly with a pointer rather than starting
 containers for you.
 
@@ -553,7 +574,7 @@ was skipped or targeted the wrong toolchain. Re-run it against the active toolch
 (`rustup show`).
 
 **Local figure lower than CI's** — the services were not running. `--features integration-tests`
-exercises Redis- and MinIO-backed code paths; if `make services-up` was not run first, those tests
+exercises Redis- and RustFS-backed code paths; if `make services-up` was not run first, those tests
 skip or fail, and the lines they would have covered count as missed. Run `make services-up`, then
 re-run `make coverage`.
 
@@ -621,6 +642,7 @@ impl LlmPort for MockLlmPort {
             model: "mock".into(),
             usage: Usage::default(),
             tool_calls: vec![],
+            reasoning: None,
         })
     }
 

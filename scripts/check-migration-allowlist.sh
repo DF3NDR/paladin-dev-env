@@ -29,11 +29,23 @@
 # so concurrent runs cannot collide) and are printed before the diff,
 # matching the CI step's own reporting.
 #
+# LOCAL-ONLY EXTENSION (not in the ci.yml step): after the pair comparison,
+# every lint id a crate allows crate-wide in its
+# `[package.metadata.cargo-semver-checks.lints]` table (value "allow") must
+# appear in at least one allowlist `[[entry]]` for that same crate. Without
+# it the Cargo.toml allows -- which silence the tool for the whole crate,
+# not for one item -- are a convention, not a gate. Manifests are read from
+# `${MANIFEST_ROOT}/Cargo.toml` and `${MANIFEST_ROOT}/crates/*/Cargo.toml`;
+# MANIFEST_ROOT defaults to the workspace root and is overridable for the
+# same reason as the two files above.
+#
 # Usage:  ./scripts/check-migration-allowlist.sh
 #         MIGRATION_FILE=/path/to/MIGRATION.md \
 #         ALLOWLIST_FILE=/path/to/allowlist.toml \
+#         MANIFEST_ROOT=/path/to/workspace \
 #           ./scripts/check-migration-allowlist.sh
-# Exit:   0 if the two crate|type pair sets are set-equal; non-zero
+# Exit:   0 if the two crate|type pair sets are set-equal and every
+#         crate-wide allowed lint is mirrored in the allowlist; non-zero
 #         otherwise, or if either input file is missing.
 
 set -euo pipefail
@@ -41,6 +53,7 @@ set -euo pipefail
 WORKSPACE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MIGRATION_FILE="${MIGRATION_FILE:-${WORKSPACE_ROOT}/MIGRATION.md}"
 ALLOWLIST_FILE="${ALLOWLIST_FILE:-${WORKSPACE_ROOT}/.cargo/semver-checks-allowlist.toml}"
+MANIFEST_ROOT="${MANIFEST_ROOT:-${WORKSPACE_ROOT}}"
 
 if [ ! -f "${MIGRATION_FILE}" ]; then
     echo "ERROR: MIGRATION.md not found at ${MIGRATION_FILE}" >&2
@@ -111,8 +124,60 @@ cat "${MIGRATION_PAIRS}"
 echo "Allowlist crate|type pairs:"
 cat "${ALLOWLIST_PAIRS}"
 
+STATUS=0
 if ! diff -u "${MIGRATION_PAIRS}" "${ALLOWLIST_PAIRS}"; then
     echo "::error::Allowlist and MIGRATION.md §9.2 deliberate-breaking crate|type pairs are not set-equal (see diff above)."
+    STATUS=1
+fi
+
+# Crate-wide allows side (local-only extension, see the header). The
+# allowlist side is every `crate | lint` pair named by an [[entry]]; the
+# manifest side is every `crate | lint` pair a Cargo.toml allows in its
+# cargo-semver-checks lints table. A manifest lint with no allowlist pair is
+# unmirrored. Entries are flushed at the next [[entry]] header (or EOF) so
+# the order of `crate` and `lint` inside an entry does not matter, and
+# comment lines never match because the key must start the line.
+ALLOWLIST_LINTS="${SCRATCH}/allowlist-lints.txt"
+MANIFEST_LINTS="${SCRATCH}/manifest-lints.txt"
+UNMIRRORED_LINTS="${SCRATCH}/unmirrored-lints.txt"
+
+awk '
+    function flush() { if (crate != "" && lint != "") print crate " | " lint; crate = ""; lint = "" }
+    /^\[\[entry\]\]/ { flush(); next }
+    /^[ \t]*crate[ \t]*=/ { split($0, a, "\""); crate = a[2]; next }
+    /^[ \t]*lint[ \t]*=/ { split($0, a, "\""); lint = a[2]; next }
+    END { flush() }
+' "${ALLOWLIST_FILE}" | sort -u > "${ALLOWLIST_LINTS}"
+
+: > "${MANIFEST_LINTS}"
+for manifest in "${MANIFEST_ROOT}/Cargo.toml" "${MANIFEST_ROOT}"/crates/*/Cargo.toml; do
+    [ -f "${manifest}" ] || continue
+    awk -v file="${manifest}" '
+        /^[ \t]*\[/ { sec = $0; gsub(/[ \t]/, "", sec); sub(/#.*$/, "", sec); next }
+        sec == "[package]" && /^[ \t]*name[ \t]*=/ { split($0, a, "\""); pkg = a[2]; next }
+        sec == "[package.metadata.cargo-semver-checks.lints]" && /^[ \t]*[A-Za-z0-9_]+[ \t]*=[ \t]*"allow"/ {
+            key = $0; sub(/^[ \t]*/, "", key); sub(/[ \t]*=.*$/, "", key); lints[key] = 1
+        }
+        END {
+            for (key in lints) {
+                if (pkg == "") { print "ERROR: " file " allows lints but has no [package] name" > "/dev/stderr"; exit 2 }
+                print pkg " | " key
+            }
+        }
+    ' "${manifest}" >> "${MANIFEST_LINTS}"
+done
+sort -u -o "${MANIFEST_LINTS}" "${MANIFEST_LINTS}"
+
+comm -23 "${MANIFEST_LINTS}" "${ALLOWLIST_LINTS}" > "${UNMIRRORED_LINTS}"
+if [ -s "${UNMIRRORED_LINTS}" ]; then
+    echo "Crate-wide cargo-semver-checks allows with no allowlist entry (crate | lint):"
+    cat "${UNMIRRORED_LINTS}"
+    echo "::error::Every lint allowed in a crate's [package.metadata.cargo-semver-checks.lints] table must appear in at least one ${ALLOWLIST_FILE##*/} entry for that crate (see list above)."
+    STATUS=1
+fi
+
+if [ "${STATUS}" -ne 0 ]; then
     exit 1
 fi
 echo "Allowlist is set-equal to the MIGRATION.md §9.2 deliberate-breaking register (crate|type pairs)."
+echo "Every crate-wide cargo-semver-checks allow is mirrored by an allowlist entry (crate|lint pairs)."

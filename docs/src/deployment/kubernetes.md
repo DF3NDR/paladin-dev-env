@@ -32,7 +32,7 @@ Paladin on Kubernetes provides:
 
 > **Scope note (read before following this guide):** the `k8s/` manifests actually shipped in
 > this repository (`k8s/namespace.yaml`, `k8s/deployment.yaml`, `k8s/service.yaml`,
-> `k8s/configmap.yaml`, `k8s/secret.yaml.example`, `k8s/redis.yaml`, `k8s/minio.yaml`, plus a
+> `k8s/configmap.yaml`, `k8s/secret.yaml.example`, `k8s/redis.yaml`, `k8s/rustfs.yaml`, plus a
 > `k8s/server/` variant for `paladin-server`) are a **local/CI testing fixture**, not a
 > production deployment kit — `k8s/deployment.yaml` runs the image `paladin:test` with
 > `imagePullPolicy: Never`, a placeholder `sleep 3600` command instead of the real binary, and
@@ -123,7 +123,7 @@ helm uninstall paladin -n paladin
 │  │                 ┌───────────┼───┼───┼───────┐ │ │
 │  │                 │           │   │   │       │ │ │
 │  │            ┌────▼───┐  ┌───▼───▼───▼────┐  │ │ │
-│  │            │ Redis  │  │ MinIO/S3        │  │ │ │
+│  │            │ Redis  │  │ RustFS/S3       │  │ │ │
 │  │            │StatefulSet│ │ StatefulSet    │  │ │ │
 │  │            └────────┘  └────────────────┘  │ │ │
 │  │                                              │ │ │
@@ -445,9 +445,9 @@ data:
         base_url: "https://api.anthropic.com/v1"
 
     file_storage:
-      minio_endpoint: "minio.paladin.svc.cluster.local:9000"
-      minio_access_key: "minioadmin"
-      minio_secret_key: "minioadmin"
+      minio_endpoint: "paladin-rustfs.paladin.svc.cluster.local:9000"
+      minio_access_key: "<your-object-store-access-key>"
+      minio_secret_key: "<your-object-store-secret-key>"
       minio_bucket: "paladin"
       minio_secure: false
 
@@ -579,7 +579,7 @@ config:
     url: "redis://redis:6379"
 
   minio:
-    endpoint: "minio:9000"
+    endpoint: "paladin-rustfs:9000"
     bucket: "paladin"
 
 # Secrets (should be overridden)
@@ -881,7 +881,7 @@ spec:
   - to:
     - podSelector:
         matchLabels:
-          app: minio
+          app: rustfs
     ports:
     - protocol: TCP
       port: 9000

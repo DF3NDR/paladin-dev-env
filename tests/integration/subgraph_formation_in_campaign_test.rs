@@ -33,7 +33,7 @@ use paladin_battalion::engine::{
     EdgeSpec, EngineLimits, EngineRegistries, NodeContext, NodeSpec, RunOutcome, StateNode,
     StateNodeError, WarEngine, WarGraph,
 };
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::battalion::BattalionConfig;
 use paladin_core::platform::container::battalion::campaign::{Campaign, EdgeCondition};
 use paladin_core::platform::container::battlefield::{
@@ -60,7 +60,7 @@ fn make_paladin(name: &str) -> Paladin {
         name: name.to_string(),
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 fn field(name: &str) -> FieldName {

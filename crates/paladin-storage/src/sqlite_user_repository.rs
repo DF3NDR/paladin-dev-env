@@ -183,7 +183,7 @@ impl SqliteUserRepository {
             created: created_at,
             modified: modified_at,
             name: row.try_get("username").ok(), // or use another field if appropriate
-            node: user_data,
+            data: user_data,
         };
 
         Ok(user)
@@ -247,18 +247,18 @@ impl UserRepositoryPort for SqliteUserRepository {
         .bind(user.created.to_rfc3339())
         .bind(user.modified.to_rfc3339())
         .bind(&user.name)
-        .bind(&user.node.username)
-        .bind(user.node.email.value())
-        .bind(&user.node.password_hash)
-        .bind(user.node.is_active)
-        .bind(user.node.is_verified)
-        .bind(user.node.role.as_str())
-        .bind(&user.node.profile.first_name)
-        .bind(&user.node.profile.last_name)
-        .bind(&user.node.profile.bio)
-        .bind(&user.node.profile.avatar_url)
-        .bind(&user.node.profile.timezone)
-        .bind(&user.node.profile.locale)
+        .bind(&user.data.username)
+        .bind(user.data.email.value())
+        .bind(&user.data.password_hash)
+        .bind(user.data.is_active)
+        .bind(user.data.is_verified)
+        .bind(user.data.role.as_str())
+        .bind(&user.data.profile.first_name)
+        .bind(&user.data.profile.last_name)
+        .bind(&user.data.profile.bio)
+        .bind(&user.data.profile.avatar_url)
+        .bind(&user.data.profile.timezone)
+        .bind(&user.data.profile.locale)
         .execute(&self.pool)
         .await
         .map_err(|e| UserError::RepositoryError(format!("Failed to save user: {}", e)))?;
@@ -281,18 +281,18 @@ impl UserRepositoryPort for SqliteUserRepository {
         .bind(user.version as i64)
         .bind(user.modified.to_rfc3339())
         .bind(&user.name)
-        .bind(&user.node.username)
-        .bind(user.node.email.value())
-        .bind(&user.node.password_hash)
-        .bind(user.node.is_active)
-        .bind(user.node.is_verified)
-        .bind(user.node.role.as_str())
-        .bind(&user.node.profile.first_name)
-        .bind(&user.node.profile.last_name)
-        .bind(&user.node.profile.bio)
-        .bind(&user.node.profile.avatar_url)
-        .bind(&user.node.profile.timezone)
-        .bind(&user.node.profile.locale)
+        .bind(&user.data.username)
+        .bind(user.data.email.value())
+        .bind(&user.data.password_hash)
+        .bind(user.data.is_active)
+        .bind(user.data.is_verified)
+        .bind(user.data.role.as_str())
+        .bind(&user.data.profile.first_name)
+        .bind(&user.data.profile.last_name)
+        .bind(&user.data.profile.bio)
+        .bind(&user.data.profile.avatar_url)
+        .bind(&user.data.profile.timezone)
+        .bind(&user.data.profile.locale)
         .bind(user.uuid.to_string())
         .execute(&self.pool)
         .await
@@ -603,7 +603,7 @@ mod tests {
             "hashed_password".to_string(),
             None,
         );
-        inactive_user.node.is_active = false;
+        inactive_user.data.is_active = false;
 
         // Save users
         repo.save(active_user.clone()).await.unwrap();
@@ -629,7 +629,7 @@ mod tests {
             "hashed_password".to_string(),
             None,
         );
-        verified_user.node.is_verified = true; // Make this user verified
+        verified_user.data.is_verified = true; // Make this user verified
 
         let unverified_user = User::new_user(
             "unverifieduser".to_string(),

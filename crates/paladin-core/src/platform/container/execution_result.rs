@@ -6,8 +6,12 @@
 //! These are pure domain value types with no infrastructure dependencies.
 //! The `application` layer re-exports them from here.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
+use crate::platform::container::allowance::AllowanceRefusal;
+use crate::platform::container::cost::Cost;
 use crate::platform::container::handoff::HandoffRecord;
 use crate::platform::container::planning::TaskPlan;
 use crate::platform::container::token_usage::TokenUsage;
@@ -20,6 +24,8 @@ use crate::platform::container::token_usage::TokenUsage;
 /// # Example
 ///
 /// ```
+/// use std::collections::BTreeMap;
+///
 /// use paladin_core::platform::container::execution_result::{PaladinResult, StopReason};
 /// use paladin_core::platform::container::token_usage::TokenUsage;
 ///
@@ -29,12 +35,14 @@ use crate::platform::container::token_usage::TokenUsage;
 ///     execution_time_ms: 1250,
 ///     loop_count: 1,
 ///     stop_reason: StopReason::Completed,
+///     run_metadata: BTreeMap::new(),
 ///     ..Default::default()
 /// };
 ///
 /// assert_eq!(result.loop_count, 1);
 /// assert!(result.stop_reason.is_successful());
 /// assert!(result.served_by.is_none());
+/// assert!(result.run_metadata.is_empty());
 /// ```
 ///
 /// # Constructing across crates
@@ -59,6 +67,18 @@ pub struct PaladinResult {
     /// (D-25) -- no custom deserializer maps the retired key forward.
     #[serde(default)]
     pub usage: TokenUsage,
+
+    /// This run's currency cost, as the `CostTally` sum of its priced model calls
+    /// (D-10, PRICE-03).
+    ///
+    /// `None` when no pricing is installed, any call in the run was unpriced, or no
+    /// model call was made at all -- **never** a zero stand-in (D-00c). `#[serde(default,
+    /// skip_serializing_if = "Option::is_none")]` so a `PaladinResult` JSON document
+    /// persisted before this field existed deserialises with `cost == None`, and a
+    /// `None` cost is absent from the serialised JSON entirely -- the same precedent
+    /// [`Self::served_by`] established.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<Cost>,
 
     /// Execution time in milliseconds
     pub execution_time_ms: u64,
@@ -100,6 +120,32 @@ pub struct PaladinResult {
     /// security decision should read it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub served_by: Option<String>,
+
+    /// The `paladin.*` visibility keys this run's model calls stamped on their responses
+    /// (Phase 50, ADR-0061 (h), owner reading R-1).
+    ///
+    /// An adapter that omits a sampling parameter it cannot honour, runs a model it holds no
+    /// profile for, adjusts a `response_format`, or serves a call from a fallback step records
+    /// that on the response (`paladin.params_omitted`, `paladin.unprofiled_model`,
+    /// `paladin.response_format_adjusted`, `paladin.served_model`). This map carries those
+    /// entries onto the run result, keyed as stamped (the `paladin.` prefix is kept), so a
+    /// caller does not have to scrape logs to learn that a value it never stated was dropped.
+    ///
+    /// Merge rule, applied by the execution service across every model call of the run:
+    /// `paladin.params_omitted` and `paladin.unprofiled_model` hold the de-duplicated union of
+    /// their comma-separated items in first-seen order; every other `paladin.*` key holds the
+    /// last call's value. `paladin.served_by` is **not** repeated here -- it has its own field,
+    /// [`Self::served_by`]. Keys that do not start with `paladin.` are never copied.
+    ///
+    /// Values are provider names, model ids and parameter names only -- never request content
+    /// or credentials. Like [`Self::served_by`], this is **observability** stamped in-process,
+    /// not an authenticated attestation: no security decision should read it.
+    ///
+    /// Empty for a run whose calls stamped nothing, and absent from the serialised JSON in
+    /// that case (`#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]`), so a
+    /// payload written before this field existed is byte-identical to one written today.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub run_metadata: BTreeMap<String, String>,
 }
 
 /// Reason why Paladin execution stopped
@@ -136,6 +182,15 @@ pub struct PaladinResult {
 /// run, but the model's last response is intact and stands as the answer,
 /// with a truncation notice appended so the caller knows a budget, not the
 /// model, ended the run (D-08).
+///
+/// [`StopReason::AllowanceHalted`] (Phase 42, ADR-0057 D-12) is **neither**
+/// successful nor a failure of the model: the Treasurer's derived token
+/// budget ended the run after the response that crossed it, the partial
+/// output is kept with the same truncation notice, and the caller is told the
+/// allowance (not the model, not an operator limit) was the reason. It is a
+/// limit (`is_limit()`), and it is deliberately excluded from
+/// `is_successful()` so a caller that only checks success never mistakes a
+/// halt for a finished answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StopReason {
@@ -158,6 +213,16 @@ pub enum StopReason {
     /// A `TokenBudget` middleware stopped the run after its configured
     /// accumulated token budget was crossed (new in v0.10.0, RT-FR-06).
     TokenBudget,
+
+    /// The Treasurer's derived per-run token budget ended the run after the
+    /// response that crossed it (new in v0.11.0, Phase 42 D-12).
+    ///
+    /// The carried [`AllowanceRefusal`] reports the binding ceiling with its
+    /// `balance` set to the ceiling -- a conservative bound, because the loop
+    /// cannot know the exact post-spend balance (ADR-0057 A5). Partial output
+    /// is kept with the truncation notice appended, exactly as for
+    /// [`StopReason::TokenBudget`]. Neither successful nor a failure.
+    AllowanceHalted(AllowanceRefusal),
 }
 
 impl StopReason {
@@ -180,6 +245,7 @@ impl StopReason {
                 | StopReason::Timeout
                 | StopReason::CallLimit
                 | StopReason::TokenBudget
+                | StopReason::AllowanceHalted(_)
         )
     }
 }
@@ -192,12 +258,14 @@ impl Default for PaladinResult {
         Self {
             output: String::new(),
             usage: TokenUsage::default(),
+            cost: None,
             execution_time_ms: 0,
             loop_count: 0,
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: BTreeMap::new(),
         }
     }
 }
@@ -229,12 +297,14 @@ impl PaladinResult {
         Self {
             output,
             usage,
+            cost: None,
             execution_time_ms,
             loop_count,
             stop_reason,
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: BTreeMap::new(),
         }
     }
 
@@ -263,6 +333,7 @@ impl PaladinResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     /// D-26: `served_by: None` leaves the serialised JSON byte-identical to
     /// what the same value produced before the field existed.
@@ -271,17 +342,20 @@ mod tests {
         let result = PaladinResult {
             output: "answer".to_string(),
             usage: TokenUsage::new(3, 0),
+            cost: None,
             execution_time_ms: 7,
             loop_count: 1,
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: BTreeMap::new(),
         };
 
         let json = serde_json::to_string(&result).unwrap();
 
         assert!(!json.contains("served_by"), "{json}");
+        assert!(!json.contains("\"cost\""), "{json}");
         assert_eq!(
             json,
             r#"{"output":"answer","usage":{"prompt_tokens":3,"completion_tokens":0,"total_tokens":3,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#
@@ -342,6 +416,88 @@ mod tests {
         assert!(json.contains(r#""served_by":"anthropic""#), "{json}");
         let back: PaladinResult = serde_json::from_str(&json).unwrap();
         assert_eq!(back.served_by.as_deref(), Some("anthropic"));
+    }
+
+    /// D-10, D-25 precedent: a `PaladinResult` JSON document persisted before
+    /// `cost` existed (no `cost` key at all) deserialises with `cost ==
+    /// None`, and a `None` cost never serialises a `cost` key.
+    #[test]
+    fn paladin_result_without_cost_key_deserializes_to_none() {
+        let legacy = r#"{"output":"answer","usage":{"prompt_tokens":3,"completion_tokens":0,"total_tokens":3,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#;
+
+        let result: PaladinResult = serde_json::from_str(legacy).unwrap();
+        assert!(result.cost.is_none());
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("\"cost\""), "{json}");
+    }
+
+    /// Phase 50 (owner reading R-1, ADR-0061 (h)): a `PaladinResult` JSON document persisted
+    /// before `run_metadata` existed deserialises with an empty map, and an empty map never
+    /// serialises a `run_metadata` key -- the same precedent `served_by` and `cost` set.
+    #[test]
+    fn paladin_result_without_run_metadata_key_deserializes_to_empty() {
+        let legacy = r#"{"output":"answer","usage":{"prompt_tokens":3,"completion_tokens":0,"total_tokens":3,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"execution_time_ms":7,"loop_count":1,"stop_reason":"Completed"}"#;
+
+        let result: PaladinResult = serde_json::from_str(legacy).unwrap();
+        assert!(result.run_metadata.is_empty());
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("run_metadata"), "{json}");
+        assert_eq!(
+            json,
+            serde_json::to_string(&PaladinResult {
+                output: "answer".to_string(),
+                usage: TokenUsage::new(3, 0),
+                execution_time_ms: 7,
+                loop_count: 1,
+                ..Default::default()
+            })
+            .unwrap()
+        );
+    }
+
+    /// A non-empty `run_metadata` round-trips, keys sorted (a `BTreeMap`, so the serialised
+    /// order is deterministic).
+    #[test]
+    fn run_metadata_round_trips_when_present() {
+        let mut run_metadata = BTreeMap::new();
+        run_metadata.insert("paladin.served_model".to_string(), "m2".to_string());
+        run_metadata.insert(
+            "paladin.params_omitted".to_string(),
+            "temperature,stop".to_string(),
+        );
+        let result = PaladinResult {
+            run_metadata,
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(
+            json.contains(
+                r#""run_metadata":{"paladin.params_omitted":"temperature,stop","paladin.served_model":"m2"}"#
+            ),
+            "{json}"
+        );
+        let back: PaladinResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.run_metadata, result.run_metadata);
+    }
+
+    /// `Default` and `new()` give an empty `run_metadata`.
+    #[test]
+    fn default_and_new_leave_run_metadata_empty() {
+        assert!(PaladinResult::default().run_metadata.is_empty());
+        assert!(
+            PaladinResult::new(
+                "text".to_string(),
+                TokenUsage::new(1, 0),
+                1,
+                1,
+                StopReason::Completed
+            )
+            .run_metadata
+            .is_empty()
+        );
     }
 
     /// FT-FR-17: `Default` and `new()` both still work and leave `served_by`
@@ -420,5 +576,37 @@ mod tests {
             let back: StopReason = serde_json::from_str(&json).unwrap();
             assert_eq!(reason, back);
         }
+    }
+
+    fn sample_refusal() -> AllowanceRefusal {
+        use crate::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+        use crate::platform::container::cost::CurrencyCode;
+        let usd = CurrencyCode::new("USD").unwrap();
+        AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(100, usd.clone()),
+            ceiling: Cost::new(100, usd),
+            window: None,
+            evaluated_at: chrono::DateTime::from_timestamp(1_000_000_000, 0).unwrap(),
+        }
+    }
+
+    /// ADR-0057 D-12: an allowance halt is a limit, and is neither successful nor a failure
+    /// of the model -- the partial output stands, but the allowance, not the model, ended it.
+    #[test]
+    fn allowance_halted_is_a_limit_and_not_successful() {
+        let reason = StopReason::AllowanceHalted(sample_refusal());
+        assert!(reason.is_limit());
+        assert!(!reason.is_successful());
+    }
+
+    /// ADR-0057 D-12: the new variant round-trips through serde with its figures intact.
+    #[test]
+    fn allowance_halted_round_trips_through_serde() {
+        let reason = StopReason::AllowanceHalted(sample_refusal());
+        let json = serde_json::to_string(&reason).unwrap();
+        let back: StopReason = serde_json::from_str(&json).unwrap();
+        assert_eq!(reason, back);
     }
 }

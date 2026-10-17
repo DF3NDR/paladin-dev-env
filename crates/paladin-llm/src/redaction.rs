@@ -249,6 +249,27 @@ pub fn diagnostic_excerpt(body: &str, api_key: &str) -> String {
     bounded_excerpt(&redacted, RESPONSE_EXCERPT_CHAR_BUDGET)
 }
 
+/// An API key as `Debug` prints it: `<redacted>`, or `""` when the key is empty.
+///
+/// Every adapter config carries its key in a public `String`, so a derived `Debug` would print it
+/// into any log line, panic message or test failure that formats the config. Their manual `Debug`
+/// impls wrap the key in this instead (D-00a); an empty key is still shown as empty so an
+/// unconfigured credential stays distinguishable from a configured one.
+///
+/// Not feature-gated: [`crate::config::llm::LlmProviderConfig`], which exists in every build,
+/// prints its key through this too.
+pub(crate) struct RedactedKey<'a>(pub(crate) &'a str);
+
+impl std::fmt::Debug for RedactedKey<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            f.write_str("\"\"")
+        } else {
+            f.write_str("<redacted>")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,5 +511,25 @@ mod tests {
 
         let from_value: Wrapper = serde_json::from_str(r#"{"content":"hello"}"#).unwrap();
         assert_eq!(from_value.content, "hello");
+    }
+}
+
+#[cfg(test)]
+mod redacted_key_tests {
+    #[cfg(any(
+        feature = "openai",
+        feature = "anthropic",
+        feature = "deepseek",
+        feature = "kimi",
+        feature = "qwen",
+        feature = "grok",
+        feature = "gemini",
+        feature = "openai-compatible"
+    ))]
+    #[test]
+    fn a_key_is_redacted_and_an_empty_key_is_shown_empty() {
+        use super::RedactedKey;
+        assert_eq!(format!("{:?}", RedactedKey("sk-secret")), "<redacted>");
+        assert_eq!(format!("{:?}", RedactedKey("")), "\"\"");
     }
 }

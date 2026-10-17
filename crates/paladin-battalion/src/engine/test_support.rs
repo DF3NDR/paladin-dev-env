@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 
 use paladin_core::platform::container::battlefield::{Battlefield, FieldName, StateDelta};
+use paladin_core::platform::container::cost::Cost;
 use paladin_core::platform::container::directive::{Directive, NextStep};
 use paladin_core::platform::container::node_cache::CachedDelta;
 use paladin_core::platform::container::node_error::NodeError;
@@ -479,12 +480,17 @@ pub fn shuffle_seeded<T>(items: &mut [T], seed: u64) {
 /// prove non-re-execution: a repeat of an already-completed node's name in
 /// the log after a resume is a re-execution bug, not a coincidence.
 ///
-/// The "Paladin name" key is `paladin.node.name` (`PaladinData::name`),
+/// The "Paladin name" key is `paladin.data.name` (`PaladinData::name`),
 /// matching the convention `tests/helpers/mock_paladin_port.rs`'s
 /// `FaultyPaladinPort` already established.
+/// One configured Paladin's output: the text, its reported [`TokenUsage`],
+/// and its reported [`Cost`] (D-10) -- `None` behaves exactly like a plain
+/// [`RecordingPaladinPort::set_output_with_usage`] call.
+type RecordedOutput = (String, TokenUsage, Option<Cost>);
+
 #[derive(Default)]
 pub struct RecordingPaladinPort {
-    outputs: Mutex<HashMap<String, (String, TokenUsage)>>,
+    outputs: Mutex<HashMap<String, RecordedOutput>>,
     calls: Mutex<Vec<(String, String)>>,
 }
 
@@ -524,7 +530,24 @@ impl RecordingPaladinPort {
         self.outputs
             .lock()
             .unwrap()
-            .insert(name.into(), (output.into(), usage));
+            .insert(name.into(), (output.into(), usage, None));
+    }
+
+    /// Configure the output string, reported [`TokenUsage`], AND reported
+    /// [`Cost`] a Paladin named `name` returns (D-10) -- the model for
+    /// exercising the engine's per-attempt `NodeFinished.cost` bridge.
+    /// `cost: None` behaves exactly like [`Self::set_output_with_usage`].
+    pub fn set_output_with_usage_and_cost(
+        &self,
+        name: impl Into<String>,
+        output: impl Into<String>,
+        usage: TokenUsage,
+        cost: Option<Cost>,
+    ) {
+        self.outputs
+            .lock()
+            .unwrap()
+            .insert(name.into(), (output.into(), usage, cost));
     }
 
     /// The ordered call log: one `(paladin_name, input)` entry per `execute`
@@ -543,13 +566,13 @@ impl RecordingPaladinPort {
 #[async_trait]
 impl PaladinPort for RecordingPaladinPort {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        let name = paladin.node.name.clone();
+        let name = paladin.data.name.clone();
         self.calls
             .lock()
             .unwrap()
             .push((name.clone(), input.to_string()));
 
-        let (output, usage) = self
+        let (output, usage, cost) = self
             .outputs
             .lock()
             .unwrap()
@@ -560,12 +583,14 @@ impl PaladinPort for RecordingPaladinPort {
         Ok(PaladinResult {
             output,
             usage,
+            cost,
             execution_time_ms: 0,
             loop_count: 1,
             stop_reason: StopReason::Completed,
             plan: None,
             handoff_history: Vec::new(),
             served_by: None,
+            run_metadata: std::collections::BTreeMap::new(),
         })
     }
 
@@ -1783,4 +1808,55 @@ impl NodeCachePort for RecordingNodeCache {
         entries.retain(|key, _| !key.starts_with(prefix));
         Ok((before - entries.len()) as u64)
     }
+}
+
+// --- A minimal in-process `log::Log` capturer for the engine's unit tests
+// (moved here from `hooks.rs`'s test module so the stampede-lock tests can
+// share it: `log::set_logger` may be called only once per process, so exactly
+// one capturer may exist). Lines are keyed by OS thread id, so concurrently
+// running `#[tokio::test]`s (each its own thread under the default
+// per-test-thread `cargo test` harness, each on a current-thread runtime that
+// runs its spawned tasks on that same thread) never observe each other's
+// lines. Captures `Warn` and above from every target; a test filters by the
+// content it cares about.
+
+struct CapturingLogger;
+
+static LOGGER_INIT: std::sync::Once = std::sync::Once::new();
+static CAPTURED: Mutex<Option<CapturedWarnings>> = Mutex::new(None);
+type CapturedWarnings = HashMap<std::thread::ThreadId, Vec<String>>;
+
+impl log::Log for CapturingLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record) {
+        if record.level() <= log::Level::Warn {
+            let mut guard = CAPTURED.lock().expect("captured warnings mutex poisoned");
+            let map = guard.get_or_insert_with(HashMap::new);
+            map.entry(std::thread::current().id())
+                .or_default()
+                .push(record.args().to_string());
+        }
+    }
+    fn flush(&self) {}
+}
+
+/// Install the capturing logger (idempotent; once per process).
+pub fn install_capturing_logger() {
+    static LOGGER: CapturingLogger = CapturingLogger;
+    LOGGER_INIT.call_once(|| {
+        log::set_logger(&LOGGER).expect("install the capturing test logger");
+        log::set_max_level(log::LevelFilter::Warn);
+    });
+}
+
+/// Every warning captured on this OS thread so far.
+pub fn captured_warnings_for_this_thread() -> Vec<String> {
+    CAPTURED
+        .lock()
+        .expect("captured warnings mutex poisoned")
+        .as_ref()
+        .and_then(|m| m.get(&std::thread::current().id()).cloned())
+        .unwrap_or_default()
 }

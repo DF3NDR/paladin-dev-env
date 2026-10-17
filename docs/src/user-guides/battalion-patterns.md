@@ -284,24 +284,47 @@ on the builder instead of `BattalionStrategy::Auto`.
 
 ## Error Handling
 
-All services use `ErrorStrategy` from `paladin_core::platform::container::battalion`:
+Fault handling for the Formation, Phalanx, Campaign and Conclave is one Aegis policy set on
+`BattalionConfig.aegis` (`with_aegis`); the types live in
+`paladin_core::platform::container::aegis`:
 
-| Strategy | Behaviour |
-|---------|-----------|
-| `FailFast` | First failure aborts the entire Battalion (default) |
-| `ContinueOnError` | Failed agents are skipped; others continue |
-| `RetryThenContinue` | Retry failed agents up to N times, then continue |
+| Aegis field | Behaviour |
+|-------------|-----------|
+| `on_error: None` | First failure aborts the entire Battalion (default) |
+| `on_error: Some(ErrorHandlerSpec::Absorb { .. })` | Failed Paladins are skipped and recorded in `node_errors`; others continue (a Formation hands the next Paladin an empty input) |
+| `retry: Some(RetryPolicy { max_attempts, retry_on, .. })` | Re-attempt a failed Paladin; `max_attempts` counts total attempts including the first, `retry_on` gates a retry by transience |
+| `timeout: Some(TimeoutPolicy { run_timeout, .. })` | Bounds **each attempt**, never the whole Battalion |
 
 ```rust,ignore
-use paladin_core::platform::container::battalion::{BattalionConfig, ErrorStrategy};
-
-let config = BattalionConfig {
-    error_strategy: ErrorStrategy::ContinueOnError,
-    max_concurrency: Some(4),
-    timeout_seconds: 120,
-    ..Default::default()
+use paladin_core::platform::container::aegis::{
+    Aegis, ErrorHandlerSpec, RetryPolicy, TimeoutPolicy,
 };
+use paladin_core::platform::container::battalion::BattalionConfig;
+use paladin_core::platform::container::battlefield::StateDelta;
+use std::time::Duration;
+
+let config = BattalionConfig::new("pipeline").with_aegis(Aegis {
+    retry: Some(RetryPolicy {
+        max_attempts: 3,
+        ..RetryPolicy::default()
+    }),
+    timeout: Some(TimeoutPolicy {
+        run_timeout: Some(Duration::from_secs(120)),
+        idle_timeout: None,
+    }),
+    on_error: Some(ErrorHandlerSpec::Absorb {
+        fallback_delta: StateDelta::new(),
+    }),
+    ..Aegis::default()
+});
 ```
+
+A Campaign has no continue mode: it ignores `on_error`, so a failing node fails the run. The
+Conclave retries Transient failures only, with `ConclaveConfig.retry_attempts` as the count (the
+`retry` policy only shapes the backoff). ChainOfCommand and Grove are not bounded by `aegis`;
+because a timeout is per attempt, a ten-step Formation may run ten times the bound, and a caller
+needing a whole-run bound wraps `Commander::execute()` in its own `tokio::time::timeout`. See
+[Orchestration](orchestration.md#configuration-reference) for the per-pattern contract.
 
 `BattalionResult` fields: `final_output: String`, `paladin_results: Vec<PaladinResult>` (each
 entry carries its own `usage: TokenUsage`, D-07), `status: BattalionStatus`,

@@ -233,7 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("   coordinator drain outcome = {shutdown_outcome:?}");
     let halted_waypoint = match run_outcome {
-        RunOutcome::Halted { waypoint } => waypoint,
+        RunOutcome::Halted { waypoint, .. } => waypoint,
         other => return Err(format!("expected Halted, got {other:?}").into()),
     };
     let waypoint = store
@@ -291,7 +291,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("   coordinator drain outcome = {shutdown_outcome_2:?}");
     match run_outcome_2 {
-        RunOutcome::Halted { waypoint: wp_id } => {
+        RunOutcome::Halted {
+            waypoint: wp_id, ..
+        } => {
             let wp = store
                 .get(&thread2, &wp_id)
                 .await?

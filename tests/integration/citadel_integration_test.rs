@@ -5,13 +5,13 @@
 
 use paladin::application::errors::citadel_error::CitadelError;
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::citadel::{
     BattalionCheckpointConfig, BattalionState, CheckpointData, ExecutionRecord, ExecutionStatus,
-    PaladinData, PaladinState, PaladinStatus,
+    PaladinState,
 };
 use paladin::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
-use paladin::core::platform::container::paladin::MaxLoops;
+use paladin::core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
 use paladin::infrastructure::adapters::citadel::file_citadel::FileCitadel;
 use paladin_ports::output::citadel_port::CitadelPort;
 use paladin_ports::output::llm_port::LlmPort;
@@ -41,8 +41,8 @@ fn create_test_paladin_data() -> PaladinData {
 }
 
 /// Helper to create test Paladin node
-fn create_test_paladin() -> Node<PaladinData> {
-    Node::new(create_test_paladin_data(), Some("TestPaladin".to_string()))
+fn create_test_paladin() -> Entity<PaladinData> {
+    Entity::new(create_test_paladin_data(), Some("TestPaladin".to_string()))
 }
 
 /// Helper to create test PaladinState
@@ -90,8 +90,8 @@ async fn test_save_and_load_paladin_state() {
     // Verify key fields match
     assert_eq!(loaded_state.paladin.uuid, state.paladin.uuid);
     assert_eq!(
-        loaded_state.paladin.node.system_prompt,
-        state.paladin.node.system_prompt
+        loaded_state.paladin.data.system_prompt,
+        state.paladin.data.system_prompt
     );
     assert_eq!(loaded_state.garrison.len(), 1);
     assert_eq!(loaded_state.execution_history.len(), 1);
@@ -113,7 +113,7 @@ async fn test_save_overwrites_existing_state() {
         .expect("Failed to save initial state");
 
     // Modify the state
-    state.paladin.node.system_prompt = "Updated prompt".to_string();
+    state.paladin.data.system_prompt = "Updated prompt".to_string();
 
     // Save again (should overwrite)
     citadel
@@ -128,7 +128,7 @@ async fn test_save_overwrites_existing_state() {
         .expect("Failed to load state")
         .expect("State should exist");
 
-    assert_eq!(loaded.paladin.node.system_prompt, "Updated prompt");
+    assert_eq!(loaded.paladin.data.system_prompt, "Updated prompt");
 }
 
 #[tokio::test]
@@ -376,9 +376,9 @@ async fn test_paladin_restoration_via_builder() {
 
     // Verify the builder has the restored configuration
     let paladin = builder.build().await.expect("Failed to build paladin");
-    assert_eq!(paladin.node.system_prompt, "You are a helpful assistant");
-    assert_eq!(paladin.node.name, "TestPaladin");
-    assert_eq!(paladin.node.model, "gpt-4");
+    assert_eq!(paladin.data.system_prompt, "You are a helpful assistant");
+    assert_eq!(paladin.data.name, "TestPaladin");
+    assert_eq!(paladin.data.model, "gpt-4");
 }
 
 #[tokio::test]

@@ -14,7 +14,8 @@
 # convention, before either passing case is treated as evidence the guard
 # works at all. The final case runs the guard against the real,
 # unmodified tree -- the live PRIM-05 evidence that 15 pairs match 15
-# pairs.
+# pairs and that every crate-wide cargo-semver-checks allow in a Cargo.toml
+# is mirrored by an allowlist entry.
 #
 # Usage:  ./tests/scripts/check-migration-allowlist_test.sh
 #         Or via `make test-shell-guards`.
@@ -81,17 +82,44 @@ justification = "fixture justification"
 TOML
 }
 
-# run_guard MIGRATION ALLOWLIST -> sets $LAST_OUTPUT and $LAST_STATUS
+# NO_MANIFESTS is an empty directory used as MANIFEST_ROOT by every fixture
+# case that is not about the crate-wide-allow mirror check, so the real
+# workspace's Cargo.toml lint tables are never compared against a fixture
+# allowlist.
+NO_MANIFESTS="${SCRATCH}/no-manifests"
+mkdir -p "${NO_MANIFESTS}"
+
+# run_guard MIGRATION ALLOWLIST [MANIFEST_ROOT] -> sets $LAST_OUTPUT and
+# $LAST_STATUS
 run_guard() {
-    local migration="$1" allowlist="$2"
-    LAST_OUTPUT="$(MIGRATION_FILE="${migration}" ALLOWLIST_FILE="${allowlist}" "${GUARD}" 2>&1)"
+    local migration="$1" allowlist="$2" manifests="${3:-${NO_MANIFESTS}}"
+    LAST_OUTPUT="$(MIGRATION_FILE="${migration}" ALLOWLIST_FILE="${allowlist}" MANIFEST_ROOT="${manifests}" "${GUARD}" 2>&1)"
     LAST_STATUS=$?
 }
 
+# write_manifest ROOT CRATE LINT... -> writes ROOT/crates/CRATE/Cargo.toml
+# with a cargo-semver-checks lints table allowing each LINT.
+write_manifest() {
+    local root="$1" crate="$2"
+    shift 2
+    mkdir -p "${root}/crates/${crate}"
+    {
+        echo "[package]"
+        echo "name = \"${crate}\""
+        echo "version = \"0.0.0\""
+        echo ""
+        echo "[package.metadata.cargo-semver-checks.lints]"
+        local lint
+        for lint in "$@"; do
+            echo "${lint} = \"allow\""
+        done
+    } > "${root}/crates/${crate}/Cargo.toml"
+}
+
 assert_fire() {
-    local migration="$1" allowlist="$2" desc="$3"
+    local migration="$1" allowlist="$2" desc="$3" manifests="${4:-${NO_MANIFESTS}}"
     ASSERTIONS=$((ASSERTIONS + 1))
-    run_guard "${migration}" "${allowlist}"
+    run_guard "${migration}" "${allowlist}" "${manifests}"
     if [ "${LAST_STATUS}" -eq 0 ]; then
         echo "FAIL: expected non-zero exit for: ${desc} (got 0)"
         echo "${LAST_OUTPUT}" | sed 's/^/  | /'
@@ -102,9 +130,9 @@ assert_fire() {
 }
 
 assert_silent() {
-    local migration="$1" allowlist="$2" desc="$3"
+    local migration="$1" allowlist="$2" desc="$3" manifests="${4:-${NO_MANIFESTS}}"
     ASSERTIONS=$((ASSERTIONS + 1))
-    run_guard "${migration}" "${allowlist}"
+    run_guard "${migration}" "${allowlist}" "${manifests}"
     if [ "${LAST_STATUS}" -ne 0 ]; then
         echo "FAIL: expected zero exit (silent) for: ${desc} (got ${LAST_STATUS})"
         echo "${LAST_OUTPUT}" | sed 's/^/  | /'
@@ -130,7 +158,7 @@ assert_fire "${f_mig}" "${f_allow}" "an allowlist entry with no matching Y row"
 
 # --- 3. Missing MIGRATION.md -> named non-zero. ----------------------------
 ASSERTIONS=$((ASSERTIONS + 1))
-LAST_OUTPUT="$(MIGRATION_FILE="${SCRATCH}/does-not-exist.md" ALLOWLIST_FILE="${WORKSPACE_ROOT}/.cargo/semver-checks-allowlist.toml" "${GUARD}" 2>&1)"
+LAST_OUTPUT="$(MIGRATION_FILE="${SCRATCH}/does-not-exist.md" ALLOWLIST_FILE="${WORKSPACE_ROOT}/.cargo/semver-checks-allowlist.toml" MANIFEST_ROOT="${NO_MANIFESTS}" "${GUARD}" 2>&1)"
 LAST_STATUS=$?
 if [ "${LAST_STATUS}" -eq 0 ]; then
     echo "FAIL: expected non-zero exit for missing MIGRATION.md (got 0)"
@@ -145,7 +173,7 @@ fi
 
 # --- 4. Missing allowlist -> named non-zero. -------------------------------
 ASSERTIONS=$((ASSERTIONS + 1))
-LAST_OUTPUT="$(MIGRATION_FILE="${WORKSPACE_ROOT}/MIGRATION.md" ALLOWLIST_FILE="${SCRATCH}/does-not-exist.toml" "${GUARD}" 2>&1)"
+LAST_OUTPUT="$(MIGRATION_FILE="${WORKSPACE_ROOT}/MIGRATION.md" ALLOWLIST_FILE="${SCRATCH}/does-not-exist.toml" MANIFEST_ROOT="${NO_MANIFESTS}" "${GUARD}" 2>&1)"
 LAST_STATUS=$?
 if [ "${LAST_STATUS}" -eq 0 ]; then
     echo "FAIL: expected non-zero exit for missing allowlist (got 0)"
@@ -185,7 +213,43 @@ write_migration "${f_mig}" ""
 write_allowlist "${f_allow}" ""
 assert_silent "${f_mig}" "${f_allow}" "both register and allowlist empty"
 
-# --- 8. The REAL tree -> exit 0 (live PRIM-05 evidence: 15 pairs = 15 pairs). -
+# --- 8. A crate-wide allowed lint with no allowlist entry for that crate
+#         -> non-zero, naming the unmirrored crate | lint. The register and
+#         allowlist agree (one Widget pair), so only the manifest check can
+#         fire. The allowlist entry's lint is struct_missing; the manifest
+#         also allows enum_missing, which nothing mirrors. -------------------
+f_mig="${SCRATCH}/case8-migration.md"
+f_allow="${SCRATCH}/case8-allowlist.toml"
+f_root="${SCRATCH}/case8-root"
+write_migration "${f_mig}" "$(migration_row paladin-fixture Widget Y)"
+write_allowlist "${f_allow}" "$(allowlist_entry paladin-fixture Widget)"
+write_manifest "${f_root}" paladin-fixture struct_missing enum_missing
+assert_fire "${f_mig}" "${f_allow}" "a crate-wide allowed lint with no allowlist entry" "${f_root}"
+if ! grep -qF "paladin-fixture | enum_missing" <<<"${LAST_OUTPUT}"; then
+    echo "FAIL: expected the unmirrored 'paladin-fixture | enum_missing' to be named, got:"
+    echo "${LAST_OUTPUT}" | sed 's/^/  | /'
+    FAILED=$((FAILED + 1))
+fi
+
+# --- 9. A lint mirrored only under a DIFFERENT crate does not count. -------
+f_mig="${SCRATCH}/case9-migration.md"
+f_allow="${SCRATCH}/case9-allowlist.toml"
+f_root="${SCRATCH}/case9-root"
+write_migration "${f_mig}" "$(migration_row paladin-other Widget Y)"
+write_allowlist "${f_allow}" "$(allowlist_entry paladin-other Widget)"
+write_manifest "${f_root}" paladin-fixture struct_missing
+assert_fire "${f_mig}" "${f_allow}" "a lint mirrored only under a different crate" "${f_root}"
+
+# --- 10. Every crate-wide allowed lint mirrored for its own crate -> 0. ----
+f_mig="${SCRATCH}/case10-migration.md"
+f_allow="${SCRATCH}/case10-allowlist.toml"
+f_root="${SCRATCH}/case10-root"
+write_migration "${f_mig}" "$(migration_row paladin-fixture Widget Y)"
+write_allowlist "${f_allow}" "$(allowlist_entry paladin-fixture Widget)"
+write_manifest "${f_root}" paladin-fixture struct_missing
+assert_silent "${f_mig}" "${f_allow}" "every crate-wide allowed lint is mirrored for its own crate" "${f_root}"
+
+# --- 11. The REAL tree -> exit 0 (live PRIM-05 evidence: 15 pairs = 15 pairs). -
 ASSERTIONS=$((ASSERTIONS + 1))
 LAST_OUTPUT="$("${GUARD}" 2>&1)"
 LAST_STATUS=$?

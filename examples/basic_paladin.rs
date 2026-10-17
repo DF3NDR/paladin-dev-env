@@ -52,9 +52,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("✅ Paladin created successfully!");
-    println!("   Name: {}", paladin.node.name);
-    println!("   Model: {}", paladin.node.model);
-    println!("   Temperature: {}", paladin.node.temperature);
+    println!("   Name: {}", paladin.data.name);
+    println!("   Model: {}", paladin.data.model);
+    println!("   Temperature: {}", paladin.data.temperature);
     println!();
 
     // Step 3: Create an execution service with circuit breaker and Herald

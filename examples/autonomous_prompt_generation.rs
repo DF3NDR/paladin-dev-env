@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("✅ Paladin created (prompt would be auto-generated in full implementation)");
-    println!("   Name: {}", code_reviewer.node.name);
+    println!("   Name: {}", code_reviewer.data.name);
     println!("   Note: Autonomous prompt generation coming soon");
     println!();
 

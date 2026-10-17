@@ -1,7 +1,7 @@
 /*
 Workflow container
 
-Workflows are Node entities that encapsulate the orchestration logic and can be triggered by
+Workflows are Entity-based containers that encapsulate the orchestration logic and can be triggered by
 various events or conditions.
 They allow for advanced control over job execution, including sequential, parallel, and
 event-driven processing.

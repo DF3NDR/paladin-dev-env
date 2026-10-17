@@ -38,18 +38,21 @@ table gets a Medieval-Military name. Units and measures (`TokenUsage`, `max_toke
 domain roles. Domain roles, places and events — the rows in the table above — get
 Medieval-Military names.
 
-## Node<T> Pattern
+## Entity<T> Pattern
 
-All domain entities use the `Node<T>` wrapper which adds identifier, timestamps,
-and metadata to any data payload:
+Every base-derived domain entity is an `Entity<T>` (`paladin_core::base::entity::Entity`):
+it adds identity, timestamps, an optional display name and a revision-intent flag to a
+payload of type `T`:
 
 ```rust,ignore
-// crates/paladin-core/src/base/node.rs
-pub struct Node<T> {
-    pub id:         Uuid,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub node:       T,         // The domain payload
+// crates/paladin-core/src/base/entity/wrapper.rs
+pub struct Entity<T> {
+    pub uuid:     Uuid,
+    pub created:  DateTime<Utc>,
+    pub modified: DateTime<Utc>,
+    pub data:     T,                // The domain payload
+    pub name:     Option<String>,   // Optional display name
+    pub version:  bool,             // Wants revision history (intent, not behaviour)
 }
 ```
 
@@ -57,15 +60,25 @@ Domain types are type aliases:
 
 ```rust,ignore
 // crates/paladin-core/src/platform/container/paladin.rs
-pub type Paladin = Node<PaladinData>;
+pub type Paladin = Entity<PaladinData>;
 ```
+
+**Vocabulary rule (ADR-0060).** "node" means a vertex in a WarGraph or Campaign graph;
+"Entity" means this base-layer wrapper. `Entity` is deliberately a generic word, not a
+Medieval-Military term.
+
+**Revisioning.** `version` declares intent only: it is honoured by a caller that routes its
+writes through `EntityVersionService`, and today only `ContentItem` is revisioned that way.
+
+**Persisted JSON.** The payload field `data` was serialized as `node` before v0.11; documents
+written by v0.10 still load, and new writes emit only `data`.
 
 ## Core Domain Entities
 
 ### Paladin (Aggregate Root)
 
 ```rust,ignore
-// PaladinData — the domain payload inside Node<PaladinData>
+// PaladinData — the domain payload inside Entity<PaladinData>
 pub struct PaladinData {
     pub name:          String,
     pub system_prompt: String,
@@ -84,7 +97,7 @@ pub enum PaladinStatus {
     Timeout,
 }
 
-pub type Paladin = Node<PaladinData>;
+pub type Paladin = Entity<PaladinData>;
 ```
 
 **Invariants:**
@@ -193,9 +206,10 @@ Persistence](../operations/observability.md).
 
 | Type | Purpose |
 |------|---------|
-| `Node<T>` | Universal entity wrapper (id + timestamps + payload) |
-| `Collection<T>` | Typed collection with pagination |
-| `Field` | Dynamic field definition for content metadata |
+| `Entity<T>` | Universal entity wrapper (uuid + timestamps + optional name + payload `data` + `version` flag) |
+| `EntityVersionService` | Revision history for entities whose caller opts in; only `ContentItem` today |
+| `CollectionType<T>` / `Item<T>` | Typed collection with pagination (`paladin_core::base::entity::collection`); retained pending review (ADR-0060) |
+| `Field<T>` | Dynamic field definition for content metadata (`paladin_core::base::entity::field`); retained pending review (ADR-0060) |
 | `Message` | Inter-agent message passing |
 | `Action` | Agent action descriptor |
 | `Event` | Domain event for cross-context communication |

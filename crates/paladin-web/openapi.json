@@ -348,6 +348,26 @@
               }
             }
           },
+          "422": {
+            "description": "Unpriced model under an allowance (code model_unpriced): the caller has a configured allowance ceiling and the agent's model has no `treasurer.pricing` row, so its spend cannot be metered; `details.model` names the model; no Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "502": {
             "description": "Upstream execution failure",
             "content": {
@@ -447,6 +467,26 @@
           },
           "404": {
             "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unpriced model under an allowance (code model_unpriced): the caller has a configured allowance ceiling and the agent's model has no `treasurer.pricing` row, so its spend cannot be metered; `details.model` names the model; no Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
             "content": {
               "application/json": {
                 "schema": {
@@ -558,6 +598,26 @@
           },
           "404": {
             "description": "Unknown agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unpriced model under an allowance (code model_unpriced): the caller has a configured allowance ceiling and the agent's model has no `treasurer.pricing` row, so its spend cannot be metered; `details.model` names the model; no Retry-After",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
             "content": {
               "application/json": {
                 "schema": {
@@ -1288,7 +1348,7 @@
         "tags": [
           "runs"
         ],
-        "summary": "`GET /runs` -- paginated list, filterable by `thread_id`/`assistant_id`/\n`status` (D-47). Authenticated, any role.",
+        "summary": "`GET /runs` -- paginated list, filterable by `thread_id`/`assistant_id`/\n`status` (D-47). Authenticated, any role, and tenant-scoped (D-11,\nPLAT-07): a user-role principal lists only runs recorded under its own\ntenant, an admin-role principal lists every run including runs with no\nrecorded principal. The scope is derived from the authenticated principal\nalone and applied inside the repository's own query as `RunQuery.scope`\n(D-12); a `tenant_id` query parameter is unknown and ignored (D-02). The\nfilters compose with the scope (AND) -- another tenant's `thread_id`\nyields an empty page (D-14).",
         "description": "Ordered `(submitted_at DESC, run_id DESC)`; a cursor walk gives a stable\nordering for rows that already existed when the first page was fetched,\nbut is NOT a point-in-time snapshot -- a row inserted after the first\npage was read may be omitted from the walk (D-47 backstop). An empty\nresult set is `200 { items: [], next_cursor: null }`, never `404`.\n\nReturns:\n- `200 OK` with [`RunListResponse`] on success;\n- `400 Bad Request` for `limit == 0`/`limit > 100`, an unparseable\n  `cursor`, an invalid `thread_id`, or an unknown `status`;\n- `501 Not Implemented` if no run store backend is configured.",
         "operationId": "list_runs",
         "parameters": [
@@ -1342,7 +1402,7 @@
         ],
         "responses": {
           "200": {
-            "description": "A page of runs; { items: [], next_cursor: null } when empty",
+            "description": "A page of runs; { items: [], next_cursor: null } when empty. Tenant-scoped: a user-role principal sees only runs recorded under its own tenant, an admin-role principal sees every run. The scope comes from the authenticated principal only -- an unknown `tenant_id` query parameter is ignored.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1396,7 +1456,7 @@
           "runs"
         ],
         "summary": "`POST /runs` -- submit a run for execution.",
-        "description": "Returns:\n- `202 Accepted` with [`SubmitRunResponse`] on success;\n- `400 Bad Request` for an invalid `thread_id`;\n- `404 Not Found` for an unknown assistant or version;\n- `409 Conflict` (`code = \"thread_busy\"`) if the target thread already\n  has an active run;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "description": "Returns:\n- `202 Accepted` with [`SubmitRunResponse`] on success;\n- `400 Bad Request` for an invalid `thread_id`;\n- `404 Not Found` for an unknown assistant or version;\n- `409 Conflict` (`code = \"thread_busy\"`) if the target thread already\n  has an active run;\n- `422 Unprocessable Entity` (`code = \"model_unpriced\"`) if the assistant is\n  agent-kind and the caller has an allowance ceiling but the agent's model\n  has no `treasurer.pricing` row;\n- `429 Too Many Requests` (`code = \"allowance_exhausted\"`) if the caller's\n  allowance is spent, or too small to buy a single token of an agent-kind\n  assistant's model;\n- `501 Not Implemented` if no run submission backend is configured.",
         "operationId": "submit_run",
         "requestBody": {
           "content": {
@@ -1469,6 +1529,36 @@
               }
             }
           },
+          "422": {
+            "description": "model_unpriced: the assistant is agent-kind, the caller has an allowance ceiling and the agent's model has no treasurer.pricing row, so its spend cannot be metered; no Retry-After, nothing runs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The allowance check itself failed; the request is refused and nothing runs (fail closed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "501": {
             "description": "No run submission backend configured",
             "content": {
@@ -1496,7 +1586,7 @@
           "runs"
         ],
         "summary": "`GET /runs/{run_id}` -- the run's current status.",
-        "description": "Reads [`RunRepositoryPort`] directly (no submission port, no engine and\nno queue type named here -- ADR-0031, D-12).\n\nReturns:\n- `200 OK` with [`RunResponse`] on success;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` if no run exists with that id;\n- `501 Not Implemented` if no run store is configured.",
+        "description": "Reads [`RunRepositoryPort`] directly (no submission port, no engine and\nno queue type named here -- ADR-0031, D-12), through `load_visible_run`:\na user-role principal sees only its own tenant's runs, an admin-role\nprincipal sees every run (D-11), and a run the caller may not see answers\nthe same `404` as a missing run (D-12, PLAT-07).\n\nReturns:\n- `200 OK` with [`RunResponse`] on success;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` for an unknown run, or a run the caller may not see;\n- `501 Not Implemented` if no run store is configured.",
         "operationId": "get_run",
         "parameters": [
           {
@@ -1511,7 +1601,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Run state",
+            "description": "Run state. Tenant-scoped: a user-role principal can read only runs recorded under its own tenant; an admin-role principal can read every run. `submitted_by` is the recording tenant and API key name, or null for a run with no recorded principal.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1541,7 +1631,7 @@
             }
           },
           "404": {
-            "description": "Unknown run",
+            "description": "Unknown run, or a run the caller may not see",
             "content": {
               "application/json": {
                 "schema": {
@@ -1577,7 +1667,7 @@
           "runs"
         ],
         "summary": "`POST /runs/{run_id}/cancel` -- idempotently request cancellation\n(D-16, D-46).",
-        "description": "Invocation-shaped: any authenticated principal, subject to the run's\nown assistant `allowed_roles`, checked inside\n[`RunSubmissionPort::cancel`] (`paladin-web` has no visibility into\n`allowed_roles` itself, ADR-0031).\n\nReturns:\n- `202 Accepted` with [`CancelRunResponse`] on a non-terminal run\n  (idempotent -- a second call also answers `202`);\n- `400 Bad Request` for a malformed run id;\n- `403 Forbidden` if the principal's role is not permitted;\n- `404 Not Found` for an unknown run;\n- `409 Conflict` if the run is already terminal;\n- `501 Not Implemented` if no run submission backend is configured.",
+        "description": "Visibility first (Phase 40 D-13, PLAT-07): the run is loaded through\n`load_visible_run`, so a run of another tenant answers the missing-run\n`404` before any role check -- cancel neither leaks the run's existence\nnor permits a cross-tenant mutation, and [`RunSubmissionPort::cancel`] is\nnever reached for it. Then invocation-shaped: any authenticated principal\nthat may see the run, subject to the run's own assistant `allowed_roles`,\nchecked inside [`RunSubmissionPort::cancel`] (`paladin-web` has no\nvisibility into `allowed_roles` itself, ADR-0031).\n\nReturns:\n- `202 Accepted` with [`CancelRunResponse`] on a non-terminal run\n  (idempotent -- a second call also answers `202`);\n- `400 Bad Request` for a malformed run id;\n- `403 Forbidden` if the principal's role is not permitted;\n- `404 Not Found` for an unknown run, or a run the caller may not see;\n- `409 Conflict` if the run is already terminal;\n- `501 Not Implemented` if no run submission backend, or no run store,\n  is configured.",
         "operationId": "cancel_run",
         "parameters": [
           {
@@ -1632,7 +1722,7 @@
             }
           },
           "404": {
-            "description": "Unknown run",
+            "description": "Unknown run, or a run the caller may not see -- answered before any role check",
             "content": {
               "application/json": {
                 "schema": {
@@ -1652,7 +1742,7 @@
             }
           },
           "501": {
-            "description": "No run submission backend configured",
+            "description": "No run submission backend configured, or no run store configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -1678,7 +1768,7 @@
           "runs"
         ],
         "summary": "`GET /runs/{run_id}/stream` -- Server-Sent Events stream of a run's\nprogress (PLAT-FR-07, D-24..D-27).",
-        "description": "Returns:\n- `200 OK` `text/event-stream` on success, framing the seven wire events\n  this module's own docs table lists;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` if no run exists with that id;\n- `501 Not Implemented` if no run event stream backend is configured.",
+        "description": "Tenant-scoped (Phase 40 D-13, PLAT-07): the run is loaded through\n`load_visible_run` before any SSE upgrade, so another tenant's run\nanswers the missing-run `404` and the stream port is never asked for it.\n\nReturns:\n- `200 OK` `text/event-stream` on success, framing the seven wire events\n  this module's own docs table lists;\n- `400 Bad Request` for a malformed run id;\n- `404 Not Found` for an unknown run, or a run the caller may not see;\n- `501 Not Implemented` if no run event stream backend, or no run store,\n  is configured.",
         "operationId": "stream_run",
         "parameters": [
           {
@@ -1719,7 +1809,7 @@
             }
           },
           "404": {
-            "description": "Unknown run",
+            "description": "Unknown run, or a run the caller may not see",
             "content": {
               "application/json": {
                 "schema": {
@@ -1729,7 +1819,7 @@
             }
           },
           "501": {
-            "description": "No run event stream backend configured",
+            "description": "No run event stream backend configured, or no run store configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -1754,8 +1844,8 @@
         "tags": [
           "runs"
         ],
-        "summary": "`GET /runs/{run_id}/webhook-deliveries` -- paginated delivery attempts,\nnewest-first (D-40, PLAT-FR-14). Authenticated, any role.",
-        "description": "Returns:\n- `200 OK` with [`WebhookDeliveryListResponse`] on success;\n- `400 Bad Request` for an invalid run id, `limit`, or `cursor`;\n- `501 Not Implemented` if no webhook delivery backend is configured.",
+        "summary": "`GET /runs/{run_id}/webhook-deliveries` -- paginated delivery attempts,\nnewest-first (D-40, PLAT-FR-14). Authenticated, any role, and\ntenant-scoped (Phase 40 D-13, PLAT-07): the run is loaded through\n`load_visible_run` before `list_for_run` is asked for anything, so\nanother tenant's webhook target URLs and delivery diagnostics are behind\nthe same missing-run `404` as a run that does not exist.",
+        "description": "Returns:\n- `200 OK` with [`WebhookDeliveryListResponse`] on success;\n- `400 Bad Request` for an invalid run id, `limit`, or `cursor`;\n- `404 Not Found` for an unknown run, or a run the caller may not see;\n- `501 Not Implemented` if no webhook delivery backend, or no run store,\n  is configured.",
         "operationId": "list_webhook_deliveries",
         "parameters": [
           {
@@ -1819,8 +1909,18 @@
               }
             }
           },
+          "404": {
+            "description": "Unknown run, or a run the caller may not see",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "501": {
-            "description": "No webhook delivery backend configured",
+            "description": "No webhook delivery backend configured, or no run store configured",
             "content": {
               "application/json": {
                 "schema": {
@@ -2607,6 +2707,26 @@
               }
             }
           },
+          "429": {
+            "description": "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The allowance check itself failed; the request is refused and nothing runs (fail closed)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "501": {
             "description": "No run submission backend configured",
             "content": {
@@ -3195,6 +3315,30 @@
           }
         }
       },
+      "CostDto": {
+        "type": "object",
+        "description": "Wire projection of a [`Cost`] (D-10): the raw, authoritative nano-unit amount plus\nthe same four-decimal-plus-currency rendering the herald and `paladin-cli treasury\nspend` print ([`format_cost`], D-00c/D-04) -- `display` is derived, never a second\nsource of truth.",
+        "required": [
+          "nanos",
+          "currency",
+          "display"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217 currency code."
+          },
+          "display": {
+            "type": "string",
+            "description": "Four-decimal-plus-currency rendering (e.g. `\"0.0450 USD\"`), byte-identical to\nthe herald and CLI output for the same amount."
+          },
+          "nanos": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The exact nano-unit amount. Authoritative; `display` is derived from it."
+          }
+        }
+      },
       "CreateAssistantRequest": {
         "type": "object",
         "description": "Request body for `POST /assistants`.",
@@ -3356,11 +3500,29 @@
           "stop_reason"
         ],
         "properties": {
+          "cost": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CostDto",
+                "description": "This call's currency cost, from [`PaladinResult::cost`] (D-10, LEDGR-04). `null`\nwhen any model call in the run was unpriced or no pricing is configured --\nnever a zero stand-in (D-00c)."
+              }
+            ]
+          },
           "execution_time_ms": {
             "type": "integer",
             "format": "int64",
             "description": "Wall-clock execution time in milliseconds.",
             "minimum": 0
+          },
+          "halt_reason": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Why the allowance ended this call, present only when `stop_reason` is\n`\"allowance_halted\"` (Phase 42, D-12): the same object `GET /runs/{id}` reports as\n`halt_reason` -- `reason: \"allowance_exhausted\"` plus the binding ceiling's `scope`,\n`kind`, `balance`, `ceiling`, `window_start` and `window_end`. The key is absent for\nevery other stop reason, so a response that was not halted is byte-identical to before."
           },
           "loop_count": {
             "type": "integer",
@@ -3713,6 +3875,24 @@
           }
         }
       },
+      "RunAttributionDto": {
+        "type": "object",
+        "description": "Wire projection of a [`RunAttribution`] (D-19, TENANT-02): the principal recorded\nwhen the run was submitted.\n\n`api_key_id` is the API key's configured name (the same string that appears in logs as\nthe principal id) -- never the key value the caller authenticated with, and never the\nrole: roles are config, not data, and are not persisted on the run row (D-08).",
+        "required": [
+          "tenant_id",
+          "api_key_id"
+        ],
+        "properties": {
+          "api_key_id": {
+            "type": "string",
+            "description": "The submitting API key's configured name (or a bearer principal's id)."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "The tenant the run is attributed to -- the tenant configured for the submitting\nAPI key, never a value the caller supplied (D-02)."
+          }
+        }
+      },
       "RunListResponse": {
         "type": "object",
         "description": "Response body for `GET /runs`.",
@@ -3753,12 +3933,30 @@
             "type": "string",
             "description": "The resolved assistant id."
           },
+          "cost": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CostDto",
+                "description": "This run's cost, derived from the ledger's settlements for `run_id` at read\ntime (D-10) -- `null` when no ledger backend is configured, the run has no\nsettled spend, or its settlements span more than one currency. Never\npersisted on the run row; a ledger read failure degrades this to `null`\nrather than failing the read (D-08)."
+              }
+            ]
+          },
           "error": {
             "type": [
               "string",
               "null"
             ],
             "description": "The engine's error, if this run is `Failed`."
+          },
+          "final_waypoint_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The final Waypoint id this run reached, if any -- for a `halted` run the Halted Waypoint,\ni.e. the fork point to resume from (`POST /threads/{thread_id}/fork` with\n`from_waypoint_id`). Always serialised: `null` while the run has recorded no Waypoint."
           },
           "finished_at": {
             "type": [
@@ -3767,6 +3965,13 @@
             ],
             "format": "date-time",
             "description": "When this run reached a terminal status, if it has."
+          },
+          "halt_reason": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Why this run halted, when it halted on spend (ALLOW-03, Phase 42 D-06): a JSON object\ntagged by `reason` -- `\"allowance_exhausted\"` with the halted ceiling's own `scope`,\n`kind`, `balance`, `ceiling`, `window_start` and `window_end` (identical to the `details`\nof the Phase 41 `429 allowance_exhausted`), or `\"ledger_unavailable\"` with no other key\nwhen the ledger could not be read and the run halted fail-closed. `null` for every run\nthat did not halt on spend. A halt is a resume point, not a failure: `error` stays\n`null` beside it. Built only by `HaltReason::wire_json`; never carries another scope's\nfigures, a tenant id or an API key name or value. Always serialised, mirroring `cost`."
           },
           "pending_responses": {
             "type": "integer",
@@ -3793,6 +3998,17 @@
             "type": "string",
             "format": "date-time",
             "description": "When this run was submitted."
+          },
+          "submitted_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunAttributionDto",
+                "description": "The principal recorded when this run was submitted (D-19): the tenant and the API\nkey's configured name, never the key value or the role. `null` for a run with no\nrecorded principal -- schedule-fired, submitted from the same process, or\nsubmitted before v0.11 (D-10). Always serialised, mirroring `cost`."
+              }
+            ]
           },
           "thread_id": {
             "type": "string",

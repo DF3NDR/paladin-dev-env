@@ -1001,6 +1001,8 @@ pub async fn get_thread(
         (status = 403, description = "Role not permitted for this assistant", body = ApiErrorBody),
         (status = 404, description = "Unknown thread or waypoint", body = ApiErrorBody),
         (status = 409, description = "Thread busy -- a run is already active on this thread", body = ApiErrorBody),
+        (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
+        (status = 500, description = "The allowance check itself failed; the request is refused and nothing runs (fail closed)", body = ApiErrorBody),
         (status = 501, description = "No run submission backend configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
@@ -1025,7 +1027,9 @@ pub async fn fork_thread(
             from_waypoint_id,
             edit: body.edit,
             webhook,
-            requested_by: Some((principal.id.clone(), principal.role)),
+            requested_by: Some(
+                paladin_core::platform::container::principal::PrincipalRef::from(&principal),
+            ),
         })
         .await
         .map_err(map_submission_error)?;
@@ -1178,10 +1182,11 @@ mod tests {
     /// An admin `Principal` extension for direct handler calls (bypasses
     /// HTTP auth plumbing), mirroring `agent_controller`'s own `admin()`.
     fn admin() -> Extension<Principal> {
-        Extension(Principal {
-            id: "test-admin".to_string(),
-            role: UserRole::Admin,
-        })
+        Extension(Principal::new(
+            "test-admin",
+            UserRole::Admin,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ))
     }
 
     fn thread(name: &str) -> ThreadId {
@@ -1721,6 +1726,7 @@ mod tests {
             enabled: true,
             api_keys: std::collections::HashMap::new(),
             token_verifier: None,
+            bearer_tenant: None,
         };
         let state = ThreadApiState::new().with_auth(auth);
         let app = thread_router(state);
@@ -1746,22 +1752,25 @@ mod tests {
         let mut api_keys = HashMap::new();
         api_keys.insert(
             "user-key".to_string(),
-            Principal {
-                id: "u".to_string(),
-                role: UserRole::User,
-            },
+            Principal::new(
+                "u",
+                UserRole::User,
+                paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+            ),
         );
         api_keys.insert(
             "admin-key".to_string(),
-            Principal {
-                id: "a".to_string(),
-                role: UserRole::Admin,
-            },
+            Principal::new(
+                "a",
+                UserRole::Admin,
+                paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+            ),
         );
         let auth = crate::agent_auth::AgentAuthConfig {
             enabled: true,
             api_keys,
             token_verifier: None,
+            bearer_tenant: None,
         };
         let state = ThreadApiState::new()
             .with_waypoints(Arc::new(MockWaypointStore::default()))
@@ -2099,6 +2108,32 @@ mod tests {
         ThreadBusy,
         UnknownWaypoint,
         Forbidden,
+        AllowanceExhausted,
+    }
+
+    /// A window refusal: the key's 2.50 USD daily allowance is spent (Phase 41).
+    fn window_allowance_refusal() -> paladin_core::platform::container::allowance::AllowanceRefusal
+    {
+        use chrono::TimeZone;
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+        };
+        use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+        let usd = CurrencyCode::new("USD").expect("USD");
+        let at = |day, hour| {
+            chrono::Utc
+                .with_ymd_and_hms(2026, 10, day, hour, 0, 0)
+                .single()
+                .expect("instant")
+        };
+        AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::ApiKey,
+            limit_kind: AllowanceLimitKind::Window,
+            balance: Cost::new(2_500_000_000, usd.clone()),
+            ceiling: Cost::new(2_500_000_000, usd),
+            window: Some((at(3, 0), at(4, 0))),
+            evaluated_at: at(3, 23),
+        }
     }
 
     struct MockForkSubmissionPort {
@@ -2118,7 +2153,7 @@ mod tests {
         async fn cancel(
             &self,
             _run_id: &RunId,
-            _requested_by: Option<(String, paladin_core::platform::container::user::UserRole)>,
+            _requested_by: Option<paladin_core::platform::container::principal::PrincipalRef>,
         ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
         {
             Err(RunSubmissionError::NotWired)
@@ -2146,6 +2181,9 @@ mod tests {
                 ForkOutcome::Forbidden => Err(RunSubmissionError::Forbidden {
                     reason: "role not permitted for this assistant".to_string(),
                 }),
+                ForkOutcome::AllowanceExhausted => Err(RunSubmissionError::AllowanceExhausted(
+                    window_allowance_refusal(),
+                )),
             }
         }
     }
@@ -2238,6 +2276,37 @@ mod tests {
         assert_eq!(err.status(), StatusCode::FORBIDDEN);
     }
 
+    /// Phase 41 (D-06, D-12, Pitfall 7): a fork refused by the Treasurer reaches the client as
+    /// the same `429 allowance_exhausted` (with `Retry-After`) `POST /v1/runs` answers, through
+    /// the shared `map_submission_error`.
+    #[tokio::test]
+    async fn fork_route_maps_allowance_exhausted_to_429() {
+        let state = ThreadApiState::new().with_run_submission(Arc::new(MockForkSubmissionPort {
+            outcome: ForkOutcome::AllowanceExhausted,
+        }));
+        let err = fork_thread(
+            State(state),
+            admin(),
+            Path("t".to_string()),
+            Json(fork_body()),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.to_body()["error"]["code"], "allowance_exhausted");
+
+        let response = axum::response::IntoResponse::into_response(err);
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok()),
+            Some("3600"),
+            "a window refusal carries Retry-After"
+        );
+    }
+
     // --- delete_thread (D-45) -------------------------------------------
 
     #[tokio::test]
@@ -2296,10 +2365,11 @@ mod tests {
         let t = thread("admin-gated");
         store.seed_latest(sample_waypoint(&t, 1, WaypointStatus::Completed));
         let state = state_with_waypoints(store);
-        let user_principal = Extension(Principal {
-            id: "u".to_string(),
-            role: UserRole::User,
-        });
+        let user_principal = Extension(Principal::new(
+            "u",
+            UserRole::User,
+            paladin_core::platform::container::principal::TenantId::new("test-tenant").unwrap(),
+        ));
         let err = delete_thread(State(state), user_principal, Path(t.as_str().to_string()))
             .await
             .unwrap_err();

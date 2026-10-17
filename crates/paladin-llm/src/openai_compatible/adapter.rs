@@ -93,6 +93,7 @@
 use async_trait::async_trait;
 use futures::Stream;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::env;
 use std::net::IpAddr;
 
@@ -100,8 +101,15 @@ use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities, StreamingResponse,
 };
 
+use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
+
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
+};
+use crate::redaction::RedactedKey;
+use crate::registry::{
+    DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
+    default_timeout_seconds, fallback_from_compat,
 };
 
 /// Default request timeout, in seconds, when `OPENAI_COMPATIBLE_TIMEOUT_SECONDS`
@@ -293,16 +301,24 @@ impl OpenAiCompatibleCapabilitiesConfig {
     /// value that fails to parse. Never silently defaults an unparseable
     /// value to `true` or `false`.
     pub fn from_env() -> Result<Self, String> {
+        Self::from_lookup(&|name| env::var(name).ok())
+    }
+
+    /// [`Self::from_env`] over an injected variable lookup, so the layered config path
+    /// (`config::bridge`, plan 50-09) reads the same `OPENAI_COMPATIBLE_*` variables through its
+    /// own environment snapshot, and a lookup that finds nothing yields the conservative
+    /// defaults.
+    pub(crate) fn from_lookup(lookup: &dyn Fn(&str) -> Option<String>) -> Result<Self, String> {
         Self::from_parts(
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_STREAMING").ok(),
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_TOOL_CALLING").ok(),
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_FUNCTION_CALLING").ok(),
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_VISION").ok(),
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_EMBEDDINGS").ok(),
-            env::var("OPENAI_COMPATIBLE_SUPPORTS_SYSTEM_MESSAGES").ok(),
-            env::var("OPENAI_COMPATIBLE_MAX_CONTEXT_TOKENS").ok(),
-            env::var("OPENAI_COMPATIBLE_TEMPERATURE_MIN").ok(),
-            env::var("OPENAI_COMPATIBLE_TEMPERATURE_MAX").ok(),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_STREAMING"),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_TOOL_CALLING"),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_FUNCTION_CALLING"),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_VISION"),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_EMBEDDINGS"),
+            lookup("OPENAI_COMPATIBLE_SUPPORTS_SYSTEM_MESSAGES"),
+            lookup("OPENAI_COMPATIBLE_MAX_CONTEXT_TOKENS"),
+            lookup("OPENAI_COMPATIBLE_TEMPERATURE_MIN"),
+            lookup("OPENAI_COMPATIBLE_TEMPERATURE_MAX"),
         )
     }
 
@@ -368,7 +384,8 @@ impl OpenAiCompatibleCapabilitiesConfig {
 /// Unlike every named preset in this crate, every field here — including
 /// `base_url` and `model` — is **required**, with no defensible default:
 /// there is no vendor to inherit an endpoint or a model identifier from.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct OpenAiCompatibleConfig {
     /// API key for the configured endpoint.
     pub api_key: String,
@@ -382,6 +399,44 @@ pub struct OpenAiCompatibleConfig {
     pub timeout_seconds: u64,
     /// Operator-declared capabilities (D-04).
     pub capabilities: OpenAiCompatibleCapabilitiesConfig,
+    /// Default output budget (`max_tokens`) sent when a request sets none. `None` (the default)
+    /// sends no `max_tokens` key. The value is checked against the model's profiled maximum
+    /// output exactly as a request's own `max_tokens` is (ADR-0061 (i)): above it, the request is
+    /// refused before any HTTP call.
+    pub max_tokens: Option<u32>,
+    /// How many times a retryable error is retried after the first attempt. Defaults to `3`;
+    /// `0` sends each request once. A 429 is never retried here (the Cadence decorator waits)
+    /// and a permanent error is never retried.
+    pub max_retries: u32,
+    /// Adapter-wide context window in tokens, the operator's statement for every model of this
+    /// provider. `None` (the default) keeps the compiled windows. When set it replaces the
+    /// adapter's declared window, the fallback profile's window and every seeded model's window;
+    /// a `context_window` in [`model_overrides`](Self::model_overrides) still wins for that
+    /// model. Construction fails when it is below a model's maximum output.
+    pub context_window: Option<u32>,
+    /// Per-model overrides (D-06), keyed by exact model id and laid over each model's seeded
+    /// entry field by field. Empty by default. Validated at construction; an invalid override
+    /// fails it with an error naming the provider and the model.
+    pub model_overrides: BTreeMap<String, ModelOverride>,
+}
+
+/// Prints every field except the API key, which is shown as `<redacted>` (D-00a): the key is a
+/// public `String`, so a derived `Debug` would put it into any log line or panic message that
+/// formats the config.
+impl std::fmt::Debug for OpenAiCompatibleConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OpenAiCompatibleConfig")
+            .field("api_key", &RedactedKey(&self.api_key))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("timeout_seconds", &self.timeout_seconds)
+            .field("capabilities", &self.capabilities)
+            .field("max_tokens", &self.max_tokens)
+            .field("max_retries", &self.max_retries)
+            .field("context_window", &self.context_window)
+            .field("model_overrides", &self.model_overrides)
+            .finish()
+    }
 }
 
 impl OpenAiCompatibleConfig {
@@ -427,10 +482,16 @@ impl OpenAiCompatibleConfig {
              default model for an operator-configured provider"
                 .to_string()
         })?;
-        let timeout_seconds = timeout_seconds
-            .unwrap_or_else(|| OPENAI_COMPATIBLE_DEFAULT_TIMEOUT_SECONDS.to_string())
-            .parse()
-            .map_err(|_| "Invalid OPENAI_COMPATIBLE_TIMEOUT_SECONDS value".to_string())?;
+        let timeout_seconds = match timeout_seconds {
+            Some(value) => value
+                .parse()
+                .map_err(|_| "Invalid OPENAI_COMPATIBLE_TIMEOUT_SECONDS value".to_string())?,
+            None => default_timeout_seconds(
+                OPENAI_COMPATIBLE_PROVIDER,
+                &model,
+                OPENAI_COMPATIBLE_DEFAULT_TIMEOUT_SECONDS,
+            ),
+        };
 
         let config = Self {
             api_key,
@@ -438,6 +499,10 @@ impl OpenAiCompatibleConfig {
             model,
             timeout_seconds,
             capabilities,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         };
 
         config.validate()?;
@@ -451,12 +516,21 @@ impl OpenAiCompatibleConfig {
         model: String,
         capabilities: OpenAiCompatibleCapabilitiesConfig,
     ) -> Self {
+        let timeout_seconds = default_timeout_seconds(
+            OPENAI_COMPATIBLE_PROVIDER,
+            &model,
+            OPENAI_COMPATIBLE_DEFAULT_TIMEOUT_SECONDS,
+        );
         Self {
             api_key,
             base_url,
             model,
-            timeout_seconds: OPENAI_COMPATIBLE_DEFAULT_TIMEOUT_SECONDS,
+            timeout_seconds,
             capabilities,
+            max_tokens: None,
+            max_retries: DEFAULT_MAX_RETRIES,
+            context_window: None,
+            model_overrides: BTreeMap::new(),
         }
     }
 
@@ -499,6 +573,8 @@ fn is_plaintext_to_non_loopback_host(base_url: &str) -> bool {
         None => false,
     }
 }
+
+config_knob_builders!(OpenAiCompatibleConfig);
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and that its engine stamps on every `LlmError::ProviderError` (Phase 25
@@ -555,14 +631,16 @@ impl OpenAiCompatibleAdapter {
             api_key: config.api_key,
             model: config.model,
             timeout_seconds: config.timeout_seconds,
-            max_retries: 3,
+            max_retries: config.max_retries,
             capabilities: CompatCapabilities {
                 supports_streaming: config.capabilities.supports_streaming,
                 supports_tool_calling: config.capabilities.supports_tool_calling,
                 supports_function_calling: config.capabilities.supports_function_calling,
                 supports_vision: config.capabilities.supports_vision,
                 supports_embeddings: config.capabilities.supports_embeddings,
-                max_context_tokens: config.capabilities.max_context_tokens,
+                max_context_tokens: config
+                    .context_window
+                    .or(config.capabilities.max_context_tokens),
                 supports_system_messages: config.capabilities.supports_system_messages,
                 temperature_range: config.capabilities.temperature_range,
             },
@@ -581,6 +659,9 @@ impl OpenAiCompatibleAdapter {
             // which is the honest answer for an endpoint this adapter knows
             // nothing about in advance.
             fallback_models: Vec::new(),
+            // No usage-cap (quota) mapping for openai-compatible: its quota-exhaustion body was never captured
+            // (50-SEED-PROBE.md, owner reading R-2: accepted unverified 2026-10-16, plan 50-17),
+            // so an override would be invented evidence (D-11a). The shared status mapping applies.
             error_override: None,
             // T-17-18: this adapter's base_url is entirely operator-supplied
             // (unlike every other preset's fixed vendor host), so a redirect
@@ -589,11 +670,36 @@ impl OpenAiCompatibleAdapter {
             redirect_policy: Some(reqwest::redirect::Policy::none()),
         };
 
+        // ADR-0061 (plan 50-03): the adapter-wide fallback profile is this preset's own
+        // declaration above, restated as a profile; per-model seeded entries arrive in plan
+        // 50-06.
+        // Stop sequences: `Supported { max: None }` is the vendor's published request schema
+        // (A3-50-03); a vendor that rejects `stop` for a model is corrected by that model's
+        // seeded entry (plan 50-06), never by this adapter (D-04a).
+        let fallback = fallback_from_compat(
+            &engine_config.capabilities.clone().into(),
+            &engine_config.request_parameters,
+            StopSupport::Supported { max: None },
+        );
+
+        // PARITY-03: the operator's adapter-wide window, then the per-model overrides, are laid
+        // over the seeded table; either one failing construction names the provider and model.
+        let registry = ModelRegistry::new(OPENAI_COMPATIBLE_PROVIDER, &[], fallback)
+            .with_context_window(config.context_window)
+            .and_then(|registry| registry.with_overrides(config.model_overrides))
+            .map_err(|e| {
+                LlmError::AuthenticationError(format!(
+                    "Invalid openai-compatible configuration: {e}"
+                ))
+            })?;
+
         Ok(Self {
             // Phase 25 D-03: name the engine explicitly (it matches the
             // engine's own default, but the preset owns its identity).
             engine: CompatEngine::new(engine_config)?
-                .with_provider_name(OPENAI_COMPATIBLE_PROVIDER),
+                .with_provider_name(OPENAI_COMPATIBLE_PROVIDER)
+                .with_default_max_tokens(config.max_tokens)
+                .with_model_registry(registry),
         })
     }
 }
@@ -643,6 +749,10 @@ impl LlmPort for OpenAiCompatibleAdapter {
     fn get_capabilities(&self) -> ProviderCapabilities {
         self.engine.capabilities()
     }
+
+    fn model_profile(&self, model: &str) -> Option<ModelProfile> {
+        Some(self.engine.model_profile(model))
+    }
 }
 
 #[cfg(test)]
@@ -650,7 +760,9 @@ mod tests {
     use super::*;
     use crate::http_status::map_http_status;
     use mockito::Server;
-    use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+    use paladin_core::platform::container::prompt::{
+        PromptItem, PromptParameters, PromptType, UserPrompt,
+    };
     use paladin_ports::output::llm_port::FinishReason;
     use serde_json::json;
 
@@ -1053,7 +1165,7 @@ mod tests {
         let adapter = OpenAiCompatibleAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request("some-model")).await;
-        assert!(matches!(result, Err(LlmError::RateLimitExceeded)));
+        assert!(matches!(result, Err(LlmError::RateLimitExceeded { .. })));
     }
 
     #[tokio::test]
@@ -1251,6 +1363,76 @@ mod tests {
         assert_eq!(caps.temperature_range, Some((0.0, 1.5)));
     }
 
+    #[tokio::test]
+    async fn openai_compatible_stop_reaches_the_wire_in_order() {
+        let mut server = crate::compat::test_support::server().await;
+        let captured = crate::compat::test_support::mock_completion(&mut server).await;
+        let adapter = OpenAiCompatibleAdapter::new(OpenAiCompatibleConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            "some-model".to_string(),
+            default_capabilities(),
+        ))
+        .unwrap();
+        let mut request = build_request("some-model");
+        request.prompt.entity.data.parameters = PromptParameters {
+            max_tokens: Some(64),
+            temperature: Some(0.5),
+            top_p: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: Some(vec!["END".to_string(), "STOP".to_string()]),
+        };
+
+        let response = adapter
+            .generate(request)
+            .await
+            .expect("well-formed response");
+        let body = captured.lock().unwrap().take().expect("a request was sent");
+
+        assert_eq!(body.get("stop"), Some(&json!(["END", "STOP"])));
+        assert!(
+            !response
+                .metadata
+                .contains_key(crate::sampling::PARAMS_OMITTED_METADATA_KEY)
+        );
+    }
+
+    #[test]
+    fn openai_compatible_model_profile_follows_the_declared_temperature_range() {
+        let capabilities = OpenAiCompatibleCapabilitiesConfig::from_parts(
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("0.0".to_string()),
+            Some("1.5".to_string()),
+        )
+        .unwrap();
+        let adapter = OpenAiCompatibleAdapter::new(OpenAiCompatibleConfig::new(
+            "test-key".to_string(),
+            "https://example.invalid/v1".to_string(),
+            "some-model".to_string(),
+            capabilities,
+        ))
+        .unwrap();
+        let profile = adapter
+            .model_profile("some-model")
+            .expect("the generic preset profiles every model");
+
+        assert_eq!(
+            profile.temperature,
+            paladin_ports::output::model_profile::ParamSupport::Range(0.0, 1.5)
+        );
+        assert_eq!(
+            profile.stop_sequences,
+            paladin_ports::output::model_profile::StopSupport::Supported { max: None }
+        );
+    }
+
     // ── Plaintext-to-non-loopback detection (T-17-22) ──
 
     #[test]
@@ -1298,6 +1480,14 @@ mod tests {
 
         impl crate::conformance::ConformanceFixture for OpenAiCompatibleFixture {
             const WIRE: crate::conformance::Wire = crate::conformance::Wire::OpenAiChat;
+
+            fn default_model() -> &'static str {
+                "some-model"
+            }
+
+            fn provider_name() -> &'static str {
+                "openai-compatible"
+            }
 
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 let config = OpenAiCompatibleConfig::new(
@@ -1348,5 +1538,152 @@ mod tests {
         }
 
         crate::llm_conformance_suite!(OpenAiCompatibleFixture);
+    }
+
+    // ── PARITY-03 knobs (plan 50-08, D-12) ──
+
+    const UNSEEDED: &str = "openai-compatible-unseeded-test-model";
+
+    fn knob_config(url: &str, model: &str) -> OpenAiCompatibleConfig {
+        OpenAiCompatibleConfig::new(
+            "test-key".to_string(),
+            url.to_string(),
+            model.to_string(),
+            default_capabilities(),
+        )
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_max_tokens_default_reaches_the_wire() {
+        use crate::compat::test_support::{mock_completion, send_with_max_tokens, server};
+
+        let mut server = server().await;
+        let captured = mock_completion(&mut server).await;
+        let adapter = OpenAiCompatibleAdapter::new(
+            knob_config(&server.url(), UNSEEDED).with_max_tokens(2048),
+        )
+        .unwrap();
+
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 2048, "{body}");
+        let body = send_with_max_tokens(&adapter, &captured, UNSEEDED, Some(512))
+            .await
+            .unwrap();
+        assert_eq!(body["max_tokens"], 512, "{body}");
+
+        let plain = OpenAiCompatibleAdapter::new(knob_config(&server.url(), UNSEEDED)).unwrap();
+        let body = send_with_max_tokens(&plain, &captured, UNSEEDED, None)
+            .await
+            .unwrap();
+        assert!(body.get("max_tokens").is_none(), "{body}");
+    }
+
+    #[tokio::test]
+    async fn openai_compatible_max_retries_is_read_by_the_engine() {
+        for retries in [0_u32, 1] {
+            let server = crate::compat::test_support::server().await;
+            let adapter = OpenAiCompatibleAdapter::new(
+                knob_config(&server.url(), UNSEEDED).with_max_retries(retries),
+            )
+            .unwrap();
+            crate::compat::test_support::attempts_against_a_failing_endpoint(
+                server,
+                &adapter,
+                UNSEEDED,
+                retries as usize + 1,
+            )
+            .await;
+        }
+    }
+
+    #[test]
+    fn openai_compatible_context_window_override_is_declared() {
+        let adapter = OpenAiCompatibleAdapter::new(
+            knob_config("https://example.invalid/v1", UNSEEDED).with_context_window(500_000),
+        )
+        .unwrap();
+        assert_eq!(adapter.get_capabilities().max_context_tokens, Some(500_000));
+        let profile = adapter.model_profile(UNSEEDED).unwrap();
+        assert_eq!(profile.context_window, Some(500_000));
+    }
+
+    #[test]
+    fn openai_compatible_model_override_reaches_the_profile_and_invalid_one_fails_construction() {
+        let with_override = |window: u32| {
+            knob_config("https://example.invalid/v1", UNSEEDED).with_model_overrides(
+                std::collections::BTreeMap::from([(
+                    UNSEEDED.to_string(),
+                    crate::registry::ModelOverride {
+                        context_window: Some(window),
+                        ..crate::registry::ModelOverride::default()
+                    },
+                )]),
+            )
+        };
+        let adapter = OpenAiCompatibleAdapter::new(with_override(900_000)).unwrap();
+        assert_eq!(
+            adapter.model_profile(UNSEEDED).unwrap().context_window,
+            Some(900_000)
+        );
+        let message = match OpenAiCompatibleAdapter::new(with_override(0)) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("a zero window must fail construction"),
+        };
+        assert!(
+            message.contains("openai-compatible") && message.contains(UNSEEDED),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn openai_compatible_config_defaults_a_reasoning_model_to_300s() {
+        // (model, expected default timeout): a seeded reasoning model gets 300 s (D-13); any
+        // other model keeps this preset's compiled default (60 s).
+        for (model, expected) in [(UNSEEDED, 60), ("any-other-model", 60)] {
+            let url = "https://example.invalid/v1";
+            assert_eq!(
+                knob_config(url, model).timeout_seconds,
+                expected,
+                "new({model})"
+            );
+            let parts = OpenAiCompatibleConfig::from_parts(
+                Some("k".to_string()),
+                Some("https://example.invalid/v1".to_string()),
+                Some(model.to_string()),
+                None,
+                default_capabilities(),
+            )
+            .unwrap();
+            assert_eq!(parts.timeout_seconds, expected, "from_parts({model})");
+        }
+        // An explicit environment value always wins.
+        for explicit in ["30", "60", "900"] {
+            let config = OpenAiCompatibleConfig::from_parts(
+                Some("k".to_string()),
+                Some("https://example.invalid/v1".to_string()),
+                Some("m".to_string()),
+                Some(explicit.to_string()),
+                default_capabilities(),
+            )
+            .unwrap();
+            assert_eq!(config.timeout_seconds.to_string(), explicit);
+        }
+    }
+
+    #[test]
+    fn openai_compatible_config_debug_redacts_the_api_key() {
+        let config = knob_config("https://api.example.invalid/v1", "m");
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
+        for needle in [
+            "https://api.example.invalid/v1",
+            "timeout_seconds",
+            "max_retries",
+        ] {
+            assert!(debug.contains(needle), "'{needle}' missing from {debug}");
+        }
     }
 }

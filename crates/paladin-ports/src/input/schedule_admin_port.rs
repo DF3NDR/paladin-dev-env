@@ -13,6 +13,7 @@
 
 use async_trait::async_trait;
 
+use paladin_core::platform::container::principal::RunAttribution;
 use paladin_core::platform::container::run::WebhookSpec;
 use paladin_core::platform::container::run_schedule::{
     OnMissed, RunSchedule, RunScheduleId, RunScheduleUpdate, ThreadStrategy,
@@ -48,6 +49,14 @@ pub struct CreateRunSchedule {
     /// An optional webhook delivery target, validated by the write-time SSRF guard (D-42)
     /// before the schedule is ever persisted.
     pub webhook: Option<WebhookSpec>,
+    /// The creating principal's attribution (tenant id and API key name -- never a role, never
+    /// a key value), set by the HTTP layer from the authenticated principal (D-08).
+    ///
+    /// `None` is for embedders with no principal: the schedule is stored with a NULL creator,
+    /// and its fired runs are unattributed and never gated by an allowance. When `Some`, it is
+    /// persisted on the schedule, every run the schedule fires is attributed to it and admitted
+    /// against it, and no later `PATCH` can change it.
+    pub created_by: Option<RunAttribution>,
 }
 
 /// Errors returned by [`ScheduleAdminPort`] methods (X-06 — structured, never a bare
@@ -170,6 +179,7 @@ pub enum ScheduleAdminError {
 ///             thread_strategy: None,
 ///             on_missed: None,
 ///             webhook: None,
+///             created_by: None,
 ///         })
 ///         .await?;
 ///

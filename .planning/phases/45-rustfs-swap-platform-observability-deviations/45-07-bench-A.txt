@@ -1,0 +1,65 @@
+    Finished `bench` profile [optimized] target(s) in 5m 32s
+     Running benches/engine_benchmarks.rs (target/release/deps/engine_benchmarks-dcbe029d8138705c)
+Gnuplot not found, using plotters backend
+Benchmarking engine/bench_superstep_cost_sinks_none
+Benchmarking engine/bench_superstep_cost_sinks_none: Warming up for 1.0000s
+Benchmarking engine/bench_superstep_cost_sinks_none: Collecting 100 samples in estimated 3.5627 s (30k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_none: Analyzing
+engine/bench_superstep_cost_sinks_none
+                        time:   [109.93 µs 112.19 µs 114.88 µs]
+Found 1 outliers among 100 measurements (1.00%)
+  1 (1.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_log_sink
+Benchmarking engine/bench_superstep_cost_sinks_log_sink: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_log_sink: Collecting 100 samples in estimated 3.4228 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_log_sink: Analyzing
+engine/bench_superstep_cost_sinks_log_sink
+                        time:   [129.91 µs 131.85 µs 134.08 µs]
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_composite
+Benchmarking engine/bench_superstep_cost_sinks_composite: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_composite: Collecting 100 samples in estimated 3.5354 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_composite: Analyzing
+engine/bench_superstep_cost_sinks_composite
+                        time:   [128.34 µs 129.60 µs 131.00 µs]
+Found 8 outliers among 100 measurements (8.00%)
+  1 (1.00%) low mild
+  4 (4.00%) high mild
+  3 (3.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off: Warming upfor 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off: Collecting100 samples in estimated 3.4366 s (30k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_none_target_off: Analyzing
+engine/bench_superstep_cost_sinks_none_target_off
+                        time:   [107.05 µs 109.30 µs 111.60 µs]
+Found 13 outliers among 100 measurements (13.00%)
+  5 (5.00%) low mild
+  3 (3.00%) high mild
+  5 (5.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off: Collecting 100 samples in estimated 3.4012 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_log_sink_target_off: Analyzing
+engine/bench_superstep_cost_sinks_log_sink_target_off
+                        time:   [131.54 µs 133.19 µs 134.88 µs]
+Found 5 outliers among 100 measurements (5.00%)
+  1 (1.00%) low mild
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off: Warming up for 1.0000 s
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off: Collecting 100 samples in estimated 3.6642 s (25k iterations)
+Benchmarking engine/bench_superstep_cost_sinks_composite_target_off: Analyzing
+engine/bench_superstep_cost_sinks_composite_target_off
+                        time:   [127.77 µs 129.99 µs 132.48 µs]
+Found 9 outliers among 100 measurements (9.00%)
+  3 (3.00%) low mild
+  5 (5.00%) high mild
+  1 (1.00%) high severe

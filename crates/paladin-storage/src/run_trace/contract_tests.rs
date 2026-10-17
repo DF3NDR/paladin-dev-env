@@ -22,7 +22,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 
-use paladin_core::platform::container::trace::{TraceEvent, TraceRecord};
+use chrono::TimeZone;
+use paladin_core::platform::container::allowance::{
+    AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, HaltReason,
+};
+use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+use paladin_core::platform::container::run::RunId;
+use paladin_core::platform::container::token_usage::TokenUsage;
+use paladin_core::platform::container::trace::{RunFinishStatus, TraceEvent, TraceRecord};
 use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
 use paladin_ports::output::run_trace_port::{RunTraceError, RunTracePort};
 
@@ -66,6 +73,27 @@ pub async fn append_then_read_round_trips(port: &dyn RunTracePort) {
     }
     let seqs: Vec<u64> = read_back.iter().map(|r| r.seq).collect();
     assert_eq!(seqs, vec![1, 2, 3, 4, 5]);
+}
+
+/// A `RunStarted` record naming its run on both the envelope and the event --
+/// the shape every Platform API run persists first -- reads back intact.
+pub async fn run_started_with_a_run_id_round_trips(port: &dyn RunTracePort) {
+    let thread = ThreadId::new("contract-run-started-run-id").unwrap();
+    let run_id = RunId::new_v7();
+    let record = TraceRecord {
+        thread_id: thread.clone(),
+        run_id: Some(run_id.clone()),
+        seq: 1,
+        at: Utc::now(),
+        event: TraceEvent::RunStarted {
+            run_id: Some(run_id),
+            graph_fingerprint: "agent".to_string(),
+        },
+    };
+    port.append(std::slice::from_ref(&record)).await.unwrap();
+
+    let read_back = port.read(&thread, 0, 100).await.unwrap();
+    assert_eq!(read_back, vec![record]);
 }
 
 /// `read(thread, 0, 2)` then `read(thread, last_seq, 2)` then again walks
@@ -130,6 +158,59 @@ pub async fn records_are_scoped_by_thread(port: &dyn RunTracePort) {
     assert_eq!(b_records[0].thread_id, thread_b);
 }
 
+/// `max_seq` reports the highest persisted `seq` of THAT thread (`0` for a thread with no rows),
+/// and a second run that numbers its records from it keeps every record: two runs on one thread
+/// are both read back (Phase 42 review WR-6).
+pub async fn max_seq_lets_a_second_run_on_a_thread_keep_its_records(port: &dyn RunTracePort) {
+    let thread = ThreadId::new("contract-max-seq-thread").unwrap();
+    let other = ThreadId::new("contract-max-seq-other-thread").unwrap();
+    assert_eq!(
+        port.max_seq(&thread).await.unwrap(),
+        0,
+        "a thread with no rows has no maximum"
+    );
+
+    let first_run = RunId::new_v7();
+    let first: Vec<TraceRecord> = [1u64, 2, 5]
+        .iter()
+        .map(|seq| TraceRecord {
+            run_id: Some(first_run.clone()),
+            ..sample_record(&thread, *seq, 0)
+        })
+        .collect();
+    port.append(&first).await.unwrap();
+    port.append(&[sample_record(&other, 40, 0)]).await.unwrap();
+    assert_eq!(
+        port.max_seq(&thread).await.unwrap(),
+        5,
+        "the maximum is the highest seq of this thread, never another thread's"
+    );
+
+    // A second run seeds its dispatcher from the maximum, so its seq starts after the first run's.
+    let origin = port.max_seq(&thread).await.unwrap();
+    let second_run = RunId::new_v7();
+    let second: Vec<TraceRecord> = (1..=3u64)
+        .map(|n| TraceRecord {
+            run_id: Some(second_run.clone()),
+            ..sample_record(&thread, origin + n, 0)
+        })
+        .collect();
+    port.append(&second).await.unwrap();
+
+    let rows = port.read(&thread, 0, 100).await.unwrap();
+    assert_eq!(rows.len(), 6, "both runs' records are persisted: {rows:?}");
+    let seqs: Vec<u64> = rows.iter().map(|r| r.seq).collect();
+    assert_eq!(seqs, vec![1, 2, 5, 6, 7, 8]);
+    assert_eq!(
+        rows.iter()
+            .filter(|r| r.run_id.as_ref() == Some(&second_run))
+            .count(),
+        3,
+        "none of the second run's records was dropped as a conflict"
+    );
+    assert_eq!(port.max_seq(&thread).await.unwrap(), 8);
+}
+
 /// `prune_thread(thread, 3)` deletes exactly the rows whose `superstep` is
 /// below 3 and returns that count.
 pub async fn prune_thread_removes_only_older_supersteps(port: &dyn RunTracePort) {
@@ -145,6 +226,85 @@ pub async fn prune_thread_removes_only_older_supersteps(port: &dyn RunTracePort)
     let remaining = port.read(&thread, 0, 100).await.unwrap();
     let supersteps: Vec<u64> = remaining.iter().map(record_superstep).collect();
     assert_eq!(supersteps, vec![3, 4, 5]);
+}
+
+/// A `RunFinished` record carrying a Treasurer `halt_reason` (Phase 42 D-05,
+/// D-19) reads back equal, the reason nested under its own key and intact:
+/// both reason kinds survive the store round trip.
+pub async fn run_finished_halt_reason_round_trips(port: &dyn RunTracePort) {
+    let thread = ThreadId::new("contract-run-finished-halt-reason").unwrap();
+    let usd = CurrencyCode::new("USD").unwrap();
+    let exhausted = HaltReason::AllowanceExhausted(AllowanceRefusal {
+        scope_kind: AllowanceScopeKind::ApiKey,
+        limit_kind: AllowanceLimitKind::Window,
+        balance: Cost::new(25_000_000_000, usd.clone()),
+        ceiling: Cost::new(25_000_000_000, usd),
+        window: Utc
+            .with_ymd_and_hms(2026, 10, 2, 0, 0, 0)
+            .single()
+            .zip(Utc.with_ymd_and_hms(2026, 10, 3, 0, 0, 0).single()),
+        evaluated_at: Utc.with_ymd_and_hms(2026, 10, 2, 12, 0, 0).unwrap(),
+    });
+    let records: Vec<TraceRecord> = [exhausted.clone(), HaltReason::LedgerUnavailable]
+        .into_iter()
+        .enumerate()
+        .map(|(index, reason)| TraceRecord {
+            thread_id: thread.clone(),
+            run_id: Some(RunId::new_v7()),
+            seq: index as u64 + 1,
+            at: Utc::now(),
+            event: TraceEvent::RunFinished {
+                status: RunFinishStatus::Halted,
+                total_supersteps: 2,
+                usage: TokenUsage::default(),
+                cost: None,
+                halt_reason: Some(reason),
+                duration_ms: 7,
+                trace_dropped_total: 0,
+            },
+        })
+        .collect();
+    port.append(&records).await.unwrap();
+
+    let read_back = port.read(&thread, 0, 100).await.unwrap();
+    assert_eq!(read_back, records);
+    match &read_back[0].event {
+        TraceEvent::RunFinished { halt_reason, .. } => {
+            assert_eq!(halt_reason, &Some(exhausted));
+        }
+        other => panic!("expected RunFinished, got {other:?}"),
+    }
+}
+
+/// A `run_finished` record persisted before `halt_reason` existed -- a
+/// literal JSON line with no `halt_reason` key -- is accepted and reads back
+/// with `halt_reason == None` (D-05, T-42-21). The legacy line is parsed with
+/// the same `serde_json` call every SQL adapter's `read` applies to its
+/// stored `record` text, then stored through the port.
+pub async fn legacy_run_finished_row_reads_back_without_a_halt_reason(port: &dyn RunTracePort) {
+    let thread = ThreadId::new("contract-legacy-run-finished").unwrap();
+    let legacy_json = r#"{"thread_id":"contract-legacy-run-finished","seq":1,"at":"2026-01-01T00:00:00Z","kind":"run_finished","status":"halted","total_supersteps":1,"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"cache_read_tokens":null,"cache_write_tokens":null,"reasoning_tokens":null},"duration_ms":5,"trace_dropped_total":0}"#;
+    let legacy: TraceRecord = serde_json::from_str(legacy_json).unwrap();
+    port.append(std::slice::from_ref(&legacy)).await.unwrap();
+
+    let read_back = port.read(&thread, 0, 100).await.unwrap();
+    assert_eq!(read_back.len(), 1);
+    match &read_back[0].event {
+        TraceEvent::RunFinished {
+            status,
+            halt_reason,
+            ..
+        } => {
+            assert_eq!(*status, RunFinishStatus::Halted);
+            assert_eq!(halt_reason, &None);
+        }
+        other => panic!("expected RunFinished, got {other:?}"),
+    }
+    let rewritten = serde_json::to_string(&read_back[0]).unwrap();
+    assert!(
+        !rewritten.contains("halt_reason"),
+        "a reason-less record writes no halt_reason key: {rewritten}"
+    );
 }
 
 /// An extra capability the schema-version clause below needs: writing a
@@ -178,15 +338,19 @@ where
     }
 }
 
-/// Run every clause expressible purely over `&dyn RunTracePort` (six of the
-/// seven `<behavior>` clauses -- `unsupported_schema_version_is_typed`
+/// Run every clause expressible purely over `&dyn RunTracePort` (every
+/// clause except `unsupported_schema_version_is_typed`, which
 /// needs [`RawSchemaVersionWriter`] too and is called directly by each
 /// backend's own test module instead).
 pub async fn run_all(store: Arc<dyn RunTracePort>) {
     append_then_read_round_trips(store.as_ref()).await;
+    run_started_with_a_run_id_round_trips(store.as_ref()).await;
     read_paginates_by_after_seq(store.as_ref()).await;
     read_of_unknown_thread_is_empty_not_error(store.as_ref()).await;
     append_is_idempotent_on_same_seq(store.as_ref()).await;
     records_are_scoped_by_thread(store.as_ref()).await;
+    max_seq_lets_a_second_run_on_a_thread_keep_its_records(store.as_ref()).await;
     prune_thread_removes_only_older_supersteps(store.as_ref()).await;
+    run_finished_halt_reason_round_trips(store.as_ref()).await;
+    legacy_run_finished_row_reads_back_without_a_halt_reason(store.as_ref()).await;
 }

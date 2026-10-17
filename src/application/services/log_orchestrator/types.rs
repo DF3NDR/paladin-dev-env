@@ -130,7 +130,7 @@ impl MessageHandler<LogMessage> for LogMessageHandler {
         {
             let mut logs = self.logs.write().await;
             if let Some(log) = logs.get_mut(&destination) {
-                log.node.add_entry(log_entry.clone());
+                log.data.add_entry(log_entry.clone());
             }
         }
 

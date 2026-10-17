@@ -469,6 +469,7 @@ impl LlmPort for MockLlmAdapter {
     async fn generate(&self, request: &LlmRequest) -> Result<LlmResponse, LlmError> {
         Ok(LlmResponse {
             content: self.responses[0].clone(),
+            reasoning: None,
             // ... other fields
         })
     }

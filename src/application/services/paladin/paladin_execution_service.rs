@@ -64,11 +64,11 @@ use crate::application::services::sanctum::rag_retrieval_service::{
     RagRetrievalResult, RagRetrievalService, rag_omission_marker,
 };
 use crate::config::agent_runtime::{ToolErrorConfig, ToolErrorMode};
-use crate::core::base::entity::node::Node;
+use crate::core::base::entity::Entity;
 use crate::core::platform::container::arsenal::{ArmamentCall, ArsenalError};
 use crate::core::platform::container::garrison::{ConversationRole, GarrisonEntry};
 use crate::core::platform::container::heartbeat::HeartbeatHandle;
-use crate::core::platform::container::herald::Herald;
+use crate::core::platform::container::herald::{ExecutionMetadata, Herald};
 use crate::core::platform::container::paladin::Paladin;
 use crate::core::platform::container::prompt::{
     PromptData, PromptItem, PromptParameters, PromptType, UserPrompt,
@@ -79,12 +79,20 @@ use crate::infrastructure::adapters::arsenal::tool_result_formatter::ToolResultF
 use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
 use paladin_battalion::llm_failure::to_paladin_error;
+use paladin_core::platform::container::allowance::{AllowanceWarning, DerivedTokenBudget};
+use paladin_core::platform::container::cost::Cost;
+use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::structured::render_instruction_block;
 use paladin_core::platform::container::transience::Transience;
+use paladin_core::platform::container::treasury_ledger::{
+    LedgerScope, SettleOutcome, SettleRequest, SettlementKey,
+};
 use paladin_core::platform::container::vault::Namespace;
 use paladin_core::platform::container::waypoint::NodeId;
 use paladin_llm::fallback::SERVED_BY_METADATA_KEY;
+use paladin_llm::registry::UNPROFILED_MODEL_METADATA_KEY;
+use paladin_llm::sampling::PARAMS_OMITTED_METADATA_KEY;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
 use paladin_ports::output::llm_port::{FunctionCall, LlmPort, LlmRequest, ResponseFormat};
@@ -101,6 +109,7 @@ use paladin_ports::output::token_counter_port::TokenCounterPort;
 use paladin_ports::output::trace_sink_port::{
     MiddlewareAction, NodeProgressKind, TraceEmitter, TraceEvent, current_trace_emitter,
 };
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::vault_port::VaultPort;
 #[cfg(feature = "vision")]
 use paladin_ports::output::vision_port::VisionPort;
@@ -230,6 +239,40 @@ pub struct PaladinExecutionService {
     /// `None` by default -- a service with nothing wired emits nothing,
     /// exactly like every other observability seam in this phase (X-03).
     trace_emitter: Option<Arc<dyn TraceEmitter>>,
+
+    /// The agent-loop settle writer (D-07, D-08, 39-05), installed via
+    /// [`PaladinExecutionService::with_treasury_ledger`]. `None` by default
+    /// -- a service with no ledger attached performs no ledger call at all,
+    /// exactly like every other observability seam in this phase (X-03).
+    treasury_ledger: Option<(Arc<dyn TreasuryLedgerPort>, AgentLoopSettlement)>,
+}
+
+/// Which calls this service's agent-loop settle writer settles (D-07, D-08),
+/// installed via [`PaladinExecutionService::with_treasury_ledger`].
+///
+/// The ledger is observational in this phase (D-08, LEDGR-03): a settle
+/// failure or duplicate-key outcome is logged and never fails, retries or
+/// alters an execution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentLoopSettlement {
+    /// Every priced model call settles, under the run's own
+    /// [`RunScope::run_id`] when the caller supplied one, else this
+    /// service's own execution id (D-07). The right mode for services
+    /// backing HTTP agent routes (`agent_host.rs`), where every call is
+    /// either a plain HTTP agent execution (no Platform run) or a Platform
+    /// API run the worker dispatched -- either way, this service is the
+    /// only writer that will ever settle that call.
+    EveryCall,
+    /// Only a call whose [`RunScope`] names a run id settles -- a call with
+    /// no run id (an engine node's own dispatch) never settles here. The
+    /// right mode for the run engine's SHARED execution service
+    /// (`facade_provisioner.rs`'s `EngineExecutionPort`): engine nodes are
+    /// already settled once per superstep by `WarEngine::with_treasury_ledger`
+    /// (39-04), and this mode is what keeps this service from ever settling
+    /// the SAME call a second time. Only a Platform API run of an
+    /// agent-kind assistant (which carries a real run id in its `RunScope`,
+    /// 39-07) settles through this service at all.
+    PlatformRunsOnly,
 }
 
 /// D-16: the latest-summary-wins effective-history rule.
@@ -334,6 +377,78 @@ pub(crate) fn effective_history(history: Vec<GarrisonEntry>) -> Vec<GarrisonEntr
     effective
 }
 
+/// The ledger identity one agent-loop execution settles its priced calls
+/// under (D-07, Phase 40 D-16): the run id every `(run_id, ordinal, 1)`
+/// key names and the resolved [`LedgerScope`] every row is stamped with.
+/// Resolved once per `execute_scoped` call, from that call's own
+/// [`RunScope`] (`ledger_run_id` for the id; `scope.ledger_scope` or the
+/// [`LedgerScope::unattributed`] sentinel for the scope), and carried
+/// unchanged through `execute_bounded` into `execute_internal`'s loop.
+/// `None` at the call site means no call this execution makes settles.
+#[derive(Debug, Clone)]
+struct AgentLoopLedgerTarget {
+    /// The run every settlement key names.
+    run_id: RunId,
+    /// The tenant and API key id every settlement row is stamped with.
+    scope: LedgerScope,
+}
+
+/// Settle one priced agent-loop model call (D-07, D-08, 39-05): an
+/// unreserved settlement under `(run_id, ordinal, 1)` with the caller's
+/// resolved `scope` (Phase 40 D-16: the submitting principal's tenant and
+/// API key id, or the [`LedgerScope::unattributed`] sentinel when the
+/// caller resolved none) and a single-entry `model_breakdown` naming
+/// `model`.
+///
+/// A free function (not a `PaladinExecutionService` method) so it can be
+/// called from `execute_stream_inner`'s spawned task, which owns no `&self`
+/// -- [`PaladinExecutionService::settle_model_call`] delegates to this same
+/// function for the buffered reasoning loop, so there is exactly one settle
+/// implementation for both call sites.
+///
+/// Never propagates: a ledger `Err` is logged at `error!` and a
+/// duplicate-key [`SettleOutcome::AlreadySettled`] at `warn!` -- neither
+/// changes a run's output, retries a call, or fails an execution (D-08).
+/// Log lines carry the run id, ordinal, nanos and currency -- never the
+/// prompt, the response content, the scope's key id, or any API key value.
+async fn settle_agent_loop_call(
+    ledger: &Arc<dyn TreasuryLedgerPort>,
+    scope: &LedgerScope,
+    run_id: &RunId,
+    ordinal: u64,
+    model: &str,
+    cost: &Cost,
+) {
+    let key = SettlementKey::new(run_id.clone(), ordinal, 1);
+    let request = SettleRequest::unreserved(
+        scope.clone(),
+        key,
+        cost.clone(),
+        BTreeMap::from([(model.to_string(), cost.nanos())]),
+    );
+    match ledger.settle(request).await {
+        Ok(SettleOutcome::Settled) => {
+            debug!(
+                "settled agent-loop model call: run {run_id} ordinal {ordinal} amount_nanos {} currency {}",
+                cost.nanos(),
+                cost.currency()
+            );
+        }
+        Ok(SettleOutcome::AlreadySettled) => {
+            warn!(
+                "agent-loop model call already settled: run {run_id} ordinal {ordinal} -- duplicate not charged again"
+            );
+        }
+        Err(e) => {
+            error!(
+                "failed to settle agent-loop model call: run {run_id} ordinal {ordinal} amount_nanos {} currency {}: {e}",
+                cost.nanos(),
+                cost.currency()
+            );
+        }
+    }
+}
+
 impl PaladinExecutionService {
     /// Creates a new Paladin execution service
     ///
@@ -392,6 +507,7 @@ impl PaladinExecutionService {
             vault_tools_enabled: false,
             tool_error_config: ToolErrorConfig::default(),
             trace_emitter: None,
+            treasury_ledger: None,
         }
     }
 
@@ -815,6 +931,101 @@ impl PaladinExecutionService {
         self
     }
 
+    /// Installs the agent-loop settle writer (D-07, D-08, 39-05): after this
+    /// call, every priced model call of the reasoning loop (buffered or
+    /// streamed) settles exactly once, under a `SettlementKey` this
+    /// service's `settlement` mode resolves (see [`AgentLoopSettlement`]).
+    ///
+    /// The ledger is observational (LEDGR-03): a settle failure is logged
+    /// at `error!` and a duplicate-key `AlreadySettled` outcome at `warn!`
+    /// -- neither ever fails, retries or alters a `PaladinResult`. A call
+    /// with no cost (`response.cost: None`) writes no row. A service
+    /// without this call behaves exactly as before -- no ledger call at
+    /// all.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    ///
+    /// use paladin::application::services::paladin::paladin_execution_service::{
+    ///     AgentLoopSettlement, PaladinExecutionService,
+    /// };
+    /// use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
+    /// use paladin_llm::mock::MockLlmAdapter;
+    /// use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+    /// use std::time::Duration;
+    ///
+    /// let llm = Arc::new(MockLlmAdapter::new());
+    /// let circuit_breaker = Arc::new(CircuitBreaker::new(3, 2, Duration::from_secs(30)));
+    /// let ledger = Arc::new(InMemoryTreasuryLedger::new());
+    /// let service = PaladinExecutionService::new(llm, circuit_breaker, None, None)
+    ///     .with_treasury_ledger(ledger, AgentLoopSettlement::EveryCall);
+    /// ```
+    #[must_use]
+    pub fn with_treasury_ledger(
+        mut self,
+        ledger: Arc<dyn TreasuryLedgerPort>,
+        settlement: AgentLoopSettlement,
+    ) -> Self {
+        info!(
+            "Attaching treasury ledger to PaladinExecutionService: settlement={:?}",
+            settlement
+        );
+        self.treasury_ledger = Some((ledger, settlement));
+        self
+    }
+
+    /// Resolves the run id this service's agent-loop settle writer should
+    /// settle `scope`'s calls under (D-07), or `None` when no call this run
+    /// makes should settle at all. The companion scope resolution (Phase 40
+    /// D-16: `scope.ledger_scope`, else the sentinel) happens beside this
+    /// call in `execute_scoped`; both ride together as one
+    /// [`AgentLoopLedgerTarget`].
+    ///
+    /// - No ledger installed: `None`.
+    /// - [`AgentLoopSettlement::PlatformRunsOnly`][] mode: `scope.run_id.clone()`
+    ///   -- an engine node's own dispatch (no run id in its scope) never
+    ///   settles here (LEDGR-04: engine spend is settled once, by the
+    ///   superstep writer, 39-04).
+    /// - [`AgentLoopSettlement::EveryCall`][] mode: `scope.run_id.clone()`
+    ///   when present, else this execution's own id (`execution_id`) parsed
+    ///   as a [`RunId`] -- a UUIDv4 execution id is always a well-formed
+    ///   UUID, so this parse never fails in practice.
+    fn ledger_run_id(&self, scope: &RunScope, execution_id: uuid::Uuid) -> Option<RunId> {
+        let (_, settlement) = self.treasury_ledger.as_ref()?;
+        match settlement {
+            AgentLoopSettlement::PlatformRunsOnly => scope.run_id.clone(),
+            AgentLoopSettlement::EveryCall => scope.run_id.clone().or_else(|| {
+                RunId::parse(execution_id.to_string())
+                    .inspect_err(|e| {
+                        error!("execution id {execution_id} did not parse as a RunId: {e}");
+                    })
+                    .ok()
+            }),
+        }
+    }
+
+    /// Settle one priced model call (D-07, D-08): an unreserved settlement
+    /// under `(target.run_id, ordinal, 1)` with the resolved `target.scope`
+    /// (Phase 40 D-16) and a single-entry `model_breakdown` naming `model`.
+    ///
+    /// Delegates to [`settle_agent_loop_call`], the free function the
+    /// streamed path (`execute_stream_inner`'s spawned task, which owns no
+    /// `&self`) also calls -- one settle implementation, two call sites.
+    async fn settle_model_call(
+        &self,
+        target: &AgentLoopLedgerTarget,
+        ordinal: u64,
+        model: &str,
+        cost: &Cost,
+    ) {
+        let Some((ledger, _)) = &self.treasury_ledger else {
+            return;
+        };
+        settle_agent_loop_call(ledger, &target.scope, &target.run_id, ordinal, model, cost).await;
+    }
+
     /// Replaces the whole `ExecutionMiddleware` chain with `chain` (Doc 05
     /// RT-01, D-06).
     ///
@@ -908,6 +1119,76 @@ impl PaladinExecutionService {
         if let Some(ref herald) = self.herald {
             // Herald now uses actual PaladinResult directly - no conversion needed!
             let formatted = herald.format_paladin_result(result).map_err(|e| {
+                PaladinError::ExecutionError(format!("Herald formatting failed: {}", e))
+            })?;
+            Ok(Some(formatted))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Folds one model call's `paladin.*` visibility keys into the run's
+    /// [`PaladinResult::run_metadata`] (ADR-0061 (h), owner reading R-1).
+    ///
+    /// Only keys that start with `paladin.` are read, and `paladin.served_by` is skipped (it
+    /// has its own `PaladinResult` field), so no foreign key -- and nothing credential-shaped --
+    /// is ever copied (T-50-18-01). `paladin.params_omitted` and `paladin.unprofiled_model`
+    /// hold the de-duplicated union of their comma-separated items in first-seen order, so a
+    /// parameter omitted on every loop is reported once; every other `paladin.*` key
+    /// (`paladin.served_model`, `paladin.response_format_adjusted`) holds the latest call's
+    /// value. The streaming path calls this same helper with the terminal chunk's metadata.
+    fn merge_run_metadata(
+        run_metadata: &mut BTreeMap<String, String>,
+        call_metadata: &HashMap<String, String>,
+    ) {
+        for (key, value) in call_metadata {
+            if !key.starts_with("paladin.") || key == SERVED_BY_METADATA_KEY {
+                continue;
+            }
+            if key == PARAMS_OMITTED_METADATA_KEY || key == UNPROFILED_MODEL_METADATA_KEY {
+                let mut merged = run_metadata.get(key).cloned().unwrap_or_default();
+                for item in value.split(',').map(str::trim).filter(|i| !i.is_empty()) {
+                    if !merged.split(',').any(|seen| seen == item) {
+                        if !merged.is_empty() {
+                            merged.push(',');
+                        }
+                        merged.push_str(item);
+                    }
+                }
+                if !merged.is_empty() {
+                    run_metadata.insert(key.clone(), merged);
+                }
+            } else {
+                run_metadata.insert(key.clone(), value.clone());
+            }
+        }
+    }
+
+    /// Finalizes a streamed execution using the configured Herald (D-12).
+    ///
+    /// The agent loop's streamed-completion producer (`execute_stream_inner`) builds
+    /// `metadata` -- including any cost the pricing decorator attached (D-09) -- and attaches it
+    /// to the final `PaladinStreamChunk` via `ChunkMetadata::with_execution`. This method hands
+    /// that same metadata to `Herald::finalize_stream`, mirroring [`Self::format_result`] for
+    /// the streaming path.
+    ///
+    /// # Arguments
+    ///
+    /// * `metadata` - The `ExecutionMetadata` produced for this streamed run
+    ///
+    /// # Returns
+    ///
+    /// Returns `Some(formatted_output)` if a Herald is configured, `None` if not.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PaladinError::ExecutionError` if formatting fails.
+    pub fn finalize_stream_output(
+        &self,
+        metadata: &ExecutionMetadata,
+    ) -> Result<Option<String>, PaladinError> {
+        if let Some(ref herald) = self.herald {
+            let formatted = herald.finalize_stream(metadata).map_err(|e| {
                 PaladinError::ExecutionError(format!("Herald formatting failed: {}", e))
             })?;
             Ok(Some(formatted))
@@ -1043,24 +1324,50 @@ impl PaladinExecutionService {
         // SAME `ConfinedVault` handle `VaultRecallMiddleware` reads --
         // exactly one resolution point, per `confined_vault`'s own contract.
         let confined_vault = self.confined_vault(scope);
+        // D-07: resolved here, once, from this call's own `scope` -- never
+        // recomputed inside `execute_internal`'s per-loop-iteration body.
+        // Phase 40 D-16: the ledger scope rides beside the run id -- the
+        // scope's own `ledger_scope` (the submitting principal's tenant and
+        // API key id, set by the run worker or the HTTP agent handler), or
+        // the unattributed sentinel when this scope carries none (D-10).
+        let ledger_target =
+            self.ledger_run_id(scope, execution_id)
+                .map(|run_id| AgentLoopLedgerTarget {
+                    run_id,
+                    scope: scope
+                        .ledger_scope
+                        .clone()
+                        .unwrap_or_else(LedgerScope::unattributed),
+                });
         info!(
             "Starting scoped Paladin execution: id={}, name={}, input_len={}, vault_namespace={}",
             execution_id,
-            paladin.node.name,
+            paladin.data.name,
             input.len(),
             confined_vault
                 .as_ref()
                 .map(|v| v.granted().to_string())
                 .unwrap_or_else(|| "none".to_string())
         );
-        self.execute_bounded(paladin, input, execution_id, heartbeat, confined_vault)
-            .await
+        // ALLOW-05 (Phase 42 D-11): the Treasurer-derived budget this call's scope carries rides
+        // down to the run's `ModelCallContext`, where the one `TokenBudget` reads it.
+        self.execute_bounded(
+            paladin,
+            input,
+            execution_id,
+            heartbeat,
+            confined_vault,
+            ledger_target,
+            scope.derived_token_budget.clone(),
+        )
+        .await
     }
 
     /// The shared body of `execute`, `execute_observed` and `execute_scoped`:
     /// the same per-execution timeout wrapper around
     /// [`Self::execute_internal`], differing only in whether a heartbeat is
     /// threaded through.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_bounded(
         &self,
         paladin: &Paladin,
@@ -1068,13 +1375,22 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
         confined_vault: Option<ConfinedVault>,
+        ledger_target: Option<AgentLoopLedgerTarget>,
+        derived_token_budget: Option<DerivedTokenBudget>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
-        let timeout_duration = Duration::from_secs(paladin.node.max_loops.as_u32() as u64 * 60);
+        let timeout_duration = Duration::from_secs(paladin.data.max_loops.as_u32() as u64 * 60);
 
         // Wrap execution with timeout
-        let execution_future =
-            self.execute_internal(paladin, input, execution_id, heartbeat, confined_vault);
+        let execution_future = self.execute_internal(
+            paladin,
+            input,
+            execution_id,
+            heartbeat,
+            confined_vault,
+            ledger_target,
+            derived_token_budget,
+        );
 
         match timeout(timeout_duration, execution_future).await {
             Ok(result) => {
@@ -1111,7 +1427,7 @@ impl PaladinExecutionService {
         images: Vec<VisionContent>,
     ) -> Result<PaladinResult, PaladinError> {
         // Step 1: Validate vision is enabled on the Paladin
-        if !paladin.node.vision_enabled {
+        if !paladin.data.vision_enabled {
             return Err(PaladinError::ConfigurationError(
                 "Vision execution requires vision_enabled=true. Use PaladinBuilder::enable_vision(true)".to_string(),
             ));
@@ -1127,7 +1443,7 @@ impl PaladinExecutionService {
         }
 
         // Step 3: Extract provider from model name
-        let model = paladin.node.model.as_str();
+        let model = paladin.data.model.as_str();
         let provider = self.extract_provider_from_model(model)?;
 
         // Step 4: Get vision adapter for provider
@@ -1140,7 +1456,7 @@ impl PaladinExecutionService {
         })?;
 
         // Step 5: Determine timeout from paladin config
-        let timeout_secs = paladin.node.max_loops.as_u32() as u64 * 60;
+        let timeout_secs = paladin.data.max_loops.as_u32() as u64 * 60;
         let timeout_duration = Duration::from_secs(timeout_secs);
 
         // Step 6: Execute vision analysis with timeout
@@ -1181,7 +1497,7 @@ impl PaladinExecutionService {
         })??;
 
         // Step 7: Check for stop words
-        for stop_word in &paladin.node.stop_words {
+        for stop_word in &paladin.data.stop_words {
             if vision_result.content.contains(stop_word) {
                 return Err(PaladinError::ExecutionError(format!(
                     "Stop word detected: {}",
@@ -1250,6 +1566,7 @@ impl PaladinExecutionService {
     /// it is beaten after every completed LLM call and after every
     /// Armament invocation, and never consulted otherwise, so the
     /// unobserved `execute` path is byte-identical to before plan 25-09.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_internal(
         &self,
         paladin: &Paladin,
@@ -1257,9 +1574,17 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         heartbeat: Option<&HeartbeatHandle>,
         confined_vault: Option<ConfinedVault>,
+        ledger_target: Option<AgentLoopLedgerTarget>,
+        derived_token_budget: Option<DerivedTokenBudget>,
     ) -> Result<PaladinResult, PaladinError> {
         let start_time = Instant::now();
         let mut usage = paladin_core::platform::container::token_usage::TokenUsage::default();
+        // D-10: cost rides beside usage everywhere usage travels -- one
+        // `CostTally` per run, folded from every model call's `LlmResponse.cost`
+        // at the exact point `usage` accumulates that call's `TokenUsage`
+        // (below). `None` propagates: if any call in this run was unpriced,
+        // the run's cost is `None`, never a partial sum (D-00c).
+        let mut cost_tally = paladin_core::platform::container::cost::CostTally::new();
         let mut accumulated_output = String::new();
         let mut _retrieval_latency_ms = 0u64;
         let mut _memories_retrieved_count = 0usize;
@@ -1270,6 +1595,10 @@ impl PaladinExecutionService {
         // stamps on its response. A plain adapter stamps nothing, so this
         // stays `None` and the serialised result is byte-identical to before.
         let mut served_by: Option<String> = None;
+        // Phase 50 (ADR-0061 (h), owner reading R-1): the `paladin.*` visibility keys every
+        // model call of this run stamped, merged by `merge_run_metadata`. A run whose calls
+        // stamped nothing leaves it empty, so the serialised result is unchanged.
+        let mut collected_metadata: BTreeMap<String, String> = BTreeMap::new();
 
         // =======================================================================
         // LAYER 1: Autonomous Planning & Prompt Generation (Optional, Pre-Exec)
@@ -1288,7 +1617,7 @@ impl PaladinExecutionService {
         // Use generated prompt if available, otherwise use configured prompt
         let effective_system_prompt = generated_prompt
             .as_ref()
-            .unwrap_or(&paladin.node.system_prompt);
+            .unwrap_or(&paladin.data.system_prompt);
 
         // =======================================================================
         // CORE LAYER 0: Standard Execution (Always Runs)
@@ -1399,12 +1728,17 @@ impl PaladinExecutionService {
         // `execute_scoped` before dispatch, is set once here and read (never
         // mutated) by `VaultRecallMiddleware` on loop 0.
         middleware_cx.vault = confined_vault;
+        // ALLOW-05 (Phase 42 D-11): the Treasurer-derived budget for THIS run, set once from the
+        // call's `RunScope` and read (never mutated) by `TokenBudget::after_model`. Per-run
+        // scratch on the context, so concurrent runs through this shared service never see each
+        // other's figure.
+        middleware_cx.set_derived_token_budget(derived_token_budget);
 
         // Execute reasoning loop
-        for loop_num in 1..=paladin.node.max_loops.as_u32() {
+        for loop_num in 1..=paladin.data.max_loops.as_u32() {
             debug!(
                 "Paladin loop iteration: id={}, loop={}/{}",
-                execution_id, loop_num, paladin.node.max_loops
+                execution_id, loop_num, paladin.data.max_loops
             );
 
             // =======================================================================
@@ -1474,12 +1808,17 @@ impl PaladinExecutionService {
                     return Ok(PaladinResult {
                         output: accumulated_output,
                         usage: usage.clone(),
+                        // Same tally every other return path reports: a `before_model`
+                        // stop on loop N must not discard the cost of loops 1..N-1
+                        // (Phase 38 code review CR-01).
+                        cost: cost_tally.total(),
                         execution_time_ms: start_time.elapsed().as_millis() as u64,
                         loop_count: loop_num,
                         stop_reason: effective_result.stop_reason,
                         plan: task_plan,
                         handoff_history,
                         served_by,
+                        run_metadata: collected_metadata,
                     });
                 }
             };
@@ -1510,10 +1849,25 @@ impl PaladinExecutionService {
             // cache/reasoning sub-counts merge under the same saturating
             // rule every other accumulator in the tree uses.
             usage += response.usage.clone();
+            cost_tally.record_call(response.cost.as_ref());
+            // D-07/D-08 (39-05): settle this priced call at the exact point
+            // its cost is folded into the run's own tally -- the same
+            // response, the same model, so the ledger's breakdown key
+            // matches the price that was actually computed from it (38-04).
+            if let (Some(target), Some(cost)) = (ledger_target.as_ref(), response.cost.as_ref()) {
+                let model = if response.model.is_empty() {
+                    paladin.data.model.as_str()
+                } else {
+                    response.model.as_str()
+                };
+                self.settle_model_call(target, u64::from(loop_num), model, cost)
+                    .await;
+            }
             middleware_cx.cumulative_tokens = usage.total_tokens;
             if let Some(provider) = response.metadata.get(SERVED_BY_METADATA_KEY) {
                 served_by = Some(provider.clone());
             }
+            Self::merge_run_metadata(&mut collected_metadata, &response.metadata);
 
             // --- D-04: after_model fires on the FINAL response for this
             // iteration -- after the service's own buffered retry and
@@ -1542,12 +1896,14 @@ impl PaladinExecutionService {
                 return Ok(PaladinResult {
                     output: accumulated_output,
                     usage: usage.clone(),
+                    cost: cost_tally.total(),
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     loop_count: loop_num,
                     stop_reason: final_result.stop_reason,
                     plan: task_plan,
                     handoff_history,
                     served_by,
+                    run_metadata: collected_metadata,
                 });
             }
 
@@ -1801,10 +2157,10 @@ impl PaladinExecutionService {
             }
 
             // Check if we've reached max loops
-            if loop_num == paladin.node.max_loops.as_u32() {
+            if loop_num == paladin.data.max_loops.as_u32() {
                 debug!(
                     "Reached max loops: id={}, loops={}",
-                    execution_id, paladin.node.max_loops
+                    execution_id, paladin.data.max_loops
                 );
 
                 // Store assistant response in garrison if available
@@ -1828,12 +2184,14 @@ impl PaladinExecutionService {
                 return Ok(PaladinResult {
                     output: accumulated_output,
                     usage: usage.clone(),
+                    cost: cost_tally.total(),
                     execution_time_ms: start_time.elapsed().as_millis() as u64,
                     loop_count: loop_num,
                     stop_reason: StopReason::MaxLoops,
                     plan: task_plan, // Layer 1 metadata
                     handoff_history, // Layer 3 metadata
                     served_by,       // FT-FR-17: serving provider (fallback chains only)
+                    run_metadata: collected_metadata,
                 });
             }
         }
@@ -1855,12 +2213,14 @@ impl PaladinExecutionService {
         Ok(PaladinResult {
             output: accumulated_output,
             usage: usage.clone(),
+            cost: cost_tally.total(),
             execution_time_ms: start_time.elapsed().as_millis() as u64,
-            loop_count: paladin.node.max_loops.as_u32(),
+            loop_count: paladin.data.max_loops.as_u32(),
             stop_reason: StopReason::Completed,
             plan: task_plan, // Layer 1 metadata
             handoff_history, // Layer 3 metadata
             served_by,       // FT-FR-17: serving provider (fallback chains only)
+            run_metadata: collected_metadata,
         })
     }
 
@@ -1878,7 +2238,7 @@ impl PaladinExecutionService {
         conversation_history: &[GarrisonEntry],
         rag_context: Option<&str>,
     ) -> String {
-        let mut prompt = format!("{}\n\n", paladin.node.system_prompt);
+        let mut prompt = format!("{}\n\n", paladin.data.system_prompt);
 
         // Inject RAG context if available
         if let Some(context) = rag_context
@@ -2070,7 +2430,7 @@ impl PaladinExecutionService {
     fn check_stop_words(&self, paladin: &Paladin, output: &str) -> Option<String> {
         let output_lower = output.to_lowercase();
 
-        for stop_word in paladin.node.stop_words.iter() {
+        for stop_word in paladin.data.stop_words.iter() {
             let stop_word_lower = stop_word.to_lowercase();
 
             // Check for exact word match (case-insensitive)
@@ -2113,7 +2473,7 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
     ) -> Option<crate::core::platform::container::planning::TaskPlan> {
         // Check if planning is enabled
-        if !paladin.node.autonomous_planning {
+        if !paladin.data.autonomous_planning {
             debug!(
                 "Planning disabled: execution_id={}, autonomous_planning=false",
                 execution_id
@@ -2140,7 +2500,7 @@ impl PaladinExecutionService {
         );
 
         // Use model from paladin config (Phase 1 enhancement)
-        let model = paladin.node.model.as_str();
+        let model = paladin.data.model.as_str();
 
         // Attempt to generate plan with graceful degradation
         match planning_service.create_plan(input, 10, model).await {
@@ -2181,7 +2541,7 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
     ) -> Option<String> {
         // Check if prompt generation is enabled
-        if !paladin.node.autonomous_prompts {
+        if !paladin.data.autonomous_prompts {
             debug!(
                 "Prompt generation disabled: execution_id={}, autonomous_prompts=false",
                 execution_id
@@ -2202,7 +2562,7 @@ impl PaladinExecutionService {
         };
 
         // Check if agent has a description (required for prompt generation)
-        if paladin.node.agent_description.is_empty() {
+        if paladin.data.agent_description.is_empty() {
             warn!(
                 "Prompt generation enabled but agent_description is empty: execution_id={}",
                 execution_id
@@ -2212,15 +2572,15 @@ impl PaladinExecutionService {
 
         info!(
             "Generating system prompt: execution_id={}, agent={}",
-            execution_id, paladin.node.name
+            execution_id, paladin.data.name
         );
 
         // Use model from paladin config (Phase 1 enhancement)
-        let model = paladin.node.model.as_str();
+        let model = paladin.data.model.as_str();
 
         // Attempt to generate prompt with graceful degradation
         match prompt_service
-            .generate_prompt(&paladin.node.name, &paladin.node.agent_description, model)
+            .generate_prompt(&paladin.data.name, &paladin.data.agent_description, model)
             .await
         {
             Ok(generated_prompt) => {
@@ -2256,12 +2616,12 @@ impl PaladinExecutionService {
     /// Adjusted temperature value (base_temp + progress * (1.0 - base_temp))
     fn apply_layer2_dynamic_temperature(&self, paladin: &Paladin, loop_num: u32) -> f32 {
         // If dynamic temperature is disabled, return configured temperature
-        if !paladin.node.dynamic_temperature {
-            return paladin.node.temperature;
+        if !paladin.data.dynamic_temperature {
+            return paladin.data.temperature;
         }
 
-        let base_temp = paladin.node.temperature;
-        let max_loops = paladin.node.max_loops.as_u32() as f32;
+        let base_temp = paladin.data.temperature;
+        let max_loops = paladin.data.max_loops.as_u32() as f32;
         let current_loop = loop_num as f32;
 
         // Linear interpolation: temp = base + progress * (1.0 - base)
@@ -2271,7 +2631,7 @@ impl PaladinExecutionService {
 
         debug!(
             "Dynamic temperature: loop={}/{}, base={}, adjusted={}",
-            loop_num, paladin.node.max_loops, base_temp, adjusted_temp
+            loop_num, paladin.data.max_loops, base_temp, adjusted_temp
         );
 
         adjusted_temp.clamp(0.0, 1.0)
@@ -2350,7 +2710,7 @@ impl PaladinExecutionService {
         // Create handoff context from the coordinator
         let context = crate::core::platform::container::handoff::HandoffContext::new(
             task_description.clone(),
-            paladin.node.name.clone(),
+            paladin.data.name.clone(),
         );
 
         // Execute the handoff via HandoffService with retry logic
@@ -2393,7 +2753,7 @@ impl PaladinExecutionService {
     /// Executes an LLM call with retry logic, circuit breaker, and custom temperature
     ///
     /// This variant supports Layer 2 (dynamic temperature) by accepting a temperature
-    /// parameter instead of using paladin.node.temperature.
+    /// parameter instead of using paladin.data.temperature.
     ///
     /// With no retry policy set on `cx`, implements today's exponential
     /// backoff unchanged: 100ms, 200ms, 400ms, etc. (D-11, X-03).
@@ -2457,7 +2817,7 @@ impl PaladinExecutionService {
         let max_attempts = retry_policy
             .as_ref()
             .map(|policy| policy.max_attempts)
-            .unwrap_or_else(|| paladin.node.max_loops.as_u32().min(10)); // Cap retries at 10 with no policy
+            .unwrap_or_else(|| paladin.data.max_loops.as_u32().min(10)); // Cap retries at 10 with no policy
 
         loop {
             attempt += 1;
@@ -2480,10 +2840,10 @@ impl PaladinExecutionService {
                     top_p: None,
                     frequency_penalty: None,
                     presence_penalty: None,
-                    stop_sequences: if paladin.node.stop_words.is_empty() {
+                    stop_sequences: if paladin.data.stop_words.is_empty() {
                         None
                     } else {
-                        Some(paladin.node.stop_words.clone())
+                        Some(paladin.data.stop_words.clone())
                     },
                 },
                 context: None,
@@ -2495,14 +2855,14 @@ impl PaladinExecutionService {
             };
 
             let prompt_item = PromptItem {
-                node: Node::new(prompt_data, Some(format!("execution-{}", execution_id))),
+                entity: Entity::new(prompt_data, Some(format!("execution-{}", execution_id))),
             };
 
             // Create LLM request. `cx.response_format` (RT-05, D-27, D-28) is
             // set exactly once, by a structured run's `execute_json_schema` --
             // an ordinary run's context never sets it, so this call is a
             // no-op for every existing caller (X-03).
-            let mut request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
+            let mut request = LlmRequest::new(paladin.data.model.clone(), prompt_item);
             if let Some(response_format) = cx.response_format.clone() {
                 request = request.with_response_format(response_format);
             }
@@ -2646,7 +3006,7 @@ impl PaladinExecutionService {
         loop_num: u32,
     ) -> Result<paladin_ports::output::llm_port::LlmResponse, PaladinError> {
         let mut attempt = 0;
-        let max_attempts = paladin.node.max_loops.as_u32().min(10); // Cap retries at 10
+        let max_attempts = paladin.data.max_loops.as_u32().min(10); // Cap retries at 10
 
         loop {
             attempt += 1;
@@ -2665,14 +3025,14 @@ impl PaladinExecutionService {
                 content_attachments: vec![],
                 parameters: PromptParameters {
                     max_tokens: None,
-                    temperature: Some(paladin.node.temperature),
+                    temperature: Some(paladin.data.temperature),
                     top_p: None,
                     frequency_penalty: None,
                     presence_penalty: None,
-                    stop_sequences: if paladin.node.stop_words.is_empty() {
+                    stop_sequences: if paladin.data.stop_words.is_empty() {
                         None
                     } else {
-                        Some(paladin.node.stop_words.clone())
+                        Some(paladin.data.stop_words.clone())
                     },
                 },
                 context: None,
@@ -2684,11 +3044,11 @@ impl PaladinExecutionService {
             };
 
             let prompt_item = PromptItem {
-                node: Node::new(prompt_data, Some(format!("execution-{}", execution_id))),
+                entity: Entity::new(prompt_data, Some(format!("execution-{}", execution_id))),
             };
 
             // Create LLM request
-            let request = LlmRequest::new(paladin.node.model.clone(), prompt_item);
+            let request = LlmRequest::new(paladin.data.model.clone(), prompt_item);
 
             // Wrap LLM call with circuit breaker (async version)
             let llm_port = Arc::clone(&self.llm_port);
@@ -2918,6 +3278,23 @@ impl PaladinExecutorPort for PaladinExecutionService {
         // Delegate to the existing public execute method
         self.execute(paladin, input).await
     }
+
+    /// Phase 40 D-16: the HTTP agent handlers hand their calling principal's
+    /// ledger scope through this override, so agent-execute spend settles
+    /// under the caller's tenant and API key id. Fully qualified so the
+    /// inherent `execute_scoped` (heartbeat-taking) is what resolves here,
+    /// never this trait method recursing into itself.
+    async fn execute_scoped(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        scope: &RunScope,
+    ) -> Result<PaladinResult, PaladinError> {
+        // D-18: the allowance warnings an HTTP agent-route admission won, emitted once
+        // before the loop starts (a no-op with no emitter and no warning).
+        self.emit_scope_allowance_warnings(scope);
+        PaladinExecutionService::execute_scoped(self, paladin, input, None, scope).await
+    }
 }
 
 /// Streaming execution over [`LlmPort::generate_stream`].
@@ -2945,7 +3322,31 @@ impl StreamingExecutorPort for PaladinExecutionService {
         paladin: &Paladin,
         input: &str,
     ) -> Result<PaladinStream, PaladinError> {
-        self.execute_stream_inner(paladin, input, None).await
+        self.execute_stream_inner(paladin, input, None, None, Vec::new())
+            .await
+    }
+
+    /// Phase 40 D-16: the streamed counterpart of
+    /// `PaladinExecutorPort::execute_scoped` -- the scope's `ledger_scope`
+    /// is the only part of `scope` this single-pass path consumes (there is
+    /// no Vault recall and no Platform run id on a stream).
+    async fn execute_stream_scoped(
+        &self,
+        paladin: &Paladin,
+        input: &str,
+        scope: &RunScope,
+    ) -> Result<PaladinStream, PaladinError> {
+        // D-18: emitted once before the provider stream opens; the same warnings also ride
+        // the final chunk's `ExecutionMetadata` (see `execute_stream_inner`).
+        self.emit_scope_allowance_warnings(scope);
+        self.execute_stream_inner(
+            paladin,
+            input,
+            None,
+            scope.ledger_scope.clone(),
+            scope.allowance_warnings.clone(),
+        )
+        .await
     }
 }
 
@@ -3079,7 +3480,7 @@ impl PaladinExecutionService {
             .execute_with_retry_and_temperature(
                 paladin,
                 prompt,
-                paladin.node.temperature,
+                paladin.data.temperature,
                 execution_id,
                 call_num,
                 &cx,
@@ -3089,6 +3490,7 @@ impl PaladinExecutionService {
         Ok(PaladinResult {
             output: response.content,
             usage: response.usage.clone(),
+            cost: response.cost.clone(),
             loop_count: call_num,
             stop_reason: StopReason::Completed,
             ..Default::default()
@@ -3136,19 +3538,27 @@ impl PaladinExecutionService {
         input: &str,
         heartbeat: &HeartbeatHandle,
     ) -> Result<PaladinStream, PaladinError> {
-        self.execute_stream_inner(paladin, input, Some(heartbeat.clone()))
+        self.execute_stream_inner(paladin, input, Some(heartbeat.clone()), None, Vec::new())
             .await
     }
 
-    /// The shared body of `execute_stream` and `execute_stream_observed`:
-    /// `heartbeat` is `Some` only on the observed path and is beaten once
-    /// per forwarded chunk; the unobserved path is byte-identical to before
-    /// plan 25-09.
+    /// The shared body of `execute_stream`, `execute_stream_observed` and
+    /// `execute_stream_scoped`: `heartbeat` is `Some` only on the observed
+    /// path and is beaten once per forwarded chunk; `ledger_scope` is `Some`
+    /// only on the scoped path (Phase 40 D-16) and names the tenant and API
+    /// key id the priced terminal chunk settles under -- `None` settles
+    /// under the unattributed sentinel (D-10). `allowance_warnings` (Phase 41
+    /// D-18) are the warnings an HTTP agent-route admission won: every final
+    /// chunk's `ExecutionMetadata` carries them, so the herald renders one
+    /// allowance line; empty on every other path, which stays byte-identical
+    /// to before plan 25-09.
     async fn execute_stream_inner(
         &self,
         paladin: &Paladin,
         input: &str,
         heartbeat: Option<HeartbeatHandle>,
+        ledger_scope: Option<LedgerScope>,
+        allowance_warnings: Vec<AllowanceWarning>,
     ) -> Result<PaladinStream, PaladinError> {
         // --- D-04: before_model fires exactly once on this path (no loop,
         // no tool dispatch); after_model/around_tool are never invoked
@@ -3156,8 +3566,14 @@ impl PaladinExecutionService {
         // exactly the no-history inputs renders byte-identically to the
         // old hardcoded `format!("{}\n\nUser: {}\n", ..)` (D-02).
         let run_id = uuid::Uuid::new_v4();
+        // D-12: captured before the provider stream opens (and, for the
+        // no-model-call `Finish` branch below, before any model call is even
+        // attempted) so the streamed-completion producer has a real start
+        // time and model name on every exit path.
+        let started_at = chrono::Utc::now();
+        let model_used = paladin.data.model.clone();
         let assembly =
-            PromptAssembly::new(paladin.node.system_prompt.clone(), input, "", vec![], None);
+            PromptAssembly::new(paladin.data.system_prompt.clone(), input, "", vec![], None);
         let mut middleware_cx = ModelCallContext::new(run_id, paladin, assembly);
         middleware_cx.trace_emitter = self.trace_emitter.clone();
         let before_outcome = run_before(&self.middleware, &mut middleware_cx).await?;
@@ -3165,14 +3581,24 @@ impl PaladinExecutionService {
         let prompt = match before_outcome {
             BeforeOutcome::Continue { .. } => middleware_cx.assembly.render(),
             BeforeOutcome::Finish { result, .. } => {
-                // No model call at all: emit the finished output as the
-                // sole, final chunk.
+                // No model call at all: emit the finished output as the sole,
+                // final chunk, still carrying a produced ExecutionMetadata
+                // (D-12) -- no usage, no cost, but a real execution record.
+                let execution = Self::stream_execution_metadata(
+                    run_id,
+                    started_at,
+                    &model_used,
+                    None,
+                    None,
+                    &allowance_warnings,
+                );
+                let metadata = execution.map(|exec| ChunkMetadata::new().with_execution(exec));
                 let (tx, rx) = mpsc::channel::<Result<PaladinStreamChunk, PaladinError>>(1);
                 let _ = tx
                     .send(Ok(PaladinStreamChunk {
                         text: result.output,
                         is_final: true,
-                        metadata: None,
+                        metadata,
                     }))
                     .await;
                 return Ok(rx);
@@ -3187,14 +3613,14 @@ impl PaladinExecutionService {
             content_attachments: vec![],
             parameters: PromptParameters {
                 max_tokens: None,
-                temperature: Some(paladin.node.temperature),
+                temperature: Some(paladin.data.temperature),
                 top_p: None,
                 frequency_penalty: None,
                 presence_penalty: None,
-                stop_sequences: if paladin.node.stop_words.is_empty() {
+                stop_sequences: if paladin.data.stop_words.is_empty() {
                     None
                 } else {
-                    Some(paladin.node.stop_words.clone())
+                    Some(paladin.data.stop_words.clone())
                 },
             },
             context: None,
@@ -3206,9 +3632,9 @@ impl PaladinExecutionService {
         };
 
         let request = LlmRequest::new(
-            paladin.node.model.clone(),
+            model_used.clone(),
             PromptItem {
-                node: Node::new(prompt_data, Some("stream".to_string())),
+                entity: Entity::new(prompt_data, Some("stream".to_string())),
             },
         )
         .with_stream(true);
@@ -3238,6 +3664,38 @@ impl PaladinExecutionService {
         // `self`) purely to name the provider in the no-usage warning below
         // -- never any request/response content.
         let provider_name = self.llm_port.get_provider_name();
+        // D-12: `Uuid` is `Copy`; cloned into the spawned task explicitly
+        // (rather than relying on the implicit `Copy` move) so the intent
+        // reads at the call site -- every final chunk's `ExecutionMetadata`
+        // is stamped with the SAME execution id as this call's `run_id`.
+        let execution_id = run_id;
+
+        // D-07/D-08 (39-05): the streamed path carries no Platform run id
+        // (a stream is never worker-dispatched), so only `EveryCall` mode
+        // ever settles a stream, always under this execution's own id --
+        // resolved ONCE, before the spawn, since the spawned task owns no
+        // `&self`. Phase 40 D-16: the scope it settles under is the
+        // caller's `ledger_scope` (`execute_stream_scoped`, from the HTTP
+        // agent handler's principal), or the unattributed sentinel when
+        // the caller passed none (D-10).
+        let stream_settlement = self
+            .treasury_ledger
+            .as_ref()
+            .filter(|(_, mode)| *mode == AgentLoopSettlement::EveryCall)
+            .and_then(|(ledger, _)| {
+                RunId::parse(execution_id.to_string())
+                    .inspect_err(|e| {
+                        error!("execution id {execution_id} did not parse as a RunId: {e}");
+                    })
+                    .ok()
+                    .map(|run_id| {
+                        (
+                            ledger.clone(),
+                            ledger_scope.unwrap_or_else(LedgerScope::unattributed),
+                            run_id,
+                        )
+                    })
+            });
 
         tokio::spawn(async move {
             use futures::StreamExt;
@@ -3262,17 +3720,64 @@ impl PaladinExecutionService {
                         // recorded decision (Milestone 14); do not "fix"
                         // this by wiring the counter in.
                         let metadata = if is_final {
-                            match resp.usage.clone() {
-                                Some(usage) => Some(ChunkMetadata::new().with_usage(usage)),
-                                None => {
-                                    warn!(
-                                        "streamed call to provider \"{provider_name}\" ended \
-                                         without a reported usage; recording a default usage \
-                                         rather than a TokenCounterPort estimate (D-17)"
-                                    );
-                                    None
-                                }
+                            let usage = resp.usage.clone();
+                            if usage.is_none() {
+                                warn!(
+                                    "streamed call to provider \"{provider_name}\" ended \
+                                     without a reported usage; recording a default usage \
+                                     rather than a TokenCounterPort estimate (D-17)"
+                                );
                             }
+                            // D-09/D-10: the pricing decorator (if any)
+                            // stamped `cost` on this SAME terminal
+                            // `StreamingResponse` -- never fabricated here.
+                            let cost = resp.cost.clone();
+                            // D-07/D-08 (39-05): settle this streamed call's
+                            // priced terminal chunk under (execution id, 1,
+                            // 1), naming `model_used` -- the only model
+                            // identity a stream carries -- before the chunk
+                            // is sent.
+                            if let (Some((ledger, scope, run_id)), Some(cost)) =
+                                (stream_settlement.as_ref(), cost.as_ref())
+                            {
+                                settle_agent_loop_call(ledger, scope, run_id, 1, &model_used, cost)
+                                    .await;
+                            }
+                            let mut chunk_metadata = ChunkMetadata::new();
+                            if let Some(usage) = usage.clone() {
+                                chunk_metadata = chunk_metadata.with_usage(usage);
+                            }
+                            if let Some(cost) = cost.clone() {
+                                chunk_metadata = chunk_metadata.with_cost(cost);
+                            }
+                            // ADR-0061 (h), owner reading R-1 (option-b): the terminal
+                            // chunk's `paladin.*` visibility keys, merged by the same rule
+                            // as a buffered run. A stream chunk has no dedicated
+                            // `served_by` field, so that key is carried here too -- no
+                            // `paladin.*` key is dropped between the provider's terminal
+                            // chunk and the caller.
+                            let mut run_metadata: BTreeMap<String, String> = BTreeMap::new();
+                            Self::merge_run_metadata(&mut run_metadata, &resp.metadata);
+                            if let Some(provider) = resp.metadata.get(SERVED_BY_METADATA_KEY) {
+                                run_metadata
+                                    .insert(SERVED_BY_METADATA_KEY.to_string(), provider.clone());
+                            }
+                            chunk_metadata = chunk_metadata.with_run_metadata(run_metadata);
+                            // D-12: the streamed-completion producer -- built
+                            // on every terminal chunk, usage or no usage,
+                            // priced or not.
+                            let execution = Self::stream_execution_metadata(
+                                execution_id,
+                                started_at,
+                                &model_used,
+                                usage.as_ref(),
+                                cost.as_ref(),
+                                &allowance_warnings,
+                            );
+                            if let Some(execution) = execution {
+                                chunk_metadata = chunk_metadata.with_execution(execution);
+                            }
+                            Some(chunk_metadata)
                         } else {
                             None
                         };
@@ -3301,17 +3806,85 @@ impl PaladinExecutionService {
                     }
                 }
             }
-            // Provider stream ended without an explicit final marker — emit one.
+            // Provider stream ended without an explicit final marker — emit
+            // one, still carrying a produced ExecutionMetadata (D-12) with
+            // no usage and no cost (the stream never reported a terminal
+            // chunk to read either from).
+            let execution = Self::stream_execution_metadata(
+                execution_id,
+                started_at,
+                &model_used,
+                None,
+                None,
+                &allowance_warnings,
+            );
+            let metadata = execution.map(|exec| ChunkMetadata::new().with_execution(exec));
             let _ = tx
                 .send(Ok(PaladinStreamChunk {
                     text: String::new(),
                     is_final: true,
-                    metadata: None,
+                    metadata,
                 }))
                 .await;
         });
 
         Ok(rx)
+    }
+
+    /// Emit each of `scope`'s allowance warnings once as a
+    /// [`TraceEvent::AllowanceWarning`] through whichever [`TraceEmitter`] is available
+    /// (D-18, RESEARCH Pattern 7): this service's own, else the ambient
+    /// `current_trace_emitter()` -- the `MiddlewareEvent` precedent. A no-op with no warning or
+    /// no emitter; never fails or delays the call.
+    fn emit_scope_allowance_warnings(&self, scope: &RunScope) {
+        if scope.allowance_warnings.is_empty() {
+            return;
+        }
+        let Some(emitter) = self.trace_emitter.clone().or_else(current_trace_emitter) else {
+            return;
+        };
+        for warning in &scope.allowance_warnings {
+            emitter.emit(TraceEvent::from(warning.clone()));
+        }
+    }
+
+    /// Build the streamed agent loop's `ExecutionMetadata` (D-12) for one final chunk:
+    /// `execution_id`/`started_at`/`model_used` identify the run, `usage` becomes
+    /// `token_usage` (falling back to `TokenUsage::default()` when the provider reported none),
+    /// and `cost` is attached through `ExecutionMetadataBuilder::cost` only when `Some` -- never
+    /// a fabricated zero (D-00c). `end_time` is stamped `now` and `calculate_duration()` is
+    /// called before returning. A builder error (missing required field) is logged once at
+    /// `warn!` and yields `None` rather than panicking.
+    fn stream_execution_metadata(
+        execution_id: uuid::Uuid,
+        started_at: chrono::DateTime<chrono::Utc>,
+        model_used: &str,
+        usage: Option<&paladin_core::platform::container::token_usage::TokenUsage>,
+        cost: Option<&paladin_core::platform::container::cost::Cost>,
+        allowance_warnings: &[AllowanceWarning],
+    ) -> Option<ExecutionMetadata> {
+        let mut builder = ExecutionMetadata::builder()
+            .execution_id(execution_id)
+            .start_time(started_at)
+            .end_time(chrono::Utc::now())
+            .model_used(model_used.to_string())
+            .token_usage(usage.cloned().unwrap_or_default());
+        if let Some(cost) = cost {
+            builder = builder.cost(cost);
+        }
+        match builder.build() {
+            Ok(mut metadata) => {
+                metadata.calculate_duration();
+                // D-18: the won allowance warnings, rendered by every herald through
+                // `ExecutionMetadata::allowance_warning_display` (no-op when empty).
+                metadata.with_allowance_warnings(allowance_warnings);
+                Some(metadata)
+            }
+            Err(e) => {
+                warn!("failed to build streamed ExecutionMetadata: {e}");
+                None
+            }
+        }
     }
 }
 
@@ -3319,7 +3892,7 @@ impl PaladinExecutionService {
 mod tests {
     use super::*;
     use crate::application::services::sanctum::MemoryExtractionStrategy;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     #[cfg(feature = "vision")]
     use crate::core::platform::container::vision::{ImageDetail, VisionContent};
     use crate::core::platform::container::{
@@ -3375,7 +3948,7 @@ mod tests {
             ..Default::default()
         };
 
-        Node::new(data, Some("TestPaladin".to_string()))
+        Entity::new(data, Some("TestPaladin".to_string()))
     }
 
     // --- Plan 26-13, D-21: RunScope / execute_scoped / with_vault --------
@@ -3408,9 +3981,11 @@ mod tests {
                 content: "the answer".to_string(),
                 finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
                 usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 metadata: HashMap::new(),
                 function_call: None,
+                reasoning: None,
             })
         }
 
@@ -3439,6 +4014,268 @@ mod tests {
         fn get_capabilities(&self) -> ProviderCapabilities {
             ProviderCapabilities::default()
         }
+    }
+
+    /// An `LlmPort` that answers a plain completion on every call, stamping the scripted
+    /// metadata for that call (the last script entry repeats). Drives the Phase 50 run-metadata
+    /// merge (ADR-0061 (h), owner reading R-1).
+    struct ScriptedMetadataLlmPort {
+        script: Vec<HashMap<String, String>>,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ScriptedMetadataLlmPort {
+        fn new(script: Vec<Vec<(&str, &str)>>) -> Self {
+            Self {
+                script: script
+                    .into_iter()
+                    .map(|call| {
+                        call.into_iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect()
+                    })
+                    .collect(),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for ScriptedMetadataLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let metadata = self
+                .script
+                .get(n)
+                .or_else(|| self.script.last())
+                .cloned()
+                .unwrap_or_default();
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model,
+                content: "the answer".to_string(),
+                finish_reason: paladin_ports::output::llm_port::FinishReason::Stop,
+                usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                cost: None,
+                created_at: chrono::Utc::now(),
+                metadata,
+                function_call: None,
+                reasoning: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            // One content chunk, then a terminal chunk stamped with the script's last entry.
+            let mut terminal =
+                StreamingResponse::terminal(paladin_ports::output::llm_port::FinishReason::Stop);
+            for (key, value) in self.script.last().cloned().unwrap_or_default() {
+                terminal = terminal.with_metadata(key, value);
+            }
+            let items: Vec<Result<StreamingResponse, LlmError>> =
+                vec![Ok(StreamingResponse::delta("streamed")), Ok(terminal)];
+            Ok(Box::new(futures::stream::iter(items)))
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "ScriptedMetadata"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// Phase 50, owner reading R-1 (option-b): every model call's `paladin.*` keys reach
+    /// `PaladinResult.run_metadata`. Two calls stamp `params_omitted` (`temperature`, then
+    /// `temperature,stop`), one stamps `unprofiled_model`, the last stamps `served_model` ->
+    /// the union / last-value rule of ADR-0061 (h). `paladin.served_by` keeps its own field and
+    /// is not duplicated; a non-`paladin.` key is ignored (T-50-18-01).
+    #[tokio::test]
+    async fn run_metadata_collects_the_paladin_keys_of_every_call() {
+        use crate::core::platform::container::paladin::MaxLoops;
+        let llm = Arc::new(ScriptedMetadataLlmPort::new(vec![
+            vec![
+                ("paladin.params_omitted", "temperature"),
+                ("paladin.served_model", "m1"),
+            ],
+            vec![
+                ("paladin.params_omitted", "temperature,stop"),
+                ("paladin.unprofiled_model", "m1"),
+                ("paladin.served_by", "p1"),
+                ("x-request-id", "not-a-paladin-key"),
+            ],
+            vec![("paladin.served_model", "m2")],
+        ]));
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+        let mut paladin = create_test_paladin();
+        paladin.data.max_loops = MaxLoops::Fixed(3);
+
+        let result = service.execute(&paladin, "hello").await.expect("run");
+
+        assert_eq!(result.loop_count, 3);
+        let expected: std::collections::BTreeMap<String, String> = [
+            ("paladin.params_omitted", "temperature,stop"),
+            ("paladin.unprofiled_model", "m1"),
+            ("paladin.served_model", "m2"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(result.run_metadata, expected);
+        assert!(!result.run_metadata.contains_key("paladin.served_by"));
+        assert_eq!(result.served_by.as_deref(), Some("p1"));
+    }
+
+    /// Phase 50, owner reading R-1 (option-b), streaming half: the terminal chunk's `paladin.*`
+    /// keys reach the final `PaladinStreamChunk`'s `ChunkMetadata.run_metadata` by the same
+    /// merge rule (a stream chunk has no `served_by` field, so that key is carried too); a
+    /// content chunk carries none and a non-`paladin.` key is never copied.
+    #[tokio::test]
+    async fn streamed_run_merges_the_terminal_chunk_keys_into_run_metadata() {
+        let llm = Arc::new(ScriptedMetadataLlmPort::new(vec![vec![
+            ("paladin.params_omitted", "temperature, stop,temperature"),
+            ("paladin.served_by", "p1"),
+            ("paladin.served_model", "m2"),
+            ("x-request-id", "not-a-paladin-key"),
+        ]]));
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+
+        let mut stream = service
+            .execute_stream(&create_test_paladin(), "hello")
+            .await
+            .expect("stream opens");
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.recv().await {
+            chunks.push(item.expect("every scripted chunk is Ok"));
+        }
+
+        let last = chunks.last().expect("a final chunk");
+        assert!(last.is_final);
+        let run_metadata = &last.metadata.as_ref().expect("final metadata").run_metadata;
+        let expected: std::collections::BTreeMap<String, String> = [
+            ("paladin.params_omitted", "temperature,stop"),
+            ("paladin.served_by", "p1"),
+            ("paladin.served_model", "m2"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        assert_eq!(run_metadata, &expected);
+        for content in chunks.iter().filter(|c| !c.is_final) {
+            assert!(content.metadata.is_none(), "content chunk: {content:?}");
+        }
+    }
+
+    /// A streamed call that adjusted nothing leaves `run_metadata` empty on its final chunk.
+    #[tokio::test]
+    async fn streamed_run_without_stamped_keys_has_empty_run_metadata() {
+        let llm = Arc::new(ScriptedMetadataLlmPort::new(vec![vec![]]));
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+
+        let mut stream = service
+            .execute_stream(&create_test_paladin(), "hello")
+            .await
+            .expect("stream opens");
+        let mut last = None;
+        while let Some(item) = stream.recv().await {
+            last = Some(item.expect("every scripted chunk is Ok"));
+        }
+
+        let last = last.expect("a final chunk");
+        assert!(
+            last.metadata
+                .expect("final metadata")
+                .run_metadata
+                .is_empty()
+        );
+    }
+
+    /// A run whose calls stamped nothing has an empty `run_metadata`, and the serialised result
+    /// carries no `run_metadata` key (byte-identical to before the field existed).
+    #[tokio::test]
+    async fn run_metadata_is_empty_when_no_call_stamped_anything() {
+        let llm = Arc::new(CountingLlmPort::default());
+        let service = PaladinExecutionService::new(llm, test_circuit_breaker(), None, None);
+
+        let result = service
+            .execute(&create_test_paladin(), "hello")
+            .await
+            .expect("run");
+
+        assert!(result.run_metadata.is_empty());
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("run_metadata"), "{json}");
+    }
+
+    /// The merge helper, unit-level: union keeps first-seen order without duplicates, a
+    /// blank item is dropped, other `paladin.*` keys take the last value, `served_by` and
+    /// foreign keys are ignored.
+    #[test]
+    fn merge_run_metadata_follows_the_adr_0061_rule() {
+        use std::collections::BTreeMap;
+        let call = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect()
+        };
+        let mut merged = BTreeMap::new();
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[("paladin.params_omitted", "top_p,temperature")]),
+        );
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[
+                ("paladin.params_omitted", "temperature, stop,,top_p"),
+                ("paladin.response_format_adjusted", "json_object"),
+                ("paladin.served_by", "p"),
+                ("other", "x"),
+            ]),
+        );
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[("paladin.response_format_adjusted", "omitted")]),
+        );
+        PaladinExecutionService::merge_run_metadata(
+            &mut merged,
+            &call(&[("paladin.params_omitted", "")]),
+        );
+
+        assert_eq!(
+            merged.get("paladin.params_omitted").map(String::as_str),
+            Some("top_p,temperature,stop")
+        );
+        assert_eq!(
+            merged
+                .get("paladin.response_format_adjusted")
+                .map(String::as_str),
+            Some("omitted")
+        );
+        assert_eq!(merged.len(), 2, "{merged:?}");
+
+        // An entry whose only value is blank leaves no key behind.
+        let mut blank = BTreeMap::new();
+        PaladinExecutionService::merge_run_metadata(
+            &mut blank,
+            &call(&[("paladin.unprofiled_model", "")]),
+        );
+        assert!(blank.is_empty(), "{blank:?}");
     }
 
     /// Test 2: a run through `execute` produces a `PaladinResult` equal to
@@ -3793,12 +4630,14 @@ mod tests {
                 content: "calling lookup".to_string(),
                 finish_reason: paladin_ports::output::llm_port::FinishReason::FunctionCall,
                 usage: crate::core::platform::container::token_usage::TokenUsage::new(1, 1),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 metadata: HashMap::new(),
                 function_call: Some(FunctionCall {
                     name: "lookup".to_string(),
                     arguments: r#"{"q":"x"}"#.to_string(),
                 }),
+                reasoning: None,
             })
         }
 
@@ -3888,7 +4727,7 @@ mod tests {
             Some(arsenal.clone() as Arc<dyn ArsenalPort>),
         );
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(2);
+        paladin.data.max_loops = MaxLoops::Fixed(2);
 
         // --- buffered path: 2 loops x (1 LLM completion + 1 Armament call)
         let heartbeat = HeartbeatHandle::new();
@@ -3993,7 +4832,7 @@ mod tests {
         )
         .with_trace_emitter(emitter.clone());
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(1);
+        paladin.data.max_loops = MaxLoops::Fixed(1);
         tool_service.execute(&paladin, "hello").await.unwrap();
 
         // --- StreamChunk progress: 2 content deltas plus the final marker.
@@ -4164,7 +5003,7 @@ mod tests {
 
     /// Plan 25-06 Test 1 (D-02): a provider 503 reaching `execute_stream`'s
     /// open-stream site surfaces as the structured `LlmFailure`, carrying the
-    /// typed transience/status/provider -- not the stringly `LlmError(String)`.
+    /// typed transience/status/provider.
     #[tokio::test]
     async fn paladin_execution_service_surfaces_structured_llm_failure() {
         use paladin_core::platform::container::transience::Transience;
@@ -4235,19 +5074,18 @@ mod tests {
         );
     }
 
-    /// Plan 25-06 (T-25-25): the two buffered retry-loop sites feed the
-    /// converted failure to the circuit breaker, whose `is_retryable()`
-    /// accounting must not drift -- `LlmFailure` counts as a failure exactly
-    /// as the legacy `LlmError(_)` did. With a threshold of one failure, the
-    /// first attempt trips the breaker and the second attempt fails fast with
-    /// `CircuitBreakerOpen`, so the loop's control flow is observably unchanged
-    /// (one provider call, not two).
+    /// Plan 25-06 (T-25-25, D-14): the two buffered retry-loop sites feed the
+    /// converted failure to the circuit breaker, which counts a failure only
+    /// when its `transience()` is `Transient` -- the 503 used here is. With a
+    /// threshold of one failure, the first attempt trips the breaker and the
+    /// second attempt fails fast with `CircuitBreakerOpen` (one provider call,
+    /// not two).
     #[tokio::test]
-    async fn buffered_retry_sites_trip_the_circuit_breaker_like_the_legacy_variant() {
+    async fn buffered_retry_sites_trip_the_circuit_breaker_on_a_transient_failure() {
         use crate::core::platform::container::paladin::MaxLoops;
 
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(2);
+        paladin.data.max_loops = MaxLoops::Fixed(2);
 
         // Site: execute_with_retry_and_temperature.
         let trips_after_one = Arc::new(CircuitBreaker::new(1, 1, Duration::from_secs(60)));
@@ -4301,7 +5139,7 @@ mod tests {
         use crate::core::platform::container::paladin::MaxLoops;
 
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(5);
+        paladin.data.max_loops = MaxLoops::Fixed(5);
 
         // Site: execute_with_retry_and_temperature.
         let (port, service) = failing_service(auth_failure, FailAt::Open, default_breaker());
@@ -4359,7 +5197,7 @@ mod tests {
         }
 
         let mut paladin = create_test_paladin();
-        paladin.node.max_loops = MaxLoops::Fixed(2);
+        paladin.data.max_loops = MaxLoops::Fixed(2);
 
         for make in [provider_503, processing_error] {
             let (port, service) = failing_service(make, FailAt::Open, default_breaker());
@@ -4399,9 +5237,9 @@ mod tests {
         }
     }
 
-    /// Plan 25-06 Test 5 (X-03, T-25-27): for a fixed `LlmError`, what each
-    /// migrated site in this file returns renders exactly what the legacy
-    /// `PaladinError::LlmError(e.to_string())` rendered -- `LLM error: {e}`.
+    /// Plan 25-06 Test 5 (T-25-27): for a fixed `LlmError`, what each
+    /// migrated site in this file returns is a `PaladinError::LlmFailure`
+    /// rendering `LLM error: {e}`.
     ///
     /// The two buffered retry-loop sites never return the converted error to
     /// a caller (they log it and end in `MaxRetriesExceeded` or
@@ -4745,7 +5583,7 @@ mod tests {
             vision_enabled: true,
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         // Verify that the MockLlmPort doesn't support vision
         let caps = llm_port.get_capabilities();
@@ -4756,7 +5594,7 @@ mod tests {
 
         // Verify paladin has vision_enabled
         assert!(
-            paladin.node.vision_enabled,
+            paladin.data.vision_enabled,
             "Paladin should have vision enabled"
         );
     }
@@ -4774,7 +5612,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("NormalPaladin".to_string()));
+        let paladin = Entity::new(data, Some("NormalPaladin".to_string()));
 
         // Try to execute with vision - should fail
         let images = vec![VisionContent::ImageUrl {
@@ -4811,7 +5649,7 @@ mod tests {
             vision_enabled: true,
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5067,7 +5905,7 @@ mod tests {
             stop_words: vec!["STOP".to_string()],
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5152,7 +5990,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5239,7 +6077,7 @@ mod tests {
             model: "gpt-4o".to_string(),
             ..Default::default()
         };
-        let paladin = Node::new(data, Some("VisionPaladin".to_string()));
+        let paladin = Entity::new(data, Some("VisionPaladin".to_string()));
 
         let images = vec![VisionContent::ImageUrl {
             url: "https://example.com/image.jpg".to_string(),
@@ -5271,7 +6109,7 @@ mod middleware_wiring_tests {
         ExecutionMiddleware, FinalResult, LlmResponseView, MiddlewareFlow, ModelCallContext,
         PromptSection, SectionPlacement, ToolCallContext, ToolCallKind, ToolFlow,
     };
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use async_trait::async_trait;
     use paladin_llm::mock::{MockLlmAdapter, MockScriptEntry};
@@ -5283,7 +6121,7 @@ mod middleware_wiring_tests {
             max_loops: MaxLoops::Fixed(max_loops),
             ..Default::default()
         };
-        Node::new(data, Some("TestPaladin".to_string()))
+        Entity::new(data, Some("TestPaladin".to_string()))
     }
 
     fn make_service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
@@ -5520,6 +6358,24 @@ mod middleware_wiring_tests {
         assert_eq!(result.output, "hello");
         assert_eq!(result.stop_reason, StopReason::MaxLoops);
         assert_eq!(result.loop_count, 1);
+    }
+
+    /// WR-01: stop words are enforced client-side. An output containing one aborts the run with
+    /// `StopWordDetected`, whatever the model's wire `stop` support, so a builder that no longer
+    /// refuses a `NotSent` profile does not leave the list unenforced.
+    #[tokio::test]
+    async fn an_output_containing_a_stop_word_aborts_with_stop_word_detected() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("the answer is END of story"));
+        let service = make_service(llm);
+        let mut paladin = make_paladin(1);
+        paladin.data.stop_words.push("end".to_string());
+
+        let result = service.execute(&paladin, "hi").await;
+
+        assert!(
+            matches!(&result, Err(PaladinError::StopWordDetected(word)) if word == "end"),
+            "expected StopWordDetected(\"end\"), got {result:?}"
+        );
     }
 
     /// `before_model`/`after_model` fire once per loop iteration, in strict
@@ -6094,7 +6950,7 @@ mod token_counter_and_recall_limit_tests {
     use crate::application::services::paladin::middleware::{
         ExecutionMiddleware, MiddlewareFlow, ModelCallContext,
     };
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use async_trait::async_trait;
     use paladin_core::platform::container::garrison::GarrisonConfig;
@@ -6109,7 +6965,7 @@ mod token_counter_and_recall_limit_tests {
             max_loops: MaxLoops::Fixed(max_loops),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     /// Records `cx.assembly.history.len()` observed on the FIRST loop
@@ -6239,7 +7095,7 @@ mod token_counter_and_recall_limit_tests {
 #[cfg(test)]
 mod streamed_usage_tests {
     use super::*;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use paladin_core::platform::container::token_usage::TokenUsage;
     use paladin_llm::mock::MockLlmAdapter;
@@ -6251,7 +7107,7 @@ mod streamed_usage_tests {
             max_loops: MaxLoops::Fixed(1),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn make_service(llm: Arc<MockLlmAdapter>) -> PaladinExecutionService {
@@ -6402,7 +7258,7 @@ mod streamed_usage_tests {
 #[cfg(test)]
 mod structured_output_tests {
     use super::*;
-    use crate::core::base::entity::node::Node;
+    use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use paladin_core::platform::container::heartbeat::HeartbeatHandle;
     use paladin_core::platform::container::prompt::PromptType;
@@ -6414,7 +7270,7 @@ mod structured_output_tests {
             max_loops: MaxLoops::Fixed(3),
             ..Default::default()
         };
-        Node::new(data, None)
+        Entity::new(data, None)
     }
 
     fn weather_schema() -> Value {
@@ -6709,5 +7565,1301 @@ mod structured_output_tests {
              repair loop -- run_structured (paladin-ports) owns the only \
              bounded attempt loop"
         );
+    }
+}
+
+/// Plan 38-02's tracer: a priced streamed agent call reaches
+/// `ExecutionMetadata` and the markdown herald (D-09, D-12).
+#[cfg(test)]
+mod streamed_cost_tests {
+    use super::*;
+    use crate::core::base::entity::Entity;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_core::platform::container::treasury_ledger::{SpendGroupBy, SpendQuery};
+    use paladin_herald::MarkdownHerald;
+    use paladin_herald::markdown_herald::MarkdownHeraldConfig;
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_llm::pricing::PricingLlmAdapter;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+
+    fn make_paladin(model: &str) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            model: model.to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            ..Default::default()
+        };
+        Entity::new(data, None)
+    }
+
+    fn plain_markdown_herald() -> Arc<dyn Herald> {
+        Arc::new(MarkdownHerald::with_config(MarkdownHeraldConfig {
+            include_colors: false,
+            heading_level: 2,
+        }))
+    }
+
+    fn make_service(llm: Arc<dyn LlmPort>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_herald(plain_markdown_herald())
+    }
+
+    async fn drain_final_chunk(
+        service: &PaladinExecutionService,
+        paladin: &Paladin,
+    ) -> ChunkMetadata {
+        let mut stream = service.execute_stream(paladin, "hi").await.unwrap();
+        loop {
+            let item = stream.recv().await.expect("stream must emit a final chunk");
+            let chunk = item.unwrap();
+            if chunk.is_final {
+                return chunk
+                    .metadata
+                    .expect("the final chunk must carry ChunkMetadata (D-12)");
+            }
+        }
+    }
+
+    /// A streamed agent call through `PaladinExecutionService::execute_stream`, whose
+    /// `LlmPort` is wrapped by `PricingLlmAdapter` over a USD table pricing `gpt-4` at
+    /// prompt 2.50 / completion 10.00 per 1M tokens, ends with a final chunk whose
+    /// `ChunkMetadata` carries `Cost` 22_500_000 nanos USD for 1_000 prompt / 2_000
+    /// completion tokens and an `ExecutionMetadata` whose `cost_estimate` is
+    /// `Some(0.0225)`; handing that metadata to `finalize_stream_output` with a
+    /// `MarkdownHerald` yields text containing `0.0225 USD` and no dollar sign.
+    #[tokio::test]
+    async fn streamed_priced_call_produces_execution_metadata_cost() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let service = make_service(llm);
+        let paladin = make_paladin("gpt-4");
+
+        let metadata = drain_final_chunk(&service, &paladin).await;
+
+        let cost = metadata
+            .cost
+            .as_ref()
+            .expect("a priced model must carry a cost");
+        assert_eq!(cost.nanos(), 22_500_000);
+        assert_eq!(cost.currency().as_str(), "USD");
+
+        let execution = metadata
+            .execution
+            .as_ref()
+            .expect("the final chunk must carry ExecutionMetadata (D-12)");
+        assert_eq!(execution.cost_estimate, Some(0.0225));
+
+        let text = service
+            .finalize_stream_output(execution)
+            .unwrap()
+            .expect("a herald is configured");
+        assert!(text.contains("0.0225 USD"), "{text}");
+        assert!(
+            !text.contains('$'),
+            "no dollar sign once a currency is configured: {text}"
+        );
+    }
+
+    /// The same streamed call against a model with no price row ends with cost `None` on
+    /// `ChunkMetadata`, an `ExecutionMetadata` whose `cost_estimate` is `None` (never
+    /// `Some(0.0)`), and herald text with no `Cost` line (D-00c, D-08).
+    #[tokio::test]
+    async fn streamed_unpriced_call_reports_no_cost() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let service = make_service(llm);
+        let paladin = make_paladin("tracer-unpriced-model");
+
+        let metadata = drain_final_chunk(&service, &paladin).await;
+
+        assert!(
+            metadata.cost.is_none(),
+            "an unpriced model must never carry a cost"
+        );
+
+        let execution = metadata
+            .execution
+            .as_ref()
+            .expect("the final chunk must carry ExecutionMetadata even when unpriced (D-12)");
+        assert_eq!(
+            execution.cost_estimate, None,
+            "an unpriced model's cost_estimate must be None, never Some(0.0) (D-00c)"
+        );
+
+        let text = service
+            .finalize_stream_output(execution)
+            .unwrap()
+            .expect("a herald is configured");
+        assert!(!text.contains("Cost"), "{text}");
+    }
+
+    /// Plan 39-05: a streamed priced call settles exactly once, under
+    /// `(execution_id, 1, 1)`, naming the request's model (`gpt-4`, the
+    /// only model identity a stream carries).
+    #[tokio::test]
+    async fn streamed_priced_call_settles_once() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin("gpt-4");
+
+        let _ = drain_final_chunk(&service, &paladin).await;
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(rows.len(), 1, "exactly one (model, currency) row");
+        assert_eq!(rows[0].group, "gpt-4");
+        assert_eq!(rows[0].amount.nanos(), 22_500_000);
+        assert_eq!(rows[0].settlements, 1);
+    }
+
+    /// 40-04 (D-16, HTTP path): through `Arc<dyn StreamingExecutorPort>` in
+    /// `EveryCall` mode, `execute_stream_scoped` settles the streamed priced
+    /// call under the scope's `ledger_scope` -- `(acme, svc-a)`, never the
+    /// sentinel.
+    #[tokio::test]
+    async fn stream_scoped_settles_under_the_scope_ledger_scope() {
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin("gpt-4");
+        let streamer: Arc<dyn StreamingExecutorPort> = Arc::new(service);
+        let scope = RunScope::default().with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+
+        let mut stream = streamer
+            .execute_stream_scoped(&paladin, "hi", &scope)
+            .await
+            .unwrap();
+        loop {
+            let item = stream.recv().await.expect("stream must emit a final chunk");
+            if item.unwrap().is_final {
+                break;
+            }
+        }
+
+        let attributed = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::ApiKey,
+                tenant_id: Some("acme".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(attributed.len(), 1, "the streamed call settled under acme");
+        assert_eq!(attributed[0].group, "svc-a");
+        assert_eq!(attributed[0].amount.nanos(), 22_500_000);
+        assert_eq!(attributed[0].settlements, 1);
+
+        let sentinel = ledger
+            .spend(SpendQuery {
+                tenant_id: Some(LedgerScope::UNATTRIBUTED.to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert!(
+            sentinel.is_empty(),
+            "a scoped stream never settles under the sentinel"
+        );
+    }
+}
+
+/// Plan 38-07: the agent loop folds each model call's cost into
+/// `PaladinResult.cost` beside `usage` (D-10, D-00c).
+#[cfg(test)]
+mod agent_loop_cost_tests {
+    use super::*;
+    use crate::core::base::entity::Entity;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use async_trait::async_trait;
+    use chrono::{DateTime, Utc};
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_core::platform::container::token_usage::TokenUsage;
+    use paladin_core::platform::container::treasury_ledger::{
+        ReservationId, ReserveRequest, SpendGroupBy, SpendQuery, SpendRow,
+    };
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::llm_port::{
+        FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
+        StreamingResponse,
+    };
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+    use std::sync::Mutex as StdMutex;
+    use uuid::Uuid;
+
+    fn make_paladin(max_loops: u32) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            max_loops: MaxLoops::Fixed(max_loops),
+            ..Default::default()
+        };
+        Entity::new(data, None)
+    }
+
+    fn make_service(llm: Arc<dyn LlmPort>) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+    }
+
+    /// A stub `LlmPort` returning a preset queue of `(content, usage, cost)`
+    /// tuples, one per call, holding on the last entry once exhausted --
+    /// lets a test drive per-call `cost` independently of
+    /// `MockLlmAdapter`'s single shared, cost-less response shape.
+    struct ScriptedCostLlmPort {
+        entries: StdMutex<std::collections::VecDeque<(String, TokenUsage, Option<Cost>)>>,
+    }
+
+    impl ScriptedCostLlmPort {
+        fn new(entries: Vec<(&str, TokenUsage, Option<Cost>)>) -> Self {
+            Self {
+                entries: StdMutex::new(
+                    entries
+                        .into_iter()
+                        .map(|(content, usage, cost)| (content.to_string(), usage, cost))
+                        .collect(),
+                ),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for ScriptedCostLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            let mut entries = self.entries.lock().unwrap();
+            let (content, usage, cost) = if entries.len() > 1 {
+                entries.pop_front().unwrap()
+            } else {
+                entries.front().cloned().expect("at least one entry")
+            };
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model,
+                content,
+                finish_reason: FinishReason::Stop,
+                usage,
+                cost,
+                created_at: chrono::Utc::now(),
+                metadata: HashMap::new(),
+                function_call: None,
+                reasoning: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            unimplemented!("ScriptedCostLlmPort only supports generate()")
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "scripted-cost-stub"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// D-10: two loop iterations whose responses carry costs 22_500_000 and
+    /// 1_000_000 nanos USD sum to `PaladinResult.cost == Some(23_500_000 USD)`
+    /// -- the exact `CostTally` sum of the run's priced calls.
+    #[tokio::test]
+    async fn agent_loop_sums_cost_across_calls() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            ),
+        ]));
+        let service = make_service(llm);
+        let paladin = make_paladin(2);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        let cost = result
+            .cost
+            .expect("two priced calls must sum to a priced run cost");
+        assert_eq!(cost.nanos(), 23_500_000);
+        assert_eq!(cost.currency(), &usd);
+    }
+
+    /// D-10, D-00c: an in-test `LlmPort` whose first response carries
+    /// `Some` cost and second carries `None` poisons the run total --
+    /// `PaladinResult.cost == None`, never a partial sum of just the first
+    /// call.
+    #[tokio::test]
+    async fn agent_loop_cost_is_none_when_any_call_unpriced() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd)),
+            ),
+            ("second", TokenUsage::new(200, 50), None),
+        ]));
+        let service = make_service(llm);
+        let paladin = make_paladin(2);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert!(
+            result.cost.is_none(),
+            "one unpriced call must poison the run total"
+        );
+    }
+
+    /// D-00c: an unwrapped `MockLlmAdapter` (no `PricingLlmAdapter`
+    /// decorator) reports `cost: None` on every response -- the run's
+    /// `PaladinResult.cost` is `None` while `usage` is still reported in
+    /// full, never a fabricated zero.
+    #[tokio::test]
+    async fn agent_loop_cost_is_none_without_pricing() {
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("plain")
+                .with_token_usage_struct(TokenUsage::new(10, 20)),
+        );
+        let llm: Arc<dyn LlmPort> = mock;
+        let service = make_service(llm);
+        let paladin = make_paladin(1);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+
+        assert!(
+            result.cost.is_none(),
+            "no pricing installed must yield None"
+        );
+        assert_eq!(
+            result.usage.total_tokens, 30,
+            "usage must still be reported in full even with no cost"
+        );
+    }
+
+    /// A ledger whose `settle` always fails with `TreasuryLedgerError::Backend`
+    /// -- proves D-08's "never fails the agent loop" guarantee.
+    /// `reserve`/`release` are unreachable: the agent loop's settle-only
+    /// production writer never calls them.
+    struct FailingTreasuryLedger;
+
+    #[async_trait]
+    impl TreasuryLedgerPort for FailingTreasuryLedger {
+        async fn reserve(
+            &self,
+            _request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            unreachable!("not exercised by the agent loop's settle-only production writer")
+        }
+
+        async fn release(&self, _reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            unreachable!("not exercised by the agent loop's settle-only production writer")
+        }
+
+        async fn settle(
+            &self,
+            _request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::Backend {
+                source: Box::new(std::io::Error::other("ledger backend unavailable")),
+            })
+        }
+
+        async fn spend(&self, _query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            Ok(Vec::new())
+        }
+
+        async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+            Ok(Utc::now())
+        }
+    }
+
+    /// D-07: every priced model call of a plain `execute()` (no `RunScope`
+    /// run id) settles under the service's own execution id -- the in-memory
+    /// ledger's spend by run has one row with 2 settlements whose amount
+    /// equals `PaladinResult.cost`; spend by model is keyed on the
+    /// responses' model.
+    #[tokio::test]
+    async fn every_priced_model_call_settles_under_the_execution_id() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd)),
+            ),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+
+        let result = service.execute(&paladin, "hi").await.unwrap();
+        let cost = result.cost.expect("two priced calls must sum to a cost");
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1, "exactly one run settled");
+        assert_eq!(by_run[0].amount, cost);
+        assert_eq!(by_run[0].settlements, 2);
+
+        let by_model = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds");
+        assert_eq!(by_model.len(), 1, "both calls named the same model");
+        assert_eq!(by_model[0].group, "gpt-4");
+        assert_eq!(by_model[0].amount, cost);
+    }
+
+    /// D-08: an unpriced call writes no settlement row -- one priced and one
+    /// unpriced call settle exactly once.
+    #[tokio::test]
+    async fn unpriced_model_call_writes_no_settlement() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd)),
+            ),
+            ("second", TokenUsage::new(200, 50), None),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+
+        let _ = service.execute(&paladin, "hi").await.unwrap();
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(
+            by_run[0].settlements, 1,
+            "the unpriced call must write no row"
+        );
+    }
+
+    /// D-07: `EveryCall` prefers the scope's own run id over this service's
+    /// execution id -- `execute_scoped` with a `RunScope::with_run_id(R)`
+    /// settles both loop iterations under R, at supersteps 1 and 2, attempt
+    /// 1 (proven by re-settling the exact same keys directly against the
+    /// ledger and observing `AlreadySettled`, never a fresh `Settled`).
+    #[tokio::test]
+    async fn every_call_mode_prefers_the_scope_run_id() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            ),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(rows.len(), 1, "both calls settled under the scope's run id");
+        assert_eq!(rows[0].settlements, 2);
+
+        for superstep in [1_u64, 2_u64] {
+            let outcome = ledger
+                .settle(SettleRequest::unreserved(
+                    LedgerScope::unattributed(),
+                    SettlementKey::new(run_id.clone(), superstep, 1),
+                    Cost::new(1, usd.clone()),
+                    BTreeMap::from([("probe".to_string(), 1_i64)]),
+                ))
+                .await
+                .expect("settle probe succeeds");
+            assert_eq!(
+                outcome,
+                SettleOutcome::AlreadySettled,
+                "superstep {superstep} attempt 1 must already be settled under run {run_id}"
+            );
+        }
+    }
+
+    /// D-16 (run path): a `RunScope` carrying `ledger_scope == (acme, svc-a)`
+    /// settles every priced call under that scope -- a spend query filtered
+    /// to that tenant and key sees both settlements, and the sentinel sees
+    /// none.
+    #[tokio::test]
+    async fn agent_loop_settles_under_the_run_scope_ledger_scope() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![
+            (
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            ),
+            (
+                "second",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            ),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default()
+            .with_run_id(run_id.clone())
+            .with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let attributed = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                tenant_id: Some("acme".to_string()),
+                api_key_id: Some("svc-a".to_string()),
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(
+            attributed.len(),
+            1,
+            "both calls settled under (acme, svc-a)"
+        );
+        assert_eq!(attributed[0].settlements, 2);
+
+        let sentinel = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                tenant_id: Some(LedgerScope::UNATTRIBUTED.to_string()),
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert!(
+            sentinel.is_empty(),
+            "an attributed run must never settle under the sentinel"
+        );
+    }
+
+    /// D-10/D-16: a `RunScope` carrying no `ledger_scope` settles under the
+    /// unattributed sentinel -- the only case the sentinel is stamped.
+    #[tokio::test]
+    async fn agent_loop_without_a_ledger_scope_settles_unattributed() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            TokenUsage::new(1_000, 2_000),
+            Some(Cost::new(22_500_000, usd)),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(1);
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+        assert!(scope.ledger_scope.is_none());
+
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Tenant,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by tenant succeeds");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].group, LedgerScope::UNATTRIBUTED);
+        assert_eq!(rows[0].settlements, 1);
+    }
+
+    /// D-16 (HTTP path): through `Arc<dyn PaladinExecutorPort>` -- the
+    /// handle `agent_controller` holds -- `execute_scoped` settles the priced
+    /// call under the scope's `ledger_scope`, proving the trait override
+    /// reaches the inherent scoped path rather than the default delegate.
+    #[tokio::test]
+    async fn executor_port_execute_scoped_settles_under_the_scope_ledger_scope() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            TokenUsage::new(1_000, 2_000),
+            Some(Cost::new(22_500_000, usd)),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let executor: Arc<dyn PaladinExecutorPort> = Arc::new(service);
+        let paladin = make_paladin(1);
+        let scope = RunScope::default().with_ledger_scope(LedgerScope::new("acme", "svc-a"));
+
+        let _ = executor
+            .execute_scoped(&paladin, "hi", &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::ApiKey,
+                tenant_id: Some("acme".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("spend by api key succeeds");
+        assert_eq!(rows.len(), 1, "the call settled under tenant acme");
+        assert_eq!(rows[0].group, "svc-a");
+        assert_eq!(rows[0].settlements, 1);
+        assert_eq!(rows[0].amount.nanos(), 22_500_000);
+    }
+
+    /// D-07/D-08: `PlatformRunsOnly` never settles a plain `execute()` call
+    /// (no run id in scope) -- only an `execute_scoped` call whose
+    /// `RunScope` names a run id settles.
+    #[tokio::test]
+    async fn platform_runs_only_settles_only_scoped_runs() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            TokenUsage::new(1_000, 2_000),
+            Some(Cost::new(22_500_000, usd)),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service = make_service(llm)
+            .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::PlatformRunsOnly);
+        let paladin = make_paladin(1);
+
+        let _ = service.execute(&paladin, "hi").await.unwrap();
+        let empty = ledger
+            .spend(SpendQuery::default())
+            .await
+            .expect("spend succeeds");
+        assert!(
+            empty.is_empty(),
+            "a call with no scope run id must never settle under PlatformRunsOnly"
+        );
+
+        let run_id = RunId::new_v7();
+        let scope = RunScope::default().with_run_id(run_id.clone());
+        let _ = service
+            .execute_scoped(&paladin, "hi", None, &scope)
+            .await
+            .unwrap();
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(rows.len(), 1, "the scoped run's call settled");
+    }
+
+    /// D-08, LEDGR-03: a ledger `Err` on every `settle` call never fails,
+    /// retries, or alters the run's output -- `execute` returns the exact
+    /// same output and cost as the identical run with no ledger installed.
+    #[tokio::test]
+    async fn ledger_failure_never_fails_the_agent_loop() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let make_llm = || -> Arc<dyn LlmPort> {
+            Arc::new(ScriptedCostLlmPort::new(vec![(
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            )]))
+        };
+        let paladin = make_paladin(1);
+
+        let baseline = make_service(make_llm())
+            .execute(&paladin, "hi")
+            .await
+            .unwrap();
+
+        let failing_service = make_service(make_llm()).with_treasury_ledger(
+            Arc::new(FailingTreasuryLedger),
+            AgentLoopSettlement::EveryCall,
+        );
+        let with_failing_ledger = failing_service.execute(&paladin, "hi").await.unwrap();
+
+        assert_eq!(with_failing_ledger.output, baseline.output);
+        assert_eq!(with_failing_ledger.cost, baseline.cost);
+        assert_eq!(with_failing_ledger.loop_count, baseline.loop_count);
+    }
+}
+
+/// Phase 41 D-18: the allowance warnings an HTTP agent-route admission won travel in
+/// `RunScope::allowance_warnings`; the execution service emits them once through its trace
+/// emitter and the streamed final chunk's `ExecutionMetadata` carries the herald line.
+/// ALLOW-05 "works alongside, replaces none" (ROADMAP success criterion 3), proven on a real
+/// service: the Treasurer's derived budget composes with the Commissary's input-side rationing
+/// instead of replacing it (Phase 42 D-11).
+#[cfg(test)]
+mod derived_budget_tests {
+    use super::*;
+    use crate::application::services::paladin::middleware::TokenBudget;
+    use crate::application::services::sanctum::RagConfig;
+    use crate::config::agent_runtime::TokenBudgetConfig;
+    use crate::core::base::entity::Entity;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use crate::core::platform::container::sanctum::{MemoryBuilder, MemoryType, SanctumEntry};
+    use crate::infrastructure::adapters::sanctum::InMemorySanctum;
+    use async_trait::async_trait;
+    use chrono::{TimeZone, Utc};
+    use paladin_core::platform::container::allowance::{
+        AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind, DerivedTokenBudget,
+    };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::embedding_port::{Embedding, EmbeddingError, EmbeddingPort};
+    use paladin_ports::output::paladin_port::StopReason;
+    use paladin_ports::output::sanctum_port::SanctumPort;
+
+    /// The query used for every run: it starts with none of `A`/`B`/`C`, so the deterministic
+    /// embedding gives it the highest-scoring memory's own vector.
+    const QUERY: &str = "find the relevant memories";
+
+    /// A deterministic, reproducible embedding port (a test-local copy of the one in
+    /// `tests/integration/rag_commissary_test.rs`): content starting with `A`/`B`/`C` maps to a
+    /// fixed vector at decreasing cosine similarity to the query vector.
+    struct DeterministicEmbeddingPort;
+
+    #[async_trait]
+    impl EmbeddingPort for DeterministicEmbeddingPort {
+        async fn embed_text(&self, text: &str) -> Result<Embedding, EmbeddingError> {
+            let vector = if text.starts_with('A') {
+                vec![1.0, 0.0, 0.0]
+            } else if text.starts_with('B') {
+                vec![0.8, 0.6, 0.0]
+            } else if text.starts_with('C') {
+                vec![0.6, 0.8, 0.0]
+            } else {
+                vec![1.0, 0.0, 0.0]
+            };
+            Ok(Embedding {
+                vector,
+                model: "deterministic-mock".to_string(),
+                dimension: 3,
+                token_count: Some(10),
+            })
+        }
+
+        async fn embed_batch(&self, texts: &[&str]) -> Result<Vec<Embedding>, EmbeddingError> {
+            let mut out = Vec::with_capacity(texts.len());
+            for text in texts {
+                out.push(self.embed_text(text).await?);
+            }
+            Ok(out)
+        }
+
+        fn dimension(&self) -> usize {
+            3
+        }
+
+        fn model_name(&self) -> &str {
+            "deterministic-mock"
+        }
+    }
+
+    /// Embed `content` and store it in `sanctum` as one of `paladin_id`'s memories.
+    async fn store_memory(
+        sanctum: &Arc<dyn SanctumPort>,
+        embedding: &Arc<dyn EmbeddingPort>,
+        paladin_id: &str,
+        content: &str,
+    ) {
+        let memory = MemoryBuilder::new(paladin_id.to_string(), content.to_string())
+            .memory_type(MemoryType::Semantic)
+            .importance(0.8)
+            .build()
+            .expect("a test memory builds");
+        let embedded = embedding
+            .embed_text(content)
+            .await
+            .expect("the deterministic embedding never fails");
+        let entry = SanctumEntry::new(memory, embedded.vector).expect("a sanctum entry builds");
+        sanctum.store(entry).await.expect("the entry is stored");
+    }
+
+    /// The Commissary's shed-forcing fixture: three memories of 987 / 654 / 321 bytes under a
+    /// 233-token RAG budget (the figures `rag_commissary_test.rs` proves force a shed).
+    async fn rag_service(paladin_id: &str) -> Arc<RagRetrievalService> {
+        let sanctum: Arc<dyn SanctumPort> = Arc::new(InMemorySanctum::new(100));
+        let embedding: Arc<dyn EmbeddingPort> = Arc::new(DeterministicEmbeddingPort);
+        store_memory(&sanctum, &embedding, paladin_id, &"A".repeat(987)).await;
+        store_memory(&sanctum, &embedding, paladin_id, &"B".repeat(654)).await;
+        store_memory(&sanctum, &embedding, paladin_id, &"C".repeat(321)).await;
+        let config = RagConfig {
+            max_tokens: 233,
+            min_similarity: 0.0,
+            top_k: 10,
+            ..RagConfig::default()
+        };
+        Arc::new(RagRetrievalService::new(sanctum, embedding, config))
+    }
+
+    fn paladin(max_loops: u32) -> Paladin {
+        let data = PaladinData {
+            system_prompt: "You are a helpful assistant".to_string(),
+            max_loops: MaxLoops::Fixed(max_loops),
+            ..Default::default()
+        };
+        Entity::new(data, Some("BudgetPaladin".to_string()))
+    }
+
+    fn derived(max_tokens: u32) -> DerivedTokenBudget {
+        let usd = CurrencyCode::new("USD").expect("USD is valid");
+        DerivedTokenBudget::new(
+            max_tokens,
+            AllowanceRefusal {
+                scope_kind: AllowanceScopeKind::Tenant,
+                limit_kind: AllowanceLimitKind::Lifetime,
+                balance: Cost::new(1_000, usd.clone()),
+                ceiling: Cost::new(1_000, usd),
+                window: None,
+                evaluated_at: Utc
+                    .with_ymd_and_hms(2026, 10, 6, 12, 0, 0)
+                    .single()
+                    .expect("valid instant"),
+            },
+        )
+    }
+
+    /// One service with RAG retrieval attached and the one `TokenBudget` installed (operator
+    /// figure off, so only the Treasurer's derived figure can bind).
+    async fn service_with_rag(
+        llm: Arc<MockLlmAdapter>,
+        paladin_id: &str,
+    ) -> PaladinExecutionService {
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_rag_retrieval(rag_service(paladin_id).await)
+        .with_middleware(Arc::new(TokenBudget::new(TokenBudgetConfig {
+            enabled: false,
+            max_tokens: 1,
+        })))
+    }
+
+    /// One run through the real service. A run carrying a derived figure is cut by the one
+    /// `TokenBudget` on the OUTPUT side after the crossing response, while the SAME run's INPUT
+    /// side was already rationed by the Commissary: the RAG context that reached the prompt the
+    /// model received was shed to its budget and carries the Commissary's own shared omission
+    /// marker. Neither limit replaced the other; and the same run without a derived figure sees
+    /// the identical first prompt and is not halted.
+    #[tokio::test]
+    async fn derived_budget_composes_with_the_commissary_rationed_rag_context() {
+        let agent = paladin(3);
+        let paladin_id = agent.uuid.to_string();
+
+        // What the Commissary alone does for this fixture: the shed count and allotted budget
+        // the shared omission marker is built from.
+        let retrieval = rag_service(&paladin_id)
+            .await
+            .retrieve_context(&paladin_id, QUERY)
+            .await
+            .expect("retrieval succeeds");
+        assert!(
+            !retrieval.shed.is_empty(),
+            "the fixture's small budget must force the Commissary to shed"
+        );
+        let marker = rag_omission_marker(retrieval.shed.len(), retrieval.allotted_tokens);
+
+        // Run 1: a derived figure of 50 against a model that reports 100 tokens per response.
+        let llm = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let service = service_with_rag(llm.clone(), &paladin_id).await;
+        let scope = RunScope::default().with_derived_token_budget(derived(50));
+        let halted = service
+            .execute_scoped(&agent, QUERY, None, &scope)
+            .await
+            .expect("the run ends gracefully");
+
+        // Output side: the derived budget cut the run after the crossing response.
+        assert_eq!(
+            llm.call_count(),
+            1,
+            "cut after the first, crossing response"
+        );
+        assert!(
+            matches!(halted.stop_reason, StopReason::AllowanceHalted(_)),
+            "got {:?}",
+            halted.stop_reason
+        );
+        assert!(!halted.stop_reason.is_successful());
+        assert!(
+            halted.output.contains("chunk"),
+            "the crossing response is kept"
+        );
+
+        // Input side: the prompt the model received carries the rationed RAG context.
+        let first_prompt = llm.last_prompt().expect("one model call was made");
+        assert!(
+            first_prompt.contains("## Relevant Context from Memory"),
+            "the RAG section reached the prompt: {first_prompt}"
+        );
+        assert!(
+            first_prompt.contains(&marker),
+            "the Commissary's shared omission marker {marker:?} reached the prompt: {first_prompt}"
+        );
+
+        // The same run without a derived figure: identical first prompt, not halted.
+        let llm_plain = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("chunk")
+                .with_token_usage(0, 100, 100),
+        );
+        let plain_agent = paladin(1);
+        // Same paladin identity so the memories (keyed by it) retrieve identically.
+        let plain_agent = Entity {
+            uuid: agent.uuid,
+            ..plain_agent
+        };
+        let plain_service = service_with_rag(llm_plain.clone(), &paladin_id).await;
+        let plain = plain_service
+            .execute_scoped(&plain_agent, QUERY, None, &RunScope::default())
+            .await
+            .expect("the run completes");
+
+        assert!(
+            !matches!(plain.stop_reason, StopReason::AllowanceHalted(_)),
+            "no derived figure, so the allowance never halts: {:?}",
+            plain.stop_reason
+        );
+        assert_eq!(
+            llm_plain.last_prompt().expect("one model call was made"),
+            first_prompt,
+            "a derived figure never changes what the Commissary dispenses"
+        );
+    }
+}
+
+#[cfg(test)]
+mod allowance_warning_tests {
+    use super::*;
+    use crate::core::base::entity::Entity;
+    use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
+    use paladin_core::platform::container::allowance::{AllowanceLimitKind, AllowanceScopeKind};
+    use paladin_core::platform::container::cost::CurrencyCode;
+    use paladin_core::platform::container::waypoint::ThreadId;
+    use paladin_herald::MarkdownHerald;
+    use paladin_herald::markdown_herald::MarkdownHeraldConfig;
+    use paladin_llm::mock::MockLlmAdapter;
+    use paladin_ports::output::trace_sink_port::{
+        StandaloneEmitter, TraceRecord, TraceSink, TraceSinkError,
+    };
+
+    #[derive(Default)]
+    struct RecordingSink {
+        events: std::sync::Mutex<Vec<TraceRecord>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TraceSink for RecordingSink {
+        async fn on_event(&self, record: TraceRecord) -> Result<(), TraceSinkError> {
+            self.events.lock().unwrap().push(record);
+            Ok(())
+        }
+    }
+
+    /// The sink drains on its own schedule: wait (bounded) for `expected` records.
+    async fn records_eventually(sink: &RecordingSink, expected: usize) -> Vec<TraceRecord> {
+        for _ in 0..300 {
+            let events = sink.events.lock().unwrap().clone();
+            if events.len() >= expected {
+                return events;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        sink.events.lock().unwrap().clone()
+    }
+
+    fn warning() -> AllowanceWarning {
+        let usd = CurrencyCode::new("USD").unwrap();
+        AllowanceWarning {
+            scope_kind: AllowanceScopeKind::Tenant,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(20_500_000_000, usd.clone()),
+            ceiling: Cost::new(25_000_000_000, usd),
+            window_start: None,
+            window_end: None,
+            warn_at: 80,
+        }
+    }
+
+    fn paladin() -> Paladin {
+        let data = PaladinData {
+            system_prompt: "system".to_string(),
+            model: "gpt-4".to_string(),
+            max_loops: MaxLoops::Fixed(1),
+            ..Default::default()
+        };
+        Entity::new(data, None)
+    }
+
+    fn service() -> PaladinExecutionService {
+        let llm: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_response("answer"));
+        PaladinExecutionService::new(
+            llm,
+            Arc::new(CircuitBreaker::new(5, 3, Duration::from_secs(60))),
+            None,
+            None,
+        )
+        .with_herald(Arc::new(MarkdownHerald::with_config(
+            MarkdownHeraldConfig {
+                include_colors: false,
+                heading_level: 2,
+            },
+        )))
+    }
+
+    fn emitter_over(sink: &Arc<RecordingSink>) -> Arc<dyn TraceEmitter> {
+        Arc::new(StandaloneEmitter::new(
+            ThreadId::new("allowance-warning-test").unwrap(),
+            None,
+            Some(sink.clone() as Arc<dyn TraceSink>),
+        ))
+    }
+
+    #[tokio::test]
+    async fn scoped_execute_emits_scope_allowance_warnings_through_the_emitter() {
+        let sink = Arc::new(RecordingSink::default());
+        let service = service().with_trace_emitter(emitter_over(&sink));
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let result = PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &scope)
+            .await
+            .unwrap();
+        assert_eq!(result.output, "answer");
+
+        let events = records_eventually(&sink, 1).await;
+        let warnings: Vec<_> = events
+            .iter()
+            .filter_map(|r| AllowanceWarning::from_trace_event(&r.event))
+            .collect();
+        assert_eq!(warnings, vec![warning()], "exactly one warning: {events:?}");
+    }
+
+    #[tokio::test]
+    async fn scoped_execute_without_an_emitter_ignores_allowance_warnings() {
+        let service = service();
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let with = PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &scope)
+            .await
+            .unwrap();
+        let without =
+            PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &RunScope::default())
+                .await
+                .unwrap();
+        assert_eq!(with.output, without.output);
+        assert_eq!(with.usage, without.usage);
+    }
+
+    #[tokio::test]
+    async fn scoped_execute_with_no_warnings_emits_no_allowance_event() {
+        let sink = Arc::new(RecordingSink::default());
+        let service = service().with_trace_emitter(emitter_over(&sink));
+
+        PaladinExecutorPort::execute_scoped(&service, &paladin(), "hi", &RunScope::default())
+            .await
+            .unwrap();
+
+        let events = sink.events.lock().unwrap().clone();
+        assert!(
+            events
+                .iter()
+                .all(|r| AllowanceWarning::from_trace_event(&r.event).is_none()),
+            "{events:?}"
+        );
+    }
+
+    /// Drain a scoped stream and return its final chunk's metadata.
+    async fn final_chunk_metadata(
+        service: &PaladinExecutionService,
+        scope: &RunScope,
+    ) -> ChunkMetadata {
+        let mut stream =
+            StreamingExecutorPort::execute_stream_scoped(service, &paladin(), "hi", scope)
+                .await
+                .unwrap();
+        loop {
+            let chunk = stream
+                .recv()
+                .await
+                .expect("stream must emit a final chunk")
+                .unwrap();
+            if chunk.is_final {
+                return chunk.metadata.expect("the final chunk carries metadata");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn streamed_final_chunk_metadata_carries_allowance_warnings() {
+        let service = service();
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let metadata = final_chunk_metadata(&service, &scope).await;
+        let execution = metadata
+            .execution
+            .expect("the final chunk carries ExecutionMetadata");
+        assert_eq!(
+            execution.allowance_warning_display().as_deref(),
+            Some("\u{26A0} allowance: 82% of 25.0000 USD (tenant, lifetime cap)")
+        );
+        let text = service
+            .finalize_stream_output(&execution)
+            .unwrap()
+            .expect("a herald is configured");
+        assert_eq!(text.matches("allowance:").count(), 1, "{text}");
+
+        // A scope without a warning renders no allowance line at all.
+        let plain = final_chunk_metadata(&service, &RunScope::default())
+            .await
+            .execution
+            .expect("the final chunk carries ExecutionMetadata");
+        assert_eq!(plain.allowance_warning_display(), None);
+    }
+
+    #[tokio::test]
+    async fn streamed_scope_warnings_are_emitted_once_through_the_emitter() {
+        let sink = Arc::new(RecordingSink::default());
+        let service = service().with_trace_emitter(emitter_over(&sink));
+        let scope = RunScope::default().with_allowance_warnings(vec![warning()]);
+
+        let _ = final_chunk_metadata(&service, &scope).await;
+
+        let events = records_eventually(&sink, 2).await;
+        let count = events
+            .iter()
+            .filter(|r| AllowanceWarning::from_trace_event(&r.event).is_some())
+            .count();
+        assert_eq!(count, 1, "{events:?}");
     }
 }

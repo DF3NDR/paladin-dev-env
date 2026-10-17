@@ -4,6 +4,7 @@
 use crate::config::agent_runtime::AgentRuntimeConfig;
 use crate::config::env_utils::EnvOverridable;
 use crate::config::trace::TraceConfig;
+use crate::config::treasurer::TreasurerConfig;
 #[cfg(feature = "s3-storage")]
 use crate::infrastructure::adapters::file_storage::minio::MinioConfig;
 use config::{Config, ConfigError, Environment, File, FileFormat};
@@ -76,6 +77,12 @@ pub struct Settings {
     /// resolves to [`WebServerConfig::default()`].
     #[serde(default)]
     pub web_server: WebServerConfig,
+    /// Operator-configured per-model price table (PRICE-01, D-07). Every field defaults to
+    /// inert (empty table, `"USD"`), so an absent `treasurer:` key resolves to
+    /// [`TreasurerConfig::default()`] and boots with identical behavior to a config file with
+    /// no `treasurer:` section.
+    #[serde(default)]
+    pub treasurer: TreasurerConfig,
 }
 
 impl Settings {
@@ -95,13 +102,15 @@ impl Settings {
 
     /// Validates this configuration's own cross-cutting invariants.
     ///
-    /// Validates [`AgentRuntimeConfig`], [`TraceConfig`] and
-    /// [`WebServerConfig`] (X-09); other domain configs perform their own
-    /// validation through their individual `get_*_config()` accessors.
+    /// Validates [`AgentRuntimeConfig`], [`TraceConfig`], [`WebServerConfig`] (X-09) and
+    /// [`TreasurerConfig`] (PRICE-01, applying `APP_TREASURER_CURRENCY` first so an invalid
+    /// env override is caught here too); other domain configs perform their own validation
+    /// through their individual `get_*_config()` accessors.
     pub fn validate(&self) -> Result<(), String> {
         self.agent_runtime.validate()?;
         self.trace.validate()?;
         self.web_server.validate()?;
+        self.get_treasurer_config().validate()?;
         Ok(())
     }
 
@@ -230,6 +239,13 @@ impl Settings {
     /// Get herald configuration with environment variable overrides.
     pub fn get_herald_config(&self) -> HeraldConfig {
         let mut cfg = self.herald.clone().unwrap_or_default();
+        cfg.apply_env_overrides();
+        cfg
+    }
+
+    /// Get treasurer (pricing) configuration with environment variable overrides.
+    pub fn get_treasurer_config(&self) -> TreasurerConfig {
+        let mut cfg = self.treasurer.clone();
         cfg.apply_env_overrides();
         cfg
     }
@@ -386,6 +402,7 @@ impl Default for Settings {
             agent_runtime: AgentRuntimeConfig::default(),
             trace: TraceConfig::default(),
             web_server: WebServerConfig::default(),
+            treasurer: TreasurerConfig::default(),
         }
     }
 }

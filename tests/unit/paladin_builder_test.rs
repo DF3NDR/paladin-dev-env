@@ -24,9 +24,11 @@ impl LlmPort for MockLlmPort {
             content: "Mock response".to_string(),
             finish_reason: FinishReason::Stop,
             usage: TokenUsage::new(10, 20),
+            cost: None,
             created_at: chrono::Utc::now(),
             metadata: std::collections::HashMap::new(),
             function_call: None,
+            reasoning: None,
         })
     }
 
@@ -70,10 +72,10 @@ async fn test_paladin_builder_creates_valid_paladin() {
 
     assert!(result.is_ok(), "Builder should create valid Paladin");
     let paladin = result.unwrap();
-    assert_eq!(paladin.node.system_prompt, "You are a helpful assistant");
-    assert_eq!(paladin.node.name, "TestPaladin");
-    assert_eq!(paladin.node.model, "gpt-4");
-    assert_eq!(paladin.node.status, PaladinStatus::Idle);
+    assert_eq!(paladin.data.system_prompt, "You are a helpful assistant");
+    assert_eq!(paladin.data.name, "TestPaladin");
+    assert_eq!(paladin.data.model, "gpt-4");
+    assert_eq!(paladin.data.status, PaladinStatus::Idle);
 }
 
 #[tokio::test]
@@ -226,12 +228,12 @@ async fn test_paladin_builder_sets_defaults() {
         .expect("Builder should succeed with minimal required fields");
 
     // Check PaladinData defaults from Default trait
-    assert_eq!(paladin.node.temperature, 0.7);
-    assert_eq!(paladin.node.max_loops, MaxLoops::Fixed(3)); // Default is 3, not 1
-    assert_eq!(paladin.node.status, PaladinStatus::Idle);
-    assert!(!paladin.node.name.is_empty(), "Should have default name");
+    assert_eq!(paladin.data.temperature, 0.7);
+    assert_eq!(paladin.data.max_loops, MaxLoops::Fixed(3)); // Default is 3, not 1
+    assert_eq!(paladin.data.status, PaladinStatus::Idle);
+    assert!(!paladin.data.name.is_empty(), "Should have default name");
     assert!(
-        !paladin.node.user_name.is_empty(),
+        !paladin.data.user_name.is_empty(),
         "Should have default user_name"
     );
 }
@@ -260,15 +262,15 @@ async fn test_paladin_builder_method_chaining() {
     assert!(result.is_ok(), "Builder should support method chaining");
     let paladin = result.unwrap();
 
-    assert_eq!(paladin.node.system_prompt, "You are a coding assistant");
-    assert_eq!(paladin.node.name, "CodePaladin");
-    assert_eq!(paladin.node.user_name, "Developer");
-    assert_eq!(paladin.node.model, "gpt-4-turbo");
-    assert_eq!(paladin.node.temperature, 0.8);
-    assert_eq!(paladin.node.max_loops, MaxLoops::Fixed(5));
-    assert_eq!(paladin.node.stop_words.len(), 2);
-    assert!(paladin.node.stop_words.contains(&"STOP".to_string()));
-    assert!(paladin.node.stop_words.contains(&"END".to_string()));
+    assert_eq!(paladin.data.system_prompt, "You are a coding assistant");
+    assert_eq!(paladin.data.name, "CodePaladin");
+    assert_eq!(paladin.data.user_name, "Developer");
+    assert_eq!(paladin.data.model, "gpt-4-turbo");
+    assert_eq!(paladin.data.temperature, 0.8);
+    assert_eq!(paladin.data.max_loops, MaxLoops::Fixed(5));
+    assert_eq!(paladin.data.stop_words.len(), 2);
+    assert!(paladin.data.stop_words.contains(&"STOP".to_string()));
+    assert!(paladin.data.stop_words.contains(&"END".to_string()));
 }
 
 #[tokio::test]

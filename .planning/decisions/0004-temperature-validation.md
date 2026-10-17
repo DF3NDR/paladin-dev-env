@@ -6,6 +6,8 @@ Accepted
 
 **Date:** 2026-07-31
 
+**Amended by ADR-0061** (2026-10-15, Phase 50 plan 50-02): parameter support is now modelled per model (`ModelProfile`), an explicit value the model cannot honour is refused by name, and an auto-selected value is omitted with a `warn!` and response metadata instead of refused -- amendment A2 below is superseded on that one point; A1, A3 and A4 stand.
+
 ## Context
 
 Should temperature validation be provider-aware, or a single global clamp? Two REQUIREMENTS.md

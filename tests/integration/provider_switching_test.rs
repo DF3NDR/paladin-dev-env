@@ -69,12 +69,13 @@ async fn test_provider_switch_preserves_request_contract() {
         .create_async()
         .await;
 
-    let deepseek_config = DeepSeekConfig {
-        api_key: "test-key".to_string(),
-        base_url: server.url(),
-        model: "deepseek-chat".to_string(),
-        timeout_seconds: 5,
-    };
+    // `DeepSeekConfig` is `#[non_exhaustive]`: build it with `new` and set what differs.
+    let mut deepseek_config = DeepSeekConfig::new(
+        "test-key".to_string(),
+        server.url(),
+        "deepseek-chat".to_string(),
+    );
+    deepseek_config.timeout_seconds = 5;
     let provider_b: Arc<dyn LlmPort> =
         Arc::new(DeepSeekAdapter::new(deepseek_config).expect("valid DeepSeek config"));
 

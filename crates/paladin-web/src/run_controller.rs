@@ -35,32 +35,63 @@
 //! `RunSubmissionService`, which is the only layer that ever resolves
 //! `allowed_roles` -- `paladin-web` has no visibility into them,
 //! ADR-0031). Every read (`GET /runs`, `GET /runs/{run_id}`, `GET
-//! /runs/{run_id}/webhook-deliveries`) needs authentication only.
+//! /runs/{run_id}/stream`, `GET /runs/{run_id}/webhook-deliveries`) needs
+//! authentication and is tenant-scoped as described next; no read carries
+//! a role gate of its own.
 //!
-//! ## Read scope (WR-03) -- deployment-wide, not per-caller
+//! ## Read scope (PLAT-07) -- per tenant, with an operator bypass
 //!
-//! The three read routes above require only authentication:
-//! [`paladin_ports::output::run_repository_port::RunQuery`] carries no
-//! caller identity, and neither
-//! [`paladin_ports::output::run_repository_port::RunRepositoryPort::list`]/`get`
-//! nor
-//! [`paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort::list_for_run`]
-//! applies a requester-derived filter. **Any authenticated principal of any
-//! role can list and read every run in the deployment**, including the
-//! webhook target URL on `RunResponse::webhook` (secret redacted, URL
-//! not), the thread and assistant ids, and the error text of runs it did
-//! not submit. `run_id` is a time-ordered UUIDv7 (`RunId::new_v7`), so
-//! enumerating the id space by walking `GET /runs` -- or by guessing
-//! adjacent, time-clustered ids -- is materially easier than for a random
-//! identifier.
+//! Every run carries the principal that submitted it
+//! (`Run.submitted_by`: the tenant and the API key's configured name,
+//! recorded server-side from the key's configured mapping -- never from a
+//! header, query parameter or body field, D-02). The visibility rule is
+//! the tenant, with an Admin bypass (D-11):
 //!
-//! This is the intended model for v0.10: a **single-tenant or
-//! mutually-trusted-principal deployment**, not a multi-tenant one. A
-//! per-tenant read scope (filtering `RunQuery`/`get`/`list_for_run` by
-//! requester identity) is the remediation, and is tracked as an open item
-//! in the project's broken-windows ledger (`.planning/WINDOWS.md`, row 32)
-//! rather than left as an implicit assumption.
+//! - a **user-role principal** sees only runs whose recorded
+//!   `submitted_by.tenant_id` equals its own `tenant_id` -- never a run of
+//!   another tenant, and never a run with no recorded principal;
+//! - an **admin-role principal** -- including the open-access principal
+//!   attached when authentication is disabled -- sees every run, including
+//!   runs with no recorded principal (schedule-fired, same-process, or
+//!   submitted before v0.11, D-10).
+//!
+//! The rule is written once, as
+//! [`RunReadScope`](paladin_core::platform::container::principal::RunReadScope)
+//! in `paladin-core`, derived from the caller by
+//! [`Principal::read_scope`](crate::agent_auth::Principal::read_scope), and
+//! applied by exactly two mechanisms (D-12):
+//!
+//! 1. **List** -- `GET /runs` passes it as
+//!    [`RunQuery::scope`](paladin_ports::output::run_repository_port::RunQuery)
+//!    and each repository adapter applies it inside its own query, so the
+//!    page and cursor stay a correct keyset walk rather than a post-filtered
+//!    page. The `thread_id`/`assistant_id`/`status` filters compose with it
+//!    (AND): another tenant's thread simply yields an empty page (D-14).
+//! 2. **Single run** -- every `/runs/{run_id}*` route (`GET /runs/{run_id}`,
+//!    `GET /runs/{run_id}/stream` before the SSE upgrade, `POST
+//!    /runs/{run_id}/cancel` before `RunSubmissionPort::cancel` and its
+//!    `allowed_roles` check, `GET /runs/{run_id}/webhook-deliveries` before
+//!    `list_for_run`) enters through the private `load_visible_run` helper,
+//!    which fetches the run and checks `permits`. A run the caller may not
+//!    see answers the **same `404` as a missing run** -- no `403`, no
+//!    different code or message -- so a foreign tenant cannot learn that a
+//!    run exists (D-12, D-13). A route-enumerating test
+//!    (`every_run_id_route_hides_foreign_runs_behind_the_missing_run_404`)
+//!    reads the `/runs/{run_id}*` operations from this router's own OpenAPI
+//!    document and fails if any of them is not in its table, so a future
+//!    route cannot skip the gate unnoticed.
+//!
+//! `RunResponse::submitted_by` exposes the recorded tenant and API key name
+//! (never the key value, never the role; `null` when no principal was
+//! recorded, D-19).
+//!
+//! The thread routes (`/threads/{id}/state|history|resume|fork`, `DELETE
+//! /threads/{id}`) are **not** tenant-scoped -- threads carry no tenant --
+//! and remain deployment-wide; that gap is tracked separately in the
+//! project's broken-windows ledger (`.planning/WINDOWS.md`), not implied
+//! closed by the run scope described here.
 
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -75,14 +106,21 @@ use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 
+use paladin_core::platform::container::allowance::HaltReason;
+use paladin_core::platform::container::cost::Cost;
+use paladin_core::platform::container::principal::{PrincipalRef, RunAttribution};
 use paladin_core::platform::container::run::{
     Run, RunCursor, RunEventKind, RunId, RunStatus, WebhookSpec,
+};
+use paladin_core::platform::container::treasury_ledger::{
+    SpendGroupBy, SpendQuery, SpendRow, format_cost,
 };
 use paladin_core::platform::container::waypoint::ThreadId;
 use paladin_core::platform::container::webhook::{WebhookDeliveryId, WebhookDeliveryStatus};
 use paladin_ports::input::run_event_stream_port::{RunEventStreamPort, RunStreamError};
 use paladin_ports::input::run_submission_port::{RunSubmissionError, RunSubmissionPort, SubmitRun};
 use paladin_ports::output::run_repository_port::{RunPage, RunQuery, RunRepositoryPort};
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
 use paladin_ports::output::webhook_delivery_port::WebhookDeliveryRepositoryPort;
 
 use utoipa_axum::router::OpenApiRouter;
@@ -150,6 +188,12 @@ pub struct RunApiState {
     /// /runs/{run_id}/webhook-deliveries`, D-40, PLAT-FR-14). `None` when
     /// unwired.
     pub webhook_deliveries: Option<Arc<dyn WebhookDeliveryRepositoryPort>>,
+    /// Reads settled spend for this deployment's runs (D-10, LEDGR-04) --
+    /// `RunResponse::cost`/`RunListResponse` items are derived from this
+    /// port's `spend` at read time, never persisted on the run row. `None`
+    /// when no ledger backend is configured, in which case `cost` is always
+    /// `null` and no ledger call is ever made.
+    pub treasury_ledger: Option<Arc<dyn TreasuryLedgerPort>>,
 }
 
 impl RunApiState {
@@ -166,6 +210,7 @@ impl RunApiState {
             expose_code_registry: true,
             schedules: None,
             webhook_deliveries: None,
+            treasury_ledger: None,
         }
     }
 
@@ -238,6 +283,14 @@ impl RunApiState {
         self.auth = auth;
         self
     }
+
+    /// Wire a [`TreasuryLedgerPort`], enabling ledger-derived `cost` on `GET
+    /// /runs/{run_id}` and `GET /runs` (D-10). Without this, `cost` is
+    /// always `null` and no ledger call is ever made.
+    pub fn with_treasury_ledger(mut self, treasury_ledger: Arc<dyn TreasuryLedgerPort>) -> Self {
+        self.treasury_ledger = Some(treasury_ledger);
+        self
+    }
 }
 
 impl Default for RunApiState {
@@ -291,6 +344,55 @@ pub struct SubmitRunResponse {
     pub state_url: String,
 }
 
+/// Wire projection of a [`Cost`] (D-10): the raw, authoritative nano-unit amount plus
+/// the same four-decimal-plus-currency rendering the herald and `paladin-cli treasury
+/// spend` print ([`format_cost`], D-00c/D-04) -- `display` is derived, never a second
+/// source of truth.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub struct CostDto {
+    /// The exact nano-unit amount. Authoritative; `display` is derived from it.
+    pub nanos: i64,
+    /// ISO 4217 currency code.
+    pub currency: String,
+    /// Four-decimal-plus-currency rendering (e.g. `"0.0450 USD"`), byte-identical to
+    /// the herald and CLI output for the same amount.
+    pub display: String,
+}
+
+impl From<&Cost> for CostDto {
+    fn from(cost: &Cost) -> Self {
+        Self {
+            nanos: cost.nanos(),
+            currency: cost.currency().as_str().to_string(),
+            display: format_cost(cost),
+        }
+    }
+}
+
+/// Wire projection of a [`RunAttribution`] (D-19, TENANT-02): the principal recorded
+/// when the run was submitted.
+///
+/// `api_key_id` is the API key's configured name (the same string that appears in logs as
+/// the principal id) -- never the key value the caller authenticated with, and never the
+/// role: roles are config, not data, and are not persisted on the run row (D-08).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+pub struct RunAttributionDto {
+    /// The tenant the run is attributed to -- the tenant configured for the submitting
+    /// API key, never a value the caller supplied (D-02).
+    pub tenant_id: String,
+    /// The submitting API key's configured name (or a bearer principal's id).
+    pub api_key_id: String,
+}
+
+impl From<&RunAttribution> for RunAttributionDto {
+    fn from(attribution: &RunAttribution) -> Self {
+        Self {
+            tenant_id: attribution.tenant_id.as_str().to_string(),
+            api_key_id: attribution.api_key_id.clone(),
+        }
+    }
+}
+
 /// Response body for `GET /runs/{run_id}`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct RunResponse {
@@ -320,6 +422,31 @@ pub struct RunResponse {
     /// How many responses are currently parked on this run awaiting worker
     /// consumption -- the COUNT only, never the response values themselves.
     pub pending_responses: usize,
+    /// This run's cost, derived from the ledger's settlements for `run_id` at read
+    /// time (D-10) -- `null` when no ledger backend is configured, the run has no
+    /// settled spend, or its settlements span more than one currency. Never
+    /// persisted on the run row; a ledger read failure degrades this to `null`
+    /// rather than failing the read (D-08).
+    pub cost: Option<CostDto>,
+    /// The principal recorded when this run was submitted (D-19): the tenant and the API
+    /// key's configured name, never the key value or the role. `null` for a run with no
+    /// recorded principal -- schedule-fired, submitted from the same process, or
+    /// submitted before v0.11 (D-10). Always serialised, mirroring `cost`.
+    pub submitted_by: Option<RunAttributionDto>,
+    /// The final Waypoint id this run reached, if any -- for a `halted` run the Halted Waypoint,
+    /// i.e. the fork point to resume from (`POST /threads/{thread_id}/fork` with
+    /// `from_waypoint_id`). Always serialised: `null` while the run has recorded no Waypoint.
+    pub final_waypoint_id: Option<String>,
+    /// Why this run halted, when it halted on spend (ALLOW-03, Phase 42 D-06): a JSON object
+    /// tagged by `reason` -- `"allowance_exhausted"` with the halted ceiling's own `scope`,
+    /// `kind`, `balance`, `ceiling`, `window_start` and `window_end` (identical to the `details`
+    /// of the Phase 41 `429 allowance_exhausted`), or `"ledger_unavailable"` with no other key
+    /// when the ledger could not be read and the run halted fail-closed. `null` for every run
+    /// that did not halt on spend. A halt is a resume point, not a failure: `error` stays
+    /// `null` beside it. Built only by `HaltReason::wire_json`; never carries another scope's
+    /// figures, a tenant id or an API key name or value. Always serialised, mirroring `cost`.
+    #[schema(value_type = Option<Object>)]
+    pub halt_reason: Option<serde_json::Value>,
 }
 
 impl From<&Run> for RunResponse {
@@ -336,6 +463,10 @@ impl From<&Run> for RunResponse {
             error: run.error.clone(),
             webhook: run.webhook.as_ref().map(RunWebhookDto::from),
             pending_responses: run.pending_responses.len(),
+            cost: None,
+            submitted_by: run.submitted_by.as_ref().map(RunAttributionDto::from),
+            final_waypoint_id: run.final_waypoint_id.clone(),
+            halt_reason: run.halt_reason.as_ref().map(HaltReason::wire_json),
         }
     }
 }
@@ -384,14 +515,7 @@ impl From<&WebhookSpec> for RunWebhookDto {
 }
 
 fn event_kind_label(kind: RunEventKind) -> String {
-    match kind {
-        RunEventKind::AwaitingInput => "awaiting_input",
-        RunEventKind::Completed => "completed",
-        RunEventKind::Failed => "failed",
-        RunEventKind::Halted => "halted",
-        RunEventKind::Cancelled => "cancelled",
-    }
-    .to_string()
+    kind.as_str().to_string()
 }
 
 fn parse_event_kind(raw: &str) -> Result<RunEventKind, ApiError> {
@@ -550,6 +674,22 @@ fn parse_run_status(raw: &str) -> Result<RunStatus, ApiError> {
 
 // --- Error mapping -----------------------------------------------------
 
+/// The one fixed client-facing message every repository/backend failure on the run
+/// routes renders (WR-03/WR-04). The detail -- which can carry connection strings,
+/// schema names, or (for a half-attributed or corrupt row) another tenant's data
+/// shape -- goes to the server log only.
+const RUN_STORE_ERROR_MESSAGE: &str = "run store error";
+
+/// Log a repository/backend failure server-side and return the generic `500`.
+///
+/// Every repository error on the run routes goes through this helper so raw
+/// backend text (connection detail, `Serialization`/attribution/tenant-validation
+/// messages) is never echoed to an API client.
+fn internal_repo_error(context: &str, err: impl std::fmt::Display) -> ApiError {
+    log::error!("run API {context} failed: {err}");
+    ApiError::internal(RUN_STORE_ERROR_MESSAGE)
+}
+
 /// Map a [`RunSubmissionError`] onto the [`ApiError`] status/code this
 /// route uses. `#[non_exhaustive]`, so a future variant renders `500
 /// internal` rather than failing to compile. `pub(crate)` so
@@ -594,9 +734,16 @@ pub(crate) fn map_submission_error(err: RunSubmissionError) -> ApiError {
         } => ApiError::not_found(format!(
             "unknown waypoint '{waypoint_id}' on thread '{thread_id}'"
         )),
-        RunSubmissionError::Backend { message } => ApiError::internal(message),
+        RunSubmissionError::Backend { message } => internal_repo_error("run submission", message),
         RunSubmissionError::NotWired => ApiError::not_implemented(SUBMISSION_PORT_HINT),
-        other => ApiError::internal(other.to_string()),
+        // Phase 41 D-12: an exhausted allowance is a 429 with its own code, never the per-IP
+        // limiter's. Explicit arm so the trailing catch-all never turns it into a 500.
+        RunSubmissionError::AllowanceExhausted(refusal) => ApiError::allowance_exhausted(&refusal),
+        // Phase 42 D-10: an agent-kind assistant whose model has no `treasurer.pricing` row,
+        // submitted by a principal with a ceiling, is a `422 model_unpriced` -- a configuration
+        // incoherence with no `Retry-After`, never the pacing-shaped 429 and never a 500.
+        RunSubmissionError::ModelUnpriced { model } => ApiError::model_unpriced(&model),
+        other => internal_repo_error("run submission", other),
     }
 }
 
@@ -610,6 +757,12 @@ pub(crate) fn map_submission_error(err: RunSubmissionError) -> ApiError {
 /// - `404 Not Found` for an unknown assistant or version;
 /// - `409 Conflict` (`code = "thread_busy"`) if the target thread already
 ///   has an active run;
+/// - `422 Unprocessable Entity` (`code = "model_unpriced"`) if the assistant is
+///   agent-kind and the caller has an allowance ceiling but the agent's model
+///   has no `treasurer.pricing` row;
+/// - `429 Too Many Requests` (`code = "allowance_exhausted"`) if the caller's
+///   allowance is spent, or too small to buy a single token of an agent-kind
+///   assistant's model;
 /// - `501 Not Implemented` if no run submission backend is configured.
 #[utoipa::path(
     post,
@@ -623,6 +776,9 @@ pub(crate) fn map_submission_error(err: RunSubmissionError) -> ApiError {
         (status = 403, description = "Role not permitted for this assistant (allowed_roles, D-46)", body = ApiErrorBody),
         (status = 404, description = "Unknown assistant or version", body = ApiErrorBody),
         (status = 409, description = "Thread busy -- the remedy is POST /threads/{id}/resume", body = ApiErrorBody),
+        (status = 422, description = "model_unpriced: the assistant is agent-kind, the caller has an allowance ceiling and the agent's model has no treasurer.pricing row, so its spend cannot be metered; no Retry-After, nothing runs", body = ApiErrorBody),
+        (status = 429, description = "Allowance exhausted (code allowance_exhausted): the caller's tenant or API-key allowance is spent; Retry-After carries the seconds until the window resets and is omitted for a lifetime cap", body = ApiErrorBody),
+        (status = 500, description = "The allowance check itself failed; the request is refused and nothing runs (fail closed)", body = ApiErrorBody),
         (status = 501, description = "No run submission backend configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
@@ -646,7 +802,8 @@ pub async fn submit_run(
         thread_id,
         input: body.input,
         webhook,
-        requested_by: Some((principal.id.clone(), principal.role)),
+        requested_by: Some(PrincipalRef::from(&principal)),
+        attributed_to: None,
     };
 
     let accepted = submission
@@ -667,15 +824,101 @@ pub async fn submit_run(
     ))
 }
 
+/// Derive ledger-backed [`CostDto`]s for a batch of run ids in exactly ONE
+/// [`TreasuryLedgerPort::spend`] call (D-10, T-39-17) -- `get_run` calls this
+/// with one id, `list_runs` with the whole page's ids.
+///
+/// Returns an empty map (never an error) when `ledger` is `None`, `run_ids`
+/// is empty, or the `spend` call itself fails -- a ledger problem degrades
+/// the caller's `cost` field to `null`, it never fails the run read (D-08).
+/// A run whose settlements span more than one currency is also omitted
+/// (T-39-11): `spend` never combines two currencies into one row, and this
+/// helper refuses to guess which one to surface, so such a run's entry is
+/// simply absent from the returned map.
+async fn run_costs(
+    ledger: Option<&Arc<dyn TreasuryLedgerPort>>,
+    run_ids: Vec<RunId>,
+) -> HashMap<String, CostDto> {
+    let Some(ledger) = ledger else {
+        return HashMap::new();
+    };
+    if run_ids.is_empty() {
+        return HashMap::new();
+    }
+    let run_count = run_ids.len();
+
+    let rows = match ledger
+        .spend(SpendQuery {
+            group_by: SpendGroupBy::Run,
+            run_ids,
+            ..Default::default()
+        })
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            log::warn!(
+                "treasury ledger spend query failed for {run_count} run(s), \
+                 degrading cost to null: {error}"
+            );
+            return HashMap::new();
+        }
+    };
+
+    let mut by_run: HashMap<String, Vec<SpendRow>> = HashMap::new();
+    for row in rows {
+        by_run.entry(row.group.clone()).or_default().push(row);
+    }
+
+    by_run
+        .into_iter()
+        .filter_map(|(run_id, rows)| match rows.as_slice() {
+            [only] => Some((run_id, CostDto::from(&only.amount))),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Fetch a run and check the caller's
+/// [`RunReadScope`](paladin_core::platform::container::principal::RunReadScope) before
+/// returning it -- the single-run
+/// half of the one shared run-read authorization function (D-12, D-13).
+///
+/// A hidden (out-of-scope) run and a genuinely missing run answer with the EXACT SAME
+/// [`ApiError::not_found`] (no `403`, no timing/shape difference, PLAT-07): a foreign
+/// tenant's run must be indistinguishable from a run that does not exist.
+///
+/// Every `/runs/{run_id}*` route enters through this helper.
+async fn load_visible_run(
+    repository: &Arc<dyn RunRepositoryPort>,
+    principal: &Principal,
+    run_id: &RunId,
+) -> Result<Run, ApiError> {
+    let run = repository
+        .get(run_id)
+        .await
+        .map_err(|e| internal_repo_error("run lookup", e))?
+        .ok_or_else(|| ApiError::not_found(format!("unknown run '{run_id}'")))?;
+
+    if !principal.read_scope().permits(&run) {
+        return Err(ApiError::not_found(format!("unknown run '{run_id}'")));
+    }
+
+    Ok(run)
+}
+
 /// `GET /runs/{run_id}` -- the run's current status.
 ///
 /// Reads [`RunRepositoryPort`] directly (no submission port, no engine and
-/// no queue type named here -- ADR-0031, D-12).
+/// no queue type named here -- ADR-0031, D-12), through `load_visible_run`:
+/// a user-role principal sees only its own tenant's runs, an admin-role
+/// principal sees every run (D-11), and a run the caller may not see answers
+/// the same `404` as a missing run (D-12, PLAT-07).
 ///
 /// Returns:
 /// - `200 OK` with [`RunResponse`] on success;
 /// - `400 Bad Request` for a malformed run id;
-/// - `404 Not Found` if no run exists with that id;
+/// - `404 Not Found` for an unknown run, or a run the caller may not see;
 /// - `501 Not Implemented` if no run store is configured.
 #[utoipa::path(
     get,
@@ -683,17 +926,17 @@ pub async fn submit_run(
     tag = "runs",
     params(("run_id" = String, Path, description = "Run id")),
     responses(
-        (status = 200, description = "Run state", body = RunResponse),
+        (status = 200, description = "Run state. Tenant-scoped: a user-role principal can read only runs recorded under its own tenant; an admin-role principal can read every run. `submitted_by` is the recording tenant and API key name, or null for a run with no recorded principal.", body = RunResponse),
         (status = 400, description = "Invalid run id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
-        (status = 404, description = "Unknown run", body = ApiErrorBody),
+        (status = 404, description = "Unknown run, or a run the caller may not see", body = ApiErrorBody),
         (status = 501, description = "No run store backend configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
 pub async fn get_run(
     State(state): State<RunApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     Path(run_id): Path<String>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
     let repository = state
@@ -702,17 +945,24 @@ pub async fn get_run(
         .ok_or_else(|| ApiError::not_implemented(REPOSITORY_PORT_HINT))?;
     let id = parse_run_id(&run_id)?;
 
-    let run = repository
-        .get(&id)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found(format!("unknown run '{run_id}'")))?;
+    let run = load_visible_run(repository, &principal, &id).await?;
 
-    Ok((StatusCode::OK, ok_body(&RunResponse::from(&run))))
+    let mut response = RunResponse::from(&run);
+    let mut costs = run_costs(state.treasury_ledger.as_ref(), vec![id]).await;
+    response.cost = costs.remove(&response.run_id);
+
+    Ok((StatusCode::OK, ok_body(&response)))
 }
 
 /// `GET /runs` -- paginated list, filterable by `thread_id`/`assistant_id`/
-/// `status` (D-47). Authenticated, any role.
+/// `status` (D-47). Authenticated, any role, and tenant-scoped (D-11,
+/// PLAT-07): a user-role principal lists only runs recorded under its own
+/// tenant, an admin-role principal lists every run including runs with no
+/// recorded principal. The scope is derived from the authenticated principal
+/// alone and applied inside the repository's own query as `RunQuery.scope`
+/// (D-12); a `tenant_id` query parameter is unknown and ignored (D-02). The
+/// filters compose with the scope (AND) -- another tenant's `thread_id`
+/// yields an empty page (D-14).
 ///
 /// Ordered `(submitted_at DESC, run_id DESC)`; a cursor walk gives a stable
 /// ordering for rows that already existed when the first page was fetched,
@@ -737,7 +987,7 @@ pub async fn get_run(
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor from a previous page's next_cursor -- a keyset walk, not a snapshot: rows inserted after the first page was fetched may be omitted"),
     ),
     responses(
-        (status = 200, description = "A page of runs; { items: [], next_cursor: null } when empty", body = RunListResponse),
+        (status = 200, description = "A page of runs; { items: [], next_cursor: null } when empty. Tenant-scoped: a user-role principal sees only runs recorded under its own tenant, an admin-role principal sees every run. The scope comes from the authenticated principal only -- an unknown `tenant_id` query parameter is ignored.", body = RunListResponse),
         (status = 400, description = "Invalid limit, cursor, thread_id, or status", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 501, description = "No run store backend configured", body = ApiErrorBody),
@@ -746,7 +996,7 @@ pub async fn get_run(
 )]
 pub async fn list_runs(
     State(state): State<RunApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     axum::extract::Query(params): axum::extract::Query<RunListQuery>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
     let repository = state
@@ -774,11 +1024,20 @@ pub async fn list_runs(
             status,
             limit,
             cursor,
+            // D-12 (list half): the scope comes from the authenticated principal
+            // only -- never from a query parameter -- and is applied inside the
+            // adapter's own query, not as a post-filter.
+            scope: principal.read_scope(),
         })
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| internal_repo_error("run list", e))?;
 
-    let items: Vec<RunResponse> = page.items.iter().map(RunResponse::from).collect();
+    let mut items: Vec<RunResponse> = page.items.iter().map(RunResponse::from).collect();
+    let page_run_ids: Vec<RunId> = page.items.iter().map(|run| run.run_id.clone()).collect();
+    let costs = run_costs(state.treasury_ledger.as_ref(), page_run_ids).await;
+    for item in &mut items {
+        item.cost = costs.get(&item.run_id).cloned();
+    }
     let next_cursor = page.next_cursor.as_ref().map(encode_cursor);
     Ok((
         StatusCode::OK,
@@ -789,19 +1048,24 @@ pub async fn list_runs(
 /// `POST /runs/{run_id}/cancel` -- idempotently request cancellation
 /// (D-16, D-46).
 ///
-/// Invocation-shaped: any authenticated principal, subject to the run's
-/// own assistant `allowed_roles`, checked inside
-/// [`RunSubmissionPort::cancel`] (`paladin-web` has no visibility into
-/// `allowed_roles` itself, ADR-0031).
+/// Visibility first (Phase 40 D-13, PLAT-07): the run is loaded through
+/// `load_visible_run`, so a run of another tenant answers the missing-run
+/// `404` before any role check -- cancel neither leaks the run's existence
+/// nor permits a cross-tenant mutation, and [`RunSubmissionPort::cancel`] is
+/// never reached for it. Then invocation-shaped: any authenticated principal
+/// that may see the run, subject to the run's own assistant `allowed_roles`,
+/// checked inside [`RunSubmissionPort::cancel`] (`paladin-web` has no
+/// visibility into `allowed_roles` itself, ADR-0031).
 ///
 /// Returns:
 /// - `202 Accepted` with [`CancelRunResponse`] on a non-terminal run
 ///   (idempotent -- a second call also answers `202`);
 /// - `400 Bad Request` for a malformed run id;
 /// - `403 Forbidden` if the principal's role is not permitted;
-/// - `404 Not Found` for an unknown run;
+/// - `404 Not Found` for an unknown run, or a run the caller may not see;
 /// - `409 Conflict` if the run is already terminal;
-/// - `501 Not Implemented` if no run submission backend is configured.
+/// - `501 Not Implemented` if no run submission backend, or no run store,
+///   is configured.
 #[utoipa::path(
     post,
     path = "/runs/{run_id}/cancel",
@@ -812,9 +1076,9 @@ pub async fn list_runs(
         (status = 400, description = "Invalid run id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
         (status = 403, description = "Role not permitted for this run's assistant", body = ApiErrorBody),
-        (status = 404, description = "Unknown run", body = ApiErrorBody),
+        (status = 404, description = "Unknown run, or a run the caller may not see -- answered before any role check", body = ApiErrorBody),
         (status = 409, description = "The run is already terminal", body = ApiErrorBody),
-        (status = 501, description = "No run submission backend configured", body = ApiErrorBody),
+        (status = 501, description = "No run submission backend configured, or no run store configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
@@ -829,8 +1093,17 @@ pub async fn cancel_run(
         .ok_or_else(|| ApiError::not_implemented(SUBMISSION_PORT_HINT))?;
     let id = parse_run_id(&run_id)?;
 
+    // D-13: visibility first -- a run of another tenant is the missing-run 404 before
+    // `RunSubmissionPort::cancel` (and its `allowed_roles` check) is ever reached, so a
+    // cancel neither leaks existence nor permits a cross-tenant mutation.
+    let repository = state
+        .run_repository
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(REPOSITORY_PORT_HINT))?;
+    load_visible_run(repository, &principal, &id).await?;
+
     let outcome = submission
-        .cancel(&id, Some((principal.id.clone(), principal.role)))
+        .cancel(&id, Some(PrincipalRef::from(&principal)))
         .await
         .map_err(map_submission_error)?;
 
@@ -845,12 +1118,18 @@ pub async fn cancel_run(
 }
 
 /// `GET /runs/{run_id}/webhook-deliveries` -- paginated delivery attempts,
-/// newest-first (D-40, PLAT-FR-14). Authenticated, any role.
+/// newest-first (D-40, PLAT-FR-14). Authenticated, any role, and
+/// tenant-scoped (Phase 40 D-13, PLAT-07): the run is loaded through
+/// `load_visible_run` before `list_for_run` is asked for anything, so
+/// another tenant's webhook target URLs and delivery diagnostics are behind
+/// the same missing-run `404` as a run that does not exist.
 ///
 /// Returns:
 /// - `200 OK` with [`WebhookDeliveryListResponse`] on success;
 /// - `400 Bad Request` for an invalid run id, `limit`, or `cursor`;
-/// - `501 Not Implemented` if no webhook delivery backend is configured.
+/// - `404 Not Found` for an unknown run, or a run the caller may not see;
+/// - `501 Not Implemented` if no webhook delivery backend, or no run store,
+///   is configured.
 #[utoipa::path(
     get,
     path = "/runs/{run_id}/webhook-deliveries",
@@ -864,13 +1143,14 @@ pub async fn cancel_run(
         (status = 200, description = "A page of delivery attempts, newest-first; { items: [], next_cursor: null } when empty", body = WebhookDeliveryListResponse),
         (status = 400, description = "Invalid run id, limit, or cursor", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
-        (status = 501, description = "No webhook delivery backend configured", body = ApiErrorBody),
+        (status = 404, description = "Unknown run, or a run the caller may not see", body = ApiErrorBody),
+        (status = 501, description = "No webhook delivery backend configured, or no run store configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
 pub async fn list_webhook_deliveries(
     State(state): State<RunApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     Path(run_id): Path<String>,
     axum::extract::Query(params): axum::extract::Query<PageQuery>,
 ) -> Result<(StatusCode, JsonValue), ApiError> {
@@ -886,10 +1166,17 @@ pub async fn list_webhook_deliveries(
         .map(decode_cursor::<WebhookDeliveryId>)
         .transpose()?;
 
+    // D-13: the run is checked first; `list_for_run` itself is untouched.
+    let repository = state
+        .run_repository
+        .as_ref()
+        .ok_or_else(|| ApiError::not_implemented(REPOSITORY_PORT_HINT))?;
+    load_visible_run(repository, &principal, &id).await?;
+
     let page = deliveries
         .list_for_run(&id, limit, cursor)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+        .map_err(|e| internal_repo_error("webhook delivery list", e))?;
 
     let items: Vec<WebhookDeliveryDto> = page.items.iter().map(WebhookDeliveryDto::from).collect();
     let next_cursor = page.next_cursor.as_ref().map(encode_cursor);
@@ -922,12 +1209,17 @@ fn frame_run_events(
 /// `GET /runs/{run_id}/stream` -- Server-Sent Events stream of a run's
 /// progress (PLAT-FR-07, D-24..D-27).
 ///
+/// Tenant-scoped (Phase 40 D-13, PLAT-07): the run is loaded through
+/// `load_visible_run` before any SSE upgrade, so another tenant's run
+/// answers the missing-run `404` and the stream port is never asked for it.
+///
 /// Returns:
 /// - `200 OK` `text/event-stream` on success, framing the seven wire events
 ///   this module's own docs table lists;
 /// - `400 Bad Request` for a malformed run id;
-/// - `404 Not Found` if no run exists with that id;
-/// - `501 Not Implemented` if no run event stream backend is configured.
+/// - `404 Not Found` for an unknown run, or a run the caller may not see;
+/// - `501 Not Implemented` if no run event stream backend, or no run store,
+///   is configured.
 #[utoipa::path(
     get,
     path = "/runs/{run_id}/stream",
@@ -948,14 +1240,14 @@ fn frame_run_events(
             content_type = "text/event-stream"),
         (status = 400, description = "Invalid run id", body = ApiErrorBody),
         (status = 401, description = "Missing/invalid credentials", body = ApiErrorBody),
-        (status = 404, description = "Unknown run", body = ApiErrorBody),
-        (status = 501, description = "No run event stream backend configured", body = ApiErrorBody),
+        (status = 404, description = "Unknown run, or a run the caller may not see", body = ApiErrorBody),
+        (status = 501, description = "No run event stream backend configured, or no run store configured", body = ApiErrorBody),
     ),
     security(("api_key" = []), ("bearer_token" = [])),
 )]
 pub async fn stream_run(
     State(state): State<RunApiState>,
-    Extension(_principal): Extension<Principal>,
+    Extension(principal): Extension<Principal>,
     Path(run_id): Path<String>,
 ) -> Response {
     let Some(run_events) = state.run_events.as_ref() else {
@@ -965,6 +1257,15 @@ pub async fn stream_run(
         Ok(id) => id,
         Err(error) => return error.into_response(),
     };
+
+    // D-13: visibility before any SSE upgrade -- a foreign tenant's run is the missing-run
+    // 404 here, and the stream port is never asked for it.
+    let Some(repository) = state.run_repository.as_ref() else {
+        return ApiError::not_implemented(REPOSITORY_PORT_HINT).into_response();
+    };
+    if let Err(error) = load_visible_run(repository, &principal, &id).await {
+        return error.into_response();
+    }
 
     match run_events.stream(&id).await {
         Ok(stream) => {
@@ -981,8 +1282,10 @@ pub async fn stream_run(
         Err(RunStreamError::NotWired) => {
             ApiError::not_implemented(RUN_EVENTS_PORT_HINT).into_response()
         }
-        Err(RunStreamError::Backend { message }) => ApiError::internal(message).into_response(),
-        Err(other) => ApiError::internal(other.to_string()).into_response(),
+        Err(RunStreamError::Backend { message }) => {
+            internal_repo_error("run event stream", message).into_response()
+        }
+        Err(other) => internal_repo_error("run event stream", other).into_response(),
     }
 }
 
@@ -1034,14 +1337,54 @@ mod tests {
     use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::Request;
+    use paladin_core::platform::container::cost::CurrencyCode;
     use paladin_core::platform::container::parley::ParleyResponse;
+    use paladin_core::platform::container::principal::RunReadScope;
     use paladin_core::platform::container::run::{AssistantRef, RunStatus};
+    use paladin_core::platform::container::treasury_ledger::{
+        ReservationId, ReserveRequest, SettleOutcome, SettleRequest,
+    };
     use paladin_ports::output::run_repository_port::{
         RunOutcomeRecord, RunPage, RunQuery, RunRepositoryError,
     };
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
     use std::collections::HashMap;
     use std::sync::Mutex;
     use tower::ServiceExt; // for `Router::oneshot`
+
+    #[test]
+    fn caller_cannot_subscribe_a_run_webhook_to_allowance_warning() {
+        // `allowance_warning` is an operator-level notice (Phase 41, D-17, C3): the
+        // caller-facing parser must keep rejecting it with a 400.
+        let err = to_run_webhook_spec(RunWebhookRequestDto {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            events: vec!["allowance_warning".to_string()],
+        })
+        .unwrap_err();
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(
+            err.to_body().to_string().contains("allowance_warning"),
+            "the 400 names the unknown kind"
+        );
+    }
+
+    #[test]
+    fn caller_cannot_subscribe_a_run_webhook_to_allowance_halted() {
+        // `allowance_halted` is the operator-level halt notice (Phase 42, D-18): the
+        // caller-facing parser must keep rejecting it with a 400.
+        let err = to_run_webhook_spec(RunWebhookRequestDto {
+            url: "https://example.com/hook".to_string(),
+            secret: None,
+            events: vec!["allowance_halted".to_string()],
+        })
+        .unwrap_err();
+        assert_eq!(err.status(), axum::http::StatusCode::BAD_REQUEST);
+        assert!(
+            err.to_body().to_string().contains("allowance_halted"),
+            "the 400 names the unknown kind"
+        );
+    }
 
     fn sample_run(thread: &str) -> Run {
         Run::new(
@@ -1053,6 +1396,15 @@ mod tests {
             },
             serde_json::json!({}),
         )
+    }
+
+    /// A `MockRepository` holding exactly `run`, so a `/runs/{run_id}*` handler test can
+    /// pass the D-13 `load_visible_run` gate (the test principals are Admin or open-access,
+    /// which see every run) and go on to exercise the route's own port.
+    fn repository_with(run: Run) -> Arc<MockRepository> {
+        let repository = Arc::new(MockRepository::default());
+        repository.seed(run);
+        repository
     }
 
     // --- Mock `RunSubmissionPort` ---------------------------------------
@@ -1108,7 +1460,7 @@ mod tests {
         async fn cancel(
             &self,
             run_id: &RunId,
-            _requested_by: Option<(String, paladin_core::platform::container::user::UserRole)>,
+            _requested_by: Option<PrincipalRef>,
         ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
         {
             match self.outcome {
@@ -1148,14 +1500,47 @@ mod tests {
     #[derive(Default)]
     struct MockRepository {
         runs: Mutex<HashMap<String, Run>>,
+        /// The page `list` returns; test-only -- the real adapters compute a page from
+        /// `RunQuery`, which this double ignores entirely.
+        list_items: Mutex<Vec<Run>>,
+        /// Every `RunQuery` handed to `list`, in call order, so a test can assert on
+        /// what the handler asked the repository for (e.g. the D-12 `scope`).
+        recorded_queries: Mutex<Vec<RunQuery>>,
+        /// When `Some`, `get` and `list` fail with a `Serialization` error carrying
+        /// this text -- proves the handlers never echo raw repository text to the
+        /// client (WR-03/WR-04).
+        fail_reads_with: Mutex<Option<String>>,
     }
 
     impl MockRepository {
+        fn failing_reads(message: &str) -> Self {
+            Self {
+                fail_reads_with: Mutex::new(Some(message.to_string())),
+                ..Self::default()
+            }
+        }
+
+        fn read_failure(&self) -> Option<RunRepositoryError> {
+            self.fail_reads_with
+                .lock()
+                .unwrap()
+                .clone()
+                .map(|message| RunRepositoryError::Serialization { message })
+        }
+
         fn seed(&self, run: Run) {
             self.runs
                 .lock()
                 .unwrap()
                 .insert(run.run_id.as_str().to_string(), run);
+        }
+
+        fn set_list_page(&self, items: Vec<Run>) {
+            *self.list_items.lock().unwrap() = items;
+        }
+
+        fn last_list_query(&self) -> Option<RunQuery> {
+            self.recorded_queries.lock().unwrap().last().cloned()
         }
     }
 
@@ -1167,6 +1552,9 @@ mod tests {
         }
 
         async fn get(&self, run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
+            if let Some(err) = self.read_failure() {
+                return Err(err);
+            }
             Ok(self.runs.lock().unwrap().get(run_id.as_str()).cloned())
         }
 
@@ -1188,9 +1576,13 @@ mod tests {
             Ok(())
         }
 
-        async fn list(&self, _query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+        async fn list(&self, query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+            if let Some(err) = self.read_failure() {
+                return Err(err);
+            }
+            self.recorded_queries.lock().unwrap().push(query);
             Ok(RunPage {
-                items: vec![],
+                items: self.list_items.lock().unwrap().clone(),
                 next_cursor: None,
             })
         }
@@ -1230,6 +1622,252 @@ mod tests {
         async fn clear_pending_responses(&self, _run_id: &RunId) -> Result<(), RunRepositoryError> {
             Ok(())
         }
+    }
+
+    // --- Mock `TreasuryLedgerPort` (D-10) --------------------------------
+    //
+    // `paladin-web` has no dependency on `paladin-storage`'s real adapters (verified by
+    // `grep -c 'paladin-storage' crates/paladin-web/Cargo.toml` printing `0`), so `cost`
+    // is proven entirely against this local double. `spend` returns a canned outcome
+    // and counts/records every call; every other method is never exercised by
+    // `get_run`/`list_runs` and returns an inert `Err` so a stray call would fail loudly.
+
+    /// What `StubTreasuryLedger::spend` answers.
+    enum StubSpendOutcome {
+        Rows(Vec<SpendRow>),
+        Err,
+    }
+
+    struct StubTreasuryLedger {
+        outcome: StubSpendOutcome,
+        calls: Mutex<Vec<SpendQuery>>,
+    }
+
+    impl StubTreasuryLedger {
+        fn rows(rows: Vec<SpendRow>) -> Self {
+            Self {
+                outcome: StubSpendOutcome::Rows(rows),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn erroring() -> Self {
+            Self {
+                outcome: StubSpendOutcome::Err,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    #[async_trait]
+    impl TreasuryLedgerPort for StubTreasuryLedger {
+        async fn reserve(
+            &self,
+            _request: ReserveRequest,
+        ) -> Result<ReservationId, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::InvalidRequest {
+                message: "StubTreasuryLedger does not implement reserve".to_string(),
+            })
+        }
+
+        async fn release(&self, _reservation: ReservationId) -> Result<(), TreasuryLedgerError> {
+            Err(TreasuryLedgerError::InvalidRequest {
+                message: "StubTreasuryLedger does not implement release".to_string(),
+            })
+        }
+
+        async fn settle(
+            &self,
+            _request: SettleRequest,
+        ) -> Result<SettleOutcome, TreasuryLedgerError> {
+            Err(TreasuryLedgerError::InvalidRequest {
+                message: "StubTreasuryLedger does not implement settle".to_string(),
+            })
+        }
+
+        async fn spend(&self, query: SpendQuery) -> Result<Vec<SpendRow>, TreasuryLedgerError> {
+            self.calls.lock().unwrap().push(query);
+            match &self.outcome {
+                StubSpendOutcome::Rows(rows) => Ok(rows.clone()),
+                StubSpendOutcome::Err => Err(TreasuryLedgerError::Backend {
+                    source: "stub ledger backend failure".into(),
+                }),
+            }
+        }
+
+        async fn store_now(&self) -> Result<DateTime<Utc>, TreasuryLedgerError> {
+            Ok(Utc::now())
+        }
+    }
+
+    #[tokio::test]
+    async fn get_run_includes_ledger_cost() {
+        let repository = Arc::new(MockRepository::default());
+        let run = sample_run("t-cost");
+        repository.seed(run.clone());
+        let usd = CurrencyCode::new("USD").unwrap();
+        let ledger = Arc::new(StubTreasuryLedger::rows(vec![SpendRow {
+            group: run.run_id.to_string(),
+            amount: Cost::new(45_000_000, usd),
+            settlements: 2,
+        }]));
+        let state = RunApiState::new()
+            .with_repository(repository)
+            .with_treasury_ledger(ledger);
+
+        let (status, Json(body)) = get_run(
+            State(state),
+            tester_principal(),
+            Path(run.run_id.to_string()),
+        )
+        .await
+        .expect("ok");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["cost"]["nanos"], 45_000_000);
+        assert_eq!(body["cost"]["currency"], "USD");
+        assert_eq!(body["cost"]["display"], "0.0450 USD");
+    }
+
+    #[tokio::test]
+    async fn get_run_cost_is_null_without_a_ledger() {
+        let repository = Arc::new(MockRepository::default());
+        let run = sample_run("t-no-ledger");
+        repository.seed(run.clone());
+        let state = RunApiState::new().with_repository(repository);
+
+        let (status, Json(body)) = get_run(
+            State(state),
+            tester_principal(),
+            Path(run.run_id.to_string()),
+        )
+        .await
+        .expect("ok");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["cost"].is_null());
+        // Every other field is unchanged.
+        assert_eq!(body["run_id"], run.run_id.to_string());
+        assert_eq!(body["status"], run.status.as_str());
+    }
+
+    #[tokio::test]
+    async fn get_run_cost_is_null_when_the_ledger_errors() {
+        let repository = Arc::new(MockRepository::default());
+        let run = sample_run("t-ledger-err");
+        repository.seed(run.clone());
+        let ledger = Arc::new(StubTreasuryLedger::erroring());
+        let state = RunApiState::new()
+            .with_repository(repository)
+            .with_treasury_ledger(ledger);
+
+        let (status, Json(body)) = get_run(
+            State(state),
+            tester_principal(),
+            Path(run.run_id.to_string()),
+        )
+        .await
+        .expect("ok");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["cost"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_run_cost_is_null_for_mixed_currencies() {
+        let repository = Arc::new(MockRepository::default());
+        let run = sample_run("t-mixed");
+        repository.seed(run.clone());
+        let usd = CurrencyCode::new("USD").unwrap();
+        let eur = CurrencyCode::new("EUR").unwrap();
+        let ledger = Arc::new(StubTreasuryLedger::rows(vec![
+            SpendRow {
+                group: run.run_id.to_string(),
+                amount: Cost::new(1_000_000, usd),
+                settlements: 1,
+            },
+            SpendRow {
+                group: run.run_id.to_string(),
+                amount: Cost::new(2_000_000, eur),
+                settlements: 1,
+            },
+        ]));
+        let state = RunApiState::new()
+            .with_repository(repository)
+            .with_treasury_ledger(ledger);
+
+        let (status, Json(body)) = get_run(
+            State(state),
+            tester_principal(),
+            Path(run.run_id.to_string()),
+        )
+        .await
+        .expect("ok");
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["cost"].is_null());
+    }
+
+    #[tokio::test]
+    async fn list_runs_derives_costs_with_one_spend_call_per_page() {
+        let repository = Arc::new(MockRepository::default());
+        let run_a = sample_run("t-list-a");
+        let run_b = sample_run("t-list-b");
+        let run_c = sample_run("t-list-c");
+        repository.set_list_page(vec![run_a.clone(), run_b.clone(), run_c.clone()]);
+        let usd = CurrencyCode::new("USD").unwrap();
+        let ledger = Arc::new(StubTreasuryLedger::rows(vec![SpendRow {
+            group: run_a.run_id.to_string(),
+            amount: Cost::new(10_000_000, usd),
+            settlements: 1,
+        }]));
+        let state = RunApiState::new()
+            .with_repository(repository)
+            .with_treasury_ledger(Arc::clone(&ledger) as Arc<dyn TreasuryLedgerPort>);
+
+        let (status, Json(body)) = list_runs(
+            State(state),
+            tester_principal(),
+            axum::extract::Query(RunListQuery {
+                thread_id: None,
+                assistant_id: None,
+                status: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .expect("ok");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ledger.call_count(), 1, "exactly one spend call per page");
+
+        {
+            let recorded = ledger.calls.lock().unwrap();
+            let query = recorded.first().expect("one spend call was recorded");
+            assert_eq!(query.group_by, SpendGroupBy::Run);
+            let mut expected_ids: Vec<String> = vec![
+                run_a.run_id.to_string(),
+                run_b.run_id.to_string(),
+                run_c.run_id.to_string(),
+            ];
+            expected_ids.sort();
+            let mut actual_ids: Vec<String> =
+                query.run_ids.iter().map(|id| id.to_string()).collect();
+            actual_ids.sort();
+            assert_eq!(actual_ids, expected_ids);
+        }
+
+        let items = body["items"].as_array().unwrap();
+        assert_eq!(items.len(), 3);
+        let find = |id: &str| items.iter().find(|item| item["run_id"] == id).unwrap();
+        assert_eq!(find(&run_a.run_id.to_string())["cost"]["nanos"], 10_000_000);
+        assert!(find(&run_b.run_id.to_string())["cost"].is_null());
+        assert!(find(&run_c.run_id.to_string())["cost"].is_null());
     }
 
     #[tokio::test]
@@ -1406,6 +2044,7 @@ mod tests {
             enabled: true,
             api_keys: HashMap::new(),
             token_verifier: None,
+            bearer_tenant: None,
         };
         let state = RunApiState::new().with_auth(auth);
         let app = run_router(state);
@@ -1474,10 +2113,11 @@ mod tests {
     }
 
     fn tester_principal() -> Extension<Principal> {
-        Extension(Principal {
-            id: "tester".to_string(),
-            role: paladin_core::platform::container::user::UserRole::Admin,
-        })
+        Extension(Principal::new(
+            "tester",
+            paladin_core::platform::container::user::UserRole::Admin,
+            paladin_core::platform::container::principal::TenantId::new("tester-tenant").unwrap(),
+        ))
     }
 
     fn sample_stream_event(
@@ -1525,7 +2165,11 @@ mod tests {
                 serde_json::json!({ "status": "completed", "waypoint_id": "wp-1" }),
             ),
         ];
-        let state = RunApiState::new().with_run_events(Arc::new(MockRunEventStreamPort { events }));
+        let mut run = sample_run("t-stream");
+        run.run_id = run_id.clone();
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_run_events(Arc::new(MockRunEventStreamPort { events }));
 
         let response = stream_run(State(state), tester_principal(), Path(run_id.to_string())).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -1556,6 +2200,19 @@ mod tests {
 
     #[tokio::test]
     async fn run_stream_unknown_run_returns_404() {
+        let run = sample_run("t-stream");
+        let run_id = run.run_id.clone();
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_run_events(Arc::new(AlwaysNotFound));
+        let response = stream_run(State(state), tester_principal(), Path(run_id.to_string())).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// D-13: the stream route needs the run store too -- with it unwired the gate cannot
+    /// run, and the route answers 501 naming the run store rather than opening a stream.
+    #[tokio::test]
+    async fn run_stream_returns_501_naming_the_run_store_when_only_events_are_wired() {
         let state = RunApiState::new().with_run_events(Arc::new(AlwaysNotFound));
         let response = stream_run(
             State(state),
@@ -1563,7 +2220,9 @@ mod tests {
             Path(RunId::new_v7().to_string()),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = read_response_body(response).await;
+        assert!(body.contains("run_store.backend"), "{body}");
     }
 
     /// D-26: the 15s heartbeat interval is asserted directly on the
@@ -1613,6 +2272,96 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["items"].as_array().unwrap().len(), 0);
         assert!(body["next_cursor"].is_null());
+    }
+
+    /// D-12 (list half): `list_runs` derives `RunQuery.scope` from the caller's
+    /// principal -- a `User` in tenant `acme` asks for `Tenant(acme)`, an `Admin`
+    /// asks for `All` -- and never from anything on the request.
+    #[tokio::test]
+    async fn list_runs_passes_the_callers_read_scope() {
+        let repository = Arc::new(MockRepository::default());
+        let state = RunApiState::new().with_repository(repository.clone());
+        let acme = paladin_core::platform::container::principal::TenantId::new("acme").unwrap();
+        let empty_query = || {
+            axum::extract::Query(RunListQuery {
+                thread_id: None,
+                assistant_id: None,
+                status: None,
+                limit: None,
+                cursor: None,
+            })
+        };
+
+        let user = Extension(Principal::new(
+            "svc-a",
+            paladin_core::platform::container::user::UserRole::User,
+            acme.clone(),
+        ));
+        let (status, _) = list_runs(State(state.clone()), user, empty_query())
+            .await
+            .expect("ok");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            repository.last_list_query().map(|q| q.scope),
+            Some(RunReadScope::Tenant(acme)),
+            "a user-role principal lists only its own tenant"
+        );
+
+        let (status, _) = list_runs(State(state), tester_principal(), empty_query())
+            .await
+            .expect("ok");
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            repository.last_list_query().map(|q| q.scope),
+            Some(RunReadScope::All),
+            "an Admin principal lists every run"
+        );
+    }
+
+    /// D-02/D-12: a `tenant_id` query parameter is not a filter and not an
+    /// override -- an `acme` user still asks the repository for `Tenant(acme)`
+    /// when the URL says `?tenant_id=globex`.
+    #[tokio::test]
+    async fn list_runs_ignores_a_tenant_query_parameter() {
+        let repository = Arc::new(MockRepository::default());
+        let mut api_keys = HashMap::new();
+        api_keys.insert(
+            "svc-a-key".to_string(),
+            Principal::new(
+                "svc-a",
+                paladin_core::platform::container::user::UserRole::User,
+                paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+            ),
+        );
+        let auth = crate::agent_auth::AgentAuthConfig {
+            enabled: true,
+            api_keys,
+            token_verifier: None,
+            bearer_tenant: None,
+        };
+        let state = RunApiState::new()
+            .with_repository(repository.clone())
+            .with_auth(auth);
+        let app = run_router(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/runs?tenant_id=globex")
+                    .header("x-api-key", "svc-a-key")
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            repository.last_list_query().map(|q| q.scope),
+            Some(RunReadScope::Tenant(
+                paladin_core::platform::container::principal::TenantId::new("acme").unwrap()
+            )),
+            "?tenant_id is ignored: the scope still comes from the principal"
+        );
     }
 
     #[tokio::test]
@@ -1682,15 +2431,19 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_run_accepted_returns_202() {
-        let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
-            outcome: MockOutcome::Accepted,
-        }));
+        let run = sample_run("t-cancel");
+        let run_id = run.run_id.clone();
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_submission(Arc::new(MockSubmissionPort {
+                outcome: MockOutcome::Accepted,
+            }));
         let app = run_router(state);
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                    .uri(format!("/v1/runs/{run_id}/cancel"))
                     .body(Body::empty())
                     .expect("request builds"),
             )
@@ -1701,15 +2454,19 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_run_already_terminal_returns_409() {
-        let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
-            outcome: MockOutcome::AlreadyTerminal,
-        }));
+        let run = sample_run("t-cancel");
+        let run_id = run.run_id.clone();
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_submission(Arc::new(MockSubmissionPort {
+                outcome: MockOutcome::AlreadyTerminal,
+            }));
         let app = run_router(state);
         let response = app
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                    .uri(format!("/v1/runs/{run_id}/cancel"))
                     .body(Body::empty())
                     .expect("request builds"),
             )
@@ -1733,6 +2490,30 @@ mod tests {
             .await
             .expect("router responds");
         assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    }
+
+    /// D-13: with the submission port wired but the run store unwired, cancel answers 501
+    /// naming the run store -- the gate cannot run, so `RunSubmissionPort::cancel` is
+    /// never reached.
+    #[tokio::test]
+    async fn cancel_run_returns_501_naming_the_run_store_when_only_submission_is_wired() {
+        let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
+            outcome: MockOutcome::Accepted,
+        }));
+        let app = run_router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                    .body(Body::empty())
+                    .expect("request builds"),
+            )
+            .await
+            .expect("router responds");
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = read_response_body(response).await;
+        assert!(body.contains("run_store.backend"), "{body}");
     }
 
     // --- list_webhook_deliveries (D-40, PLAT-FR-14) ------------------------
@@ -1832,11 +2613,36 @@ mod tests {
         assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
     }
 
+    /// D-13: with the webhook port wired but the run store unwired, the route answers 501
+    /// naming the run store before `list_for_run` is reached.
     #[tokio::test]
-    async fn list_webhook_deliveries_empty_is_200_with_empty_items() {
-        let run_id = RunId::new_v7();
+    async fn list_webhook_deliveries_returns_501_naming_the_run_store_when_only_deliveries_wired() {
         let state =
             RunApiState::new().with_webhook_deliveries(Arc::new(MockWebhookDeliveries::default()));
+        let error = list_webhook_deliveries(
+            State(state),
+            tester_principal(),
+            Path(RunId::new_v7().to_string()),
+            axum::extract::Query(PageQuery {
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .expect_err("run store unwired");
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = read_response_body(response).await;
+        assert!(body.contains("run_store.backend"), "{body}");
+    }
+
+    #[tokio::test]
+    async fn list_webhook_deliveries_empty_is_200_with_empty_items() {
+        let run = sample_run("t-wh");
+        let run_id = run.run_id.clone();
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_webhook_deliveries(Arc::new(MockWebhookDeliveries::default()));
         let (status, Json(body)) = list_webhook_deliveries(
             State(state),
             tester_principal(),
@@ -1855,7 +2661,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_webhook_deliveries_no_secret_in_body() {
-        let run_id = RunId::new_v7();
+        let run = sample_run("t-wh");
+        let run_id = run.run_id.clone();
         let repo = Arc::new(MockWebhookDeliveries::default());
         let delivery = paladin_core::platform::container::webhook::WebhookDelivery::new(
             WebhookDeliveryId::new_v7(),
@@ -1867,7 +2674,9 @@ mod tests {
             Utc::now(),
         );
         repo.items.lock().unwrap().push(delivery);
-        let state = RunApiState::new().with_webhook_deliveries(repo);
+        let state = RunApiState::new()
+            .with_repository(repository_with(run))
+            .with_webhook_deliveries(repo);
         let (status, Json(body)) = list_webhook_deliveries(
             State(state),
             tester_principal(),
@@ -1905,18 +2714,29 @@ mod tests {
             key: &str,
             role: paladin_core::platform::container::user::UserRole,
         ) -> crate::agent_auth::AgentAuthConfig {
+            api_key_auth_with_tenant(key, "svc", role, "svc-tenant")
+        }
+
+        fn api_key_auth_with_tenant(
+            key: &str,
+            principal_id: &str,
+            role: paladin_core::platform::container::user::UserRole,
+            tenant: &str,
+        ) -> crate::agent_auth::AgentAuthConfig {
             let mut api_keys = HashMap::new();
             api_keys.insert(
                 key.to_string(),
-                Principal {
-                    id: "svc".to_string(),
+                Principal::new(
+                    principal_id,
                     role,
-                },
+                    paladin_core::platform::container::principal::TenantId::new(tenant).unwrap(),
+                ),
             );
             crate::agent_auth::AgentAuthConfig {
                 enabled: true,
                 api_keys,
                 token_verifier: None,
+                bearer_tenant: None,
             }
         }
 
@@ -1969,15 +2789,19 @@ mod tests {
 
         #[tokio::test]
         async fn cancel_forbidden_role_is_403() {
-            let state = RunApiState::new().with_submission(Arc::new(MockSubmissionPort {
-                outcome: MockOutcome::Forbidden,
-            }));
+            let run = sample_run("t-cancel");
+            let run_id = run.run_id.clone();
+            let state = RunApiState::new()
+                .with_repository(repository_with(run))
+                .with_submission(Arc::new(MockSubmissionPort {
+                    outcome: MockOutcome::Forbidden,
+                }));
             let app = run_router(state);
             let response = app
                 .oneshot(
                     Request::builder()
                         .method("POST")
-                        .uri(format!("/v1/runs/{}/cancel", RunId::new_v7()))
+                        .uri(format!("/v1/runs/{run_id}/cancel"))
                         .body(Body::empty())
                         .expect("request builds"),
                 )
@@ -2054,5 +2878,715 @@ mod tests {
                 "expected a 429 within the burst window"
             );
         }
+
+        // --- Tenant-scoped GET /runs/{id} (Phase 40, D-12/D-13, PLAT-07) ---
+
+        fn authed_state_with_repository(
+            auth: crate::agent_auth::AgentAuthConfig,
+            repository: Arc<MockRepository>,
+        ) -> RunApiState {
+            RunApiState::new()
+                .with_repository(repository)
+                .with_auth(auth)
+        }
+
+        #[tokio::test]
+        async fn get_run_hides_a_foreign_tenant_run_behind_the_missing_run_404() {
+            let repository = Arc::new(MockRepository::default());
+            let run = sample_run("t1").with_submitted_by(
+                paladin_core::platform::container::principal::RunAttribution::new(
+                    paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+                    "svc-a".to_string(),
+                ),
+            );
+            let run_id = run.run_id.clone();
+            repository.seed(run);
+
+            let mut api_keys = HashMap::new();
+            api_keys.insert(
+                "svc-a-key".to_string(),
+                Principal::new(
+                    "svc-a",
+                    paladin_core::platform::container::user::UserRole::User,
+                    paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+                ),
+            );
+            api_keys.insert(
+                "svc-b-key".to_string(),
+                Principal::new(
+                    "svc-b",
+                    paladin_core::platform::container::user::UserRole::User,
+                    paladin_core::platform::container::principal::TenantId::new("globex").unwrap(),
+                ),
+            );
+            let auth = crate::agent_auth::AgentAuthConfig {
+                enabled: true,
+                api_keys,
+                token_verifier: None,
+                bearer_tenant: None,
+            };
+            let app = run_router(authed_state_with_repository(auth, repository));
+
+            let owner_response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/runs/{run_id}"))
+                        .header("x-api-key", "svc-a-key")
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(owner_response.status(), StatusCode::OK);
+
+            let hidden_response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/runs/{run_id}"))
+                        .header("x-api-key", "svc-b-key")
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(hidden_response.status(), StatusCode::NOT_FOUND);
+            let hidden_body = axum::body::to_bytes(hidden_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+
+            let missing_id = RunId::new_v7();
+            let missing_response = app
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/runs/{missing_id}"))
+                        .header("x-api-key", "svc-b-key")
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+            let missing_body = axum::body::to_bytes(missing_response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+
+            // Byte-equal once the two ids are swapped (D-12: no shape/timing difference
+            // between "hidden" and "genuinely missing").
+            let hidden_text = String::from_utf8(hidden_body.to_vec()).unwrap();
+            let missing_text = String::from_utf8(missing_body.to_vec()).unwrap();
+            let normalized_hidden =
+                hidden_text.replace(&run_id.to_string(), &missing_id.to_string());
+            assert_eq!(normalized_hidden, missing_text);
+        }
+
+        #[tokio::test]
+        async fn get_run_lets_an_admin_of_another_tenant_see_the_run() {
+            let repository = Arc::new(MockRepository::default());
+            let run = sample_run("t1").with_submitted_by(
+                paladin_core::platform::container::principal::RunAttribution::new(
+                    paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+                    "svc-a".to_string(),
+                ),
+            );
+            let run_id = run.run_id.clone();
+            repository.seed(run);
+
+            let mut api_keys = HashMap::new();
+            api_keys.insert(
+                "ops-key".to_string(),
+                Principal::new(
+                    "ops",
+                    paladin_core::platform::container::user::UserRole::Admin,
+                    paladin_core::platform::container::principal::TenantId::new("ops-tenant")
+                        .unwrap(),
+                ),
+            );
+            let auth = crate::agent_auth::AgentAuthConfig {
+                enabled: true,
+                api_keys,
+                token_verifier: None,
+                bearer_tenant: None,
+            };
+            let app = run_router(authed_state_with_repository(auth, repository));
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/v1/runs/{run_id}"))
+                        .header("x-api-key", "ops-key")
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+
+        /// A small recording `RunSubmissionPort` double capturing the `SubmitRun` it received,
+        /// so this test can assert the exact `PrincipalRef` the controller forwarded (D-04).
+        struct RecordingSubmissionPort {
+            captured: std::sync::Mutex<Option<SubmitRun>>,
+        }
+
+        #[async_trait]
+        impl RunSubmissionPort for RecordingSubmissionPort {
+            async fn submit(
+                &self,
+                request: SubmitRun,
+            ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+            {
+                let thread_id = request
+                    .thread_id
+                    .clone()
+                    .unwrap_or_else(|| ThreadId::new("t1").unwrap());
+                *self.captured.lock().unwrap() = Some(request);
+                Ok(paladin_ports::input::run_submission_port::RunAccepted {
+                    run_id: RunId::new_v7(),
+                    thread_id,
+                })
+            }
+
+            async fn cancel(
+                &self,
+                run_id: &RunId,
+                _requested_by: Option<PrincipalRef>,
+            ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
+            {
+                Err(RunSubmissionError::NotFound {
+                    run_id: run_id.clone(),
+                })
+            }
+
+            async fn fork(
+                &self,
+                _request: paladin_ports::input::run_submission_port::ForkRun,
+            ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+            {
+                Err(RunSubmissionError::NotWired)
+            }
+        }
+
+        #[tokio::test]
+        async fn submit_run_forwards_the_callers_principal_ref() {
+            let submission = Arc::new(RecordingSubmissionPort {
+                captured: std::sync::Mutex::new(None),
+            });
+            let auth = api_key_auth_with_tenant(
+                "svc-a-key",
+                "svc-a",
+                paladin_core::platform::container::user::UserRole::User,
+                "acme",
+            );
+            let state = RunApiState::new()
+                .with_submission(Arc::clone(&submission) as Arc<dyn RunSubmissionPort>)
+                .with_auth(auth);
+            let app = run_router(state);
+
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/v1/runs")
+                        .header("x-api-key", "svc-a-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from(
+                            serde_json::to_vec(&serde_json::json!({ "assistant_id": "a1" }))
+                                .unwrap(),
+                        ))
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds");
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+            let captured = submission.captured.lock().unwrap().take().unwrap();
+            let requested_by = captured.requested_by.expect("principal ref forwarded");
+            assert_eq!(requested_by.api_key_id, "svc-a");
+            assert_eq!(
+                requested_by.tenant_id,
+                paladin_core::platform::container::principal::TenantId::new("acme").unwrap()
+            );
+            assert_eq!(
+                requested_by.role,
+                paladin_core::platform::container::user::UserRole::User
+            );
+        }
+
+        // --- Route matrix (Phase 40, 40-05, D-13, research Pitfall 10, PLAT-07) ---
+
+        /// A `RunSubmissionPort` double that records the `api_key_id` behind every
+        /// `cancel` call, so the matrix can prove a foreign caller never reaches the
+        /// port at all (D-13, T-40-19) -- the gate answers before `cancel` is invoked.
+        struct RecordingCancelPort {
+            cancel_callers: Mutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl RunSubmissionPort for RecordingCancelPort {
+            async fn submit(
+                &self,
+                _request: SubmitRun,
+            ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+            {
+                Err(RunSubmissionError::NotWired)
+            }
+
+            async fn cancel(
+                &self,
+                run_id: &RunId,
+                requested_by: Option<PrincipalRef>,
+            ) -> Result<paladin_ports::input::run_submission_port::CancelOutcome, RunSubmissionError>
+            {
+                self.cancel_callers.lock().unwrap().push(
+                    requested_by
+                        .map(|principal| principal.api_key_id)
+                        .unwrap_or_else(|| "<internal>".to_string()),
+                );
+                Ok(paladin_ports::input::run_submission_port::CancelOutcome {
+                    run_id: run_id.clone(),
+                    status: RunStatus::Running,
+                    was_local: false,
+                })
+            }
+
+            async fn fork(
+                &self,
+                _request: paladin_ports::input::run_submission_port::ForkRun,
+            ) -> Result<paladin_ports::input::run_submission_port::RunAccepted, RunSubmissionError>
+            {
+                Err(RunSubmissionError::NotWired)
+            }
+        }
+
+        /// Every `(METHOD, path)` operation under `/v1/runs/{run_id}` the router publishes,
+        /// read from its OWN OpenAPI document (`versioned_run_parts(..).1`) rather than a
+        /// hand-maintained list -- so a route added to `run_openapi_router` without joining
+        /// the matrix table fails the test (research Pitfall 10, T-40-22).
+        fn published_run_id_operations(api: &utoipa::openapi::OpenApi) -> Vec<(String, String)> {
+            let mut operations = Vec::new();
+            for (path, item) in &api.paths.paths {
+                if !path.starts_with("/v1/runs/{run_id}") {
+                    continue;
+                }
+                let by_method = [
+                    ("GET", item.get.is_some()),
+                    ("PUT", item.put.is_some()),
+                    ("POST", item.post.is_some()),
+                    ("DELETE", item.delete.is_some()),
+                    ("OPTIONS", item.options.is_some()),
+                    ("HEAD", item.head.is_some()),
+                    ("PATCH", item.patch.is_some()),
+                    ("TRACE", item.trace.is_some()),
+                ];
+                for (method, present) in by_method {
+                    if present {
+                        operations.push((method.to_string(), path.clone()));
+                    }
+                }
+            }
+            operations.sort();
+            operations
+        }
+
+        async fn send_as(app: &axum::Router, method: &str, uri: String, key: &str) -> Response {
+            app.clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(uri)
+                        .header("x-api-key", key)
+                        .body(Body::empty())
+                        .expect("request builds"),
+                )
+                .await
+                .expect("router responds")
+        }
+
+        /// D-13 / PLAT-07 success criterion 3, on the WHOLE `/runs/{run_id}*` route set:
+        /// the operations are enumerated from the router's own OpenAPI document and
+        /// compared against this table; for every row the owner key, a second key of
+        /// the same tenant and an Admin of another tenant get the success status, a key of
+        /// a different tenant gets a 404 whose body is byte-identical to that route's
+        /// missing-run 404 once the ids are swapped (D-11, D-12), and the recording cancel
+        /// double never sees a call from the foreign key.
+        #[tokio::test]
+        async fn every_run_id_route_hides_foreign_runs_behind_the_missing_run_404() {
+            use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+            use paladin_core::platform::container::run::RunStreamEventKind;
+            use paladin_core::platform::container::user::UserRole;
+
+            let submission = Arc::new(RecordingCancelPort {
+                cancel_callers: Mutex::new(Vec::new()),
+            });
+            let repository = Arc::new(MockRepository::default());
+            let run = sample_run("t-matrix")
+                .with_submitted_by(RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a"));
+            let run_id = run.run_id.clone();
+            repository.seed(run);
+
+            let mut api_keys = HashMap::new();
+            api_keys.insert(
+                "owner-key".to_string(),
+                Principal::new("svc-a", UserRole::User, TenantId::new("acme").unwrap()),
+            );
+            api_keys.insert(
+                "peer-key".to_string(),
+                Principal::new("svc-a2", UserRole::User, TenantId::new("acme").unwrap()),
+            );
+            api_keys.insert(
+                "foreign-key".to_string(),
+                Principal::new("svc-b", UserRole::User, TenantId::new("globex").unwrap()),
+            );
+            api_keys.insert(
+                "admin-key".to_string(),
+                Principal::new("ops", UserRole::Admin, TenantId::new("ops-tenant").unwrap()),
+            );
+            let auth = crate::agent_auth::AgentAuthConfig {
+                enabled: true,
+                api_keys,
+                token_verifier: None,
+                bearer_tenant: None,
+            };
+
+            let events = vec![sample_stream_event(
+                &run_id,
+                RunStreamEventKind::Done,
+                serde_json::json!({ "status": "completed", "waypoint_id": "wp-1" }),
+            )];
+            let state = RunApiState::new()
+                .with_submission(Arc::clone(&submission) as Arc<dyn RunSubmissionPort>)
+                .with_repository(repository)
+                .with_run_events(Arc::new(MockRunEventStreamPort { events }))
+                .with_webhook_deliveries(Arc::new(MockWebhookDeliveries::default()))
+                .with_auth(auth);
+            let (app, api) = versioned_run_parts(state);
+
+            // The table every `/v1/runs/{run_id}*` operation must appear in, with the
+            // status its owner gets. Adding a route to `run_openapi_router` without adding
+            // it here (and routing it through `load_visible_run`) fails the assertion
+            // below.
+            let table: [(&str, &str, StatusCode); 4] = [
+                ("GET", "/v1/runs/{run_id}", StatusCode::OK),
+                ("GET", "/v1/runs/{run_id}/stream", StatusCode::OK),
+                ("POST", "/v1/runs/{run_id}/cancel", StatusCode::ACCEPTED),
+                (
+                    "GET",
+                    "/v1/runs/{run_id}/webhook-deliveries",
+                    StatusCode::OK,
+                ),
+            ];
+            let mut tabled: Vec<(String, String)> = table
+                .iter()
+                .map(|(method, path, _)| (method.to_string(), path.to_string()))
+                .collect();
+            tabled.sort();
+            let published = published_run_id_operations(&api);
+            assert_eq!(
+                published, tabled,
+                "the /v1/runs/{{run_id}}* operations the router publishes do not match the \
+                 matrix table: published={published:?} table={tabled:?}. Every route under \
+                 /v1/runs/{{run_id}} must enter through `load_visible_run` (D-13, PLAT-07) \
+                 and be added to this table with its owner success status; a route that no \
+                 longer exists must be removed from the table."
+            );
+
+            for (method, template, success) in table {
+                let uri_for = |id: &RunId| template.replace("{run_id}", &id.to_string());
+
+                for key in ["owner-key", "peer-key", "admin-key"] {
+                    let response = send_as(&app, method, uri_for(&run_id), key).await;
+                    assert_eq!(
+                        response.status(),
+                        success,
+                        "{method} {template} as {key} must succeed (D-11: same tenant or Admin)"
+                    );
+                }
+
+                let hidden = send_as(&app, method, uri_for(&run_id), "foreign-key").await;
+                assert_eq!(
+                    hidden.status(),
+                    StatusCode::NOT_FOUND,
+                    "{method} {template} as a foreign tenant must be the missing-run 404 (D-12)"
+                );
+                let hidden_text = read_response_body(hidden).await;
+
+                let missing_id = RunId::new_v7();
+                let missing = send_as(&app, method, uri_for(&missing_id), "foreign-key").await;
+                assert_eq!(
+                    missing.status(),
+                    StatusCode::NOT_FOUND,
+                    "{method} {template} for a missing run must be 404"
+                );
+                let missing_text = read_response_body(missing).await;
+
+                assert_eq!(
+                    hidden_text.replace(&run_id.to_string(), &missing_id.to_string()),
+                    missing_text,
+                    "{method} {template}: a hidden run's 404 body must be byte-identical to \
+                     the missing-run 404 once the ids are swapped (D-12, T-40-21)"
+                );
+            }
+
+            let mut callers = submission.cancel_callers.lock().unwrap().clone();
+            callers.sort();
+            assert_eq!(
+                callers,
+                vec!["ops".to_string(), "svc-a".to_string(), "svc-a2".to_string()],
+                "RunSubmissionPort::cancel must be reached only by the owner, the same-tenant \
+                 peer and the Admin -- never by the foreign key (D-13, T-40-19)"
+            );
+        }
+
+        // --- RunResponse.submitted_by (Phase 40, 40-05, D-19, TENANT-02) ---
+
+        /// D-19: `GET /v1/runs/{id}` carries the recorded submitter as exactly
+        /// `{ tenant_id, api_key_id }` -- the key's configured NAME, never the key value
+        /// the caller authenticated with, and never the role.
+        #[tokio::test]
+        async fn run_response_carries_submitted_by_and_never_the_key_or_role() {
+            use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+            use paladin_core::platform::container::user::UserRole;
+
+            const KEY_VALUE: &str = "owner-super-secret-key-value";
+
+            let repository = Arc::new(MockRepository::default());
+            let run = sample_run("t-dto")
+                .with_submitted_by(RunAttribution::new(TenantId::new("acme").unwrap(), "svc-a"));
+            let run_id = run.run_id.clone();
+            repository.seed(run);
+            let auth = api_key_auth_with_tenant(KEY_VALUE, "svc-a", UserRole::User, "acme");
+            let app = run_router(authed_state_with_repository(auth, repository));
+
+            let response = send_as(&app, "GET", format!("/v1/runs/{run_id}"), KEY_VALUE).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let text = read_response_body(response).await;
+            let body: serde_json::Value = serde_json::from_str(&text).expect("JSON body");
+
+            let submitted_by = body["submitted_by"]
+                .as_object()
+                .expect("submitted_by is an object for an attributed run");
+            assert_eq!(
+                submitted_by.len(),
+                2,
+                "exactly tenant_id and api_key_id: {text}"
+            );
+            assert_eq!(submitted_by["tenant_id"], "acme");
+            assert_eq!(submitted_by["api_key_id"], "svc-a");
+            assert!(
+                !text.contains(KEY_VALUE),
+                "the configured API key value must never appear in a response body: {text}"
+            );
+            assert!(
+                !submitted_by.contains_key("role") && !text.contains("\"role\""),
+                "the role is config, not data, and is never served (D-19): {text}"
+            );
+        }
+
+        /// D-19: a run with no recorded principal (schedule-fired, same-process, or
+        /// submitted before v0.11) serialises `"submitted_by": null` -- the key is always
+        /// present, mirroring the `cost` precedent.
+        #[tokio::test]
+        async fn run_response_submitted_by_is_null_for_an_unattributed_run() {
+            let run = sample_run("t-dto");
+            let run_id = run.run_id.clone();
+            let state = RunApiState::new().with_repository(repository_with(run));
+
+            let (status, Json(body)) =
+                get_run(State(state), tester_principal(), Path(run_id.to_string()))
+                    .await
+                    .expect("ok");
+            assert_eq!(status, StatusCode::OK);
+            let object = body.as_object().expect("object body");
+            assert!(
+                object.contains_key("submitted_by"),
+                "submitted_by must always be serialised: {body}"
+            );
+            assert!(body["submitted_by"].is_null(), "{body}");
+        }
+    }
+
+    // --- RunResponse.halt_reason / final_waypoint_id (Phase 42, 42-03, D-06, G7) ---
+
+    mod halt_reason_dto {
+        use super::*;
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+        };
+        use paladin_core::platform::container::cost::CurrencyCode;
+
+        fn exhausted_reason() -> HaltReason {
+            use chrono::TimeZone;
+            let usd = CurrencyCode::new("USD").expect("USD");
+            let at = |hour| {
+                Utc.with_ymd_and_hms(2026, 10, 6, hour, 0, 0)
+                    .single()
+                    .expect("instant")
+            };
+            HaltReason::AllowanceExhausted(AllowanceRefusal {
+                scope_kind: AllowanceScopeKind::ApiKey,
+                limit_kind: AllowanceLimitKind::Window,
+                balance: Cost::new(1_000_000_000, usd.clone()),
+                ceiling: Cost::new(1_000_000_000, usd),
+                window: Some((at(0), at(23))),
+                evaluated_at: at(12),
+            })
+        }
+
+        #[test]
+        fn run_response_serializes_halt_reason_and_final_waypoint_id() {
+            let mut run = sample_run("t-halt").with_status(RunStatus::Halted);
+            run.final_waypoint_id = Some("wp-halted".to_string());
+            let reason = exhausted_reason();
+            run.halt_reason = Some(reason.clone());
+
+            let body = serde_json::to_value(RunResponse::from(&run)).expect("json");
+            assert_eq!(body["status"], "halted");
+            assert!(body["error"].is_null(), "a halt is not a failure: {body}");
+            assert_eq!(body["final_waypoint_id"], "wp-halted");
+            assert_eq!(body["halt_reason"], reason.wire_json());
+
+            let object = body["halt_reason"].as_object().expect("halt_reason object");
+            let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            assert_eq!(
+                keys,
+                [
+                    "balance",
+                    "ceiling",
+                    "kind",
+                    "reason",
+                    "scope",
+                    "window_end",
+                    "window_start"
+                ]
+            );
+            assert_eq!(object["reason"], "allowance_exhausted");
+            assert_eq!(object["balance"], "1.0000 USD");
+        }
+
+        #[test]
+        fn run_response_without_a_halt_reason_serializes_nulls() {
+            let run = sample_run("t-no-halt");
+            let body = serde_json::to_value(RunResponse::from(&run)).expect("json");
+            let object = body.as_object().expect("object");
+            assert!(object.contains_key("halt_reason"), "always serialised");
+            assert!(
+                object.contains_key("final_waypoint_id"),
+                "always serialised"
+            );
+            assert!(body["halt_reason"].is_null());
+            assert!(body["final_waypoint_id"].is_null());
+        }
+
+        #[test]
+        fn ledger_unavailable_halt_reason_is_the_reason_key_alone() {
+            let mut run = sample_run("t-ledger").with_status(RunStatus::Halted);
+            run.halt_reason = Some(HaltReason::LedgerUnavailable);
+            let body = serde_json::to_value(RunResponse::from(&run)).expect("json");
+            assert_eq!(
+                body["halt_reason"],
+                serde_json::json!({"reason": "ledger_unavailable"})
+            );
+        }
+    }
+
+    // --- WR-03/WR-04: repository errors never leak raw backend text ---------
+
+    const LEAKY_REPO_TEXT: &str =
+        "run row attribution is incomplete: tenant_id set, api_key_id NULL (host=db.internal:5432)";
+
+    fn assert_generic_internal(err: &ApiError) {
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = err.to_body().to_string();
+        assert!(
+            !body.contains("db.internal") && !body.contains("attribution is incomplete"),
+            "a repository error must never surface raw backend text, got {body}"
+        );
+        assert_eq!(err.to_body()["error"]["message"], "run store error");
+    }
+
+    #[tokio::test]
+    async fn get_run_repository_error_is_a_generic_500_without_backend_text() {
+        let repository = Arc::new(MockRepository::failing_reads(LEAKY_REPO_TEXT));
+        let state = RunApiState::new().with_repository(repository);
+
+        let err = get_run(
+            State(state),
+            tester_principal(),
+            Path(RunId::new_v7().to_string()),
+        )
+        .await
+        .unwrap_err();
+        assert_generic_internal(&err);
+    }
+
+    #[tokio::test]
+    async fn list_runs_repository_error_is_a_generic_500_without_backend_text() {
+        let repository = Arc::new(MockRepository::failing_reads(LEAKY_REPO_TEXT));
+        let state = RunApiState::new().with_repository(repository);
+
+        let err = list_runs(
+            State(state),
+            tester_principal(),
+            axum::extract::Query(RunListQuery {
+                thread_id: None,
+                assistant_id: None,
+                status: None,
+                limit: None,
+                cursor: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_generic_internal(&err);
+    }
+
+    #[test]
+    fn submission_backend_errors_are_a_generic_500_without_backend_text() {
+        let err = map_submission_error(RunSubmissionError::Backend {
+            message: LEAKY_REPO_TEXT.to_string(),
+        });
+        assert_generic_internal(&err);
+    }
+
+    #[test]
+    fn map_submission_error_maps_allowance_exhausted_to_429() {
+        use paladin_core::platform::container::allowance::{
+            AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+        };
+        let usd = CurrencyCode::new("USD").unwrap();
+        let err = map_submission_error(RunSubmissionError::AllowanceExhausted(AllowanceRefusal {
+            scope_kind: AllowanceScopeKind::Tenant,
+            limit_kind: AllowanceLimitKind::Lifetime,
+            balance: Cost::new(10, usd.clone()),
+            ceiling: Cost::new(10, usd),
+            window: None,
+            evaluated_at: Utc::now(),
+        }));
+        assert_eq!(err.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(err.to_body()["error"]["code"], "allowance_exhausted");
+    }
+
+    /// 42-09, D-10: an unpriced agent-kind model is a `422 model_unpriced` naming the model, with
+    /// no `Retry-After` and no tenant or key in the body -- never the 429 and never a 500.
+    #[test]
+    fn map_submission_error_maps_model_unpriced_to_422() {
+        let err = map_submission_error(RunSubmissionError::ModelUnpriced {
+            model: "mystery-model".to_string(),
+        });
+        assert_eq!(err.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            err.retry_after(),
+            None,
+            "a configuration fault is never pacing"
+        );
+        let body = err.to_body();
+        assert_eq!(body["error"]["code"], "model_unpriced");
+        assert_eq!(
+            body["error"]["details"],
+            serde_json::json!({ "model": "mystery-model" })
+        );
     }
 }

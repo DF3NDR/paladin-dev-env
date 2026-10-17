@@ -84,8 +84,8 @@ impl PaladinContentProcessor {
     /// Builds the enrichment metadata attached to every result.
     fn base_metadata(&self, output: &str, token_count: u32) -> HashMap<String, Value> {
         let mut metadata = HashMap::new();
-        metadata.insert("agent_name".to_string(), json!(self.paladin.node.name));
-        metadata.insert("model".to_string(), json!(self.paladin.node.model));
+        metadata.insert("agent_name".to_string(), json!(self.paladin.data.name));
+        metadata.insert("model".to_string(), json!(self.paladin.data.model));
         metadata.insert("parsing_strategy".to_string(), json!(self.parsing.as_str()));
         metadata.insert("token_count".to_string(), json!(token_count));
         metadata.insert("output_chars".to_string(), json!(output.len()));

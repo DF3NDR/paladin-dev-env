@@ -5,12 +5,14 @@
 #[allow(missing_docs)]
 pub mod container {
     // ── flat file modules from paladin-core ───────────────────────────────────
+    pub use paladin_core::platform::container::allowance;
     pub use paladin_core::platform::container::autonomous_config;
     pub use paladin_core::platform::container::citadel;
     pub use paladin_core::platform::container::citadel_error;
     pub use paladin_core::platform::container::comment;
     pub use paladin_core::platform::container::content;
     pub use paladin_core::platform::container::content_list;
+    pub use paladin_core::platform::container::cost;
     pub use paladin_core::platform::container::document;
     pub use paladin_core::platform::container::execution_result;
     pub use paladin_core::platform::container::garrison;
@@ -27,6 +29,7 @@ pub mod container {
     pub use paladin_core::platform::container::paladin_config;
     pub use paladin_core::platform::container::paladin_error;
     pub use paladin_core::platform::container::planning;
+    pub use paladin_core::platform::container::principal;
     pub use paladin_core::platform::container::prompt;
     pub use paladin_core::platform::container::queue_config;
     pub use paladin_core::platform::container::queue_item;
@@ -35,6 +38,7 @@ pub mod container {
     pub use paladin_core::platform::container::schedule;
     pub use paladin_core::platform::container::task;
     pub use paladin_core::platform::container::token_usage;
+    pub use paladin_core::platform::container::treasury_ledger;
     pub use paladin_core::platform::container::trigger;
     pub use paladin_core::platform::container::user;
     pub use paladin_core::platform::container::user_group;

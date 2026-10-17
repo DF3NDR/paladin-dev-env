@@ -94,6 +94,7 @@ fn sample_payload_json(run: &Run, event: RunEventKind, attempt: u32) -> String {
         timestamp: Utc::now(),
         attempt,
         parleys: None,
+        halt_reason: None,
     };
     serde_json::to_string(&payload).unwrap()
 }
@@ -211,6 +212,87 @@ impl RunRepositoryPort for MissingRunRepository {
 
     async fn get(&self, _run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
         Ok(None)
+    }
+
+    async fn update_status(
+        &self,
+        _run_id: &RunId,
+        _from: RunStatus,
+        _to: RunStatus,
+        _at: DateTime<Utc>,
+    ) -> Result<(), RunRepositoryError> {
+        Ok(())
+    }
+
+    async fn record_outcome(
+        &self,
+        _run_id: &RunId,
+        _outcome: RunOutcomeRecord,
+    ) -> Result<(), RunRepositoryError> {
+        Ok(())
+    }
+
+    async fn list(&self, _query: RunQuery) -> Result<RunPage, RunRepositoryError> {
+        Ok(RunPage {
+            items: vec![],
+            next_cursor: None,
+        })
+    }
+
+    async fn active_run_for_thread(
+        &self,
+        _thread_id: &ThreadId,
+    ) -> Result<Option<Run>, RunRepositoryError> {
+        Ok(None)
+    }
+
+    async fn request_cancel(&self, run_id: &RunId) -> Result<RunStatus, RunRepositoryError> {
+        Err(RunRepositoryError::NotFound {
+            run_id: run_id.clone(),
+        })
+    }
+
+    async fn is_cancel_requested(&self, _thread_id: &ThreadId) -> Result<bool, RunRepositoryError> {
+        Ok(false)
+    }
+
+    async fn bump_attempt(&self, _run_id: &RunId) -> Result<u32, RunRepositoryError> {
+        Ok(1)
+    }
+
+    async fn record_resume(
+        &self,
+        _run_id: &RunId,
+        _responses: Vec<ParleyResponse>,
+    ) -> Result<u32, RunRepositoryError> {
+        Ok(1)
+    }
+
+    async fn clear_pending_responses(&self, _run_id: &RunId) -> Result<(), RunRepositoryError> {
+        Ok(())
+    }
+}
+
+/// A `RunRepositoryPort` double that counts `get` calls and fails them -- proves an
+/// operator allowance delivery is signed and sent without ever consulting the run
+/// repository (Phase 41, C3, RESEARCH Pitfall 4): a lookup would reschedule the delivery
+/// forever, since the correlation run id is owned by no run.
+#[derive(Default)]
+struct NoLookupRunRepository {
+    get_calls: AtomicU32,
+}
+
+#[async_trait::async_trait]
+impl RunRepositoryPort for NoLookupRunRepository {
+    async fn insert(&self, _run: &Run) -> Result<(), RunRepositoryError> {
+        Ok(())
+    }
+
+    async fn get(&self, _run_id: &RunId) -> Result<Option<Run>, RunRepositoryError> {
+        self.get_calls.fetch_add(1, Ordering::SeqCst);
+        Err(RunRepositoryError::Backend {
+            source: "an operator delivery must never look up a run".into(),
+        })
     }
 
     async fn update_status(
@@ -487,6 +569,95 @@ async fn webhook_signature_verifies_on_receiver() {
     assert_eq!(header_signature, expected);
 }
 
+// ── halted_webhook_signature_covers_the_halt_reason (D-19, T-42-12) ────────
+
+/// A `halted` delivery whose stored payload carries the typed `halt_reason` object is sent
+/// verbatim (the receiver's captured bytes equal the stored bytes) and its
+/// `X-Paladin-Signature` is the HMAC over those exact bytes -- adding the optional key changed
+/// nothing about how the payload is signed.
+#[tokio::test]
+async fn halted_webhook_signature_covers_the_halt_reason() {
+    use paladin_core::platform::container::allowance::HaltReason;
+    use paladin_core::platform::container::run::RunStatus;
+
+    let mut server = mockito::Server::new_async().await;
+    type Captured = Arc<Mutex<Option<(Vec<u8>, String)>>>;
+    let captured: Captured = Arc::new(Mutex::new(None));
+
+    {
+        let captured = Arc::clone(&captured);
+        server
+            .mock("POST", "/hook")
+            .with_status_code_from_request(move |req| {
+                let body = req.body().cloned().unwrap_or_default();
+                let signature = req
+                    .header(WEBHOOK_SIGNATURE_HEADER)
+                    .first()
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                *captured.lock().unwrap() = Some((body, signature));
+                200
+            })
+            .create_async()
+            .await;
+    }
+
+    let key = "webhook-signing-value-0123456789";
+    let run = sample_run(Some(WebhookSpec {
+        url: format!("{}/hook", server.url()),
+        secret: Some(key.to_string()),
+        events: vec![RunEventKind::Halted],
+    }));
+    let runs: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    runs.insert(&run).await.unwrap();
+
+    let payload = serde_json::to_string(&WebhookPayload {
+        run_id: run.run_id.clone(),
+        thread_id: run.thread_id.clone(),
+        assistant: WebhookPayloadAssistant {
+            assistant_id: run.assistant.assistant_id.clone(),
+            version: run.assistant.version,
+        },
+        status: RunStatus::Halted,
+        event: RunEventKind::Halted,
+        timestamp: Utc::now(),
+        attempt: 1,
+        parleys: None,
+        halt_reason: Some(HaltReason::LedgerUnavailable.wire_json()),
+    })
+    .unwrap();
+    assert!(payload.contains(r#""halt_reason":{"reason":"ledger_unavailable"}"#));
+
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let url = format!("{}/hook", server.url());
+    let now = Utc::now();
+    deliveries
+        .enqueue(delivery_for(&run, &url, &payload, now))
+        .await
+        .unwrap();
+
+    let clock = AtomicClock::new(now);
+    let service = service_with(Arc::clone(&deliveries), Arc::clone(&runs), &clock).await;
+    assert_eq!(service.run_once(now).await, 1);
+
+    let (raw_body, header_signature) = captured.lock().unwrap().clone().expect("receiver was hit");
+    assert_eq!(raw_body, payload.as_bytes());
+
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key.as_bytes()).unwrap();
+    mac.update(&raw_body);
+    let expected = format!(
+        "sha256={}",
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    assert_eq!(header_signature, expected);
+}
+
 // ── webhook_payload_has_no_secret_or_input (T-27-13-03) ───────────────────
 
 /// The wire body's JSON has EXACTLY the documented payload keys -- no
@@ -660,6 +831,7 @@ async fn webhook_signing_key_load_failure_reschedules_without_sending() {
         timestamp: Utc::now(),
         attempt: 0,
         parleys: None,
+        halt_reason: None,
     })
     .unwrap();
 
@@ -733,6 +905,7 @@ async fn webhook_signing_key_missing_run_reschedules_without_sending() {
         timestamp: Utc::now(),
         attempt: 0,
         parleys: None,
+        halt_reason: None,
     })
     .unwrap();
 
@@ -766,4 +939,234 @@ async fn webhook_signing_key_missing_run_reschedules_without_sending() {
     );
     assert!(loaded.last_error.is_some());
     assert!(loaded.last_response_status.is_none());
+}
+
+// ── operator allowance deliveries (Phase 41, D-17, C3) ────────────────────
+
+/// Hex `sha256=` HMAC of `body` under `key`, the receiver's recomputation.
+fn expected_signature(key: &[u8], body: &[u8]) -> String {
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).unwrap();
+    mac.update(body);
+    format!(
+        "sha256={}",
+        mac.finalize()
+            .into_bytes()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    )
+}
+
+/// What the local receiver captured: raw body, signature header, event header.
+type CapturedOperator = Arc<Mutex<Option<(Vec<u8>, String, String)>>>;
+
+/// Mount a `POST /hook` mock that captures body, signature and event header.
+async fn capturing_receiver(server: &mut mockito::ServerGuard) -> CapturedOperator {
+    let captured: CapturedOperator = Arc::new(Mutex::new(None));
+    let sink = Arc::clone(&captured);
+    server
+        .mock("POST", "/hook")
+        .with_status_code_from_request(move |req| {
+            let header = |name: &str| {
+                req.header(name)
+                    .first()
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            *sink.lock().unwrap() = Some((
+                req.body().cloned().unwrap_or_default(),
+                header(WEBHOOK_SIGNATURE_HEADER),
+                header("X-Paladin-Event"),
+            ));
+            200
+        })
+        .create_async()
+        .await;
+    captured
+}
+
+/// An operator delivery: a correlation run id no run owns, the
+/// `treasurer-notices` thread, event `AllowanceWarning`.
+fn operator_delivery(url: &str, payload: &str, at: DateTime<Utc>) -> WebhookDelivery {
+    operator_delivery_of(RunEventKind::AllowanceWarning, url, payload, at)
+}
+
+/// An operator delivery of the given operator event kind.
+fn operator_delivery_of(
+    event: RunEventKind,
+    url: &str,
+    payload: &str,
+    at: DateTime<Utc>,
+) -> WebhookDelivery {
+    WebhookDelivery::new(
+        WebhookDeliveryId::new_v7(),
+        RunId::new_v7(),
+        ThreadId::new("treasurer-notices").unwrap(),
+        event,
+        url,
+        payload,
+        at,
+    )
+}
+
+/// An `allowance_halted` operator delivery (Phase 42 D-18) is signed with the operator secret
+/// held on the service, carries `X-Paladin-Event: allowance_halted`, is delivered, and the run
+/// repository is NEVER queried -- exactly like `allowance_warning` (T-42-40).
+#[tokio::test]
+async fn operator_halted_delivery_is_signed_with_the_operator_secret_without_a_run_lookup() {
+    let mut server = mockito::Server::new_async().await;
+    let captured = capturing_receiver(&mut server).await;
+
+    let runs = Arc::new(NoLookupRunRepository::default());
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let payload = r#"{"event":"allowance_halted","run_id":null}"#;
+    let now = base_time();
+    let delivery = operator_delivery_of(
+        RunEventKind::AllowanceHalted,
+        &format!("{}/hook", server.url()),
+        payload,
+        now,
+    );
+    let delivery_id = delivery.delivery_id.clone();
+    deliveries.enqueue(delivery).await.unwrap();
+
+    let clock = AtomicClock::new(now);
+    let service = service_with(
+        Arc::clone(&deliveries),
+        Arc::clone(&runs) as Arc<dyn RunRepositoryPort>,
+        &clock,
+    )
+    .await
+    .with_operator_notice_secret(Some("op-secret-0123456789".to_string()));
+    assert_eq!(service.run_once(now).await, 1);
+
+    let (raw, signature, event) = captured.lock().unwrap().clone().expect("receiver was hit");
+    assert_eq!(raw, payload.as_bytes(), "signed and sent verbatim");
+    assert_eq!(event, "allowance_halted");
+    assert_eq!(signature, expected_signature(b"op-secret-0123456789", &raw));
+    assert_eq!(
+        runs.get_calls.load(Ordering::SeqCst),
+        0,
+        "the run repository must never be queried for an operator delivery"
+    );
+    let loaded = deliveries.get(&delivery_id).await.unwrap().unwrap();
+    assert!(matches!(loaded.status, WebhookDeliveryStatus::Delivered));
+}
+
+/// An operator delivery is signed with the operator secret held on the service, carries
+/// `X-Paladin-Event: allowance_warning`, is delivered, and the run repository is NEVER
+/// queried (C3): a receiver recomputing the HMAC over the captured raw bytes with the
+/// operator secret verifies the header.
+#[tokio::test]
+async fn operator_delivery_is_signed_with_the_operator_secret_without_a_run_lookup() {
+    let mut server = mockito::Server::new_async().await;
+    let captured = capturing_receiver(&mut server).await;
+
+    let runs = Arc::new(NoLookupRunRepository::default());
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let payload = r#"{"event":"allowance_warning","run_id":null}"#;
+    let now = base_time();
+    let delivery = operator_delivery(&format!("{}/hook", server.url()), payload, now);
+    let delivery_id = delivery.delivery_id.clone();
+    deliveries.enqueue(delivery).await.unwrap();
+
+    let clock = AtomicClock::new(now);
+    let service = service_with(
+        Arc::clone(&deliveries),
+        Arc::clone(&runs) as Arc<dyn RunRepositoryPort>,
+        &clock,
+    )
+    .await
+    .with_operator_notice_secret(Some("op-secret-0123456789".to_string()));
+    assert_eq!(service.run_once(now).await, 1);
+
+    let (raw, signature, event) = captured.lock().unwrap().clone().expect("receiver was hit");
+    assert_eq!(raw, payload.as_bytes(), "signed and sent verbatim");
+    assert_eq!(event, "allowance_warning");
+    assert_eq!(signature, expected_signature(b"op-secret-0123456789", &raw));
+    assert_eq!(
+        runs.get_calls.load(Ordering::SeqCst),
+        0,
+        "the run repository must never be queried for an operator delivery"
+    );
+    let loaded = deliveries.get(&delivery_id).await.unwrap().unwrap();
+    assert!(matches!(loaded.status, WebhookDeliveryStatus::Delivered));
+}
+
+/// With no operator secret configured an operator delivery is signed with the empty key,
+/// exactly like a run webhook that carries no secret.
+#[tokio::test]
+async fn operator_delivery_without_a_secret_is_signed_with_the_empty_key() {
+    let mut server = mockito::Server::new_async().await;
+    let captured = capturing_receiver(&mut server).await;
+
+    let runs = Arc::new(NoLookupRunRepository::default());
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let payload = r#"{"event":"allowance_warning"}"#;
+    let now = base_time();
+    deliveries
+        .enqueue(operator_delivery(
+            &format!("{}/hook", server.url()),
+            payload,
+            now,
+        ))
+        .await
+        .unwrap();
+
+    let clock = AtomicClock::new(now);
+    let service = service_with(
+        Arc::clone(&deliveries),
+        Arc::clone(&runs) as Arc<dyn RunRepositoryPort>,
+        &clock,
+    )
+    .await;
+    assert_eq!(service.run_once(now).await, 1);
+
+    let (raw, signature, _event) = captured.lock().unwrap().clone().expect("receiver was hit");
+    assert_eq!(signature, expected_signature(b"", &raw));
+    assert_eq!(runs.get_calls.load(Ordering::SeqCst), 0);
+}
+
+/// A run delivery keeps signing with its OWN run's secret even when an operator secret is
+/// configured on the service -- the operator branch fires only for `AllowanceWarning`.
+#[tokio::test]
+async fn run_delivery_signing_is_unchanged() {
+    let mut server = mockito::Server::new_async().await;
+    let captured = capturing_receiver(&mut server).await;
+
+    let run_key = "run-webhook-secret-0123456789";
+    let run = sample_run(Some(WebhookSpec {
+        url: format!("{}/hook", server.url()),
+        secret: Some(run_key.to_string()),
+        events: vec![RunEventKind::Completed],
+    }));
+    let runs: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+    runs.insert(&run).await.unwrap();
+    let deliveries: Arc<dyn WebhookDeliveryRepositoryPort> =
+        Arc::new(InMemoryWebhookDeliveryRepository::new());
+    let payload = sample_payload_json(&run, RunEventKind::Completed, 1);
+    let now = base_time();
+    deliveries
+        .enqueue(delivery_for(
+            &run,
+            &format!("{}/hook", server.url()),
+            &payload,
+            now,
+        ))
+        .await
+        .unwrap();
+
+    let clock = AtomicClock::new(now);
+    let service = service_with(Arc::clone(&deliveries), Arc::clone(&runs), &clock)
+        .await
+        .with_operator_notice_secret(Some("op-secret-must-not-sign-runs".to_string()));
+    assert_eq!(service.run_once(now).await, 1);
+
+    let (raw, signature, event) = captured.lock().unwrap().clone().expect("receiver was hit");
+    assert_eq!(event, "completed");
+    assert_eq!(signature, expected_signature(run_key.as_bytes(), &raw));
 }

@@ -21,6 +21,7 @@ use sqlx::sqlite::{Sqlite, SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::{QueryBuilder, Row, sqlite::SqliteRow};
 use std::str::FromStr;
 
+use paladin_core::platform::container::principal::{RunAttribution, TenantId};
 use paladin_core::platform::container::run::WebhookSpec;
 use paladin_core::platform::container::run_schedule::{
     OnMissed, RUN_SCHEDULE_SCHEMA_VERSION, RunSchedule, RunScheduleId, RunScheduleUpdate,
@@ -35,22 +36,23 @@ use crate::waypoint::redact::redact_database_url_password;
 const INSERT_SCHEDULE: &str = "INSERT INTO run_schedules \
      (schedule_id, assistant_id, assistant_version, cron, timezone, input, enabled, \
       thread_strategy, on_missed, webhook, last_tick, next_tick, skipped_ticks, \
-      created_at, updated_at, schema_version) \
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+      created_at, updated_at, schema_version, tenant_id, api_key_id) \
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 const SELECT_BY_ID: &str = "SELECT schedule_id, assistant_id, assistant_version, cron, \
      timezone, input, enabled, thread_strategy, on_missed, webhook, last_tick, next_tick, \
-     skipped_ticks, created_at, updated_at, schema_version FROM run_schedules \
-     WHERE schedule_id = ?";
+     skipped_ticks, created_at, updated_at, schema_version, tenant_id, api_key_id \
+     FROM run_schedules WHERE schedule_id = ?";
 
 const LIST_PREFIX: &str = "SELECT schedule_id, assistant_id, assistant_version, cron, \
      timezone, input, enabled, thread_strategy, on_missed, webhook, last_tick, next_tick, \
-     skipped_ticks, created_at, updated_at, schema_version FROM run_schedules WHERE 1 = 1";
+     skipped_ticks, created_at, updated_at, schema_version, tenant_id, api_key_id \
+     FROM run_schedules WHERE 1 = 1";
 
 const DUE_QUERY: &str = "SELECT schedule_id, assistant_id, assistant_version, cron, \
      timezone, input, enabled, thread_strategy, on_missed, webhook, last_tick, next_tick, \
-     skipped_ticks, created_at, updated_at, schema_version FROM run_schedules \
-     WHERE enabled = 1 AND next_tick IS NOT NULL AND next_tick <= ? \
+     skipped_ticks, created_at, updated_at, schema_version, tenant_id, api_key_id \
+     FROM run_schedules WHERE enabled = 1 AND next_tick IS NOT NULL AND next_tick <= ? \
      ORDER BY next_tick ASC LIMIT ?";
 
 const CLAIM_TICK: &str = "UPDATE run_schedules SET last_tick = ?, next_tick = ? \
@@ -179,6 +181,26 @@ impl SqliteRunScheduleRepository {
         let created_at: DateTime<Utc> = row.try_get("created_at").map_err(backend_err)?;
         let updated_at: DateTime<Utc> = row.try_get("updated_at").map_err(backend_err)?;
         let schema_version: String = row.try_get("schema_version").map_err(backend_err)?;
+        let tenant_id: Option<String> = row.try_get("tenant_id").map_err(backend_err)?;
+        let api_key_id: Option<String> = row.try_get("api_key_id").map_err(backend_err)?;
+        let created_by = match (tenant_id, api_key_id) {
+            (Some(tenant_id), Some(api_key_id)) => {
+                let tenant_id = TenantId::new(tenant_id).map_err(|e| {
+                    RunScheduleRepositoryError::Serialization {
+                        message: format!("invalid tenant_id: {e}"),
+                    }
+                })?;
+                Some(RunAttribution::new(tenant_id, api_key_id))
+            }
+            (None, None) => None,
+            _ => {
+                return Err(RunScheduleRepositoryError::Serialization {
+                    message: "run schedule row attribution is incomplete: tenant_id and \
+                              api_key_id must both be set or both be NULL"
+                        .to_string(),
+                });
+            }
+        };
 
         if schema_version != RUN_SCHEDULE_SCHEMA_VERSION {
             return Err(RunScheduleRepositoryError::UnknownSchemaVersion {
@@ -200,6 +222,7 @@ impl SqliteRunScheduleRepository {
         schedule.created_at = created_at;
         schedule.updated_at = updated_at;
         schedule.schema_version = schema_version;
+        schedule.created_by = created_by;
         Ok(schedule)
     }
 }
@@ -243,6 +266,8 @@ impl RunScheduleRepositoryPort for SqliteRunScheduleRepository {
             .bind(schedule.created_at)
             .bind(schedule.updated_at)
             .bind(&schedule.schema_version)
+            .bind(schedule.created_by.as_ref().map(|a| a.tenant_id.as_str()))
+            .bind(schedule.created_by.as_ref().map(|a| a.api_key_id.as_str()))
             .execute(&self.pool)
             .await
             .map_err(|e| self.map_insert_error(e, &schedule.schedule_id))?;
@@ -567,6 +592,62 @@ mod tests {
     #[tokio::test]
     async fn increment_skipped_increments_and_persists() {
         contract_tests::increment_skipped_increments_and_persists(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn created_by_round_trips() {
+        contract_tests::created_by_round_trips(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn null_created_by_reads_back_none() {
+        contract_tests::null_created_by_reads_back_none(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn update_never_changes_created_by() {
+        contract_tests::update_never_changes_created_by(&fresh_store().await).await;
+    }
+
+    #[tokio::test]
+    async fn half_attributed_schedule_row_is_rejected_on_read() {
+        let store = fresh_store().await;
+        let schedule = contract_tests::sample_schedule("half-attributed");
+        let id = schedule.schedule_id.clone();
+        store.insert(schedule).await.unwrap();
+
+        sqlx::query("UPDATE run_schedules SET tenant_id = ? WHERE schedule_id = ?")
+            .bind("acme")
+            .bind(id.as_str())
+            .execute(&store.pool)
+            .await
+            .unwrap();
+
+        let err = store.get(&id).await.unwrap_err();
+        assert!(
+            matches!(err, RunScheduleRepositoryError::Serialization { .. }),
+            "a half-attributed row must be rejected on read, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn migration_010_adds_nullable_creator_columns() {
+        let store = fresh_store().await;
+        let rows = sqlx::query("PRAGMA table_info(run_schedules)")
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
+        for column_name in ["tenant_id", "api_key_id"] {
+            let row = rows
+                .iter()
+                .find(|row| row.get::<String, _>("name") == column_name)
+                .unwrap_or_else(|| panic!("run_schedules must have a {column_name} column"));
+            assert_eq!(
+                row.get::<i64, _>("notnull"),
+                0,
+                "{column_name} must be nullable"
+            );
+        }
     }
 
     #[tokio::test]

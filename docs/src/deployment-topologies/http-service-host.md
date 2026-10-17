@@ -79,7 +79,7 @@ http:
   auth:
     enabled: true                  # fail-closed: the server refuses to start with no credentials
     api_keys:
-      - { key: "${PALADIN_API_KEY_CI}", name: "ci", role: "admin" }
+      - { key: "${PALADIN_API_KEY_CI}", name: "ci", role: "admin", tenant: "platform-ops" }
   docs:
     enabled: true                  # GET /openapi.json + Swagger UI at /docs
 
@@ -99,6 +99,24 @@ verified against the server's own token store — not a signed or self-describin
 key/token maps to a role. Per-agent `allowed_roles` gate invocation, and runtime
 register/deregister require an `admin` role. `/health`, `/ready`, `/openapi.json`, and `/docs`
 are always reachable without a credential.
+
+**Tenants and what a key can read.** Every API key maps to exactly one tenant through
+`http.auth.api_keys[].tenant`. The field is **required**: a key without one, or with a value
+that is not a plain identifier (non-empty, no whitespace, printable ASCII, at most 128 bytes),
+stops the server at boot with an error naming the key by `name` — there is no implicit default
+tenant, and the error never prints a key value. Key `name`s and key values must each be unique
+across the list (a duplicated secret would resolve to an arbitrary principal, so it is rejected
+at boot too). Bearer-token principals take the tenant configured at `http.auth.bearer_token.tenant`,
+which is required whenever `http.auth.bearer_token.enabled` is true. The tenant is derived by
+the server from the presented credential and nothing else: no header, query parameter or body
+field can assert one. Every submitted run is attributed to the submitting key (`name`) and its
+tenant, and read access follows that attribution — `GET /runs` and every `/runs/{run_id}*`
+route (`GET`, `/stream`, `/cancel`, `/webhook-deliveries`) show a `user`-role key only its own
+tenant's runs, while an `admin`-role key sees every run, including runs recorded without a
+principal. Another tenant's run answers the same `404` as a run that does not exist — never a
+`403`, so a caller cannot learn that a foreign run is there. With `http.auth.enabled: false`,
+every request is an `admin` principal in the `open-access` tenant, which is why open mode keeps
+its deployment-wide read behaviour.
 
 **Choosing a credential path for a multi-replica deployment:** the API-key path scales
 horizontally without qualification — keys are static and byte-identical across every replica.
@@ -134,6 +152,61 @@ Deployment + Service + ConfigMap with liveness `/health` and readiness `/ready` 
 kubectl apply -f k8s/namespace.yaml
 kubectl apply -f k8s/server/secret.yaml -f k8s/server/
 ```
+
+## Treasurer allowances
+
+`treasurer.allowance` (see the [configuration guide](../getting-started/configuration.md#treasurer-allowances))
+adds a durable notice store (`treasury_notices`, applied by the embedded migrator) and, optionally,
+an operator webhook. Roll it out in this order:
+
+1. **Upgrade every replica before setting `allowance.webhook`.** The operator notice is a
+   `webhook_deliveries` row whose `event` is `allowance_warning`. A replica running an older build
+   cannot decode that value: its delivery claim rejects the unknown row and fails the whole batch,
+   stalling run-webhook delivery on that replica until it is upgraded. Setting `warn_at` has a
+   smaller version of the same hazard: an older reader of `run_traces` meets an unknown record kind,
+   but only for runs that carry a notice.
+2. **Reach internal targets with `webhooks.allow_private: true`.** The operator URL passes the same
+   SSRF guard as run webhooks, at boot and at send time. A private or loopback target is rejected
+   unless `allow_private` is set, in which case the server starts and delivers; the cloud metadata
+   address is always rejected. A rejected target stops `paladin-server` from starting, naming
+   `treasurer.allowance.webhook.url`.
+3. **Supply the secret through the environment.** Set `APP_TREASURER_ALLOWANCE_WEBHOOK_SECRET`
+   rather than writing the secret in YAML (a `${VAR}` placeholder is not expanded). It signs the
+   notice with HMAC-SHA256 and is never stored on a delivery row or printed.
+
+## Fleet-wide pacing with Redis
+
+After a provider answers `429`, `paladin-server` paces its next calls to that provider and model
+(`treasurer.cadence`, see the [configuration guide](../getting-started/configuration.md#treasurer-rate-pacing-cadence)).
+By default the gate state lives in the process and is shared by every port the server composes: a
+429 seen by a resident agent also delays the run engine's next call to the same provider and
+model. That is enough for one replica. With several replicas calling one provider account, each
+replica only learns about 429s it received itself; share the state through Redis so one replica's
+429 slows the others:
+
+1. **Build with the feature.** `cargo build --bin paladin-server --features redis-cadence,web-server`
+   (or the same feature set in your image build). A binary built without `redis-cadence` refuses to
+   start with `backend: redis` configured, naming the feature -- it never silently falls back to
+   in-process pacing.
+2. **Name the variable, set the URL.** Configure
+   `treasurer.cadence.backend: { redis: { url_env: CADENCE_REDIS_URL } }` and set
+   `CADENCE_REDIS_URL=redis://:password@host:6379/2` in the environment (a Kubernetes `Secret` is
+   the natural home). Only the variable name is configuration; the URL is read once at boot and
+   is never logged, serialised or printed in an error. A missing variable stops the server at boot.
+3. **Roll out in any order.** Replicas without the Redis backend keep pacing in-process and simply
+   do not see the fleet's 429s.
+
+**When Redis is down.** Redis is never a dependency of a run. A replica boots while Redis is
+unreachable (the connection is made lazily, on first use). If Redis fails at runtime, the replica
+logs **one warning per outage** and paces in-process for the same provider and model, with every
+delay multiplied by `treasurer.cadence.degraded_multiplier` (default `2.0`) since it can no longer
+see the fleet. One call probes Redis at most every five seconds (the others never wait on the probe) and the
+replica returns to the shared state on its own when Redis answers; gates recorded locally during the outage are not
+released early on recovery. A run is never unpaced and an LLM call never fails because Redis did.
+
+**Namespace.** All keys live under the fixed prefix `paladin:cadence`, so two independent fleets
+sharing one Redis server share pacing state for the same provider and model. Use a separate Redis
+server or logical database per fleet.
 
 ## Versioning
 

@@ -3,7 +3,7 @@
 // Comprehensive unit tests for MockLlmAdapter following TDD methodology
 
 use paladin::MockLlmAdapter;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::prompt::{
     PromptData, PromptItem, PromptParameters, PromptType, UserPrompt,
 };
@@ -54,13 +54,16 @@ async fn test_mock_llm_adapter_multiple_responses() {
 #[tokio::test]
 async fn test_mock_llm_adapter_simulates_error() {
     // Test error simulation
-    let adapter = MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded);
+    let adapter = MockLlmAdapter::new().with_error(LlmError::rate_limited(None));
 
     let request = create_test_request();
     let result = adapter.generate(request).await;
 
     assert!(result.is_err(), "Should fail with configured error");
-    assert!(matches!(result.unwrap_err(), LlmError::RateLimitExceeded));
+    assert!(matches!(
+        result.unwrap_err(),
+        LlmError::RateLimitExceeded { .. }
+    ));
 }
 
 #[tokio::test]
@@ -307,7 +310,7 @@ fn create_test_request() -> LlmRequest {
     };
 
     let prompt_item = PromptItem {
-        node: Node::new(prompt_data, Some("test-prompt".to_string())),
+        entity: Entity::new(prompt_data, Some("test-prompt".to_string())),
     };
 
     LlmRequest::new("mock-model", prompt_item)

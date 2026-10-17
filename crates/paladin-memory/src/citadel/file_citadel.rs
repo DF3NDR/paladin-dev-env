@@ -344,11 +344,9 @@ impl CitadelPort for FileCitadel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paladin_core::base::entity::node::Node;
-    use paladin_core::platform::container::citadel::{
-        BattalionCheckpointConfig, CheckpointData, PaladinData, PaladinStatus,
-    };
-    use paladin_core::platform::container::paladin::MaxLoops;
+    use paladin_core::base::entity::Entity;
+    use paladin_core::platform::container::citadel::{BattalionCheckpointConfig, CheckpointData};
+    use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
     use tempfile::TempDir;
 
     fn create_test_paladin_state() -> PaladinState {
@@ -364,7 +362,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        let paladin = Node::new(paladin_data, Some("test".to_string()));
+        let paladin = Entity::new(paladin_data, Some("test".to_string()));
         PaladinState::new(paladin, vec![], vec![])
     }
 
@@ -446,6 +444,80 @@ mod tests {
         assert!(FileCitadel::parse_filename("invalid.json").is_none());
         assert!(FileCitadel::parse_filename("paladin-notauuid.json").is_none());
         assert!(FileCitadel::parse_filename("paladin-123.txt").is_none());
+    }
+
+    /// Compatibility check for the base-entity rename (ADR-0060): the bytes a
+    /// v0.10 Citadel wrote -- captured from the unrenamed tree and never
+    /// hand-edited -- load through the real `FileCitadel` adapter into a
+    /// `PaladinState` and save back to the same JSON document, apart from the
+    /// renamed entity key (`paladin.node` is written as `paladin.data`).
+    #[tokio::test]
+    async fn pre_rename_citadel_snapshot_loads_through_file_citadel()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Runtime read (never `include_str!`) so crate packaging is unaffected.
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../paladin-core/tests/fixtures/pre_rename/citadel.json");
+        // The fixture lives in the sibling `paladin-core` crate. A packaged
+        // `paladin-memory` tarball or a build context that copies only this
+        // crate does not have it, so skip loudly instead of failing on I/O.
+        if !fixture_path.exists() {
+            eprintln!(
+                "skipping pre_rename_citadel_snapshot_loads_through_file_citadel: \
+                 fixture {} is absent (sibling paladin-core crate not present)",
+                fixture_path.display()
+            );
+            return Ok(());
+        }
+        let fixture_bytes = std::fs::read(&fixture_path)?;
+        let fixture_value: serde_json::Value = serde_json::from_slice(&fixture_bytes)?;
+
+        let id_text = fixture_value["paladin"]["uuid"]
+            .as_str()
+            .ok_or("fixture has no paladin.uuid string")?;
+        let id = Uuid::parse_str(id_text)?;
+
+        // The fixture bytes are copied unchanged into the Citadel's state dir.
+        let temp_dir = TempDir::new()?;
+        std::fs::write(
+            temp_dir.path().join(format!("paladin-{id}.json")),
+            &fixture_bytes,
+        )?;
+
+        let citadel = FileCitadel::new(temp_dir.path())?;
+        let state = citadel
+            .load_paladin(id)
+            .await?
+            .ok_or("pre-rename snapshot was not found by load_paladin")?;
+
+        assert_eq!(state.paladin.uuid, id);
+        assert_eq!(state.paladin.name.as_deref(), Some("fixture"));
+        assert_eq!(state.schema_version, "1.0.0");
+
+        // Saving overwrites the same path; the written document must equal the
+        // fixture (`serde_json::Value` equality ignores key order).
+        citadel.save_paladin(&state).await?;
+        let written = std::fs::read_to_string(temp_dir.path().join(format!("paladin-{id}.json")))?;
+        let written_value: serde_json::Value = serde_json::from_str(&written)?;
+
+        // The only wire change is the entity-sense key: the fixture's v0.10 `node` key under `paladin` is
+        // written as `paladin.data` (D-03), and no old key is emitted.
+        let mut expected = fixture_value;
+        let paladin = expected
+            .pointer_mut("/paladin")
+            .and_then(serde_json::Value::as_object_mut)
+            .ok_or("fixture has no paladin object")?;
+        let payload = paladin
+            .remove("node")
+            .ok_or("fixture paladin has no v0.10 node key")?;
+        paladin.insert("data".to_owned(), payload);
+        assert_eq!(written_value, expected);
+        let written_paladin = written_value
+            .pointer("/paladin")
+            .and_then(serde_json::Value::as_object)
+            .ok_or("written snapshot has no paladin object")?;
+        assert!(written_paladin.contains_key("data"));
+        assert!(!written_paladin.contains_key("node"));
+        Ok(())
     }
 
     #[tokio::test]

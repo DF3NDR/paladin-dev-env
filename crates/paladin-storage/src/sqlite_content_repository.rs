@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use paladin_core::base::entity::node::Node;
+use paladin_core::base::entity::Entity;
 use paladin_core::platform::container::content::{
     AudioContent, ContentData, ContentItem, ContentType, ImageContent, TextContent, VideoContent,
 };
@@ -291,18 +291,18 @@ impl SqliteStore {
             mod_date,
         };
 
-        // Reconstruct Node with database values
-        let node = Node {
+        // Reconstruct Entity with database values
+        let entity = Entity {
             uuid,
             created,
             modified,
-            node: content_data,
+            data: content_data,
             name: title,
             version,
         };
 
-        // Create ContentItem with reconstructed node
-        Ok(ContentItem { node })
+        // Create ContentItem with reconstructed entity
+        Ok(ContentItem { entity })
     }
 }
 
@@ -337,13 +337,13 @@ impl ContentRepository for SqliteStore {
     async fn create(&self, content: ContentItem) -> Result<Uuid, RepositoryError> {
         let id = content.uuid();
         let (content_type, content_data_json) = self
-            .serialize_content_type(&content.node.node.content)
+            .serialize_content_type(&content.entity.data.content)
             .await?;
         let content_data_str = serde_json::to_string(&content_data_json)
             .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
         let tags_str = content
-            .node
-            .node
+            .entity
+            .data
             .tags
             .as_ref()
             .map(serde_json::to_string)
@@ -359,23 +359,23 @@ impl ContentRepository for SqliteStore {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         )
-        .bind(content.node.uuid.to_string())
-        .bind(content.node.created)
-        .bind(content.node.modified)
+        .bind(content.entity.uuid.to_string())
+        .bind(content.entity.created)
+        .bind(content.entity.modified)
         .bind(&content_type)
         .bind(&content_data_str)
-        .bind(content.node.node.url.as_ref().map(|u| u.as_str()))
-        .bind(&content.node.node.hash)
-        .bind(content.node.node.source_url.as_ref().map(|u| u.as_str()))
-        .bind(&content.node.name)
-        .bind(&content.node.node.description)
+        .bind(content.entity.data.url.as_ref().map(|u| u.as_str()))
+        .bind(&content.entity.data.hash)
+        .bind(content.entity.data.source_url.as_ref().map(|u| u.as_str()))
+        .bind(&content.entity.name)
+        .bind(&content.entity.data.description)
         .bind(tags_str.as_deref())
-        .bind(&content.node.node.source)
-        .bind(&content.node.node.author)
-        .bind(&content.node.node.source_id)
-        .bind(content.node.node.pub_date)
-        .bind(content.node.node.mod_date)
-        .bind(content.node.version)
+        .bind(&content.entity.data.source)
+        .bind(&content.entity.data.author)
+        .bind(&content.entity.data.source_id)
+        .bind(content.entity.data.pub_date)
+        .bind(content.entity.data.mod_date)
+        .bind(content.entity.version)
         .execute(&self.pool)
         .await
         .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
@@ -385,13 +385,13 @@ impl ContentRepository for SqliteStore {
 
     async fn update(&self, content: &ContentItem) -> Result<(), RepositoryError> {
         let (content_type, content_data_json) = self
-            .serialize_content_type(&content.node.node.content)
+            .serialize_content_type(&content.entity.data.content)
             .await?;
         let content_data_str = serde_json::to_string(&content_data_json)
             .map_err(|e| RepositoryError::SerializationError(e.to_string()))?;
         let tags_str = content
-            .node
-            .node
+            .entity
+            .data
             .tags
             .as_ref()
             .map(serde_json::to_string)
@@ -407,28 +407,28 @@ impl ContentRepository for SqliteStore {
             WHERE uuid = ?
         "#,
         )
-        .bind(content.node.modified)
+        .bind(content.entity.modified)
         .bind(&content_type)
         .bind(&content_data_str)
-        .bind(content.node.node.url.as_ref().map(|u| u.as_str()))
-        .bind(&content.node.node.hash)
-        .bind(content.node.node.source_url.as_ref().map(|u| u.as_str()))
-        .bind(&content.node.name)
-        .bind(&content.node.node.description)
+        .bind(content.entity.data.url.as_ref().map(|u| u.as_str()))
+        .bind(&content.entity.data.hash)
+        .bind(content.entity.data.source_url.as_ref().map(|u| u.as_str()))
+        .bind(&content.entity.name)
+        .bind(&content.entity.data.description)
         .bind(tags_str.as_deref())
-        .bind(&content.node.node.source)
-        .bind(&content.node.node.author)
-        .bind(&content.node.node.source_id)
-        .bind(content.node.node.pub_date)
-        .bind(content.node.node.mod_date)
-        .bind(content.node.version)
-        .bind(content.node.uuid.to_string())
+        .bind(&content.entity.data.source)
+        .bind(&content.entity.data.author)
+        .bind(&content.entity.data.source_id)
+        .bind(content.entity.data.pub_date)
+        .bind(content.entity.data.mod_date)
+        .bind(content.entity.version)
+        .bind(content.entity.uuid.to_string())
         .execute(&self.pool)
         .await
         .map_err(|e| RepositoryError::QueryError(e.to_string()))?;
 
         if result.rows_affected() == 0 {
-            return Err(RepositoryError::NotFound(content.node.uuid.to_string()));
+            return Err(RepositoryError::NotFound(content.entity.uuid.to_string()));
         }
 
         Ok(())
@@ -792,16 +792,16 @@ mod tests {
         let uuid = Uuid::new_v4();
         let now = Utc::now();
 
-        let node = Node {
+        let entity = Entity {
             uuid,
             created: now,
             modified: now,
-            node: content_data,
+            data: content_data,
             name: Some("Test Item".to_string()),
             version: true,
         };
 
-        let content_item = ContentItem { node };
+        let content_item = ContentItem { entity };
 
         assert_eq!(content_item.uuid(), uuid);
         assert_eq!(content_item.created(), now);

@@ -13,9 +13,11 @@ use async_trait::async_trait;
 use chrono::Utc;
 
 use paladin_core::platform::container::assistant::AssistantSource;
+use paladin_core::platform::container::principal::{PrincipalRef, RunReadScope};
 use paladin_core::platform::container::run::{ForkSpec, Run, RunId};
 use paladin_core::platform::container::user::UserRole;
 use paladin_core::platform::container::waypoint::ThreadId;
+use paladin_ports::input::allowance_admission_port::{AdmissionError, AllowanceAdmissionPort};
 use paladin_ports::input::run_submission_port::{
     CancelOutcome, ForkRun, RunAccepted, RunSubmissionError, RunSubmissionPort, SubmitRun,
 };
@@ -24,7 +26,7 @@ use paladin_ports::output::run_repository_port::{RunQuery, RunRepositoryError, R
 use paladin_ports::output::waypoint_port::WaypointPort;
 
 use super::cancel::LocalRunTokens;
-use super::resolver::{AssistantResolver, ResolveError};
+use super::resolver::{AssistantResolver, ResolveError, Runnable};
 use super::webhook::SsrfGuard;
 
 /// Generate a fresh [`ThreadId`] from a UUIDv7 string.
@@ -84,6 +86,22 @@ fn map_queue_error(err: QueueError) -> RunSubmissionError {
     }
 }
 
+/// Map an [`AllowanceAdmissionPort::admit`] failure (Phase 41): a refusal is the typed
+/// [`RunSubmissionError::AllowanceExhausted`]; a backend failure stays a `Backend` error (the
+/// request is not admitted -- fail closed, D-10). An unpriced model under a ceiling (Phase 42,
+/// D-10) is the typed [`RunSubmissionError::ModelUnpriced`]. `AdmissionError` is a foreign
+/// `#[non_exhaustive]` enum, so any future variant falls back to its display text.
+fn map_admission_error(err: AdmissionError) -> RunSubmissionError {
+    match err {
+        AdmissionError::Refused(refusal) => RunSubmissionError::AllowanceExhausted(refusal),
+        AdmissionError::ModelUnpriced { model } => RunSubmissionError::ModelUnpriced { model },
+        AdmissionError::Backend { message } => RunSubmissionError::Backend { message },
+        other => RunSubmissionError::Backend {
+            message: other.to_string(),
+        },
+    }
+}
+
 /// Map a [`RunRepositoryPort::request_cancel`] failure specifically:
 /// [`RunRepositoryError::NotFound`] and [`RunRepositoryError::AlreadyTerminal`]
 /// carry their own typed [`RunSubmissionError`] counterparts (the terminal
@@ -138,6 +156,7 @@ fn map_cancel_error(err: RunRepositoryError) -> RunSubmissionError {
 ///             input: serde_json::json!({}),
 ///             webhook: None,
 ///             requested_by: None,
+///             attributed_to: None,
 ///         })
 ///         .await
 ///         .unwrap_err();
@@ -162,6 +181,10 @@ pub struct RunSubmissionService {
     /// its own precondition without this collaborator, so failing closed
     /// (a genuine 501) is the honest answer, not a silently skipped check.
     waypoints: Option<Arc<dyn WaypointPort>>,
+    /// The Treasurer's admission check (Phase 41, D-06), wired via
+    /// [`RunSubmissionService::with_treasurer`]. `None` (the default) means admission is a
+    /// no-op.
+    treasurer: Option<Arc<dyn AllowanceAdmissionPort>>,
 }
 
 impl RunSubmissionService {
@@ -184,6 +207,7 @@ impl RunSubmissionService {
             local_tokens: LocalRunTokens::new(),
             ssrf_guard: SsrfGuard::new(false),
             waypoints: None,
+            treasurer: None,
         }
     }
 
@@ -204,12 +228,71 @@ impl RunSubmissionService {
         self
     }
 
+    /// Attach the Treasurer's admission check (Phase 41, D-06): `submit` asks it whether the
+    /// caller's allowance is exhausted after the SSRF guard, `resolve`, role authorization and
+    /// thread-visibility check, and before any run row is written. `None` (the default) means
+    /// admission is a no-op; production wiring attaches one only when `treasurer.allowance` has
+    /// entries.
+    ///
+    /// A request with no principal (`requested_by: None`) is never gated (D-07).
+    pub fn with_treasurer(mut self, treasurer: Arc<dyn AllowanceAdmissionPort>) -> Self {
+        self.treasurer = Some(treasurer);
+        self
+    }
+
     /// Wire a [`WaypointPort`] so [`RunSubmissionService::fork`] can
     /// validate that `from_waypoint_id` actually exists on the target
     /// thread before enqueuing a forked run (D-45).
     pub fn with_waypoints(mut self, waypoints: Arc<dyn WaypointPort>) -> Self {
         self.waypoints = Some(waypoints);
         self
+    }
+
+    /// Tenant guard for a caller-supplied Thread (phase 40 review WR-01).
+    ///
+    /// A thread carries no tenant of its own, but every run on it carries
+    /// `submitted_by`. When `requested_by` is `Some`, the thread's latest run
+    /// (looked up with the unrestricted `All` scope -- this is an internal
+    /// authorization read, not a caller-facing one) must be permitted by the
+    /// principal's [`RunReadScope`]; otherwise the caller is answered
+    /// [`RunSubmissionError::UnknownThread`], the same value a `fork` against a
+    /// thread with no runs yields, so a hidden thread is not distinguishable
+    /// from a missing one on this path. A thread with no runs stays open, and a
+    /// `None` principal (an internal caller) or an `All` scope (Admin) skips
+    /// the lookup entirely.
+    ///
+    /// Known limitation: `submit` accepts a caller-chosen id for a thread that
+    /// has no runs, so a Quest submit against an unused id still succeeds while
+    /// a hidden thread is refused -- thread ids are unguessable in practice
+    /// (UUIDv7 by default) and full tenant-namespacing of threads is the
+    /// deferred thread-tenancy work (40-CONTEXT D-14).
+    async fn ensure_thread_visible(
+        &self,
+        thread_id: &ThreadId,
+        requested_by: &Option<PrincipalRef>,
+    ) -> Result<(), RunSubmissionError> {
+        let Some(principal_ref) = requested_by else {
+            return Ok(());
+        };
+        let scope = RunReadScope::for_principal(principal_ref.role, &principal_ref.tenant_id);
+        if scope == RunReadScope::All {
+            return Ok(());
+        }
+        let page = self
+            .repository
+            .list(RunQuery {
+                thread_id: Some(thread_id.clone()),
+                limit: 1,
+                ..Default::default()
+            })
+            .await
+            .map_err(map_repository_error)?;
+        match page.items.into_iter().next() {
+            Some(latest) if !scope.permits(&latest) => Err(RunSubmissionError::UnknownThread {
+                thread_id: thread_id.clone(),
+            }),
+            _ => Ok(()),
+        }
     }
 
     /// D-46: authorize an invocation-shaped request (`submit`/`cancel`/
@@ -219,19 +302,102 @@ impl RunSubmissionService {
     /// against). Shared by all three call sites so the rule is expressed
     /// exactly once.
     fn authorize_invocation(
-        requested_by: &Option<(String, UserRole)>,
+        requested_by: &Option<PrincipalRef>,
         allowed_roles: &[UserRole],
     ) -> Result<(), RunSubmissionError> {
-        let Some((_, role)) = requested_by else {
+        let Some(principal_ref) = requested_by else {
             return Ok(());
         };
-        if allowed_roles.is_empty() || allowed_roles.contains(role) {
+        if allowed_roles.is_empty() || allowed_roles.contains(&principal_ref.role) {
             Ok(())
         } else {
             Err(RunSubmissionError::Forbidden {
                 reason: "role not permitted for this assistant".to_string(),
             })
         }
+    }
+
+    /// Insert `run` (freezing `latest` when `use_latest`) and enqueue it -- the two writes
+    /// `submit` makes after admission, kept together so `submit` can confirm or abandon the
+    /// admission on the one result.
+    async fn persist_and_enqueue(
+        &self,
+        run: &mut Run,
+        use_latest: bool,
+    ) -> Result<(), RunSubmissionError> {
+        if use_latest {
+            let resolved_version = self
+                .repository
+                .insert_with_latest(run)
+                .await
+                .map_err(map_repository_error)?;
+            run.assistant.version = resolved_version;
+        } else {
+            self.repository
+                .insert(run)
+                .await
+                .map_err(map_repository_error)?;
+        }
+        self.queue
+            .enqueue(QueuedRun {
+                run_id: run.run_id.clone(),
+                thread_id: run.thread_id.clone(),
+                attempt: run.attempt,
+                enqueued_at: Utc::now(),
+            })
+            .await
+            .map_err(map_queue_error)?;
+        Ok(())
+    }
+
+    /// The one admission lifecycle `submit` and `fork` share (Phase 41, D-06, D-07, D-10):
+    /// ask the Treasurer BEFORE any row is written, persist, then `confirm` on success or
+    /// `abandon` on a persistence failure, so a run that was admitted but never enqueued does
+    /// not hold an allowance notice.
+    ///
+    /// A request with no principal (`run.submitted_by` is `None`, an internal caller) or a
+    /// service without a Treasurer is never gated and never touches `confirm` / `abandon`.
+    /// A refusal returns [`RunSubmissionError::AllowanceExhausted`]; any other admission error
+    /// returns [`RunSubmissionError::Backend`] (fail closed) -- in both cases nothing is
+    /// persisted. Admission is a check only (D-05): the role never reaches the Treasurer, so an
+    /// `Admin` principal is bound exactly like a `User` (D-09).
+    ///
+    /// `model` is the resolved agent-kind assistant's model (Phase 42, D-09/D-10): when `Some`,
+    /// admission goes through `admit_for_model`, so an unpriced model under a ceiling is
+    /// [`RunSubmissionError::ModelUnpriced`] and a derived budget of zero is
+    /// `AllowanceExhausted`, both before any row is written. A workflow assistant passes `None`
+    /// and keeps today's `admit` (engine nodes are guarded per superstep, not by a derived
+    /// budget). The model comes from the resolved assistant, never from the request.
+    async fn admit_and_persist(
+        &self,
+        run: &mut Run,
+        use_latest: bool,
+        model: Option<&str>,
+    ) -> Result<(), RunSubmissionError> {
+        let admission = match (&self.treasurer, &run.submitted_by) {
+            (Some(treasurer), Some(subject)) => Some(
+                match model {
+                    Some(model) => {
+                        treasurer
+                            .admit_for_model(subject, Some(&run.run_id), model)
+                            .await
+                    }
+                    None => treasurer.admit(subject, Some(&run.run_id)).await,
+                }
+                .map_err(map_admission_error)?,
+            ),
+            _ => None,
+        };
+
+        let persisted = self.persist_and_enqueue(run, use_latest).await;
+
+        if let (Some(treasurer), Some(admission)) = (&self.treasurer, &admission) {
+            match &persisted {
+                Ok(()) => treasurer.confirm(admission).await,
+                Err(_) => treasurer.abandon(admission).await,
+            }
+        }
+        persisted
     }
 }
 
@@ -270,6 +436,12 @@ impl RunSubmissionPort for RunSubmissionService {
         // there (no `assistants` row for a code id).
         let use_latest = request.version.is_none() && resolved.source == AssistantSource::Stored;
 
+        // WR-01: a caller-supplied thread must not belong to another tenant.
+        if let Some(supplied) = &request.thread_id {
+            self.ensure_thread_visible(supplied, &request.requested_by)
+                .await?;
+        }
+
         let thread_id = request.thread_id.unwrap_or_else(generate_thread_id);
         let mut run = Run::new(
             RunId::new_v7(),
@@ -280,29 +452,33 @@ impl RunSubmissionPort for RunSubmissionService {
         if let Some(webhook) = request.webhook {
             run = run.with_webhook(webhook);
         }
-
-        if use_latest {
-            let resolved_version = self
-                .repository
-                .insert_with_latest(&run)
-                .await
-                .map_err(map_repository_error)?;
-            run.assistant.version = resolved_version;
-        } else {
-            self.repository
-                .insert(&run)
-                .await
-                .map_err(map_repository_error)?;
+        // D-08: stamp the effective attribution onto the run BEFORE it is ever inserted.
+        // The submitting principal wins; `attributed_to` (a schedule-fired run's creator,
+        // Phase 41 D-08) applies only when there is no principal. `None` for both (an
+        // internal/same-process caller) leaves `submitted_by` `None` (D-10). The role check
+        // and the thread-visibility guard above read `requested_by` alone: `attributed_to`
+        // is identity only and never grants or implies a role (C13).
+        if let Some(attribution) = request
+            .requested_by
+            .as_ref()
+            .map(PrincipalRef::attribution)
+            .or(request.attributed_to)
+        {
+            run = run.with_submitted_by(attribution);
         }
-        self.queue
-            .enqueue(QueuedRun {
-                run_id: run.run_id.clone(),
-                thread_id: run.thread_id.clone(),
-                attempt: run.attempt,
-                enqueued_at: Utc::now(),
-            })
-            .await
-            .map_err(map_queue_error)?;
+
+        // Phase 41 D-06/D-07: the allowance check, BEFORE any row is written, with confirm /
+        // abandon on the persistence result -- the lifecycle `fork` shares.
+        //
+        // Phase 42 D-09/D-10: an agent-kind assistant is admitted WITH its model, so an
+        // unpriced model under a ceiling is refused here (422) and a zero derived budget is a
+        // 429, instead of surfacing later as a run that cannot be metered.
+        let agent_model = match &resolved.runnable {
+            Runnable::Agent(paladin) => Some(paladin.data.model.as_str()),
+            _ => None,
+        };
+        self.admit_and_persist(&mut run, use_latest, agent_model)
+            .await?;
 
         Ok(RunAccepted {
             run_id: run.run_id,
@@ -326,7 +502,7 @@ impl RunSubmissionPort for RunSubmissionService {
     async fn cancel(
         &self,
         run_id: &RunId,
-        requested_by: Option<(String, UserRole)>,
+        requested_by: Option<PrincipalRef>,
     ) -> Result<CancelOutcome, RunSubmissionError> {
         if requested_by.is_some() {
             let run = self
@@ -337,6 +513,18 @@ impl RunSubmissionPort for RunSubmissionService {
                 .ok_or_else(|| RunSubmissionError::NotFound {
                     run_id: run_id.clone(),
                 })?;
+            // WR-02: enforce the tenant scope here, not only in the HTTP
+            // controller -- any other adapter or embedder passing a fully
+            // attributed principal gets the same isolation. A run the principal
+            // may not see is answered exactly like a missing one.
+            if let Some(principal_ref) = &requested_by
+                && !RunReadScope::for_principal(principal_ref.role, &principal_ref.tenant_id)
+                    .permits(&run)
+            {
+                return Err(RunSubmissionError::NotFound {
+                    run_id: run_id.clone(),
+                });
+            }
             let resolved = self
                 .resolver
                 .resolve(&run.assistant.assistant_id, Some(run.assistant.version))
@@ -363,7 +551,9 @@ impl RunSubmissionPort for RunSubmissionService {
     /// [`WaypointPort`]), copies the assistant reference from the thread's
     /// most recent run, then inserts and enqueues a NEW run carrying
     /// `fork_from`. Subject to the same busy-thread and SSRF checks
-    /// [`RunSubmissionPort::submit`] enforces.
+    /// [`RunSubmissionPort::submit`] enforces, and to the same Treasurer allowance check
+    /// (Phase 41, D-06): an exhausted principal is refused with
+    /// [`RunSubmissionError::AllowanceExhausted`] before the fork's run row is written.
     async fn fork(&self, request: ForkRun) -> Result<RunAccepted, RunSubmissionError> {
         // D-42: same write-time SSRF guard `submit` runs.
         if let Some(webhook) = &request.webhook
@@ -373,6 +563,11 @@ impl RunSubmissionPort for RunSubmissionService {
                 reason: rejection.to_string(),
             });
         }
+
+        // WR-01: run the tenant guard first, so neither the busy-thread nor the
+        // waypoint checks below can confirm another tenant's thread exists.
+        self.ensure_thread_visible(&request.thread_id, &request.requested_by)
+            .await?;
 
         // D-17/D-18: a thread with an active run cannot accept a fork
         // either -- the busy invariant is thread-wide, not run-specific.
@@ -446,23 +641,17 @@ impl RunSubmissionPort for RunSubmissionService {
             serde_json::json!({}),
         )
         .with_fork_from(fork_spec);
+        if let Some(principal_ref) = &request.requested_by {
+            run = run.with_submitted_by(principal_ref.attribution());
+        }
         if let Some(webhook) = request.webhook {
             run = run.with_webhook(webhook);
         }
 
-        self.repository
-            .insert(&run)
-            .await
-            .map_err(map_repository_error)?;
-        self.queue
-            .enqueue(QueuedRun {
-                run_id: run.run_id.clone(),
-                thread_id: run.thread_id.clone(),
-                attempt: run.attempt,
-                enqueued_at: Utc::now(),
-            })
-            .await
-            .map_err(map_queue_error)?;
+        // Phase 41 D-06/D-07: a fork starts spend exactly like a submit, so it runs the same
+        // admit -> insert -> enqueue -> confirm / abandon lifecycle. The fork's run row pins the
+        // assistant version it copied, so `use_latest` is `false` (a plain `insert`).
+        self.admit_and_persist(&mut run, false, None).await?;
 
         Ok(RunAccepted {
             run_id: run.run_id,
@@ -522,6 +711,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -550,6 +740,7 @@ mod tests {
                     events: vec![],
                 }),
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap_err();
@@ -580,6 +771,7 @@ mod tests {
                     events: vec![],
                 }),
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -600,6 +792,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -619,6 +812,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap_err();
@@ -640,6 +834,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -652,6 +847,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap_err();
@@ -738,6 +934,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -797,6 +994,7 @@ mod tests {
                 input: serde_json::json!({}),
                 webhook: None,
                 requested_by: None,
+                attributed_to: None,
             })
             .await
             .unwrap();
@@ -807,5 +1005,1398 @@ mod tests {
             "a pinned version: Some(1) must be inserted verbatim, ignoring the \
              assistant's later-published latest (2)"
         );
+    }
+
+    // --- Phase 40 (TENANT-01/02, D-08): principal attribution stamped on submit ---
+
+    fn principal_ref(tenant: &str, api_key_id: &str, role: UserRole) -> PrincipalRef {
+        PrincipalRef::new(
+            api_key_id,
+            paladin_core::platform::container::principal::TenantId::new(tenant).unwrap(),
+            role,
+        )
+    }
+
+    #[tokio::test]
+    async fn submit_records_the_requesting_principal_attribution() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+
+        let accepted = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: Some(principal_ref("acme", "svc-a", UserRole::User)),
+                attributed_to: None,
+            })
+            .await
+            .unwrap();
+
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(
+            stored.submitted_by,
+            Some(
+                paladin_core::platform::container::principal::RunAttribution::new(
+                    paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+                    "svc-a",
+                )
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_without_a_principal_records_no_attribution() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+
+        let accepted = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: None,
+                attributed_to: None,
+            })
+            .await
+            .unwrap();
+
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert!(stored.submitted_by.is_none());
+    }
+
+    #[tokio::test]
+    async fn two_submissions_by_one_principal_carry_identical_attribution() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let principal = principal_ref("acme", "svc-a", UserRole::User);
+
+        let first = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: Some(principal.clone()),
+                attributed_to: None,
+            })
+            .await
+            .unwrap();
+        let second = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: Some(principal),
+                attributed_to: None,
+            })
+            .await
+            .unwrap();
+
+        let first_stored = repository.get(&first.run_id).await.unwrap().unwrap();
+        let second_stored = repository.get(&second.run_id).await.unwrap().unwrap();
+        assert_eq!(first_stored.submitted_by, second_stored.submitted_by);
+    }
+
+    #[tokio::test]
+    async fn submit_forbidden_role_is_read_from_the_principal_ref() {
+        struct StubRoleRestrictedResolver;
+
+        #[async_trait]
+        impl AssistantResolver for StubRoleRestrictedResolver {
+            async fn resolve(
+                &self,
+                assistant_id: &str,
+                version: Option<u32>,
+            ) -> Result<ResolvedAssistant, ResolveError> {
+                Ok(ResolvedAssistant {
+                    reference: paladin_core::platform::container::run::AssistantRef {
+                        assistant_id: assistant_id.to_string(),
+                        version: version.unwrap_or(1),
+                    },
+                    runnable: Runnable::Workflow(empty_graph()),
+                    allowed_roles: vec![UserRole::Admin],
+                    source: AssistantSource::Code,
+                })
+            }
+        }
+
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let service =
+            RunSubmissionService::new(repository, queue, Arc::new(StubRoleRestrictedResolver));
+
+        let err = service
+            .submit(SubmitRun {
+                assistant_id: "wf1".to_string(),
+                version: None,
+                thread_id: None,
+                input: serde_json::json!({}),
+                webhook: None,
+                requested_by: Some(principal_ref("acme", "svc-a", UserRole::User)),
+                attributed_to: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RunSubmissionError::Forbidden { .. }));
+    }
+
+    // --- Phase 40 review-fix (WR-01/WR-02): tenant isolation on the write paths ---
+
+    fn submit_on_thread(thread: &str, requested_by: Option<PrincipalRef>) -> SubmitRun {
+        SubmitRun {
+            assistant_id: "wf1".to_string(),
+            version: None,
+            thread_id: Some(ThreadId::new(thread).unwrap()),
+            input: serde_json::json!({}),
+            webhook: None,
+            requested_by,
+            attributed_to: None,
+        }
+    }
+
+    /// WR-01: a `User` principal of another tenant must not be able to run
+    /// against a Thread whose latest run belongs to a different tenant, and the
+    /// rejection is the SAME `UnknownThread` a fork against a thread with no
+    /// runs answers -- never `ThreadBusy`, which would confirm the thread
+    /// exists.
+    #[tokio::test]
+    async fn submit_on_another_tenants_thread_is_rejected_as_unknown_thread() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+
+        service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        let err = service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("globex", "svc-b", UserRole::User)),
+            ))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RunSubmissionError::UnknownThread { .. }),
+            "cross-tenant thread submit must look like an unknown thread, got {err:?}"
+        );
+        assert_eq!(queue.depth().await.unwrap(), 1, "nothing may be enqueued");
+        let all = repository
+            .list(RunQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(all.items.len(), 1, "nothing may be inserted");
+    }
+
+    /// WR-01 controls: the owning tenant, an Admin, an internal (`None`)
+    /// caller, and a thread with no runs are all NOT blocked by the tenant
+    /// guard (the owner and Admin reach the ordinary busy-thread check).
+    #[tokio::test]
+    async fn submit_thread_tenant_guard_admits_owner_admin_internal_and_fresh_threads() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, _repository, _queue) = service_with(resolver);
+
+        service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        for requester in [
+            Some(principal_ref("acme", "svc-a2", UserRole::User)),
+            Some(principal_ref("ops-tenant", "ops", UserRole::Admin)),
+            None,
+        ] {
+            let err = service
+                .submit(submit_on_thread("acme-thread", requester))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(err, RunSubmissionError::ThreadBusy { .. }),
+                "owner/admin/internal must pass the tenant guard and reach the busy check, got {err:?}"
+            );
+        }
+
+        // A thread with no runs stays open to any principal.
+        service
+            .submit(submit_on_thread(
+                "fresh-thread",
+                Some(principal_ref("globex", "svc-b", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+    }
+
+    /// WR-01 (fork): a `User` of another tenant forking a thread whose latest
+    /// run is not theirs gets the uniform `UnknownThread`, before the
+    /// busy-thread / waypoint checks can confirm the thread exists.
+    #[tokio::test]
+    async fn fork_on_another_tenants_thread_is_rejected_as_unknown_thread() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, _repository, queue) = service_with(resolver);
+
+        service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        let fork_as = |requested_by: Option<PrincipalRef>| ForkRun {
+            thread_id: ThreadId::new("acme-thread").unwrap(),
+            from_waypoint_id: paladin_core::platform::container::waypoint::WaypointId::new(),
+            edit: None,
+            webhook: None,
+            requested_by,
+        };
+
+        let err = service
+            .fork(fork_as(Some(principal_ref(
+                "globex",
+                "svc-b",
+                UserRole::User,
+            ))))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RunSubmissionError::UnknownThread { .. }),
+            "cross-tenant fork must look like an unknown thread, got {err:?}"
+        );
+        assert_eq!(queue.depth().await.unwrap(), 1, "nothing may be enqueued");
+
+        // Control: the owning tenant passes the guard and reaches the ordinary
+        // busy-thread check (the thread's only run is still active).
+        let err = service
+            .fork(fork_as(Some(principal_ref(
+                "acme",
+                "svc-a2",
+                UserRole::User,
+            ))))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RunSubmissionError::ThreadBusy { .. }));
+    }
+
+    /// WR-02: `cancel` enforces the tenant scope itself -- another tenant's
+    /// `User` gets the same `NotFound` a missing run yields, and the durable
+    /// cancel flag is never written.
+    #[tokio::test]
+    async fn cancel_of_another_tenants_run_is_not_found_and_writes_nothing() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+
+        let accepted = service
+            .submit(submit_on_thread(
+                "acme-thread",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        let err = service
+            .cancel(
+                &accepted.run_id,
+                Some(principal_ref("globex", "svc-b", UserRole::User)),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, RunSubmissionError::NotFound { run_id } if *run_id == accepted.run_id),
+            "cross-tenant cancel must look like a missing run, got {err:?}"
+        );
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert!(
+            !stored.cancel_requested,
+            "a rejected cancel must not persist the cancel flag"
+        );
+    }
+
+    /// WR-02 controls: the owning tenant and an Admin can cancel.
+    #[tokio::test]
+    async fn cancel_admits_the_owning_tenant_and_admin() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+
+        let first = service
+            .submit(submit_on_thread(
+                "t-own",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+        service
+            .cancel(
+                &first.run_id,
+                Some(principal_ref("acme", "svc-a2", UserRole::User)),
+            )
+            .await
+            .unwrap();
+        assert!(
+            repository
+                .get(&first.run_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .cancel_requested
+        );
+
+        let second = service
+            .submit(submit_on_thread(
+                "t-admin",
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+        service
+            .cancel(
+                &second.run_id,
+                Some(principal_ref("ops-tenant", "ops", UserRole::Admin)),
+            )
+            .await
+            .unwrap();
+    }
+
+    // --- Phase 41 (41-01): the Treasurer admission slot --------------------
+
+    use paladin_core::platform::container::allowance::{
+        Admission, AllowanceLimitKind, AllowanceRefusal, AllowanceScopeKind,
+    };
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode};
+    use std::sync::Mutex;
+
+    /// What a [`RecordingTreasurer`] answers to `admit`.
+    enum Script {
+        Admit,
+        Refuse,
+        Backend,
+    }
+
+    /// An `AllowanceAdmissionPort` double that returns a scripted result and records every
+    /// `admit` / `confirm` / `abandon` call.
+    struct RecordingTreasurer {
+        script: Script,
+        admits: Mutex<u32>,
+        confirms: Mutex<u32>,
+        abandons: Mutex<u32>,
+        last_run_id: Mutex<Option<RunId>>,
+        last_subject: Mutex<Option<paladin_core::platform::container::principal::RunAttribution>>,
+    }
+
+    impl RecordingTreasurer {
+        fn new(script: Script) -> Arc<Self> {
+            Arc::new(Self {
+                script,
+                admits: Mutex::new(0),
+                confirms: Mutex::new(0),
+                abandons: Mutex::new(0),
+                last_run_id: Mutex::new(None),
+                last_subject: Mutex::new(None),
+            })
+        }
+
+        /// The subject the most recent `admit` was called with.
+        fn last_subject(
+            &self,
+        ) -> Option<paladin_core::platform::container::principal::RunAttribution> {
+            self.last_subject.lock().unwrap().clone()
+        }
+
+        /// The run id the most recent `admit` was called with.
+        fn last_run_id(&self) -> Option<RunId> {
+            self.last_run_id.lock().unwrap().clone()
+        }
+
+        fn counts(&self) -> (u32, u32, u32) {
+            (
+                *self.admits.lock().unwrap(),
+                *self.confirms.lock().unwrap(),
+                *self.abandons.lock().unwrap(),
+            )
+        }
+    }
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for RecordingTreasurer {
+        async fn admit(
+            &self,
+            subject: &paladin_core::platform::container::principal::RunAttribution,
+            run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            *self.admits.lock().unwrap() += 1;
+            *self.last_subject.lock().unwrap() = Some(subject.clone());
+            *self.last_run_id.lock().unwrap() = run_id.cloned();
+            match self.script {
+                Script::Admit => Ok(Admission::none()),
+                Script::Refuse => {
+                    let usd = CurrencyCode::new("USD").unwrap();
+                    Err(AdmissionError::Refused(AllowanceRefusal {
+                        scope_kind: AllowanceScopeKind::ApiKey,
+                        limit_kind: AllowanceLimitKind::Lifetime,
+                        balance: Cost::new(10, usd.clone()),
+                        ceiling: Cost::new(10, usd),
+                        window: None,
+                        evaluated_at: Utc::now(),
+                    }))
+                }
+                Script::Backend => Err(AdmissionError::Backend {
+                    message: "ledger down".to_string(),
+                }),
+            }
+        }
+
+        async fn confirm(&self, _admission: &Admission) {
+            *self.confirms.lock().unwrap() += 1;
+        }
+
+        async fn abandon(&self, _admission: &Admission) {
+            *self.abandons.lock().unwrap() += 1;
+        }
+    }
+
+    fn submit_as(thread: Option<&str>, requested_by: Option<PrincipalRef>) -> SubmitRun {
+        SubmitRun {
+            assistant_id: "wf1".to_string(),
+            version: None,
+            thread_id: thread.map(|t| ThreadId::new(t).unwrap()),
+            input: serde_json::json!({}),
+            webhook: None,
+            requested_by,
+            attributed_to: None,
+        }
+    }
+
+    // --- Phase 41 (41-05, D-08): attributed_to for principal-less (schedule-fired) runs ---
+
+    fn acme_ops() -> paladin_core::platform::container::principal::RunAttribution {
+        paladin_core::platform::container::principal::RunAttribution::new(
+            paladin_core::platform::container::principal::TenantId::new("acme").unwrap(),
+            "ops",
+        )
+    }
+
+    #[tokio::test]
+    async fn attributed_to_attributes_and_admits_a_principal_less_submission() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let mut request = submit_as(None, None);
+        request.attributed_to = Some(acme_ops());
+        let accepted = service.submit(request).await.unwrap();
+
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(stored.submitted_by, Some(acme_ops()));
+        assert_eq!(treasurer.last_subject(), Some(acme_ops()));
+        assert_eq!(treasurer.counts(), (1, 1, 0));
+    }
+
+    #[tokio::test]
+    async fn requested_by_takes_precedence_over_attributed_to() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let principal = principal_ref("globex", "svc-b", UserRole::User);
+        let mut request = submit_as(None, Some(principal.clone()));
+        request.attributed_to = Some(acme_ops());
+        let accepted = service.submit(request).await.unwrap();
+
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(stored.submitted_by, Some(principal.attribution()));
+        assert_eq!(treasurer.last_subject(), Some(principal.attribution()));
+    }
+
+    #[tokio::test]
+    async fn attributed_to_never_triggers_the_role_check() {
+        struct RestrictedToUsers;
+
+        #[async_trait]
+        impl AssistantResolver for RestrictedToUsers {
+            async fn resolve(
+                &self,
+                assistant_id: &str,
+                version: Option<u32>,
+            ) -> Result<ResolvedAssistant, ResolveError> {
+                Ok(ResolvedAssistant {
+                    reference: paladin_core::platform::container::run::AssistantRef {
+                        assistant_id: assistant_id.to_string(),
+                        version: version.unwrap_or(1),
+                    },
+                    runnable: Runnable::Workflow(empty_graph()),
+                    allowed_roles: vec![UserRole::User],
+                    source: AssistantSource::Code,
+                })
+            }
+        }
+
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let service =
+            RunSubmissionService::new(repository.clone(), queue, Arc::new(RestrictedToUsers));
+
+        // Written decision (D-08, C13): the attribution is identity only. A submission that
+        // carries nothing but `attributed_to` is still an internal caller as far as the
+        // invocation role check goes, so the restricted assistant accepts it.
+        let mut request = submit_as(None, None);
+        request.attributed_to = Some(acme_ops());
+        let accepted = service.submit(request).await.unwrap();
+        let stored = repository.get(&accepted.run_id).await.unwrap().unwrap();
+        assert_eq!(stored.submitted_by, Some(acme_ops()));
+
+        // Control: a real principal whose role is not allowed is still refused.
+        let err = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "ops", UserRole::Admin)),
+            ))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, RunSubmissionError::Forbidden { .. }));
+    }
+
+    #[tokio::test]
+    async fn submit_refused_by_the_treasurer_touches_nothing() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Refuse);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let err = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RunSubmissionError::AllowanceExhausted(_)),
+            "got {err:?}"
+        );
+        assert_eq!(queue.depth().await.unwrap(), 0);
+        assert!(
+            repository
+                .list(RunQuery::default())
+                .await
+                .unwrap()
+                .items
+                .is_empty()
+        );
+        assert_eq!(
+            treasurer.counts(),
+            (1, 0, 0),
+            "a refusal is never confirmed"
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_without_a_principal_never_calls_the_treasurer() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Refuse);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let accepted = service.submit(submit_as(None, None)).await.unwrap();
+
+        assert!(repository.get(&accepted.run_id).await.unwrap().is_some());
+        assert_eq!(treasurer.counts(), (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn submit_admitted_calls_confirm_after_enqueue() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let accepted = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        assert!(repository.get(&accepted.run_id).await.unwrap().is_some());
+        assert_eq!(queue.depth().await.unwrap(), 1);
+        assert_eq!(treasurer.counts(), (1, 1, 0));
+    }
+
+    #[tokio::test]
+    async fn submit_admission_backend_error_fails_closed_as_backend() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Backend);
+        let service = service.with_treasurer(treasurer.clone());
+
+        let err = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "svc-a", UserRole::User)),
+            ))
+            .await
+            .unwrap_err();
+
+        match err {
+            RunSubmissionError::Backend { message } => assert_eq!(message, "ledger down"),
+            other => panic!("expected a Backend error, got {other:?}"),
+        }
+        assert_eq!(queue.depth().await.unwrap(), 0);
+        assert!(
+            repository
+                .list(RunQuery::default())
+                .await
+                .unwrap()
+                .items
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_insert_failure_after_admission_calls_abandon() {
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, _repository, _queue) = service_with(resolver);
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = service.with_treasurer(treasurer.clone());
+        let principal = || Some(principal_ref("acme", "svc-a", UserRole::User));
+
+        service
+            .submit(submit_as(Some("busy-thread"), principal()))
+            .await
+            .unwrap();
+        let err = service
+            .submit(submit_as(Some("busy-thread"), principal()))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RunSubmissionError::ThreadBusy { .. }),
+            "{err:?}"
+        );
+        // First submit: admit + confirm. Second: admit, then the busy insert, then abandon.
+        assert_eq!(treasurer.counts(), (2, 1, 1));
+    }
+
+    // --- Phase 41 (41-04): fork admission and the Admin binding -------------
+
+    use paladin_core::platform::container::battlefield::Battlefield;
+    use paladin_core::platform::container::run::RunStatus;
+    use paladin_core::platform::container::waypoint::{
+        FrontierSnapshot, GraphFingerprint, Waypoint, WaypointId, WaypointStatus,
+    };
+    use paladin_ports::output::waypoint_port::WaypointPort;
+    use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+    use std::collections::BTreeMap;
+
+    /// A thread with one completed run and one saved Waypoint -- everything `fork` needs to
+    /// reach its admission slot. `service` builds a fresh [`RunSubmissionService`] over the same
+    /// repository / queue / waypoints with an optional Treasurer double.
+    struct ForkFixture {
+        repository: Arc<dyn RunRepositoryPort>,
+        queue: Arc<dyn RunQueuePort>,
+        resolver: Arc<dyn AssistantResolver>,
+        waypoints: Arc<dyn WaypointPort>,
+        thread: ThreadId,
+        from_waypoint: WaypointId,
+    }
+
+    impl ForkFixture {
+        async fn new() -> Self {
+            let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+            let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+            let resolver: Arc<dyn AssistantResolver> =
+                Arc::new(CodeWorkflowResolver::new().register("wf1", empty_graph()));
+            let waypoints: Arc<dyn WaypointPort> = Arc::new(InMemoryWaypointStore::new());
+            let fixture = Self {
+                repository,
+                queue,
+                resolver,
+                waypoints,
+                thread: ThreadId::new("fork-thread").unwrap(),
+                from_waypoint: WaypointId::generate(),
+            };
+
+            // An unattributed original run, driven to `Completed` so the thread is not busy.
+            let accepted = fixture
+                .service(None)
+                .submit(submit_as(Some("fork-thread"), None))
+                .await
+                .unwrap();
+            for (from, to) in [
+                (RunStatus::Queued, RunStatus::Running),
+                (RunStatus::Running, RunStatus::Completed),
+            ] {
+                fixture
+                    .repository
+                    .update_status(&accepted.run_id, from, to, Utc::now())
+                    .await
+                    .unwrap();
+            }
+
+            let mut waypoint = Waypoint::new_root(
+                fixture.thread.clone(),
+                1,
+                GraphFingerprint::from_canonical_bytes(b"submission-fork-test-graph"),
+                Battlefield::new(BattlefieldSchema::new(Vec::new())),
+                Vec::new(),
+                Vec::new(),
+                WaypointStatus::Completed,
+                BTreeMap::new(),
+                FrontierSnapshot::default(),
+            );
+            waypoint.waypoint_id = fixture.from_waypoint;
+            fixture.waypoints.save(&waypoint).await.unwrap();
+            fixture
+        }
+
+        fn service(&self, treasurer: Option<Arc<RecordingTreasurer>>) -> RunSubmissionService {
+            let service = RunSubmissionService::new(
+                self.repository.clone(),
+                self.queue.clone(),
+                self.resolver.clone(),
+            )
+            .with_waypoints(self.waypoints.clone());
+            match treasurer {
+                Some(treasurer) => service.with_treasurer(treasurer),
+                None => service,
+            }
+        }
+
+        /// A fork of the fixture's thread by `requested_by`.
+        fn fork_by(&self, requested_by: Option<PrincipalRef>) -> ForkRun {
+            ForkRun {
+                thread_id: self.thread.clone(),
+                from_waypoint_id: self.from_waypoint,
+                edit: None,
+                webhook: None,
+                requested_by,
+            }
+        }
+
+        async fn run_count(&self) -> usize {
+            self.repository
+                .list(RunQuery::default())
+                .await
+                .unwrap()
+                .items
+                .len()
+        }
+    }
+
+    /// An `Admin` of `acme` -- the original run is unattributed, so only an `Admin`
+    /// (`RunReadScope::All`) may fork it (the Phase 40 tenant guard).
+    fn acme_admin() -> PrincipalRef {
+        principal_ref("acme", "ops", UserRole::Admin)
+    }
+
+    #[tokio::test]
+    async fn fork_by_an_exhausted_principal_is_refused_and_touches_nothing() {
+        let fixture = ForkFixture::new().await;
+        let depth_before = fixture.queue.depth().await.unwrap();
+        let runs_before = fixture.run_count().await;
+        let treasurer = RecordingTreasurer::new(Script::Refuse);
+        let service = fixture.service(Some(treasurer.clone()));
+
+        let err = service
+            .fork(fixture.fork_by(Some(acme_admin())))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RunSubmissionError::AllowanceExhausted(_)),
+            "got {err:?}"
+        );
+        assert_eq!(fixture.queue.depth().await.unwrap(), depth_before);
+        assert_eq!(fixture.run_count().await, runs_before, "no run is inserted");
+        assert_eq!(
+            treasurer.counts(),
+            (1, 0, 0),
+            "a refusal is never confirmed"
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_admitted_confirms_after_enqueue() {
+        let fixture = ForkFixture::new().await;
+        let depth_before = fixture.queue.depth().await.unwrap();
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = fixture.service(Some(treasurer.clone()));
+
+        let accepted = service
+            .fork(fixture.fork_by(Some(acme_admin())))
+            .await
+            .unwrap();
+
+        let stored = fixture.repository.get(&accepted.run_id).await.unwrap();
+        assert!(stored.is_some(), "the fork's run row is persisted");
+        assert_eq!(fixture.queue.depth().await.unwrap(), depth_before + 1);
+        assert_eq!(treasurer.counts(), (1, 1, 0));
+        assert_eq!(
+            treasurer.last_run_id(),
+            Some(accepted.run_id),
+            "admit is called with the new run's id"
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_failing_after_admission_calls_abandon_once() {
+        let fixture = ForkFixture::new().await;
+        let treasurer = RecordingTreasurer::new(Script::Admit);
+        let service = fixture.service(Some(treasurer.clone()));
+        let depth_before = fixture.queue.depth().await.unwrap();
+
+        // The first fork is accepted and leaves a Queued run on the thread. A second run
+        // handed straight to the admit-then-persist lifecycle (as if it had passed `fork`'s own
+        // busy check a moment earlier -- the insert race) is refused by the repository's
+        // one-active-run-per-thread invariant AFTER admission.
+        service
+            .fork(fixture.fork_by(Some(acme_admin())))
+            .await
+            .unwrap();
+        let first_fork = fixture
+            .repository
+            .list(RunQuery::default())
+            .await
+            .unwrap()
+            .items
+            .into_iter()
+            .next()
+            .expect("a run exists");
+        let mut racing = Run::new(
+            RunId::new_v7(),
+            fixture.thread.clone(),
+            first_fork.assistant,
+            serde_json::json!({}),
+        )
+        .with_submitted_by(acme_admin().attribution());
+        let err = service
+            .admit_and_persist(&mut racing, false, None)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RunSubmissionError::ThreadBusy { .. }),
+            "{err:?}"
+        );
+        // fork #1: admit + confirm; the failed persist: admit + abandon.
+        assert_eq!(treasurer.counts(), (2, 1, 1));
+        assert_eq!(fixture.queue.depth().await.unwrap(), depth_before + 1);
+        assert!(
+            fixture
+                .repository
+                .get(&racing.run_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "the failed insert persists no run"
+        );
+    }
+
+    #[tokio::test]
+    async fn fork_without_a_principal_never_calls_the_treasurer() {
+        let fixture = ForkFixture::new().await;
+        let treasurer = RecordingTreasurer::new(Script::Refuse);
+        let service = fixture.service(Some(treasurer.clone()));
+
+        let accepted = service.fork(fixture.fork_by(None)).await.unwrap();
+
+        assert!(
+            fixture
+                .repository
+                .get(&accepted.run_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(treasurer.counts(), (0, 0, 0));
+    }
+
+    /// D-09: the Treasurer receives a `RunAttribution` only, so an `Admin` principal with a
+    /// configured allowance is refused exactly like a `User` -- through a REAL `Treasurer` over
+    /// an in-memory ledger, not a scripted double. The ceiling is a lifetime cap (alongside the
+    /// window) so a window boundary crossed mid-test cannot make the balance read zero.
+    #[tokio::test]
+    async fn admin_principal_is_bound_by_its_allowance() {
+        use crate::application::services::treasurer::Treasurer;
+        use crate::config::treasurer::TreasurerConfig;
+        use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
+        use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+        use paladin_storage::treasury::contract_tests::{settle_request, usd};
+        use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, queue) = service_with(resolver);
+        let ledger: Arc<dyn TreasuryLedgerPort> = Arc::new(InMemoryTreasuryLedger::new());
+        let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+            "currency": "USD",
+            "allowance": { "api_keys": { "ops": {
+                "period": "1d", "amount": "2.50", "lifetime": "2.50"
+            } } }
+        }))
+        .unwrap();
+        let treasurer = Treasurer::new(config.allowance_policy().unwrap(), Arc::clone(&ledger));
+        let service = service.with_treasurer(Arc::new(treasurer));
+
+        // `ops` of `acme` has already spent its whole allowance.
+        ledger
+            .settle(settle_request(
+                LedgerScope::new("acme", "ops"),
+                SettlementKey::new(RunId::new_v7(), 0, 0),
+                2_500_000_000,
+                usd(),
+                "gpt-4",
+            ))
+            .await
+            .unwrap();
+
+        let err = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "ops", UserRole::Admin)),
+            ))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, RunSubmissionError::AllowanceExhausted(_)),
+            "an Admin is bound by its allowance, got {err:?}"
+        );
+        assert_eq!(queue.depth().await.unwrap(), 0);
+        assert!(
+            repository
+                .list(RunQuery::default())
+                .await
+                .unwrap()
+                .items
+                .is_empty()
+        );
+    }
+
+    // --- Phase 41 (41-06): once-per-window notices through the real lifecycle -----------------
+
+    use paladin_core::platform::container::allowance::{NoticeOutcome, NoticeRecord};
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
+    use paladin_ports::output::treasury_notice_port::TreasuryNoticePort;
+
+    /// A [`TreasuryNoticePort`] over a real in-memory store (so deduplication is the adapter's)
+    /// that also records the run id of every claim attempt and every discarded id list.
+    struct SpyNotices {
+        inner: paladin_storage::treasury::in_memory::InMemoryTreasuryLedger,
+        attempts: Mutex<Vec<Option<RunId>>>,
+        discards: Mutex<Vec<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl TreasuryNoticePort for SpyNotices {
+        async fn record(
+            &self,
+            notice: &NoticeRecord,
+        ) -> Result<NoticeOutcome, TreasuryLedgerError> {
+            self.attempts.lock().unwrap().push(notice.run_id.clone());
+            self.inner.record(notice).await
+        }
+
+        async fn notices_for_run(
+            &self,
+            run_id: &RunId,
+        ) -> Result<Vec<NoticeRecord>, TreasuryLedgerError> {
+            self.inner.notices_for_run(run_id).await
+        }
+
+        async fn discard(&self, notice_ids: &[String]) -> Result<(), TreasuryLedgerError> {
+            self.discards.lock().unwrap().push(notice_ids.to_vec());
+            self.inner.discard(notice_ids).await
+        }
+    }
+
+    /// A submission service over a REAL [`Treasurer`] whose ledger and notice store are one
+    /// in-memory store, with `ops` of `acme` holding a 2.50 lifetime cap and 2.00 already spent
+    /// (80%, a crossing on the lifetime ceiling that no window rollover can change).
+    async fn notice_fixture() -> (
+        RunSubmissionService,
+        Arc<dyn RunRepositoryPort>,
+        Arc<SpyNotices>,
+    ) {
+        use crate::application::services::treasurer::Treasurer;
+        use crate::config::treasurer::TreasurerConfig;
+        use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementKey};
+        use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+        use paladin_storage::treasury::contract_tests::{settle_request, usd};
+
+        let resolver = CodeWorkflowResolver::new().register("wf1", empty_graph());
+        let (service, repository, _queue) = service_with(resolver);
+        let spy = Arc::new(SpyNotices {
+            inner: paladin_storage::treasury::in_memory::InMemoryTreasuryLedger::new(),
+            attempts: Mutex::new(Vec::new()),
+            discards: Mutex::new(Vec::new()),
+        });
+        let config: TreasurerConfig = serde_json::from_value(serde_json::json!({
+            "currency": "USD",
+            "allowance": { "api_keys": { "ops": {
+                "period": "1d", "amount": "100.00", "lifetime": "2.50"
+            } } }
+        }))
+        .unwrap();
+        let ledger: Arc<dyn TreasuryLedgerPort> = Arc::new(spy.inner.clone());
+        ledger
+            .settle(settle_request(
+                LedgerScope::new("acme", "ops"),
+                SettlementKey::new(RunId::new_v7(), 0, 0),
+                2_000_000_000,
+                usd(),
+                "gpt-4",
+            ))
+            .await
+            .unwrap();
+        let treasurer =
+            Treasurer::new(config.allowance_policy().unwrap(), ledger).with_notices(spy.clone());
+        (service.with_treasurer(Arc::new(treasurer)), repository, spy)
+    }
+
+    #[tokio::test]
+    async fn admitted_submission_records_its_notice_against_the_persisted_run() {
+        let (service, repository, notices) = notice_fixture().await;
+
+        let accepted = service
+            .submit(submit_as(
+                None,
+                Some(principal_ref("acme", "ops", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        // The run the notice names is the run that was persisted.
+        assert!(repository.get(&accepted.run_id).await.unwrap().is_some());
+        let rows = notices.notices_for_run(&accepted.run_id).await.unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "the crossing's notice names the admitted run"
+        );
+        assert_eq!(rows[0].run_id.as_ref(), Some(&accepted.run_id));
+        assert_eq!(rows[0].tenant_id, "acme");
+        assert!(
+            notices.discards.lock().unwrap().is_empty(),
+            "a successful submission discards nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn threadbusy_after_a_won_notice_abandons_it_so_the_next_admission_rewins() {
+        let (service, _repository, notices) = notice_fixture().await;
+        let ops = || Some(principal_ref("acme", "ops", UserRole::User));
+
+        // Another key of the same tenant, with no allowance entry (never reads the ledger),
+        // occupies the thread -- so the tenant guard admits `ops` to the thread and the refusal
+        // is the insert-time one-active-run invariant.
+        service
+            .submit(submit_on_thread(
+                "busy-thread",
+                Some(principal_ref("acme", "other", UserRole::User)),
+            ))
+            .await
+            .unwrap();
+
+        // The principal's admission wins the window's notice, then the insert is refused.
+        let err = service
+            .submit(submit_on_thread("busy-thread", ops()))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, RunSubmissionError::ThreadBusy { .. }),
+            "{err:?}"
+        );
+
+        let attempts = notices.attempts.lock().unwrap().clone();
+        assert_eq!(attempts.len(), 1, "one claim was made");
+        let phantom_run = attempts[0]
+            .clone()
+            .expect("the claim names the admitting run");
+        assert_eq!(
+            notices.discards.lock().unwrap().len(),
+            1,
+            "the abandoned admission discards what it won"
+        );
+        assert!(
+            notices
+                .notices_for_run(&phantom_run)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a run that never persisted holds no notice"
+        );
+
+        // The next admission in the same window wins the notice again, with its own run id.
+        let accepted = service
+            .submit(submit_on_thread("free-thread", ops()))
+            .await
+            .unwrap();
+        let rows = notices.notices_for_run(&accepted.run_id).await.unwrap();
+        assert_eq!(rows.len(), 1, "the next admission re-wins the notice");
+        assert_ne!(accepted.run_id, phantom_run);
+    }
+}
+
+/// Phase 42 (42-09, D-09, D-10): `POST /runs` admits an agent-kind assistant WITH its model, so
+/// an unpriced model under a ceiling and a zero derived budget are both refused before any run
+/// row is written; a workflow assistant keeps today's model-less `admit`.
+#[cfg(test)]
+mod agent_model_admission_tests {
+    use super::*;
+    use crate::application::services::run::resolver::{
+        CodeWorkflowResolver, ResolvedAssistant, Runnable,
+    };
+    use crate::application::services::treasurer::{AllowancePolicy, ScopeAllowance, Treasurer};
+    use paladin_battalion::engine::{EngineLimits, WarGraph};
+    use paladin_core::base::entity::Entity;
+    use paladin_core::platform::container::allowance::Admission;
+    use paladin_core::platform::container::battlefield::BattlefieldSchema;
+    use paladin_core::platform::container::cost::{Cost, CurrencyCode, PriceRow, PriceTable};
+    use paladin_core::platform::container::paladin::PaladinData;
+    use paladin_core::platform::container::principal::{RunAttribution, TenantId};
+    use paladin_core::platform::container::run::AssistantRef;
+    use paladin_core::platform::container::treasury_ledger::{
+        LedgerScope, SettleRequest, SettlementKey,
+    };
+    use paladin_ports::input::run_submission_port::SubmitRun;
+    use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+    use paladin_storage::run::in_memory::InMemoryRunRepository;
+    use paladin_storage::run_queue::in_memory::InMemoryRunQueue;
+    use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
+    use std::sync::Mutex;
+
+    /// 10 USD per 1M tokens: one token is 10_000 nanos.
+    const PRICE_PER_MILLION: i64 = 10_000_000_000;
+    const CEILING_NANOS: i64 = 1_500_000;
+
+    fn usd() -> CurrencyCode {
+        CurrencyCode::new("USD").unwrap()
+    }
+
+    /// Resolves every id to an agent-kind assistant on `model`.
+    struct AgentResolver {
+        model: &'static str,
+    }
+
+    #[async_trait]
+    impl AssistantResolver for AgentResolver {
+        async fn resolve(
+            &self,
+            assistant_id: &str,
+            version: Option<u32>,
+        ) -> Result<ResolvedAssistant, ResolveError> {
+            Ok(ResolvedAssistant {
+                reference: AssistantRef {
+                    assistant_id: assistant_id.to_string(),
+                    version: version.unwrap_or(1),
+                },
+                runnable: Runnable::Agent(Arc::new(Entity::new(
+                    PaladinData {
+                        system_prompt: "system".to_string(),
+                        model: self.model.to_string(),
+                        ..Default::default()
+                    },
+                    Some(assistant_id.to_string()),
+                ))),
+                allowed_roles: vec![],
+                source: AssistantSource::Code,
+            })
+        }
+    }
+
+    /// Records which admission entry point was used and with which model.
+    #[derive(Default)]
+    struct RecordingAdmission {
+        plain_admits: Mutex<u32>,
+        model_admits: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl AllowanceAdmissionPort for RecordingAdmission {
+        async fn admit(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+        ) -> Result<Admission, AdmissionError> {
+            *self.plain_admits.lock().unwrap() += 1;
+            Ok(Admission::none())
+        }
+
+        async fn admit_for_model(
+            &self,
+            _subject: &RunAttribution,
+            _run_id: Option<&RunId>,
+            model: &str,
+        ) -> Result<Admission, AdmissionError> {
+            self.model_admits.lock().unwrap().push(model.to_string());
+            Ok(Admission::none())
+        }
+
+        async fn confirm(&self, _admission: &Admission) {}
+
+        async fn abandon(&self, _admission: &Admission) {}
+    }
+
+    fn principal() -> PrincipalRef {
+        PrincipalRef::new("svc-a", TenantId::new("acme").unwrap(), UserRole::User)
+    }
+
+    fn request() -> SubmitRun {
+        SubmitRun {
+            assistant_id: "agent-1".to_string(),
+            version: None,
+            thread_id: None,
+            input: serde_json::json!({ "input": "hi" }),
+            webhook: None,
+            requested_by: Some(principal()),
+            attributed_to: None,
+        }
+    }
+
+    struct Fixture {
+        service: RunSubmissionService,
+        repository: Arc<dyn RunRepositoryPort>,
+        queue: Arc<dyn RunQueuePort>,
+        ledger: Arc<InMemoryTreasuryLedger>,
+    }
+
+    /// A real `Treasurer` with a lifetime ceiling for `svc-a`, priced only for `gpt-4`, over
+    /// an agent-kind assistant on `model`.
+    fn fixture(model: &'static str) -> Fixture {
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let ledger_port: Arc<dyn TreasuryLedgerPort> = ledger.clone();
+        let policy = AllowancePolicy::new(usd(), 80).with_api_key(
+            "svc-a",
+            ScopeAllowance::new(86_400, i64::MAX).with_lifetime(CEILING_NANOS),
+        );
+        let prices = Arc::new(PriceTable::new(usd()).with_row(
+            "gpt-4",
+            PriceRow::new(PRICE_PER_MILLION, PRICE_PER_MILLION).unwrap(),
+        ));
+        let treasurer = Arc::new(Treasurer::new(policy, ledger_port).with_pricing(prices));
+        let service = RunSubmissionService::new(
+            repository.clone(),
+            queue.clone(),
+            Arc::new(AgentResolver { model }),
+        )
+        .with_treasurer(treasurer);
+        Fixture {
+            service,
+            repository,
+            queue,
+            ledger,
+        }
+    }
+
+    async fn assert_nothing_written(f: &Fixture) {
+        let runs = f.repository.list(RunQuery::default()).await.unwrap();
+        assert!(runs.items.is_empty(), "no run row: {:?}", runs.items);
+        assert_eq!(f.queue.depth().await.unwrap(), 0, "no queue entry");
+    }
+
+    /// D-10: an unpriced agent model under a ceiling is refused `ModelUnpriced` naming the
+    /// model, before any row or queue entry is written.
+    #[tokio::test]
+    async fn submit_agent_kind_with_an_unpriced_model_is_refused_before_any_row() {
+        let f = fixture("mystery-model");
+
+        let err = f.service.submit(request()).await.unwrap_err();
+
+        assert!(
+            matches!(&err, RunSubmissionError::ModelUnpriced { model } if model == "mystery-model"),
+            "{err:?}"
+        );
+        assert_nothing_written(&f).await;
+    }
+
+    /// D-09: a derived budget of zero tokens (headroom below one token's price) is refused
+    /// `AllowanceExhausted` with the binding ceiling's figures, before any row is written; and
+    /// a priced model with real headroom is admitted and persisted (the control).
+    #[tokio::test]
+    async fn submit_agent_kind_with_a_zero_derived_budget_is_refused_allowance_exhausted() {
+        let f = fixture("gpt-4");
+        // 5_000 nanos of headroom is half a token at 10_000 nanos per token.
+        f.ledger
+            .settle(SettleRequest::unreserved(
+                LedgerScope::new("acme", "svc-a"),
+                SettlementKey::new(RunId::new_v7(), 1, 1),
+                Cost::new(CEILING_NANOS - 5_000, usd()),
+                std::collections::BTreeMap::from([("gpt-4".to_string(), CEILING_NANOS - 5_000)]),
+            ))
+            .await
+            .unwrap();
+
+        let err = f.service.submit(request()).await.unwrap_err();
+
+        let RunSubmissionError::AllowanceExhausted(refusal) = &err else {
+            panic!("expected AllowanceExhausted, got {err:?}");
+        };
+        assert_eq!(refusal.ceiling.nanos(), CEILING_NANOS);
+        assert_nothing_written(&f).await;
+
+        // Control: with real headroom the same priced model is admitted and persisted.
+        let f = fixture("gpt-4");
+        f.service.submit(request()).await.expect("admitted");
+        let runs = f.repository.list(RunQuery::default()).await.unwrap();
+        assert_eq!(runs.items.len(), 1);
+        assert_eq!(f.queue.depth().await.unwrap(), 1);
+    }
+
+    /// An agent-kind assistant is admitted with its OWN model (the resolved assistant's, never
+    /// the request's); a workflow assistant keeps the model-less `admit`.
+    #[tokio::test]
+    async fn submit_workflow_assistant_keeps_admit_and_agent_kind_admits_with_its_model() {
+        // Agent-kind: `admit_for_model` with the resolved assistant's model.
+        let admission = Arc::new(RecordingAdmission::default());
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let service = RunSubmissionService::new(
+            repository,
+            queue,
+            Arc::new(AgentResolver { model: "gpt-4" }),
+        )
+        .with_treasurer(admission.clone());
+        service.submit(request()).await.unwrap();
+        assert_eq!(
+            *admission.model_admits.lock().unwrap(),
+            vec!["gpt-4".to_string()]
+        );
+        assert_eq!(*admission.plain_admits.lock().unwrap(), 0);
+
+        // Workflow: the model-less `admit`, no model lookup.
+        let admission = Arc::new(RecordingAdmission::default());
+        let repository: Arc<dyn RunRepositoryPort> = Arc::new(InMemoryRunRepository::new());
+        let queue: Arc<dyn RunQueuePort> = Arc::new(InMemoryRunQueue::new());
+        let graph = Arc::new(WarGraph::new(
+            BattlefieldSchema::new(vec![]),
+            EngineLimits::default(),
+        ));
+        let resolver = CodeWorkflowResolver::new().register("agent-1", graph);
+        let service = RunSubmissionService::new(repository, queue, Arc::new(resolver))
+            .with_treasurer(admission.clone());
+        service.submit(request()).await.unwrap();
+        assert!(admission.model_admits.lock().unwrap().is_empty());
+        assert_eq!(*admission.plain_admits.lock().unwrap(), 1);
     }
 }

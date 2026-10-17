@@ -145,6 +145,7 @@ impl RunRepositoryPort for InMemoryRunRepository {
         run.error = outcome.error;
         run.output = outcome.output;
         run.final_waypoint_id = outcome.final_waypoint_id;
+        run.halt_reason = outcome.halt_reason;
         Ok(())
     }
 
@@ -160,6 +161,10 @@ impl RunRepositoryPort for InMemoryRunRepository {
                     .is_none_or(|a| a == r.assistant.assistant_id)
             })
             .filter(|r| query.status.is_none_or(|s| s == r.status))
+            // D-12: the one shared read rule (`RunReadScope::permits`), applied
+            // before sorting and paging -- the in-memory analogue of the SQL
+            // adapters' `WHERE tenant_id = ?` predicate.
+            .filter(|r| query.scope.permits(r))
             .cloned()
             .collect();
         items.sort_by(|a, b| {
@@ -403,6 +408,7 @@ mod tests {
                 error: Some("boom".to_string()),
                 output: Some(serde_json::json!({"ok": false})),
                 final_waypoint_id: Some("wp-1".to_string()),
+                halt_reason: None,
             },
         )
         .await
@@ -561,6 +567,23 @@ mod contract_suite {
     }
 
     #[tokio::test]
+    async fn halt_reason_round_trips_on_record_outcome() {
+        contract_tests::halt_reason_round_trips_on_record_outcome(&InMemoryRunRepository::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn legacy_row_reads_back_without_a_halt_reason() {
+        contract_tests::legacy_row_reads_back_without_a_halt_reason(&InMemoryRunRepository::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn record_outcome_before_status_flip_is_accepted() {
+        contract_tests::record_outcome_before_status_flip_is_accepted(&InMemoryRunRepository::new()).await;
+    }
+
+    #[tokio::test]
     async fn get_on_unsupported_schema_version_fails() {
         contract_tests::get_on_unsupported_schema_version_fails(&InMemoryRunRepository::new())
             .await;
@@ -621,5 +644,51 @@ mod contract_suite {
             dyn paladin_ports::output::assistant_repository_port::AssistantRepositoryPort,
         > = assistant_repo;
         contract_tests::assistant_version_freeze_at_submit(run_repo, assistant_repo).await;
+    }
+
+    // ── Run attribution + tenant-scoped list contract clauses (Phase 40) ──
+
+    #[tokio::test]
+    async fn insert_then_get_round_trips_attribution() {
+        contract_tests::insert_then_get_round_trips_attribution(&InMemoryRunRepository::new())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn unattributed_run_round_trips_null_attribution() {
+        contract_tests::unattributed_run_round_trips_null_attribution(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn attribution_survives_every_status_and_attempt_update() {
+        contract_tests::attribution_survives_every_status_and_attempt_update(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_to_tenant_returns_only_that_tenants_runs() {
+        contract_tests::list_scoped_to_tenant_returns_only_that_tenants_runs(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_to_a_tenant_with_no_runs_is_an_empty_page() {
+        contract_tests::list_scoped_to_a_tenant_with_no_runs_is_an_empty_page(
+            &InMemoryRunRepository::new(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn list_scoped_pagination_has_no_gap_or_overlap() {
+        contract_tests::list_scoped_pagination_has_no_gap_or_overlap(&InMemoryRunRepository::new())
+            .await;
     }
 }

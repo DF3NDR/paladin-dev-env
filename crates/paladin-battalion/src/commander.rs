@@ -5,7 +5,7 @@
 
 use log::{debug, info, warn};
 use std::sync::Arc;
-use tokio::time::{Duration, timeout};
+use tokio::time::Duration;
 use uuid::Uuid;
 
 use crate::campaign_service::CampaignExecutionService;
@@ -18,8 +18,10 @@ use crate::in_memory_registry::HashMapPaladinRegistry;
 use crate::llm_decision::llm_error_class;
 use crate::maneuver::service::ManeuverExecutionService;
 use crate::phalanx_service::PhalanxExecutionService;
+use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
+use paladin_core::platform::container::battalion::conclave::ConclaveConfig;
 use paladin_core::platform::container::battalion::{
-    BattalionConfig, BattalionError, BattalionResult, BattalionStrategy, ErrorStrategy,
+    BattalionConfig, BattalionError, BattalionResult, BattalionStrategy,
 };
 use paladin_core::platform::container::herald::Herald;
 use paladin_core::platform::container::paladin::Paladin;
@@ -91,10 +93,12 @@ impl std::fmt::Debug for StrategySelection {
 ///
 /// - **Auto Mode**: Automatically selects optimal strategy based on input analysis and Paladin count
 /// - **Explicit Strategy**: Manually select Formation, Phalanx, Campaign, ChainOfCommand, Conclave, Council, or Grove
-/// - **Timeout Enforcement**: Configurable execution timeouts with automatic cancellation
-/// - **Error Handling**: Supports FailFast, ContinueOnError, and RetryThenContinue strategies
+/// - **Per-attempt Aegis policy**: `config.aegis` bounds and retries each Paladin attempt of
+///   Formation, Phalanx, Campaign and the Conclave (`aegis.timeout` is a per-attempt bound, not a
+///   whole-run clock; `aegis.retry` counts total attempts)
+/// - **Error Handling**: fail fast by default; `aegis.on_error = Absorb` lets a Formation continue
+///   past a failed Paladin
 /// - **Telemetry**: Comprehensive execution metadata including timing and success/failure counts
-/// - **Retry Logic**: Configurable retry policies with exponential backoff
 ///
 /// # Auto Mode Heuristics
 ///
@@ -134,14 +138,23 @@ impl std::fmt::Debug for StrategySelection {
 ///
 /// ```ignore
 /// use paladin_battalion::commander::CommanderBuilder;
+/// use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
 /// use paladin_core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
 /// use std::sync::Arc;
+/// use std::time::Duration;
 ///
 /// // Create Commander with Formation strategy
 /// let commander = CommanderBuilder::new(paladin_port)
 ///     .strategy(BattalionStrategy::Formation)
 ///     .paladins(vec![analyzer, enhancer, reviewer])
-///     .config(BattalionConfig::new("sequential_pipeline").with_timeout(60))
+///     .config(BattalionConfig::new("sequential_pipeline").with_aegis(Aegis {
+///         // Each Paladin attempt may run for at most 60 seconds.
+///         timeout: Some(TimeoutPolicy {
+///             run_timeout: Some(Duration::from_secs(60)),
+///             idle_timeout: None,
+///         }),
+///         ..Aegis::default()
+///     }))
 ///     .build()?;
 ///
 /// // Execute with input
@@ -173,15 +186,30 @@ impl std::fmt::Debug for StrategySelection {
 /// ## Production Configuration
 ///
 /// ```ignore
-/// use paladin_core::platform::container::battalion::{BattalionConfig, ErrorStrategy, RetryPolicy};
+/// use paladin_core::platform::container::aegis::{
+///     Aegis, ErrorHandlerSpec, RetryPolicy, RetryPredicate, TimeoutPolicy,
+/// };
+/// use paladin_core::platform::container::battalion::BattalionConfig;
+/// use paladin_core::platform::container::battlefield::StateDelta;
+/// use std::time::Duration;
 ///
-/// let config = BattalionConfig::new("production_battalion")
-///     .with_timeout(300)
-///     .with_error_strategy(ErrorStrategy::RetryThenContinue)
-///     .with_retry_policy(RetryPolicy {
+/// let config = BattalionConfig::new("production_battalion").with_aegis(Aegis {
+///     timeout: Some(TimeoutPolicy {
+///         run_timeout: Some(Duration::from_secs(300)),
+///         idle_timeout: None,
+///     }),
+///     // `max_attempts` counts TOTAL attempts, including the first.
+///     retry: Some(RetryPolicy {
 ///         max_attempts: 3,
-///         ..Default::default()
-///     });
+///         retry_on: RetryPredicate::TransientAndUnknown,
+///         ..RetryPolicy::default()
+///     }),
+///     // Absorb lets a Formation continue past a failed Paladin.
+///     on_error: Some(ErrorHandlerSpec::Absorb {
+///         fallback_delta: StateDelta::new(),
+///     }),
+///     ..Aegis::default()
+/// });
 ///
 /// let commander = CommanderBuilder::new(paladin_port)
 ///     .strategy(BattalionStrategy::Formation)
@@ -368,23 +396,20 @@ impl Commander {
     /// Execute the Commander's Battalion with the given input.
     ///
     /// This is the primary entry point for Battalion execution. It handles strategy
-    /// resolution, timeout enforcement, service delegation, and result enrichment.
+    /// resolution, service delegation, and result enrichment.
     ///
     /// # Execution Flow
     ///
     /// 1. **Strategy Resolution**: If using Auto mode, analyzes input and Paladin characteristics
     ///    to select the optimal strategy. Otherwise, uses the explicitly configured strategy.
     ///
-    /// 2. **Timeout Enforcement**: Wraps execution with `tokio::time::timeout` using the
-    ///    configured `timeout_seconds`. If execution exceeds this limit, returns a Timeout error.
-    ///
-    /// 3. **Service Delegation**: Routes to the appropriate Battalion service:
+    /// 2. **Service Delegation**: Routes to the appropriate Battalion service:
     ///    - Formation -> Sequential pipeline execution
     ///    - Phalanx -> Concurrent parallel execution  
     ///    - Campaign -> Graph-based workflow execution
     ///    - ChainOfCommand -> Hierarchical delegation execution
     ///
-    /// 4. **Result Enrichment**: Enhances the result with Commander-specific metadata:
+    /// 3. **Result Enrichment**: Enhances the result with Commander-specific metadata:
     ///    - `strategy_used`: The actual strategy executed (resolved from Auto if applicable)
     ///    - `strategy_selection_reasoning`: Explanation of why the strategy was chosen
     ///    - `strategy_selection_time_ms`: Time spent selecting strategy
@@ -409,9 +434,18 @@ impl Commander {
     ///   - `started_at` / `completed_at`: Timestamp metadata
     ///   - Additional telemetry fields
     ///
+    /// # Timeouts
+    ///
+    /// The Commander adds no wall clock of its own. Each Paladin attempt of Formation,
+    /// Phalanx, Campaign and the Conclave is bounded by `config.aegis.timeout` -- **per
+    /// attempt**, never for the whole run. ChainOfCommand, Grove and Council are not bounded by
+    /// `aegis`. A caller that needs a whole-run bound wraps `execute()` in its own
+    /// `tokio::time::timeout`.
+    ///
     /// # Errors
     ///
-    /// * `BattalionError::Timeout` - Execution exceeded configured timeout_seconds
+    /// * `BattalionError::Node` - A Paladin attempt exceeded `aegis.timeout`
+    ///   (`NodeErrorSource::Timeout`)
     /// * `BattalionError::ExecutionError` - One or more Paladins failed (if using FailFast)
     /// * `BattalionError::ValidationError` - Invalid Battalion configuration or state
     /// * `BattalionError::PaladinError` - Underlying Paladin execution failure
@@ -436,8 +470,8 @@ impl Commander {
     ///         println!("   Duration: {}ms",
     ///             result.completed_at.signed_duration_since(result.started_at).num_milliseconds());
     ///     }
-    ///     Err(BattalionError::Timeout(secs)) => {
-    ///         eprintln!("❌ Execution timed out after {} seconds", secs);
+    ///     Err(BattalionError::Node(node_error)) => {
+    ///         eprintln!("❌ Paladin attempt failed: {:?}", node_error.source);
     ///     }
     ///     Err(e) => {
     ///         eprintln!("❌ Execution failed: {}", e);
@@ -461,7 +495,7 @@ impl Commander {
     /// # Performance Considerations
     ///
     /// - Auto mode adds 0-5ms overhead for strategy analysis
-    /// - Timeout is enforced at the Commander level and also passed to services
+    /// - Timeouts are enforced per Paladin attempt by the delegated services, not by the Commander
     /// - Telemetry collection adds minimal overhead (<1ms typically)
     ///
     /// # See Also
@@ -470,21 +504,48 @@ impl Commander {
     /// - [`BattalionResult`] - Detailed result structure
     /// - [`BattalionConfig`] - Configuration options affecting execution
     pub async fn execute(&self, input: &str) -> Result<BattalionResult, BattalionError> {
-        let timeout_duration = Duration::from_secs(self.config.timeout_seconds);
+        self.execute_internal(input).await
+    }
 
-        match timeout(timeout_duration, self.execute_internal(input)).await {
-            Ok(result) => result,
-            Err(_) => {
-                info!(
-                    "Commander {} timed out after {} seconds",
-                    self.id, self.config.timeout_seconds
-                );
-                Err(BattalionError::Timeout(self.config.timeout_seconds))
-            }
+    /// Bridge the Battalion's [`Aegis`] policy onto a [`ConclaveConfig`] (D-04).
+    ///
+    /// The per-attempt timeout and the backoff shape travel inside the cloned
+    /// `battalion_config.aegis`, which the Conclave reads directly; this only
+    /// derives the retry **count**. `aegis.retry.max_attempts` counts total
+    /// attempts while `retry_attempts` counts retries after the first, so the
+    /// bridge sets `max_attempts - 1` (clamped to 5 by
+    /// [`ConclaveConfig::with_retry_attempts`]). With no `aegis.retry` the
+    /// `ConclaveConfig` default of 2 applies.
+    fn conclave_config_from_battalion(&self) -> ConclaveConfig {
+        let config = ConclaveConfig::new(&self.config.name, self.config.clone());
+        match &self.config.aegis.retry {
+            Some(policy) => config.with_retry_attempts(policy.max_attempts.saturating_sub(1)),
+            None => config,
         }
     }
 
-    /// Internal execution logic without timeout wrapper
+    /// The Maneuver configuration used when none was set explicitly (D-04).
+    ///
+    /// The error strategy is the Maneuver default (`FailFast`) whatever
+    /// `aegis.on_error` says; the Maneuver's own workflow timeout is
+    /// `aegis.timeout.run_timeout` (`None` when no timeout is set).
+    fn default_maneuver_config(&self) -> crate::maneuver::ManeuverConfig {
+        crate::maneuver::ManeuverConfig {
+            error_strategy: crate::maneuver::ErrorStrategy::default(),
+            output_format: crate::maneuver::OutputFormat::Concatenate,
+            pass_output_as_input: true,
+            timeout: self
+                .config
+                .aegis
+                .timeout
+                .as_ref()
+                .and_then(|policy| policy.run_timeout),
+            collect_timing_metrics: true,
+            detailed_observability: false,
+        }
+    }
+
+    /// Internal execution logic (strategy resolution, delegation, enrichment)
     async fn execute_internal(&self, input: &str) -> Result<BattalionResult, BattalionError> {
         let start_time = std::time::Instant::now();
         let started_at = chrono::Utc::now();
@@ -628,14 +689,8 @@ impl Commander {
                     ));
                 }
 
-                // Create ConclaveConfig from BattalionConfig
-                let conclave_config =
-                    paladin_core::platform::container::battalion::conclave::ConclaveConfig::new(
-                        &self.config.name,
-                        self.config.clone(),
-                    )
-                    .with_timeout(self.config.timeout_seconds)
-                    .with_retry_attempts(self.config.retry_policy.max_attempts.saturating_sub(1));
+                // Create ConclaveConfig from BattalionConfig (D-04)
+                let conclave_config = self.conclave_config_from_battalion();
 
                 // Create Conclave instance
                 let conclave =
@@ -692,7 +747,7 @@ impl Commander {
 
                 // Add all Paladins as participants using their actual names as IDs
                 for paladin in &self.paladins {
-                    council_builder = council_builder.add_participant(paladin.node.name.clone());
+                    council_builder = council_builder.add_participant(paladin.data.name.clone());
                 }
 
                 let council = council_builder.build()?;
@@ -703,7 +758,7 @@ impl Commander {
                 let registry = HashMapPaladinRegistry::new();
                 for paladin in &self.paladins {
                     // Use paladin name as ID
-                    registry.register(paladin.node.name.clone(), Arc::new(paladin.clone()))?;
+                    registry.register(paladin.data.name.clone(), Arc::new(paladin.clone()))?;
                 }
 
                 // Execute Council (pass None for garrison_port - Commander doesn't have one)
@@ -767,18 +822,18 @@ impl Commander {
                 for paladin in &self.paladins {
                     // Register paladin in registry
                     registry
-                        .register(paladin.node.name.clone(), Arc::new(paladin.clone()))
+                        .register(paladin.data.name.clone(), Arc::new(paladin.clone()))
                         .map_err(|e| {
                             BattalionError::ExecutionError(format!(
                                 "Failed to register paladin '{}': {}",
-                                paladin.node.name, e
+                                paladin.data.name, e
                             ))
                         })?;
 
                     // Create TreeAgent with paladin ID matching registry
                     let tree_agent =
                         paladin_core::platform::container::battalion::grove::TreeAgent::new(
-                            paladin.node.name.clone(),
+                            paladin.data.name.clone(),
                         );
                     tree = tree.add_agent(tree_agent);
                 }
@@ -876,24 +931,10 @@ impl Commander {
                 }
 
                 // Use ManeuverConfig from Commander if set, otherwise create from BattalionConfig
-                let maneuver_config = self.maneuver_config.clone().unwrap_or_else(|| {
-                    crate::maneuver::ManeuverConfig {
-                        error_strategy: match self.config.error_strategy {
-                            ErrorStrategy::FailFast => crate::maneuver::ErrorStrategy::FailFast,
-                            ErrorStrategy::ContinueOnError => {
-                                crate::maneuver::ErrorStrategy::ContinueParallel
-                            }
-                            ErrorStrategy::RetryThenContinue => {
-                                crate::maneuver::ErrorStrategy::ContinueParallel
-                            }
-                        },
-                        output_format: crate::maneuver::OutputFormat::Concatenate,
-                        pass_output_as_input: true,
-                        timeout: Some(Duration::from_secs(self.config.timeout_seconds)),
-                        collect_timing_metrics: true,
-                        detailed_observability: false,
-                    }
-                });
+                let maneuver_config = self
+                    .maneuver_config
+                    .clone()
+                    .unwrap_or_else(|| self.default_maneuver_config());
 
                 // Create Maneuver instance
                 let maneuver = crate::maneuver::Maneuver::new(
@@ -1429,9 +1470,8 @@ impl Commander {
 ///
 /// - **config**: Can be set via `config()` - if omitted, uses sensible defaults:
 ///   - Name: "default_commander_battalion"
-///   - Timeout: 300 seconds (5 minutes)
-///   - Error Strategy: FailFast
-///   - Retry Policy: 3 attempts with exponential backoff
+///   - Aegis timeout: `run_timeout` of 300 seconds (5 minutes), applied **per attempt**
+///   - No Aegis retry and no `on_error` handler (fail fast)
 ///
 /// # Validation
 ///
@@ -1439,8 +1479,7 @@ impl Commander {
 ///
 /// - Ensures strategy is set
 /// - Ensures at least one Paladin is provided
-/// - Validates config timeout_seconds > 0
-/// - Validates retry_policy max_attempts > 0
+/// - Validates the config's Aegis policy through `BattalionConfig::validate_aegis`
 ///
 /// # Examples
 ///
@@ -1456,18 +1495,25 @@ impl Commander {
 /// ## Full Configuration
 ///
 /// ```ignore
-/// use paladin_core::platform::container::battalion::{
-///     BattalionConfig, BattalionStrategy, ErrorStrategy, RetryPolicy
-/// };
+/// use paladin_core::platform::container::aegis::{Aegis, RetryPolicy, TimeoutPolicy};
+/// use paladin_core::platform::container::battalion::{BattalionConfig, BattalionStrategy};
 /// use std::path::PathBuf;
+/// use std::time::Duration;
 ///
 /// let config = BattalionConfig::new("custom_battalion")
 ///     .with_description("Customer data processing pipeline")
-///     .with_timeout(600) // 10 minutes
-///     .with_error_strategy(ErrorStrategy::RetryThenContinue)
-///     .with_retry_policy(RetryPolicy {
-///         max_attempts: 5,
-///         ..Default::default()
+///     .with_aegis(Aegis {
+///         // 10 minutes per Paladin attempt
+///         timeout: Some(TimeoutPolicy {
+///             run_timeout: Some(Duration::from_secs(600)),
+///             idle_timeout: None,
+///         }),
+///         // `max_attempts` counts total attempts, including the first.
+///         retry: Some(RetryPolicy {
+///             max_attempts: 5,
+///             ..RetryPolicy::default()
+///         }),
+///         ..Aegis::default()
 ///     })
 ///     .with_metadata_dir(PathBuf::from("./checkpoints"));
 ///
@@ -1690,9 +1736,8 @@ impl CommanderBuilder {
     ///
     /// If no config is provided, generates a default configuration with:
     /// - Name: "default_commander_battalion"
-    /// - Timeout: 300 seconds
-    /// - Error strategy: FailFast
-    /// - Retry policy: 3 attempts with exponential backoff
+    /// - `aegis.timeout`: `run_timeout` of 300 seconds, applied **per attempt**
+    /// - `aegis.retry` and `aegis.on_error`: none (fail fast)
     ///
     /// # Returns
     ///
@@ -1704,7 +1749,8 @@ impl CommanderBuilder {
     /// Returns `CommanderValidation` error if:
     /// - Strategy is not set
     /// - Paladins vector is not set or is empty
-    /// - Config validation fails (timeout_seconds == 0)
+    /// - The config's Aegis policy is invalid (`BattalionConfig::validate_aegis`, for example a
+    ///   zero `run_timeout`)
     ///
     /// # Example
     ///
@@ -1765,23 +1811,21 @@ impl CommanderBuilder {
         // Generate default config if none provided
         let config = self.config.unwrap_or_else(|| {
             debug!("No config provided, generating default configuration");
-            BattalionConfig::new("default_commander_battalion")
-                .with_timeout(300)
-                .with_error_strategy(ErrorStrategy::FailFast)
+            // A bare builder keeps a documented 300 s bound -- per attempt, not per run.
+            BattalionConfig::new("default_commander_battalion").with_aegis(Aegis {
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(Duration::from_secs(300)),
+                    idle_timeout: None,
+                }),
+                ..Aegis::default()
+            })
         });
 
-        // Validate config
-        if config.timeout_seconds == 0 {
-            return Err(BattalionError::CommanderValidation(
-                "Config timeout_seconds must be greater than 0".to_string(),
-            ));
-        }
-
-        if config.retry_policy.max_attempts == 0 {
-            return Err(BattalionError::CommanderValidation(
-                "Config retry_policy.max_attempts must be greater than 0".to_string(),
-            ));
-        }
+        // Validate the Aegis policy (zero durations, zero max_attempts, unsupported handlers)
+        config.validate_aegis().map_err(|e| match e {
+            BattalionError::ValidationError(msg) => BattalionError::CommanderValidation(msg),
+            other => other,
+        })?;
 
         // Validate metadata output directory if configured
         config.validate_metadata_dir().map_err(|e| {
@@ -1806,15 +1850,19 @@ impl CommanderBuilder {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use paladin_core::base::entity::node::Node;
-    use paladin_core::platform::container::battalion::{
-        BattalionStatus, ErrorStrategy, RetryPolicy, TokenUsage,
+    use paladin_core::base::entity::Entity;
+    use paladin_core::platform::container::aegis::{
+        Aegis, ErrorHandlerSpec, RetryPolicy as AegisRetryPolicy, RetryPredicate,
     };
+    use paladin_core::platform::container::battalion::{BattalionStatus, TokenUsage};
+    use paladin_core::platform::container::battlefield::StateDelta;
+    use paladin_core::platform::container::node_error::{NodeErrorSource, TimeoutKind};
     use paladin_core::platform::container::paladin::{MaxLoops, PaladinData, PaladinStatus};
     use paladin_core::platform::container::paladin_error::PaladinError;
     use paladin_llm::mock::MockLlmAdapter;
     use paladin_ports::output::llm_port::LlmError;
     use paladin_ports::output::paladin_port::{PaladinResult, PaladinStream, StopReason};
+    use std::collections::HashMap;
 
     /// Mock PaladinPort for testing
     struct MockPaladinPort;
@@ -1862,10 +1910,10 @@ mod tests {
             _input: &str,
         ) -> Result<PaladinResult, PaladinError> {
             // Commander returns specialist selection, others return normal output
-            let output = if paladin.node.name == "Commander" {
+            let output = if paladin.data.name == "Commander" {
                 "SELECT: Specialist_1, Specialist_2\nREASON: Both specialists are needed for this task".to_string()
             } else {
-                format!("{} completed the task", paladin.node.name)
+                format!("{} completed the task", paladin.data.name)
             };
 
             Ok(PaladinResult {
@@ -1905,7 +1953,7 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some("TestPaladin".to_string()))
+        Entity::new(data, Some("TestPaladin".to_string()))
     }
 
     fn create_test_paladin_with_name(name: &str) -> Paladin {
@@ -1921,17 +1969,21 @@ mod tests {
             vision_enabled: false,
             ..Default::default()
         };
-        Node::new(data, Some(name.to_string()))
+        Entity::new(data, Some(name.to_string()))
     }
 
     fn create_test_config() -> BattalionConfig {
-        BattalionConfig {
-            name: "TestBattalion".to_string(),
-            description: None,
-            timeout_seconds: 300,
-            retry_policy: RetryPolicy::default(),
-            error_strategy: ErrorStrategy::FailFast,
-            metadata_output_dir: None,
+        BattalionConfig::new("TestBattalion")
+    }
+
+    /// An `Aegis` carrying only a per-attempt `run_timeout`.
+    fn run_timeout_aegis(run_timeout: Duration) -> Aegis {
+        Aegis {
+            timeout: Some(TimeoutPolicy {
+                run_timeout: Some(run_timeout),
+                idle_timeout: None,
+            }),
+            ..Aegis::default()
         }
     }
 
@@ -2014,12 +2066,13 @@ mod tests {
     }
 
     #[test]
-    fn test_commander_builder_invalid_config() {
+    fn commander_builder_rejects_zero_run_timeout() {
         let paladin_port = Arc::new(MockPaladinPort);
         let paladin = create_test_paladin();
 
-        // Test with zero timeout (invalid)
-        let invalid_config = BattalionConfig::new("test").with_timeout(0);
+        // Test with zero run_timeout (invalid)
+        let invalid_config =
+            BattalionConfig::new("test").with_aegis(run_timeout_aegis(Duration::ZERO));
 
         let result = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Formation)
@@ -2030,7 +2083,7 @@ mod tests {
         assert!(result.is_err());
         match result.unwrap_err() {
             BattalionError::CommanderValidation(msg) => {
-                assert!(msg.contains("timeout_seconds must be greater than 0"));
+                assert!(msg.contains("run_timeout"), "{msg}");
             }
             _ => panic!("Expected CommanderValidation error"),
         }
@@ -2270,7 +2323,7 @@ mod tests {
         let paladins = vec![create_test_paladin(), create_test_paladin()];
         let config = create_test_config();
         let llm: Arc<dyn LlmPort> =
-            Arc::new(MockLlmAdapter::new().with_error(LlmError::RateLimitExceeded));
+            Arc::new(MockLlmAdapter::new().with_error(LlmError::rate_limited(None)));
 
         let commander = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Auto)
@@ -2560,9 +2613,13 @@ mod tests {
         let paladin = create_test_paladin();
 
         // Create config with specific values to verify passthrough
-        let config = BattalionConfig::new("test_battalion")
-            .with_timeout(600)
-            .with_error_strategy(ErrorStrategy::ContinueOnError);
+        let aegis = Aegis {
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..run_timeout_aegis(Duration::from_secs(600))
+        };
+        let config = BattalionConfig::new("test_battalion").with_aegis(aegis.clone());
 
         let commander = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Formation)
@@ -2573,85 +2630,102 @@ mod tests {
 
         // Verify config is properly stored
         assert_eq!(commander.config.name, "test_battalion");
-        assert_eq!(commander.config.timeout_seconds, 600);
-        assert_eq!(
-            commander.config.error_strategy,
-            ErrorStrategy::ContinueOnError
-        );
+        assert_eq!(commander.config.aegis, aegis);
     }
 
-    #[tokio::test]
-    async fn test_timeout_enforcement() {
-        // Create a mock that simulates a long-running operation
-        struct SlowMockPaladinPort;
+    /// A port whose every call takes `delay` before succeeding.
+    struct SlowMockPaladinPort {
+        delay: Duration,
+    }
 
-        #[async_trait]
-        impl PaladinPort for SlowMockPaladinPort {
-            async fn execute(
-                &self,
-                _paladin: &Paladin,
-                _input: &str,
-            ) -> Result<PaladinResult, paladin_core::platform::container::paladin_error::PaladinError>
-            {
-                // Sleep for 2 seconds to trigger timeout
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                Ok(PaladinResult {
-                    output: "slow output".to_string(),
-                    usage: TokenUsage::new(100, 0),
-                    execution_time_ms: 2000,
-                    loop_count: 1,
-                    stop_reason: StopReason::Completed,
-                    ..Default::default()
-                })
-            }
-
-            async fn execute_stream(
-                &self,
-                _paladin: &Paladin,
-                _input: &str,
-            ) -> Result<PaladinStream, paladin_core::platform::container::paladin_error::PaladinError>
-            {
-                unimplemented!()
-            }
-
-            fn validate(
-                &self,
-                _paladin: &Paladin,
-            ) -> Result<(), paladin_core::platform::container::paladin_error::PaladinError>
-            {
-                Ok(())
-            }
+    #[async_trait]
+    impl PaladinPort for SlowMockPaladinPort {
+        async fn execute(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            tokio::time::sleep(self.delay).await;
+            Ok(PaladinResult {
+                output: "slow output".to_string(),
+                usage: TokenUsage::new(100, 0),
+                execution_time_ms: self.delay.as_millis() as u64,
+                loop_count: 1,
+                stop_reason: StopReason::Completed,
+                ..Default::default()
+            })
         }
 
-        let paladin_port = Arc::new(SlowMockPaladinPort);
-        let paladin1 = create_test_paladin();
-        let paladin2 = create_test_paladin();
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            unimplemented!()
+        }
 
-        // Create config with 1 second timeout
-        let config = BattalionConfig::new("timeout_test").with_timeout(1);
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// D-03: the Commander adds no clock of its own; the bound is Aegis's, per attempt.
+    #[tokio::test(start_paused = true)]
+    async fn commander_formation_timeout_is_per_attempt() {
+        let paladin_port = Arc::new(SlowMockPaladinPort {
+            delay: Duration::from_secs(2),
+        });
+        let config = BattalionConfig::new("timeout_test")
+            .with_aegis(run_timeout_aegis(Duration::from_secs(1)));
 
         let commander = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Formation)
-            .paladins(vec![paladin1, paladin2])
+            .paladins(vec![create_test_paladin(), create_test_paladin()])
             .config(config)
             .build()
             .unwrap();
 
-        // Execute should timeout
+        let started = tokio::time::Instant::now();
         let result = commander.execute("Test input").await;
 
-        // Verify timeout error
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            BattalionError::Timeout(seconds) => {
-                assert_eq!(seconds, 1);
+        match result {
+            Err(BattalionError::Node(node_error)) => {
+                assert_eq!(
+                    node_error.source,
+                    NodeErrorSource::Timeout(TimeoutKind::Run)
+                );
             }
-            other => panic!("Expected Timeout error, got {:?}", other),
+            other => panic!("Expected a Node timeout error, got {:?}", other),
         }
+        // The first Paladin's attempt is cut at 1 s and the run fails fast.
+        assert_eq!(started.elapsed(), Duration::from_secs(1));
+    }
+
+    /// Each Paladin gets its own bound: two 0.8 s Paladins under a 1 s bound finish in 1.6 s.
+    #[tokio::test(start_paused = true)]
+    async fn commander_bound_is_not_a_whole_run_clock() {
+        let paladin_port = Arc::new(SlowMockPaladinPort {
+            delay: Duration::from_millis(800),
+        });
+        let config = BattalionConfig::new("per_attempt")
+            .with_aegis(run_timeout_aegis(Duration::from_secs(1)));
+
+        let commander = CommanderBuilder::new(paladin_port)
+            .strategy(BattalionStrategy::Formation)
+            .paladins(vec![create_test_paladin(), create_test_paladin()])
+            .config(config)
+            .build()
+            .unwrap();
+
+        let started = tokio::time::Instant::now();
+        let result = commander.execute("Test input").await;
+
+        assert!(result.is_ok(), "{:?}", result.err());
+        assert_eq!(started.elapsed(), Duration::from_millis(1600));
     }
 
     #[tokio::test]
-    async fn test_default_config_generation() {
+    async fn commander_builder_default_bounds_each_attempt() {
         let paladin_port = Arc::new(MockPaladinPort);
         let paladin = create_test_paladin();
 
@@ -2665,9 +2739,17 @@ mod tests {
 
         // Verify default config was generated
         assert_eq!(commander.config.name, "default_commander_battalion");
-        assert_eq!(commander.config.timeout_seconds, 300);
-        assert_eq!(commander.config.error_strategy, ErrorStrategy::FailFast);
-        assert_eq!(commander.config.retry_policy.max_attempts, 3);
+        // A bare builder keeps a documented 300 s bound, applied per attempt (Open Question 1).
+        let aegis = &commander.config.aegis;
+        assert_eq!(
+            aegis.timeout,
+            Some(TimeoutPolicy {
+                run_timeout: Some(Duration::from_secs(300)),
+                idle_timeout: None,
+            })
+        );
+        assert_eq!(aegis.retry, None);
+        assert_eq!(aegis.on_error, None);
     }
 
     #[test]
@@ -2813,7 +2895,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -2886,7 +2968,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -2978,6 +3060,69 @@ mod tests {
         );
     }
 
+    /// A Commander over `config` for bridge tests (the strategy is irrelevant to the helpers).
+    fn commander_with(config: BattalionConfig) -> Commander {
+        CommanderBuilder::new(Arc::new(MockPaladinPort))
+            .strategy(BattalionStrategy::Formation)
+            .paladins(vec![create_test_paladin()])
+            .config(config)
+            .build()
+            .unwrap()
+    }
+
+    fn retrying_config(max_attempts: u32) -> BattalionConfig {
+        BattalionConfig::new("bridge").with_aegis(Aegis {
+            retry: Some(AegisRetryPolicy {
+                max_attempts,
+                ..AegisRetryPolicy::default()
+            }),
+            ..Aegis::default()
+        })
+    }
+
+    /// D-04: with no explicit `ManeuverConfig` the bridge fails fast whatever `on_error` says,
+    /// and the Maneuver timeout is `aegis.timeout.run_timeout`.
+    #[test]
+    fn commander_maneuver_bridge_defaults_to_fail_fast() {
+        let absorbing = BattalionConfig::new("bridge").with_aegis(Aegis {
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..run_timeout_aegis(Duration::from_secs(45))
+        });
+        let bridged = commander_with(absorbing).default_maneuver_config();
+        assert_eq!(
+            bridged.error_strategy,
+            crate::maneuver::ErrorStrategy::FailFast
+        );
+        assert_eq!(bridged.timeout, Some(Duration::from_secs(45)));
+
+        let unbounded = commander_with(BattalionConfig::new("bridge")).default_maneuver_config();
+        assert_eq!(
+            unbounded.error_strategy,
+            crate::maneuver::ErrorStrategy::FailFast
+        );
+        assert_eq!(unbounded.timeout, None);
+    }
+
+    /// D-04 as refined by ADR-0059 (e): `retry_attempts = max_attempts - 1`, clamped to 5; the
+    /// `ConclaveConfig` default of 2 applies when there is no `aegis.retry`.
+    #[test]
+    fn commander_conclave_bridge_derives_retry_attempts() {
+        let four = commander_with(retrying_config(4)).conclave_config_from_battalion();
+        assert_eq!(four.retry_attempts, 3);
+
+        let clamped = commander_with(retrying_config(9)).conclave_config_from_battalion();
+        assert_eq!(clamped.retry_attempts, 5);
+
+        let single = commander_with(retrying_config(1)).conclave_config_from_battalion();
+        assert_eq!(single.retry_attempts, 0);
+
+        let none = commander_with(BattalionConfig::new("bridge")).conclave_config_from_battalion();
+        assert_eq!(none.retry_attempts, 2);
+        assert_eq!(none.battalion_config.name, "bridge");
+    }
+
     #[test]
     fn test_commander_builder_with_maneuver_config() {
         let paladin_port = Arc::new(MockPaladinPort);
@@ -3025,7 +3170,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -3063,7 +3208,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -3127,7 +3272,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -3164,7 +3309,7 @@ mod tests {
                 vision_enabled: false,
                 ..Default::default()
             };
-            paladins.push(Node::new(data, Some(format!("agent{}", i))));
+            paladins.push(Entity::new(data, Some(format!("agent{}", i))));
         }
         let config = create_test_config();
 
@@ -3198,9 +3343,7 @@ mod tests {
 
         let paladin_port = Arc::new(MockPaladinPort);
         let paladins = vec![create_test_paladin()];
-        let config = BattalionConfig::new("meta_test")
-            .with_timeout(120)
-            .with_metadata_dir(dir.clone());
+        let config = BattalionConfig::new("meta_test").with_metadata_dir(dir.clone());
 
         let result = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Formation)
@@ -3221,7 +3364,7 @@ mod tests {
     async fn test_commander_build_without_metadata_dir() {
         let paladin_port = Arc::new(MockPaladinPort);
         let paladins = vec![create_test_paladin()];
-        let config = BattalionConfig::new("no_meta_test").with_timeout(120);
+        let config = BattalionConfig::new("no_meta_test");
 
         let result = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Formation)
@@ -3241,9 +3384,7 @@ mod tests {
 
         let paladin_port: Arc<dyn PaladinPort> = Arc::new(MockPaladinPort);
         let paladins = vec![create_test_paladin(), create_test_paladin()];
-        let config = BattalionConfig::new("export_test")
-            .with_timeout(120)
-            .with_metadata_dir(dir.clone());
+        let config = BattalionConfig::new("export_test").with_metadata_dir(dir.clone());
 
         let commander = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Formation)
@@ -3279,9 +3420,7 @@ mod tests {
 
         let paladin_port: Arc<dyn PaladinPort> = Arc::new(MockPaladinPort);
         let paladins = vec![create_test_paladin(), create_test_paladin()];
-        let config = BattalionConfig::new("naming_test")
-            .with_timeout(120)
-            .with_metadata_dir(dir.clone());
+        let config = BattalionConfig::new("naming_test").with_metadata_dir(dir.clone());
 
         let commander = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Formation)
@@ -3327,9 +3466,7 @@ mod tests {
 
         let paladin_port: Arc<dyn PaladinPort> = Arc::new(MockPaladinPort);
         let paladins = vec![create_test_paladin(), create_test_paladin()];
-        let config = BattalionConfig::new("json_test")
-            .with_timeout(120)
-            .with_metadata_dir(dir.clone());
+        let config = BattalionConfig::new("json_test").with_metadata_dir(dir.clone());
 
         let commander = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Formation)
@@ -3394,7 +3531,7 @@ mod tests {
         // and no files should be written
         let paladin_port: Arc<dyn PaladinPort> = Arc::new(MockPaladinPort);
         let paladins = vec![create_test_paladin(), create_test_paladin()];
-        let config = BattalionConfig::new("no_export_test").with_timeout(120);
+        let config = BattalionConfig::new("no_export_test");
 
         let commander = CommanderBuilder::new(paladin_port)
             .strategy(BattalionStrategy::Formation)
@@ -3419,10 +3556,8 @@ mod tests {
         let paladin2 = create_test_paladin();
         let paladin3 = create_test_paladin();
 
-        // Configure fail-fast error strategy
-        let config = BattalionConfig::new("test-fail-fast")
-            .with_error_strategy(ErrorStrategy::FailFast)
-            .with_timeout(60);
+        // Fail fast is the default Aegis policy (`on_error: None`)
+        let config = BattalionConfig::new("test-fail-fast");
 
         let paladin_port = Arc::new(MockPaladinPort) as Arc<dyn PaladinPort>;
         let commander = CommanderBuilder::new(paladin_port)
@@ -3455,10 +3590,13 @@ mod tests {
         let paladin2 = create_test_paladin();
         let paladin3 = create_test_paladin();
 
-        // Configure continue-on-error strategy
-        let config = BattalionConfig::new("test-continue-on-error")
-            .with_error_strategy(ErrorStrategy::ContinueOnError)
-            .with_timeout(60);
+        // Continue past failures: the Aegis Absorb handler
+        let config = BattalionConfig::new("test-continue-on-error").with_aegis(Aegis {
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..Aegis::default()
+        });
 
         let paladin_port = Arc::new(MockPaladinPort) as Arc<dyn PaladinPort>;
         let commander = CommanderBuilder::new(paladin_port)
@@ -3487,19 +3625,26 @@ mod tests {
         let paladin1 = create_test_paladin();
         let paladin2 = create_test_paladin();
 
-        // Configure retry policy
-        let retry_policy = RetryPolicy {
-            max_attempts: 3,
-            base_delay: Duration::from_millis(10),
-            max_delay: Duration::from_millis(100),
-            exponential_backoff: true,
+        // v0.10 `RetryPolicy { max_attempts: 3 }` is `max_attempts: 4` under
+        // Aegis (the count now includes the first attempt). `TransientAndUnknown`
+        // keeps the v0.10 "retry everything" meaning: the default `TransientOnly`
+        // would not retry an Unknown failure.
+        let retry = AegisRetryPolicy {
+            max_attempts: 4,
+            initial_interval: Duration::from_millis(10),
+            backoff_factor: 2.0,
+            max_interval: Duration::from_millis(100),
             jitter: false,
+            retry_on: RetryPredicate::TransientAndUnknown,
         };
 
-        let config = BattalionConfig::new("test-retry-continue")
-            .with_error_strategy(ErrorStrategy::RetryThenContinue)
-            .with_retry_policy(retry_policy)
-            .with_timeout(60);
+        let config = BattalionConfig::new("test-retry-continue").with_aegis(Aegis {
+            retry: Some(retry),
+            on_error: Some(ErrorHandlerSpec::Absorb {
+                fallback_delta: StateDelta::new(),
+            }),
+            ..Aegis::default()
+        });
 
         let paladin_port = Arc::new(MockPaladinPort) as Arc<dyn PaladinPort>;
         let commander = CommanderBuilder::new(paladin_port)
@@ -3531,8 +3676,7 @@ mod tests {
 
         // Configure to continue on error for partial failure handling
         let config = BattalionConfig::new("test-partial-failure")
-            .with_error_strategy(ErrorStrategy::ContinueOnError)
-            .with_timeout(60);
+            .with_aegis(run_timeout_aegis(Duration::from_secs(60)));
 
         let paladin_port = Arc::new(MockPaladinPort) as Arc<dyn PaladinPort>;
         let commander = CommanderBuilder::new(paladin_port)
@@ -3716,5 +3860,122 @@ mod tests {
             commander_result.final_output,
             delegation_result.outputs.join("\n")
         );
+    }
+
+    /// Tracer (Phase 44 D-01, D-02, LEGACY-02): `BattalionConfig.aegis` bounds
+    /// each Paladin attempt on Campaign through the Commander -- never the run.
+    #[tokio::test(start_paused = true)]
+    async fn commander_campaign_honours_aegis_per_attempt_timeout_end_to_end() {
+        use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
+        use paladin_core::platform::container::node_error::{NodeErrorSource, TimeoutKind};
+        use paladin_core::platform::container::transience::Transience;
+
+        /// Sleeps a per-Paladin duration (keyed by Paladin name), then succeeds.
+        struct SleepyPaladinPort {
+            delays: HashMap<String, Duration>,
+        }
+
+        #[async_trait]
+        impl PaladinPort for SleepyPaladinPort {
+            async fn execute(
+                &self,
+                paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinResult, PaladinError> {
+                let delay = self
+                    .delays
+                    .get(&paladin.data.name)
+                    .copied()
+                    .unwrap_or_default();
+                tokio::time::sleep(delay).await;
+                Ok(PaladinResult {
+                    output: format!("{} done", paladin.data.name),
+                    usage: TokenUsage::new(10, 0),
+                    execution_time_ms: delay.as_millis() as u64,
+                    loop_count: 1,
+                    stop_reason: StopReason::Completed,
+                    ..Default::default()
+                })
+            }
+
+            async fn execute_stream(
+                &self,
+                _paladin: &Paladin,
+                _input: &str,
+            ) -> Result<PaladinStream, PaladinError> {
+                Err(PaladinError::ExecutionError("not used".to_string()))
+            }
+
+            fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+                Ok(())
+            }
+        }
+
+        let bounded_config = || {
+            BattalionConfig::new("aegis_tracer").with_aegis(Aegis {
+                timeout: Some(TimeoutPolicy {
+                    run_timeout: Some(Duration::from_secs(1)),
+                    idle_timeout: None,
+                }),
+                ..Aegis::default()
+            })
+        };
+
+        // Case 1: three 600 ms Paladins finish in 1.8 s -- longer than the
+        // 1 s bound, so the bound is per attempt, not per run.
+        let names = ["scout_a", "scout_b", "scout_c"];
+        let port = Arc::new(SleepyPaladinPort {
+            delays: names
+                .iter()
+                .map(|n| (n.to_string(), Duration::from_millis(600)))
+                .collect(),
+        });
+        let commander = CommanderBuilder::new(port)
+            .strategy(BattalionStrategy::Campaign)
+            .paladins(
+                names
+                    .iter()
+                    .map(|n| create_test_paladin_with_name(n))
+                    .collect(),
+            )
+            .config(bounded_config())
+            .build()
+            .expect("commander builds");
+        let started = tokio::time::Instant::now();
+        let result = commander
+            .execute("go")
+            .await
+            .expect("each 600 ms attempt is inside its 1 s bound");
+        assert_eq!(result.status, BattalionStatus::Completed);
+        assert_eq!(result.paladin_results.len(), 3);
+        assert!(started.elapsed() >= Duration::from_millis(1800));
+
+        // Case 2: one 1.5 s Paladin exceeds the 1 s per-attempt bound.
+        let port = Arc::new(SleepyPaladinPort {
+            delays: HashMap::from([("laggard".to_string(), Duration::from_millis(1500))]),
+        });
+        let commander = CommanderBuilder::new(port)
+            .strategy(BattalionStrategy::Campaign)
+            .paladins(vec![create_test_paladin_with_name("laggard")])
+            .config(bounded_config())
+            .build()
+            .expect("commander builds");
+        let started = tokio::time::Instant::now();
+        let error = commander
+            .execute("go")
+            .await
+            .expect_err("a 1.5 s attempt exceeds the 1 s bound");
+        let elapsed = started.elapsed();
+        match error {
+            BattalionError::Node(e) => {
+                assert_eq!(e.node_id.as_str(), "laggard");
+                assert_eq!(e.attempt, 1);
+                assert_eq!(e.transience, Transience::Transient);
+                assert_eq!(e.source, NodeErrorSource::Timeout(TimeoutKind::Run));
+            }
+            other => panic!("expected BattalionError::Node, got {other:?}"),
+        }
+        assert!(elapsed >= Duration::from_secs(1));
+        assert!(elapsed < Duration::from_millis(1500));
     }
 }

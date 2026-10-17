@@ -20,7 +20,7 @@ use paladin::application::services::battalion::council_service::{
     CouncilExecutionService, CouncilResult,
 };
 use paladin::application::services::paladin::error::PaladinError;
-use paladin::core::base::entity::node::Node;
+use paladin::core::base::entity::Entity;
 use paladin::core::platform::container::battalion::council::{
     CouncilBuilder, TerminationCondition, TurnStrategy,
 };
@@ -81,7 +81,7 @@ impl MockLlmAdapter {
 #[async_trait]
 impl PaladinPort for MockLlmAdapter {
     async fn execute(&self, paladin: &Paladin, input: &str) -> Result<PaladinResult, PaladinError> {
-        let paladin_name = paladin.node.name.clone();
+        let paladin_name = paladin.data.name.clone();
 
         // Get configured response based on paladin name
         let output = if let Some(responses) = self.responses.get(&paladin_name) {
@@ -144,7 +144,7 @@ fn create_expert_paladin(name: &str, expertise: &str) -> Paladin {
         vision_enabled: false,
         ..Default::default()
     };
-    Node::new(data, Some(name.to_string()))
+    Entity::new(data, Some(name.to_string()))
 }
 
 #[tokio::main]

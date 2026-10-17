@@ -24,25 +24,16 @@ mod tests {
     use paladin_llm::deepseek::adapter::DeepSeekConfig;
 
     fn typical_provider_config() -> LlmProviderConfig {
-        LlmProviderConfig {
-            api_key: "sk-test-key".to_string(),
-            base_url: Some("https://custom.example.com/v1".to_string()),
-            default_model: Some("gpt-4o".to_string()),
-            default_temperature: Some(0.7),
-            timeout_seconds: Some(120),
-            max_retries: Some(5),
-        }
+        LlmProviderConfig::new("sk-test-key")
+            .with_base_url("https://custom.example.com/v1")
+            .with_default_model("gpt-4o")
+            .with_default_temperature(0.7)
+            .with_timeout_seconds(120)
+            .with_max_retries(5)
     }
 
     fn minimal_provider_config() -> LlmProviderConfig {
-        LlmProviderConfig {
-            api_key: "sk-minimal".to_string(),
-            base_url: None,
-            default_model: None,
-            default_temperature: None,
-            timeout_seconds: None,
-            max_retries: None,
-        }
+        LlmProviderConfig::new("sk-minimal")
     }
 
     // ── OpenAI ──────────────────────────────────────────────────────────────
@@ -88,8 +79,13 @@ mod tests {
         let provider = minimal_provider_config();
         let cfg = AnthropicConfig::from(&provider);
         assert_eq!(cfg.base_url, "https://api.anthropic.com/v1");
-        assert_eq!(cfg.model, "claude-3-5-sonnet-20241022");
-        assert_eq!(cfg.timeout_seconds, 300);
+        // Plan 50-09: the bridge's stale defaults (the October-2024 Sonnet id, a 300 s timeout)
+        // are the adapter's own compiled ones now.
+        assert_eq!(
+            cfg.model,
+            paladin_llm::anthropic::adapter::ANTHROPIC_DEFAULT_MODEL
+        );
+        assert_eq!(cfg.timeout_seconds, 60);
     }
 
     // ── DeepSeek ────────────────────────────────────────────────────────────
@@ -111,7 +107,12 @@ mod tests {
         let provider = minimal_provider_config();
         let cfg = DeepSeekConfig::from(&provider);
         assert_eq!(cfg.base_url, "https://api.deepseek.com/v1");
-        assert_eq!(cfg.model, "deepseek-chat");
-        assert_eq!(cfg.timeout_seconds, 60);
+        // Plan 50-09: the retired `deepseek-chat` default is the adapter's current default
+        // model, a seeded reasoning model, so it gets the 300 s reasoning timeout (D-13).
+        assert_eq!(
+            cfg.model,
+            paladin_llm::deepseek::adapter::DEEPSEEK_DEFAULT_MODEL
+        );
+        assert_eq!(cfg.timeout_seconds, 300);
     }
 }

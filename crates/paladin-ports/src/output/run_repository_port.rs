@@ -15,6 +15,18 @@
 //! no-op. This is what keeps monotonicity true under concurrent workers with
 //! no application lock.
 //!
+//! ## Tenant-scoped listing (D-12)
+//!
+//! [`RunQuery::scope`] carries the caller's [`RunReadScope`]. The default,
+//! [`RunReadScope::All`], is what every internal caller (fork's latest-run
+//! lookup, the run inspector, the schedule service) relies on; only the HTTP
+//! `GET /runs` handler narrows it, from the authenticated principal. Every
+//! adapter applies the scope INSIDE its own query -- a `WHERE tenant_id = ?`
+//! predicate in the same statement as the other filters, ahead of `ORDER BY
+//! ... LIMIT` -- never by post-filtering a fetched page, so a scoped page is
+//! exactly as full as an unscoped one and `next_cursor` keeps walking the
+//! keyset with no gap and no overlap.
+//!
 //! ## Only `insert`/`get`/`update_status`/`record_outcome` are exercised by
 //! this slice
 //!
@@ -30,7 +42,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
+use paladin_core::platform::container::allowance::HaltReason;
 use paladin_core::platform::container::parley::ParleyResponse;
+use paladin_core::platform::container::principal::RunReadScope;
 use paladin_core::platform::container::run::{Run, RunCursor, RunId, RunStatus};
 use paladin_core::platform::container::waypoint::ThreadId;
 
@@ -57,10 +71,41 @@ pub struct RunQuery {
     pub limit: u32,
     /// Opaque keyset cursor from a previous page's `next_cursor`.
     pub cursor: Option<RunCursor>,
+    /// Which runs the caller may see (D-12). `All` (the `Default`) leaves
+    /// every existing internal caller unchanged; `Tenant(t)` restricts the
+    /// page to runs whose recorded `submitted_by.tenant_id` is `t` and is
+    /// applied by every adapter inside its own query -- never by
+    /// post-filtering a fetched page -- so `limit` and `next_cursor` stay a
+    /// correct keyset walk.
+    pub scope: RunReadScope,
 }
 
 /// The terminal outcome fields [`RunRepositoryPort::record_outcome`]
 /// persists alongside a status transition.
+///
+/// # Examples
+///
+/// A spend halt records the typed reason beside the Waypoint to resume from; `error` stays
+/// `None` because a halt is a resume point, not a failure:
+///
+/// ```
+/// use paladin_core::platform::container::allowance::HaltReason;
+/// use paladin_ports::output::run_repository_port::RunOutcomeRecord;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let outcome = RunOutcomeRecord {
+///     final_waypoint_id: Some("wp-halted".to_string()),
+///     halt_reason: Some(HaltReason::LedgerUnavailable),
+///     ..Default::default()
+/// };
+/// assert!(outcome.error.is_none());
+/// assert_eq!(
+///     outcome.halt_reason.as_ref().map(HaltReason::as_str),
+///     Some("ledger_unavailable"),
+/// );
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RunOutcomeRecord {
     /// The engine's error, for a `Failed` outcome.
@@ -69,6 +114,11 @@ pub struct RunOutcomeRecord {
     pub output: Option<serde_json::Value>,
     /// The final Waypoint id reached, if any.
     pub final_waypoint_id: Option<String>,
+    /// Why the run halted, for a spend halt (ALLOW-03, Phase 42 D-06). `None` for every outcome
+    /// that is not a spend halt. Persisted as the typed [`HaltReason`] (figures as integer
+    /// nano-units); an adapter rejects a stored value that is not valid `HaltReason` JSON with
+    /// a serialization error on read, never a panic.
+    pub halt_reason: Option<HaltReason>,
 }
 
 /// Errors returned by [`RunRepositoryPort`] methods (X-06 — structured,
@@ -304,6 +354,13 @@ pub trait RunRepositoryPort: Send + Sync {
 
     /// Page through runs matching `query`, ordered `(submitted_at DESC,
     /// run_id DESC)`.
+    ///
+    /// `query.scope` (D-12) is a predicate inside the adapter's own query --
+    /// on a SQL backend a `WHERE tenant_id = ?` clause in the same statement
+    /// as the other filters, before `ORDER BY ... LIMIT` -- never a Rust
+    /// post-filter over a fetched page, so `limit` and `next_cursor` remain
+    /// a correct keyset walk under [`RunReadScope::Tenant`].
+    /// [`RunReadScope::All`] (the default) adds no predicate at all.
     async fn list(&self, query: RunQuery) -> Result<RunPage, RunRepositoryError>;
 
     /// The thread's currently active run (`Queued`, `Running` or

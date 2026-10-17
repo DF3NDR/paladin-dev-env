@@ -58,6 +58,14 @@ impl MockLlmPort {
         ))])
     }
 
+    /// Fails every call with a Transient `LlmError` (`NetworkError`), the
+    /// classification the circuit breaker counts toward tripping (D-14).
+    fn always_fail_transient() -> Self {
+        Self::new(vec![Err(LlmError::NetworkError(
+            "connection reset".to_string(),
+        ))])
+    }
+
     fn get_call_count(&self) -> u32 {
         self.call_count.load(Ordering::SeqCst)
     }
@@ -92,9 +100,11 @@ impl LlmPort for MockLlmPort {
                 content,
                 finish_reason: FinishReason::Stop,
                 usage: TokenUsage::new(10, 20),
+                cost: None,
                 created_at: chrono::Utc::now(),
                 metadata: std::collections::HashMap::new(),
                 function_call: None,
+                reasoning: None,
             }),
             Err(e) => Err(e),
         }
@@ -344,7 +354,7 @@ async fn test_execution_service_exponential_backoff() {
 
 #[tokio::test]
 async fn test_execution_service_uses_circuit_breaker() {
-    let llm_port = Arc::new(MockLlmPort::always_fail());
+    let llm_port = Arc::new(MockLlmPort::always_fail_transient());
     let circuit_breaker = Arc::new(CircuitBreaker::new(2, 2, Duration::from_millis(100)));
     let service =
         PaladinExecutionService::new(llm_port.clone(), circuit_breaker.clone(), None, None);
@@ -372,6 +382,34 @@ async fn test_execution_service_uses_circuit_breaker() {
             // Expected - circuit breaker is protecting us
         }
         e => panic!("Expected CircuitBreakerOpen, got {:?}", e),
+    }
+}
+
+/// D-14: an Unknown LLM failure (`ProcessingError`) is not counted by the
+/// circuit breaker, so the circuit never opens however many calls fail.
+#[tokio::test]
+async fn unknown_llm_failures_do_not_open_the_circuit() {
+    let llm_port = Arc::new(MockLlmPort::always_fail());
+    let circuit_breaker = Arc::new(CircuitBreaker::new(2, 2, Duration::from_millis(100)));
+    let service =
+        PaladinExecutionService::new(llm_port.clone(), circuit_breaker.clone(), None, None);
+
+    let paladin = PaladinBuilder::new(llm_port.clone() as Arc<dyn LlmPort>)
+        .system_prompt("You are a helpful assistant")
+        .retry_attempts(1)
+        .build()
+        .await
+        .expect("Failed to build paladin");
+
+    for call in 1..=4 {
+        let error = service
+            .execute(&paladin, "Test input")
+            .await
+            .expect_err("every call must fail");
+        assert!(
+            !matches!(error, PaladinError::CircuitBreakerOpen),
+            "call {call}: an Unknown failure must not open the circuit, got {error:?}"
+        );
     }
 }
 
@@ -486,7 +524,7 @@ async fn test_layer2_dynamic_temperature_enabled() {
         .expect("Failed to build paladin");
 
     // Enable dynamic temperature
-    paladin.node.dynamic_temperature = true;
+    paladin.data.dynamic_temperature = true;
 
     let result = service.execute(&paladin, "Test input").await;
 
@@ -544,7 +582,7 @@ async fn test_graceful_degradation_no_planning_service() {
         .expect("Failed to build paladin");
 
     // Enable planning without service (graceful degradation test)
-    paladin.node.autonomous_planning = true;
+    paladin.data.autonomous_planning = true;
 
     let result = service.execute(&paladin, "Test input").await;
 
@@ -576,7 +614,7 @@ async fn test_graceful_degradation_no_prompt_service() {
         .expect("Failed to build paladin");
 
     // Enable prompt generation without service (graceful degradation test)
-    paladin.node.autonomous_prompts = true;
+    paladin.data.autonomous_prompts = true;
 
     let result = service.execute(&paladin, "Test input").await;
 
@@ -631,7 +669,7 @@ async fn test_mixed_autonomous_features() {
         .expect("Failed to build paladin");
 
     // Enable only dynamic_temperature (Layer 2)
-    paladin.node.dynamic_temperature = true;
+    paladin.data.dynamic_temperature = true;
 
     let result = service.execute(&paladin, "Test input").await;
 

@@ -24,6 +24,11 @@ pub(crate) struct CompatRequest {
     pub frequency_penalty: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presence_penalty: Option<f32>,
+    /// The caller's stop sequences, in the order declared, when the model's profile admits them
+    /// (ADR-0061). Absent -- never `null` -- when the caller set none or the profile does not
+    /// admit them, so a body without stop sequences stays byte-identical to a pre-Phase-50 one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop: Option<Vec<String>>,
     pub stream: bool,
     /// `LlmRequest.response_format` on the wire (RT-FR-17, D-28). Omitted
     /// entirely when the caller sets no hint, keeping the body byte
@@ -47,7 +52,9 @@ pub(crate) struct CompatStreamOptions {
 }
 
 /// The provider-agnostic `response_format` hint, compiled down to this
-/// engine's own plain JSON-object wire shape (D-28).
+/// engine's own plain JSON-object wire shape (D-28). Whether one is sent at all, and whether a
+/// schema request is downgraded to this form, follows the model's profile (ADR-0061 (i)); a
+/// downgrade is recorded as `paladin.response_format_adjusted`.
 ///
 /// Every preset built on [`super::engine::CompatEngine`] — Kimi, Qwen, Grok,
 /// Ollama and the generic OpenAI-compatible preset — speaks the de-facto
@@ -78,6 +85,11 @@ pub(crate) struct CompatMessage {
     /// requests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
+    /// The vendor's dedicated refusal text (OpenAI-shaped `message.refusal`), when the model
+    /// declined to answer. Only ever present on responses; omitted from outgoing requests.
+    /// `null` and absent both mean "no refusal" (D-09).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
 }
 
 /// Non-streaming chat-completions response body.
@@ -129,6 +141,10 @@ pub(crate) struct CompatUsage {
 pub(crate) struct CompatPromptTokensDetails {
     #[serde(default)]
     pub cached_tokens: Option<u32>,
+    /// Moonshot's `prompt_tokens_details.cache_write_tokens` (D-11; the field the handoff
+    /// measured and `50-SEED-PROBE.md` re-checked for Kimi). Absent elsewhere.
+    #[serde(default)]
+    pub cache_write_tokens: Option<u32>,
 }
 
 /// `CompatUsage.completion_tokens_details` (D-20).
@@ -163,6 +179,12 @@ pub(crate) struct CompatStreamChoice {
 #[derive(Debug, Deserialize)]
 pub(crate) struct CompatStreamDelta {
     pub content: Option<String>,
+    /// Hidden chain-of-thought text streamed on this delta, in wire order (D-11).
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
+    /// A fragment of the vendor's refusal text (D-09). `null` and absent mean none.
+    #[serde(default)]
+    pub refusal: Option<String>,
 }
 
 /// `GET {base_url}/models` response shape: `{ "data": [ { "id": "..." } ] }`.

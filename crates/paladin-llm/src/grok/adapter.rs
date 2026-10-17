@@ -299,8 +299,8 @@ impl GrokAdapter {
         // declaration above, restated as a profile; per-model seeded entries arrive in plan
         // 50-06.
         // Stop sequences: `NotSent` -- xAI's reasoning models reject `stop` (RESEARCH A5, the
-        // handoff's G-10 note), so a stop-word agent is refused at build by name and a direct
-        // call's `stop` is omitted and recorded. A model that does take it is corrected by its
+        // handoff's G-10 note), so the wire omits `stop` and records the omission while the
+        // execution service still enforces a stop-word agent's list client-side. A model that does take it is corrected by its
         // seeded entry (plan 50-06), never by this adapter (D-04a).
         let fallback = fallback_from_compat(
             &engine_config.capabilities.clone().into(),

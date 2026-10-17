@@ -646,7 +646,7 @@ impl ModelRegistry {
 /// - `top_p`: `Range(0.0, 1.0)` when carried, else `NotSent`.
 /// - `frequency_penalty` / `presence_penalty`: `Range(-2.0, 2.0)` (the OpenAI chat-completions
 ///   contract) when carried, else `NotSent`.
-/// - `stop_sequences`: the caller's `stop` (compat presets differ: Grok refuses it).
+/// - `stop_sequences`: the caller's `stop` (compat presets differ: Grok does not send it).
 /// - `context_window`: the preset's advertised maximum.
 /// - `json_object` is true and `json_schema` false: the engine downgrades a schema to an object.
 ///

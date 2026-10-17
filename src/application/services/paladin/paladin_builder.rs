@@ -1232,8 +1232,15 @@ impl PaladinBuilder {
             }
         }
 
+        // Stop words are enforced client-side by `PaladinExecutionService::check_stop_words`,
+        // which scans the accumulated output and aborts with `StopWordDetected`. That check is the
+        // source of truth, so a model that takes no wire `stop` (`StopSupport::NotSent`) is not a
+        // build refusal: the sampler omits the unsupported parameter at send time and records the
+        // omission, and the client-side check still enforces the list. Only a count above a
+        // numeric maximum is refused here.
         if !self.data.stop_words.is_empty()
             && let Some(profile) = &profile
+            && !matches!(profile.stop_sequences, StopSupport::NotSent)
         {
             let count = self.data.stop_words.len();
             if !profile.stop_sequences.admits(count) {
@@ -1699,22 +1706,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stop_words_the_profile_does_not_take_are_refused_by_name() {
+    async fn stop_words_on_a_model_that_sends_no_stop_still_build() {
+        // WR-01: the client-side check enforces the list, so a profile that does not take a wire
+        // `stop` must not turn an agent's stop words into a build refusal.
         let port = Arc::new(MockLlmPortWithProfile(ModelProfile::new()));
-        let message = configuration_error(
-            PaladinBuilder::new(port)
-                .system_prompt("Test")
-                .model("reasoner")
-                .add_stop_word("END")
-                .build()
-                .await,
-        );
-        for needle in ["MockWithProfile", "reasoner", "stop", "does not take"] {
-            assert!(
-                message.contains(needle),
-                "'{needle}' missing from: {message}"
-            );
-        }
+        PaladinBuilder::new(port)
+            .system_prompt("Test")
+            .model("reasoner")
+            .add_stop_word("END")
+            .build()
+            .await
+            .expect("stop words are enforced client-side, so NotSent must not refuse the build");
     }
 
     #[tokio::test]

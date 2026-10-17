@@ -7,9 +7,11 @@
 //! none is ever swapped for another:
 //!
 //! - **Refuse at build.** `PaladinBuilder` refuses an *explicit* value (an operator's
-//!   `.temperature(0.5)`, an `.add_stop_word("END")`) the profile does not admit, with an error
-//!   naming provider, model and parameter. An explicit request is a statement of intent; silently
-//!   dropping it would be a divergence nobody can discover.
+//!   `.temperature(0.5)`, or more `.add_stop_word(..)` words than the profile's numeric maximum)
+//!   the profile does not admit, with an error naming provider, model and parameter. An explicit
+//!   request is a statement of intent; silently dropping it would be a divergence nobody can
+//!   discover. Stop words on a model that takes no wire `stop` are the one exception: the
+//!   execution service enforces them client-side, so that value is omitted below and recorded.
 //! - **Filter at the wire.** This module is the other half. A value that is set on the request
 //!   but not admitted -- the framework's fabricated `0.7`, an auto-selected temperature, a value a
 //!   direct caller put on an `LlmRequest` -- is **omitted** from the outgoing body, and the

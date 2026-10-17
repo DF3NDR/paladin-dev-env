@@ -42,7 +42,7 @@ use paladin::{LlmConfig, LlmProviderConfig, LlmProviderFactory};
 use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 use paladin_core::platform::container::transience::Transience;
 use paladin_llm::fallback::{FallbackLlmAdapter, FallbackStep};
-use paladin_ports::output::llm_port::{LlmRequest, LlmResponse};
+use paladin_ports::output::llm_port::{LlmRequest, LlmResponse, StopSupport};
 use serde_json::{Value, json};
 
 /// The query every case sends: multibyte on purpose, so a normalising or truncating adapter fails.
@@ -497,6 +497,11 @@ async fn case_context_reaches_the_wire(name: &'static str) {
 /// refused at build by name (provider, model and parameter) or carries both values on the wire
 /// in the vendor's own fields. Nothing else passes: a built agent whose value is missing or
 /// changed on the wire is a silent divergence.
+///
+/// One declared exception (WR-01): a model whose profile takes no wire `stop`
+/// (`StopSupport::NotSent`) does not refuse the build, because the execution service enforces
+/// stop words client-side (`StopWordDetected`). Its wire must then carry no `stop` at all -- the
+/// sampler omits the unsupported parameter -- while the temperature is still carried.
 async fn case_same_agent_is_equivalent_or_refused_by_name(name: &'static str) {
     let p = provider(name);
     let (vendor, port) = vendor_and_port(&p, 200, success_body(p.wire, "Paris")).await;
@@ -524,6 +529,9 @@ async fn case_same_agent_is_equivalent_or_refused_by_name(name: &'static str) {
         Ok(paladin) => paladin,
     };
 
+    let wire_takes_stop = port
+        .model_profile(p.model)
+        .is_none_or(|profile| !matches!(profile.stop_sequences, StopSupport::NotSent));
     execution_service(port)
         .execute(&paladin, MATRIX_QUERY)
         .await
@@ -537,11 +545,19 @@ async fn case_same_agent_is_equivalent_or_refused_by_name(name: &'static str) {
         "{name}: the agent was built with temperature 0.5 but the wire carries {temperature:?}; body was {last}"
     );
     let stop = sent_stop(p.wire, &last);
-    assert_eq!(
-        stop,
-        Some(vec!["END".to_string(), "STOP".to_string()]),
-        "{name}: the agent was built with stop words [END, STOP] but the wire carries {stop:?}; body was {last}"
-    );
+    if wire_takes_stop {
+        assert_eq!(
+            stop,
+            Some(vec!["END".to_string(), "STOP".to_string()]),
+            "{name}: the agent was built with stop words [END, STOP] but the wire carries {stop:?}; body was {last}"
+        );
+    } else {
+        assert_eq!(
+            stop, None,
+            "{name}: the model takes no wire stop, so the stop words are enforced client-side and \
+             none may be sent; the wire carries {stop:?}; body was {last}"
+        );
+    }
 }
 
 /// (e) A normal-stop completion with no text is a typed, permanent `Empty completion` failure,

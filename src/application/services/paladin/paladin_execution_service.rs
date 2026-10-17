@@ -6360,6 +6360,24 @@ mod middleware_wiring_tests {
         assert_eq!(result.loop_count, 1);
     }
 
+    /// WR-01: stop words are enforced client-side. An output containing one aborts the run with
+    /// `StopWordDetected`, whatever the model's wire `stop` support, so a builder that no longer
+    /// refuses a `NotSent` profile does not leave the list unenforced.
+    #[tokio::test]
+    async fn an_output_containing_a_stop_word_aborts_with_stop_word_detected() {
+        let llm = Arc::new(MockLlmAdapter::new().with_response("the answer is END of story"));
+        let service = make_service(llm);
+        let mut paladin = make_paladin(1);
+        paladin.data.stop_words.push("end".to_string());
+
+        let result = service.execute(&paladin, "hi").await;
+
+        assert!(
+            matches!(&result, Err(PaladinError::StopWordDetected(word)) if word == "end"),
+            "expected StopWordDetected(\"end\"), got {result:?}"
+        );
+    }
+
     /// `before_model`/`after_model` fire once per loop iteration, in strict
     /// alternation -- never two `before`s in a row and never a hook per
     /// buffered retry attempt.

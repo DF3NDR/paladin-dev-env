@@ -1365,7 +1365,7 @@ the existing credential gate with the env vars Paladin already reads.
      every intentional break; `make clean-code`, `make check-gates`, `make api-surface`,
      `make security` and the 82 % coverage floor stay green, with no `unwrap`/`expect`/`panic!`
      added to library code.
-**Plans**: 18 plans
+**Plans**: 25 plans (18 executed + 7 gap closure)
 
 Plans:
 **Wave 1**
@@ -1430,6 +1430,33 @@ Plans:
 **Wave 15** *(blocked on Wave 14 completion)*
 
 - [x] 50-16-PLAN.md — mdBook "Switching providers" page with the per-provider/per-model table and a registry drift test; MIGRATION 9.8 consumer rows, changelogs, muster pins; closeout register check; ADR-0061 conforms; full phase gate
+
+**Gap closure** *(from `50-UAT.md` test 5, owner decisions of 2026-10-17 on WINDOWS rows 74-76: G-50-5a major, G-50-5b major, G-50-5c minor)*
+
+**Wave 16** *(gap-closure wave 1; blocked on Wave 15 completion)*
+
+- [ ] 50-19-PLAN.md — G-50-5b (row 75, option (a)): the OpenAI adapter always sends `max_completion_tokens` (chat and vision wire keys renamed, config names unchanged); gpt-5.4-nano body test on all three request paths; smoke drives gpt-5.4-nano; only gpt-5.4-nano and gpt-4o-mini recorded as measured
+
+**Wave 17** *(gap-closure wave 2; blocked on Wave 16 completion)*
+
+- [ ] 50-20-PLAN.md — G-50-5c (row 76, option (a)): the Kimi adapter-wide fallback declares temperature, top_p and both penalties `NotSent`, matching the seeded kimi-k2.6/kimi-k3 rows; fallback-vs-seed test; temperature-range invariant covers Kimi
+
+**Wave 18** *(gap-closure wave 3; blocked on Wave 17 completion)*
+
+- [ ] 50-21-PLAN.md — G-50-5a (row 74): tracer Grok wire -> compat mapper -> PricingLlmAdapter billed in full; per-preset usage semantics (Grok reasoning beside completion); vendor total parsed and reconciled under `paladin.usage_unreconciled`, D-02 kept
+- [ ] 50-22-PLAN.md — G-50-5a: `live_vendor_smoke --usage` and the operator's recorded usage-containment probe (`50-USAGE-PROBE.md`; human-action checkpoint, blocks only 50-23)
+
+**Wave 19** *(gap-closure wave 4; blocked on Wave 18 completion)*
+
+- [ ] 50-23-PLAN.md — G-50-5a: Gemini tool-use prompt tokens folded; vendor totals reconciled on OpenAI, DeepSeek and Gemini (Anthropic containment, vision cache counts); per-vendor conformance fixtures; probe verdicts applied
+
+**Wave 20** *(gap-closure wave 5; blocked on Wave 19 completion)*
+
+- [ ] 50-24-PLAN.md — G-50-5a: billed-but-failed calls (`EmptyCompletion`, `Refusal`) carry `BilledUsage` on every adapter and both paths; PricingLlmAdapter prices them; registered `LlmError` break
+
+**Wave 21** *(gap-closure wave 6; blocked on Wave 20 completion)*
+
+- [ ] 50-25-PLAN.md — G-50-5a: billed failures settle in the agent loop and stream and count as the engine attempt's spend (`PaladinError::LlmFailure.spend`, registered); WINDOWS row 74 fixed, remainders ledgered
 
 ### Phase 51: Adjustable Reasoning Effort
 

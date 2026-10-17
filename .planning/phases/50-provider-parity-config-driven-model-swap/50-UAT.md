@@ -3,23 +3,22 @@ status: testing
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-16T22:51:11Z
+updated: 2026-10-17T07:23:12Z
 ---
 
 ## Current Test
 
-number: 1
-name: CI coverage job on the Phase 50 head (82 % workspace floor, ADR-0006)
+number: 2
+name: CI test-integration-docker job (Docker-bound integration suites)
 expected: |
-  The `coverage` job (`cargo llvm-cov --fail-under-lines 82`) is green on the Phase 50 head.
-  cargo-llvm-cov is not installed in the authoring environment, so no percentage was measured here.
+  All Docker-backed suites (Redis, RustFS, Postgres, Ollama Tier 2) are green on the Phase 50 head; Docker is absent here.
 awaiting: user response
 
 ## Tests
 
 ### 1. CI coverage job on the Phase 50 head (82 % workspace floor, ADR-0006)
 expected: The `coverage` job is green on the Phase 50 head; cargo-llvm-cov is absent here, so only CI can measure it.
-result: [pending]
+result: pass
 
 ### 2. CI test-integration-docker job (Docker-bound integration suites)
 expected: All Docker-backed suites (Redis, RustFS, Postgres, Ollama Tier 2) are green on the Phase 50 head; Docker is absent here.
@@ -47,9 +46,9 @@ result: [pending]
 ## Summary
 
 total: 5
-passed: 0
+passed: 1
 issues: 0
-pending: 5
+pending: 4
 skipped: 0
 blocked: 0
 

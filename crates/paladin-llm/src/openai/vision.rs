@@ -109,6 +109,11 @@ const VISION_MODELS: &[&str] = &[
 struct OpenAIVisionApiRequest {
     model: String,
     messages: Vec<OpenAIVisionMessage>,
+    /// The output-token limit. Paladin calls it `max_tokens`; the OpenAI wire key is
+    /// `max_completion_tokens` for every model (owner decision 2026-10-17, UAT test 5, G-50-5b),
+    /// the same name the chat path sends. Acceptance was measured for `gpt-5.4-nano` and
+    /// `gpt-4o-mini` only (2026-10-15).
+    #[serde(rename = "max_completion_tokens")]
     max_tokens: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
@@ -530,6 +535,19 @@ mod tests {
     fn create_test_adapter() -> OpenAIAdapter {
         let config = OpenAIConfig::new("test-key".to_string());
         OpenAIAdapter::new(config).unwrap()
+    }
+
+    #[test]
+    fn vision_request_carries_max_completion_tokens() {
+        let request = OpenAIVisionApiRequest {
+            model: "gpt-4o-mini".to_string(),
+            messages: Vec::new(),
+            max_tokens: 1000,
+            temperature: None,
+        };
+        let body = serde_json::to_value(&request).unwrap();
+        assert_eq!(body["max_completion_tokens"], 1000, "{body}");
+        assert!(body.get("max_tokens").is_none(), "{body}");
     }
 
     #[test]

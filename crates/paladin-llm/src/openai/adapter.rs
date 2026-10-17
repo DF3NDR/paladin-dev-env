@@ -3005,7 +3005,10 @@ mod tests {
     mod max_completion_tokens_wiring {
         use super::*;
         use crate::test_support::{mock_completion, server};
+        use futures::StreamExt;
         use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::{Value, json};
+        use std::sync::{Arc, Mutex};
 
         /// A default `PromptItem` for the seeded OpenAI model: nothing about the parameters is
         /// overridden, so the `PromptParameters` default (1000) is the caller's value.
@@ -3028,9 +3031,9 @@ mod tests {
 
         #[tokio::test]
         async fn openai_gpt_5_4_nano_bodies_carry_max_completion_tokens() {
-            let mut server = server().await;
-            let captured = mock_completion(&mut server).await;
-            let adapter = OpenAIAdapter::new(config_at(&server.url())).unwrap();
+            let mut mock_server = server().await;
+            let captured = mock_completion(&mut mock_server).await;
+            let adapter = OpenAIAdapter::new(config_at(&mock_server.url())).unwrap();
 
             adapter.generate(nano_request()).await.unwrap();
             let body = captured
@@ -3039,6 +3042,54 @@ mod tests {
                 .take()
                 .expect("the mock endpoint received a request");
             assert_eq!(body["model"], "gpt-5.4-nano");
+            assert_eq!(body["max_completion_tokens"], 1000, "{body}");
+            assert!(body.get("max_tokens").is_none(), "{body}");
+
+            // The streamed body goes through the same `build_request` constructor.
+            let mut mock_server = server().await;
+            let captured: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+            let slot = Arc::clone(&captured);
+            mock_server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body_from_request(move |req| {
+                    *slot.lock().unwrap() =
+                        Some(req.utf8_lossy_body().unwrap_or_default().into_owned());
+                    b"data: [DONE]\n\n".to_vec()
+                })
+                .create_async()
+                .await;
+            let adapter = OpenAIAdapter::new(config_at(&mock_server.url())).unwrap();
+            let stream = adapter.generate_stream(nano_request()).await.unwrap();
+            let mut stream = Box::into_pin(stream);
+            while stream.next().await.is_some() {}
+            let text = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock endpoint received a streamed request");
+            let body: Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(body["stream"], true, "{body}");
+            assert_eq!(body["max_completion_tokens"], 1000, "{body}");
+            assert!(body.get("max_tokens").is_none(), "{body}");
+
+            // And so does a structured (json_schema) body.
+            let mut mock_server = server().await;
+            let captured = mock_completion(&mut mock_server).await;
+            let adapter = OpenAIAdapter::new(config_at(&mock_server.url())).unwrap();
+            let request = nano_request().with_response_format(ResponseFormat::JsonSchema {
+                name: "answer".to_string(),
+                schema: json!({"type": "object"}),
+                strict: true,
+            });
+            adapter.generate(request).await.unwrap();
+            let body = captured
+                .lock()
+                .unwrap()
+                .take()
+                .expect("the mock endpoint received a structured request");
+            assert_eq!(body["response_format"]["type"], "json_schema", "{body}");
             assert_eq!(body["max_completion_tokens"], 1000, "{body}");
             assert!(body.get("max_tokens").is_none(), "{body}");
         }

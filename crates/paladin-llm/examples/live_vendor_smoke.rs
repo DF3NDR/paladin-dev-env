@@ -196,8 +196,10 @@ const ANTHROPIC_MODELS: &[&str] = &[ANTHROPIC_DEFAULT_MODEL];
 const DEEPSEEK_MODELS: &[&str] = &[DEEPSEEK_DEFAULT_MODEL];
 
 /// `OpenAIConfig` carries no model (the request does), so the harness names one candidate. It is
-/// a probe candidate only; pass others with `--models openai=<id>`.
-const OPENAI_PROBE_DEFAULT_MODEL: &str = "gpt-4o-mini";
+/// the first seeded OpenAI model, and the one whose rejection of the old `max_tokens` key went
+/// unnoticed while the plain smoke drove `gpt-4o-mini` (G-50-5b). Pass others with
+/// `--models openai=<id>`; `gpt-4o-mini` stays reachable that way.
+const OPENAI_PROBE_DEFAULT_MODEL: &str = "gpt-5.4-nano";
 
 /// Build an adapter whose config exposes `base_url` and `model` and whose `new` returns
 /// `Result<_, LlmError>`.
@@ -1898,6 +1900,15 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_openai_default_candidate_is_the_first_seeded_model() {
+        // The plain smoke must drive the model whose rejection of the old output-cap key it
+        // once missed (G-50-5b); `build_openai` and the table both read this one constant.
+        assert_eq!(OPENAI_PROBE_DEFAULT_MODEL, "gpt-5.4-nano");
+        let spec = PROVIDERS.iter().find(|p| p.name == "OpenAI").unwrap();
+        assert_eq!(spec.default_model, OPENAI_PROBE_DEFAULT_MODEL);
     }
 
     #[test]

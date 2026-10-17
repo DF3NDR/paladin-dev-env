@@ -1435,7 +1435,7 @@ Plans:
 
 **Wave 16** *(gap-closure wave 1; blocked on Wave 15 completion)*
 
-- [ ] 50-19-PLAN.md — G-50-5b (row 75, option (a)): the OpenAI adapter always sends `max_completion_tokens` (chat and vision wire keys renamed, config names unchanged); gpt-5.4-nano body test on all three request paths; smoke drives gpt-5.4-nano; only gpt-5.4-nano and gpt-4o-mini recorded as measured
+- [x] 50-19-PLAN.md — G-50-5b (row 75, option (a)): the OpenAI adapter always sends `max_completion_tokens` (chat and vision wire keys renamed, config names unchanged); gpt-5.4-nano body test on all three request paths; smoke drives gpt-5.4-nano; only gpt-5.4-nano and gpt-4o-mini recorded as measured
 
 **Wave 17** *(gap-closure wave 2; blocked on Wave 16 completion)*
 

@@ -33,7 +33,7 @@ and this project follows lockstep workspace versioning.
     shared guard, and the `paladin.*` keys stamped on a stream's terminal chunk.
   - **Fallback.** `FallbackStep`, `FallbackLlmAdapter::from_steps`, `hop_on_refusal`,
     `SERVED_MODEL_METADATA_KEY` (`paladin.served_model`) and `FallbackChainError::EmptyStepModel`.
-  - **Tests and tools.** The conformance suite grows to seventeen cases and measures all nine
+  - **Tests and tools.** The conformance suite grows to eighteen cases and measures all nine
     adapters (Anthropic included); `live_vendor_smoke` covers all nine providers with `--probe`,
     `--models` and `--dry-run`.
 
@@ -59,6 +59,19 @@ and this project follows lockstep workspace versioning.
   decorator that prices every call — streaming and non-streaming — at the served model's own
   usage, with a process-wide, capacity-bounded warn-once log line per unpriced model name
   (PRICE-02, PRICE-03).
+
+### Fixed
+
+- Phase 50 code-review fixes:
+  - A typed `LlmError::Refusal` is no longer retried by the Anthropic, shared-engine, DeepSeek and
+    Gemini retry loops (it is permanent and re-billed the whole prompt on every attempt).
+  - A streamed SSE event split across network reads is reassembled instead of dropped, in all five
+    streaming paths (Anthropic, OpenAI, DeepSeek, Gemini, shared engine); a multi-byte character
+    split at a read boundary is decoded intact.
+  - `max_retries` above 10 and `timeout_seconds` of 0 are refused when a provider is resolved from
+    its `llm.<provider>` block or environment, and the OpenAI, DeepSeek and shared-engine back-off
+    saturates at 10 s instead of overflowing or growing without bound.
+  - `LlmProviderConfig.api_key` is no longer written by `Serialize`.
 
 ### Changed
 

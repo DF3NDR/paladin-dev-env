@@ -3,15 +3,15 @@ status: testing
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-17T07:23:12Z
+updated: 2026-10-17T07:24:13Z
 ---
 
 ## Current Test
 
-number: 2
-name: CI test-integration-docker job (Docker-bound integration suites)
+number: 3
+name: mdBook build of docs/src with the Switching providers page
 expected: |
-  All Docker-backed suites (Redis, RustFS, Postgres, Ollama Tier 2) are green on the Phase 50 head; Docker is absent here.
+  `mdbook build` exits 0; `docs/src/user-guides/switching-providers.md` is reachable from the SUMMARY nav and its per-provider/per-model and response-mapping tables render. Only grep-level link checks and the Rust registry drift test ran here.
 awaiting: user response
 
 ## Tests
@@ -22,7 +22,7 @@ result: pass
 
 ### 2. CI test-integration-docker job (Docker-bound integration suites)
 expected: All Docker-backed suites (Redis, RustFS, Postgres, Ollama Tier 2) are green on the Phase 50 head; Docker is absent here.
-result: [pending]
+result: pass
 
 ### 3. mdBook build of docs/src with the Switching providers page
 expected: `mdbook build` exits 0; `docs/src/user-guides/switching-providers.md` is reachable from the SUMMARY nav and its per-provider/per-model and response-mapping tables render. Only grep-level link checks and the Rust registry drift test ran here.
@@ -46,9 +46,9 @@ result: [pending]
 ## Summary
 
 total: 5
-passed: 1
+passed: 2
 issues: 0
-pending: 4
+pending: 3
 skipped: 0
 blocked: 0
 

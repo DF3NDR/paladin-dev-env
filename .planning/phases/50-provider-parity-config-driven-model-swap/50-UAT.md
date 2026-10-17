@@ -3,15 +3,17 @@ status: testing
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-17T07:24:13Z
+updated: 2026-10-17T07:30:18Z
 ---
 
 ## Current Test
 
-number: 3
-name: mdBook build of docs/src with the Switching providers page
+number: 4
+name: Operator credential-gated smoke run on the finished tree
 expected: |
-  `mdbook build` exits 0; `docs/src/user-guides/switching-providers.md` is reachable from the SUMMARY nav and its per-provider/per-model and response-mapping tables render. Only grep-level link checks and the Rust registry drift test ran here.
+  `cargo run -p paladin-llm --example live_vendor_smoke --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible`
+  prints PASS for every configured provider, SKIPPED for unconfigured ones, and exits non-zero only if nothing was configured.
+  The 2026-10-15 --probe run is on record in 50-SEED-PROBE.md; the plain smoke mode has no run on the final tree.
 awaiting: user response
 
 ## Tests
@@ -26,7 +28,7 @@ result: pass
 
 ### 3. mdBook build of docs/src with the Switching providers page
 expected: `mdbook build` exits 0; `docs/src/user-guides/switching-providers.md` is reachable from the SUMMARY nav and its per-provider/per-model and response-mapping tables render. Only grep-level link checks and the Rust registry drift test ran here.
-result: [pending]
+result: pass
 
 ### 4. Operator credential-gated smoke run on the finished tree
 expected: |
@@ -46,9 +48,9 @@ result: [pending]
 ## Summary
 
 total: 5
-passed: 2
+passed: 3
 issues: 0
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

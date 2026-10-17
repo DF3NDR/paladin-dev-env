@@ -3,17 +3,18 @@ status: testing
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-17T07:30:18Z
+updated: 2026-10-17T07:31:30Z
 ---
 
 ## Current Test
 
-number: 4
-name: Operator credential-gated smoke run on the finished tree
+number: 5
+name: Owner decision on open ledger rows WINDOWS 74, 75, 76
 expected: |
-  `cargo run -p paladin-llm --example live_vendor_smoke --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible`
-  prints PASS for every configured provider, SKIPPED for unconfigured ones, and exits non-zero only if nothing was configured.
-  The 2026-10-15 --probe run is on record in 50-SEED-PROBE.md; the plain smoke mode has no run on the final tree.
+  Row 74: keep `total_tokens = prompt + completion` (D-02 invariant) or open a paladin-core plan to carry the vendor total.
+  Row 75: OpenAI adapter sends `max_tokens`, which `gpt-5.4-nano` rejects with HTTP 400; decide whether to switch to `max_completion_tokens` per model.
+  Row 76: the Kimi adapter-wide fallback profile (Fixed 1.0 temperature) contradicts the 2026-10-15 probe for unseeded Kimi ids.
+  Each is an accepted, ledgered deviation that needs an owner call code cannot make.
 awaiting: user response
 
 ## Tests
@@ -35,7 +36,7 @@ expected: |
   `cargo run -p paladin-llm --example live_vendor_smoke --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible`
   prints PASS for every configured provider, SKIPPED for unconfigured ones, and exits non-zero only if nothing was configured.
   The 2026-10-15 --probe run is on record in 50-SEED-PROBE.md; the plain smoke mode has no run on the final tree.
-result: [pending]
+result: pass
 
 ### 5. Owner decision on open ledger rows WINDOWS 74, 75, 76
 expected: |
@@ -48,9 +49,9 @@ result: [pending]
 ## Summary
 
 total: 5
-passed: 3
+passed: 4
 issues: 0
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 

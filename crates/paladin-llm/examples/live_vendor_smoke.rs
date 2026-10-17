@@ -40,6 +40,27 @@
 //!
 //! Exits non-zero if any configured provider fails a probe.
 //!
+//! # Usage mode (`--usage`)
+//!
+//! One reasoning-eliciting call per candidate model per configured provider, over the raw vendor
+//! wire (not the adapters), recording how the vendor's `usage` object relates reasoning tokens
+//! to `completion_tokens` and to its own total (Phase 50 gap G-50-5a). Each row carries numbers
+//! only -- prompt, completion, reasoning, vendor total and a few extras (cached, cache-write,
+//! tool-use prompt, Grok's `cost_in_usd_ticks` and `num_sources_used`) -- plus one verdict derived
+//! from that arithmetic:
+//!
+//! | Verdict                                              | Meaning                                    |
+//! |------------------------------------------------------|--------------------------------------------|
+//! | `reasoning inside completion`                        | total = prompt + completion, reasoning > 0 |
+//! | `reasoning beside completion`                        | total = prompt + completion + reasoning    |
+//! | `indeterminate (no reasoning reported)`              | reasoning absent or 0, total agrees        |
+//! | `no vendor total`                                    | Anthropic (or a body with no total)        |
+//! | `other (total - (prompt + completion) = <n>)`        | anything else, signed                      |
+//! | `not measured (<reason>)`                            | no usable response                         |
+//!
+//! Response content is never printed. `--usage --dry-run` lists the planned calls without network
+//! access or credentials.
+//!
 //! # Run commands
 //!
 //! ```text
@@ -535,6 +556,9 @@ async fn smoke_provider(spec: &ProviderSpec) -> Result<SmokeRun, String> {
 struct Options {
     /// `--probe`: measure what each vendor's models accept and report.
     probe: bool,
+    /// `--usage`: send one reasoning-eliciting call per candidate model and record the usage
+    /// arithmetic (numbers only).
+    usage: bool,
     /// `--dry-run`: print the probe plan, touching no network and reading no credential.
     dry_run: bool,
     /// `--models <provider>=<id>[,<id>...]` (repeatable): extra candidate models, keyed by the
@@ -549,14 +573,18 @@ enum Command {
     Run(Options),
 }
 
-const USAGE: &str = "usage: live_vendor_smoke [--probe] [--dry-run] [--models <provider>=<id>[,<id>...]]... [-h|--help]\n\
+const USAGE: &str = "usage: live_vendor_smoke [--probe | --usage] [--dry-run] [--models <provider>=<id>[,<id>...]]... [-h|--help]\n\
 \n\
   (no flag)   credential-gated smoke probes over all nine providers\n\
   --probe     record, per configured provider, the live models listing and what each candidate\n\
               model accepts (sampling, stop sequences, output cap, JSON-object and JSON-schema\n\
               modes, usage fields, quota-shaped errors); prints a markdown transcript\n\
-  --dry-run   print the probe plan for all nine providers; no network access, no credential read\n\
-  --models    extra candidate model ids for one provider (repeatable); needs --probe or --dry-run\n\
+  --usage     send one reasoning-eliciting call per candidate model and record the usage\n\
+              arithmetic, numbers only, with a containment verdict per model; excludes --probe\n\
+  --dry-run   print the probe (or, with --usage, the usage) plan for all nine providers; no\n\
+              network access, no credential read\n\
+  --models    extra candidate model ids for one provider (repeatable); needs --probe, --usage\n\
+              or --dry-run\n\
 \n\
 providers: OpenAI, Anthropic, DeepSeek, Kimi, Qwen, Grok, Gemini, Ollama, OpenAI-compatible";
 
@@ -596,6 +624,7 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String
         match arg.as_str() {
             "-h" | "--help" => help = true,
             "--probe" => options.probe = true,
+            "--usage" => options.usage = true,
             "--dry-run" => options.dry_run = true,
             "--models" => {
                 let value = args.next().ok_or_else(|| {
@@ -609,8 +638,11 @@ fn parse_args<I: IntoIterator<Item = String>>(args: I) -> Result<Command, String
     if help {
         return Ok(Command::Help);
     }
-    if !options.models.is_empty() && !options.probe && !options.dry_run {
-        return Err("`--models` has no effect without --probe or --dry-run".to_string());
+    if options.usage && options.probe {
+        return Err("`--usage` and `--probe` are mutually exclusive".to_string());
+    }
+    if !options.models.is_empty() && !options.probe && !options.usage && !options.dry_run {
+        return Err("`--models` has no effect without --probe, --usage or --dry-run".to_string());
     }
     Ok(Command::Run(options))
 }
@@ -755,6 +787,12 @@ const PROBE_TIMEOUT_SECS: u64 = 120;
 /// Output cap carried by every acceptance probe (A3-50-04): bounds cost and reasoning time.
 const PROBE_MAX_TOKENS: u64 = 256;
 const PROBE_PROMPT: &str = "Reply with the single word: ping";
+/// Output cap of a `--usage` call (A1-50-22): room for a reasoning model to think and answer,
+/// bounded so a long default reasoning (Moonshot) cannot run away on the operator's bill.
+const USAGE_MAX_TOKENS: u64 = 1024;
+/// The `--usage` prompt: a small multi-step calculation a reasoning model reasons about.
+const USAGE_PROMPT: &str =
+    "What is 17 multiplied by 23? Work it out, then answer with the number only.";
 /// The JSON-mode probes name JSON in the prompt: OpenAI-chat `json_object` mode refuses a prompt
 /// that does not, and that refusal would be a prompt artefact rather than a capability finding.
 const PROBE_JSON_PROMPT: &str = "Reply with a JSON object of the form {\"answer\": \"ping\"}.";
@@ -777,6 +815,9 @@ enum ProbeKind {
     MaxCompletionTokens,
     JsonObject,
     JsonSchema,
+    /// `--usage` only: the reasoning-eliciting arithmetic prompt under [`USAGE_MAX_TOKENS`], with
+    /// no body extras and no sampling parameters.
+    Usage,
 }
 
 /// A probe in the ordered per-model list.
@@ -929,7 +970,9 @@ fn remove_field(body: &mut Value, key: &str) {
 /// The body extras applied to a probe of `kind`, if any. `DefaultThinking` is the one call made
 /// without them.
 fn extras_for(spec: &ProviderSpec, kind: ProbeKind) -> Option<&'static str> {
-    if kind == ProbeKind::DefaultThinking {
+    // `--usage` sends no extras: Kimi's `thinking: disabled` would suppress the very tokens
+    // being measured (A2-50-22).
+    if matches!(kind, ProbeKind::DefaultThinking | ProbeKind::Usage) {
         None
     } else {
         spec.acceptance_extras
@@ -939,10 +982,15 @@ fn extras_for(spec: &ProviderSpec, kind: ProbeKind) -> Option<&'static str> {
 /// The JSON body for one probe call. Every probe is bounded by [`PROBE_MAX_TOKENS`] unless it is
 /// the probe of the cap itself, and varies exactly one thing from the baseline.
 fn request_body(spec: &ProviderSpec, model: &str, kind: ProbeKind) -> Value {
-    let prompt = if matches!(kind, ProbeKind::JsonObject | ProbeKind::JsonSchema) {
-        PROBE_JSON_PROMPT
+    let prompt = match kind {
+        ProbeKind::JsonObject | ProbeKind::JsonSchema => PROBE_JSON_PROMPT,
+        ProbeKind::Usage => USAGE_PROMPT,
+        _ => PROBE_PROMPT,
+    };
+    let cap = if kind == ProbeKind::Usage {
+        USAGE_MAX_TOKENS
     } else {
-        PROBE_PROMPT
+        PROBE_MAX_TOKENS
     };
     let wire = spec.wire;
     let mut body = match wire {
@@ -951,17 +999,17 @@ fn request_body(spec: &ProviderSpec, model: &str, kind: ProbeKind) -> Value {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
             });
-            set_path(&mut b, &[spec.cap_field], json!(PROBE_MAX_TOKENS));
+            set_path(&mut b, &[spec.cap_field], json!(cap));
             b
         }
         Wire::AnthropicMessages => json!({
             "model": model,
-            "max_tokens": PROBE_MAX_TOKENS,
+            "max_tokens": cap,
             "messages": [{"role": "user", "content": prompt}],
         }),
         Wire::GeminiGenerate => json!({
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"maxOutputTokens": PROBE_MAX_TOKENS},
+            "generationConfig": {"maxOutputTokens": cap},
         }),
     };
     let (temperature, top_p, stop, max_tokens): (&[&str], &[&str], &[&str], &[&str]) = match wire {
@@ -980,7 +1028,7 @@ fn request_body(spec: &ProviderSpec, model: &str, kind: ProbeKind) -> Value {
         ),
     };
     match kind {
-        ProbeKind::Default | ProbeKind::DefaultThinking => {}
+        ProbeKind::Default | ProbeKind::DefaultThinking | ProbeKind::Usage => {}
         ProbeKind::Temperature(value) => set_path(&mut body, temperature, json!(value)),
         ProbeKind::TopP => set_path(&mut body, top_p, json!(0.5)),
         ProbeKind::FrequencyPenalty => set_path(&mut body, &["frequency_penalty"], json!(0.5)),
@@ -1174,6 +1222,9 @@ struct Parsed {
     usage_fields: Vec<String>,
     has_reasoning: bool,
     note: Option<String>,
+    /// The numeric usage values (`--usage`); every field is an integer or absent.
+    /// Boxed so the `Outcome::Accepted` variant stays small (`clippy::large_enum_variant`).
+    usage: Box<UsageRow>,
 }
 
 enum Outcome {
@@ -1251,6 +1302,7 @@ fn parse_success(wire: Wire, body: &str, api_key: &str) -> Parsed {
     if let Some(usage) = v.get(usage_key) {
         flatten_field_names(usage, "", &mut usage_fields);
     }
+    let usage = usage_row(wire, body);
     let text_of = |s: Option<&Value>| s.and_then(Value::as_str).map(str::to_string);
     match wire {
         Wire::OpenAiChat => {
@@ -1268,6 +1320,7 @@ fn parse_success(wire: Wire, body: &str, api_key: &str) -> Parsed {
                         .any(|k| m.get(k).is_some_and(non_empty_value))
                 }),
                 note: None,
+                usage: Box::new(usage),
             }
         }
         Wire::AnthropicMessages => {
@@ -1290,6 +1343,7 @@ fn parse_success(wire: Wire, body: &str, api_key: &str) -> Parsed {
                     )
                 }),
                 note: None,
+                usage: Box::new(usage),
             }
         }
         Wire::GeminiGenerate => {
@@ -1308,9 +1362,136 @@ fn parse_success(wire: Wire, body: &str, api_key: &str) -> Parsed {
                     .iter()
                     .any(|p| is_thought(p) && p.get("text").is_some_and(non_blank_text)),
                 note: None,
+                usage: Box::new(usage),
             }
         }
     }
+}
+
+/// The numeric usage values of one call. Every field is an integer or absent: a field holding a
+/// string (or anything else non-integer) is read as absent, so no vendor text can reach a row.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct UsageRow {
+    /// True when the response carried a usage object at all.
+    has_usage: bool,
+    /// Prompt tokens. Gemini: `promptTokenCount + toolUsePromptTokenCount`.
+    prompt: Option<i64>,
+    /// Completion tokens. Gemini: `candidatesTokenCount`.
+    completion: Option<i64>,
+    /// Reasoning tokens (Gemini: thoughts), as the vendor reports them.
+    reasoning: Option<i64>,
+    cached: Option<i64>,
+    cache_write: Option<i64>,
+    /// Gemini only: the tool-use prompt tokens already folded into [`UsageRow::prompt`].
+    tool_use_prompt: Option<i64>,
+    /// The vendor's own total, when it sends one (Anthropic does not).
+    total: Option<i64>,
+    /// Grok only: the billed cost in USD ticks.
+    cost_in_usd_ticks: Option<i64>,
+    /// Grok only: the number of sources a search-grounded call used.
+    num_sources_used: Option<i64>,
+}
+
+/// Read the usage values out of a response body, integers only. A body that is not JSON, or has
+/// no usage object, yields an empty row.
+fn usage_row(wire: Wire, body: &str) -> UsageRow {
+    let Ok(v) = serde_json::from_str::<Value>(body) else {
+        return UsageRow::default();
+    };
+    let key = if wire == Wire::GeminiGenerate {
+        "usageMetadata"
+    } else {
+        "usage"
+    };
+    let Some(usage) = v.get(key).filter(|u| u.is_object()) else {
+        return UsageRow::default();
+    };
+    let int = |pointer: &str| usage.pointer(pointer).and_then(Value::as_i64);
+    let mut row = UsageRow {
+        has_usage: true,
+        ..UsageRow::default()
+    };
+    match wire {
+        Wire::OpenAiChat => {
+            row.prompt = int("/prompt_tokens");
+            row.completion = int("/completion_tokens");
+            row.reasoning = int("/completion_tokens_details/reasoning_tokens");
+            row.cached = int("/prompt_tokens_details/cached_tokens");
+            row.cache_write = int("/prompt_tokens_details/cache_write_tokens");
+            row.total = int("/total_tokens");
+            row.cost_in_usd_ticks = int("/cost_in_usd_ticks");
+            row.num_sources_used = int("/num_sources_used");
+        }
+        Wire::AnthropicMessages => {
+            row.prompt = int("/input_tokens");
+            row.completion = int("/output_tokens");
+            row.reasoning = int("/output_tokens_details/thinking_tokens");
+            row.cached = int("/cache_read_input_tokens");
+            row.cache_write = int("/cache_creation_input_tokens");
+        }
+        Wire::GeminiGenerate => {
+            row.tool_use_prompt = int("/toolUsePromptTokenCount");
+            row.prompt = int("/promptTokenCount")
+                .map(|p| p.saturating_add(row.tool_use_prompt.unwrap_or(0)));
+            row.completion = int("/candidatesTokenCount");
+            row.reasoning = int("/thoughtsTokenCount");
+            row.cached = int("/cachedContentTokenCount");
+            row.total = int("/totalTokenCount");
+        }
+    }
+    row
+}
+
+/// The containment verdict for one call, derived only from the arithmetic. The difference is
+/// computed in `i128` so no input can overflow or underflow it.
+fn containment_verdict(wire: Wire, row: &UsageRow) -> String {
+    if !row.has_usage {
+        return "not measured (no usage object in the response)".to_string();
+    }
+    let (Some(prompt), Some(completion)) = (row.prompt, row.completion) else {
+        return "not measured (usage lacks prompt or completion tokens)".to_string();
+    };
+    let total = match (wire, row.total) {
+        (Wire::AnthropicMessages, _) | (_, None) => return "no vendor total".to_string(),
+        (_, Some(total)) => total,
+    };
+    let difference = i128::from(total) - (i128::from(prompt) + i128::from(completion));
+    let reasoning = row.reasoning.filter(|r| *r > 0);
+    match reasoning {
+        Some(_) if difference == 0 => "reasoning inside completion".to_string(),
+        Some(r) if difference == i128::from(r) => "reasoning beside completion".to_string(),
+        None if difference == 0 => "indeterminate (no reasoning reported)".to_string(),
+        _ => format!("other (total - (prompt + completion) = {difference})"),
+    }
+}
+
+/// The six usage cells of a table row: prompt, completion, reasoning, vendor total, verdict and
+/// extras. Integers, the absent marker `-`, the fixed verdict grammar and fixed extras labels
+/// only.
+fn usage_cells(wire: Wire, row: &UsageRow) -> [String; 6] {
+    let number = |n: Option<i64>| n.map_or_else(|| "-".to_string(), |n| n.to_string());
+    let extras: Vec<String> = [
+        ("cached", row.cached),
+        ("cache_write", row.cache_write),
+        ("tool_use_prompt", row.tool_use_prompt),
+        ("cost_in_usd_ticks", row.cost_in_usd_ticks),
+        ("num_sources_used", row.num_sources_used),
+    ]
+    .into_iter()
+    .filter_map(|(label, value)| value.map(|v| format!("{label}={v}")))
+    .collect();
+    [
+        number(row.prompt),
+        number(row.completion),
+        number(row.reasoning),
+        number(row.total),
+        containment_verdict(wire, row),
+        if extras.is_empty() {
+            "-".to_string()
+        } else {
+            extras.join("; ")
+        },
+    ]
 }
 
 /// What a non-2xx body says about the error, for the quota-shaped-error ledger.
@@ -1798,31 +1979,27 @@ fn git_short_head() -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-async fn run_probe(options: &Options) -> i32 {
-    let client = match reqwest::Client::builder()
-        // A credentialed client must not follow a redirect: the credential header could be
-        // forwarded to a host the vendor does not control (T-50-04-02).
+/// The credentialed HTTP client shared by `--probe` and `--usage`: a per-call timeout, and no
+/// redirect is ever followed, so the credential header cannot be forwarded to a host the vendor
+/// does not control (T-50-04-02).
+fn build_probe_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(PROBE_TIMEOUT_SECS))
         .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!(
-                "error: could not build the HTTP client: {}",
-                e.without_url()
-            );
-            return 1;
-        }
-    };
-    let lookup = |name: &str| std::env::var(name).ok();
+        .map_err(|e| format!("could not build the HTTP client: {}", e.without_url()))
+}
+
+/// The transcript header shared by `--probe` and `--usage`: title, UTC date, commit and the
+/// credential variable NAMES found (never values).
+fn print_run_header(title: &str, lookup: &dyn Fn(&str) -> Option<String>) {
     let found: Vec<&str> = PROVIDERS
         .iter()
         .flat_map(|p| p.cred_vars.iter().copied())
         .filter(|var| lookup(var).is_some_and(|v| !v.trim().is_empty()))
         .collect();
 
-    println!("# Live vendor probe\n");
+    println!("# {title}\n");
     println!(
         "- date (UTC): {}",
         chrono::Utc::now().format("%Y-%m-%d %H:%M:%SZ")
@@ -1838,6 +2015,18 @@ async fn run_probe(options: &Options) -> i32 {
             found.join(", ")
         }
     );
+}
+
+async fn run_probe(options: &Options) -> i32 {
+    let client = match build_probe_client() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let lookup = |name: &str| std::env::var(name).ok();
+    print_run_header("Live vendor probe", &lookup);
 
     let (mut configured, mut skipped, mut failed) = (0usize, 0usize, 0usize);
     for spec in PROVIDERS.iter() {
@@ -1870,6 +2059,217 @@ async fn run_probe(options: &Options) -> i32 {
     smoke_exit_code(configured, failed)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Usage mode (`--usage`): the recorded containment measurement (G-50-5a)
+// ---------------------------------------------------------------------------------------------
+
+/// Candidates of a `--usage` run: the provider's default model plus the `--models` ids, without
+/// duplicates. The curated lists are not added -- every call costs the operator money.
+fn usage_candidates(_spec: &ProviderSpec, default_model: &str, extra: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for model in std::iter::once(default_model.to_string()).chain(extra.iter().cloned()) {
+        if !out.contains(&model) {
+            out.push(model);
+        }
+    }
+    out
+}
+
+/// Header facts of a provider's `--usage` section.
+fn write_usage_section_facts(out: &mut String, spec: &ProviderSpec, base_url: &str, model: &str) {
+    let cap = match spec.wire {
+        Wire::OpenAiChat => spec.cap_field,
+        Wire::AnthropicMessages => "max_tokens",
+        Wire::GeminiGenerate => "generationConfig.maxOutputTokens",
+    };
+    let _ = writeln!(out, "\n- base URL: `{}`", redact_url(base_url));
+    let _ = writeln!(
+        out,
+        "- chat endpoint: `POST {}`; credential header `{}` (name only, value never printed)",
+        redact_url(&chat_url(spec.wire, base_url, model)),
+        spec.auth.header_name()
+    );
+    let _ = writeln!(
+        out,
+        "- every call carries `{cap}` = {USAGE_MAX_TOKENS}, a {PROBE_TIMEOUT_SECS} s timeout, no \
+         body extras and no sampling parameters; redirects are never followed"
+    );
+}
+
+/// The offline `--usage` plan: every planned call for all nine providers, with no network access
+/// and no credential read.
+fn render_usage_dry_run(models: &[(String, Vec<String>)]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "# Live vendor usage probe plan (--usage --dry-run)\n");
+    let _ = writeln!(
+        out,
+        "- no network access was made and no credential was read"
+    );
+    let _ = writeln!(out, "- prompt: \"{USAGE_PROMPT}\"");
+    for spec in PROVIDERS.iter() {
+        let _ = writeln!(out, "\n## {}", spec.name);
+        let base_url = spec.default_base_url.map_or_else(
+            || "<OPENAI_COMPATIBLE_BASE_URL>".to_string(),
+            str::to_string,
+        );
+        write_usage_section_facts(&mut out, spec, &base_url, spec.default_model);
+        let _ = writeln!(
+            out,
+            "- credential variables required: {}",
+            spec.cred_vars
+                .iter()
+                .map(|v| format!("`{v}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let extra = extra_models_for(models, spec);
+        let _ = writeln!(out, "\n### Planned usage calls\n");
+        for model in usage_candidates(spec, spec.default_model, &extra) {
+            let _ = writeln!(out, "- `{model}`: 1 call");
+        }
+    }
+    out
+}
+
+/// The seven cells of a `--usage` table row after the model: the outcome, then [`usage_cells`].
+/// A call without a usable response is `not measured (<reason>)`, never a guess.
+fn usage_table_cells(wire: Wire, outcome: &Outcome) -> [String; 7] {
+    let blank = |outcome_cell: String, verdict: String| -> [String; 7] {
+        [
+            outcome_cell,
+            "-".into(),
+            "-".into(),
+            "-".into(),
+            "-".into(),
+            verdict,
+            "-".into(),
+        ]
+    };
+    match outcome {
+        Outcome::Accepted { status, parsed } => {
+            let [prompt, completion, reasoning, total, verdict, extras] =
+                usage_cells(wire, &parsed.usage);
+            [
+                format!("ACCEPTED ({status})"),
+                prompt,
+                completion,
+                reasoning,
+                total,
+                verdict,
+                extras,
+            ]
+        }
+        Outcome::Rejected { status, detail } => blank(
+            format!("REJECTED ({status}): {detail}"),
+            format!("not measured (HTTP {status})"),
+        ),
+        Outcome::Unreachable(detail) => blank(
+            format!("UNREACHABLE: {detail}"),
+            "not measured (unreachable)".to_string(),
+        ),
+        Outcome::NotApplicable(why) => blank(
+            format!("NOT APPLICABLE ({why})"),
+            format!("not measured ({why})"),
+        ),
+    }
+}
+
+async fn usage_provider(
+    client: &reqwest::Client,
+    spec: &ProviderSpec,
+    options: &Options,
+) -> ProbeEnd {
+    let built = match (spec.build)() {
+        Ok(b) => b,
+        Err(e) => {
+            println!(
+                "\nNOT MEASURED: the adapter could not be built from the environment: {}",
+                excerpt(&e, "")
+            );
+            return ProbeEnd::NotBuilt;
+        }
+    };
+    let mut facts = String::new();
+    write_usage_section_facts(&mut facts, spec, &built.base_url, &built.model);
+    print!("{facts}");
+    println!(
+        "\n| model | outcome | prompt | completion | reasoning | vendor total | verdict | extras |\n\
+         |---|---|---|---|---|---|---|---|"
+    );
+    let extra = extra_models_for(&options.models, spec);
+    let mut reached = false;
+    for model in usage_candidates(spec, &built.model, &extra) {
+        let (outcome, _) = run_probe_call(client, spec, &built, &model, ProbeKind::Usage).await;
+        if !matches!(outcome, Outcome::Unreachable(_) | Outcome::NotApplicable(_)) {
+            reached = true;
+        }
+        let [
+            outcome_cell,
+            prompt,
+            completion,
+            reasoning,
+            total,
+            verdict,
+            extras,
+        ] = usage_table_cells(spec.wire, &outcome);
+        println!(
+            "| {} | {outcome_cell} | {prompt} | {completion} | {reasoning} | {total} | {verdict} \
+             | {extras} |",
+            cell(&model)
+        );
+    }
+    if reached {
+        ProbeEnd::Reached
+    } else {
+        ProbeEnd::Unreachable
+    }
+}
+
+async fn run_usage(options: &Options) -> i32 {
+    let client = match build_probe_client() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    let lookup = |name: &str| std::env::var(name).ok();
+    print_run_header("Live vendor usage probe", &lookup);
+    println!(
+        "- prompt: \"{USAGE_PROMPT}\" (numbers are recorded; response content is never printed)"
+    );
+
+    let (mut configured, mut skipped, mut failed) = (0usize, 0usize, 0usize);
+    for spec in PROVIDERS.iter() {
+        println!("\n## {}", spec.name);
+        if let Some(var) = missing_credential(spec, &lookup) {
+            println!("\nSKIPPED ({var} not set)");
+            skipped += 1;
+            continue;
+        }
+        configured += 1;
+        match usage_provider(&client, spec, options).await {
+            ProbeEnd::Reached => {}
+            ProbeEnd::Unreachable => {
+                println!("\nUNREACHABLE: no HTTP exchange with this provider completed");
+                failed += 1;
+            }
+            ProbeEnd::NotBuilt => failed += 1,
+        }
+    }
+
+    println!("\n---\n");
+    println!(
+        "{configured} of {} providers measured ({skipped} not configured); {failed} unreachable \
+         or not buildable",
+        PROVIDERS.len()
+    );
+    if configured == 0 {
+        eprintln!("no provider was configured -- nothing was tested");
+    }
+    smoke_exit_code(configured, failed)
+}
+
 #[tokio::main]
 async fn main() {
     // `set_logger` (not `set_boxed_logger`) is used deliberately: the latter requires `log`'s
@@ -1888,9 +2288,13 @@ async fn main() {
     };
     match command {
         Command::Help => println!("{USAGE}"),
+        Command::Run(options) if options.dry_run && options.usage => {
+            print!("{}", render_usage_dry_run(&options.models));
+        }
         Command::Run(options) if options.dry_run => {
             print!("{}", render_dry_run(&options.models));
         }
+        Command::Run(options) if options.usage => std::process::exit(run_usage(&options).await),
         Command::Run(options) if options.probe => std::process::exit(run_probe(&options).await),
         Command::Run(_) => std::process::exit(run_smoke().await),
     }
@@ -2031,6 +2435,7 @@ mod tests {
             Ok(Command::Run(Options {
                 probe: true,
                 dry_run: true,
+                usage: false,
                 models: vec![
                     ("Kimi".to_string(), vec!["a".to_string(), "b".to_string()]),
                     ("Kimi".to_string(), vec!["c".to_string()]),
@@ -2258,5 +2663,237 @@ mod tests {
         assert_eq!(list.iter().filter(|m| *m == "kimi-k2.6").count(), 1);
         assert_eq!(list.last().map(String::as_str), Some("new"));
         assert_eq!(list[0], KIMI_DEFAULT_MODEL);
+    }
+
+    /// The verdict for a body on a wire, through the same two functions the run uses.
+    fn verdict_of(wire: Wire, body: &str) -> String {
+        containment_verdict(wire, &usage_row(wire, body))
+    }
+
+    #[test]
+    fn containment_verdicts_follow_the_arithmetic() {
+        // OpenAI-shaped: total = prompt + completion, reasoning inside completion.
+        let inside = r#"{"usage":{"prompt_tokens":100,"completion_tokens":40,"total_tokens":140,
+            "completion_tokens_details":{"reasoning_tokens":15}}}"#;
+        assert_eq!(
+            verdict_of(Wire::OpenAiChat, inside),
+            "reasoning inside completion"
+        );
+        // The Vertex AI Grok example (debug Evidence 00:35): 663 + 50 + 124 = 837.
+        let beside = r#"{"usage":{"prompt_tokens":663,"completion_tokens":50,"total_tokens":837,
+            "completion_tokens_details":{"reasoning_tokens":124}}}"#;
+        assert_eq!(
+            verdict_of(Wire::OpenAiChat, beside),
+            "reasoning beside completion"
+        );
+        let none = r#"{"usage":{"prompt_tokens":100,"completion_tokens":40,"total_tokens":140}}"#;
+        assert_eq!(
+            verdict_of(Wire::OpenAiChat, none),
+            "indeterminate (no reasoning reported)"
+        );
+        let zero = r#"{"usage":{"prompt_tokens":100,"completion_tokens":40,"total_tokens":140,
+            "completion_tokens_details":{"reasoning_tokens":0}}}"#;
+        assert_eq!(
+            verdict_of(Wire::OpenAiChat, zero),
+            "indeterminate (no reasoning reported)"
+        );
+        let over = r#"{"usage":{"prompt_tokens":100,"completion_tokens":40,"total_tokens":9999,
+            "completion_tokens_details":{"reasoning_tokens":15}}}"#;
+        assert_eq!(
+            verdict_of(Wire::OpenAiChat, over),
+            "other (total - (prompt + completion) = 9859)"
+        );
+        // A total below prompt + completion is a signed difference, not an underflow.
+        let under = r#"{"usage":{"prompt_tokens":100,"completion_tokens":40,"total_tokens":120,
+            "completion_tokens_details":{"reasoning_tokens":15}}}"#;
+        assert_eq!(
+            verdict_of(Wire::OpenAiChat, under),
+            "other (total - (prompt + completion) = -20)"
+        );
+        // Gemini: prompt counts promptTokenCount + toolUsePromptTokenCount, completion counts
+        // candidatesTokenCount; 100 + 300 + 20 + 10 thoughts = 430.
+        let gemini = r#"{"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":20,
+            "thoughtsTokenCount":10,"toolUsePromptTokenCount":300,"totalTokenCount":430}}"#;
+        assert_eq!(
+            verdict_of(Wire::GeminiGenerate, gemini),
+            "reasoning beside completion"
+        );
+        let gemini_row = usage_row(Wire::GeminiGenerate, gemini);
+        assert_eq!(gemini_row.prompt, Some(400));
+        assert_eq!(gemini_row.tool_use_prompt, Some(300));
+        // Anthropic sends no vendor total, whatever else it reports.
+        let anthropic = r#"{"usage":{"input_tokens":12,"output_tokens":30,
+            "cache_read_input_tokens":2,"cache_creation_input_tokens":0,
+            "output_tokens_details":{"thinking_tokens":9}}}"#;
+        assert_eq!(
+            verdict_of(Wire::AnthropicMessages, anthropic),
+            "no vendor total"
+        );
+        let row = usage_row(Wire::AnthropicMessages, anthropic);
+        assert_eq!(
+            (row.prompt, row.completion, row.reasoning, row.cached),
+            (Some(12), Some(30), Some(9), Some(2))
+        );
+        // No usage object at all, and a usage object missing its counts, are not measured.
+        assert_eq!(
+            verdict_of(Wire::OpenAiChat, r#"{"choices":[]}"#),
+            "not measured (no usage object in the response)"
+        );
+        assert_eq!(
+            verdict_of(Wire::OpenAiChat, "not json"),
+            "not measured (no usage object in the response)"
+        );
+        assert_eq!(
+            verdict_of(Wire::OpenAiChat, r#"{"usage":{"total_tokens":5}}"#),
+            "not measured (usage lacks prompt or completion tokens)"
+        );
+        // An OpenAI-shaped body with counts but no total has no vendor total to compare.
+        assert_eq!(
+            verdict_of(
+                Wire::OpenAiChat,
+                r#"{"usage":{"prompt_tokens":1,"completion_tokens":2}}"#
+            ),
+            "no vendor total"
+        );
+        // Extremes never panic.
+        let huge = r#"{"usage":{"prompt_tokens":9223372036854775807,"completion_tokens":9223372036854775807,"total_tokens":1}}"#;
+        assert!(verdict_of(Wire::OpenAiChat, huge).starts_with("other ("));
+    }
+
+    #[test]
+    fn grok_cost_and_sources_are_read_as_numbers() {
+        let body = r#"{"usage":{"prompt_tokens":663,"completion_tokens":50,"total_tokens":837,
+            "prompt_tokens_details":{"cached_tokens":8,"cache_write_tokens":0},
+            "completion_tokens_details":{"reasoning_tokens":124},
+            "cost_in_usd_ticks":123456,"num_sources_used":3}}"#;
+        let row = usage_row(Wire::OpenAiChat, body);
+        assert_eq!(row.cached, Some(8));
+        assert_eq!(row.cache_write, Some(0));
+        assert_eq!(row.cost_in_usd_ticks, Some(123_456));
+        assert_eq!(row.num_sources_used, Some(3));
+    }
+
+    #[test]
+    fn usage_values_are_numbers_only() {
+        // Content, a text-valued "count" and an echoed credential-shaped string are all present
+        // in the body; none may reach the rendered row.
+        let body = r#"{"choices":[{"message":{"content":"SECRET-ANSWER-TEXT 391"}}],
+            "echo":"sk-should-never-print",
+            "usage":{"prompt_tokens":"sk-leaked-as-a-count","completion_tokens":40,
+                     "total_tokens":140,"cost_in_usd_ticks":"also-text",
+                     "completion_tokens_details":{"reasoning_tokens":15}}}"#;
+        let row = usage_row(Wire::OpenAiChat, body);
+        // A string where a number belongs is absent, never copied.
+        assert_eq!(row.prompt, None);
+        assert_eq!(row.cost_in_usd_ticks, None);
+        assert_eq!(row.completion, Some(40));
+        let cells = usage_cells(Wire::OpenAiChat, &row);
+        let rendered = cells.join(" | ");
+        for forbidden in ["SECRET", "sk-", "also-text", "391"] {
+            assert!(!rendered.contains(forbidden), "{rendered}");
+        }
+        // Every cell but the verdict is an integer or the absent marker.
+        for cell in &cells[..cells.len() - 2] {
+            assert!(
+                cell == "-" || cell.parse::<i64>().is_ok(),
+                "non-numeric cell `{cell}`"
+            );
+        }
+    }
+
+    #[test]
+    fn usage_flag_is_exclusive_with_probe_and_accepts_models_and_dry_run() {
+        let parsed = parse_args(args(&["--usage", "--models", "grok=grok-4.3"]));
+        assert_eq!(
+            parsed,
+            Ok(Command::Run(Options {
+                usage: true,
+                models: vec![("Grok".to_string(), vec!["grok-4.3".to_string()])],
+                ..Options::default()
+            }))
+        );
+        let Ok(Command::Run(options)) = parse_args(args(&["--usage", "--dry-run"])) else {
+            panic!("--usage --dry-run must parse");
+        };
+        assert!(options.usage && options.dry_run && !options.probe);
+        let err = parse_args(args(&["--usage", "--probe"])).unwrap_err();
+        assert!(err.contains("--usage") && err.contains("--probe"), "{err}");
+        let err = parse_args(args(&["--probe", "--usage"])).unwrap_err();
+        assert!(err.contains("--usage") && err.contains("--probe"), "{err}");
+    }
+
+    #[test]
+    fn the_usage_body_sends_no_extras_and_no_sampling_under_a_larger_cap() {
+        let kimi = request_body(spec("Kimi"), "kimi-k2.6", ProbeKind::Usage);
+        assert!(kimi.get("thinking").is_none(), "{kimi}");
+        assert!(kimi.get("temperature").is_none() && kimi.get("top_p").is_none());
+        assert_eq!(kimi["max_tokens"], json!(USAGE_MAX_TOKENS));
+        assert!(kimi.to_string().contains("17 multiplied by 23"));
+        let openai = request_body(spec("OpenAI"), "m", ProbeKind::Usage);
+        assert_eq!(openai["max_completion_tokens"], json!(USAGE_MAX_TOKENS));
+        assert!(openai.get("max_tokens").is_none());
+        let gemini = request_body(spec("Gemini"), "m", ProbeKind::Usage);
+        assert_eq!(
+            gemini["generationConfig"],
+            json!({"maxOutputTokens": USAGE_MAX_TOKENS})
+        );
+        let anthropic = request_body(spec("Anthropic"), "m", ProbeKind::Usage);
+        assert_eq!(anthropic["max_tokens"], json!(USAGE_MAX_TOKENS));
+        assert_eq!(USAGE_MAX_TOKENS, 1024);
+    }
+
+    #[test]
+    fn the_usage_dry_run_lists_all_nine_providers_without_credentials() {
+        let plan = render_usage_dry_run(&[("Grok".to_string(), vec!["grok-4.5".to_string()])]);
+        assert_eq!(plan.lines().filter(|l| l.starts_with("## ")).count(), 9);
+        assert!(plan.contains("`grok-4.5`"));
+        assert!(plan.contains("no network access"));
+        // The extras that would suppress reasoning are not planned.
+        assert!(!plan.contains("thinking"), "{plan}");
+    }
+
+    #[test]
+    fn usage_candidates_are_the_default_plus_extras_without_duplicates() {
+        let grok = spec("Grok");
+        let list = usage_candidates(
+            grok,
+            "grok-4.3",
+            &["grok-4.3".into(), "grok-4.5".into(), "grok-4.5".into()],
+        );
+        assert_eq!(list, vec!["grok-4.3".to_string(), "grok-4.5".to_string()]);
+    }
+
+    #[test]
+    fn a_call_without_a_usable_response_is_not_measured() {
+        let rejected = Outcome::Rejected {
+            status: 429,
+            detail: "[REDACTED] quota".to_string(),
+        };
+        let cells = usage_table_cells(Wire::OpenAiChat, &rejected);
+        assert!(cells[0].starts_with("REJECTED (429)"), "{cells:?}");
+        assert_eq!(cells[5], "not measured (HTTP 429)");
+        let down = Outcome::Unreachable("timed out".to_string());
+        assert_eq!(
+            usage_table_cells(Wire::OpenAiChat, &down)[5],
+            "not measured (unreachable)"
+        );
+        let body = r#"{"usage":{"prompt_tokens":663,"completion_tokens":50,"total_tokens":837,
+            "completion_tokens_details":{"reasoning_tokens":124}}}"#;
+        let accepted = Outcome::Accepted {
+            status: 200,
+            parsed: parse_success(Wire::OpenAiChat, body, "k"),
+        };
+        let cells = usage_table_cells(Wire::OpenAiChat, &accepted);
+        assert_eq!(
+            cells[1..].to_vec(),
+            [
+                "663",
+                "50",
+                "124",
+                "837",
+                "reasoning beside completion",
+                "-"
+            ]
+        );
     }
 }

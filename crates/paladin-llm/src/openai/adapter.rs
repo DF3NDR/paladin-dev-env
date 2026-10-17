@@ -19,6 +19,7 @@ use std::env;
 use std::pin::Pin;
 use std::time::{Duration, SystemTime};
 
+use crate::backoff::exponential_backoff;
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::RedactedKey;
@@ -810,9 +811,8 @@ impl OpenAIAdapter {
 
                     if attempt < self.config.max_retries {
                         let base_delay = Duration::from_secs(1);
-                        let exponential_delay = base_delay * 2_u32.pow(attempt);
                         let max_delay = Duration::from_secs(10);
-                        let delay = exponential_delay.min(max_delay);
+                        let delay = exponential_backoff(base_delay, attempt, max_delay);
 
                         let jitter_ms = {
                             let mut rng = rand::thread_rng();

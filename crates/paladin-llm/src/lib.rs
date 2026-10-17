@@ -166,6 +166,17 @@ mod response_guards;
     feature = "openai-compatible"
 ))]
 mod sse;
+// The shared saturating exponential back-off for the retrying adapters (WR-02). Crate-private.
+#[cfg(any(
+    feature = "openai",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod backoff;
 /// The shared context-window precedence resolver (PRIM-04, D-01/D-02): one
 /// pure function, [`window::resolve_context_window`], that every consumer of
 /// [`paladin_ports::output::llm_port::ProviderCapabilities`] calls through

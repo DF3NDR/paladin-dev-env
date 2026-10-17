@@ -59,6 +59,11 @@ pub(crate) const MAX_MODEL_ID_CHARS: usize = 256;
 /// arbitrarily long and may carry control characters; the message shows a bounded, escaped prefix.
 const MAX_ECHOED_MODEL_CHARS: usize = 80;
 
+/// The largest `max_retries` an operator may configure. Each retry re-sends (and re-bills) the
+/// whole request and waits an exponentially growing, capped interval first, so a value beyond a
+/// handful buys minutes of waiting, not reliability. Adapters also clamp the wait themselves.
+pub(crate) const MAX_RETRIES_CEILING: u32 = 10;
+
 /// What an `api_key` string in a provider block turned out to be.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum SecretSource {
@@ -440,6 +445,21 @@ fn resolve(
         "count",
     )
     .unwrap_or(defaults.max_retries);
+
+    // A zero timeout makes the HTTP client fail every request at once, and an unbounded retry
+    // count turns one outage into hours of back-off. Both are refused here, naming the provider
+    // and the key (never an environment variable's raw text).
+    if timeout_seconds == 0 {
+        problems.push(format!(
+            "{subject_text}: `llm.{provider}.timeout_seconds` must be at least 1"
+        ));
+    }
+    if max_retries > MAX_RETRIES_CEILING {
+        problems.push(format!(
+            "{subject_text}: `llm.{provider}.max_retries` must be at most {MAX_RETRIES_CEILING}, \
+             got {max_retries}"
+        ));
+    }
 
     let max_tokens = layered_number::<u32>(
         block.and_then(|b| b.max_tokens),
@@ -839,6 +859,40 @@ mod tests {
         let layered = resolve_with(Some(&block), None, &env).unwrap();
         assert_eq!(layered.base_url, "https://env.example/v1");
         assert_eq!(layered.model, "compiled-model");
+    }
+
+    // ── operator-settable knobs are bounded (WR-02) ─────────────────────────
+
+    #[test]
+    fn a_zero_timeout_is_refused_by_name() {
+        let block = LlmProviderConfig::new("k").with_timeout_seconds(0);
+        let message = resolve_with(Some(&block), None, &env_of(&[])).unwrap_err();
+        assert!(
+            message.contains("acme") && message.contains("timeout_seconds"),
+            "the refusal must name the provider and the key: {message}"
+        );
+        let env = env_of(&[("ACME_TIMEOUT_SECONDS", "0")]);
+        let from_env = resolve_with(Some(&LlmProviderConfig::new("k")), None, &env).unwrap_err();
+        assert!(from_env.contains("timeout_seconds"), "{from_env}");
+    }
+
+    #[test]
+    fn max_retries_above_the_ceiling_is_refused_and_the_ceiling_is_allowed() {
+        let at_ceiling = LlmProviderConfig::new("k").with_max_retries(MAX_RETRIES_CEILING);
+        let layered = resolve_with(Some(&at_ceiling), None, &env_of(&[])).unwrap();
+        assert_eq!(layered.max_retries, MAX_RETRIES_CEILING);
+
+        for too_many in [MAX_RETRIES_CEILING + 1, u32::MAX] {
+            let block = LlmProviderConfig::new("k").with_max_retries(too_many);
+            let message = resolve_with(Some(&block), None, &env_of(&[])).unwrap_err();
+            assert!(
+                message.contains("acme") && message.contains("max_retries"),
+                "the refusal must name the provider and the key: {message}"
+            );
+        }
+        let env = env_of(&[("ACME_MAX_RETRIES", "4000000000")]);
+        let from_env = resolve_with(Some(&LlmProviderConfig::new("k")), None, &env).unwrap_err();
+        assert!(from_env.contains("max_retries"), "{from_env}");
     }
 
     // ── the 300 s reasoning default ─────────────────────────────────────────

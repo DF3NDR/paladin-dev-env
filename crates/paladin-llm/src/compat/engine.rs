@@ -35,6 +35,7 @@ use super::types::{
     CompatMessage, CompatModelsResponse, CompatRequest, CompatResponse, CompatResponseFormat,
     CompatStreamOptions, CompatUsage,
 };
+use crate::backoff::exponential_backoff;
 use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
@@ -866,7 +867,11 @@ impl CompatEngine {
                         return Err(e);
                     }
 
-                    let backoff = Duration::from_millis(100 * 2_u64.pow(attempt));
+                    let backoff = exponential_backoff(
+                        Duration::from_millis(100),
+                        attempt,
+                        Duration::from_secs(10),
+                    );
                     let jitter = Duration::from_millis(rand::random::<u64>() % 100);
                     tokio::time::sleep(backoff + jitter).await;
                     last_error = Some(e);

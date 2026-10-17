@@ -35,9 +35,10 @@ pub struct LlmProviderConfig {
     pub default_model: Option<String>,
     /// Default temperature (0.0–2.0).
     pub default_temperature: Option<f32>,
-    /// Default timeout in seconds.
+    /// Default timeout in seconds; at least 1 (a zero timeout is refused when the provider is built).
     pub timeout_seconds: Option<u64>,
-    /// Maximum retries for failed requests.
+    /// Maximum retries for failed requests; at most 10 (a larger value is refused when the
+    /// provider is built).
     pub max_retries: Option<u32>,
     /// Default output budget (`max_tokens`) sent when a request sets none. YAML key
     /// `max_tokens`. Beats the provider's legacy environment variable (where it has one) and

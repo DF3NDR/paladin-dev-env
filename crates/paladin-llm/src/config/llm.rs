@@ -27,7 +27,14 @@ pub struct LlmProviderConfig {
     /// API key for the provider. May be empty (the provider's own environment variable then
     /// supplies it, D-13) or an exact `${ENV_VAR}` placeholder naming the variable that holds
     /// the key; any other text, including `abc${X}` and `$X`, is used literally.
-    #[serde(default)]
+    ///
+    /// Never serialised (WR-04): the block is `Serialize` through `LlmConfig`, `Settings` and
+    /// `AgentRuntimeDeps`, so any config dump, snapshot or `--print-config` would otherwise emit
+    /// every provider key in plaintext. Omitting the field, rather than writing a placeholder,
+    /// means a serialise-then-deserialise round trip yields an empty key (which the provider's
+    /// environment variable then supplies) instead of a placeholder string mistaken for a
+    /// credential.
+    #[serde(default, skip_serializing)]
     pub api_key: String,
     /// Base URL for the API endpoint.
     pub base_url: Option<String>,
@@ -793,6 +800,29 @@ llm:
         // An empty key prints empty, not as a redaction of something that is not there.
         let keyless = format!("{:?}", LlmProviderConfig::new(""));
         assert!(!keyless.contains("<redacted>"), "{keyless}");
+    }
+
+    #[test]
+    fn the_api_key_is_never_serialized() {
+        // WR-04: the type must not leak a key by construction, however it is serialised.
+        const SECRET: &str = "sk-never-serialize-me";
+        let block = LlmProviderConfig::new(SECRET);
+        let json = serde_json::to_string(&block).expect("serialize");
+        assert!(!json.contains(SECRET), "{json}");
+        assert!(!json.contains("api_key"), "{json}");
+
+        let config = LlmConfig {
+            openai: Some(LlmProviderConfig::new(SECRET)),
+            anthropic: Some(LlmProviderConfig::new(SECRET)),
+            ..LlmConfig::default()
+        };
+        let json = serde_json::to_string(&config).expect("serialize");
+        assert!(!json.contains(SECRET), "{json}");
+
+        // A round trip loses the key rather than inventing one: the provider's environment
+        // variable supplies it, exactly as for an absent `api_key`.
+        let back: LlmConfig = serde_json::from_str(&json).expect("round trip");
+        assert_eq!(back.openai.expect("openai block").api_key, "");
     }
 
     #[test]

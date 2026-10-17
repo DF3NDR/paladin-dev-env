@@ -302,6 +302,14 @@ test-llm: ## Run tests for paladin-llm
 	@echo "$(CYAN)Running tests for paladin-llm...$(NC)"
 	@$(CARGO) test -p paladin-llm
 
+# The live-vendor smoke harness is a cargo example, and cargo does not run an example's unit
+# tests by default (its guard test `the_static_model_lists_match_the_adapters` would otherwise
+# never run). Not wired into CI: it is the local gate for editing that harness.
+.PHONY: test-llm-examples
+test-llm-examples: ## Run the unit tests inside paladin-llm's examples (live_vendor_smoke)
+	@echo "$(CYAN)Running paladin-llm example tests...$(NC)"
+	@$(CARGO) test -p paladin-llm --example live_vendor_smoke --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible
+
 .PHONY: test-memory
 test-memory: ## Run tests for paladin-memory
 	@echo "$(CYAN)Running tests for paladin-memory...$(NC)"

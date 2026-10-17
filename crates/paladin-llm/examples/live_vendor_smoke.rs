@@ -52,7 +52,9 @@
 //! has already routed through its redact-then-bound diagnostic excerpt.
 
 use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+use paladin_llm::anthropic::adapter::ANTHROPIC_DEFAULT_MODEL;
 use paladin_llm::anthropic::{AnthropicAdapter, AnthropicConfig};
+use paladin_llm::deepseek::adapter::DEEPSEEK_DEFAULT_MODEL;
 use paladin_llm::deepseek::{DeepSeekAdapter, DeepSeekConfig};
 use paladin_llm::gemini::adapter::{
     GEMINI_DEFAULT_BASE_URL, GEMINI_DEFAULT_MODEL, GEMINI_FALLBACK_MODELS,
@@ -182,31 +184,20 @@ struct ProviderSpec {
     build: fn() -> Result<Built, String>,
 }
 
-/// Anthropic's static model list (mirrors `AnthropicAdapter::get_available_models`; a unit test
-/// below keeps the two in step).
-const ANTHROPIC_MODELS: &[&str] = &[
-    "claude-3-5-sonnet-20241022",
-    "claude-3-5-sonnet-20240620",
-    "claude-3-opus-20240229",
-    "claude-3-sonnet-20240229",
-    "claude-3-haiku-20240307",
-    "claude-2.1",
-    "claude-2.0",
-    "claude-instant-1.2",
-];
+/// Anthropic's static model list (mirrors `AnthropicAdapter::get_available_models`, which returns
+/// its seeded table). That table holds exactly the adapter's default model today, so the list is
+/// built from the adapter's own constant rather than restated; the unit test
+/// `the_static_model_lists_match_the_adapters` fails if the table grows.
+const ANTHROPIC_MODELS: &[&str] = &[ANTHROPIC_DEFAULT_MODEL];
 
-/// DeepSeek's static model list (mirrors `DeepSeekAdapter::get_available_models`).
-const DEEPSEEK_MODELS: &[&str] = &["deepseek-chat", "deepseek-coder"];
+/// DeepSeek's static model list (mirrors `DeepSeekAdapter::get_available_models`, which returns
+/// its seeded table). Built from the adapter's own default-model constant for the same reason as
+/// [`ANTHROPIC_MODELS`], and guarded by the same unit test.
+const DEEPSEEK_MODELS: &[&str] = &[DEEPSEEK_DEFAULT_MODEL];
 
 /// `OpenAIConfig` carries no model (the request does), so the harness names one candidate. It is
 /// a probe candidate only; pass others with `--models openai=<id>`.
 const OPENAI_PROBE_DEFAULT_MODEL: &str = "gpt-4o-mini";
-
-/// `AnthropicConfig::from_env` default model, restated for the dry run (no credential read).
-const ANTHROPIC_DEFAULT_MODEL: &str = "claude-3-5-sonnet-20241022";
-
-/// `DeepSeekConfig::from_env` default model, restated for the dry run.
-const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-chat";
 
 /// Build an adapter whose config exposes `base_url` and `model` and whose `new` returns
 /// `Result<_, LlmError>`.

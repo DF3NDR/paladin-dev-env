@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-19-PLAN.md
-last_updated: "2026-10-17T18:43:09.033Z"
+stopped_at: Completed 50-20-PLAN.md
+last_updated: "2026-10-17T18:57:44.954Z"
 last_activity: 2026-10-17
 last_activity_desc: Phase 50 gap-closure execution started (plans 50-19..50-31)
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 120
-  completed_plans: 108
+  completed_plans: 109
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([█████████░] 90%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([█████████░] 91%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 20 of 31 (gap closure 50-19..50-31, --gaps-only)
+Plan: 21 of 31 (gap closure 50-19..50-31, --gaps-only)
 Status: Ready to execute
 Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-19..50-31)
 
@@ -315,6 +315,7 @@ Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-1
 | Phase 50 P18 | 65min | 3 tasks | 18 files |
 | Phase 50 P16 | 95min | 3 tasks | 25 files |
 | Phase 50 P19 | 25min | 3 tasks | 9 files |
+| Phase 50 P20 | 40min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -556,6 +557,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-16: the Switching providers drift test compares every column of every seeded row and is compiled only with all nine adapter features; the usage-cap column reads unverified (owner accepted 2026-10-16) for the five compat presets and does not call any other vendor verified
 - [Phase ?]: 50-16: closeout register check closed WINDOWS rows 70, 71, 72 on measured evidence, left 73 and 74 open, and recorded rows 75 (OpenAI max_tokens vs gpt-5.4-nano) and 76 (Kimi fallback profile) as open owner items
 - [Phase ?]: 50-19: OpenAI adapter sends max_completion_tokens for every model (owner option (a)); measured on gpt-5.4-nano and gpt-4o-mini only, other hosts use the openai-compatible preset
+- [Phase ?]: 50-20: Kimi adapter-wide fallback declares temperature, top_p and both penalties NotSent (owner option (a), G-50-5c); temperature_range is ADR-0004's (0.0, 1.0), no vendor claim
 
 ### Pending Todos
 
@@ -774,8 +776,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-17T18:43:08.993Z
-**Stopped at:** Completed 50-19-PLAN.md
+**Last session:** 2026-10-17T18:57:44.822Z
+**Stopped at:** Completed 50-20-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

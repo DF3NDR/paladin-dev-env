@@ -1439,7 +1439,7 @@ Plans:
 
 **Wave 17** *(gap-closure wave 2; blocked on Wave 16 completion)*
 
-- [ ] 50-20-PLAN.md — G-50-5c (row 76, option (a)): the Kimi adapter-wide fallback declares temperature, top_p and both penalties `NotSent`, matching the seeded kimi-k2.6/kimi-k3 rows; fallback-vs-seed test; temperature-range invariant covers Kimi
+- [x] 50-20-PLAN.md — G-50-5c (row 76, option (a)): the Kimi adapter-wide fallback declares temperature, top_p and both penalties `NotSent`, matching the seeded kimi-k2.6/kimi-k3 rows; fallback-vs-seed test; temperature-range invariant covers Kimi
 
 **Wave 18** *(gap-closure wave 3; blocked on Wave 17 completion)*
 

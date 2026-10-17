@@ -1365,7 +1365,7 @@ the existing credential gate with the env vars Paladin already reads.
      every intentional break; `make clean-code`, `make check-gates`, `make api-surface`,
      `make security` and the 82 % coverage floor stay green, with no `unwrap`/`expect`/`panic!`
      added to library code.
-**Plans**: 25 plans (18 executed + 7 gap closure)
+**Plans**: 31 plans (18 executed + 13 gap closure)
 
 Plans:
 **Wave 1**
@@ -1444,19 +1444,40 @@ Plans:
 **Wave 18** *(gap-closure wave 3; blocked on Wave 17 completion)*
 
 - [ ] 50-21-PLAN.md — G-50-5a (row 74): tracer Grok wire -> compat mapper -> PricingLlmAdapter billed in full; per-preset usage semantics (Grok reasoning beside completion); vendor total parsed and reconciled under `paladin.usage_unreconciled`, D-02 kept
-- [ ] 50-22-PLAN.md — G-50-5a: `live_vendor_smoke --usage` and the operator's recorded usage-containment probe (`50-USAGE-PROBE.md`; human-action checkpoint, blocks only 50-23)
+- [ ] 50-22-PLAN.md — G-50-5a: `live_vendor_smoke --usage` and the operator's recorded usage-containment probe (`50-USAGE-PROBE.md`; human-action checkpoint; only 50-24 consumes it)
 
 **Wave 19** *(gap-closure wave 4; blocked on Wave 18 completion)*
 
-- [ ] 50-23-PLAN.md — G-50-5a: Gemini tool-use prompt tokens folded; vendor totals reconciled on OpenAI, DeepSeek and Gemini (Anthropic containment, vision cache counts); per-vendor conformance fixtures; probe verdicts applied
+- [ ] 50-23-PLAN.md — G-50-5a: Gemini tool-use prompt tokens folded; vendor totals reconciled on OpenAI, DeepSeek and Gemini (Anthropic containment, vision cache counts); disagreement conformance case on all nine (`CASE_COUNT` 19)
 
 **Wave 20** *(gap-closure wave 5; blocked on Wave 19 completion)*
 
-- [ ] 50-24-PLAN.md — G-50-5a: billed-but-failed calls (`EmptyCompletion`, `Refusal`) carry `BilledUsage` on every adapter and both paths; PricingLlmAdapter prices them; registered `LlmError` break
+- [ ] 50-24-PLAN.md — G-50-5a: the 50-22 live verdicts applied to each provider's usage semantics (red-first flips, mixed results ledgered open); usage mapping documented for all nine; MIGRATION 9.1 row
 
 **Wave 21** *(gap-closure wave 6; blocked on Wave 20 completion)*
 
-- [ ] 50-25-PLAN.md — G-50-5a: billed failures settle in the agent loop and stream and count as the engine attempt's spend (`PaladinError::LlmFailure.spend`, registered); WINDOWS row 74 fixed, remainders ledgered
+- [ ] 50-25-PLAN.md — G-50-5a: additive `LlmError::empty_completion` / `LlmError::refusal` constructors; seven consumer files moved to shape-proof forms (no behaviour change)
+
+**Wave 22** *(gap-closure wave 7; blocked on Wave 21 completion)*
+
+- [ ] 50-26-PLAN.md — G-50-5a: `BilledUsage`; `EmptyCompletion`/`Refusal` as `#[non_exhaustive]` struct variants with `billed_usage()`; compat buffered path bills; `LlmError` break measured and registered in the same commit
+
+**Wave 23** *(gap-closure wave 8; blocked on Wave 22 completion)*
+
+- [ ] 50-27-PLAN.md — G-50-5a: every adapter bills empty and refused calls on both paths; PricingLlmAdapter prices them buffered and streamed; conformance case on all nine (`CASE_COUNT` 20)
+- [ ] 50-28-PLAN.md — G-50-5a: billed failures folded and settled to the treasury ledger in the agent loop, buffered and streamed (private `CallFailure`, no public type change)
+
+**Wave 24** *(gap-closure wave 9; blocked on Wave 23 completion)*
+
+- [ ] 50-29-PLAN.md — G-50-5a remainder (b): `IncurredSpend` and the `ATTEMPT_SPEND` attempt spend scope; failed, timed-out and structured Battalion attempts count every billed call; the execution service records every call
+
+**Wave 25** *(gap-closure wave 10; blocked on Wave 24 completion)*
+
+- [ ] 50-30-PLAN.md — G-50-5a remainder (a): `HOPPED_BILLS`; FallbackLlmAdapter records billed hops it moves past, PricingLlmAdapter prices them, the agent loop settles each call's parts in one row with a per-model breakdown
+
+**Wave 26** *(gap-closure wave 11; blocked on Wave 25 completion)*
+
+- [ ] 50-31-PLAN.md — G-50-5a: end-to-end matrix case through real adapters to the ledger; billing contract documented (docs, changelogs, MIGRATION, ADR-0061); WINDOWS row 74 fixed; remainder (c) Grok cost cross-check kept open as the owner's accepted deferral
 
 ### Phase 51: Adjustable Reasoning Effort
 

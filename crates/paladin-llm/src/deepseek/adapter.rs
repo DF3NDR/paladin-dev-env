@@ -30,6 +30,7 @@ use crate::registry::{
 };
 use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
+use crate::sse::SseLines;
 // WR-01 (`25-REVIEW.md`): this adapter previously carried its own
 // byte-for-byte copy of the crate's shared credential-redaction routine
 // (`RESPONSE_EXCERPT_CHAR_BUDGET`, `CREDENTIAL_PLACEHOLDER`,
@@ -1038,74 +1039,87 @@ impl LlmPort for DeepSeekAdapter {
         let api_key = self.config.api_key.clone();
         let mut completion = StreamCompletion::default();
 
-        let llm_stream = stream.flat_map(move |chunk_result| {
-            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).into_owned();
-                    let mut items = Vec::new();
+        // A network read can end inside a `data:` line (or inside a multi-byte character), so the
+        // bytes are reassembled into whole lines before any line is parsed (CR-02).
+        let mut sse = SseLines::default();
+        let llm_stream = stream
+            .map(Some)
+            .chain(futures::stream::iter([None]))
+            .flat_map(move |chunk_option| {
+                // `None` is the end of the body: it releases a final line that had no newline.
+                let chunk_result = match chunk_option {
+                    Some(read) => read.map(|bytes| sse.push(&bytes)),
+                    None => Ok(sse.finish()),
+                };
+                let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
+                    Ok(lines) => {
+                        let mut items = Vec::new();
 
-                    for line in text.lines() {
-                        let Some(json_str) = line.strip_prefix("data: ") else {
-                            continue;
-                        };
+                        for line in &lines {
+                            let Some(json_str) = line.strip_prefix("data: ") else {
+                                continue;
+                            };
 
-                        if json_str.trim() == "[DONE]" {
-                            let finish_reason =
-                                held_finish_reason.take().unwrap_or(FinishReason::Stop);
-                            match completion.finish(provider, &model, &finish_reason, &api_key) {
-                                Ok(()) => {
-                                    let mut terminal = StreamingResponse::terminal(finish_reason);
-                                    if let Some(usage) = held_usage.take() {
-                                        terminal = terminal.with_usage(usage);
+                            if json_str.trim() == "[DONE]" {
+                                let finish_reason =
+                                    held_finish_reason.take().unwrap_or(FinishReason::Stop);
+                                match completion.finish(provider, &model, &finish_reason, &api_key)
+                                {
+                                    Ok(()) => {
+                                        let mut terminal =
+                                            StreamingResponse::terminal(finish_reason);
+                                        if let Some(usage) = held_usage.take() {
+                                            terminal = terminal.with_usage(usage);
+                                        }
+                                        for (key, value) in &stream_metadata {
+                                            terminal = terminal
+                                                .with_metadata(key.as_str(), value.as_str());
+                                        }
+                                        items.push(Ok(terminal));
                                     }
-                                    for (key, value) in &stream_metadata {
-                                        terminal =
-                                            terminal.with_metadata(key.as_str(), value.as_str());
-                                    }
-                                    items.push(Ok(terminal));
+                                    // An empty answer replaces the terminal chunk; deltas already
+                                    // yielded (reasoning included) stay yielded.
+                                    Err(error) => items.push(Err(error)),
                                 }
-                                // An empty answer replaces the terminal chunk; deltas already
-                                // yielded (reasoning included) stay yielded.
-                                Err(error) => items.push(Err(error)),
+                                continue;
                             }
-                            continue;
+
+                            match serde_json::from_str::<DeepSeekStreamResponse>(json_str) {
+                                Ok(response) => {
+                                    if let Some(usage) = response.usage {
+                                        held_usage = Some(map_usage(usage));
+                                    }
+                                    if let Some(choice) = response.choices.first() {
+                                        if let Some(reason) = &choice.finish_reason {
+                                            held_finish_reason =
+                                                Some(Self::map_finish_reason(Some(reason.clone())));
+                                        }
+                                        let content =
+                                            choice.delta.content.clone().unwrap_or_default();
+                                        completion.observe_content(&content);
+                                        let mut delta = StreamingResponse::delta(content);
+                                        if let Some(reasoning) = &choice.delta.reasoning_content {
+                                            delta = delta.with_reasoning(reasoning.as_str());
+                                        }
+                                        items.push(Ok(delta));
+                                    }
+                                }
+                                Err(e) => {
+                                    items.push(Err(LlmError::ProcessingError(format!(
+                                        "Failed to parse streaming response: {}",
+                                        e
+                                    ))));
+                                }
+                            }
                         }
 
-                        match serde_json::from_str::<DeepSeekStreamResponse>(json_str) {
-                            Ok(response) => {
-                                if let Some(usage) = response.usage {
-                                    held_usage = Some(map_usage(usage));
-                                }
-                                if let Some(choice) = response.choices.first() {
-                                    if let Some(reason) = &choice.finish_reason {
-                                        held_finish_reason =
-                                            Some(Self::map_finish_reason(Some(reason.clone())));
-                                    }
-                                    let content = choice.delta.content.clone().unwrap_or_default();
-                                    completion.observe_content(&content);
-                                    let mut delta = StreamingResponse::delta(content);
-                                    if let Some(reasoning) = &choice.delta.reasoning_content {
-                                        delta = delta.with_reasoning(reasoning.as_str());
-                                    }
-                                    items.push(Ok(delta));
-                                }
-                            }
-                            Err(e) => {
-                                items.push(Err(LlmError::ProcessingError(format!(
-                                    "Failed to parse streaming response: {}",
-                                    e
-                                ))));
-                            }
-                        }
+                        items
                     }
+                    Err(e) => vec![Err(LlmError::NetworkError(format!("Stream error: {}", e)))],
+                };
 
-                    items
-                }
-                Err(e) => vec![Err(LlmError::NetworkError(format!("Stream error: {}", e)))],
-            };
-
-            futures::stream::iter(items)
-        });
+                futures::stream::iter(items)
+            });
 
         Ok(Box::new(llm_stream))
     }

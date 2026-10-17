@@ -32,6 +32,7 @@ use crate::registry::{
 };
 use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
+use crate::sse::SseLines;
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
@@ -829,121 +830,134 @@ impl LlmPort for AnthropicAdapter {
         let mut completion = StreamCompletion::default();
         let api_key = self.config.api_key.clone();
 
-        let stream = response.bytes_stream().flat_map(move |chunk_result| {
-            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).into_owned();
-                    let mut items = Vec::new();
+        // A network read can end inside a `data:` line (or inside a multi-byte character), so the
+        // bytes are reassembled into whole lines before any line is parsed (CR-02).
+        let mut sse = SseLines::default();
+        let stream = response
+            .bytes_stream()
+            .map(Some)
+            .chain(futures::stream::iter([None]))
+            .flat_map(move |chunk_option| {
+                // `None` is the end of the body: it releases a final line that had no newline.
+                let chunk_result = match chunk_option {
+                    Some(read) => read.map(|bytes| sse.push(&bytes)),
+                    None => Ok(sse.finish()),
+                };
+                let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
+                    Ok(lines) => {
+                        let mut items = Vec::new();
 
-                    for line in text.lines() {
-                        let Some(json_str) = line.strip_prefix("data: ") else {
-                            continue;
-                        };
-                        if json_str.trim() == "[DONE]" {
-                            continue;
-                        }
+                        for line in &lines {
+                            let Some(json_str) = line.strip_prefix("data: ") else {
+                                continue;
+                            };
+                            if json_str.trim() == "[DONE]" {
+                                continue;
+                            }
 
-                        let Ok(event) = serde_json::from_str::<ClaudeStreamEvent>(json_str) else {
-                            // Never skipped silently: name the event type only, never its body
-                            // (it can echo a credential) and never serde's message (it can quote
-                            // the offending value).
-                            log::warn!(
-                                target: "paladin::anthropic",
-                                "skipping an unparsable stream event (type: {})",
-                                unparsable_event_type(json_str)
-                            );
-                            continue;
-                        };
+                            let Ok(event) = serde_json::from_str::<ClaudeStreamEvent>(json_str)
+                            else {
+                                // Never skipped silently: name the event type only, never its body
+                                // (it can echo a credential) and never serde's message (it can quote
+                                // the offending value).
+                                log::warn!(
+                                    target: "paladin::anthropic",
+                                    "skipping an unparsable stream event (type: {})",
+                                    unparsable_event_type(json_str)
+                                );
+                                continue;
+                            };
 
-                        match event.event_type.as_str() {
-                            "content_block_delta" => {
-                                if let Some(delta) = event.delta {
-                                    if let Some(text) = delta.text {
-                                        completion.observe_content(&text);
-                                        items.push(Ok(StreamingResponse::delta(text)));
-                                    }
-                                    if let Some(thinking) = delta.thinking {
-                                        items
-                                            .push(Ok(StreamingResponse::delta("")
+                            match event.event_type.as_str() {
+                                "content_block_delta" => {
+                                    if let Some(delta) = event.delta {
+                                        if let Some(text) = delta.text {
+                                            completion.observe_content(&text);
+                                            items.push(Ok(StreamingResponse::delta(text)));
+                                        }
+                                        if let Some(thinking) = delta.thinking {
+                                            items.push(Ok(StreamingResponse::delta("")
                                                 .with_reasoning(thinking)));
+                                        }
                                     }
                                 }
-                            }
-                            "message_start" => {
-                                if let Some(message) = event.message {
-                                    if let Some(started) = message.model {
-                                        model = started;
+                                "message_start" => {
+                                    if let Some(message) = event.message {
+                                        if let Some(started) = message.model {
+                                            model = started;
+                                        }
+                                        if let Some(usage) = message.usage {
+                                            held_usage = Some(merge_claude_stream_usage(
+                                                held_usage.take(),
+                                                usage,
+                                            ));
+                                        }
                                     }
-                                    if let Some(usage) = message.usage {
+                                }
+                                "message_delta" => {
+                                    if let Some(usage) = event.usage {
                                         held_usage = Some(merge_claude_stream_usage(
                                             held_usage.take(),
                                             usage,
                                         ));
                                     }
-                                }
-                            }
-                            "message_delta" => {
-                                if let Some(usage) = event.usage {
-                                    held_usage =
-                                        Some(merge_claude_stream_usage(held_usage.take(), usage));
-                                }
-                                if let Some(delta) = event.delta {
-                                    if let Some(reason) = delta.stop_reason {
-                                        held_stop_reason = Some(reason);
-                                    }
-                                    if let Some(details) = delta.stop_details {
-                                        held_stop_details = Some(details);
-                                    }
-                                }
-                            }
-                            "message_stop" => {
-                                // A stream that never reported a stop reason keeps the
-                                // pre-50-13 terminal `Stop`; a reported one is mapped by name.
-                                let finish = match held_stop_reason.as_deref() {
-                                    None => FinishReason::Stop,
-                                    reason => map_stop_reason(reason),
-                                };
-                                if let Some(refusal) = refusal_text(
-                                    held_stop_reason.as_deref(),
-                                    held_stop_details.as_ref(),
-                                ) {
-                                    completion.observe_refusal(&refusal);
-                                }
-                                match completion.finish(
-                                    ANTHROPIC_PROVIDER,
-                                    &model,
-                                    &finish,
-                                    &api_key,
-                                ) {
-                                    Ok(()) => {
-                                        let mut terminal = StreamingResponse::terminal(finish);
-                                        if let Some(usage) = held_usage.take() {
-                                            terminal =
-                                                terminal.with_usage(map_claude_usage(&usage));
+                                    if let Some(delta) = event.delta {
+                                        if let Some(reason) = delta.stop_reason {
+                                            held_stop_reason = Some(reason);
                                         }
-                                        for (key, value) in &stream_metadata {
-                                            terminal = terminal
-                                                .with_metadata(key.as_str(), value.as_str());
+                                        if let Some(details) = delta.stop_details {
+                                            held_stop_details = Some(details);
                                         }
-                                        items.push(Ok(terminal));
                                     }
-                                    Err(err) => items.push(Err(err)),
                                 }
+                                "message_stop" => {
+                                    // A stream that never reported a stop reason keeps the
+                                    // pre-50-13 terminal `Stop`; a reported one is mapped by name.
+                                    let finish = match held_stop_reason.as_deref() {
+                                        None => FinishReason::Stop,
+                                        reason => map_stop_reason(reason),
+                                    };
+                                    if let Some(refusal) = refusal_text(
+                                        held_stop_reason.as_deref(),
+                                        held_stop_details.as_ref(),
+                                    ) {
+                                        completion.observe_refusal(&refusal);
+                                    }
+                                    match completion.finish(
+                                        ANTHROPIC_PROVIDER,
+                                        &model,
+                                        &finish,
+                                        &api_key,
+                                    ) {
+                                        Ok(()) => {
+                                            let mut terminal = StreamingResponse::terminal(finish);
+                                            if let Some(usage) = held_usage.take() {
+                                                terminal =
+                                                    terminal.with_usage(map_claude_usage(&usage));
+                                            }
+                                            for (key, value) in &stream_metadata {
+                                                terminal = terminal
+                                                    .with_metadata(key.as_str(), value.as_str());
+                                            }
+                                            items.push(Ok(terminal));
+                                        }
+                                        Err(err) => items.push(Err(err)),
+                                    }
+                                }
+                                _ => {}
                             }
-                            _ => {}
                         }
+
+                        items
                     }
+                    Err(e) => vec![Err(LlmError::ProcessingError(format!(
+                        "Stream error: {}",
+                        e
+                    )))],
+                };
 
-                    items
-                }
-                Err(e) => vec![Err(LlmError::ProcessingError(format!(
-                    "Stream error: {}",
-                    e
-                )))],
-            };
-
-            futures::stream::iter(items)
-        });
+                futures::stream::iter(items)
+            });
 
         Ok(Box::new(stream))
     }

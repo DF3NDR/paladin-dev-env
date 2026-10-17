@@ -96,6 +96,7 @@ use crate::registry::{
 };
 use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
+use crate::sse::SseLines;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits (Phase 25 D-03).
@@ -1088,7 +1089,7 @@ impl LlmPort for GeminiAdapter {
     }
 
     /// Generate a streaming completion. POSTs with `alt=sse` and assembles
-    /// SSE frames via `parse_sse_chunk`.
+    /// SSE frames via `parse_sse_lines`.
     ///
     /// ## Retry (WR-04, `17-REVIEW.md`)
     ///
@@ -1188,21 +1189,33 @@ impl LlmPort for GeminiAdapter {
         let api_key = self.config.api_key.clone();
         let mut completion = StreamCompletion::default();
 
-        let stream = response.bytes_stream().flat_map(move |chunk_result| {
-            let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
-                Ok(bytes) => {
-                    let mut items = parse_sse_chunk(&bytes);
-                    classify_stream_items(&mut items, &mut completion, &model, &api_key);
-                    stamp_terminal_metadata(&mut items, &stream_metadata);
-                    items
-                }
-                Err(e) => vec![Err(LlmError::NetworkError(format!(
-                    "Gemini stream error: {e}"
-                )))],
-            };
+        // A network read can end inside a `data:` line (or inside a multi-byte character), so the
+        // bytes are reassembled into whole lines before any line is parsed (CR-02).
+        let mut sse = SseLines::default();
+        let stream = response
+            .bytes_stream()
+            .map(Some)
+            .chain(futures::stream::iter([None]))
+            .flat_map(move |chunk_option| {
+                // `None` is the end of the body: it releases a final line that had no newline.
+                let chunk_result = match chunk_option {
+                    Some(read) => read.map(|bytes| sse.push(&bytes)),
+                    None => Ok(sse.finish()),
+                };
+                let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
+                    Ok(lines) => {
+                        let mut items = parse_sse_lines(&lines);
+                        classify_stream_items(&mut items, &mut completion, &model, &api_key);
+                        stamp_terminal_metadata(&mut items, &stream_metadata);
+                        items
+                    }
+                    Err(e) => vec![Err(LlmError::NetworkError(format!(
+                        "Gemini stream error: {e}"
+                    )))],
+                };
 
-            futures::stream::iter(items)
-        });
+                futures::stream::iter(items)
+            });
 
         Ok(Box::new(stream))
     }
@@ -1573,22 +1586,23 @@ fn stamp_terminal_metadata(
     }
 }
 
-/// Parse one network chunk of Gemini's SSE stream into zero or more
+/// Parse the complete SSE lines one network read produced into zero or more
 /// [`StreamingResponse`] items.
 ///
-/// A single chunk can carry more than one complete `data: {...}` event —
-/// common when a mock transport (or a provider whose TCP framing does not
-/// align to event boundaries) writes the whole body at once — so every
+/// The lines come from [`SseLines`], which reassembles a frame that straddles
+/// two reads, so a frame is never parsed in halves (CR-02). One read can carry
+/// more than one complete `data: {...}` event — common when a mock transport
+/// (or a provider whose TCP framing does not align to event boundaries)
+/// writes the whole body at once — so every
 /// `data:`-prefixed line found is emitted as its own item, mirroring
 /// [`crate::compat::engine::CompatEngine::generate_stream`]'s `flat_map`
 /// discipline. There is no `[DONE]` sentinel in Gemini's SSE framing; the
 /// stream simply ends when the body ends. A frame with no `candidates` at
 /// all (e.g. a metadata-only frame) yields no item, not an error.
-fn parse_sse_chunk(bytes: &[u8]) -> Vec<Result<StreamingResponse, LlmError>> {
-    let text = String::from_utf8_lossy(bytes);
+fn parse_sse_lines(lines: &[String]) -> Vec<Result<StreamingResponse, LlmError>> {
     let mut items = Vec::new();
 
-    for line in text.lines() {
+    for line in lines {
         let Some(json_str) = line.strip_prefix("data: ") else {
             continue;
         };

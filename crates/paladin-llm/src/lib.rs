@@ -152,6 +152,20 @@ mod turn;
     feature = "openai-compatible"
 ))]
 mod response_guards;
+// Reassembles complete SSE lines from arbitrarily split network reads so a frame that straddles
+// two reads is not dropped (CR-02). Crate-private; compiled with the adapters that stream.
+#[cfg(any(
+    feature = "openai",
+    feature = "anthropic",
+    feature = "gemini",
+    feature = "deepseek",
+    feature = "kimi",
+    feature = "qwen",
+    feature = "grok",
+    feature = "ollama",
+    feature = "openai-compatible"
+))]
+mod sse;
 /// The shared context-window precedence resolver (PRIM-04, D-01/D-02): one
 /// pure function, [`window::resolve_context_window`], that every consumer of
 /// [`paladin_ports::output::llm_port::ProviderCapabilities`] calls through

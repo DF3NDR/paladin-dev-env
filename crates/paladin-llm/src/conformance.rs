@@ -32,7 +32,9 @@
 //! `Pricing(Cadence(adapter))` returns the same profile), `response_format_reaches_the_wire`,
 //! `empty_stop_completion_is_empty_completion` and `empty_stop_stream_is_empty_completion`
 //! (D-11a, buffered and streamed), `refusal_is_typed_and_permanent` (D-09),
-//! `usage_fields_are_mapped` and `unsupported_parameters_are_omitted_and_recorded`. A vendor that
+//! `usage_fields_are_mapped` and `unsupported_parameters_are_omitted_and_recorded`. A later review
+//! (CR-02) added `stream_frames_split_across_reads_are_reassembled`, which serves the fixture's
+//! stream body in writes cut inside a frame. A vendor that
 //! lacks a feature never skips a case: it states its documented alternative shape through the
 //! fixture ([`RefusalShape::ContentFilterOnly`], [`MalformedFrame::SkippedWithWarning`]), so every
 //! adapter is measured against every case. The default bodies for these cases live in
@@ -530,6 +532,82 @@ pub mod cases {
         assert!(
             last_finish_reason.is_some(),
             "the wire's terminal stop must surface as a finish_reason on the last chunk"
+        );
+    }
+
+    /// Case (CR-02): a stream whose frames straddle network reads still assembles in full.
+    ///
+    /// The fixture's own [`ConformanceFixture::stream_body`] is served in separate writes cut
+    /// inside the first and the last `data:` payload, with a pause between writes so each reaches
+    /// the adapter as its own read. The adapter must reassemble the split frames: every delta
+    /// arrives, no item is an error, and the terminal chunk -- the frame that carries the finish
+    /// reason, usage and the Phase 50 terminal guarantees -- is still delivered.
+    pub async fn stream_frames_split_across_reads_are_reassembled<F: ConformanceFixture>() {
+        let body = F::stream_body().into_bytes();
+        let marker = b"data: ";
+        let positions: Vec<usize> = body
+            .windows(marker.len())
+            .enumerate()
+            .filter(|(_, window)| *window == marker)
+            .map(|(index, _)| index)
+            .collect();
+        let (Some(first), Some(last)) = (positions.first(), positions.last()) else {
+            panic!("stream_body() must contain at least one `data: ` frame");
+        };
+        // Two bytes past a frame's `data: ` prefix is inside its payload on every wire.
+        let mut cuts = vec![first + marker.len() + 2, last + marker.len() + 2];
+        cuts.dedup();
+        let mut segments: Vec<Vec<u8>> = Vec::new();
+        let mut start = 0;
+        for cut in cuts {
+            segments.push(body[start..cut].to_vec());
+            start = cut;
+        }
+        segments.push(body[start..].to_vec());
+
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_chunked_body(move |writer| {
+                for (index, segment) in segments.iter().enumerate() {
+                    if index > 0 {
+                        std::thread::sleep(Duration::from_millis(60));
+                    }
+                    writer.write_all(segment)?;
+                    writer.flush()?;
+                }
+                Ok(())
+            })
+            .create_async()
+            .await;
+
+        let adapter = F::adapter(&server.url());
+        let stream = adapter
+            .generate_stream(conformance_request())
+            .await
+            .expect("stream_body() must open successfully");
+        let mut stream = Box::into_pin(stream);
+
+        let mut assembled = String::new();
+        let mut last_finish_reason = None;
+        while let Some(item) = stream.next().await {
+            let chunk =
+                item.expect("a frame split across network reads must not surface as an error");
+            assembled.push_str(&chunk.delta);
+            if chunk.finish_reason.is_some() {
+                last_finish_reason = chunk.finish_reason;
+            }
+        }
+
+        assert_eq!(
+            assembled, "Hello world",
+            "a frame split across network reads must be reassembled, not dropped"
+        );
+        assert!(
+            last_finish_reason.is_some(),
+            "the terminal frame split across network reads must still surface its finish reason"
         );
     }
 
@@ -1437,7 +1515,7 @@ pub mod cases {
 /// `17`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
 ///
 /// The lists are split in two groups: the ten transport cases (status mapping, streaming
-/// framing, redaction, redirects, rate limits) and the seven Phase 50 behaviour cases
+/// framing, redaction, redirects, rate limits) and the eight behaviour cases
 /// (capability truthfulness, structured output, empty completion, refusal, usage, the parameter
 /// policy). `llm_conformance_suite!(Fixture)` generates both. `llm_conformance_suite!(Fixture,
 /// transport_only)` generates only the first group and exists for one caller, the macro's own
@@ -1472,6 +1550,7 @@ macro_rules! llm_conformance_suite {
                 response_format_reaches_the_wire,
                 empty_stop_completion_is_empty_completion,
                 empty_stop_stream_is_empty_completion,
+                stream_frames_split_across_reads_are_reassembled,
                 refusal_is_typed_and_permanent,
                 usage_fields_are_mapped,
                 unsupported_parameters_are_omitted_and_recorded,
@@ -1762,8 +1841,8 @@ mod tests {
     #[test]
     fn suite_generates_the_full_case_list_for_a_fixture() {
         assert_eq!(
-            CASE_COUNT, 17,
-            "llm_conformance_suite! must generate exactly the documented 17 fixed cases -- if this \
+            CASE_COUNT, 18,
+            "llm_conformance_suite! must generate exactly the documented 18 fixed cases -- if this \
              fails, a case was added to or removed from the macro's list without updating this \
              pinned expectation"
         );

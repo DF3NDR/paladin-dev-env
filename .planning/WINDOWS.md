@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 14
+open_count: 13
 waived_count: 37
-fixed_count: 25
+fixed_count: 26
 total_count: 76
-last_updated: 2026-10-16T21:57:02.159Z
+last_updated: 2026-10-17T18:32:44.959Z
 ---
 
 # Broken Windows Ledger
@@ -89,7 +89,7 @@ last_updated: 2026-10-16T21:57:02.159Z
 | 72 | 50 | unrun-verify | Makefile | 367 | 50-02: make clean-code stops at lint-shell (shellcheck not installed in the sandbox); fmt, clippy -D warnings and workspace check passed separately | fixed |  | 2026-10-15T16:23:35.635Z | 2026-10-16T21:57:01.946Z |
 | 73 | 50 | unrun-verify | src/infrastructure/web/run_api_wiring.rs | 2369 | Wave 1 post-merge gate (plans 50-02, 50-04): cargo test --workspace --lib --bins passes 1348 tests but build_run_api_persists_no_run_traces_by_default and build_run_api_persists_run_traces_when_trace_persist_is_set fail with 'the run never reached a terminal status' (10 s worker deadline). Reproduced identically at the pre-wave-1 commit 28b6a69b in a throwaway worktree, so it is pre-existing and sandbox-specific, not a Phase 50 regression; CI on the pushed branch is the proof of record. | open |  | 2026-10-15T17:13:24.980Z |  |
 | 74 | 50 | deviation | crates/paladin-llm/src/compat/engine.rs |  | 50-12: vendor total_tokens not copied into TokenUsage (D-02 invariant kept; plan truth 'never recomputed' unimplemented); owner decision pending | open |  | 2026-10-16T16:30:20.647Z |  |
-| 75 | 50 | deviation | crates/paladin-llm/src/openai/adapter.rs |  | 50-16 closeout: the OpenAI adapter sends max_tokens, which gpt-5.4-nano (the probed default model) rejects with HTTP 400 (it wants max_completion_tokens; 50-SEED-PROBE.md probe 11). The ModelProfile has no field for the token-limit parameter name. Carried unfixed from 50-06, 50-08 and 50-09; documented in the Switching providers page and the CHANGELOG known limitations. Needs an owner decision on the profile field or an adapter fix | open |  | 2026-10-16T21:57:02.053Z |  |
+| 75 | 50 | deviation | crates/paladin-llm/src/openai/adapter.rs |  | 50-16 closeout: the OpenAI adapter sends max_tokens, which gpt-5.4-nano (the probed default model) rejects with HTTP 400 (it wants max_completion_tokens; 50-SEED-PROBE.md probe 11). The ModelProfile has no field for the token-limit parameter name. Carried unfixed from 50-06, 50-08 and 50-09; documented in the Switching providers page and the CHANGELOG known limitations. Needs an owner decision on the profile field or an adapter fix | fixed |  | 2026-10-16T21:57:02.053Z | 2026-10-17T18:32:44.959Z |
 | 76 | 50 | deviation | crates/paladin-llm/src/kimi/adapter.rs |  | 50-16 closeout: the Kimi adapter-wide fallback profile (temperature Fixed(1.0), top_p Fixed(0.95), declared range (1.0, 1.0)) comes from the 2026-08-22 measurement and contradicts the 2026-10-15 probe (kimi-k2.6 and kimi-k3 accept only 0.6 and reject top_p). Applies to unseeded Kimi ids only; carried unreconciled from 50-06 and 50-15; labelled unverified on the Switching providers page. Owner decision pending | open |  | 2026-10-16T21:57:02.159Z |  |
 
 ````json
@@ -989,10 +989,10 @@ last_updated: 2026-10-16T21:57:02.159Z
     "file": "crates/paladin-llm/src/openai/adapter.rs",
     "line": null,
     "description": "50-16 closeout: the OpenAI adapter sends max_tokens, which gpt-5.4-nano (the probed default model) rejects with HTTP 400 (it wants max_completion_tokens; 50-SEED-PROBE.md probe 11). The ModelProfile has no field for the token-limit parameter name. Carried unfixed from 50-06, 50-08 and 50-09; documented in the Switching providers page and the CHANGELOG known limitations. Needs an owner decision on the profile field or an adapter fix",
-    "status": "open",
+    "status": "fixed",
     "reason": "",
     "recorded_at": "2026-10-16T21:57:02.053Z",
-    "resolved_at": null
+    "resolved_at": "2026-10-17T18:32:44.959Z"
   },
   {
     "id": 76,

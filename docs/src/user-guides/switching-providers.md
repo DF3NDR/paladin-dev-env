@@ -186,9 +186,12 @@ over HTTP is a separate decision about a published contract.
 - Seven of the nine providers were probed; **Ollama and OpenAI-compatible were skipped** (no daemon
   and no endpoint were configured), so they have no seeded models and run on adapter-wide values.
   Every model not in the table below does too, visibly unprofiled.
-- The OpenAI adapter sends `max_tokens`. The probe showed `gpt-5.4-nano` rejects it ("Use
-  `max_completion_tokens` instead"), so pinning that model through the OpenAI adapter currently
-  produces an HTTP 400. The profile has no field for the token-limit parameter's name.
+- The OpenAI adapter sends its output limit as `max_completion_tokens` for every model, on the chat
+  and the vision path; Paladin's own names (`OpenAIConfig.max_tokens`, `PromptParameters.max_tokens`)
+  are unchanged. Only `gpt-5.4-nano` and `gpt-4o-mini` were measured accepting that key
+  (2026-10-15). Other OpenAI model ids, and any non-OpenAI server behind `OPENAI_BASE_URL`, are
+  unmeasured; for a server that accepts only `max_tokens`, use the `openai-compatible` preset,
+  which still sends it.
 - The retry counters are not unified: the compat presets (Kimi, Qwen, Grok, Ollama,
   OpenAI-compatible), OpenAI and DeepSeek retry that many times after the first attempt (`0` sends
   once); Anthropic and Gemini count total attempts (`0` and `1` both send once).

@@ -1089,6 +1089,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The OpenAI adapter sends `max_completion_tokens`, so `gpt-5.4-nano` no longer returns HTTP 400
+  (G-50-5b; Phase 50 plan 50-19; `MIGRATION.md` 9.1 M-B-18).** The adapter sent the output limit
+  as `max_tokens`, which `gpt-5.4-nano` (the first seeded OpenAI model) rejects with
+  `unsupported_parameter`, and the defaults always set a limit, so every request to it failed.
+  Every OpenAI chat-completions body (buffered, streamed and every `response_format`) and the
+  vision request now carry the limit as `max_completion_tokens` for every model. Measured
+  accepting that key: `gpt-5.4-nano` and `gpt-4o-mini` only (2026-10-15); other OpenAI ids and
+  non-OpenAI servers behind `OPENAI_BASE_URL` are unmeasured. The Paladin-side names
+  (`OpenAIConfig.max_tokens`, `PromptParameters.max_tokens`) and the DeepSeek and compat presets'
+  `max_tokens` wire key are unchanged. `live_vendor_smoke` now drives `gpt-5.4-nano` by default.
+
 - **The OpenAI adapter no longer sends an empty user message, and all nine adapters build the user
   turn the same way (PARITY-08; Phase 50 plan 50-01; handoff B-4).** The OpenAI adapter built the
   user message from `UserPrompt::context` only, while `PaladinExecutionService` fills
@@ -1252,14 +1263,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (2) Usage-cap (quota) mapping is unverified for Kimi, Qwen, Grok, Ollama and OpenAI-compatible:
   no quota body was captured and the owner accepted each as unverified (owner reading R-2,
   2026-10-16); each keeps the shared status mapping and an override is a single `error_override`
-  once a body is captured. (3) The OpenAI adapter sends `max_tokens`, which `gpt-5.4-nano`
-  rejects (it wants `max_completion_tokens`), so that model currently returns HTTP 400 through
-  it. (4) Kimi's adapter-wide fallback profile (`temperature` fixed at 1.0, `top_p` at 0.95) comes
+  once a body is captured. (3) Kimi's adapter-wide fallback profile (`temperature` fixed at 1.0, `top_p` at 0.95) comes
   from the 2026-08-22 measurement and contradicts the 2026-10-15 probe; it applies only to an
-  unseeded Kimi model id. (5) A caller that builds an `LlmRequest` directly gets omit, `warn!` and
-  metadata, not a refusal. (6) `TokenUsage.total_tokens` stays `prompt + completion`; a vendor's
-  own total is not copied. (7) The retry counters are not unified: Anthropic and Gemini count total
-  attempts, the other seven count retries after the first attempt. (8) The Grok and OpenAI
+  unseeded Kimi model id. (4) A caller that builds an `LlmRequest` directly gets omit, `warn!` and
+  metadata, not a refusal. (5) `TokenUsage.total_tokens` stays `prompt + completion`; a vendor's
+  own total is not copied. (6) The retry counters are not unified: Anthropic and Gemini count total
+  attempts, the other seven count retries after the first attempt. (7) The Grok and OpenAI
   temperature upper bounds, and every `top_p` and penalty span, are stated or contract-derived
   rather than measured edges; the Switching providers page labels each.
 

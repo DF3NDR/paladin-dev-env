@@ -62,6 +62,12 @@ and this project follows lockstep workspace versioning.
 
 ### Fixed
 
+- The OpenAI adapter sends its output limit as `max_completion_tokens` on every chat-completions
+  body (buffered, streamed, every `response_format`) and on the vision request (G-50-5b, Phase 50
+  plan 50-19), so `gpt-5.4-nano` no longer answers HTTP 400. Measured accepting the key:
+  `gpt-5.4-nano` and `gpt-4o-mini` only (2026-10-15). `OpenAIConfig.max_tokens` and
+  `PromptParameters.max_tokens` keep their names; DeepSeek and the compat presets still send
+  `max_tokens`.
 - Phase 50 code-review fixes:
   - A typed `LlmError::Refusal` is no longer retried by the Anthropic, shared-engine, DeepSeek and
     Gemini retry loops (it is permanent and re-billed the whole prompt on every attempt).

@@ -791,8 +791,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the profile does not admit is no longer refused (ADR-0004 A2 is superseded): it logs a warning
   and is omitted at the wire, recorded as `paladin.params_omitted`, so a Kimi swap with the
   default `auto_temperature` builds. On the five compat presets (Kimi, Qwen, Grok, Ollama,
-  OpenAI-compatible): Kimi now sends an explicit `1.0` temperature and `0.95` `top_p` (it
-  dropped both unconditionally before); stop sequences now reach the wire in the order declared,
+  OpenAI-compatible): Kimi sends no `temperature`, `top_p` or penalty on any model, seeded or
+  not (an explicit value is refused at build, a framework default is omitted and recorded; before
+  this phase it dropped `temperature` and `top_p` unconditionally and sent both penalties);
+  stop sequences now reach the wire in the order declared,
   except on Grok, which does not take them and refuses them at build; a JSON-schema
   `response_format` is still sent as a plain JSON object and the downgrade is now recorded; and
   a `max_tokens` above a model's profiled maximum output is refused by name before anything is
@@ -1263,12 +1265,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (2) Usage-cap (quota) mapping is unverified for Kimi, Qwen, Grok, Ollama and OpenAI-compatible:
   no quota body was captured and the owner accepted each as unverified (owner reading R-2,
   2026-10-16); each keeps the shared status mapping and an override is a single `error_override`
-  once a body is captured. (3) Kimi's adapter-wide fallback profile (`temperature` fixed at 1.0, `top_p` at 0.95) comes
-  from the 2026-08-22 measurement and contradicts the 2026-10-15 probe; it applies only to an
-  unseeded Kimi model id. (4) A caller that builds an `LlmRequest` directly gets omit, `warn!` and
-  metadata, not a refusal. (5) `TokenUsage.total_tokens` stays `prompt + completion`; a vendor's
-  own total is not copied. (6) The retry counters are not unified: Anthropic and Gemini count total
-  attempts, the other seven count retries after the first attempt. (7) The Grok and OpenAI
+  once a body is captured. (3) A caller that builds an `LlmRequest` directly gets omit, `warn!` and
+  metadata, not a refusal. (4) `TokenUsage.total_tokens` stays `prompt + completion`; a vendor's
+  own total is not copied. (5) The retry counters are not unified: Anthropic and Gemini count total
+  attempts, the other seven count retries after the first attempt. (6) The Grok and OpenAI
   temperature upper bounds, and every `top_p` and penalty span, are stated or contract-derived
   rather than measured edges; the Switching providers page labels each.
 

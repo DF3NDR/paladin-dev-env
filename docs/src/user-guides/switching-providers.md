@@ -216,7 +216,7 @@ sends today and are **unverified**: they apply to any model the registry does no
 | deepseek | (adapter-wide fallback) | unverified | 1,048,576 | not set | 0.0 to 2.0 | 0.0 to 1.0 | -2.0 to 2.0 | yes | no | object |
 | kimi | `kimi-k2.6` | 2026-10-15 | 262,144 | not set | not sent | not sent | not sent | yes | yes | object, schema |
 | kimi | `kimi-k3` | 2026-10-15 | 1,048,576 | not set | not sent | not sent | not sent | yes | yes | object, schema |
-| kimi | (adapter-wide fallback) | unverified | 262,144 | not set | only 1.0 [f] | only 0.95 [f] | -2.0 to 2.0 | yes | no | object |
+| kimi | (adapter-wide fallback) | unverified | 262,144 | not set | not sent [f] | not sent | not sent | yes | no | object |
 | qwen | `qwen-plus` | 2026-10-15 | not set | not set | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | no | object, schema |
 | qwen | `qwen3.8-flash` | 2026-10-15 | 1,000,000 [d] | 131,072 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object, schema |
 | qwen | (adapter-wide fallback) | unverified | 1,000,000 | not set | 0.0 to 1.99 | 0.0 to 1.0 | -2.0 to 2.0 | yes | no | object |
@@ -251,10 +251,13 @@ window of `not set` is not a statement that the model has none.
 - **[e]** OpenAI penalties: the vendor accepted 0.5 in the probe, but the adapter's request type
   has no penalty field, so the profile says `not sent` rather than admit a value the wire cannot
   carry. The same holds for Anthropic and Gemini, whose wires have no such field.
-- **[f]** Kimi's fallback profile comes from an earlier measurement (2026-08-22) and contradicts the
-  2026-10-15 probe, where `kimi-k2.6` and `kimi-k3` accepted only 0.6 for temperature and rejected
-  `top_p`. It applies only to an unseeded Kimi model id and is not reconciled; treat Kimi sampling
-  values on an unseeded model as unverified.
+- **[f]** Kimi's fallback profile matches the seeded Kimi models: an unseeded Kimi model id sends
+  none of `temperature`, `top_p` or the penalties (owner decision, 2026-10-17). The vendor accepts
+  exactly one value for each, and that value depends on the thinking mode: `temperature` was "only
+  1" on 2026-08-22 and "only 0.6" with thinking disabled on 2026-10-15, so no single value can be
+  declared and omitting the parameter lets the vendor apply its own. An explicit value on an
+  unseeded Kimi model is refused at build, naming `kimi`, the model and the parameter; a default
+  the framework supplies is omitted and recorded in `paladin.params_omitted`.
 
 **Probed but not seeded** (so they run on the adapter-wide fallback): the eight retired Claude ids
 (`claude-3-*`, `claude-2.*`, `claude-instant-1.2`, all HTTP 404) and the other current Claude ids

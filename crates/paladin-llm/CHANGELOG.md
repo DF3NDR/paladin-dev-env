@@ -84,8 +84,9 @@ and this project follows lockstep workspace versioning.
 - Phase 50: every adapter builds the user turn through one shared rule (the query, then the
   context, each only when non-empty after trimming, joined by one blank line); the OpenAI adapter
   previously sent an empty user message when only the query was set (PARITY-08). OpenAI no longer
-  sends a fabricated `temperature` or `top_p`. The Kimi preset sends an explicit `1.0` and `0.95`
-  instead of dropping them (and the seeded Kimi models state `not sent`). Compat presets send
+  sends a fabricated `temperature` or `top_p`. The Kimi preset sends no `temperature`, `top_p`
+  or penalty on any model: the seeded Kimi models and the adapter-wide fallback for an unseeded id
+  both state `not sent`. Compat presets send
   stop sequences, except Grok. Default models and windows come from the registry (Anthropic
   `claude-haiku-5-5`, DeepSeek `deepseek-flash`, Kimi `kimi-k2.6`, Qwen `qwen3.8-flash`, Grok
   `grok-4.3`, Gemini `gemini-3.5-flash-lite`), and a direct `*Config` constructor defaults a seeded

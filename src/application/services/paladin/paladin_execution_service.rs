@@ -103,7 +103,9 @@ use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::paladin_port::{
     ChunkMetadata, PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
 };
-use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, record_incurred_spend};
+use paladin_ports::output::spend_scope::{
+    ATTEMPT_SPEND, HOPPED_BILLS, HoppedBills, record_incurred_spend,
+};
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_ports::output::structured_executor_port::{
     Structured, StructuredExecutorPort, StructuredOptions, run_structured,
@@ -405,24 +407,74 @@ struct AgentLoopLedgerTarget {
 /// [`BilledUsage`] at the conversion. The helper records the bill beside the
 /// conversion and returns it here, so the buffered loop can fold it into the
 /// run's tallies and settle it before the error leaves the loop. Private: no
-/// public type changes. `bills` is a `Vec` because plan 50-30 adds the bills
-/// of hops a fallback chain moved past; today it holds at most the failing
-/// call's own bill (A1-50-28), and is empty for every unbilled error.
+/// public type changes. `bills` lists the bills of every hop a fallback chain
+/// moved past during the call (plan 50-30, [`HOPPED_BILLS`]) first, then the
+/// failing call's own bill (A1-50-28); it is empty for an unbilled error
+/// with no billed hop.
 #[derive(Debug)]
 struct CallFailure {
     /// The error the caller sees.
     error: PaladinError,
-    /// What the vendor billed for the failed call, priced when a
-    /// `PricingLlmAdapter` priced it.
+    /// What the vendor billed for the failed call and for every hop moved
+    /// past on the way, priced when a `PricingLlmAdapter` priced them.
     bills: Vec<BilledUsage>,
+}
+
+/// A served model call as the agent loop's retry helper reports it
+/// (G-50-5a remainder (a), plan 50-30): the response, plus the bills of every
+/// hop a `FallbackLlmAdapter` moved past before a later hop served it (a
+/// refusal the vendor billed under `hop_on_refusal`). The helper installs a
+/// fresh [`HOPPED_BILLS`] collector around the whole call -- all of its
+/// retries, each retry's hops being separate billed requests (A3-50-30) --
+/// and returns what it collected here, so the loop folds every part into the
+/// run's tallies and settles them in the call's one row. Private: no public
+/// type changes (`LlmResponse` keeps its fields). `bills` is empty for every
+/// call that hopped past no billed error.
+#[derive(Debug)]
+struct CallOutcome {
+    /// The response that served the call.
+    response: paladin_ports::output::llm_port::LlmResponse,
+    /// The bills of the hops moved past, in hop order, priced when a
+    /// `PricingLlmAdapter` outside the chain priced them.
+    bills: Vec<BilledUsage>,
+}
+
+/// The priced parts of `bills` as `(model, cost)` settle parts: an unpriced
+/// bill contributes nothing (D-00c), and a bill naming no model falls back
+/// to `fallback_model` (the Paladin's configured model), the rule a served
+/// response's empty `model` already follows.
+fn priced_bill_parts<'a>(
+    bills: &'a [BilledUsage],
+    fallback_model: &'a str,
+) -> impl Iterator<Item = (&'a str, &'a Cost)> + 'a {
+    bills.iter().filter_map(move |bill| {
+        let model = if bill.model.is_empty() {
+            fallback_model
+        } else {
+            bill.model.as_str()
+        };
+        bill.cost.as_ref().map(|cost| (model, cost))
+    })
 }
 
 /// Settle one priced agent-loop model call (D-07, D-08, 39-05): an
 /// unreserved settlement under `(run_id, ordinal, 1)` with the caller's
 /// resolved `scope` (Phase 40 D-16: the submitting principal's tenant and
 /// API key id, or the [`LedgerScope::unattributed`] sentinel when the
-/// caller resolved none) and a single-entry `model_breakdown` naming
-/// `model`.
+/// caller resolved none).
+///
+/// `parts` are the call's priced `(model, cost)` parts: the served
+/// response's (or the failing call's own bill) and, since plan 50-30, the
+/// bill of every fallback hop the call moved past. They settle in ONE row
+/// (ADR-0053 section 4: a model-fallback hop folds into its attempt's row;
+/// a second settle under the same key would be dropped as `AlreadySettled`,
+/// A1-50-30): `amount` is their [`Cost::checked_add`] sum and
+/// `model_breakdown` names each model with its own nanos (summed when a
+/// model appears twice, e.g. the same hop refused on two retries). No parts
+/// settles nothing. A currency mismatch between parts -- impossible while
+/// every part comes from the one `PriceTable` behind the decorator
+/// (A2-50-30) -- is logged at `error!` and settles nothing, never a partial
+/// or fabricated amount.
 ///
 /// A free function (not a `PaladinExecutionService` method) so it can be
 /// called from `execute_stream_inner`'s spawned task, which owns no `&self`
@@ -440,22 +492,38 @@ async fn settle_agent_loop_call(
     scope: &LedgerScope,
     run_id: &RunId,
     ordinal: u64,
-    model: &str,
-    cost: &Cost,
+    parts: &[(&str, &Cost)],
 ) {
+    let Some(((_, first), rest)) = parts.split_first() else {
+        return;
+    };
+    let mut cost: Cost = (*first).clone();
+    for (_, part) in rest {
+        let Some(sum) = cost.checked_add(part) else {
+            error!(
+                "agent-loop model call parts disagree on currency: run {run_id} ordinal {ordinal} \
+                 currencies {} and {} -- nothing settled",
+                cost.currency(),
+                part.currency()
+            );
+            return;
+        };
+        cost = sum;
+    }
+    let mut model_breakdown: BTreeMap<String, i64> = BTreeMap::new();
+    for (model, part) in parts {
+        let nanos = model_breakdown.entry((*model).to_string()).or_insert(0);
+        *nanos = nanos.saturating_add(part.nanos());
+    }
     let key = SettlementKey::new(run_id.clone(), ordinal, 1);
-    let request = SettleRequest::unreserved(
-        scope.clone(),
-        key,
-        cost.clone(),
-        BTreeMap::from([(model.to_string(), cost.nanos())]),
-    );
+    let request = SettleRequest::unreserved(scope.clone(), key, cost.clone(), model_breakdown);
     match ledger.settle(request).await {
         Ok(SettleOutcome::Settled) => {
             debug!(
-                "settled agent-loop model call: run {run_id} ordinal {ordinal} amount_nanos {} currency {}",
+                "settled agent-loop model call: run {run_id} ordinal {ordinal} amount_nanos {} currency {} parts {}",
                 cost.nanos(),
-                cost.currency()
+                cost.currency(),
+                parts.len()
             );
         }
         Ok(SettleOutcome::AlreadySettled) => {
@@ -1032,7 +1100,8 @@ impl PaladinExecutionService {
 
     /// Settle one priced model call (D-07, D-08): an unreserved settlement
     /// under `(target.run_id, ordinal, 1)` with the resolved `target.scope`
-    /// (Phase 40 D-16) and a single-entry `model_breakdown` naming `model`.
+    /// (Phase 40 D-16), one row for all of the call's priced `parts` with a
+    /// per-model `model_breakdown` (plan 50-30, see [`settle_agent_loop_call`]).
     ///
     /// Delegates to [`settle_agent_loop_call`], the free function the
     /// streamed path (`execute_stream_inner`'s spawned task, which owns no
@@ -1041,13 +1110,12 @@ impl PaladinExecutionService {
         &self,
         target: &AgentLoopLedgerTarget,
         ordinal: u64,
-        model: &str,
-        cost: &Cost,
+        parts: &[(&str, &Cost)],
     ) {
         let Some((ledger, _)) = &self.treasury_ledger else {
             return;
         };
-        settle_agent_loop_call(ledger, &target.scope, &target.run_id, ordinal, model, cost).await;
+        settle_agent_loop_call(ledger, &target.scope, &target.run_id, ordinal, parts).await;
     }
 
     /// Replaces the whole `ExecutionMiddleware` chain with `chain` (Doc 05
@@ -1850,7 +1918,10 @@ impl PaladinExecutionService {
             let prompt = middleware_cx.assembly.render();
 
             // Execute with retry and circuit breaker (using effective temperature)
-            let response = match self
+            let CallOutcome {
+                response,
+                bills: hop_bills,
+            } = match self
                 .execute_with_retry_and_temperature(
                     paladin,
                     &prompt,
@@ -1861,16 +1932,19 @@ impl PaladinExecutionService {
                 )
                 .await
             {
-                Ok(response) => response,
+                Ok(outcome) => outcome,
                 Err(failure) => {
                     // G-50-5a (plan 50-28): a call the vendor billed but that
                     // failed (a billed `EmptyCompletion` or `Refusal`) is
                     // folded into the run's tallies and settled exactly like a
-                    // priced success -- same ordinal, same single-model
-                    // breakdown -- before the unchanged error leaves the loop.
-                    // A billed failure is `Permanent`, so it is never retried
-                    // and never settled twice; an unpriced bill (`cost: None`)
-                    // folds its usage and settles nothing (D-00c).
+                    // priced success -- same ordinal -- before the unchanged
+                    // error leaves the loop. A billed failure is `Permanent`,
+                    // so it is never retried and never settled twice; an
+                    // unpriced bill (`cost: None`) folds its usage and settles
+                    // nothing (D-00c). Plan 50-30: `bills` also holds the bill
+                    // of every fallback hop moved past (a chain that ended in
+                    // `AllProvidersFailed` after billed refusals), so all of
+                    // the call's priced parts settle in ONE row.
                     for bill in &failure.bills {
                         usage += bill.usage.clone();
                         cost_tally.record_call(bill.cost.as_ref());
@@ -1878,17 +1952,13 @@ impl PaladinExecutionService {
                         // attempt was charged for -- reported to the attempt
                         // scope at the same fold as a success's call.
                         record_incurred_spend(&bill.usage, bill.cost.as_ref());
-                        if let (Some(target), Some(cost)) =
-                            (ledger_target.as_ref(), bill.cost.as_ref())
-                        {
-                            let model = if bill.model.is_empty() {
-                                paladin.data.model.as_str()
-                            } else {
-                                bill.model.as_str()
-                            };
-                            self.settle_model_call(target, u64::from(loop_num), model, cost)
-                                .await;
-                        }
+                    }
+                    if let Some(target) = ledger_target.as_ref() {
+                        let parts: Vec<(&str, &Cost)> =
+                            priced_bill_parts(&failure.bills, paladin.data.model.as_str())
+                                .collect();
+                        self.settle_model_call(target, u64::from(loop_num), &parts)
+                            .await;
                     }
                     if !failure.bills.is_empty() {
                         debug!(
@@ -1911,6 +1981,16 @@ impl PaladinExecutionService {
             // D-12) rather than a hand-rolled sum, so the three optional
             // cache/reasoning sub-counts merge under the same saturating
             // rule every other accumulator in the tree uses.
+            //
+            // G-50-5a remainder (a), plan 50-30: the bill of every fallback hop
+            // this call moved past (a refusal the vendor billed) is folded the
+            // same way first -- each one was a billed request, so it counts in
+            // the run's usage and price and in the attempt's spend.
+            for bill in &hop_bills {
+                usage += bill.usage.clone();
+                cost_tally.record_call(bill.cost.as_ref());
+                record_incurred_spend(&bill.usage, bill.cost.as_ref());
+            }
             usage += response.usage.clone();
             cost_tally.record_call(response.cost.as_ref());
             // G-50-5a (plan 50-29): report this call to the Battalion attempt
@@ -1922,13 +2002,20 @@ impl PaladinExecutionService {
             // its cost is folded into the run's own tally -- the same
             // response, the same model, so the ledger's breakdown key
             // matches the price that was actually computed from it (38-04).
-            if let (Some(target), Some(cost)) = (ledger_target.as_ref(), response.cost.as_ref()) {
-                let model = if response.model.is_empty() {
+            // Plan 50-30: the hopped-past bills settle in the SAME row (one
+            // row per call ordinal, a per-model breakdown, A1-50-30); a call
+            // with no hop bill settles exactly the one-part row it did before.
+            if let Some(target) = ledger_target.as_ref() {
+                let served_model = if response.model.is_empty() {
                     paladin.data.model.as_str()
                 } else {
                     response.model.as_str()
                 };
-                self.settle_model_call(target, u64::from(loop_num), model, cost)
+                let parts: Vec<(&str, &Cost)> =
+                    priced_bill_parts(&hop_bills, paladin.data.model.as_str())
+                        .chain(response.cost.as_ref().map(|cost| (served_model, cost)))
+                        .collect();
+                self.settle_model_call(target, u64::from(loop_num), &parts)
                     .await;
             }
             middleware_cx.cumulative_tokens = usage.total_tokens;
@@ -2874,6 +2961,51 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         loop_num: u32,
         cx: &ModelCallContext<'_>,
+    ) -> Result<CallOutcome, CallFailure> {
+        // G-50-5a remainder (a), plan 50-30: one fresh collector around the
+        // whole call -- every retry and every hop of each retry -- so a
+        // `FallbackLlmAdapter` that hops past a billed refusal can hand its
+        // bill to THIS call (A3-50-30); `PricingLlmAdapter` prices the
+        // entries in place. Taken once the call ends: a success carries them
+        // in `CallOutcome.bills`, a failure puts them before its own bill.
+        let hopped = HoppedBills::new();
+        let outcome = HOPPED_BILLS
+            .scope(
+                hopped.clone(),
+                self.execute_with_retry_inner(
+                    paladin,
+                    prompt,
+                    temperature,
+                    execution_id,
+                    loop_num,
+                    cx,
+                ),
+            )
+            .await;
+        let mut bills = hopped.take();
+        match outcome {
+            Ok(response) => Ok(CallOutcome { response, bills }),
+            Err(mut failure) => {
+                bills.append(&mut failure.bills);
+                failure.bills = bills;
+                Err(failure)
+            }
+        }
+    }
+
+    /// The body of [`Self::execute_with_retry_and_temperature`]: every
+    /// attempt of one model call under the retry policy and the circuit
+    /// breaker, run inside that method's [`HOPPED_BILLS`] collector. Returns
+    /// the served response, or a [`CallFailure`] carrying the failing
+    /// attempts' own bills (the caller adds the hopped-past ones).
+    async fn execute_with_retry_inner(
+        &self,
+        paladin: &Paladin,
+        prompt: &str,
+        temperature: f32,
+        execution_id: uuid::Uuid,
+        loop_num: u32,
+        cx: &ModelCallContext<'_>,
     ) -> Result<paladin_ports::output::llm_port::LlmResponse, CallFailure> {
         // D-11 / the assumption-delta promote (see `ModelCallContext::effective_llm`'s
         // rustdoc): the effective port for THIS call is resolved here,
@@ -3588,7 +3720,8 @@ impl PaladinExecutionService {
                     record_incurred_spend(&bill.usage, bill.cost.as_ref());
                 }
                 failure.error
-            })?;
+            })?
+            .response;
         record_incurred_spend(&response.usage, response.cost.as_ref());
 
         Ok(PaladinResult {
@@ -3869,8 +4002,14 @@ impl PaladinExecutionService {
                             if let (Some((ledger, scope, run_id)), Some(cost)) =
                                 (stream_settlement.as_ref(), cost.as_ref())
                             {
-                                settle_agent_loop_call(ledger, scope, run_id, 1, &model_used, cost)
-                                    .await;
+                                settle_agent_loop_call(
+                                    ledger,
+                                    scope,
+                                    run_id,
+                                    1,
+                                    &[(model_used.as_str(), cost)],
+                                )
+                                .await;
                             }
                             let mut chunk_metadata = ChunkMetadata::new();
                             if let Some(usage) = usage.clone() {
@@ -3945,8 +4084,14 @@ impl PaladinExecutionService {
                             stream_settlement.as_ref(),
                             e.billed_usage().and_then(|bill| bill.cost.as_ref()),
                         ) {
-                            settle_agent_loop_call(ledger, scope, run_id, 1, &model_used, cost)
-                                .await;
+                            settle_agent_loop_call(
+                                ledger,
+                                scope,
+                                run_id,
+                                1,
+                                &[(model_used.as_str(), cost)],
+                            )
+                            .await;
                         }
                         let _ = tx.send(Err(to_paladin_error(&e))).await;
                         return;
@@ -9149,6 +9294,159 @@ mod agent_loop_cost_tests {
         assert_eq!(with_failing_ledger.output, baseline.output);
         assert_eq!(with_failing_ledger.cost, baseline.cost);
         assert_eq!(with_failing_ledger.loop_count, baseline.loop_count);
+    }
+
+    // ---- G-50-5a remainder (a), plan 50-30: hopped-past fallback bills ----
+
+    use paladin_core::platform::container::cost::{PriceRow, PriceTable};
+    use paladin_llm::fallback::{FallbackLlmAdapter, FallbackStep};
+    use paladin_llm::pricing::PricingLlmAdapter;
+
+    /// The price table the plan 50-30 hop tests price against: `m1` (the
+    /// hop that refused) and `m2` (the hop that answered), USD.
+    fn hop_price_table() -> Arc<PriceTable> {
+        let usd = CurrencyCode::new("USD").unwrap();
+        Arc::new(
+            PriceTable::new(usd)
+                .with_row("m1", PriceRow::new(3_000_000_000, 15_000_000_000).unwrap())
+                .with_row("m2", PriceRow::new(2_500_000_000, 10_000_000_000).unwrap()),
+        )
+    }
+
+    /// A refusal hop `model` refused after the vendor billed `usage` (no cost
+    /// yet: the pricing decorator outside the chain prices it).
+    fn billed_refusal(provider: &str, model: &str, usage: TokenUsage) -> LlmError {
+        LlmError::refusal(provider, model, "I can't help with that.")
+            .with_billed_usage(BilledUsage::new(model, usage))
+    }
+
+    /// `Pricing(Fallback[hop1 -> m1, hop2 -> m2].hop_on_refusal(true))`, the
+    /// composition ADR-0052 prescribes, over two scripted hops.
+    fn priced_refusal_chain(
+        hop1: Vec<ScriptedOutcome<&str>>,
+        hop2: Vec<ScriptedOutcome<&str>>,
+    ) -> Arc<dyn LlmPort> {
+        let hop1: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(hop1));
+        let hop2: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(hop2));
+        let chain = FallbackLlmAdapter::from_steps(vec![
+            FallbackStep::new(hop1, "m1"),
+            FallbackStep::new(hop2, "m2"),
+        ])
+        .unwrap()
+        .hop_on_refusal(true);
+        Arc::new(PricingLlmAdapter::new(Arc::new(chain), hop_price_table()))
+    }
+
+    /// Every settled row's `(amount nanos, settlements)` by model, from the
+    /// ledger's own `SpendGroupBy::Model` read (it sums `model_breakdown`).
+    async fn spend_by_model(ledger: &InMemoryTreasuryLedger) -> BTreeMap<String, (i64, u64)> {
+        ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds")
+            .into_iter()
+            .map(|row| (row.group, (row.amount.nanos(), row.settlements)))
+            .collect()
+    }
+
+    /// G-50-5a remainder (a), plan 50-30 tracer: hop 1 refuses after the
+    /// vendor billed U1 on `m1`; the chain hops (`hop_on_refusal`) and hop 2
+    /// answers on `m2` with U2. The refused hop's bill is priced against its
+    /// own model and settled with the served call in ONE row for ordinal 1
+    /// (amount c1 + c2, breakdown `{m1: c1, m2: c2}`), and the run reports
+    /// U1 + U2 and c1 + c2 -- to the caller and to the attempt scope.
+    #[tokio::test]
+    async fn hopped_refusal_bill_is_settled_with_the_served_call() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(1_000, 2_000);
+        let table = hop_price_table();
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let c2 = table.price("m2", &u2).expect("m2 is priced");
+        let total = c1.checked_add(&c2).expect("one currency");
+
+        let llm = priced_refusal_chain(
+            vec![Err(billed_refusal("hop1", "m1", u1.clone()))],
+            vec![Ok(("answer", u2.clone(), None))],
+        );
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(1);
+
+        let scope = SpendScope::new();
+        let result = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&paladin, "hi"))
+            .await
+            .expect("hop 2 serves the call");
+
+        let mut both = u1.clone();
+        both += u2.clone();
+        assert_eq!(
+            result.usage, both,
+            "the refused hop's billed usage is counted"
+        );
+        assert_eq!(result.cost, Some(total.clone()), "and its price");
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(
+            by_run[0].settlements, 1,
+            "one row for the call, not one per hop"
+        );
+        assert_eq!(by_run[0].amount, total);
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            BTreeMap::from([
+                ("m1".to_string(), (c1.nanos(), 1)),
+                ("m2".to_string(), (c2.nanos(), 1)),
+            ]),
+            "the row's breakdown names each model with its own nanos"
+        );
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2, "the hop bill and the served call");
+        assert_eq!(spend.usage(), &both);
+        assert_eq!(spend.cost(), Some(total));
+    }
+
+    /// Control (plan 50-30): a call through the same chain with no hop bill
+    /// settles exactly the row it settled before -- one part, one breakdown
+    /// entry.
+    #[tokio::test]
+    async fn a_call_with_no_hop_bill_settles_one_part() {
+        let u2 = TokenUsage::new(1_000, 2_000);
+        let c2 = hop_price_table().price("m2", &u2).expect("m2 is priced");
+        let llm = priced_refusal_chain(
+            vec![Err(LlmError::ProviderError {
+                provider: "hop1".to_string(),
+                status: 503,
+                message: "upstream unavailable".to_string(),
+            })],
+            vec![Ok(("answer", u2.clone(), None))],
+        );
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+
+        let result = service.execute(&make_paladin(1), "hi").await.unwrap();
+
+        assert_eq!(result.usage, u2);
+        assert_eq!(result.cost, Some(c2.clone()));
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            BTreeMap::from([("m2".to_string(), (c2.nanos(), 1))])
+        );
     }
 }
 

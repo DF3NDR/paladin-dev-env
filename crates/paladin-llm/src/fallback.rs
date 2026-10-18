@@ -145,6 +145,7 @@ use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
     StreamingResponse,
 };
+use paladin_ports::output::spend_scope::record_hopped_bill;
 use paladin_ports::output::trace_sink_port::{TraceEmitter, TraceEvent, current_trace_emitter};
 use thiserror::Error;
 use tokio::time::Instant;
@@ -513,6 +514,14 @@ impl FallbackLlmAdapter {
         }
         match self.chain.get(index + 1) {
             Some(next) => {
+                // G-50-5a remainder (a), plan 50-30: the one point where a hop past a billed
+                // error is decided. Its bill goes to the call's `HOPPED_BILLS` collector so it
+                // is priced (outside the chain) and settled with the call, not dropped with
+                // the error. An exhausted chain records nothing here: `AllProvidersFailed`
+                // keeps the last hop's own bill (`LlmError::billed_usage` looks through it).
+                if let Some(billed) = err.billed_usage() {
+                    record_hopped_bill(billed.clone());
+                }
                 self.record_hop(from, next.get_provider_name(), &err).await;
                 Ok(())
             }

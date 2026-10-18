@@ -27,6 +27,15 @@
 //! usage on the error (`LlmError::billed_usage`). Both paths price that bill as they price a
 //! success, through one shared helper: `generate` against the bill's served model, a stream's
 //! error item against the request's model. An unpriced model keeps `cost: None` (D-00c).
+//!
+//! ## Hopped-past bills (G-50-5a remainder (a), plan 50-30)
+//!
+//! A `FallbackLlmAdapter` inside this decorator records the bill of every billed hop it moves
+//! past (a refusal under `hop_on_refusal`) into the call's
+//! `paladin_ports::output::spend_scope::HOPPED_BILLS` collector, unpriced. Once the inner call
+//! returns, `Ok` or `Err`, this decorator prices every entry still at `cost: None` against the
+//! entry's own model, through the same `price_or_warn`, so each hop is charged at its own
+//! model's rate. No collector installed: nothing to price.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -41,6 +50,7 @@ use paladin_ports::output::llm_port::{
     LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
     StreamingResponse,
 };
+use paladin_ports::output::spend_scope::{HOPPED_BILLS, HoppedBills};
 
 /// The log/trace target every unpriced-model warning is emitted under (D-08).
 pub const PRICING_LOG_TARGET: &str = "paladin::pricing";
@@ -171,6 +181,20 @@ impl PricingLlmAdapter {
             None => err,
         }
     }
+
+    /// Price every hopped-past bill in `bills` still at `cost: None` (G-50-5a remainder (a),
+    /// plan 50-30) against the entry's OWN model through [`Self::price_or_warn`] -- never the
+    /// served model's rate (PARITY-06) -- with the same warn-once rule and `cost: None` for an
+    /// unpriced model (D-00c). Idempotent: an entry already priced is left as it is.
+    fn price_hopped_bills(table: &PriceTable, bills: &HoppedBills) {
+        bills.price_unpriced(|bill| Self::price_or_warn(table, &bill.model, &bill.usage));
+    }
+
+    /// [`Self::price_hopped_bills`] on the active call's [`HOPPED_BILLS`] collector; a no-op
+    /// when none is installed.
+    fn price_active_hopped_bills(table: &PriceTable) {
+        let _ = HOPPED_BILLS.try_with(|bills| Self::price_hopped_bills(table, bills));
+    }
 }
 
 /// Wrap `inner` with pricing from `table`, UNLESS `table` is empty -- an operator who never
@@ -195,11 +219,12 @@ impl LlmPort for PricingLlmAdapter {
     /// gets its bill's cost from the bill's own served model, through the same warn-once rule,
     /// so an unpriced model keeps `cost: None`.
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let mut response = self
-            .inner
-            .generate(request)
-            .await
-            .map_err(|err| Self::price_billed_error(&self.table, None, err))?;
+        let outcome = self.inner.generate(request).await;
+        // G-50-5a remainder (a), plan 50-30: the chain inside has recorded every billed hop
+        // it moved past by now, whichever way the call ended.
+        Self::price_active_hopped_bills(&self.table);
+        let mut response =
+            outcome.map_err(|err| Self::price_billed_error(&self.table, None, err))?;
         response.cost = Self::price_or_warn(&self.table, &response.model, &response.usage);
         Ok(response)
     }

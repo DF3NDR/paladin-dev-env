@@ -25,6 +25,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PaladinError` or other public type changes shape, and the scope holds `TokenUsage` and `Cost`
   only.
 
+- **Hopped-past fallback bills are settled with the call** (G-50-5a remainder (a), PARITY-05,
+  PARITY-06; Phase 50 plan 50-30). `paladin_ports::output::spend_scope::{HoppedBills, HOPPED_BILLS,
+  record_hopped_bill}`: a per-call collector beside `ATTEMPT_SPEND`. When a `FallbackLlmAdapter`
+  hops past an error the vendor billed (a `Refusal` under `hop_on_refusal(true)`), it records that
+  hop's `BilledUsage`; `PricingLlmAdapter`, outside the chain, prices it against the hop's own model
+  on both paths; and `PaladinExecutionService`, which installs a fresh collector around every model
+  call (all retries, buffered and streamed), folds each hop bill into the run's usage, cost and the
+  attempt spend scope and settles the call's priced parts in ONE ledger row under the call's
+  existing `(run_id, ordinal, 1)` key, with a per-model `model_breakdown` (ADR-0053 section 4). A
+  chain that runs out (`AllProvidersFailed`) settles every billed hop the same way, including on an
+  early `generate_stream` error, which `PricingLlmAdapter` now prices against its bill's own model.
+  A call with no hop bill settles exactly the one-part row it did before. A billed hop with no
+  collector installed (a direct `LlmPort` caller) is warned once per (provider, model) under
+  `paladin::usage`, token counts only. Additive: no public type changes shape.
+
 - **Usage reconciliation and `paladin_llm::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY`
   (G-50-5a; Phase 50 plan 50-21).** The five OpenAI-compatible presets (Kimi, Qwen, Grok, Ollama,
   OpenAI-compatible) now parse the vendor's own `total_tokens`, buffered and streamed, and compare

@@ -9,6 +9,14 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 50 (G-50-5a remainder (a), PARITY-05; plan 50-30): `output::spend_scope::HoppedBills` (a
+  shared, ordered list of the `BilledUsage` a fallback chain moved past during one model call;
+  `new`, `push`, `price_unpriced` (idempotent: only entries at `cost: None`), `take`; a poisoned
+  lock is recovered, never unwrapped), the `tokio::task_local!` `HOPPED_BILLS` and
+  `record_hopped_bill(billed) -> bool` (`false` with no collector installed). Installed per model
+  call by `PaladinExecutionService`, filled by `FallbackLlmAdapter`, priced by
+  `PricingLlmAdapter`; entries hold a model id, token counts and a `Cost` only.
+
 - Phase 50 (G-50-5a remainder (b), PARITY-05; plan 50-29): the `output::spend_scope` module --
   `SpendScope` (a shared accumulator of `paladin_core`'s `IncurredSpend`; `new`, `record`,
   `snapshot`; a poisoned lock is recovered, never unwrapped), the `tokio::task_local!`

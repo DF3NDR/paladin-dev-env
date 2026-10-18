@@ -9,6 +9,17 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 50 (G-50-5a remainder (a), PARITY-05, PARITY-06; plan 50-30): a hopped-past bill is
+  carried, not dropped. `FallbackLlmAdapter` records the `BilledUsage` of every billed error it hops
+  past (a `Refusal` under `hop_on_refusal(true)`) into the call's
+  `paladin_ports::output::spend_scope::HOPPED_BILLS` collector, at its one hop decision point; an
+  exhausted chain's last hop is not recorded, because `AllProvidersFailed` carries that bill. With
+  no collector installed it warns once per (provider, model) under `paladin::usage`, token counts
+  only (bounded at 256 pairs). `PricingLlmAdapter` prices every unpriced collector entry against
+  the entry's own model after `generate` returns, `Ok` or `Err`, and on `generate_stream` once the
+  call returns and again at the terminal chunk or an error item; an early `generate_stream` error
+  carrying a bill (a fallback chain that ran out) is now priced against the bill's own model.
+
 - `usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY` (`"paladin.usage_unreconciled"`) and the
   compat reconciliation (G-50-5a, Phase 50 plan 50-21): the five compat presets parse the vendor's
   own `total_tokens` on both paths and compare it, and the reasoning and cache containment, with the

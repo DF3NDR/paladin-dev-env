@@ -139,6 +139,31 @@ impl PricingLlmAdapter {
             }
         }
     }
+
+    /// Price a billed-but-failed call's error (G-50-5a) exactly as a success is priced.
+    ///
+    /// When `err` carries a bill ([`LlmError::billed_usage`]) with no cost yet, its usage is
+    /// priced through [`Self::price_or_warn`] against `model` (`None`: the bill's own served
+    /// model) -- the same warn-once rule and `cost: None` for an unpriced model (D-00c) -- and
+    /// the priced bill is set back on the error ([`LlmError::with_billed_usage`]). Any other
+    /// error, or a bill that already carries a cost, is returned unchanged. Shared by `generate`
+    /// (priced against the bill's served model, as a success is priced against
+    /// `response.model`) and the `generate_stream` error items (priced against the request
+    /// model, the Phase 31 stream contract), so the two run paths cannot diverge (D-09).
+    fn price_billed_error(table: &PriceTable, model: Option<&str>, err: LlmError) -> LlmError {
+        let priced = match err.billed_usage() {
+            Some(billed) if billed.cost.is_none() => {
+                let model = model.unwrap_or(billed.model.as_str());
+                Self::price_or_warn(table, model, &billed.usage)
+                    .map(|cost| billed.clone().with_cost(cost))
+            }
+            _ => None,
+        };
+        match priced {
+            Some(billed) => err.with_billed_usage(billed),
+            None => err,
+        }
+    }
 }
 
 /// Wrap `inner` with pricing from `table`, UNLESS `table` is empty -- an operator who never
@@ -156,10 +181,18 @@ impl LlmPort for PricingLlmAdapter {
     /// Prices the RESERVED response's own `model` and `usage` (D-05, D-09) -- the model that
     /// actually SERVED the call, which may differ from the requested model after a
     /// `FallbackLlmAdapter` hop composed inside this decorator
-    /// (`Pricing(Fallback(..))`). `None` when no price row exists for that model (D-00c);
-    /// errors pass through untouched.
+    /// (`Pricing(Fallback(..))`). `None` when no price row exists for that model (D-00c).
+    ///
+    /// Billed errors are priced like successes; other errors pass through untouched. An
+    /// `EmptyCompletion` or `Refusal` the vendor billed ([`LlmError::billed_usage`], G-50-5a)
+    /// gets its bill's cost from the bill's own served model, through the same warn-once rule,
+    /// so an unpriced model keeps `cost: None`.
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let mut response = self.inner.generate(request).await?;
+        let mut response = self
+            .inner
+            .generate(request)
+            .await
+            .map_err(|err| Self::price_billed_error(&self.table, None, err))?;
         response.cost = Self::price_or_warn(&self.table, &response.model, &response.usage);
         Ok(response)
     }
@@ -526,6 +559,142 @@ mod tests {
         assert!(
             response.cost.is_none(),
             "a served model with no price row must never carry a cost"
+        );
+    }
+
+    /// The Kimi served model the billed tracer prices, and its row: 2.5 USD per million input
+    /// tokens, 10 USD per million output tokens.
+    const BILLED_SERVED_MODEL: &str = "kimi-served-test";
+
+    fn billed_table() -> Arc<PriceTable> {
+        Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            BILLED_SERVED_MODEL,
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ))
+    }
+
+    /// G-50-5a tracer: a Kimi (compat) call that the vendor billed but answered with no text --
+    /// `finish_reason: length`, usage 1_000 / 62_000 / 63_000 and no
+    /// `completion_tokens_details`, so the figures hold under either usage semantics -- comes
+    /// back through `PricingLlmAdapter::generate` as `Err(EmptyCompletion)` whose bill carries
+    /// the Treasurer price of the served model's row, exactly as a success would be priced.
+    #[cfg(feature = "kimi")]
+    #[tokio::test]
+    async fn priced_billed_empty_completion_carries_its_cost() {
+        use crate::kimi::adapter::KIMI_DEFAULT_MODEL;
+        use crate::kimi::{KimiAdapter, KimiConfig};
+        use serde_json::json;
+
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("POST", mockito::Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "id": "cmpl-1",
+                    "model": BILLED_SERVED_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": ""},
+                        "finish_reason": "length"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 1_000,
+                        "completion_tokens": 62_000,
+                        "total_tokens": 63_000
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let kimi: Arc<dyn LlmPort> = Arc::new(
+            KimiAdapter::new(KimiConfig::new(
+                "test-key".to_string(),
+                server.url(),
+                KIMI_DEFAULT_MODEL.to_string(),
+            ))
+            .unwrap(),
+        );
+
+        let table = billed_table();
+        let adapter = PricingLlmAdapter::new(Arc::clone(&kimi), Arc::clone(&table));
+        let err = adapter
+            .generate(request(KIMI_DEFAULT_MODEL))
+            .await
+            .expect_err("an empty length completion is an error");
+        assert!(
+            matches!(err, LlmError::EmptyCompletion { .. }),
+            "expected EmptyCompletion, got {err:?}"
+        );
+        let billed = err
+            .billed_usage()
+            .expect("a billed empty completion carries its usage");
+        assert_eq!(billed.model, BILLED_SERVED_MODEL);
+        assert_eq!(billed.usage.total_tokens, 63_000);
+        let expected = table
+            .price(BILLED_SERVED_MODEL, &billed.usage)
+            .expect("the served model has a row");
+        // 1_000 * 2.5 USD/M + 62_000 * 10 USD/M = 0.0025 + 0.62 USD.
+        assert_eq!(expected.nanos(), 622_500_000);
+        assert_eq!(billed.cost.as_ref(), Some(&expected));
+
+        // An unpriced served model: the same error and bill, with `cost: None` (D-00c).
+        let unpriced = PricingLlmAdapter::new(
+            kimi,
+            Arc::new(
+                PriceTable::new(CurrencyCode::new("USD").unwrap())
+                    .with_row("some-other-model", PriceRow::new(1, 1).unwrap()),
+            ),
+        );
+        let err = unpriced
+            .generate(request(KIMI_DEFAULT_MODEL))
+            .await
+            .expect_err("an empty length completion is an error");
+        let billed = err
+            .billed_usage()
+            .expect("an unpriced bill still carries its usage");
+        assert_eq!(billed.usage.total_tokens, 63_000);
+        assert_eq!(
+            billed.cost, None,
+            "an unpriced model must never carry a cost"
+        );
+    }
+
+    /// G-50-5a: an error the vendor did not bill passes through `generate` unchanged, and a
+    /// billed error on an unpriced model keeps `cost: None`.
+    #[tokio::test]
+    async fn unbilled_and_unpriced_errors_pass_through_generate() {
+        let mock = Arc::new(MockLlmAdapter::new().with_error(LlmError::empty_completion("x")));
+        let adapter = PricingLlmAdapter::new(mock, billed_table());
+        let err = adapter.generate(request("gpt-4")).await.unwrap_err();
+        assert!(
+            matches!(&err, LlmError::EmptyCompletion { detail, .. } if detail == "x"),
+            "got {err:?}"
+        );
+        assert_eq!(err.billed_usage(), None, "nothing billed, nothing priced");
+
+        let mock = Arc::new(MockLlmAdapter::new().with_error(LlmError::rate_limited(None)));
+        let adapter = PricingLlmAdapter::new(mock, billed_table());
+        let err = adapter.generate(request("gpt-4")).await.unwrap_err();
+        assert!(
+            matches!(err, LlmError::RateLimitExceeded { .. }),
+            "got {err:?}"
+        );
+
+        let bill = paladin_ports::output::llm_port::BilledUsage::new(
+            "p50-27-unpriced-billed",
+            TokenUsage::new(10, 20),
+        );
+        let billed = LlmError::empty_completion("x").with_billed_usage(bill.clone());
+        let mock = Arc::new(MockLlmAdapter::new().with_error(billed));
+        let adapter = PricingLlmAdapter::new(mock, billed_table());
+        let err = adapter.generate(request("gpt-4")).await.unwrap_err();
+        assert_eq!(
+            err.billed_usage(),
+            Some(&bill),
+            "an unpriced bill is returned exactly as it came"
         );
     }
 

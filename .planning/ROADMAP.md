@@ -1473,7 +1473,7 @@ Plans:
 
 **Wave 25** *(gap-closure wave 10; blocked on Wave 24 completion)*
 
-- [ ] 50-30-PLAN.md — G-50-5a remainder (a): `HOPPED_BILLS`; FallbackLlmAdapter records billed hops it moves past, PricingLlmAdapter prices them, the agent loop settles each call's parts in one row with a per-model breakdown
+- [x] 50-30-PLAN.md — G-50-5a remainder (a): `HOPPED_BILLS`; FallbackLlmAdapter records billed hops it moves past, PricingLlmAdapter prices them, the agent loop settles each call's parts in one row with a per-model breakdown
 
 **Wave 26** *(gap-closure wave 11; blocked on Wave 25 completion)*
 

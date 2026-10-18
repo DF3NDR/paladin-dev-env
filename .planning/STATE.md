@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-29-PLAN.md
-last_updated: "2026-10-18T23:32:20.885Z"
+stopped_at: Completed 50-30-PLAN.md
+last_updated: "2026-10-18T23:57:36.740Z"
 last_activity: 2026-10-17
 last_activity_desc: Phase 50 gap-closure execution started (plans 50-19..50-31)
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 120
-  completed_plans: 118
+  completed_plans: 119
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([██████████] 98%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([██████████] 99%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 30 of 31 (gap closure 50-19..50-31, --gaps-only; 50-19..50-29 complete; 50-30 next)
+Plan: 31 of 31 (gap closure 50-19..50-31, --gaps-only; 50-19..50-30 complete; 50-31 next)
 Status: Ready to execute
 Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-19..50-31)
 
@@ -325,6 +325,7 @@ Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-1
 | Phase 50 P27 | 72min | 2 tasks | 8 files |
 | Phase 50 P28 | 40min | 2 tasks | 1 files |
 | Phase 50 P29 | 58min | 3 tasks | 10 files |
+| Phase 50 P30 | 30min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -576,6 +577,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-27: every adapter bills EmptyCompletion/Refusal on both paths (stream bills on the request model); PricingLlmAdapter prices billed errors via one helper (generate: served model; stream: request model); DeepSeek annotate_with_usage removed; conformance CASE_COUNT 20
 - [Phase ?]: 50-28: private CallFailure { error, bills } carries a failed call's BilledUsage out of the retry helper; buffered loop folds and settles priced bills (ordinal loop_num), stream settles a billed terminal error once (ordinal 1, model_used); no public type change
 - [Phase ?]: 50-29: IncurredSpend + paladin_ports spend_scope (SpendScope, ATTEMPT_SPEND task-local, record_incurred_spend, current_attempt_spend); race_attempt scopes every attempt so failed, timed-out and structured attempts report their recorded spend; successes keep PaladinResult.cost; no public type changes shape
+- [Phase ?]: 50-30: paladin_ports spend_scope HoppedBills / HOPPED_BILLS / record_hopped_bill; FallbackLlmAdapter records every billed hop it moves past (warn-once with no collector), PricingLlmAdapter prices each against its own model; the agent loop folds hop bills into usage, cost and the attempt scope and settles each call's parts in ONE row (run_id, ordinal, 1) with a per-model breakdown, buffered, structured and at every streamed exit; no public type changes shape
 
 ### Pending Todos
 
@@ -794,8 +796,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-18T23:32:20.786Z
-**Stopped at:** Completed 50-29-PLAN.md
+**Last session:** 2026-10-18T23:55:51.326Z
+**Stopped at:** Completed 50-30-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

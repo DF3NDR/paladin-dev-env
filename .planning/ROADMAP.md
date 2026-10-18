@@ -1452,7 +1452,7 @@ Plans:
 
 **Wave 20** *(gap-closure wave 5; blocked on Wave 19 completion)*
 
-- [ ] 50-24-PLAN.md — G-50-5a: the 50-22 live verdicts applied to each provider's usage semantics (red-first flips, mixed results ledgered open); usage mapping documented for all nine; MIGRATION 9.1 row
+- [x] 50-24-PLAN.md — G-50-5a: the 50-22 live verdicts applied to each provider's usage semantics (red-first flips, mixed results ledgered open); usage mapping documented for all nine; MIGRATION 9.1 row
 
 **Wave 21** *(gap-closure wave 6; blocked on Wave 20 completion)*
 

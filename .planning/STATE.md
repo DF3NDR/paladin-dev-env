@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-22-PLAN.md
-last_updated: "2026-10-18T14:00:44.508Z"
+stopped_at: Completed 50-24-PLAN.md
+last_updated: "2026-10-18T14:23:12.481Z"
 last_activity: 2026-10-17
 last_activity_desc: Phase 50 gap-closure execution started (plans 50-19..50-31)
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 120
-  completed_plans: 112
+  completed_plans: 113
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([█████████░] 93%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([█████████░] 94%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 24 of 31 (gap closure 50-19..50-31, --gaps-only; 50-21, 50-22 and 50-23 complete; 50-24 applies the 50-USAGE-PROBE.md verdicts next)
+Plan: 25 of 31 (gap closure 50-19..50-31, --gaps-only; 50-19..50-24 complete; 50-25 next)
 Status: Ready to execute
 Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-19..50-31)
 
@@ -319,6 +319,7 @@ Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-1
 | Phase 50 P21 | 29min | 3 tasks | 10 files |
 | Phase 50 P23 | 37min | 2 tasks | 7 files |
 | Phase 50 P22 | 10min | 3 tasks | 2 files |
+| Phase 50 P24 | 21min | 3 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -564,6 +565,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-21: Grok folds reasoning_tokens into completion_tokens (ReasoningBesideCompletion, secondary-sourced, live-measured by 50-22); compat presets parse the vendor total and record disagreements under paladin.usage_unreconciled; D-02 kept, no TokenUsage field added
 - [Phase ?]: 50-23: Gemini folds toolUsePromptTokenCount into prompt_tokens; OpenAI, DeepSeek and Gemini parse their vendor total (now Option, absence = None) and record disagreements under paladin.usage_unreconciled on both paths; Anthropic runs containment checks only; Anthropic vision folds cache counts; D-02 kept
 - [Phase ?]: 50-22: live usage probe (operator, 2026-10-18): Grok grok-4.3/4.5/4.6 reasoning beside completion, billed at the completion rate (cost_in_usd_ticks consistent to the tick); DeepSeek, Kimi, qwen3.8-flash inside; Gemini thoughts beside candidates; OpenAI, qwen-plus, gemini-3.5-flash-lite indeterminate; Ollama and OpenAI-compatible not configured
+- [Phase ?]: 50-24: 50-USAGE-PROBE.md verdicts applied by the fixed rules with no semantics flip; Grok ReasoningBesideCompletion now live-measured (cost cross-check consistent); Kimi, Qwen, DeepSeek, Gemini labelled measured 2026-10-18; OpenAI, Anthropic, Ollama, OpenAI-compatible not live-measured; no WINDOWS row (no mixed or other result); MIGRATION M-B-20
 
 ### Pending Todos
 
@@ -782,8 +784,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-18T14:00:44.437Z
-**Stopped at:** Completed 50-22-PLAN.md
+**Last session:** 2026-10-18T14:23:12.444Z
+**Stopped at:** Completed 50-24-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

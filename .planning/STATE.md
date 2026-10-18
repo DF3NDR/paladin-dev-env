@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-26-PLAN.md
-last_updated: "2026-10-18T19:16:54.642Z"
+stopped_at: Completed 50-27-PLAN.md
+last_updated: "2026-10-18T20:32:33.066Z"
 last_activity: 2026-10-17
 last_activity_desc: Phase 50 gap-closure execution started (plans 50-19..50-31)
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 120
-  completed_plans: 115
+  completed_plans: 116
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([██████████] 96%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([██████████] 97%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 27 of 31 (gap closure 50-19..50-31, --gaps-only; 50-19..50-26 complete; 50-27 next)
+Plan: 28 of 31 (gap closure 50-19..50-31, --gaps-only; 50-19..50-27 complete; 50-28 next)
 Status: Ready to execute
 Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-19..50-31)
 
@@ -322,6 +322,7 @@ Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-1
 | Phase 50 P24 | 21min | 3 tasks | 11 files |
 | Phase 50 P25 | 63min | 2 tasks | 8 files |
 | Phase 50 P26 | 227min | 2 tasks | 14 files |
+| Phase 50 P27 | 72min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -570,6 +571,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-24: 50-USAGE-PROBE.md verdicts applied by the fixed rules with no semantics flip; Grok ReasoningBesideCompletion now live-measured (cost cross-check consistent); Kimi, Qwen, DeepSeek, Gemini labelled measured 2026-10-18; OpenAI, Anthropic, Ollama, OpenAI-compatible not live-measured; no WINDOWS row (no mixed or other result); MIGRATION M-B-20
 - [Phase ?]: 50-25: LlmError::empty_completion / LlmError::refusal are permanent public constructors (A2-50-25); seven consumer files moved to shape-proof forms ahead of 50-26
 - [Phase ?]: 50-26: LlmError::EmptyCompletion { detail, billed } and Refusal { .., billed } are #[non_exhaustive] struct variants carrying Option<Box<BilledUsage>>; billed_usage() looks through AllProvidersFailed; compat buffered path bills; D-27 measured enum_tuple_variant_changed_kind (newly allowed), registered in the same commit
+- [Phase ?]: 50-27: every adapter bills EmptyCompletion/Refusal on both paths (stream bills on the request model); PricingLlmAdapter prices billed errors via one helper (generate: served model; stream: request model); DeepSeek annotate_with_usage removed; conformance CASE_COUNT 20
 
 ### Pending Todos
 
@@ -788,8 +790,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-18T19:16:53.871Z
-**Stopped at:** Completed 50-26-PLAN.md
+**Last session:** 2026-10-18T20:32:33.032Z
+**Stopped at:** Completed 50-27-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

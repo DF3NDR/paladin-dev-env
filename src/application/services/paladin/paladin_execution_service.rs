@@ -3636,6 +3636,12 @@ impl PaladinExecutionService {
     /// chunk's `ExecutionMetadata` carries them, so the herald renders one
     /// allowance line; empty on every other path, which stays byte-identical
     /// to before plan 25-09.
+    ///
+    /// A billed terminal error (G-50-5a, plan 50-28: the provider stream
+    /// ended in an `EmptyCompletion` or `Refusal` its vendor billed, priced
+    /// by `PricingLlmAdapter`) is settled like a priced terminal chunk --
+    /// once, under `(execution id, 1, 1)`, naming `model_used` -- before the
+    /// converted error is sent; chunks already forwarded are unchanged.
     async fn execute_stream_inner(
         &self,
         paladin: &Paladin,
@@ -3885,6 +3891,19 @@ impl PaladinExecutionService {
                         }
                     }
                     Err(e) => {
+                        // G-50-5a (plan 50-28): a billed, priced terminal error
+                        // (a stream that ended empty or refused) is settled
+                        // exactly like a priced terminal chunk -- (execution
+                        // id, 1, 1), naming `model_used` -- once, before the
+                        // converted error is sent. An unbilled or unpriced
+                        // error settles nothing (D-00c).
+                        if let (Some((ledger, scope, run_id)), Some(cost)) = (
+                            stream_settlement.as_ref(),
+                            e.billed_usage().and_then(|bill| bill.cost.as_ref()),
+                        ) {
+                            settle_agent_loop_call(ledger, scope, run_id, 1, &model_used, cost)
+                                .await;
+                        }
                         let _ = tx.send(Err(to_paladin_error(&e))).await;
                         return;
                     }
@@ -7838,6 +7857,91 @@ mod streamed_cost_tests {
         assert_eq!(rows[0].settlements, 1);
     }
 
+    /// Drain every item `execute_stream` delivers, in order, until the channel closes.
+    async fn drain_all(
+        service: &PaladinExecutionService,
+        paladin: &Paladin,
+    ) -> Vec<Result<PaladinStreamChunk, PaladinError>> {
+        let mut stream = service.execute_stream(paladin, "hi").await.unwrap();
+        let mut items = Vec::new();
+        while let Some(item) = stream.recv().await {
+            items.push(item);
+        }
+        items
+    }
+
+    /// G-50-5a (plan 50-28): a stream that yields one delta and then ends in
+    /// a billed, priced `EmptyCompletion` settles exactly once -- ordinal 1,
+    /// naming `model_used` (the paladin's model, the only model identity a
+    /// stream carries), the billed nanos -- while the caller still receives
+    /// the delta and then the converted `LlmFailure`. Control: a stream that
+    /// ends in an unbilled error settles nothing.
+    #[tokio::test]
+    async fn billed_stream_failure_is_settled() {
+        use paladin_ports::output::llm_port::{BilledUsage, LlmError};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let billed = LlmError::empty_completion("finish_reason=stop with empty content")
+            .with_billed_usage(
+                BilledUsage::new("bill-model", TokenUsage::new(1_000, 2_000))
+                    .with_cost(Cost::new(22_500_000, usd)),
+            );
+        let mock = Arc::new(
+            MockLlmAdapter::new().with_stream_items(vec![Ok("partial".to_string()), Err(billed)]),
+        );
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(mock).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin("gpt-4");
+
+        let items = drain_all(&service, &paladin).await;
+        assert_eq!(items.len(), 2, "the delta, then the error: {items:?}");
+        let delta = items[0].as_ref().expect("the delta was delivered");
+        assert_eq!(delta.text, "partial");
+        assert!(!delta.is_final);
+        assert!(
+            matches!(items[1], Err(PaladinError::LlmFailure { .. })),
+            "the stream ends with the converted error, got {:?}",
+            items[1]
+        );
+
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend query succeeds");
+        assert_eq!(rows.len(), 1, "exactly one settled row: {rows:?}");
+        assert_eq!(rows[0].group, "gpt-4");
+        assert_eq!(rows[0].amount.nanos(), 22_500_000);
+        assert_eq!(rows[0].settlements, 1);
+
+        // Control: an unbilled stream error settles nothing.
+        let mock = Arc::new(MockLlmAdapter::new().with_stream_items(vec![
+            Ok("partial".to_string()),
+            Err(LlmError::empty_completion(
+                "finish_reason=stop with empty content",
+            )),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(mock).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let items = drain_all(&service, &paladin).await;
+        assert!(matches!(
+            items.last(),
+            Some(Err(PaladinError::LlmFailure { .. }))
+        ));
+        let rows = ledger
+            .spend(SpendQuery::default())
+            .await
+            .expect("spend query succeeds");
+        assert!(
+            rows.is_empty(),
+            "an unbilled failure settles nothing: {rows:?}"
+        );
+    }
+
     /// 40-04 (D-16, HTTP path): through `Arc<dyn StreamingExecutorPort>` in
     /// `EveryCall` mode, `execute_stream_scoped` settles the streamed priced
     /// call under the scope's `ledger_scope` -- `(acme, svc-a)`, never the
@@ -8218,18 +8322,19 @@ mod agent_loop_cost_tests {
         );
     }
 
+    /// One scripted call outcome: a success `(content, usage, cost)` or an error.
+    type ScriptedOutcome<S> = Result<(S, TokenUsage, Option<Cost>), LlmError>;
+
     /// A stub `LlmPort` answering a preset queue of outcomes, one per call --
     /// a success `(content, usage, cost)` or an error -- holding on the last
     /// entry once exhausted (G-50-5a, plan 50-28): lets a test end a run in a
     /// billed failure after earlier priced successes.
     struct ScriptedOutcomeLlmPort {
-        outcomes: StdMutex<
-            std::collections::VecDeque<Result<(String, TokenUsage, Option<Cost>), LlmError>>,
-        >,
+        outcomes: StdMutex<std::collections::VecDeque<ScriptedOutcome<String>>>,
     }
 
     impl ScriptedOutcomeLlmPort {
-        fn new(outcomes: Vec<Result<(&str, TokenUsage, Option<Cost>), LlmError>>) -> Self {
+        fn new(outcomes: Vec<ScriptedOutcome<&str>>) -> Self {
             Self {
                 outcomes: StdMutex::new(
                     outcomes

@@ -103,7 +103,7 @@ use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::paladin_port::{
     ChunkMetadata, PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
 };
-use paladin_ports::output::spend_scope::record_incurred_spend;
+use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, record_incurred_spend};
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_ports::output::structured_executor_port::{
     Structured, StructuredExecutorPort, StructuredOptions, run_structured,
@@ -1874,6 +1874,10 @@ impl PaladinExecutionService {
                     for bill in &failure.bills {
                         usage += bill.usage.clone();
                         cost_tally.record_call(bill.cost.as_ref());
+                        // G-50-5a (plan 50-29): a billed failure is a call the
+                        // attempt was charged for -- reported to the attempt
+                        // scope at the same fold as a success's call.
+                        record_incurred_spend(&bill.usage, bill.cost.as_ref());
                         if let (Some(target), Some(cost)) =
                             (ledger_target.as_ref(), bill.cost.as_ref())
                         {
@@ -3573,9 +3577,19 @@ impl PaladinExecutionService {
                 &cx,
             )
             .await
-            // A3-50-28: a structured call's bill is reported to the engine by
-            // plan 50-29; here it is unwrapped to its unchanged error.
-            .map_err(|failure| failure.error)?;
+            // G-50-5a (plan 50-29, closing A3-50-28): every structured call
+            // -- the first and each repair, success or billed failure -- is
+            // reported to the attempt scope here, because `run_structured`
+            // returns only the LAST call's `PaladinResult` and the engine's
+            // structured arm reads the scope for the whole attempt's spend.
+            // The caller still sees the unchanged error.
+            .map_err(|failure| {
+                for bill in &failure.bills {
+                    record_incurred_spend(&bill.usage, bill.cost.as_ref());
+                }
+                failure.error
+            })?;
+        record_incurred_spend(&response.usage, response.cost.as_ref());
 
         Ok(PaladinResult {
             output: response.content,
@@ -3648,6 +3662,12 @@ impl PaladinExecutionService {
     /// by `PricingLlmAdapter`) is settled like a priced terminal chunk --
     /// once, under `(execution id, 1, 1)`, naming `model_used` -- before the
     /// converted error is sent; chunks already forwarded are unchanged.
+    ///
+    /// The attempt spend scope (G-50-5a, plan 50-29) active on the calling
+    /// task is captured before the spawn and re-installed inside the
+    /// forwarding task, exactly like the trace emitter, so the terminal
+    /// chunk's usage and cost and a billed terminal error's bill are both
+    /// reported to the attempt that opened the stream.
     async fn execute_stream_inner(
         &self,
         paladin: &Paladin,
@@ -3755,6 +3775,11 @@ impl PaladinExecutionService {
             .trace_emitter
             .clone()
             .or_else(current_trace_emitter);
+        // G-50-5a (plan 50-29): the attempt spend scope is a task-local too,
+        // so it is captured HERE on the calling task, by the same rule, and
+        // re-installed inside the spawned task below. A missing scope (no
+        // engine attempt around this call) stays missing: nothing is recorded.
+        let stream_spend_scope = ATTEMPT_SPEND.try_with(Clone::clone).ok();
 
         // D-17: captured before the spawn (the spawned task never touches
         // `self`) purely to name the provider in the no-usage warning below
@@ -3793,7 +3818,7 @@ impl PaladinExecutionService {
                     })
             });
 
-        tokio::spawn(async move {
+        let forward_chunks = async move {
             use futures::StreamExt;
             let mut stream = Box::into_pin(provider_stream);
             while let Some(item) = stream.next().await {
@@ -3828,6 +3853,14 @@ impl PaladinExecutionService {
                             // stamped `cost` on this SAME terminal
                             // `StreamingResponse` -- never fabricated here.
                             let cost = resp.cost.clone();
+                            // G-50-5a (plan 50-29): the terminal chunk is the
+                            // stream's one billed call -- reported to the
+                            // re-installed attempt scope when the provider
+                            // reported a usage (a usage-less chunk is nothing
+                            // billable to record, D-17).
+                            if let Some(usage) = usage.as_ref() {
+                                record_incurred_spend(usage, cost.as_ref());
+                            }
                             // D-07/D-08 (39-05): settle this streamed call's
                             // priced terminal chunk under (execution id, 1,
                             // 1), naming `model_used` -- the only model
@@ -3902,7 +3935,12 @@ impl PaladinExecutionService {
                         // exactly like a priced terminal chunk -- (execution
                         // id, 1, 1), naming `model_used` -- once, before the
                         // converted error is sent. An unbilled or unpriced
-                        // error settles nothing (D-00c).
+                        // error settles nothing (D-00c). G-50-5a (plan
+                        // 50-29): the bill is reported to the re-installed
+                        // attempt scope first.
+                        if let Some(bill) = e.billed_usage() {
+                            record_incurred_spend(&bill.usage, bill.cost.as_ref());
+                        }
                         if let (Some((ledger, scope, run_id)), Some(cost)) = (
                             stream_settlement.as_ref(),
                             e.billed_usage().and_then(|bill| bill.cost.as_ref()),
@@ -3935,6 +3973,12 @@ impl PaladinExecutionService {
                     metadata,
                 }))
                 .await;
+        };
+        tokio::spawn(async move {
+            match stream_spend_scope {
+                Some(scope) => ATTEMPT_SPEND.scope(scope, forward_chunks).await,
+                None => forward_chunks.await,
+            }
         });
 
         Ok(rx)
@@ -7948,6 +7992,67 @@ mod streamed_cost_tests {
         );
     }
 
+    /// G-50-5a (plan 50-29): the streamed path's spawned task re-installs the
+    /// attempt scope that was active when `execute_stream` was called (the
+    /// `stream_trace_emitter` capture pattern -- a task-local never crosses
+    /// a `tokio::spawn`), so a priced terminal chunk and a billed stream
+    /// failure both leave their spend in the caller's scope.
+    #[tokio::test]
+    async fn streamed_calls_are_recorded_in_the_attempt_spend_scope() {
+        use paladin_ports::output::llm_port::{BilledUsage, LlmError};
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let table = Arc::new(PriceTable::new(usd.clone()).with_row(
+            "gpt-4",
+            PriceRow::new(2_500_000_000, 10_000_000_000).unwrap(),
+        ));
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_response("streamed")
+                .with_token_usage_struct(TokenUsage::new(1_000, 2_000)),
+        );
+        let llm: Arc<dyn LlmPort> = Arc::new(PricingLlmAdapter::new(mock, table));
+        let service = make_service(llm);
+        let paladin = make_paladin("gpt-4");
+
+        let scope = SpendScope::new();
+        let items = ATTEMPT_SPEND
+            .scope(scope.clone(), drain_all(&service, &paladin))
+            .await;
+        assert!(items.iter().all(Result::is_ok), "a clean stream: {items:?}");
+        let spend = scope.snapshot();
+        assert_eq!(
+            spend.calls(),
+            1,
+            "the terminal chunk is the stream's one bill"
+        );
+        assert_eq!(spend.usage(), &TokenUsage::new(1_000, 2_000));
+        assert_eq!(spend.cost(), Some(Cost::new(22_500_000, usd.clone())));
+
+        let billed = LlmError::empty_completion("finish_reason=stop with empty content")
+            .with_billed_usage(
+                BilledUsage::new("bill-model", TokenUsage::new(200, 50))
+                    .with_cost(Cost::new(1_000_000, usd.clone())),
+            );
+        let mock = Arc::new(
+            MockLlmAdapter::new().with_stream_items(vec![Ok("partial".to_string()), Err(billed)]),
+        );
+        let service = make_service(mock);
+        let scope = SpendScope::new();
+        let items = ATTEMPT_SPEND
+            .scope(scope.clone(), drain_all(&service, &paladin))
+            .await;
+        assert!(matches!(
+            items.last(),
+            Some(Err(PaladinError::LlmFailure { .. }))
+        ));
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "the billed failure is recorded");
+        assert_eq!(spend.usage(), &TokenUsage::new(200, 50));
+        assert_eq!(spend.cost(), Some(Cost::new(1_000_000, usd)));
+    }
+
     /// 40-04 (D-16, HTTP path): through `Arc<dyn StreamingExecutorPort>` in
     /// `EveryCall` mode, `execute_stream_scoped` settles the streamed priced
     /// call under the scope's `ledger_scope` -- `(acme, svc-a)`, never the
@@ -8014,6 +8119,7 @@ mod streamed_cost_tests {
 #[cfg(test)]
 mod agent_loop_cost_tests {
     use super::*;
+    use crate::application::services::paladin::middleware::MiddlewareFlow;
     use crate::core::base::entity::Entity;
     use crate::core::platform::container::paladin::{MaxLoops, PaladinData};
     use async_trait::async_trait;
@@ -8562,6 +8668,186 @@ mod agent_loop_cost_tests {
         assert_eq!(by_run.len(), 1);
         assert_eq!(by_run[0].settlements, 2, "one settle per call ordinal");
         assert_eq!(by_run[0].amount, Cost::new(23_500_000, usd));
+    }
+
+    /// An `ExecutionMiddleware` whose SECOND `before_model` fails the run
+    /// with a non-LLM `ExecutionError` -- a terminal error after a billed
+    /// call (G-50-5a remainder (b), plan 50-29).
+    struct FailOnSecondLoop {
+        loops_seen: std::sync::atomic::AtomicU32,
+    }
+
+    #[async_trait]
+    impl ExecutionMiddleware for FailOnSecondLoop {
+        async fn before_model(
+            &self,
+            _cx: &mut ModelCallContext<'_>,
+        ) -> Result<MiddlewareFlow, PaladinError> {
+            let seen = self
+                .loops_seen
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if seen == 0 {
+                Ok(MiddlewareFlow::Continue)
+            } else {
+                Err(PaladinError::ExecutionError(
+                    "middleware refused the second loop".to_string(),
+                ))
+            }
+        }
+
+        fn name(&self) -> &str {
+            "fail-on-second-loop"
+        }
+    }
+
+    /// G-50-5a remainder (b), plan 50-29: inside an `ATTEMPT_SPEND` scope, a
+    /// two-loop Paladin whose first call succeeds at cost A and whose second
+    /// iteration fails with a non-LLM error returns that error, and the
+    /// scope holds A and the first call's usage -- the billed call before a
+    /// non-`LlmFailure` terminal error still reports its spend.
+    #[tokio::test]
+    async fn non_llm_failure_after_billed_calls_reports_their_spend() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let first_usage = TokenUsage::new(1_000, 2_000);
+        let cost_a = Cost::new(22_500_000, usd);
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "first",
+            first_usage.clone(),
+            Some(cost_a.clone()),
+        )]));
+        let service = make_service(llm).with_middleware(Arc::new(FailOnSecondLoop {
+            loops_seen: std::sync::atomic::AtomicU32::new(0),
+        }));
+        let paladin = make_paladin(2);
+
+        let scope = SpendScope::new();
+        let err = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&paladin, "hi"))
+            .await
+            .expect_err("the second loop's middleware error fails the run");
+        assert!(
+            matches!(&err, PaladinError::ExecutionError(msg) if msg.contains("second loop")),
+            "the middleware's own error, unchanged: {err:?}"
+        );
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "the one billed call before the error");
+        assert_eq!(spend.usage(), &first_usage);
+        assert_eq!(spend.cost(), Some(cost_a));
+    }
+
+    /// G-50-5a (plan 50-29): a billed `EmptyCompletion` priced at B leaves B
+    /// in the attempt scope beside its ledger settle (plan 50-28).
+    #[tokio::test]
+    async fn billed_failure_is_recorded_in_the_attempt_spend_scope() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let billed_usage = TokenUsage::new(1_000, 62_000);
+        let cost_b = Cost::new(2_403_000, usd);
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(vec![Err(
+            billed_empty_completion("m", billed_usage.clone(), Some(cost_b.clone())),
+        )]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(1);
+
+        let scope = SpendScope::new();
+        let err = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&paladin, "hi"))
+            .await
+            .expect_err("a billed empty completion still fails the run");
+        assert!(matches!(err, PaladinError::LlmFailure { .. }));
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "the bill is one recorded call");
+        assert_eq!(spend.usage(), &billed_usage);
+        assert_eq!(spend.cost(), Some(cost_b.clone()));
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1, "the 50-28 settle is unchanged beside it");
+        assert_eq!(by_run[0].amount, cost_b);
+        assert_eq!(by_run[0].settlements, 1);
+    }
+
+    /// G-50-5a (plan 50-29): `execute_json_schema` with `max_repair_attempts:
+    /// 1` and two priced non-conforming responses returns
+    /// `StructuredOutputInvalid { attempts: 2, .. }`, and the attempt scope
+    /// holds BOTH calls -- the first and the repair. Outside any scope the
+    /// same run behaves exactly as before and records nothing.
+    #[tokio::test]
+    async fn structured_exhaustion_reports_every_call() {
+        use paladin_core::platform::container::structured::StructuredOptions;
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let scripted = || -> Arc<dyn LlmPort> {
+            Arc::new(ScriptedCostLlmPort::new(vec![
+                (
+                    r#"{"nope": 1}"#,
+                    TokenUsage::new(300, 20),
+                    Some(Cost::new(1_000_000, usd.clone())),
+                ),
+                (
+                    r#"{"nope": 2}"#,
+                    TokenUsage::new(500, 30),
+                    Some(Cost::new(1_500_000, usd.clone())),
+                ),
+            ]))
+        };
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["city"],
+            "properties": {"city": {"type": "string"}}
+        });
+        let paladin = make_paladin(1);
+
+        let service = make_service(scripted());
+        let scope = SpendScope::new();
+        let err = ATTEMPT_SPEND
+            .scope(
+                scope.clone(),
+                service.execute_json_schema(
+                    &paladin,
+                    "weather",
+                    &schema,
+                    &StructuredOptions::new(1),
+                ),
+            )
+            .await
+            .expect_err("two non-conforming responses exhaust one repair");
+        assert!(
+            matches!(
+                err,
+                PaladinError::StructuredOutputInvalid { attempts: 2, .. }
+            ),
+            "got {err:?}"
+        );
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2, "the first call and the repair call");
+        assert_eq!(spend.usage(), &TokenUsage::new(800, 50));
+        assert_eq!(spend.cost(), Some(Cost::new(2_500_000, usd.clone())));
+
+        // Outside any scope: the same error, nothing recorded anywhere.
+        let service = make_service(scripted());
+        let err = service
+            .execute_json_schema(&paladin, "weather", &schema, &StructuredOptions::new(1))
+            .await
+            .expect_err("still exhausts");
+        assert!(matches!(
+            err,
+            PaladinError::StructuredOutputInvalid { attempts: 2, .. }
+        ));
+        assert!(SpendScope::new().snapshot().is_empty());
     }
 
     /// G-50-5a / D-00c: a failure with no bill settles nothing, and a bill

@@ -1460,7 +1460,7 @@ Plans:
 
 **Wave 22** *(gap-closure wave 7; blocked on Wave 21 completion)*
 
-- [ ] 50-26-PLAN.md — G-50-5a: `BilledUsage`; `EmptyCompletion`/`Refusal` as `#[non_exhaustive]` struct variants with `billed_usage()`; compat buffered path bills; `LlmError` break measured and registered in the same commit
+- [x] 50-26-PLAN.md — G-50-5a: `BilledUsage`; `EmptyCompletion`/`Refusal` as `#[non_exhaustive]` struct variants with `billed_usage()`; compat buffered path bills; `LlmError` break measured and registered in the same commit
 
 **Wave 23** *(gap-closure wave 8; blocked on Wave 22 completion)*
 

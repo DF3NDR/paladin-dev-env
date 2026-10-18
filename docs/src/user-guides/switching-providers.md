@@ -169,13 +169,13 @@ reach every caller, buffered and streamed:
 
 | Surface | Carries |
 |---------|---------|
-| `LlmResponse.metadata` (each buffered call) | `paladin.params_omitted`, `paladin.unprofiled_model`, `paladin.response_format_adjusted`, and for a fallback chain `paladin.served_by` and `paladin.served_model` |
+| `LlmResponse.metadata` (each buffered call) | `paladin.params_omitted`, `paladin.unprofiled_model`, `paladin.response_format_adjusted`, `paladin.usage_unreconciled` (a call whose mapped usage disagrees with the vendor's own total or breaks containment; see [Responses](#responses)), and for a fallback chain `paladin.served_by` and `paladin.served_model`. `paladin.usage_unreconciled` follows the last-value rule below, so a run's `run_metadata` keeps the last call that recorded a disagreement. |
 | `PaladinResult.run_metadata` (a whole run) | The same keys merged across every model call of the run. `paladin.params_omitted` and `paladin.unprofiled_model` hold the de-duplicated union in first-seen order; every other key holds the last call's value; a key without the `paladin.` prefix is never copied. `paladin.served_by` keeps its own `PaladinResult.served_by` field. |
 | `StreamingResponse.metadata` (a stream) | The same keys on the stream's **terminal chunk only**, for all nine adapters; content chunks carry an empty map, and an error terminal item (refusal, empty completion) carries none. A fallback chain's stream names the serving hop with `paladin.served_by` and `paladin.served_model` on that chunk. |
 | `ChunkMetadata.run_metadata` (a streamed run) | The terminal chunk's keys merged by the same rule, including `paladin.served_by`. |
 
-The values are provider names, model ids and parameter names only, never request content or
-credentials. The HTTP `ExecuteResponse` of `paladin-web` does not carry `run_metadata`; exposing it
+The values are provider names, model ids, parameter names and token counts only, never request
+content or credentials. The HTTP `ExecuteResponse` of `paladin-web` does not carry `run_metadata`; exposing it
 over HTTP is a separate decision about a published contract.
 
 **Known limits.**
@@ -282,7 +282,17 @@ quota-exhaustion body.
 - **Reasoning** text is on `LlmResponse.reasoning` (and `StreamingResponse.reasoning` while
   streaming) where the vendor returns it; reasoning and cache counts are on `TokenUsage` and are
   `None` when the vendor did not report them. `TokenUsage.total_tokens` is always
-  `prompt_tokens + completion_tokens`; the vendor's own total is not copied.
+  `prompt_tokens + completion_tokens`, and sub-counts sit inside their parents: an adapter folds a
+  category its vendor reports outside the parent into it (Gemini thoughts and Grok reasoning into
+  `completion_tokens`, Anthropic cache reads and writes into `prompt_tokens`), so the counts the
+  Treasurer prices are what the vendor bills.
+- **The vendor's own total** on the five OpenAI-compatible presets (kimi, qwen, grok, ollama,
+  openai-compatible) is parsed, buffered and streamed, and compared with the mapped total; it is
+  never copied over it. A disagreement, a reasoning count above `completion_tokens`, or cache
+  counts above `prompt_tokens` is logged once per model (target `paladin::usage`) and recorded
+  under `paladin.usage_unreconciled` (for example `total:vendor=900,mapped=837`) on the buffered
+  response or the stream's terminal chunk. On openai, anthropic, deepseek and gemini the vendor
+  total is not yet reconciled; plan 50-23 extends the check to them.
 
 | Provider | Empty output (buffered, streamed) | Refusal | Content filter | Usage cap | Cache read, write | Reasoning tokens, text | Stop sequences |
 |----------|-----------------------------------|---------|----------------|-----------|-------------------|------------------------|----------------|
@@ -291,7 +301,7 @@ quota-exhaustion body.
 | deepseek | `EmptyCompletion`, both | no typed refusal field on the wire; a blocked answer arrives as a `content_filter` finish | `ContentFilter` | `UsageLimitExceeded` on HTTP 402 (the shared status mapping, unit-tested; not part of R-2) | read yes (`prompt_cache_hit_tokens`); write not reported | tokens yes; text yes (`reasoning_content`, both paths) | `stop`, no known maximum |
 | kimi | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write yes (`cache_write_tokens`, observed on Kimi) | tokens yes; text yes (`reasoning_content`) | `stop`, no known maximum |
 | qwen | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes; text yes (`reasoning_content`) | `stop`, no known maximum |
-| grok | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes; text yes (`reasoning_content`) | not sent: `stop` is omitted and recorded; an agent's stop words are enforced client-side |
+| grok | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes: xAI reports `reasoning_tokens` beside `completion_tokens`, and the adapter folds them into `completion_tokens` (secondary-sourced, not yet live-measured; plan 50-22 measures it); text yes (`reasoning_content`) | not sent: `stop` is omitted and recorded; an agent's stop words are enforced client-side |
 | gemini | `EmptyCompletion`, both (streamed: at the item that carries `finishReason`; a stream with no such frame is not classified) | no refusal signal on the wire; `SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT` and `SPII` finishes are `Ok(ContentFilter)` | `ContentFilter` | no usage-cap mapping: a 429 is a rate limit (the free-tier body of 2026-10-15 was one) | read yes (`cachedContentTokenCount`); write not reported | tokens yes (`thoughtsTokenCount`); text not mapped | `generationConfig.stopSequences`, no known maximum |
 | ollama | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes; text yes (`reasoning_content`) | `stop`, no known maximum |
 | openai-compatible | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes; text yes (`reasoning_content`) | `stop`, no known maximum |

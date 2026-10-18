@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Usage reconciliation and `paladin_llm::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY`
+  (G-50-5a; Phase 50 plan 50-21).** The five OpenAI-compatible presets (Kimi, Qwen, Grok, Ollama,
+  OpenAI-compatible) now parse the vendor's own `total_tokens`, buffered and streamed, and compare
+  it with the mapped `prompt_tokens + completion_tokens`; they also check that reasoning does not
+  exceed `completion_tokens` and that cache reads plus writes do not exceed `prompt_tokens`. A
+  finding is never repaired and never written over the mapped total: it is logged once per adapter
+  instance per (model, check) (target `paladin::usage`) and recorded under
+  `paladin.usage_unreconciled` (`USAGE_UNRECONCILED_METADATA_KEY`) on `LlmResponse.metadata` or the
+  stream's terminal chunk, as `total:vendor=<n>,mapped=<m>`, `reasoning:reasoning=<n>,completion=<m>`
+  or `cache:cache=<n>,prompt=<m>` joined by `;`. The value holds token counts only. The four
+  bespoke adapters follow in plan 50-23. Additive: one new public constant.
+
 - **Per-model parameter support (PARITY-02; Phase 50 plan 50-02; ADR-0061).** `paladin-ports`
   gains `ModelProfile`, `ParamSupport` (`Range`, `Fixed`, `NotSent`), `StopSupport` and
   `SamplingParam` in `output::model_profile` (re-exported from `output::llm_port`), and
@@ -1091,6 +1103,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Grok reasoning tokens are counted and priced (G-50-5a; Phase 50 plan 50-21; `MIGRATION.md`
+  9.1 M-B-19).** xAI reports `completion_tokens_details.reasoning_tokens` beside
+  `completion_tokens` (its total is prompt + completion + reasoning), while the shared compat
+  engine read every preset with OpenAI's inclusive contract, so every Grok reasoning call dropped
+  its reasoning tokens from `total_tokens`, reported more reasoning than completion, and was
+  priced by the Treasurer at about half what xAI bills. The Grok adapter now folds the reasoning
+  into `completion_tokens` (and so into `total_tokens`), which is priced at the completion rate
+  (or the row's reasoning rate). Repro at $1/M input and $10/M output for prompt 663, completion
+  50, reasoning 124, vendor total 837: 1_163_000 nanos before, 2_403_000 nanos now, the amount xAI
+  bills. `total_tokens` is still `prompt_tokens + completion_tokens` (D-02). xAI's
+  reasoning-exclusive `completion_tokens` is secondary-sourced and not yet live-measured (plan
+  50-22 measures it); a wrong reading would be flagged on every reasoning call by the
+  reconciliation below. Kimi, Qwen, Ollama and OpenAI-compatible keep the inclusive reading.
+
 - **The OpenAI adapter sends `max_completion_tokens`, so `gpt-5.4-nano` no longer returns HTTP 400
   (G-50-5b; Phase 50 plan 50-19; `MIGRATION.md` 9.1 M-B-18).** The adapter sent the output limit
   as `max_tokens`, which `gpt-5.4-nano` (the first seeded OpenAI model) rejects with
@@ -1267,7 +1293,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2026-10-16); each keeps the shared status mapping and an override is a single `error_override`
   once a body is captured. (3) A caller that builds an `LlmRequest` directly gets omit, `warn!` and
   metadata, not a refusal. (4) `TokenUsage.total_tokens` stays `prompt + completion`; a vendor's
-  own total is not copied. (5) The retry counters are not unified: Anthropic and Gemini count total
+  own total is not copied over it. On the five compat presets it is compared and a disagreement is
+  recorded under `paladin.usage_unreconciled` (plan 50-21); OpenAI, Anthropic, DeepSeek and Gemini
+  follow in plan 50-23. (5) The retry counters are not unified: Anthropic and Gemini count total
   attempts, the other seven count retries after the first attempt. (6) The Grok and OpenAI
   temperature upper bounds, and every `top_p` and penalty span, are stated or contract-derived
   rather than measured edges; the Switching providers page labels each.

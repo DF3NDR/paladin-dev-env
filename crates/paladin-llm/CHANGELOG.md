@@ -9,6 +9,12 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- `usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY` (`"paladin.usage_unreconciled"`) and the
+  compat reconciliation (G-50-5a, Phase 50 plan 50-21): the five compat presets parse the vendor's
+  own `total_tokens` on both paths and compare it, and the reasoning and cache containment, with the
+  mapped usage. A finding is warned once per (model, check) (target `paladin::usage`) and recorded
+  under the key on the buffered response or the stream's terminal chunk; `total_tokens` stays
+  `prompt_tokens + completion_tokens`. The four bespoke adapters follow in plan 50-23.
 - Phase 50 (provider parity and configuration-driven model swap; PARITY-01..08; ADR-0061):
   - **Sampling policy and registry.** `sampling` (the one wire filter every request builder calls: an
     explicit value the model cannot honour is refused at build, any other is omitted with a
@@ -62,6 +68,11 @@ and this project follows lockstep workspace versioning.
 
 ### Fixed
 
+- Grok reasoning tokens are counted and priced (G-50-5a, Phase 50 plan 50-21): xAI reports
+  `reasoning_tokens` beside `completion_tokens`, so the Grok adapter now folds them into
+  `completion_tokens` and `total_tokens`, priced at the completion rate. Repro at $1/M input and
+  $10/M output (prompt 663, completion 50, reasoning 124, vendor total 837): 1_163_000 nanos before,
+  2_403_000 now. Secondary-sourced, not yet live-measured (plan 50-22 measures it).
 - The OpenAI adapter sends its output limit as `max_completion_tokens` on every chat-completions
   body (buffered, streamed, every `response_format`) and on the vision request (G-50-5b, Phase 50
   plan 50-19), so `gpt-5.4-nano` no longer answers HTTP 400. Measured accepting the key:

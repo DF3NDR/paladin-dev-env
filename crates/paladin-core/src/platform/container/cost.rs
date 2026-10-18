@@ -354,6 +354,13 @@ impl PriceRow {
 /// summed, and rounded to the nearest nano-unit — half-up, exactly once for the whole call, not
 /// once per axis (D-02) — before saturating into the `i64` this function returns.
 ///
+/// Since Phase 50 plan 50-21 (G-50-5a) the adapters fold every billed category into its parent
+/// (Grok's reasoning tokens, reported beside `completion_tokens`, are added into it) and flag a
+/// broken containment under `paladin.usage_unreconciled` at the adapter boundary. The clamp above
+/// is therefore the last line of defence against a malformed response, not a silent re-pricing of
+/// a normal one: a mapped usage that would reach it with a sub-count above its parent has already
+/// been warned about and recorded.
+///
 /// This function is infallible and total: every `TokenUsage`/`PriceRow` pair, including
 /// `TokenUsage::default()`, produces a `Cost` (never a `Result` or `Option`) — the caller
 /// (typically [`PriceTable::price`]) decides `None` only when no row exists for a model at all.

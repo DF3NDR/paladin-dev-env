@@ -614,6 +614,87 @@ mod tests {
         assert!(matches!(last_finish_reason, Some(FinishReason::Stop)));
     }
 
+    /// Drain one Grok `generate_stream` over a canned SSE body whose usage frame carries the
+    /// xAI shape with the given vendor total.
+    async fn grok_stream_with_vendor_total(total: u32) -> Vec<StreamingResponse> {
+        use futures::StreamExt;
+
+        let sse_body = format!(
+            concat!(
+                "data: {{\"id\":\"1\",\"choices\":[{{\"delta\":{{\"content\":\"Par\"}},\"finish_reason\":null}}]}}\n\n",
+                "data: {{\"id\":\"1\",\"choices\":[{{\"delta\":{{\"content\":\"is\"}},\"finish_reason\":\"stop\"}}]}}\n\n",
+                "data: {{\"id\":\"1\",\"choices\":[],\"usage\":{{\"prompt_tokens\":663,\"completion_tokens\":50,",
+                "\"total_tokens\":{total},\"completion_tokens_details\":{{\"reasoning_tokens\":124}}}}}}\n\n",
+                "data: [DONE]\n\n",
+            ),
+            total = total
+        );
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body)
+            .create_async()
+            .await;
+        let adapter = GrokAdapter::new(GrokConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            GROK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        let stream = adapter
+            .generate_stream(build_request(GROK_DEFAULT_MODEL))
+            .await
+            .unwrap();
+        Box::into_pin(stream)
+            .map(|item| item.expect("a stream with text ends Ok"))
+            .collect()
+            .await
+    }
+
+    /// G-50-5a on the streamed path: the terminal chunk's usage is folded with Grok's semantics
+    /// (completion 50 + reasoning 124) and reconciled against the vendor total; a disagreement
+    /// is recorded on the terminal chunk only, never on a content chunk.
+    #[tokio::test]
+    async fn grok_stream_terminal_usage_is_folded_and_reconciled() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let chunks = grok_stream_with_vendor_total(837).await;
+        let terminal = chunks.last().expect("a terminal chunk");
+        assert!(terminal.finish_reason.is_some(), "{terminal:?}");
+        let usage = terminal.usage.as_ref().expect("the usage frame is held");
+        assert_eq!(usage.prompt_tokens, 663);
+        assert_eq!(usage.completion_tokens, 174, "{usage:?}");
+        assert_eq!(usage.reasoning_tokens, Some(124));
+        assert_eq!(usage.total_tokens, 837);
+        assert!(
+            !terminal
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "{:?}",
+            terminal.metadata
+        );
+
+        let chunks = grok_stream_with_vendor_total(900).await;
+        let (terminal, content) = chunks.split_last().expect("a terminal chunk");
+        assert_eq!(
+            terminal
+                .metadata
+                .get(USAGE_UNRECONCILED_METADATA_KEY)
+                .map(String::as_str),
+            Some("total:vendor=900,mapped=837")
+        );
+        assert_eq!(terminal.usage.as_ref().map(|u| u.total_tokens), Some(837));
+        assert!(!content.is_empty());
+        for chunk in content {
+            assert!(
+                !chunk.metadata.contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+                "content chunk: {chunk:?}"
+            );
+        }
+    }
+
     // ── Error mapping ──
 
     #[tokio::test]

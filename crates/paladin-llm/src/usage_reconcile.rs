@@ -77,6 +77,10 @@ pub const USAGE_UNRECONCILED_METADATA_KEY: &str = "paladin.usage_unreconciled";
 enum UsageCheck {
     /// The vendor's reported total against the mapped total.
     Total,
+    /// The reasoning sub-count against `completion_tokens`.
+    Reasoning,
+    /// Cache read plus cache write against `prompt_tokens`.
+    Cache,
 }
 
 impl UsageCheck {
@@ -84,6 +88,8 @@ impl UsageCheck {
     fn as_str(self) -> &'static str {
         match self {
             Self::Total => "total",
+            Self::Reasoning => "reasoning",
+            Self::Cache => "cache",
         }
     }
 }
@@ -103,6 +109,27 @@ pub(crate) fn reconcile(mapped: &TokenUsage, vendor_total: Option<u32>) -> Optio
             "{}:vendor={vendor},mapped={}",
             UsageCheck::Total.as_str(),
             mapped.total_tokens
+        ));
+    }
+    let reasoning = mapped.reasoning_tokens.unwrap_or(0);
+    if reasoning > mapped.completion_tokens {
+        found.push(format!(
+            "{}:reasoning={reasoning},completion={}",
+            UsageCheck::Reasoning.as_str(),
+            mapped.completion_tokens
+        ));
+    }
+    // Saturating: two hostile `u32::MAX` sub-counts must neither panic nor wrap to a small sum
+    // that would pass the check.
+    let cache = mapped
+        .cache_read_tokens
+        .unwrap_or(0)
+        .saturating_add(mapped.cache_write_tokens.unwrap_or(0));
+    if cache > mapped.prompt_tokens {
+        found.push(format!(
+            "{}:cache={cache},prompt={}",
+            UsageCheck::Cache.as_str(),
+            mapped.prompt_tokens
         ));
     }
     (!found.is_empty()).then(|| found.join(";"))
@@ -189,5 +216,103 @@ mod tests {
             reconcile(&mapped, Some(9999)),
             Some("total:vendor=9999,mapped=1801".to_string())
         );
+    }
+
+    #[test]
+    fn broken_containment_is_a_finding_per_check() {
+        let reasoning = TokenUsage::new(663, 50).with_reasoning(124);
+        assert_eq!(
+            reconcile(&reasoning, None),
+            Some("reasoning:reasoning=124,completion=50".to_string())
+        );
+
+        let cache = TokenUsage::new(100, 40)
+            .with_cache_read(80)
+            .with_cache_write(30);
+        assert_eq!(
+            reconcile(&cache, Some(140)),
+            Some("cache:cache=110,prompt=100".to_string())
+        );
+    }
+
+    #[test]
+    fn every_finding_is_listed_in_fixed_order() {
+        let mapped = TokenUsage::new(100, 10)
+            .with_cache_read(90)
+            .with_cache_write(20)
+            .with_reasoning(15);
+        assert_eq!(
+            reconcile(&mapped, Some(500)),
+            Some(
+                "total:vendor=500,mapped=110;reasoning:reasoning=15,completion=10;\
+                 cache:cache=110,prompt=100"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn saturating_inputs_neither_panic_nor_wrap() {
+        let max = u32::MAX;
+        let all_max = TokenUsage::new(max, max)
+            .with_cache_read(max)
+            .with_cache_write(max)
+            .with_reasoning(max);
+        // Every sum saturates at `u32::MAX`, so nothing exceeds its parent and the totals agree.
+        assert_eq!(reconcile(&all_max, Some(max)), None);
+
+        let small_prompt = TokenUsage::new(1, 0)
+            .with_cache_read(max)
+            .with_cache_write(max);
+        assert_eq!(
+            reconcile(&small_prompt, Some(0)),
+            Some(format!(
+                "total:vendor=0,mapped=1;cache:cache={max},prompt=1"
+            ))
+        );
+    }
+
+    #[test]
+    fn usage_log_warns_once_per_model_and_check() {
+        let log = UsageLog::new();
+        let mapped = TokenUsage::new(1234, 567);
+
+        // The metadata value is returned on every call; the warning is deduplicated.
+        for _ in 0..2 {
+            assert_eq!(
+                log.record("grok", "m1", &mapped, Some(9999)),
+                Some("total:vendor=9999,mapped=1801".to_string())
+            );
+        }
+        assert_eq!(
+            log.warned.lock().unwrap().len(),
+            1,
+            "two calls for one (model, check) are one logged key"
+        );
+
+        let _ = log.record("grok", "m2", &mapped, Some(9999));
+        assert_eq!(
+            log.warned.lock().unwrap().len(),
+            2,
+            "a second model warns again"
+        );
+
+        let broken = TokenUsage::new(663, 50).with_reasoning(124);
+        let _ = log.record("grok", "m1", &broken, None);
+        assert_eq!(
+            log.warned.lock().unwrap().len(),
+            3,
+            "a second check warns again"
+        );
+
+        // A clone shares the record: the streamed path's closure logs into the same instance.
+        let _ = log.clone().record("grok", "m1", &broken, None);
+        assert_eq!(log.warned.lock().unwrap().len(), 3);
+
+        assert_eq!(
+            log.record("grok", "m1", &TokenUsage::new(1, 1), Some(2)),
+            None
+        );
+        assert_eq!(log.warned.lock().unwrap().len(), 3);
     }
 }

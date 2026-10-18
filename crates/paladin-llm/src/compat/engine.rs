@@ -1093,6 +1093,14 @@ impl CompatEngine {
     /// instead of the `Ok` terminal chunk (a `content_filter` or function-call
     /// finish stays `Ok`). Deltas already yielded, reasoning deltas included,
     /// stay yielded: only the terminal item changes.
+    ///
+    /// The `Ok` terminal chunk carries the usage frame mapped with the preset's
+    /// usage semantics (G-50-5a), and, when that usage does not reconcile with
+    /// the vendor's own total or breaks containment, the
+    /// [`USAGE_UNRECONCILED_METADATA_KEY`] finding in its
+    /// [`StreamingResponse::metadata`] -- beside any ADR-0061 omission keys.
+    /// Content chunks never carry it, and an `Err` terminal item carries no
+    /// metadata at all.
     pub async fn generate_stream(
         &self,
         request: LlmRequest,
@@ -1172,6 +1180,11 @@ impl CompatEngine {
         // still emitted immediately, in wire order, carrying neither.
         let mut held_finish_reason: Option<FinishReason> = None;
         let mut held_usage: Option<TokenUsage> = None;
+        // The vendor's own total from the held usage frame, reconciled at the terminal chunk
+        // (G-50-5a) against the usage mapped with this preset's semantics.
+        let mut held_vendor_total: Option<u32> = None;
+        let usage_semantics = self.usage_semantics;
+        let usage_log = self.usage_log.clone();
 
         // D-11a / D-09 on the streaming path: the terminal chunk is decided by the same
         // `classify_completion` the buffered path uses, over what the stream accumulated.
@@ -1210,6 +1223,20 @@ impl CompatEngine {
                                         let mut terminal =
                                             StreamingResponse::terminal(finish_reason);
                                         if let Some(usage) = held_usage.take() {
+                                            // G-50-5a: only the `Ok` terminal chunk carries
+                                            // a finding; an `Err` terminal carries no
+                                            // metadata (50-18 rule).
+                                            if let Some(value) = usage_log.record(
+                                                provider,
+                                                &model,
+                                                &usage,
+                                                held_vendor_total.take(),
+                                            ) {
+                                                terminal = terminal.with_metadata(
+                                                    USAGE_UNRECONCILED_METADATA_KEY,
+                                                    value,
+                                                );
+                                            }
                                             terminal = terminal.with_usage(usage);
                                         }
                                         for (key, value) in &stream_metadata {
@@ -1230,15 +1257,10 @@ impl CompatEngine {
                             ) {
                                 Ok(response) => {
                                     if let Some(usage) = response.usage {
-                                        // Plan 50-21 Task 2 maps the streamed frame with the
-                                        // preset's semantics and reconciles it.
-                                        held_usage = Some(
-                                            Self::map_compat_usage(
-                                                usage,
-                                                CompatUsageSemantics::ReasoningInsideCompletion,
-                                            )
-                                            .0,
-                                        );
+                                        let (mapped, vendor_total) =
+                                            Self::map_compat_usage(usage, usage_semantics);
+                                        held_usage = Some(mapped);
+                                        held_vendor_total = vendor_total;
                                     }
                                     if let Some(choice) = response.choices.first() {
                                         if let Some(reason) = &choice.finish_reason {
@@ -3420,12 +3442,13 @@ mod tests {
         assert_eq!(response.usage.cache_read_tokens, Some(4));
     }
 
-    /// Edge PARITY-05/precision: sub-counts are copied exactly as the vendor reported them. The
-    /// one figure not copied is `total_tokens`: `TokenUsage` guarantees it is
-    /// `prompt_tokens + completion_tokens` (D-02), so a vendor total that disagrees does not
-    /// override that invariant.
+    /// Edge PARITY-05/precision: sub-counts are copied exactly as the vendor reported them, and
+    /// a vendor total that disagrees is recorded, not discarded (G-50-5a, owner decision
+    /// 2026-10-17; this test previously pinned the discard). `total_tokens` stays
+    /// `prompt_tokens + completion_tokens` (D-02): the disagreement is surfaced under
+    /// `paladin.usage_unreconciled`, never written over the mapped total.
     #[tokio::test]
-    async fn compat_usage_fields_are_copied_exactly() {
+    async fn compat_vendor_total_disagreement_is_recorded() {
         let mut body = buffered_body(json!({"role": "assistant", "content": "ok"}), "stop");
         body["usage"] = json!({
             "prompt_tokens": 1234,
@@ -3434,7 +3457,15 @@ mod tests {
             "prompt_tokens_details": {"cached_tokens": 1000, "cache_write_tokens": 200},
             "completion_tokens_details": {"reasoning_tokens": 321}
         });
-        let usage = generate_from_body(body).await.unwrap().usage;
+        let response = generate_from_body(body).await.unwrap();
+        assert_eq!(
+            response
+                .metadata
+                .get(USAGE_UNRECONCILED_METADATA_KEY)
+                .map(String::as_str),
+            Some("total:vendor=9999,mapped=1801")
+        );
+        let usage = response.usage;
         assert_eq!(usage.prompt_tokens, 1234);
         assert_eq!(usage.completion_tokens, 567);
         assert_eq!(usage.cache_read_tokens, Some(1000));

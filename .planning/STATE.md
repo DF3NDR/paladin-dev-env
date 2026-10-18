@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-23-PLAN.md
-last_updated: "2026-10-18T12:04:14.597Z"
+stopped_at: Completed 50-22-PLAN.md
+last_updated: "2026-10-18T14:00:44.508Z"
 last_activity: 2026-10-17
 last_activity_desc: Phase 50 gap-closure execution started (plans 50-19..50-31)
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 120
-  completed_plans: 111
+  completed_plans: 112
 ---
 
 # Project State
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 23 of 31 (gap closure 50-19..50-31, --gaps-only; 50-23 complete, 50-22 Task 1 committed and awaiting the operator's usage probe, which 50-24 consumes)
+Plan: 24 of 31 (gap closure 50-19..50-31, --gaps-only; 50-21, 50-22 and 50-23 complete; 50-24 applies the 50-USAGE-PROBE.md verdicts next)
 Status: Ready to execute
 Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-19..50-31)
 
@@ -318,6 +318,7 @@ Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-1
 | Phase 50 P20 | 40min | 3 tasks | 10 files |
 | Phase 50 P21 | 29min | 3 tasks | 10 files |
 | Phase 50 P23 | 37min | 2 tasks | 7 files |
+| Phase 50 P22 | 10min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -562,6 +563,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-20: Kimi adapter-wide fallback declares temperature, top_p and both penalties NotSent (owner option (a), G-50-5c); temperature_range is ADR-0004's (0.0, 1.0), no vendor claim
 - [Phase ?]: 50-21: Grok folds reasoning_tokens into completion_tokens (ReasoningBesideCompletion, secondary-sourced, live-measured by 50-22); compat presets parse the vendor total and record disagreements under paladin.usage_unreconciled; D-02 kept, no TokenUsage field added
 - [Phase ?]: 50-23: Gemini folds toolUsePromptTokenCount into prompt_tokens; OpenAI, DeepSeek and Gemini parse their vendor total (now Option, absence = None) and record disagreements under paladin.usage_unreconciled on both paths; Anthropic runs containment checks only; Anthropic vision folds cache counts; D-02 kept
+- [Phase ?]: 50-22: live usage probe (operator, 2026-10-18): Grok grok-4.3/4.5/4.6 reasoning beside completion, billed at the completion rate (cost_in_usd_ticks consistent to the tick); DeepSeek, Kimi, qwen3.8-flash inside; Gemini thoughts beside candidates; OpenAI, qwen-plus, gemini-3.5-flash-lite indeterminate; Ollama and OpenAI-compatible not configured
 
 ### Pending Todos
 
@@ -780,8 +782,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-18T12:04:14.562Z
-**Stopped at:** Completed 50-23-PLAN.md
+**Last session:** 2026-10-18T14:00:44.437Z
+**Stopped at:** Completed 50-22-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

@@ -1444,7 +1444,7 @@ Plans:
 **Wave 18** *(gap-closure wave 3; blocked on Wave 17 completion)*
 
 - [x] 50-21-PLAN.md — G-50-5a (row 74): tracer Grok wire -> compat mapper -> PricingLlmAdapter billed in full; per-preset usage semantics (Grok reasoning beside completion); vendor total parsed and reconciled under `paladin.usage_unreconciled`, D-02 kept
-- [ ] 50-22-PLAN.md — G-50-5a: `live_vendor_smoke --usage` and the operator's recorded usage-containment probe (`50-USAGE-PROBE.md`; human-action checkpoint; only 50-24 consumes it)
+- [x] 50-22-PLAN.md — G-50-5a: `live_vendor_smoke --usage` and the operator's recorded usage-containment probe (`50-USAGE-PROBE.md`; human-action checkpoint; only 50-24 consumes it)
 
 **Wave 19** *(gap-closure wave 4; blocked on Wave 18 completion)*
 

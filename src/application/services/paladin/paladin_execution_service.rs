@@ -95,7 +95,9 @@ use paladin_llm::registry::UNPROFILED_MODEL_METADATA_KEY;
 use paladin_llm::sampling::PARAMS_OMITTED_METADATA_KEY;
 use paladin_ports::output::arsenal_port::ArsenalPort;
 use paladin_ports::output::garrison_port::GarrisonPort;
-use paladin_ports::output::llm_port::{FunctionCall, LlmPort, LlmRequest, ResponseFormat};
+use paladin_ports::output::llm_port::{
+    BilledUsage, FunctionCall, LlmPort, LlmRequest, ResponseFormat,
+};
 use paladin_ports::output::orchestrator_port::OrchestratorPort;
 use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::paladin_port::{
@@ -391,6 +393,27 @@ struct AgentLoopLedgerTarget {
     run_id: RunId,
     /// The tenant and API key id every settlement row is stamped with.
     scope: LedgerScope,
+}
+
+/// A failed model call as the agent loop's retry helper reports it
+/// (G-50-5a, plan 50-28): the error the caller sees, unchanged
+/// (`to_paladin_error`'s output), plus the bills the call incurred.
+///
+/// The retry and circuit-breaker machinery only see [`PaladinError`], so a
+/// billed `EmptyCompletion` or `Refusal` would otherwise lose its
+/// [`BilledUsage`] at the conversion. The helper records the bill beside the
+/// conversion and returns it here, so the buffered loop can fold it into the
+/// run's tallies and settle it before the error leaves the loop. Private: no
+/// public type changes. `bills` is a `Vec` because plan 50-30 adds the bills
+/// of hops a fallback chain moved past; today it holds at most the failing
+/// call's own bill (A1-50-28), and is empty for every unbilled error.
+#[derive(Debug)]
+struct CallFailure {
+    /// The error the caller sees.
+    error: PaladinError,
+    /// What the vendor billed for the failed call, priced when a
+    /// `PricingLlmAdapter` priced it.
+    bills: Vec<BilledUsage>,
 }
 
 /// Settle one priced agent-loop model call (D-07, D-08, 39-05): an
@@ -1826,7 +1849,7 @@ impl PaladinExecutionService {
             let prompt = middleware_cx.assembly.render();
 
             // Execute with retry and circuit breaker (using effective temperature)
-            let response = self
+            let response = match self
                 .execute_with_retry_and_temperature(
                     paladin,
                     &prompt,
@@ -1835,7 +1858,42 @@ impl PaladinExecutionService {
                     loop_num,
                     &middleware_cx,
                 )
-                .await?;
+                .await
+            {
+                Ok(response) => response,
+                Err(failure) => {
+                    // G-50-5a (plan 50-28): a call the vendor billed but that
+                    // failed (a billed `EmptyCompletion` or `Refusal`) is
+                    // folded into the run's tallies and settled exactly like a
+                    // priced success -- same ordinal, same single-model
+                    // breakdown -- before the unchanged error leaves the loop.
+                    // A billed failure is `Permanent`, so it is never retried
+                    // and never settled twice; an unpriced bill (`cost: None`)
+                    // folds its usage and settles nothing (D-00c).
+                    for bill in &failure.bills {
+                        usage += bill.usage.clone();
+                        cost_tally.record_call(bill.cost.as_ref());
+                        if let (Some(target), Some(cost)) =
+                            (ledger_target.as_ref(), bill.cost.as_ref())
+                        {
+                            let model = if bill.model.is_empty() {
+                                paladin.data.model.as_str()
+                            } else {
+                                bill.model.as_str()
+                            };
+                            self.settle_model_call(target, u64::from(loop_num), model, cost)
+                                .await;
+                        }
+                    }
+                    if !failure.bills.is_empty() {
+                        debug!(
+                            "billed model call failed: id={}, loop={}, run_total_tokens={}",
+                            execution_id, loop_num, usage.total_tokens
+                        );
+                    }
+                    return Err(failure.error);
+                }
+            };
 
             // --- FT-FR-09, D-19: an LLM call completed -- progress.
             if let Some(heartbeat) = heartbeat {
@@ -2784,7 +2842,11 @@ impl PaladinExecutionService {
     ///
     /// # Errors
     ///
-    /// Returns `PaladinError` if:
+    /// Returns a [`CallFailure`] whose `error` is the `PaladinError` the
+    /// caller sees, and whose `bills` carry the [`BilledUsage`] of any
+    /// attempt the vendor billed but that failed (G-50-5a, plan 50-28),
+    /// recorded beside the `to_paladin_error` conversion. The `error` is
+    /// returned if:
     /// - Circuit breaker is open
     /// - The failure is [`Transience::Permanent`](paladin_core::platform::container::transience::Transience::Permanent)
     ///   (e.g. a rejected credential or a malformed prompt) -- returned
@@ -2802,7 +2864,7 @@ impl PaladinExecutionService {
         execution_id: uuid::Uuid,
         loop_num: u32,
         cx: &ModelCallContext<'_>,
-    ) -> Result<paladin_ports::output::llm_port::LlmResponse, PaladinError> {
+    ) -> Result<paladin_ports::output::llm_port::LlmResponse, CallFailure> {
         // D-11 / the assumption-delta promote (see `ModelCallContext::effective_llm`'s
         // rustdoc): the effective port for THIS call is resolved here,
         // exactly once. The service's own `llm_port` is the seeded default;
@@ -2818,6 +2880,10 @@ impl PaladinExecutionService {
             .as_ref()
             .map(|policy| policy.max_attempts)
             .unwrap_or_else(|| paladin.data.max_loops.as_u32().min(10)); // Cap retries at 10 with no policy
+        // G-50-5a: every bill an attempt of this call incurred. A billed error
+        // is `Permanent` and returns on its own attempt, so this holds at most
+        // one bill today; it is returned with whatever error ends the call.
+        let mut bills: Vec<BilledUsage> = Vec::new();
 
         loop {
             attempt += 1;
@@ -2871,15 +2937,24 @@ impl PaladinExecutionService {
             // resolved `llm_port` (D-11's single resolution point), not
             // `self.llm_port` directly.
             let port = Arc::clone(&llm_port);
+            // G-50-5a: the bill is kept from the `LlmError` before it is
+            // converted -- the circuit breaker and the retry arms below only
+            // ever see `PaladinError`.
+            let mut attempt_bill: Option<BilledUsage> = None;
+            let bill_slot = &mut attempt_bill;
             let result = self
                 .circuit_breaker
                 .call_async(async move {
                     match port.generate(request).await {
                         Ok(response) => Ok(response),
-                        Err(e) => Err(to_paladin_error(&e)),
+                        Err(e) => {
+                            *bill_slot = e.billed_usage().cloned();
+                            Err(to_paladin_error(&e))
+                        }
                     }
                 })
                 .await;
+            bills.extend(attempt_bill);
 
             match result {
                 Ok(response) => {
@@ -2895,7 +2970,10 @@ impl PaladinExecutionService {
                         "Circuit breaker open: id={}, loop={}",
                         execution_id, loop_num
                     );
-                    return Err(PaladinError::CircuitBreakerOpen);
+                    return Err(CallFailure {
+                        error: PaladinError::CircuitBreakerOpen,
+                        bills,
+                    });
                 }
                 // WR-02 (`25-REVIEW.md`), D-11: a `Permanent` failure (e.g. a
                 // rejected credential or a malformed prompt) needs operator
@@ -2917,7 +2995,7 @@ impl PaladinExecutionService {
                         "LLM call failed permanently, not retrying: id={}, loop={}, attempt={}, error={}",
                         execution_id, loop_num, attempt, e
                     );
-                    return Err(e);
+                    return Err(CallFailure { error: e, bills });
                 }
                 // D-11: with an active retry policy, `RetryPredicate::admits`
                 // -- the SAME pure function
@@ -2936,7 +3014,7 @@ impl PaladinExecutionService {
                         "LLM call failed with a policy-declined transience, not retrying: id={}, loop={}, attempt={}, error={}",
                         execution_id, loop_num, attempt, e
                     );
-                    return Err(e);
+                    return Err(CallFailure { error: e, bills });
                 }
                 Err(_e) if attempt >= max_attempts => {
                     // Exhausted retries
@@ -2944,7 +3022,10 @@ impl PaladinExecutionService {
                         "Max retries exhausted: id={}, loop={}, attempts={}",
                         execution_id, loop_num, attempt
                     );
-                    return Err(PaladinError::MaxRetriesExceeded(attempt));
+                    return Err(CallFailure {
+                        error: PaladinError::MaxRetriesExceeded(attempt),
+                        bills,
+                    });
                 }
                 Err(e) => {
                     // D-11: the delay before the NEXT attempt comes from
@@ -3485,7 +3566,10 @@ impl PaladinExecutionService {
                 call_num,
                 &cx,
             )
-            .await?;
+            .await
+            // A3-50-28: a structured call's bill is reported to the engine by
+            // plan 50-29; here it is unwrapped to its unchanged error.
+            .map_err(|failure| failure.error)?;
 
         Ok(PaladinResult {
             output: response.content,
@@ -5099,7 +5183,8 @@ mod tests {
                 1,
                 &bare_cx(&paladin),
             )
-            .await;
+            .await
+            .map_err(|failure| failure.error);
         assert!(
             matches!(result, Err(PaladinError::CircuitBreakerOpen)),
             "expected CircuitBreakerOpen on the second attempt, got {result:?}"
@@ -5152,7 +5237,8 @@ mod tests {
                 1,
                 &bare_cx(&paladin),
             )
-            .await;
+            .await
+            .map_err(|failure| failure.error);
         match result {
             Err(PaladinError::LlmFailure { transience, .. }) => {
                 assert_eq!(transience, Transience::Permanent);
@@ -5210,7 +5296,8 @@ mod tests {
                     1,
                     &bare_cx(&paladin),
                 )
-                .await;
+                .await
+                .map_err(|failure| failure.error);
             assert!(
                 matches!(result, Err(PaladinError::MaxRetriesExceeded(2))),
                 "expected MaxRetriesExceeded(2), got {result:?}"
@@ -7828,8 +7915,8 @@ mod agent_loop_cost_tests {
     };
     use paladin_llm::mock::MockLlmAdapter;
     use paladin_ports::output::llm_port::{
-        FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse, ProviderCapabilities,
-        StreamingResponse,
+        BilledUsage, FinishReason, LlmError, LlmPort, LlmRequest, LlmResponse,
+        ProviderCapabilities, StreamingResponse,
     };
     use paladin_ports::output::treasury_ledger_port::TreasuryLedgerError;
     use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
@@ -8129,6 +8216,223 @@ mod agent_loop_cost_tests {
             by_run[0].settlements, 1,
             "the unpriced call must write no row"
         );
+    }
+
+    /// A stub `LlmPort` answering a preset queue of outcomes, one per call --
+    /// a success `(content, usage, cost)` or an error -- holding on the last
+    /// entry once exhausted (G-50-5a, plan 50-28): lets a test end a run in a
+    /// billed failure after earlier priced successes.
+    struct ScriptedOutcomeLlmPort {
+        outcomes: StdMutex<
+            std::collections::VecDeque<Result<(String, TokenUsage, Option<Cost>), LlmError>>,
+        >,
+    }
+
+    impl ScriptedOutcomeLlmPort {
+        fn new(outcomes: Vec<Result<(&str, TokenUsage, Option<Cost>), LlmError>>) -> Self {
+            Self {
+                outcomes: StdMutex::new(
+                    outcomes
+                        .into_iter()
+                        .map(|outcome| {
+                            outcome.map(|(content, usage, cost)| (content.to_string(), usage, cost))
+                        })
+                        .collect(),
+                ),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmPort for ScriptedOutcomeLlmPort {
+        async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            let outcome = {
+                let mut outcomes = self.outcomes.lock().unwrap();
+                if outcomes.len() > 1 {
+                    outcomes.pop_front().unwrap()
+                } else {
+                    outcomes.front().cloned().expect("at least one outcome")
+                }
+            };
+            let (content, usage, cost) = outcome?;
+            Ok(LlmResponse {
+                id: Uuid::new_v4(),
+                request_id: request.id,
+                model: request.model,
+                content,
+                finish_reason: FinishReason::Stop,
+                usage,
+                cost,
+                created_at: chrono::Utc::now(),
+                metadata: HashMap::new(),
+                function_call: None,
+                reasoning: None,
+            })
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            unimplemented!("ScriptedOutcomeLlmPort only supports generate()")
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "scripted-outcome-stub"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// An `EmptyCompletion` the vendor billed for `usage` on `model`, priced at
+    /// `cost` when `Some` (as `PricingLlmAdapter` would have priced it).
+    fn billed_empty_completion(model: &str, usage: TokenUsage, cost: Option<Cost>) -> LlmError {
+        let mut bill = BilledUsage::new(model, usage);
+        if let Some(cost) = cost {
+            bill = bill.with_cost(cost);
+        }
+        LlmError::empty_completion("finish_reason=length with empty content")
+            .with_billed_usage(bill)
+    }
+
+    /// G-50-5a (plan 50-28 tracer): a model call that fails with a billed,
+    /// priced `EmptyCompletion` is settled to the treasury ledger exactly once
+    /// -- one row of the billed 2_403_000 nanos, breakdown key `m` -- while the
+    /// caller still sees exactly the error `to_paladin_error` produces.
+    #[tokio::test]
+    async fn billed_empty_completion_is_settled() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let billed = billed_empty_completion(
+            "m",
+            TokenUsage::new(1_000, 62_000),
+            Some(Cost::new(2_403_000, usd)),
+        );
+        let expected = to_paladin_error(&billed);
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(vec![Err(billed)]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(1);
+
+        let err = service
+            .execute(&paladin, "hi")
+            .await
+            .expect_err("a billed empty completion still fails the run");
+        assert!(
+            matches!(
+                err,
+                PaladinError::LlmFailure {
+                    transience: Transience::Permanent,
+                    ..
+                }
+            ),
+            "expected a permanent LlmFailure, got {err:?}"
+        );
+        assert_eq!(
+            err.to_string(),
+            expected.to_string(),
+            "the caller sees exactly what to_paladin_error produces"
+        );
+
+        let by_model = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds");
+        assert_eq!(by_model.len(), 1, "exactly one settled row");
+        assert_eq!(by_model[0].group, "m");
+        assert_eq!(by_model[0].amount.nanos(), 2_403_000);
+        assert_eq!(by_model[0].settlements, 1);
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1, "settled under the execution's own run");
+        assert_eq!(by_run[0].settlements, 1);
+    }
+
+    /// G-50-5a: a priced success on loop 1 and a billed failure on loop 2
+    /// settle once per call ordinal -- two rows, A and B.
+    #[tokio::test]
+    async fn billed_failure_after_a_priced_call_settles_both_ordinals() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(vec![
+            Ok((
+                "first",
+                TokenUsage::new(1_000, 2_000),
+                Some(Cost::new(22_500_000, usd.clone())),
+            )),
+            Err(billed_empty_completion(
+                "gpt-4",
+                TokenUsage::new(200, 50),
+                Some(Cost::new(1_000_000, usd.clone())),
+            )),
+        ]));
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin(2);
+
+        let _ = service
+            .execute(&paladin, "hi")
+            .await
+            .expect_err("the second call's billed failure fails the run");
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(by_run[0].settlements, 2, "one settle per call ordinal");
+        assert_eq!(by_run[0].amount, Cost::new(23_500_000, usd));
+    }
+
+    /// G-50-5a / D-00c: a failure with no bill settles nothing, and a bill
+    /// with `cost: None` (an unpriced model) settles nothing either.
+    #[tokio::test]
+    async fn unbilled_or_unpriced_failure_settles_nothing() {
+        for failure in [
+            LlmError::empty_completion("finish_reason=stop with empty content"),
+            billed_empty_completion("m", TokenUsage::new(1_000, 62_000), None),
+        ] {
+            let llm: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(vec![Err(failure)]));
+            let ledger = Arc::new(InMemoryTreasuryLedger::new());
+            let service = make_service(llm)
+                .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+
+            let _ = service
+                .execute(&make_paladin(1), "hi")
+                .await
+                .expect_err("the failure still fails the run");
+
+            let rows = ledger
+                .spend(SpendQuery::default())
+                .await
+                .expect("spend succeeds");
+            assert!(rows.is_empty(), "nothing priced, nothing settled: {rows:?}");
+        }
     }
 
     /// D-07: `EveryCall` prefers the scope's own run id over this service's

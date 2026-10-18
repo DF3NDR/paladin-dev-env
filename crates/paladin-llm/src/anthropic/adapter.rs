@@ -33,6 +33,7 @@ use crate::registry::{
 use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
+use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
@@ -260,6 +261,9 @@ pub struct AnthropicAdapter {
     /// Which (model, adjustment) `response_format` changes this instance has already warned
     /// about.
     format_log: FormatLog,
+    /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
+    /// Anthropic reports no vendor total, so only the containment checks can fire.
+    usage_log: UsageLog,
 }
 
 /// What this adapter declares to the port, stated once so the adapter-wide fallback profile and
@@ -362,6 +366,7 @@ impl AnthropicAdapter {
             model_registry,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
+            usage_log: UsageLog::new(),
         })
     }
 
@@ -757,6 +762,16 @@ impl LlmPort for AnthropicAdapter {
             .await?;
         // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
         response.metadata = notes.into_metadata();
+        // G-50-5a: Anthropic reports no total of its own, so the mapped usage is checked for
+        // containment only (`vendor_total = None`); a finding is warned once and recorded.
+        if let Some(value) =
+            self.usage_log
+                .record(ANTHROPIC_PROVIDER, &request.model, &response.usage, None)
+        {
+            response
+                .metadata
+                .insert(USAGE_UNRECONCILED_METADATA_KEY.to_string(), value);
+        }
         Ok(response)
     }
 
@@ -829,6 +844,10 @@ impl LlmPort for AnthropicAdapter {
         let mut model = claude_request.model.clone();
         let mut completion = StreamCompletion::default();
         let api_key = self.config.api_key.clone();
+        // G-50-5a: the terminal usage is checked for containment (no vendor total) into this
+        // instance's log, keyed on the request model as the buffered path is.
+        let usage_log = self.usage_log.clone();
+        let usage_model = claude_request.model.clone();
 
         // A network read can end inside a `data:` line (or inside a multi-byte character), so the
         // bytes are reassembled into whole lines before any line is parsed (CR-02).
@@ -932,8 +951,21 @@ impl LlmPort for AnthropicAdapter {
                                         Ok(()) => {
                                             let mut terminal = StreamingResponse::terminal(finish);
                                             if let Some(usage) = held_usage.take() {
-                                                terminal =
-                                                    terminal.with_usage(map_claude_usage(&usage));
+                                                let mapped = map_claude_usage(&usage);
+                                                // Only the `Ok` terminal chunk carries a finding;
+                                                // an `Err` terminal carries no metadata.
+                                                if let Some(value) = usage_log.record(
+                                                    ANTHROPIC_PROVIDER,
+                                                    &usage_model,
+                                                    &mapped,
+                                                    None,
+                                                ) {
+                                                    terminal = terminal.with_metadata(
+                                                        USAGE_UNRECONCILED_METADATA_KEY,
+                                                        value,
+                                                    );
+                                                }
+                                                terminal = terminal.with_usage(mapped);
                                             }
                                             for (key, value) in &stream_metadata {
                                                 terminal = terminal
@@ -2940,6 +2972,123 @@ stake, so an attacker donating to himself alone is a strict loss.";
     // sentinel) is carried by `Wire::Anthropic`, whose default bodies this fixture inherits for
     // every case except the three below. Nested in its own module so every generated test's full
     // path contains "conformance" (`cargo test --lib conformance` selects it).
+    /// Plan 50-23 (G-50-5a): Anthropic reports no vendor total, so both paths run the
+    /// containment checks only -- a thinking count that escapes `output_tokens` is recorded.
+    mod usage_reconciliation {
+        use super::*;
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+        use futures::StreamExt;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+
+        fn adapter_at(base_url: &str) -> AnthropicAdapter {
+            let config = AnthropicConfig::new(
+                "sk-ant-test123".to_string(),
+                base_url.to_string(),
+                "claude-sonnet-5".to_string(),
+                4096,
+            );
+            AnthropicAdapter::new(config).expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "claude-sonnet-5",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        /// `thinking_tokens` 25 against `output_tokens` 10: a reading the inclusive contract
+        /// cannot hold.
+        const ESCAPING_THINKING_JSON: &str = r#"{"model":"claude-sonnet-5","id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":16,"output_tokens":10,"output_tokens_details":{"thinking_tokens":25}}}"#;
+
+        async fn generate_from(body: &'static str) -> LlmResponse {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_body(body)
+                .create_async()
+                .await;
+            adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect("a well-formed body must parse")
+        }
+
+        #[tokio::test]
+        async fn anthropic_thinking_beyond_output_is_a_reasoning_finding() {
+            let response = generate_from(ESCAPING_THINKING_JSON).await;
+            assert_eq!(response.usage.completion_tokens, 10, "the mapping is kept");
+            assert_eq!(
+                response
+                    .metadata
+                    .get(USAGE_UNRECONCILED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("reasoning:reasoning=25,completion=10")
+            );
+        }
+
+        #[tokio::test]
+        async fn anthropic_normal_usage_records_no_finding() {
+            let response = generate_from(CACHED_PROMPT_SONNET_5_JSON).await;
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+                "{:?}",
+                response.metadata
+            );
+        }
+
+        #[tokio::test]
+        async fn anthropic_stream_terminal_records_a_reasoning_finding() {
+            let sse = "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\
+                 \"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\
+                 \"stop_sequence\":null,\"usage\":{\"input_tokens\":16,\"output_tokens\":1}}}\n\n\
+                 data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"OK\"}}\n\n\
+                 data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\
+                 \"usage\":{\"output_tokens\":10,\"output_tokens_details\":{\"thinking_tokens\":25}}}\n\n\
+                 data: {\"type\":\"message_stop\"}\n\n";
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/messages")
+                .with_status(200)
+                .with_header("content-type", "text/event-stream")
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await
+                .expect("streaming call must succeed");
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every chunk must parse"));
+            }
+
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert!(terminal.finish_reason.is_some());
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(USAGE_UNRECONCILED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("reasoning:reasoning=25,completion=10")
+            );
+            assert!(
+                earlier
+                    .iter()
+                    .all(|chunk| !chunk.metadata.contains_key(USAGE_UNRECONCILED_METADATA_KEY))
+            );
+        }
+    }
+
     mod conformance_suite {
         use super::*;
         use serde_json::json;

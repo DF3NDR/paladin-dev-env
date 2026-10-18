@@ -32,6 +32,7 @@ use crate::registry::{
 use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
+use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
 // WR-01 (`25-REVIEW.md`): this adapter previously carried its own
 // byte-for-byte copy of the crate's shared credential-redaction routine
 // (`RESPONSE_EXCERPT_CHAR_BUDGET`, `CREDENTIAL_PLACEHOLDER`,
@@ -309,7 +310,14 @@ struct DeepSeekChoice {
 struct DeepSeekUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
-    total_tokens: u32,
+    /// DeepSeek's own reported total (G-50-5a). Parsed and handed to the
+    /// reconciliation ([`crate::usage_reconcile`]), never copied:
+    /// `TokenUsage::new` derives `total_tokens` as `prompt_tokens +
+    /// completion_tokens` (D-02), and a disagreement is recorded under
+    /// [`USAGE_UNRECONCILED_METADATA_KEY`]. `None` when the key is absent --
+    /// a usage object without it still parses, and nothing is fabricated.
+    #[serde(default)]
+    total_tokens: Option<u32>,
     /// `prompt_cache_hit_tokens` (D-20, confirmed field name). Absent on a
     /// response that reports no cache split -- `None` in that case (D-03),
     /// never a fabricated `Some(0)`.
@@ -368,7 +376,10 @@ struct DeepSeekStreamDelta {
 /// carried the figure (D-03: an absent figure is `None`, never a fabricated
 /// `Some(0)`). Shared by both the non-streaming usage-construction site and
 /// the streaming terminal-chunk usage, so the two paths cannot drift.
-fn map_usage(usage: DeepSeekUsage) -> TokenUsage {
+///
+/// Returns the mapped usage together with DeepSeek's own `total_tokens` (when
+/// reported), which the caller reconciles rather than copies (D-02, G-50-5a).
+fn map_usage(usage: DeepSeekUsage) -> (TokenUsage, Option<u32>) {
     let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
     if let Some(cached) = usage.prompt_cache_hit_tokens {
         mapped = mapped.with_cache_read(cached);
@@ -379,7 +390,7 @@ fn map_usage(usage: DeepSeekUsage) -> TokenUsage {
     {
         mapped = mapped.with_reasoning(reasoning);
     }
-    mapped
+    (mapped, usage.total_tokens)
 }
 
 /// Annotate an [`LlmError::EmptyCompletion`] with the provider's own reported
@@ -405,13 +416,21 @@ fn map_usage(usage: DeepSeekUsage) -> TokenUsage {
 /// mapping — see [`map_usage`], which is now responsible for the full
 /// D-20 cache/reasoning sub-count split (including
 /// `completion_tokens_details.reasoning_tokens`).
+///
+/// A usage object that omitted `total_tokens` renders it as `not reported`,
+/// never as a fabricated `0` (G-50-5a).
 fn annotate_with_usage(err: LlmError, usage: &DeepSeekUsage) -> LlmError {
     match err {
-        LlmError::EmptyCompletion(msg) => LlmError::EmptyCompletion(format!(
-            "{msg} (provider-reported usage: prompt_tokens={}, completion_tokens={}, \
-             total_tokens={})",
-            usage.prompt_tokens, usage.completion_tokens, usage.total_tokens
-        )),
+        LlmError::EmptyCompletion(msg) => {
+            let total = usage
+                .total_tokens
+                .map_or_else(|| "not reported".to_string(), |total| total.to_string());
+            LlmError::EmptyCompletion(format!(
+                "{msg} (provider-reported usage: prompt_tokens={}, completion_tokens={}, \
+                 total_tokens={total})",
+                usage.prompt_tokens, usage.completion_tokens
+            ))
+        }
         other => other,
     }
 }
@@ -451,6 +470,8 @@ pub struct DeepSeekAdapter {
     /// Which (model, adjustment) `response_format` changes this instance has already warned
     /// about.
     format_log: FormatLog,
+    /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
+    usage_log: UsageLog,
 }
 
 /// What this adapter's request builder carries today, stated once so the adapter-wide fallback
@@ -553,6 +574,7 @@ impl DeepSeekAdapter {
             model_registry,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
+            usage_log: UsageLog::new(),
         })
     }
 
@@ -950,7 +972,15 @@ impl LlmPort for DeepSeekAdapter {
             }
 
             let content = choice.message.content.clone();
-            let usage = map_usage(api_response.usage);
+            let (usage, vendor_total) = map_usage(api_response.usage);
+            // G-50-5a: DeepSeek's own total is the check on the mapping -- a disagreement is
+            // warned once and recorded, never written over the mapped total (D-02).
+            let unreconciled = self.usage_log.record(
+                self.get_provider_name(),
+                &request.model,
+                &usage,
+                vendor_total,
+            );
 
             let mut llm_response = LlmResponse::new(
                 request.id,
@@ -959,6 +989,11 @@ impl LlmPort for DeepSeekAdapter {
                 finish_reason,
                 usage,
             );
+            if let Some(value) = unreconciled {
+                llm_response
+                    .metadata
+                    .insert(USAGE_UNRECONCILED_METADATA_KEY.to_string(), value);
+            }
             if let Some(reasoning) = &choice.message.reasoning_content {
                 llm_response = llm_response.with_reasoning(reasoning.as_str());
             }
@@ -968,8 +1003,9 @@ impl LlmPort for DeepSeekAdapter {
         let mut response = self
             .call_api_with_retry(operation, self.config.max_retries)
             .await?;
-        // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
-        response.metadata = notes.into_metadata();
+        // The request-time notes (ADR-0061 visibility rule) ride on the successful response,
+        // beside any usage finding the parse recorded.
+        response.metadata.extend(notes.into_metadata());
         Ok(response)
     }
 
@@ -1036,6 +1072,10 @@ impl LlmPort for DeepSeekAdapter {
         // chunk.
         let mut held_finish_reason: Option<FinishReason> = None;
         let mut held_usage: Option<TokenUsage> = None;
+        // The vendor's own total from the held usage frame, reconciled at the terminal chunk
+        // (G-50-5a). A clone shares this instance's usage log.
+        let mut held_vendor_total: Option<u32> = None;
+        let usage_log = self.usage_log.clone();
 
         // D-11a on the streaming path: the terminal chunk is decided by the same
         // `classify_completion` the buffered path uses, over what the stream accumulated.
@@ -1074,6 +1114,19 @@ impl LlmPort for DeepSeekAdapter {
                                         let mut terminal =
                                             StreamingResponse::terminal(finish_reason);
                                         if let Some(usage) = held_usage.take() {
+                                            // G-50-5a: only the `Ok` terminal chunk carries a
+                                            // finding; an `Err` terminal carries no metadata.
+                                            if let Some(value) = usage_log.record(
+                                                provider,
+                                                &model,
+                                                &usage,
+                                                held_vendor_total.take(),
+                                            ) {
+                                                terminal = terminal.with_metadata(
+                                                    USAGE_UNRECONCILED_METADATA_KEY,
+                                                    value,
+                                                );
+                                            }
                                             terminal = terminal.with_usage(usage);
                                         }
                                         for (key, value) in &stream_metadata {
@@ -1092,7 +1145,9 @@ impl LlmPort for DeepSeekAdapter {
                             match serde_json::from_str::<DeepSeekStreamResponse>(json_str) {
                                 Ok(response) => {
                                     if let Some(usage) = response.usage {
-                                        held_usage = Some(map_usage(usage));
+                                        let (mapped, vendor_total) = map_usage(usage);
+                                        held_usage = Some(mapped);
+                                        held_vendor_total = vendor_total;
                                     }
                                     if let Some(choice) = response.choices.first() {
                                         if let Some(reason) = &choice.finish_reason {
@@ -1313,7 +1368,7 @@ mod tests {
         let usage = DeepSeekUsage {
             prompt_tokens: 31_000,
             completion_tokens: 32_000,
-            total_tokens: 63_000,
+            total_tokens: Some(63_000),
             prompt_cache_hit_tokens: None,
             completion_tokens_details: None,
         };
@@ -1345,7 +1400,7 @@ mod tests {
         let usage = DeepSeekUsage {
             prompt_tokens: 1,
             completion_tokens: 2,
-            total_tokens: 3,
+            total_tokens: Some(3),
             prompt_cache_hit_tokens: None,
             completion_tokens_details: None,
         };
@@ -2023,14 +2078,14 @@ mod tests {
         let usage = DeepSeekUsage {
             prompt_tokens: 800,
             completion_tokens: 900,
-            total_tokens: 1700,
+            total_tokens: Some(1700),
             prompt_cache_hit_tokens: Some(64),
             completion_tokens_details: Some(DeepSeekCompletionTokensDetails {
                 reasoning_tokens: Some(320),
             }),
         };
 
-        let mapped = map_usage(usage);
+        let (mapped, _) = map_usage(usage);
 
         assert_eq!(mapped.cache_read_tokens, Some(64));
         assert_eq!(mapped.reasoning_tokens, Some(320));
@@ -2042,12 +2097,12 @@ mod tests {
         let usage = DeepSeekUsage {
             prompt_tokens: 1,
             completion_tokens: 1,
-            total_tokens: 2,
+            total_tokens: Some(2),
             prompt_cache_hit_tokens: None,
             completion_tokens_details: None,
         };
 
-        let mapped = map_usage(usage);
+        let (mapped, _) = map_usage(usage);
 
         assert_eq!(mapped.cache_read_tokens, None);
         assert_eq!(mapped.cache_write_tokens, None);
@@ -2617,6 +2672,141 @@ mod tests {
     // Nested in its own module (rather than inline in `mod tests`) so every generated test's
     // full path contains "conformance" -- `cargo test --lib conformance` (the plan's own
     // acceptance criterion) selects it by that substring.
+    /// Plan 50-23 (G-50-5a): DeepSeek's own `total_tokens` is read and reconciled against the
+    /// mapped `prompt + completion` on both paths, never copied (D-02).
+    mod usage_reconciliation {
+        use super::*;
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+        use futures::StreamExt;
+        use serde_json::{Value, json};
+
+        async fn generate_with_usage(usage: Value) -> LlmResponse {
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(
+                    json!({
+                        "id": "cmpl-1",
+                        "model": "deepseek-chat",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": usage
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+            test_adapter_at(&server.url())
+                .generate(build_response_format_request(None))
+                .await
+                .expect("a well-formed body must parse")
+        }
+
+        #[tokio::test]
+        async fn deepseek_agreeing_total_records_no_finding() {
+            let response = generate_with_usage(
+                json!({"prompt_tokens": 800, "completion_tokens": 900, "total_tokens": 1700}),
+            )
+            .await;
+            assert_eq!(response.usage.total_tokens, 1700);
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY)
+            );
+        }
+
+        #[tokio::test]
+        async fn deepseek_disagreeing_total_is_recorded_and_not_copied() {
+            let response = generate_with_usage(
+                json!({"prompt_tokens": 800, "completion_tokens": 900, "total_tokens": 1707}),
+            )
+            .await;
+            assert_eq!(response.usage, TokenUsage::new(800, 900));
+            assert_eq!(
+                response
+                    .metadata
+                    .get(USAGE_UNRECONCILED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("total:vendor=1707,mapped=1700")
+            );
+        }
+
+        #[tokio::test]
+        async fn deepseek_usage_without_a_total_parses_with_no_finding() {
+            let response =
+                generate_with_usage(json!({"prompt_tokens": 800, "completion_tokens": 900})).await;
+            assert_eq!(response.usage, TokenUsage::new(800, 900));
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY)
+            );
+        }
+
+        #[tokio::test]
+        async fn deepseek_stream_terminal_records_a_disagreeing_total() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":15}}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let mut server = mockito::Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = test_adapter_at(&server.url())
+                .generate_stream(build_response_format_request(None))
+                .await
+                .unwrap();
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every item must be Ok"));
+            }
+
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert_eq!(terminal.usage, Some(TokenUsage::new(5, 3)));
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(USAGE_UNRECONCILED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("total:vendor=15,mapped=8")
+            );
+            assert!(
+                earlier
+                    .iter()
+                    .all(|chunk| !chunk.metadata.contains_key(USAGE_UNRECONCILED_METADATA_KEY))
+            );
+        }
+
+        #[test]
+        fn annotate_with_usage_renders_an_absent_total_plainly() {
+            let err = LlmError::EmptyCompletion("finish_reason=length".to_string());
+            let usage = DeepSeekUsage {
+                prompt_tokens: 31_000,
+                completion_tokens: 32_000,
+                total_tokens: None,
+                prompt_cache_hit_tokens: None,
+                completion_tokens_details: None,
+            };
+            match annotate_with_usage(err, &usage) {
+                LlmError::EmptyCompletion(msg) => {
+                    assert!(msg.contains("total_tokens=not reported"), "{msg}");
+                }
+                other => panic!("expected EmptyCompletion, got {other:?}"),
+            }
+        }
+    }
+
     mod conformance_suite {
         use super::*;
         use serde_json::json;

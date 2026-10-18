@@ -34,7 +34,11 @@
 //! (D-11a, buffered and streamed), `refusal_is_typed_and_permanent` (D-09),
 //! `usage_fields_are_mapped` and `unsupported_parameters_are_omitted_and_recorded`. A later review
 //! (CR-02) added `stream_frames_split_across_reads_are_reassembled`, which serves the fixture's
-//! stream body in writes cut inside a frame. A vendor that
+//! stream body in writes cut inside a frame. Plan 50-23 (G-50-5a) tightened
+//! `usage_fields_are_mapped` (sub-counts stay inside their parents, and an agreeing body records
+//! no `paladin.usage_unreconciled`) and added `vendor_total_disagreement_is_recorded`, which raises
+//! the fixture's own vendor total by 1000 and asserts the mapped usage is unchanged (D-02) and the
+//! disagreement recorded. A vendor that
 //! lacks a feature never skips a case: it states its documented alternative shape through the
 //! fixture ([`RefusalShape::ContentFilterOnly`], [`MalformedFrame::SkippedWithWarning`]), so every
 //! adapter is measured against every case. The default bodies for these cases live in
@@ -229,6 +233,15 @@ pub trait ConformanceFixture {
     /// What [`Self::usage_body`] must map to; `None` for a field the vendor does not report.
     fn expected_usage() -> ExpectedUsage {
         wire_defaults::expected_usage(Self::WIRE)
+    }
+
+    /// [`Self::usage_body`] with the vendor's own reported total raised by 1000, so it no longer
+    /// agrees with the mapped `prompt + completion` (plan 50-23, G-50-5a); `None` when the wire
+    /// reports no total (Anthropic). The default edits the fixture's own usage body -- a chat
+    /// `usage.total_tokens` or a Gemini `usageMetadata.totalTokenCount` -- so no fixture needs
+    /// to override it.
+    fn disagreeing_usage_body() -> Option<String> {
+        wire_defaults::disagreeing_usage_body(&Self::usage_body())
     }
 }
 
@@ -428,6 +441,25 @@ pub mod wire_defaults {
             })
             .to_string(),
         }
+    }
+
+    /// How far [`disagreeing_usage_body`] raises a body's vendor total.
+    pub const DISAGREEMENT: u32 = 1000;
+
+    /// See [`super::ConformanceFixture::disagreeing_usage_body`]: `usage_body` with its vendor
+    /// total (`usage.total_tokens` or `usageMetadata.totalTokenCount`) raised by
+    /// [`DISAGREEMENT`], or `None` when it carries neither.
+    pub fn disagreeing_usage_body(usage_body: &str) -> Option<String> {
+        let mut body: serde_json::Value = serde_json::from_str(usage_body).ok()?;
+        for pointer in ["/usage/total_tokens", "/usageMetadata/totalTokenCount"] {
+            if let Some(slot) = body.pointer_mut(pointer)
+                && let Some(total) = slot.as_u64()
+            {
+                *slot = json!(total + u64::from(DISAGREEMENT));
+                return Some(body.to_string());
+            }
+        }
+        None
     }
 
     /// See [`super::ConformanceFixture::expected_usage`].
@@ -1510,6 +1542,69 @@ pub mod cases {
         );
     }
 
+    /// Case (plan 50-23, G-50-5a): a vendor total that disagrees with the mapped `prompt +
+    /// completion` leaves the mapped usage exactly as [`ConformanceFixture::expected_usage`]
+    /// declares (D-02: the vendor figure is never copied) and is recorded under
+    /// [`USAGE_UNRECONCILED_METADATA_KEY`] as `total:vendor=<n>,mapped=<m>`. A wire with no
+    /// vendor total ([`ConformanceFixture::disagreeing_usage_body`] is `None`) is measured on its
+    /// plain usage body instead, which must carry no finding.
+    pub async fn vendor_total_disagreement_is_recorded<F: ConformanceFixture>() {
+        let disagreeing = F::disagreeing_usage_body();
+        let body = disagreeing.clone().unwrap_or_else(F::usage_body);
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+
+        let response = F::adapter(&server.url())
+            .generate(conformance_request())
+            .await
+            .expect("a usage body must produce a well-formed response");
+        let expected = F::expected_usage();
+        let usage = &response.usage;
+        let mapped = ExpectedUsage {
+            prompt: usage.prompt_tokens,
+            completion: usage.completion_tokens,
+            cache_read: usage.cache_read_tokens,
+            cache_write: usage.cache_write_tokens,
+            reasoning: usage.reasoning_tokens,
+            total: usage.total_tokens,
+        };
+        assert_eq!(
+            mapped,
+            expected,
+            "{}: the mapped usage must not move with the vendor total",
+            F::provider_name()
+        );
+
+        let recorded = response.metadata.get(USAGE_UNRECONCILED_METADATA_KEY);
+        if disagreeing.is_some() {
+            let want = format!(
+                "total:vendor={},mapped={}",
+                expected.total + wire_defaults::DISAGREEMENT,
+                expected.total
+            );
+            assert_eq!(
+                recorded.map(String::as_str),
+                Some(want.as_str()),
+                "{}: a disagreeing vendor total must be recorded under \
+                 {USAGE_UNRECONCILED_METADATA_KEY}",
+                F::provider_name()
+            );
+        } else {
+            assert!(
+                recorded.is_none(),
+                "{}: a wire with no vendor total records no finding on an agreeing body, got \
+                 {recorded:?}",
+                F::provider_name()
+            );
+        }
+    }
+
     /// Case (ADR-0061 (a)): a temperature `99.0` -- admitted by no profile -- is omitted from every
     /// wire, never clamped or substituted, and the response records the omission under
     /// `paladin.params_omitted`.
@@ -1554,13 +1649,14 @@ pub mod cases {
 /// [`ConformanceFixture`], plus a `CASE_COUNT` derived from the SAME identifier lists the tests
 /// are generated from -- so a case silently dropped from the lists shrinks `CASE_COUNT` too,
 /// which `suite_generates_the_full_case_list_for_a_fixture` (below) pins against the documented
-/// `17`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
+/// `19`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
 ///
 /// The lists are split in two groups: the ten transport cases (status mapping, streaming
-/// framing, redaction, redirects, rate limits) and the eight behaviour cases
-/// (capability truthfulness, structured output, empty completion, refusal, usage, the parameter
-/// policy). `llm_conformance_suite!(Fixture)` generates both. `llm_conformance_suite!(Fixture,
-/// transport_only)` generates only the first group and exists for one caller, the macro's own
+/// framing, redaction, redirects, rate limits) and the nine behaviour cases
+/// (capability truthfulness, structured output, empty completion, refusal, usage, vendor-total
+/// reconciliation, the parameter policy). `llm_conformance_suite!(Fixture)` generates both.
+/// `llm_conformance_suite!(Fixture, transport_only)` generates only the first group and exists
+/// for one caller, the macro's own
 /// self-test fixture, which is a bare transport with no profile, sampling or refusal surface;
 /// `CASE_COUNT` is the full suite's size either way. Every one of the nine adapter fixtures uses
 /// the full form.
@@ -1595,6 +1691,7 @@ macro_rules! llm_conformance_suite {
                 stream_frames_split_across_reads_are_reassembled,
                 refusal_is_typed_and_permanent,
                 usage_fields_are_mapped,
+                vendor_total_disagreement_is_recorded,
                 unsupported_parameters_are_omitted_and_recorded,
             ]
         );
@@ -1883,8 +1980,8 @@ mod tests {
     #[test]
     fn suite_generates_the_full_case_list_for_a_fixture() {
         assert_eq!(
-            CASE_COUNT, 18,
-            "llm_conformance_suite! must generate exactly the documented 18 fixed cases -- if this \
+            CASE_COUNT, 19,
+            "llm_conformance_suite! must generate exactly the documented 19 fixed cases -- if this \
              fails, a case was added to or removed from the macro's list without updating this \
              pinned expectation"
         );

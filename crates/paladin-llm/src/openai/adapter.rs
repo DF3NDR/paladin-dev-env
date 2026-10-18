@@ -29,6 +29,7 @@ use crate::registry::{
 use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
+use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
 use paladin_ports::output::rate_limit_hints::RateLimitHints;
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
@@ -364,12 +365,14 @@ struct OpenAIChoice {
 struct OpenAIUsage {
     prompt_tokens: u32,
     completion_tokens: u32,
-    // Deliberately unread: `TokenUsage::new` recomputes `total_tokens` as
-    // `prompt_tokens + completion_tokens` (D-02), so the provider's own
-    // reported total is discarded rather than trusted. Kept on the struct so
-    // the deserializer still matches the full wire shape for debugging.
-    #[allow(dead_code)]
-    total_tokens: u32,
+    /// OpenAI's own reported total (G-50-5a). Parsed and handed to the
+    /// reconciliation ([`crate::usage_reconcile`]), never copied:
+    /// `TokenUsage::new` derives `total_tokens` as `prompt_tokens +
+    /// completion_tokens` (D-02), and a disagreement is recorded under
+    /// [`USAGE_UNRECONCILED_METADATA_KEY`]. `None` when the key is absent --
+    /// a usage object without it still parses, and nothing is fabricated.
+    #[serde(default)]
+    total_tokens: Option<u32>,
     /// `prompt_tokens_details.cached_tokens` (D-20). Absent on a response
     /// that reports no cache split -- `None` in that case (D-03), never a
     /// fabricated `Some(0)`.
@@ -441,6 +444,8 @@ pub struct OpenAIAdapter {
     /// Which (model, adjustment) `response_format` changes this instance has already warned
     /// about.
     format_log: FormatLog,
+    /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
+    usage_log: UsageLog,
 }
 
 /// What this adapter's request builder carries today, stated once so [`OpenAIAdapter::new`]'s
@@ -527,6 +532,7 @@ impl OpenAIAdapter {
             model_registry,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
+            usage_log: UsageLog::new(),
         })
     }
 
@@ -780,7 +786,11 @@ impl OpenAIAdapter {
     /// a fabricated `Some(0)`). Shared by both the non-streaming
     /// usage-construction site and the streaming terminal-chunk usage, so
     /// the two paths cannot drift.
-    fn map_usage(usage: OpenAIUsage) -> TokenUsage {
+    ///
+    /// Returns the mapped usage together with OpenAI's own `total_tokens`
+    /// (when reported), which the caller reconciles rather than copies (D-02,
+    /// G-50-5a).
+    fn map_usage(usage: OpenAIUsage) -> (TokenUsage, Option<u32>) {
         let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
         if let Some(cached) = usage
             .prompt_tokens_details
@@ -794,7 +804,7 @@ impl OpenAIAdapter {
         {
             mapped = mapped.with_reasoning(reasoning);
         }
-        mapped
+        (mapped, usage.total_tokens)
     }
 
     /// Send `request`, retrying transient failures with jittered exponential back-off.
@@ -944,6 +954,10 @@ impl OpenAIAdapter {
         // terminal chunk.
         let mut held_finish_reason: Option<FinishReason> = None;
         let mut held_usage: Option<TokenUsage> = None;
+        // The vendor's own total from the held usage frame, reconciled at the terminal chunk
+        // (G-50-5a). A clone shares this instance's usage log.
+        let mut held_vendor_total: Option<u32> = None;
+        let usage_log = self.usage_log.clone();
 
         // D-09 / D-11a on the streaming path: the terminal chunk is decided by the same
         // `classify_completion` the buffered path uses, over what the stream accumulated.
@@ -983,6 +997,19 @@ impl OpenAIAdapter {
                                         let mut terminal =
                                             StreamingResponse::terminal(finish_reason);
                                         if let Some(usage) = held_usage.take() {
+                                            // G-50-5a: only the `Ok` terminal chunk carries a
+                                            // finding; an `Err` terminal carries no metadata.
+                                            if let Some(value) = usage_log.record(
+                                                provider,
+                                                &model,
+                                                &usage,
+                                                held_vendor_total.take(),
+                                            ) {
+                                                terminal = terminal.with_metadata(
+                                                    USAGE_UNRECONCILED_METADATA_KEY,
+                                                    value,
+                                                );
+                                            }
                                             terminal = terminal.with_usage(usage);
                                         }
                                         for (key, value) in &stream_metadata {
@@ -1001,7 +1028,9 @@ impl OpenAIAdapter {
                             match serde_json::from_str::<OpenAIStreamChunk>(data) {
                                 Ok(chunk) => {
                                     if let Some(usage) = chunk.usage {
-                                        held_usage = Some(Self::map_usage(usage));
+                                        let (mapped, vendor_total) = Self::map_usage(usage);
+                                        held_usage = Some(mapped);
+                                        held_vendor_total = vendor_total;
                                     }
                                     if let Some(choice) = chunk.choices.first() {
                                         if let Some(reason) = &choice.finish_reason {
@@ -1066,11 +1095,24 @@ impl LlmPort for OpenAIAdapter {
             &self.config.api_key,
         )?;
 
-        let usage = Self::map_usage(response.usage);
+        let (usage, vendor_total) = Self::map_usage(response.usage);
+        // G-50-5a: OpenAI's own total is the check on the mapping -- a disagreement is warned
+        // once and recorded, never written over the mapped total (D-02).
+        let unreconciled = self.usage_log.record(
+            self.get_provider_name(),
+            &request.model,
+            &usage,
+            vendor_total,
+        );
 
         let mut llm_response =
             LlmResponse::new(request.id, response.model, content, finish_reason, usage);
         llm_response.metadata = notes.into_metadata();
+        if let Some(value) = unreconciled {
+            llm_response
+                .metadata
+                .insert(USAGE_UNRECONCILED_METADATA_KEY.to_string(), value);
+        }
         Ok(llm_response)
     }
 
@@ -3002,6 +3044,150 @@ mod tests {
     /// (owner decision 2026-10-17, UAT test 5). `gpt-5.4-nano` -- the first seeded model --
     /// rejects `max_tokens` with HTTP 400 `unsupported_parameter` (probe 11), and accepts the
     /// new key (probe 12, `50-SEED-PROBE.md`).
+    /// Plan 50-23 (G-50-5a): OpenAI's own `total_tokens` is read and reconciled against the
+    /// mapped `prompt + completion` on both paths, never copied (D-02).
+    mod usage_reconciliation {
+        use super::*;
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+        use futures::StreamExt;
+        use mockito::Server;
+        use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+        use serde_json::{Value, json};
+
+        fn adapter_at(base_url: &str) -> OpenAIAdapter {
+            OpenAIAdapter::new(OpenAIConfig {
+                api_key: "test-key".to_string(),
+                base_url: base_url.to_string(),
+                organization: None,
+                timeout_seconds: 5,
+                max_retries: 0,
+                max_tokens: Some(4096),
+                context_window: None,
+                model_overrides: BTreeMap::new(),
+            })
+            .expect("test config must build a valid adapter")
+        }
+
+        fn build_request() -> LlmRequest {
+            LlmRequest::new(
+                "gpt-4o",
+                PromptItem::new(PromptType::User(UserPrompt {
+                    query: "Hello".to_string(),
+                    context: None,
+                }))
+                .expect("a user prompt must build"),
+            )
+        }
+
+        async fn generate_with_usage(usage: Value) -> LlmResponse {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(
+                    json!({
+                        "id": "cmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": usage
+                    })
+                    .to_string(),
+                )
+                .create_async()
+                .await;
+            adapter_at(&server.url())
+                .generate(build_request())
+                .await
+                .expect("a well-formed body must parse")
+        }
+
+        #[tokio::test]
+        async fn openai_agreeing_total_records_no_finding() {
+            let response = generate_with_usage(
+                json!({"prompt_tokens": 800, "completion_tokens": 900, "total_tokens": 1700}),
+            )
+            .await;
+            assert_eq!(response.usage.total_tokens, 1700);
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY)
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_disagreeing_total_is_recorded_and_not_copied() {
+            let response = generate_with_usage(
+                json!({"prompt_tokens": 800, "completion_tokens": 900, "total_tokens": 1707}),
+            )
+            .await;
+            assert_eq!(response.usage, TokenUsage::new(800, 900));
+            assert_eq!(
+                response
+                    .metadata
+                    .get(USAGE_UNRECONCILED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("total:vendor=1707,mapped=1700")
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_usage_without_a_total_parses_with_no_finding() {
+            let response =
+                generate_with_usage(json!({"prompt_tokens": 800, "completion_tokens": 900})).await;
+            assert_eq!(response.usage, TokenUsage::new(800, 900));
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY)
+            );
+        }
+
+        #[tokio::test]
+        async fn openai_stream_terminal_records_a_disagreeing_total() {
+            let sse = concat!(
+                "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":3,\"total_tokens\":15}}\n\n",
+                "data: [DONE]\n\n",
+            );
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", "/chat/completions")
+                .with_status(200)
+                .with_body(sse)
+                .create_async()
+                .await;
+            let stream = adapter_at(&server.url())
+                .generate_stream(build_request())
+                .await
+                .unwrap();
+            let mut stream = Box::into_pin(stream);
+            let mut chunks = Vec::new();
+            while let Some(item) = stream.next().await {
+                chunks.push(item.expect("every item must be Ok"));
+            }
+
+            let (terminal, earlier) = chunks.split_last().expect("a terminal chunk");
+            assert_eq!(terminal.usage, Some(TokenUsage::new(5, 3)));
+            assert_eq!(
+                terminal
+                    .metadata
+                    .get(USAGE_UNRECONCILED_METADATA_KEY)
+                    .map(String::as_str),
+                Some("total:vendor=15,mapped=8")
+            );
+            assert!(
+                earlier
+                    .iter()
+                    .all(|chunk| !chunk.metadata.contains_key(USAGE_UNRECONCILED_METADATA_KEY))
+            );
+        }
+    }
+
     mod max_completion_tokens_wiring {
         use super::*;
         use crate::test_support::{mock_completion, server};

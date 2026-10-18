@@ -4483,6 +4483,255 @@ mod tests {
         );
     }
 
+    /// An `Aegis` declaring only a `TimeoutPolicy`, no retry.
+    fn timeout_only_aegis(
+        run_timeout: Option<std::time::Duration>,
+        idle_timeout: Option<std::time::Duration>,
+    ) -> Aegis {
+        Aegis {
+            timeout: Some(paladin_core::platform::container::aegis::TimeoutPolicy {
+                run_timeout,
+                idle_timeout,
+            }),
+            ..Default::default()
+        }
+    }
+
+    /// G-50-5a (plan 50-29, Task 2): a port that records U and C and then
+    /// stalls past the attempt's `run_timeout` is cut by the deadline -- its
+    /// attempt future dropped mid-sleep -- yet its `NodeFinished` reports U
+    /// and C and the boundary settles C once. The idle bound behaves the
+    /// same. Paused clock: no wall-clock sleeps.
+    #[tokio::test(start_paused = true)]
+    async fn timed_out_attempt_records_its_incurred_spend() {
+        use paladin_core::platform::container::node_error::TimeoutKind;
+        let usd = CurrencyCode::new("USD").unwrap();
+        let usage = TokenUsage::new(400, 80);
+        let cost = Cost::new(1_200_000, usd.clone());
+        let ten_seconds = std::time::Duration::from_secs(10);
+
+        for (label, aegis, expected_kind) in [
+            (
+                "run-deadline",
+                timeout_only_aegis(Some(std::time::Duration::from_millis(500)), None),
+                TimeoutKind::Run,
+            ),
+            (
+                "idle-window",
+                timeout_only_aegis(
+                    Some(ten_seconds * 2),
+                    Some(std::time::Duration::from_millis(250)),
+                ),
+                TimeoutKind::Idle,
+            ),
+        ] {
+            let port = SpendRecordingPaladinPort::new(
+                usage.clone(),
+                Some(cost.clone()),
+                AfterRecording::Stall(ten_seconds),
+            );
+            let (outcome, ledger, run_id, finished) = run_scout_with_ledger(
+                &format!("timed-out-attempt-counts-its-spend-{label}"),
+                port.clone(),
+                Some(aegis),
+            )
+            .await;
+
+            assert_eq!(
+                port.call_count(),
+                1,
+                "{label}: one attempt, no retry policy"
+            );
+            let node_error = outcome
+                .node_error()
+                .unwrap_or_else(|| panic!("{label}: expected a timed-out node, got {outcome:?}"));
+            assert_eq!(
+                node_error.source,
+                NodeErrorSource::Timeout(expected_kind),
+                "{label}: the typed bound fired"
+            );
+            assert_eq!(
+                finished,
+                vec![(usage.clone(), Some(cost.clone()))],
+                "{label}: the dropped attempt's recorded spend reaches NodeFinished"
+            );
+            assert_eq!(
+                settled_for(&ledger, &run_id).await,
+                Some((cost.clone(), 1)),
+                "{label}: the boundary settles C once"
+            );
+        }
+    }
+
+    use crate::engine::test_support::{SpendRecordingStructuredExecutor, StructuredEnding};
+
+    /// Runs a single structured `Paladin` node (`scout`/gpt-4, an inline
+    /// `{"type": "object"}` output schema, writing `out`) through `executor`
+    /// against a fresh ledger and trace sink. Returns the outcome, the
+    /// ledger, the run id and every `NodeFinished` `(usage, cost)` pair.
+    async fn run_structured_scout_with_ledger(
+        thread: &str,
+        executor: Arc<dyn StructuredExecutorPort>,
+    ) -> (
+        RunOutcome,
+        Arc<InMemoryTreasuryLedger>,
+        RunId,
+        Vec<(TokenUsage, Option<Cost>)>,
+    ) {
+        use paladin_core::platform::container::structured::SchemaRef;
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("scout");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("scout", "gpt-4"),
+                InputMapping::new("go"),
+                out,
+            )
+            .with_output_schema(SchemaRef::Inline(serde_json::json!({"type": "object"}))),
+        );
+        graph.add_entry(node_id.clone());
+        graph.set_aegis(node_id, retrying_aegis(1));
+
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(
+            Arc::new(RecordingPaladinPort::new()),
+            Arc::new(RecordingWaypointStore::new()),
+        )
+        .with_structured_executor(executor)
+        .with_trace_sink(sink.clone())
+        .with_treasury_ledger(ledger.clone(), context);
+        let outcome = engine
+            .start(&graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let finished = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeFinished { usage, cost, .. } => Some((usage.clone(), cost.clone())),
+                _ => None,
+            })
+            .collect();
+        (outcome, ledger, run_id, finished)
+    }
+
+    /// Three scripted structured calls: 1_000 + 1_000 + 500 nanos USD, 30 +
+    /// 30 + 25 tokens.
+    fn three_structured_calls(usd: &CurrencyCode) -> Vec<(TokenUsage, Option<Cost>)> {
+        vec![
+            (TokenUsage::new(20, 10), Some(Cost::new(1_000, usd.clone()))),
+            (TokenUsage::new(20, 10), Some(Cost::new(1_000, usd.clone()))),
+            (TokenUsage::new(20, 5), Some(Cost::new(500, usd.clone()))),
+        ]
+    }
+
+    /// G-50-5a (plan 50-29, Task 2): a structured executor that records
+    /// three calls' spend and fails with `StructuredOutputInvalid` reports
+    /// the SUM on its `NodeFinished` and settles the sum once; the same
+    /// executor succeeding on its third call reports the sum too -- not only
+    /// the last call's `raw.cost`, because every repair call was billed.
+    #[tokio::test]
+    async fn structured_repairs_count_every_call() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let sum_usage = TokenUsage::new(60, 25);
+        let sum_cost = Cost::new(2_500, usd.clone());
+
+        let exhausted = SpendRecordingStructuredExecutor::recording(
+            three_structured_calls(&usd),
+            StructuredEnding::Invalid,
+        );
+        let (outcome, ledger, run_id, finished) =
+            run_structured_scout_with_ledger("structured-exhaustion-counts-every-call", exhausted)
+                .await;
+        let node_error = outcome
+            .node_error()
+            .unwrap_or_else(|| panic!("expected StructuredOutputInvalid, got {outcome:?}"));
+        assert!(
+            matches!(
+                &node_error.source,
+                NodeErrorSource::Paladin { kind, .. } if kind == "StructuredOutputInvalid"
+            ),
+            "got {node_error:?}"
+        );
+        assert_eq!(finished, vec![(sum_usage.clone(), Some(sum_cost.clone()))]);
+        assert_eq!(
+            settled_for(&ledger, &run_id).await,
+            Some((sum_cost.clone(), 1))
+        );
+
+        let repaired = SpendRecordingStructuredExecutor::recording(
+            three_structured_calls(&usd),
+            StructuredEnding::Succeed(serde_json::json!({"ok": true})),
+        );
+        let (outcome, ledger, run_id, finished) =
+            run_structured_scout_with_ledger("structured-success-counts-every-call", repaired)
+                .await;
+        match outcome {
+            RunOutcome::Completed { final_state, .. } => assert_eq!(
+                final_state.get_raw(&FieldName::new("out").unwrap()),
+                Some(&serde_json::json!({"ok": true}))
+            ),
+            other => panic!("expected Completed, got {other:?}"),
+        }
+        assert_eq!(
+            finished,
+            vec![(sum_usage, Some(sum_cost.clone()))],
+            "the sum of every call, not only the last call's raw figures"
+        );
+        assert_eq!(settled_for(&ledger, &run_id).await, Some((sum_cost, 1)));
+    }
+
+    /// Control: a structured executor that records nothing keeps reporting
+    /// `raw`'s own figures (the last call's) on success and the neutral pair
+    /// on failure -- the pre-50-29 behaviour, unchanged.
+    #[tokio::test]
+    async fn a_silent_structured_executor_keeps_raw_figures() {
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let silent_success = SpendRecordingStructuredExecutor::silent(
+            three_structured_calls(&usd),
+            StructuredEnding::Succeed(serde_json::json!({"ok": true})),
+        );
+        let (outcome, ledger, run_id, finished) =
+            run_structured_scout_with_ledger("silent-structured-success", silent_success).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        let last_cost = Cost::new(500, usd.clone());
+        assert_eq!(
+            finished,
+            vec![(TokenUsage::new(20, 5), Some(last_cost.clone()))],
+            "raw carries the last call only"
+        );
+        assert_eq!(settled_for(&ledger, &run_id).await, Some((last_cost, 1)));
+
+        let silent_failure = SpendRecordingStructuredExecutor::silent(
+            three_structured_calls(&usd),
+            StructuredEnding::Invalid,
+        );
+        let (outcome, ledger, run_id, finished) =
+            run_structured_scout_with_ledger("silent-structured-failure", silent_failure).await;
+        assert!(outcome.node_error().is_some());
+        assert_eq!(finished, vec![(TokenUsage::default(), None)]);
+        assert_eq!(settled_for(&ledger, &run_id).await, None);
+    }
+
     // --- Plan 39-04 Task 2: nested Battalion roll-up, the retry invariant,
     // and ledger failure isolation ---------------------------------------
 

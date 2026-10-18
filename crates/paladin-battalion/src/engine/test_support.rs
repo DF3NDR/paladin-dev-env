@@ -24,6 +24,9 @@ use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId
 use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
 use paladin_ports::output::spend_scope::record_incurred_spend;
+use paladin_ports::output::structured_executor_port::{
+    Structured, StructuredExecutorPort, StructuredOptions,
+};
 use paladin_ports::output::trace_sink_port::{TraceRecord, TraceSink, TraceSinkError};
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
@@ -665,6 +668,10 @@ pub enum AfterRecording {
     /// Fail with the `PaladinError` the factory produces (a `fn` pointer, as
     /// [`FailingPaladinPort`] uses, so the double stays `Send + Sync`).
     Fail(fn() -> PaladinError),
+    /// Sleep for this long (on the paused test clock), then succeed with an
+    /// empty output -- long enough past an attempt deadline or idle window
+    /// and the engine drops the attempt mid-sleep.
+    Stall(std::time::Duration),
     /// Succeed with a `PaladinResult` carrying the SAME usage and cost it
     /// just recorded -- what the real service does on success, so a test can
     /// prove a success is charged once, not once per source (T-50-29-02).
@@ -713,6 +720,10 @@ impl PaladinPort for SpendRecordingPaladinPort {
         record_incurred_spend(&self.usage, self.cost.as_ref());
         match self.then {
             AfterRecording::Fail(factory) => Err(factory()),
+            AfterRecording::Stall(for_how_long) => {
+                tokio::time::sleep(for_how_long).await;
+                Ok(PaladinResult::default())
+            }
             AfterRecording::Succeed => Ok(PaladinResult {
                 output: "done".to_string(),
                 usage: self.usage.clone(),
@@ -732,6 +743,96 @@ impl PaladinPort for SpendRecordingPaladinPort {
 
     fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
         Ok(())
+    }
+}
+
+/// How a [`SpendRecordingStructuredExecutor`] ends its structured run once
+/// every scripted call has been recorded.
+#[derive(Clone)]
+pub enum StructuredEnding {
+    /// Succeed with this value; `raw` carries the LAST call's usage and
+    /// cost only, exactly as `run_structured` returns it.
+    Succeed(serde_json::Value),
+    /// Exhaust the repair budget: `StructuredOutputInvalid { attempts }`
+    /// with `attempts` equal to the number of scripted calls.
+    Invalid,
+}
+
+/// A [`StructuredExecutorPort`] test double standing in for a
+/// `PaladinExecutionService` whose repair loop made several billed calls
+/// (G-50-5a, plan 50-29): every `execute_json_schema` plays its scripted
+/// `calls` in order -- recording each call's usage and cost through
+/// [`record_incurred_spend`] when `records` is set, as the real service does,
+/// or recording nothing (an executor that does not report) -- then ends as
+/// its [`StructuredEnding`] says.
+pub struct SpendRecordingStructuredExecutor {
+    calls: Vec<(TokenUsage, Option<Cost>)>,
+    records: bool,
+    ending: StructuredEnding,
+}
+
+impl SpendRecordingStructuredExecutor {
+    /// Construct an executor that records every scripted call, then ends
+    /// with `ending`.
+    pub fn recording(
+        calls: Vec<(TokenUsage, Option<Cost>)>,
+        ending: StructuredEnding,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            calls,
+            records: true,
+            ending,
+        })
+    }
+
+    /// Construct an executor that makes the same scripted calls but records
+    /// none of them (the pre-50-29 control).
+    pub fn silent(calls: Vec<(TokenUsage, Option<Cost>)>, ending: StructuredEnding) -> Arc<Self> {
+        Arc::new(Self {
+            calls,
+            records: false,
+            ending,
+        })
+    }
+}
+
+#[async_trait]
+impl StructuredExecutorPort for SpendRecordingStructuredExecutor {
+    async fn execute_json_schema(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+        _schema: &serde_json::Value,
+        _opts: &StructuredOptions,
+    ) -> Result<Structured<serde_json::Value>, PaladinError> {
+        for (usage, cost) in &self.calls {
+            if self.records {
+                record_incurred_spend(usage, cost.as_ref());
+            }
+        }
+        let attempts = self.calls.len() as u32;
+        let (last_usage, last_cost) = self
+            .calls
+            .last()
+            .cloned()
+            .unwrap_or((TokenUsage::default(), None));
+        match &self.ending {
+            StructuredEnding::Succeed(value) => Ok(Structured {
+                value: value.clone(),
+                raw: PaladinResult {
+                    output: value.to_string(),
+                    usage: last_usage,
+                    cost: last_cost,
+                    loop_count: attempts,
+                    ..Default::default()
+                },
+            }),
+            StructuredEnding::Invalid => Err(PaladinError::StructuredOutputInvalid {
+                attempts,
+                last_error: "output did not contain a parseable JSON value".to_string(),
+                raw_output: "not json".to_string(),
+            }),
+        }
     }
 }
 

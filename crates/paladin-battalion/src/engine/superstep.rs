@@ -67,7 +67,7 @@ use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
-use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope, current_attempt_spend};
 use paladin_ports::output::structured_executor_port::{StructuredExecutorPort, StructuredOptions};
 use paladin_ports::output::trace_sink_port::{NodeProgressKind, TraceEvent};
 use paladin_ports::output::vault_confined::ConfinedVault;
@@ -660,16 +660,19 @@ async fn idle_or_pending(
 /// `biased` toward the attempt so a result landing on the same virtual
 /// tick as a deadline is still a result. On expiry the attempt future is
 /// dropped here -- its partial output is discarded exactly as any other
-/// failed attempt's is (FT-FR-03, T-25-41) -- and the failure names the
-/// bound that fired by typed `TimeoutKind`, never by message text (T-25-42).
+/// failed attempt's is (FT-FR-03, T-25-41); the spend it recorded is still
+/// counted -- and the failure names the bound that fired by typed
+/// `TimeoutKind`, never by message text (T-25-42).
 ///
 /// G-50-5a (plan 50-29): every attempt runs inside a fresh [`ATTEMPT_SPEND`]
 /// scope installed HERE, outside the attempt future, so what the attempt
 /// recorded through `record_incurred_spend` (every call its Paladin made and
 /// was billed for) outlives the future. A failed attempt that would
 /// otherwise report the neutral `(TokenUsage::default(), None)` pair reports
-/// the scope's recorded spend instead ([`with_incurred_spend`]); a success
-/// keeps its own `PaladinResult.cost` (A1-50-29, one source per outcome).
+/// the scope's recorded spend instead ([`with_incurred_spend`]), and a
+/// timed-out attempt -- whose future was just dropped -- reports it from the
+/// scope handle held here ([`recorded_spend`]); a success keeps its own
+/// `PaladinResult.cost` (A1-50-29, one source per outcome).
 #[allow(clippy::too_many_arguments)]
 async fn race_attempt(
     attempt: impl std::future::Future<Output = NodeDispatchResult>,
@@ -691,11 +694,15 @@ async fn race_attempt(
     tokio::select! {
         biased;
         result = attempt => with_incurred_spend(result, &spend_scope),
+        // The attempt future is dropped on either expiry; the shared
+        // accumulator it recorded into is not (G-50-5a, plan 50-29).
         _ = deadline_or_pending(deadline) => {
-            (None, TokenUsage::default(), None, Err(NodeFailure::Timeout(deadline_kind)))
+            let (usage, cost) = recorded_spend(&spend_scope);
+            (None, usage, cost, Err(NodeFailure::Timeout(deadline_kind)))
         }
         _ = idle_or_pending(heartbeat, bounds.idle, node_id, trace, heartbeat_last_emitted, heartbeat_interval) => {
-            (None, TokenUsage::default(), None, Err(NodeFailure::Timeout(TimeoutKind::Idle)))
+            let (usage, cost) = recorded_spend(&spend_scope);
+            (None, usage, cost, Err(NodeFailure::Timeout(TimeoutKind::Idle)))
         }
     }
 }
@@ -1075,8 +1082,10 @@ fn next_step_arm_name(next: &NextStep) -> &'static str {
 /// [`execute_vanguard_node`]'s per-node result: `paladin_id`/`usage`
 /// (`None`/`TokenUsage::default()` for a `Function` or `Battalion` node)
 /// plus this attempt's `cost` (D-10: the Paladin arm's own
-/// `PaladinResult.cost`, the structured-output arm's `structured.raw.cost`,
-/// `None` everywhere `usage` is `TokenUsage::default()`) plus the resolved
+/// `PaladinResult.cost`; the structured-output arm's recorded spend across
+/// every call, or `structured.raw.cost` when nothing was recorded; a failed
+/// or timed-out attempt's recorded spend, G-50-5a plan 50-29; `None`
+/// everywhere `usage` is `TokenUsage::default()`) plus the resolved
 /// `Directive` or [`NodeFailure`].
 type NodeDispatchResult = (
     Option<Uuid>,
@@ -1357,12 +1366,20 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         .await
                     {
                         Ok(structured) => {
-                            let usage = structured.raw.usage.clone();
-                            // --- D-10: the structured-output arm returns the
-                            // structured result's own raw PaladinResult.cost --
-                            // the single deterministic model call
-                            // `execute_structured_call` primed beside its usage.
-                            let cost = structured.raw.cost.clone();
+                            // --- D-10, G-50-5a (plan 50-29): `structured.raw`
+                            // carries only the LAST model call's usage and
+                            // cost (`execute_structured_call` primes one
+                            // `PaladinResult` per call), but every repair call
+                            // before it was billed too. When this attempt's
+                            // `ATTEMPT_SPEND` scope recorded anything, the
+                            // whole recorded spend is reported; an executor
+                            // that records nothing keeps `raw`'s own figures.
+                            let (usage, cost) = match current_attempt_spend() {
+                                Some(spend) if !spend.is_empty() => {
+                                    (spend.usage().clone(), spend.cost())
+                                }
+                                _ => (structured.raw.usage.clone(), structured.raw.cost.clone()),
+                            };
                             let mut delta = StateDelta::new();
                             delta.set_raw(output_field, structured.value);
                             (paladin_id, usage, cost, Ok(delta.into()))
@@ -1375,6 +1392,11 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                         // `execute_structured`, who has no different-graph
                         // retry available) -- see `NodeFailure::
                         // StructuredOutputInvalid`'s own rustdoc for why.
+                        // D-10, G-50-5a (plan 50-29): the neutral pair here
+                        // and in the arm below is a placeholder --
+                        // `race_attempt`'s `with_incurred_spend` replaces it
+                        // with the spend this attempt's scope recorded (the
+                        // first call and every repair call that was billed).
                         Err(err @ PaladinError::StructuredOutputInvalid { .. }) => (
                             paladin_id,
                             TokenUsage::default(),
@@ -3099,9 +3121,11 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                                     // --- FT-FR-08/09/10, D-20: race the
                                     // attempt against its resolved bounds.
                                     // On expiry the attempt future is
-                                    // DROPPED (its partial work never becomes
-                                    // a Directive, T-25-41) and the failure
-                                    // names the bound by typed `TimeoutKind`.
+                                    // DROPPED (its partial output never
+                                    // becomes a Directive, T-25-41; the spend
+                                    // it recorded is still counted, G-50-5a)
+                                    // and the failure names the bound by
+                                    // typed `TimeoutKind`.
                                     let (paladin_id, usage, cost, result) = race_attempt(
                                         execute_vanguard_node(
                                             dispatch.clone(),

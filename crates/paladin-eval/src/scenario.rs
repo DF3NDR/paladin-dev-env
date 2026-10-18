@@ -417,7 +417,7 @@ impl LlmErrorKind {
                 "scripted model-not-available (node {node}, call {call_index})"
             )),
             LlmErrorKind::TokenLimit => LlmError::TokenLimitExceeded,
-            LlmErrorKind::EmptyCompletion => LlmError::EmptyCompletion(format!(
+            LlmErrorKind::EmptyCompletion => LlmError::empty_completion(format!(
                 "scripted empty completion (node {node}, call {call_index})"
             )),
             LlmErrorKind::Processing => LlmError::ProcessingError(format!(

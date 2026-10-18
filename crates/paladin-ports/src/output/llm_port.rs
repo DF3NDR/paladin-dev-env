@@ -592,6 +592,69 @@ impl LlmError {
         }
     }
 
+    /// Build a [`LlmError::EmptyCompletion`]: the provider answered but returned no usable
+    /// text. `detail` names the finish reason and carries the advice that fits it.
+    ///
+    /// This is the supported way to build the variant. A later change adds a slot for the
+    /// usage of a call the vendor billed even though it failed; this constructor keeps
+    /// working unchanged when it does, so build the variant with it and match it with
+    /// `EmptyCompletion { .. }`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::transience::Transience;
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// let error = LlmError::empty_completion("finish_reason=stop, the model returned no text");
+    /// assert!(matches!(error, LlmError::EmptyCompletion { .. }));
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     "Empty completion: finish_reason=stop, the model returned no text"
+    /// );
+    /// assert_eq!(error.transience(), Transience::Permanent);
+    /// ```
+    pub fn empty_completion(detail: impl Into<String>) -> Self {
+        LlmError::EmptyCompletion(detail.into())
+    }
+
+    /// Build a [`LlmError::Refusal`]: `model` at `provider` declined to answer. `detail` is
+    /// the vendor's refusal text, already redacted and then bounded by the caller.
+    ///
+    /// This is the supported way to build the variant. A later change adds a slot for the
+    /// usage of a call the vendor billed even though it refused; this constructor keeps
+    /// working unchanged when it does, so build the variant with it and match it with
+    /// `Refusal { .. }` (naming fields followed by `..`).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::transience::Transience;
+    /// use paladin_ports::output::llm_port::LlmError;
+    ///
+    /// let error = LlmError::refusal("anthropic", "claude-sonnet-4", "I can't help with that.");
+    /// assert!(matches!(
+    ///     &error,
+    ///     LlmError::Refusal { provider, .. } if provider == "anthropic"
+    /// ));
+    /// assert_eq!(
+    ///     error.to_string(),
+    ///     "Refused by provider 'anthropic' (model 'claude-sonnet-4'): I can't help with that."
+    /// );
+    /// assert_eq!(error.transience(), Transience::Permanent);
+    /// ```
+    pub fn refusal(
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        LlmError::Refusal {
+            provider: provider.into(),
+            model: model.into(),
+            detail: detail.into(),
+        }
+    }
+
     /// Build a [`LlmError::RateLimitExceeded`] from a parsed header snapshot. The error's
     /// [`retry_after`](LlmError::retry_after) is the snapshot's
     /// [`effective_retry_after`](RateLimitHints::effective_retry_after); a snapshot that
@@ -2684,6 +2747,38 @@ mod tests {
         assert!(rendered.contains("gpt-x"), "{rendered}");
         assert!(rendered.contains("I can't help with that."), "{rendered}");
         assert_eq!(err.transience(), Transience::Permanent);
+    }
+
+    /// G-50-5a (plan 50-25): the two constructors build exactly today's
+    /// values -- same `Display`, same `Permanent` transience -- and the
+    /// values match the shape-proof patterns (`EmptyCompletion { .. }`,
+    /// `Refusal { .., .. }`) that survive plan 50-26's struct variants.
+    #[test]
+    fn llm_error_constructors_build_todays_values() {
+        let empty = LlmError::empty_completion("x");
+        assert_eq!(empty.to_string(), "Empty completion: x");
+        assert!(matches!(empty, LlmError::EmptyCompletion { .. }));
+        assert_eq!(empty.transience(), Transience::Permanent);
+
+        let refusal = LlmError::refusal("p", "m", "d");
+        assert_eq!(
+            refusal.to_string(),
+            "Refused by provider 'p' (model 'm'): d"
+        );
+        match &refusal {
+            LlmError::Refusal {
+                provider,
+                model,
+                detail,
+                ..
+            } => {
+                assert_eq!(provider, "p");
+                assert_eq!(model, "m");
+                assert_eq!(detail, "d");
+            }
+            other => panic!("expected a Refusal, got {other:?}"),
+        }
+        assert_eq!(refusal.transience(), Transience::Permanent);
     }
 
     /// D-11a: `EmptyCompletion`'s `Display` no longer appends max-tokens

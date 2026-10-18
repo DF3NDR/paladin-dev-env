@@ -285,7 +285,7 @@ mod tests {
             },
             LlmError::ModelNotAvailable("gpt-99".to_string()),
             LlmError::TokenLimitExceeded,
-            LlmError::EmptyCompletion("finish_reason=length, content empty".to_string()),
+            LlmError::empty_completion("finish_reason=length, content empty"),
             LlmError::ProcessingError("unexpected body".to_string()),
             LlmError::Timeout("30s elapsed".to_string()),
             LlmError::ProviderError {
@@ -368,7 +368,7 @@ mod tests {
     fn variants_without_a_status_convert_with_none() {
         let without_status = [
             LlmError::NetworkError("connection refused".to_string()),
-            LlmError::EmptyCompletion("finish_reason=length".to_string()),
+            LlmError::empty_completion("finish_reason=length"),
             LlmError::ProcessingError("unexpected body".to_string()),
         ];
         // `Refusal` is deliberately absent: it names its provider by value
@@ -401,11 +401,7 @@ mod tests {
     /// status; it converts as `Permanent`.
     #[test]
     fn refusal_carries_its_provider() {
-        let err = LlmError::Refusal {
-            provider: "anthropic".to_string(),
-            model: "m".to_string(),
-            detail: "d".to_string(),
-        };
+        let err = LlmError::refusal("anthropic", "m", "d");
 
         let (transience, status, provider, _) = expect_failure(to_paladin_error(&err));
 

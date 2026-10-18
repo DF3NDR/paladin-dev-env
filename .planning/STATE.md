@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-28-PLAN.md
-last_updated: "2026-10-18T21:14:02.673Z"
+stopped_at: Completed 50-29-PLAN.md
+last_updated: "2026-10-18T23:32:20.885Z"
 last_activity: 2026-10-17
 last_activity_desc: Phase 50 gap-closure execution started (plans 50-19..50-31)
 progress:
   total_phases: 12
   completed_phases: 10
   total_plans: 120
-  completed_plans: 117
+  completed_plans: 118
 ---
 
 # Project State
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 29 of 31 (gap closure 50-19..50-31, --gaps-only; 50-19..50-28 complete; 50-29 next)
+Plan: 30 of 31 (gap closure 50-19..50-31, --gaps-only; 50-19..50-29 complete; 50-30 next)
 Status: Ready to execute
 Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-19..50-31)
 
@@ -324,6 +324,7 @@ Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-1
 | Phase 50 P26 | 227min | 2 tasks | 14 files |
 | Phase 50 P27 | 72min | 2 tasks | 8 files |
 | Phase 50 P28 | 40min | 2 tasks | 1 files |
+| Phase 50 P29 | 58min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -574,6 +575,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-26: LlmError::EmptyCompletion { detail, billed } and Refusal { .., billed } are #[non_exhaustive] struct variants carrying Option<Box<BilledUsage>>; billed_usage() looks through AllProvidersFailed; compat buffered path bills; D-27 measured enum_tuple_variant_changed_kind (newly allowed), registered in the same commit
 - [Phase ?]: 50-27: every adapter bills EmptyCompletion/Refusal on both paths (stream bills on the request model); PricingLlmAdapter prices billed errors via one helper (generate: served model; stream: request model); DeepSeek annotate_with_usage removed; conformance CASE_COUNT 20
 - [Phase ?]: 50-28: private CallFailure { error, bills } carries a failed call's BilledUsage out of the retry helper; buffered loop folds and settles priced bills (ordinal loop_num), stream settles a billed terminal error once (ordinal 1, model_used); no public type change
+- [Phase ?]: 50-29: IncurredSpend + paladin_ports spend_scope (SpendScope, ATTEMPT_SPEND task-local, record_incurred_spend, current_attempt_spend); race_attempt scopes every attempt so failed, timed-out and structured attempts report their recorded spend; successes keep PaladinResult.cost; no public type changes shape
 
 ### Pending Todos
 
@@ -792,8 +794,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-18T21:14:02.391Z
-**Stopped at:** Completed 50-28-PLAN.md
+**Last session:** 2026-10-18T23:32:20.786Z
+**Stopped at:** Completed 50-29-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

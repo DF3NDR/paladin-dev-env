@@ -1469,7 +1469,7 @@ Plans:
 
 **Wave 24** *(gap-closure wave 9; blocked on Wave 23 completion)*
 
-- [ ] 50-29-PLAN.md — G-50-5a remainder (b): `IncurredSpend` and the `ATTEMPT_SPEND` attempt spend scope; failed, timed-out and structured Battalion attempts count every billed call; the execution service records every call
+- [x] 50-29-PLAN.md — G-50-5a remainder (b): `IncurredSpend` and the `ATTEMPT_SPEND` attempt spend scope; failed, timed-out and structured Battalion attempts count every billed call; the execution service records every call
 
 **Wave 25** *(gap-closure wave 10; blocked on Wave 24 completion)*
 

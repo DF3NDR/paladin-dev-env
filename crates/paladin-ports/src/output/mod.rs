@@ -62,6 +62,10 @@ pub mod search_engine_port;
 /// the superstep engine through, consulted at every superstep boundary beside the
 /// cancellation signals.
 pub mod spend_guard;
+/// Attempt spend scope (G-50-5a, plan 50-29): the `ATTEMPT_SPEND` task-local through which a
+/// Paladin execution reports every billed call to the Battalion attempt that made it, however
+/// the attempt ends.
+pub mod spend_scope;
 /// Streaming counterpart to `paladin_executor_port` (SSE / token streaming).
 pub mod streaming_executor_port;
 /// Structured output executor port: the bounded JSON-schema repair loop

@@ -103,6 +103,7 @@ use paladin_ports::output::paladin_executor_port::PaladinExecutorPort;
 use paladin_ports::output::paladin_port::{
     ChunkMetadata, PaladinResult, PaladinStream, PaladinStreamChunk, StopReason,
 };
+use paladin_ports::output::spend_scope::record_incurred_spend;
 use paladin_ports::output::streaming_executor_port::StreamingExecutorPort;
 use paladin_ports::output::structured_executor_port::{
     Structured, StructuredExecutorPort, StructuredOptions, run_structured,
@@ -1908,6 +1909,11 @@ impl PaladinExecutionService {
             // rule every other accumulator in the tree uses.
             usage += response.usage.clone();
             cost_tally.record_call(response.cost.as_ref());
+            // G-50-5a (plan 50-29): report this call to the Battalion attempt
+            // that made it, at the exact point it is folded into the run's
+            // own tallies, so the attempt can charge it however the run
+            // ends. A no-op outside an engine attempt (no active scope).
+            record_incurred_spend(&response.usage, response.cost.as_ref());
             // D-07/D-08 (39-05): settle this priced call at the exact point
             // its cost is folded into the run's own tally -- the same
             // response, the same model, so the ledger's breakdown key
@@ -8115,6 +8121,50 @@ mod agent_loop_cost_tests {
         fn get_capabilities(&self) -> ProviderCapabilities {
             ProviderCapabilities::default()
         }
+    }
+
+    /// G-50-5a (plan 50-29): a one-loop Paladin executed inside an
+    /// `ATTEMPT_SPEND` scope leaves a snapshot equal to the response's usage
+    /// and cost -- the buffered loop records every call at the point it folds
+    /// it into its own tallies. Outside a scope nothing is recorded.
+    #[tokio::test]
+    async fn buffered_calls_are_recorded_in_the_attempt_spend_scope() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let usage = TokenUsage::new(1_000, 2_000);
+        let cost = Cost::new(22_500_000, usd);
+        let llm: Arc<dyn LlmPort> = Arc::new(ScriptedCostLlmPort::new(vec![(
+            "done",
+            usage.clone(),
+            Some(cost.clone()),
+        )]));
+        let service = make_service(llm);
+        let paladin = make_paladin(1);
+
+        let scope = SpendScope::new();
+        let result = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&paladin, "hi"))
+            .await
+            .expect("the run succeeds");
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "one loop, one recorded call");
+        assert_eq!(spend.usage(), &usage);
+        assert_eq!(spend.cost(), Some(cost));
+        assert_eq!(
+            spend.usage(),
+            &result.usage,
+            "equal to what the run reports"
+        );
+        assert_eq!(spend.cost(), result.cost);
+
+        let outside = SpendScope::new();
+        service
+            .execute(&paladin, "hi")
+            .await
+            .expect("still succeeds");
+        assert!(outside.snapshot().is_empty(), "no scope: nothing recorded");
     }
 
     /// D-10: two loop iterations whose responses carry costs 22_500_000 and

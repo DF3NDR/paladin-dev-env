@@ -576,6 +576,86 @@ impl CostTally {
     }
 }
 
+/// The spend an operation has incurred so far: every billed call counted, whatever the
+/// operation's eventual outcome (G-50-5a, plan 50-29).
+///
+/// A [`CostTally`] answers "what did this run cost?" once the run has ended well; an
+/// `IncurredSpend` answers "what has been billed so far?" at any moment, including after a
+/// failure, a timeout or a dropped future -- so the Battalion engine can charge a failed attempt
+/// for the calls its Paladin made before the error. It holds a [`TokenUsage`] sum (saturating,
+/// through `TokenUsage`'s own `AddAssign`), a [`CostTally`] (so one unpriced call makes
+/// [`IncurredSpend::cost`] `None`, exactly like a run total) and a call count. It carries no
+/// prompt text, content, model id or credential.
+///
+/// `Default` is the empty spend: nothing recorded, [`IncurredSpend::is_empty`] `true`, and the
+/// neutral `(TokenUsage::default(), None)` pair that `CostTally::record_node` ignores.
+///
+/// # Examples
+///
+/// ```
+/// use paladin_core::platform::container::cost::{Cost, CostError, CurrencyCode, IncurredSpend};
+/// use paladin_core::platform::container::token_usage::TokenUsage;
+///
+/// let usd = CurrencyCode::new("USD")?;
+/// let mut spend = IncurredSpend::new();
+/// assert!(spend.is_empty());
+///
+/// spend.record(&TokenUsage::new(100, 20), Some(&Cost::new(1_000, usd.clone())));
+/// spend.record(&TokenUsage::new(50, 10), Some(&Cost::new(500, usd.clone())));
+/// assert_eq!(spend.calls(), 2);
+/// assert_eq!(spend.usage(), &TokenUsage::new(150, 30));
+/// assert_eq!(spend.cost(), Some(Cost::new(1_500, usd)));
+///
+/// // One unpriced call makes the cost unknown; the usage keeps summing.
+/// spend.record(&TokenUsage::new(1, 1), None);
+/// assert_eq!(spend.cost(), None);
+/// assert_eq!(spend.usage().total_tokens, 182);
+/// # Ok::<(), CostError>(())
+/// ```
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct IncurredSpend {
+    usage: TokenUsage,
+    tally: CostTally,
+    calls: u32,
+}
+
+impl IncurredSpend {
+    /// Construct an empty spend (nothing recorded yet).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record one billed call: `usage` is summed (saturating) and `cost` goes to the tally
+    /// under [`CostTally::record_call`]'s rule (`None` makes [`IncurredSpend::cost`] unknown
+    /// for good).
+    pub fn record(&mut self, usage: &TokenUsage, cost: Option<&Cost>) {
+        self.usage += usage.clone();
+        self.tally.record_call(cost);
+        self.calls = self.calls.saturating_add(1);
+    }
+
+    /// The summed usage of every recorded call.
+    pub fn usage(&self) -> &TokenUsage {
+        &self.usage
+    }
+
+    /// The summed cost: `Some` only when every recorded call was priced in one currency, and
+    /// `None` when nothing was recorded.
+    pub fn cost(&self) -> Option<Cost> {
+        self.tally.total()
+    }
+
+    /// How many calls have been recorded.
+    pub fn calls(&self) -> u32 {
+        self.calls
+    }
+
+    /// `true` when no call has been recorded.
+    pub fn is_empty(&self) -> bool {
+        self.calls == 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -909,5 +989,38 @@ mod tests {
         saturating.record_call(Some(&Cost::new(i64::MAX, usd.clone())));
         saturating.record_call(Some(&Cost::new(1, usd.clone())));
         assert_eq!(saturating.total(), Some(Cost::new(i64::MAX, usd)));
+    }
+
+    /// G-50-5a (plan 50-29): `IncurredSpend` sums usage saturating, prices
+    /// under the `CostTally` rule, counts calls, and starts (and stays, when
+    /// nothing is recorded) as the neutral pair `record_node` ignores.
+    #[test]
+    fn incurred_spend_sums_usage_and_prices_like_a_tally() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let empty = IncurredSpend::default();
+        assert!(empty.is_empty());
+        assert_eq!(empty.calls(), 0);
+        assert_eq!(empty.usage(), &TokenUsage::default());
+        assert_eq!(empty.cost(), None);
+
+        let mut spend = IncurredSpend::new();
+        spend.record(
+            &TokenUsage::new(u32::MAX, 1).with_cache_read(7),
+            Some(&Cost::new(1_000, usd.clone())),
+        );
+        spend.record(&TokenUsage::new(5, 5), Some(&Cost::new(250, usd.clone())));
+        assert!(!spend.is_empty());
+        assert_eq!(spend.calls(), 2);
+        assert_eq!(spend.usage().prompt_tokens, u32::MAX, "saturating sum");
+        assert_eq!(spend.usage().completion_tokens, 6);
+        assert_eq!(spend.usage().cache_read_tokens, Some(7));
+        assert_eq!(spend.cost(), Some(Cost::new(1_250, usd.clone())));
+
+        spend.record(&TokenUsage::new(1, 1), None);
+        assert_eq!(spend.calls(), 3);
+        assert_eq!(spend.cost(), None, "an unpriced call poisons the cost");
+        spend.record(&TokenUsage::new(1, 1), Some(&Cost::new(1, usd)));
+        assert_eq!(spend.cost(), None, "and it stays unknown");
+        assert_eq!(spend.usage().completion_tokens, 8, "usage keeps summing");
     }
 }

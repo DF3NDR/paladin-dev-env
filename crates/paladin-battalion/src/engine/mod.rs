@@ -4251,6 +4251,238 @@ mod tests {
         assert!(matches!(outcome, RunOutcome::Completed { .. }));
     }
 
+    // --- Plan 50-29 (G-50-5a remainder (b)): an attempt counts the spend it
+    // incurred however it ends -----------------------------------------------
+
+    use crate::engine::test_support::{AfterRecording, SpendRecordingPaladinPort};
+
+    /// Runs a single-`Paladin`-node graph (`scout`/gpt-4, writing `out`)
+    /// with `port` under `aegis` against a fresh in-memory ledger and a
+    /// recording trace sink. Returns the outcome, the ledger, the run id and
+    /// every `NodeFinished` record's `(usage, cost)` pair in emit order.
+    async fn run_scout_with_ledger(
+        thread: &str,
+        port: Arc<dyn PaladinPort>,
+        aegis: Option<Aegis>,
+    ) -> (
+        RunOutcome,
+        Arc<InMemoryTreasuryLedger>,
+        RunId,
+        Vec<(TokenUsage, Option<Cost>)>,
+    ) {
+        let out = FieldName::new("out").unwrap();
+        let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+            out.clone(),
+            DispatchRule::LastWrite,
+            None,
+            false,
+        )]);
+        let mut graph = WarGraph::new(schema, EngineLimits::default());
+        let node_id = NodeId::new("scout");
+        graph.add_node(
+            node_id.clone(),
+            NodeSpec::paladin(
+                make_paladin_with_model("scout", "gpt-4"),
+                InputMapping::new("go"),
+                out,
+            ),
+        );
+        graph.add_entry(node_id.clone());
+        if let Some(aegis) = aegis {
+            graph.set_aegis(node_id, aegis);
+        }
+
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let run_id = RunId::new_v7();
+        let context = SettlementContext {
+            scope: LedgerScope::unattributed(),
+            run_id: run_id.clone(),
+            attempt: 1,
+        };
+        let store = Arc::new(RecordingWaypointStore::new());
+        let sink = RecordingTraceSink::new();
+        let engine = WarEngine::new(port, store)
+            .with_trace_sink(sink.clone())
+            .with_treasury_ledger(ledger.clone(), context);
+        let outcome = engine
+            .start(&graph, ThreadId::new(thread).unwrap(), StateDelta::new())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let finished = sink
+            .events()
+            .await
+            .iter()
+            .filter_map(|record| match &record.event {
+                TraceEvent::NodeFinished { usage, cost, .. } => Some((usage.clone(), cost.clone())),
+                _ => None,
+            })
+            .collect();
+        (outcome, ledger, run_id, finished)
+    }
+
+    /// The ledger's single by-run row for `run_id`: `(amount, settlements)`,
+    /// or `None` when nothing was settled.
+    async fn settled_for(ledger: &InMemoryTreasuryLedger, run_id: &RunId) -> Option<(Cost, u64)> {
+        let rows = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                run_ids: vec![run_id.clone()],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert!(rows.len() <= 1, "one currency, at most one row: {rows:?}");
+        rows.first()
+            .map(|row| (row.amount.clone(), row.settlements))
+    }
+
+    fn spend_recording_failure() -> PaladinError {
+        PaladinError::ExecutionError("middleware refused the second loop".into())
+    }
+
+    /// G-50-5a remainder (b), plan 50-29 tracer: a Paladin attempt that
+    /// recorded usage U and cost C through the attempt spend scope and then
+    /// failed with a non-LLM `PaladinError` reports U and C on its
+    /// `NodeFinished`, and the superstep boundary settles C exactly once,
+    /// under the node's model. Before this plan the attempt reported the
+    /// neutral pair and settled nothing.
+    #[tokio::test]
+    async fn failed_paladin_attempt_records_its_incurred_spend() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let usage = TokenUsage::new(1_000, 62_000);
+        let cost = Cost::new(2_403_000, usd.clone());
+        let port = SpendRecordingPaladinPort::new(
+            usage.clone(),
+            Some(cost.clone()),
+            AfterRecording::Fail(spend_recording_failure),
+        );
+
+        let (outcome, ledger, run_id, finished) = run_scout_with_ledger(
+            "failed-attempt-counts-its-spend",
+            port.clone(),
+            // A single-attempt retry policy: policy-governed, so the
+            // structured `NodeError` is recorded, with no actual retry.
+            Some(retrying_aegis(1)),
+        )
+        .await;
+
+        assert_eq!(port.call_count(), 1, "no retry policy: one attempt");
+        let node_error = outcome.node_error().expect("the run failed on the node");
+        assert!(
+            matches!(node_error.source, NodeErrorSource::Paladin { .. }),
+            "a non-LLM Paladin failure: {node_error:?}"
+        );
+        assert_eq!(
+            finished,
+            vec![(usage, Some(cost.clone()))],
+            "NodeFinished reports the spend the failed attempt recorded"
+        );
+        assert_eq!(
+            settled_for(&ledger, &run_id).await,
+            Some((cost.clone(), 1)),
+            "the boundary settles C exactly once"
+        );
+
+        let by_model = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                run_ids: vec![run_id],
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds");
+        assert_eq!(by_model.len(), 1);
+        assert_eq!(by_model[0].group, "gpt-4", "charged under the node's model");
+        assert_eq!(by_model[0].amount, cost);
+    }
+
+    /// LEDGR-03/04 under retries: three failed attempts each record C once
+    /// -- three `NodeFinished` records carrying C, and the one superstep
+    /// settle charges exactly 3C in one settlement, never a double count.
+    #[tokio::test]
+    async fn each_failed_retry_attempt_is_charged_once() {
+        let usd = CurrencyCode::new("USD").unwrap();
+        let usage = TokenUsage::new(10, 5);
+        let cost = Cost::new(10_000, usd.clone());
+        let port = SpendRecordingPaladinPort::new(
+            usage.clone(),
+            Some(cost.clone()),
+            AfterRecording::Fail(spend_recording_failure),
+        );
+
+        let (outcome, ledger, run_id, finished) = run_scout_with_ledger(
+            "each-failed-retry-charged-once",
+            port.clone(),
+            Some(retrying_aegis(3)),
+        )
+        .await;
+
+        assert_eq!(
+            port.call_count(),
+            3,
+            "ExecutionError is Unknown: retried to exhaustion"
+        );
+        assert!(outcome.node_error().is_some(), "every attempt failed");
+        assert_eq!(
+            finished,
+            vec![
+                (usage.clone(), Some(cost.clone())),
+                (usage.clone(), Some(cost.clone())),
+                (usage, Some(cost)),
+            ],
+            "one NodeFinished per attempt, each with that attempt's own spend"
+        );
+        assert_eq!(
+            settled_for(&ledger, &run_id).await,
+            Some((Cost::new(30_000, usd), 1)),
+            "one settle per superstep, 3 x C, each attempt counted once"
+        );
+    }
+
+    /// Controls (A1-50-29): a failing port that records nothing still reports
+    /// the neutral pair and settles nothing; a port that records U/C and then
+    /// succeeds with the same U/C on its `PaladinResult` (what the real
+    /// service does) is charged C once -- the success keeps its one source,
+    /// `PaladinResult.cost`, and the scope never adds a second count.
+    #[tokio::test]
+    async fn unrecorded_failures_stay_neutral_and_successes_are_not_double_counted() {
+        let usd = CurrencyCode::new("USD").unwrap();
+
+        let silent = FailingPaladinPort::new(spend_recording_failure);
+        let (outcome, ledger, run_id, finished) = run_scout_with_ledger(
+            "unrecorded-failure-stays-neutral",
+            silent,
+            Some(retrying_aegis(1)),
+        )
+        .await;
+        assert!(outcome.node_error().is_some());
+        assert_eq!(finished, vec![(TokenUsage::default(), None)]);
+        assert_eq!(
+            settled_for(&ledger, &run_id).await,
+            None,
+            "nothing to settle"
+        );
+
+        let usage = TokenUsage::new(10, 5);
+        let cost = Cost::new(10_000, usd);
+        let recording_success = SpendRecordingPaladinPort::new(
+            usage.clone(),
+            Some(cost.clone()),
+            AfterRecording::Succeed,
+        );
+        let (outcome, ledger, run_id, finished) =
+            run_scout_with_ledger("success-not-double-counted", recording_success, None).await;
+        assert!(matches!(outcome, RunOutcome::Completed { .. }));
+        assert_eq!(finished, vec![(usage, Some(cost.clone()))]);
+        assert_eq!(
+            settled_for(&ledger, &run_id).await,
+            Some((cost, 1)),
+            "C once: PaladinResult.cost is the success's only source"
+        );
+    }
+
     // --- Plan 39-04 Task 2: nested Battalion roll-up, the retry invariant,
     // and ledger failure isolation ---------------------------------------
 

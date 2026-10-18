@@ -67,6 +67,7 @@ use paladin_ports::output::cancellation_probe::CancellationProbe;
 use paladin_ports::output::node_cache_port::{NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::PaladinPort;
 use paladin_ports::output::spend_guard::{SpendDecision, SpendGuard};
+use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
 use paladin_ports::output::structured_executor_port::{StructuredExecutorPort, StructuredOptions};
 use paladin_ports::output::trace_sink_port::{NodeProgressKind, TraceEvent};
 use paladin_ports::output::vault_confined::ConfinedVault;
@@ -658,9 +659,17 @@ async fn idle_or_pending(
 /// Race one attempt's execution against its [`AttemptBounds`] (D-20).
 /// `biased` toward the attempt so a result landing on the same virtual
 /// tick as a deadline is still a result. On expiry the attempt future is
-/// dropped here -- its partial work is discarded exactly as any other
+/// dropped here -- its partial output is discarded exactly as any other
 /// failed attempt's is (FT-FR-03, T-25-41) -- and the failure names the
 /// bound that fired by typed `TimeoutKind`, never by message text (T-25-42).
+///
+/// G-50-5a (plan 50-29): every attempt runs inside a fresh [`ATTEMPT_SPEND`]
+/// scope installed HERE, outside the attempt future, so what the attempt
+/// recorded through `record_incurred_spend` (every call its Paladin made and
+/// was billed for) outlives the future. A failed attempt that would
+/// otherwise report the neutral `(TokenUsage::default(), None)` pair reports
+/// the scope's recorded spend instead ([`with_incurred_spend`]); a success
+/// keeps its own `PaladinResult.cost` (A1-50-29, one source per outcome).
 #[allow(clippy::too_many_arguments)]
 async fn race_attempt(
     attempt: impl std::future::Future<Output = NodeDispatchResult>,
@@ -675,15 +684,43 @@ async fn race_attempt(
         Some((at, kind)) => (Some(at), kind),
         None => (None, TimeoutKind::Run),
     };
+    // A2-50-29: one fresh scope per attempt, inside the node's own spawned
+    // task -- concurrent nodes and retried attempts never share one.
+    let spend_scope = SpendScope::new();
+    let attempt = ATTEMPT_SPEND.scope(spend_scope.clone(), attempt);
     tokio::select! {
         biased;
-        result = attempt => result,
+        result = attempt => with_incurred_spend(result, &spend_scope),
         _ = deadline_or_pending(deadline) => {
             (None, TokenUsage::default(), None, Err(NodeFailure::Timeout(deadline_kind)))
         }
         _ = idle_or_pending(heartbeat, bounds.idle, node_id, trace, heartbeat_last_emitted, heartbeat_interval) => {
             (None, TokenUsage::default(), None, Err(NodeFailure::Timeout(TimeoutKind::Idle)))
         }
+    }
+}
+
+/// The `(usage, cost)` pair an attempt's [`SpendScope`] recorded: the
+/// neutral `(TokenUsage::default(), None)` pair when nothing was recorded,
+/// so `CostTally::record_node`'s neutral rule and every unrecorded path are
+/// untouched (G-50-5a, plan 50-29).
+fn recorded_spend(scope: &SpendScope) -> (TokenUsage, Option<Cost>) {
+    let spend = scope.snapshot();
+    (spend.usage().clone(), spend.cost())
+}
+
+/// A failed attempt that reported the neutral pair reports what its scope
+/// recorded instead -- the calls its Paladin made and was billed for before
+/// the error. Every other result (a success, or a `DirectiveParse` failure
+/// already carrying the result's own usage and cost) passes through
+/// unchanged (A1-50-29: one source per outcome, never two).
+fn with_incurred_spend(result: NodeDispatchResult, scope: &SpendScope) -> NodeDispatchResult {
+    match result {
+        (paladin_id, usage, None, Err(failure)) if usage == TokenUsage::default() => {
+            let (usage, cost) = recorded_spend(scope);
+            (paladin_id, usage, cost, Err(failure))
+        }
+        other => other,
     }
 }
 
@@ -1393,6 +1430,13 @@ fn execute_vanguard_node<'a, W: WaypointPort + 'static>(
                             }
                         }
                     }
+                    // --- D-10, G-50-5a (plan 50-29): the neutral pair HERE
+                    // is a placeholder -- `race_attempt`'s
+                    // `with_incurred_spend` replaces it with the spend this
+                    // attempt's `ATTEMPT_SPEND` scope recorded (every call
+                    // the Paladin made and was billed for before `e`), so a
+                    // failed attempt reports the spend its attempt scope
+                    // recorded and is charged like a success would be.
                     Err(e) => (
                         paladin_id,
                         TokenUsage::default(),
@@ -3162,8 +3206,12 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                             // D-10: this attempt's own cost -- the Paladin
                             // arm's PaladinResult.cost, the structured-output
                             // arm's structured.raw.cost, or None for every
-                            // other node kind / failed attempt (mirroring
-                            // `usage` exactly).
+                            // other node kind (mirroring `usage` exactly).
+                            // G-50-5a (plan 50-29): a failed attempt reports
+                            // the spend its attempt scope recorded -- the
+                            // calls its Paladin was billed for before the
+                            // error -- or the neutral pair when it recorded
+                            // nothing.
                             cost: cost.clone(),
                             // Plan 25-13 is the only plan that sets this
                             // `true` (a served-from-cache outcome).
@@ -3176,7 +3224,9 @@ pub(crate) async fn run_with_namespace<W: WaypointPort + 'static>(
                         // is folded in exactly once per attempt, never
                         // dropped and never double-counted. A `None` cost
                         // (an unpriced call, a `Function` node, a failed
-                        // attempt) records nothing.
+                        // attempt that recorded no spend) records nothing;
+                        // a failed attempt's recorded spend (G-50-5a, plan
+                        // 50-29) is recorded exactly like a success's.
                         if let (Some(hook), Some(attempt_cost)) = (&node_spend, &cost) {
                             hook.record(node_model.as_deref(), attempt_cost);
                         }

@@ -23,6 +23,7 @@ use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::waypoint::{ThreadId, Waypoint, WaypointId};
 use paladin_ports::output::node_cache_port::{NodeCacheError, NodeCacheKey, NodeCachePort};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, PaladinStream, StopReason};
+use paladin_ports::output::spend_scope::record_incurred_spend;
 use paladin_ports::output::trace_sink_port::{TraceRecord, TraceSink, TraceSinkError};
 use paladin_ports::output::waypoint_port::{
     ThreadSummary, WaypointError, WaypointPort, WaypointSummary,
@@ -651,6 +652,82 @@ impl PaladinPort for FailingPaladinPort {
         _input: &str,
     ) -> Result<PaladinStream, PaladinError> {
         unimplemented!("FailingPaladinPort only supports execute()")
+    }
+
+    fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+        Ok(())
+    }
+}
+
+/// What a [`SpendRecordingPaladinPort`] does once it has recorded its spend.
+#[derive(Clone, Copy)]
+pub enum AfterRecording {
+    /// Fail with the `PaladinError` the factory produces (a `fn` pointer, as
+    /// [`FailingPaladinPort`] uses, so the double stays `Send + Sync`).
+    Fail(fn() -> PaladinError),
+    /// Succeed with a `PaladinResult` carrying the SAME usage and cost it
+    /// just recorded -- what the real service does on success, so a test can
+    /// prove a success is charged once, not once per source (T-50-29-02).
+    Succeed,
+}
+
+/// A [`PaladinPort`] test double standing in for a `PaladinExecutionService`
+/// that made and was billed for a call before its attempt ended badly
+/// (G-50-5a, plan 50-29): every `execute` first records `usage`/`cost`
+/// through [`record_incurred_spend`] -- exactly what the real service does
+/// at every fold -- then does what its [`AfterRecording`] says. Counts its
+/// calls.
+pub struct SpendRecordingPaladinPort {
+    usage: TokenUsage,
+    cost: Option<Cost>,
+    then: AfterRecording,
+    calls: AtomicUsize,
+}
+
+impl SpendRecordingPaladinPort {
+    /// Construct a port that records `usage`/`cost` on every call, then
+    /// does `then`.
+    pub fn new(usage: TokenUsage, cost: Option<Cost>, then: AfterRecording) -> Arc<Self> {
+        Arc::new(Self {
+            usage,
+            cost,
+            then,
+            calls: AtomicUsize::new(0),
+        })
+    }
+
+    /// How many times `execute` has been called.
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl PaladinPort for SpendRecordingPaladinPort {
+    async fn execute(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinResult, PaladinError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        record_incurred_spend(&self.usage, self.cost.as_ref());
+        match self.then {
+            AfterRecording::Fail(factory) => Err(factory()),
+            AfterRecording::Succeed => Ok(PaladinResult {
+                output: "done".to_string(),
+                usage: self.usage.clone(),
+                cost: self.cost.clone(),
+                ..Default::default()
+            }),
+        }
+    }
+
+    async fn execute_stream(
+        &self,
+        _paladin: &Paladin,
+        _input: &str,
+    ) -> Result<PaladinStream, PaladinError> {
+        unimplemented!("SpendRecordingPaladinPort only supports execute()")
     }
 
     fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {

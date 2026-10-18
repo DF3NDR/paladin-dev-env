@@ -1465,7 +1465,7 @@ Plans:
 **Wave 23** *(gap-closure wave 8; blocked on Wave 22 completion)*
 
 - [x] 50-27-PLAN.md — G-50-5a: every adapter bills empty and refused calls on both paths; PricingLlmAdapter prices them buffered and streamed; conformance case on all nine (`CASE_COUNT` 20)
-- [ ] 50-28-PLAN.md — G-50-5a: billed failures folded and settled to the treasury ledger in the agent loop, buffered and streamed (private `CallFailure`, no public type change)
+- [x] 50-28-PLAN.md — G-50-5a: billed failures folded and settled to the treasury ledger in the agent loop, buffered and streamed (private `CallFailure`, no public type change)
 
 **Wave 24** *(gap-closure wave 9; blocked on Wave 23 completion)*
 

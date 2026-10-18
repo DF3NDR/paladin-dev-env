@@ -9,6 +9,17 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 50 (G-50-5a remainder (b), PARITY-05; plan 50-29): the superstep engine counts the spend of
+  an attempt however it ends. `race_attempt` runs every attempt inside a fresh
+  `paladin_ports::output::spend_scope::ATTEMPT_SPEND` scope held outside the attempt future; an
+  attempt that fails with any `PaladinError`, or that the run deadline or idle bound cuts off,
+  reports the usage and cost its Paladin recorded (every call it was billed for) on its
+  `NodeFinished` and the superstep boundary settles it once per attempt (LEDGR-03/04, retries never
+  double counted), where before it reported the neutral pair and settled nothing. The
+  structured-output arm reports the recorded sum of every repair call on success too (its `raw`
+  carries only the last call), falling back to `raw`'s figures when nothing was recorded. A
+  successful Paladin attempt still reports `PaladinResult.cost` alone. No public item changes.
+
 - Phase 43 (rate pacing, the Cadence; PACE-04; ADR-0058): `WarEngine::with_cadence(port,
   lock_ttl)`, which puts the Cadence stampede lock around the node cache's miss-to-store window.
   With a node cache attached, concurrent identical cache misses execute a cache-policy node once and

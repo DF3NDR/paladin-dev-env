@@ -9,6 +9,17 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 50 (G-50-5a remainder (b), PARITY-05; plan 50-29): the `output::spend_scope` module --
+  `SpendScope` (a shared accumulator of `paladin_core`'s `IncurredSpend`; `new`, `record`,
+  `snapshot`; a poisoned lock is recovered, never unwrapped), the `tokio::task_local!`
+  `ATTEMPT_SPEND`, `record_incurred_spend(usage, cost) -> bool` (the write side; `false` outside a
+  scope) and `current_attempt_spend() -> Option<IncurredSpend>` (the read side). It follows the
+  `RUN_TRACE_EMITTER` precedent: the Battalion engine installs a fresh scope around every attempt,
+  `PaladinExecutionService` records every billed call at the point it folds it, and the engine
+  reads the scope for a failed, timed-out or structured attempt. A direct `PaladinPort` caller that
+  wants a failed execution's spend installs a scope itself (`ATTEMPT_SPEND.scope(scope.clone(),
+  fut).await`, then `scope.snapshot()`).
+
 - Phase 50 (provider parity and configuration-driven model swap; PARITY-02, PARITY-05; ADR-0061):
   `ModelProfile`, `ParamSupport` (`Range`, `Fixed`, `NotSent`), `StopSupport` and `SamplingParam`
   in `output::model_profile` (re-exported from `output::llm_port`), and the defaulted

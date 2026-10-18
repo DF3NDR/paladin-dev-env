@@ -175,11 +175,12 @@ pub fn record_incurred_spend(usage: &TokenUsage, cost: Option<&Cost>) -> bool {
 /// let spend = ATTEMPT_SPEND.sync_scope(SpendScope::new(), || {
 ///     record_incurred_spend(&TokenUsage::new(3, 4), None);
 ///     current_attempt_spend()
-/// })
-/// .expect("inside a scope");
+/// });
+/// let spend = spend.ok_or("inside a scope the snapshot is Some")?;
 /// assert_eq!(spend.calls(), 1);
 /// assert_eq!(spend.usage().total_tokens, 7);
 /// assert_eq!(spend.cost(), None, "an unpriced call: cost unknown");
+/// # Ok::<(), &'static str>(())
 /// ```
 pub fn current_attempt_spend() -> Option<IncurredSpend> {
     ATTEMPT_SPEND.try_with(SpendScope::snapshot).ok()

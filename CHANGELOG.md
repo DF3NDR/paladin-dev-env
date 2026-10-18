@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Attempt spend scope: a Battalion attempt is charged for every call it made, however it
+  ends** (G-50-5a remainder (b), PARITY-05; Phase 50 plan 50-29). `paladin_core::platform::container::cost::IncurredSpend`
+  (the usage, `CostTally` cost and call count an operation has incurred so far) and
+  `paladin_ports::output::spend_scope::{SpendScope, ATTEMPT_SPEND, record_incurred_spend,
+  current_attempt_spend}`, a `tokio::task_local!` following `RUN_TRACE_EMITTER`. The superstep
+  engine installs a fresh scope around every attempt (outside the attempt future, so a deadline-
+  or idle-dropped attempt still reports what it spent); `PaladinExecutionService` records every
+  buffered call, every billed failure, every structured call including each repair, and the
+  streamed terminal chunk or billed stream error (the scope is captured before the spawn and
+  re-installed in the forwarding task). A failed or timed-out attempt's `NodeFinished` now carries
+  that spend and the superstep settle charges it once per attempt; a structured attempt reports
+  the sum of every repair call rather than only the last call's `raw` figures; a successful
+  Paladin attempt still reports `PaladinResult.cost` and is never double counted. Additive: no
+  `PaladinError` or other public type changes shape, and the scope holds `TokenUsage` and `Cost`
+  only.
+
 - **Usage reconciliation and `paladin_llm::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY`
   (G-50-5a; Phase 50 plan 50-21).** The five OpenAI-compatible presets (Kimi, Qwen, Grok, Ollama,
   OpenAI-compatible) now parse the vendor's own `total_tokens`, buffered and streamed, and compare

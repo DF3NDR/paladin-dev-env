@@ -15,6 +15,14 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 50 (G-50-5a remainder (b), PARITY-05; plan 50-29): `IncurredSpend` in
+  `platform::container::cost` -- the spend an operation has incurred so far, every billed call
+  counted, whatever its eventual outcome: `new`, `record(usage, cost)` (usage summed saturating,
+  cost under the `CostTally` rule so one unpriced call makes `cost()` `None`), `usage()`, `cost()`,
+  `calls()` and `is_empty()`. `Default` is the empty spend, the neutral `(TokenUsage::default(),
+  None)` pair `CostTally::record_node` ignores. It is the accumulator behind `paladin-ports`'s
+  attempt spend scope.
+
 - Phase 42 (mid-run halt and terminal status, ALLOW-03, ALLOW-05, PLAT-09; ADR-0057):
   `HaltReason` (`AllowanceExhausted`, `LedgerUnavailable`; `as_str`, `wire_json`, `herald_line`) and
   `AllowanceRefusal::details_json`; `RunFinishStatus::Cancelled` (the enum is now

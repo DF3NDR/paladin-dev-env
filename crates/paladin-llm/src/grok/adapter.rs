@@ -325,15 +325,18 @@ impl GrokAdapter {
                 .with_provider_name(GROK_PROVIDER)
                 .with_default_max_tokens(config.max_tokens)
                 .with_model_registry(registry)
-                // G-50-5a (A2-50-21): xAI reports `completion_tokens_details.reasoning_tokens`
-                // BESIDE `completion_tokens` -- its total is prompt + completion + reasoning
-                // (Google Vertex AI "Reasoning for Grok models": 663 + 50 + 124 = 837; Glama
-                // grok-api doc: 50 + 200 + 150 = 400) -- so the engine folds reasoning into
-                // completion and the Treasurer prices what xAI bills. This is SECONDARY-SOURCED,
-                // NOT LIVE-MEASURED: docs.x.ai answered 403 through the proxy on 2026-10-17 and
-                // the 2026-10-15 probe recorded field names only. Plan 50-22 measures it live and
-                // plan 50-24 applies the verdict. A wrong declaration cannot stay silent: the
-                // vendor-total reconciliation flags every reasoning call it misreads.
+                // G-50-5a: xAI reports `completion_tokens_details.reasoning_tokens` BESIDE
+                // `completion_tokens` -- its total is prompt + completion + reasoning -- so the
+                // engine folds reasoning into completion and the Treasurer prices what xAI bills.
+                // LIVE-MEASURED 2026-10-18 (plan 50-22, `50-USAGE-PROBE.md`, operator run on the
+                // raw xAI wire): grok-4.3, grok-4.5 and grok-4.6 each read `reasoning beside
+                // completion` (grok-4.3: 212 + 1 + 457 = 670), and the billed-cost cross-check is
+                // consistent to the tick on all three -- `cost_in_usd_ticks` equals the listing
+                // prices with reasoning billed at the completion rate. Plan 50-24 applied the
+                // verdict (this declaration stays). It replaces plan 50-21's secondary sources
+                // (A2-50-21: Google Vertex AI 663 + 50 + 124 = 837). Semantics are per provider:
+                // a future Grok model that disagrees is flagged at runtime by the vendor-total
+                // reconciliation under `paladin.usage_unreconciled`.
                 .with_usage_semantics(CompatUsageSemantics::ReasoningBesideCompletion),
         })
     }
@@ -942,7 +945,8 @@ mod tests {
 
     /// G-50-5a (owner decision, UAT test 5): a Grok reasoning response is billed in full. xAI
     /// reports `completion_tokens_details.reasoning_tokens` beside `completion_tokens` (vendor
-    /// total = prompt + completion + reasoning; A2-50-21, secondary-sourced), so the adapter
+    /// total = prompt + completion + reasoning; this body is plan 50-21's secondary-sourced
+    /// Vertex example, live-measured 2026-10-18 in `50-USAGE-PROBE.md`), so the adapter
     /// folds the reasoning into `completion_tokens`, keeps `total_tokens == prompt + completion`
     /// (D-02), and the Treasurer prices what xAI bills. Before the fold this call mapped to
     /// completion 50, total 713 and priced at 1_163_000 nanos.
@@ -1020,6 +1024,88 @@ mod tests {
         );
     }
 
+    /// G-50-5a, plan 50-24: the live-measured grok-4.3 usage object (`50-USAGE-PROBE.md`,
+    /// 2026-10-18: prompt 212 of which 128 cached, completion 1, reasoning 457, total 670,
+    /// `cost_in_usd_ticks` 12_756_000) maps to the inclusive figures and, priced at the xAI
+    /// listing prices recorded in `50-SEED-PROBE.md` (12_500 / 2_000 / 25_000 ticks per token,
+    /// 1 tick = 1e-10 USD, i.e. $1.25 / $0.20 / $2.50 per million), costs exactly what xAI
+    /// billed: 12_756_000 ticks = 1_275_600 nanos. Read inclusively (no fold) it would price at
+    /// 133_100 nanos and disagree with the vendor total.
+    #[tokio::test]
+    async fn grok_measured_usage_prices_to_the_billed_cost() {
+        use crate::pricing::PricingLlmAdapter;
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+        use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
+        use std::sync::Arc;
+
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "id": "cmpl-grok-measured",
+                    "model": "grok-4.3",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "391"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 212,
+                        "completion_tokens": 1,
+                        "total_tokens": 670,
+                        "prompt_tokens_details": {"cached_tokens": 128},
+                        "completion_tokens_details": {"reasoning_tokens": 457},
+                        "num_sources_used": 0,
+                        "cost_in_usd_ticks": 12_756_000_u64
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let grok = GrokAdapter::new(GrokConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            "grok-4.3".to_string(),
+        ))
+        .unwrap();
+        // xAI listing price in ticks per token x 100_000 = nanos per million tokens.
+        let row = PriceRow::new(1_250_000_000, 2_500_000_000)
+            .unwrap()
+            .with_cache_read(200_000_000)
+            .unwrap();
+        let table =
+            Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row("grok-4.3", row));
+        let priced = PricingLlmAdapter::new(Arc::new(grok), table);
+
+        let response = priced
+            .generate(build_request("grok-4.3"))
+            .await
+            .expect("well-formed response");
+
+        let usage = &response.usage;
+        assert_eq!(usage.prompt_tokens, 212);
+        assert_eq!(usage.cache_read_tokens, Some(128));
+        assert_eq!(usage.completion_tokens, 458, "1 + 457 reasoning: {usage:?}");
+        assert_eq!(usage.reasoning_tokens, Some(457));
+        assert_eq!(usage.total_tokens, 670, "the vendor's total: {usage:?}");
+        let cost = response.cost.as_ref().expect("the model is priced");
+        // 84 x $1.25/M + 128 x $0.20/M + 458 x $2.50/M = 105_000 + 25_600 + 1_145_000 nanos,
+        // which is xAI's cost_in_usd_ticks 12_756_000 / 10.
+        assert_eq!(cost.nanos(), 1_275_600);
+        assert!(
+            !response
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "the measured usage reconciles: {:?}",
+            response.metadata
+        );
+    }
+
     // Test 2: the curated fallback can never disagree with the default
     // about which model to reach for.
     #[test]
@@ -1087,9 +1173,9 @@ mod tests {
                 .to_string()
             }
 
-            // G-50-5a (A2-50-21): xAI reports `reasoning_tokens` BESIDE `completion_tokens`
-            // (vendor total = prompt + completion + reasoning; secondary-sourced, measured live
-            // by plan 50-22), so this body is xAI-shaped -- completion 25 plus reasoning 15,
+            // G-50-5a: xAI reports `reasoning_tokens` BESIDE `completion_tokens` (vendor total =
+            // prompt + completion + reasoning; live-measured 2026-10-18, `50-USAGE-PROBE.md`),
+            // so this body is xAI-shaped -- completion 25 plus reasoning 15,
             // total 140 -- and must map to the same inclusive figures every other preset's
             // OpenAI-shaped body does (completion 40). It pins Grok's
             // `ReasoningBesideCompletion` declaration by behaviour.

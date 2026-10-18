@@ -395,7 +395,8 @@ pub(crate) enum CompatUsageSemantics {
     /// The vendor reports `completion_tokens_details.reasoning_tokens` beside
     /// `completion_tokens` (vendor total = prompt + completion + reasoning), so the engine adds
     /// the reasoning into `completion_tokens` (saturating) and keeps the reasoning sub-count as
-    /// reported. Grok declares it (secondary-sourced; see `GrokAdapter::new`).
+    /// reported. Grok declares it (live-measured 2026-10-18, `50-USAGE-PROBE.md`; see
+    /// `GrokAdapter::new`).
     // Declared by the Grok preset only; a build without it never constructs this variant.
     #[cfg_attr(not(feature = "grok"), allow(dead_code))]
     ReasoningBesideCompletion,

@@ -747,7 +747,7 @@ mod tests {
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
 
         assert!(
-            matches!(result, Err(LlmError::EmptyCompletion(_))),
+            matches!(result, Err(LlmError::EmptyCompletion { .. })),
             "got {result:?}"
         );
     }
@@ -779,7 +779,7 @@ mod tests {
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
 
-        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
+        assert!(matches!(result, Err(LlmError::EmptyCompletion { .. })));
     }
 
     // ── Error mapping ──
@@ -1116,7 +1116,7 @@ mod tests {
 
         assert_eq!(items.len(), 1, "only the terminal item is emitted");
         assert!(
-            matches!(items[0], Err(LlmError::EmptyCompletion(_))),
+            matches!(items[0], Err(LlmError::EmptyCompletion { .. })),
             "got {:?}",
             items[0]
         );

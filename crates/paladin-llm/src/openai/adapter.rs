@@ -2894,6 +2894,7 @@ mod tests {
                     provider,
                     model,
                     detail,
+                    ..
                 }) => {
                     assert_eq!(provider, "openai");
                     assert_eq!(model, "gpt-4o");
@@ -2929,7 +2930,7 @@ mod tests {
                 ))
                 .await;
                 assert!(
-                    matches!(result, Err(LlmError::EmptyCompletion(_))),
+                    matches!(result, Err(LlmError::EmptyCompletion { .. })),
                     "got {result:?}"
                 );
             }
@@ -2981,6 +2982,7 @@ mod tests {
                     provider,
                     model,
                     detail,
+                    ..
                 }) => {
                     assert_eq!(provider, "openai");
                     assert_eq!(model, "gpt-4o");
@@ -3001,7 +3003,7 @@ mod tests {
             let items = stream_from(sse).await;
             let (last, yielded) = items.split_last().unwrap();
             assert!(
-                matches!(last, Err(LlmError::EmptyCompletion(_))),
+                matches!(last, Err(LlmError::EmptyCompletion { .. })),
                 "got {last:?}"
             );
             assert!(yielded.iter().all(|item| item.is_ok()));

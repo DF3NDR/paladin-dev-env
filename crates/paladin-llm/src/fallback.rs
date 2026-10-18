@@ -2062,11 +2062,7 @@ mod tests {
     }
 
     fn refusal(provider: &str, model: &str) -> LlmError {
-        LlmError::Refusal {
-            provider: provider.to_string(),
-            model: model.to_string(),
-            detail: "I can't help with that.".to_string(),
-        }
+        LlmError::refusal(provider, model, "I can't help with that.")
     }
 
     #[test]

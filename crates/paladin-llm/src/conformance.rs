@@ -1339,7 +1339,7 @@ pub mod cases {
         let result = adapter.generate(conformance_request()).await;
 
         match result {
-            Err(err @ LlmError::EmptyCompletion(_)) => assert_eq!(
+            Err(err @ LlmError::EmptyCompletion { .. }) => assert_eq!(
                 err.transience(),
                 Transience::Permanent,
                 "an empty completion is permanent (retrying the same call does not help)"
@@ -1373,7 +1373,7 @@ pub mod cases {
         }
 
         match items.last() {
-            Some(Err(err @ LlmError::EmptyCompletion(_))) => assert_eq!(
+            Some(Err(err @ LlmError::EmptyCompletion { .. })) => assert_eq!(
                 err.transience(),
                 Transience::Permanent,
                 "an empty streamed completion is permanent"

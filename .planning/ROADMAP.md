@@ -1456,7 +1456,7 @@ Plans:
 
 **Wave 21** *(gap-closure wave 6; blocked on Wave 20 completion)*
 
-- [ ] 50-25-PLAN.md — G-50-5a: additive `LlmError::empty_completion` / `LlmError::refusal` constructors; seven consumer files moved to shape-proof forms (no behaviour change)
+- [x] 50-25-PLAN.md — G-50-5a: additive `LlmError::empty_completion` / `LlmError::refusal` constructors; seven consumer files moved to shape-proof forms (no behaviour change)
 
 **Wave 22** *(gap-closure wave 7; blocked on Wave 21 completion)*
 

@@ -116,14 +116,14 @@ pub(crate) struct CompatChoice {
 pub(crate) struct CompatUsage {
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
-    /// Some compatible providers omit `total_tokens` from their usage
-    /// object, and even when present it is deliberately unread:
-    /// `TokenUsage::new` recomputes `total_tokens` as `prompt_tokens +
-    /// completion_tokens` (D-02), so the provider's own reported total is
-    /// discarded rather than trusted — see [`super::engine::CompatEngine`]'s
-    /// usage-construction site. Kept on the struct so the deserializer still
-    /// matches the full wire shape for debugging.
-    #[allow(dead_code)]
+    /// The vendor's own reported total (G-50-5a). Some compatible providers
+    /// omit it, so it is `None` then. When present it is parsed and
+    /// reconciled against the mapped `prompt_tokens + completion_tokens`
+    /// (`crate::usage_reconcile`), never copied into `TokenUsage`, which
+    /// keeps `total_tokens == prompt_tokens + completion_tokens` (D-02): a
+    /// disagreement is recorded under
+    /// [`crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY`] instead
+    /// of being discarded.
     #[serde(default)]
     pub total_tokens: Option<u32>,
     /// OpenAI-shaped `prompt_tokens_details.cached_tokens` (D-20). Absent on

@@ -122,6 +122,11 @@ pub mod sampling;
 /// priority-ordered allocator with explicit truncation markers).
 #[allow(missing_docs)]
 pub mod services;
+/// The check every usage mapper's output passes through (G-50-5a): the vendor's own total and
+/// the containment [`paladin_core::platform::container::token_usage::TokenUsage`] promises are
+/// compared with the mapped usage, and any finding is logged once and recorded under
+/// [`usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY`]. Not feature-gated.
+pub mod usage_reconcile;
 // The one user-turn text helper every provider adapter's request builder calls (PARITY-08,
 // handoff B-4). Crate-private; documented by its own inner `//!` block; compiled only when a
 // provider adapter is.

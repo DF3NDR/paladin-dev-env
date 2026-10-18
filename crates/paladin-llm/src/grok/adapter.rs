@@ -19,6 +19,7 @@ use paladin_ports::output::llm_port::{
 
 use paladin_ports::output::model_profile::{ModelProfile, StopSupport};
 
+use crate::compat::engine::CompatUsageSemantics;
 use crate::compat::{
     CompatCapabilities, CompatEngine, CompatEngineConfig, CompatRequestParameters,
 };
@@ -323,7 +324,17 @@ impl GrokAdapter {
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(GROK_PROVIDER)
                 .with_default_max_tokens(config.max_tokens)
-                .with_model_registry(registry),
+                .with_model_registry(registry)
+                // G-50-5a (A2-50-21): xAI reports `completion_tokens_details.reasoning_tokens`
+                // BESIDE `completion_tokens` -- its total is prompt + completion + reasoning
+                // (Google Vertex AI "Reasoning for Grok models": 663 + 50 + 124 = 837; Glama
+                // grok-api doc: 50 + 200 + 150 = 400) -- so the engine folds reasoning into
+                // completion and the Treasurer prices what xAI bills. This is SECONDARY-SOURCED,
+                // NOT LIVE-MEASURED: docs.x.ai answered 403 through the proxy on 2026-10-17 and
+                // the 2026-10-15 probe recorded field names only. Plan 50-22 measures it live and
+                // plan 50-24 applies the verdict. A wrong declaration cannot stay silent: the
+                // vendor-total reconciliation flags every reasoning call it misreads.
+                .with_usage_semantics(CompatUsageSemantics::ReasoningBesideCompletion),
         })
     }
 }
@@ -848,6 +859,86 @@ mod tests {
         assert_eq!(obj.get("top_p").and_then(Value::as_f64), Some(1.0));
     }
 
+    /// G-50-5a (owner decision, UAT test 5): a Grok reasoning response is billed in full. xAI
+    /// reports `completion_tokens_details.reasoning_tokens` beside `completion_tokens` (vendor
+    /// total = prompt + completion + reasoning; A2-50-21, secondary-sourced), so the adapter
+    /// folds the reasoning into `completion_tokens`, keeps `total_tokens == prompt + completion`
+    /// (D-02), and the Treasurer prices what xAI bills. Before the fold this call mapped to
+    /// completion 50, total 713 and priced at 1_163_000 nanos.
+    #[tokio::test]
+    async fn grok_reasoning_tokens_reach_completion_and_the_price() {
+        use crate::pricing::PricingLlmAdapter;
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+        use paladin_core::platform::container::cost::{CurrencyCode, PriceRow, PriceTable};
+        use std::sync::Arc;
+
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "id": "cmpl-grok-reasoning",
+                    "model": GROK_DEFAULT_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Paris"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 663,
+                        "completion_tokens": 50,
+                        "total_tokens": 837,
+                        "completion_tokens_details": {"reasoning_tokens": 124}
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+
+        let grok = GrokAdapter::new(GrokConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            GROK_DEFAULT_MODEL.to_string(),
+        ))
+        .unwrap();
+        // $1 per million input tokens, $10 per million output tokens.
+        let table = Arc::new(PriceTable::new(CurrencyCode::new("USD").unwrap()).with_row(
+            GROK_DEFAULT_MODEL,
+            PriceRow::new(1_000_000_000, 10_000_000_000).unwrap(),
+        ));
+        let priced = PricingLlmAdapter::new(Arc::new(grok), table);
+
+        let response = priced
+            .generate(build_request(GROK_DEFAULT_MODEL))
+            .await
+            .expect("well-formed response");
+
+        let usage = &response.usage;
+        assert_eq!(usage.prompt_tokens, 663);
+        assert_eq!(
+            usage.completion_tokens, 174,
+            "50 + 124 reasoning: {usage:?}"
+        );
+        assert_eq!(usage.reasoning_tokens, Some(124));
+        assert_eq!(
+            usage.total_tokens, 837,
+            "equals the vendor's total: {usage:?}"
+        );
+        let cost = response.cost.as_ref().expect("the model is priced");
+        // 663 * $1/M + 174 * $10/M = 663_000 + 1_740_000 nanos, what xAI bills at this row.
+        assert_eq!(cost.nanos(), 2_403_000);
+        assert!(
+            !response
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "the folded usage agrees with the vendor total: {:?}",
+            response.metadata
+        );
+    }
+
     // Test 2: the curated fallback can never disagree with the default
     // about which model to reach for.
     #[test]
@@ -913,6 +1004,39 @@ mod tests {
                     "data: [DONE]\n\n",
                 )
                 .to_string()
+            }
+
+            // G-50-5a (A2-50-21): xAI reports `reasoning_tokens` BESIDE `completion_tokens`
+            // (vendor total = prompt + completion + reasoning; secondary-sourced, measured live
+            // by plan 50-22), so this body is xAI-shaped -- completion 25 plus reasoning 15,
+            // total 140 -- and must map to the same inclusive figures every other preset's
+            // OpenAI-shaped body does (completion 40). It pins Grok's
+            // `ReasoningBesideCompletion` declaration by behaviour.
+            fn usage_body() -> String {
+                json!({
+                    "id": "cmpl-1",
+                    "model": GROK_DEFAULT_MODEL,
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hi there"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 25,
+                        "total_tokens": 140,
+                        "prompt_tokens_details": {"cached_tokens": 30},
+                        "completion_tokens_details": {"reasoning_tokens": 15}
+                    }
+                })
+                .to_string()
+            }
+
+            fn expected_usage() -> crate::conformance::ExpectedUsage {
+                // prompt 100, completion 25 + 15 = 40, reasoning 15, cache read 30, total 140.
+                crate::conformance::wire_defaults::expected_usage(
+                    crate::conformance::Wire::OpenAiChat,
+                )
             }
 
             fn error_body(status: u16) -> String {

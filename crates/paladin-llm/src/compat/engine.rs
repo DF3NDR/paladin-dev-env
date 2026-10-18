@@ -43,6 +43,7 @@ use crate::registry::{ModelRegistry, fallback_from_compat};
 use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
+use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
 
 /// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
 ///
@@ -375,6 +376,31 @@ fn base_url_without_userinfo(base_url: &str) -> String {
     out
 }
 
+/// How a preset's vendor reports reasoning tokens relative to `completion_tokens` (G-50-5a).
+///
+/// [`TokenUsage`] is inclusive: `completion_tokens` carries every billed output token, reasoning
+/// included. Vendors on the OpenAI chat wire do not all report it that way, so each preset
+/// declares its vendor's contract through [`CompatEngine::with_usage_semantics`] and the engine
+/// folds accordingly -- declared, never branched on provider identity. The vendor's own
+/// `total_tokens` is the check on the declaration: a wrong one is recorded under
+/// [`USAGE_UNRECONCILED_METADATA_KEY`] on every reasoning call, never silently priced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum CompatUsageSemantics {
+    /// OpenAI's documented contract: `completion_tokens` already includes
+    /// `completion_tokens_details.reasoning_tokens`, so `completion_tokens` is copied as is and
+    /// the vendor total is `prompt_tokens + completion_tokens`. The engine default; Kimi, Qwen,
+    /// Ollama and OpenAI-compatible keep it.
+    #[default]
+    ReasoningInsideCompletion,
+    /// The vendor reports `completion_tokens_details.reasoning_tokens` beside
+    /// `completion_tokens` (vendor total = prompt + completion + reasoning), so the engine adds
+    /// the reasoning into `completion_tokens` (saturating) and keeps the reasoning sub-count as
+    /// reported. Grok declares it (secondary-sourced; see `GrokAdapter::new`).
+    // Declared by the Grok preset only; a build without it never constructs this variant.
+    #[cfg_attr(not(feature = "grok"), allow(dead_code))]
+    ReasoningBesideCompletion,
+}
+
 /// The shared OpenAI-compatible engine every preset built on this core
 /// delegates to.
 ///
@@ -421,6 +447,12 @@ pub struct CompatEngine {
     /// Which (model, adjustment) `response_format` changes this instance has already warned
     /// about.
     format_log: FormatLog,
+    /// How the preset's vendor reports reasoning against `completion_tokens`
+    /// ([`CompatEngine::with_usage_semantics`]). Private and **not** a field of the public
+    /// [`CompatEngineConfig`], which stays constructible exactly as before.
+    usage_semantics: CompatUsageSemantics,
+    /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
+    usage_log: UsageLog,
 }
 
 /// The provider name a [`CompatEngine`] reports until a preset names it via
@@ -464,6 +496,8 @@ impl CompatEngine {
             default_max_tokens: None,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
+            usage_semantics: CompatUsageSemantics::default(),
+            usage_log: UsageLog::new(),
         })
     }
 
@@ -496,6 +530,18 @@ impl CompatEngine {
     #[must_use]
     pub(crate) fn with_default_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
         self.default_max_tokens = max_tokens;
+        self
+    }
+
+    /// Declare how this preset's vendor reports reasoning tokens against `completion_tokens`
+    /// (G-50-5a), in the [`with_model_registry`](Self::with_model_registry) style. Without it the
+    /// engine reads OpenAI's inclusive contract
+    /// ([`CompatUsageSemantics::ReasoningInsideCompletion`]).
+    #[must_use]
+    // Called by the Grok preset only today; the other presets keep the default.
+    #[cfg_attr(not(feature = "grok"), allow(dead_code))]
+    pub(crate) fn with_usage_semantics(mut self, semantics: CompatUsageSemantics) -> Self {
+        self.usage_semantics = semantics;
         self
     }
 
@@ -635,11 +681,31 @@ impl CompatEngine {
     /// -chunk usage, so the two paths cannot drift.
     ///
     /// Cache-read, cache-write and reasoning counts are copied from the vendor's fields exactly
-    /// as reported. `total_tokens` is the one figure this does not copy: [`TokenUsage`]
-    /// guarantees `total_tokens == prompt_tokens + completion_tokens` (D-02), so it is derived
-    /// by the constructor from the two counts the vendor did report.
-    fn map_compat_usage(usage: CompatUsage) -> TokenUsage {
-        let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
+    /// as reported. `completion_tokens` follows the preset's declared `semantics`: copied as is
+    /// when the vendor reports reasoning inside it, and with the reported reasoning added
+    /// (saturating) when the vendor reports it beside it, so the mapped `prompt + completion`
+    /// equals what the vendor bills. A reasoning figure of `None` or `Some(0)` leaves
+    /// completion unchanged.
+    ///
+    /// Returns the mapped usage together with the vendor's own `total_tokens` (when it reported
+    /// one). The vendor total is parsed and handed to the reconciliation, never copied:
+    /// [`TokenUsage`] guarantees `total_tokens == prompt_tokens + completion_tokens` (D-02), so
+    /// a disagreement is recorded under [`USAGE_UNRECONCILED_METADATA_KEY`], not written over
+    /// the mapped total.
+    fn map_compat_usage(
+        usage: CompatUsage,
+        semantics: CompatUsageSemantics,
+    ) -> (TokenUsage, Option<u32>) {
+        let reasoning = usage
+            .completion_tokens_details
+            .and_then(|details| details.reasoning_tokens);
+        let completion = match semantics {
+            CompatUsageSemantics::ReasoningInsideCompletion => usage.completion_tokens,
+            CompatUsageSemantics::ReasoningBesideCompletion => usage
+                .completion_tokens
+                .saturating_add(reasoning.unwrap_or(0)),
+        };
+        let mut mapped = TokenUsage::new(usage.prompt_tokens, completion);
         if let Some(details) = usage.prompt_tokens_details {
             if let Some(cached) = details.cached_tokens {
                 mapped = mapped.with_cache_read(cached);
@@ -648,13 +714,10 @@ impl CompatEngine {
                 mapped = mapped.with_cache_write(written);
             }
         }
-        if let Some(reasoning) = usage
-            .completion_tokens_details
-            .and_then(|details| details.reasoning_tokens)
-        {
+        if let Some(reasoning) = reasoning {
             mapped = mapped.with_reasoning(reasoning);
         }
-        mapped
+        (mapped, usage.total_tokens)
     }
 
     /// Convert a `PromptItem` into the wire message list. Provider-agnostic
@@ -962,7 +1025,13 @@ impl CompatEngine {
                 &self.config.api_key,
             )?;
 
-            let usage = Self::map_compat_usage(api_response.usage);
+            let (usage, vendor_total) =
+                Self::map_compat_usage(api_response.usage, self.usage_semantics);
+            // G-50-5a: the vendor's own total is the check on the mapping -- a disagreement is
+            // warned once and recorded, never written over the mapped total (D-02).
+            let unreconciled =
+                self.usage_log
+                    .record(self.provider_name(), &request.model, &usage, vendor_total);
 
             let mut llm_response = LlmResponse::new(
                 request.id,
@@ -972,6 +1041,11 @@ impl CompatEngine {
                 usage,
             );
             llm_response.metadata = metadata.clone();
+            if let Some(value) = unreconciled {
+                llm_response
+                    .metadata
+                    .insert(USAGE_UNRECONCILED_METADATA_KEY.to_string(), value);
+            }
             if let Some(reasoning) = &choice.message.reasoning_content {
                 llm_response = llm_response.with_reasoning(reasoning.as_str());
             }
@@ -1156,7 +1230,15 @@ impl CompatEngine {
                             ) {
                                 Ok(response) => {
                                     if let Some(usage) = response.usage {
-                                        held_usage = Some(Self::map_compat_usage(usage));
+                                        // Plan 50-21 Task 2 maps the streamed frame with the
+                                        // preset's semantics and reconciles it.
+                                        held_usage = Some(
+                                            Self::map_compat_usage(
+                                                usage,
+                                                CompatUsageSemantics::ReasoningInsideCompletion,
+                                            )
+                                            .0,
+                                        );
                                     }
                                     if let Some(choice) = response.choices.first() {
                                         if let Some(reason) = &choice.finish_reason {

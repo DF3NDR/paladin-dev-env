@@ -36,15 +36,17 @@
 //! buffered `LlmResponse.metadata`, or the terminal chunk's `StreamingResponse.metadata` on a
 //! streamed call). Warn text and metadata value carry provider, model, check name and token
 //! counts only -- never content, a URL or a credential.
-// Consumed by the compat engine today (plan 50-21); the four bespoke adapters join in plan 50-23.
-// Without a consuming adapter feature the crate-private helpers are legitimately unused.
+// Consumed by the compat engine (plan 50-21) and the Gemini adapter (plan 50-23); the other
+// bespoke adapters join in plan 50-23 Task 2. Without a consuming adapter feature the
+// crate-private helpers are legitimately unused.
 #![cfg_attr(
     not(any(
         feature = "kimi",
         feature = "qwen",
         feature = "grok",
         feature = "ollama",
-        feature = "openai-compatible"
+        feature = "openai-compatible",
+        feature = "gemini"
     )),
     allow(dead_code)
 )]

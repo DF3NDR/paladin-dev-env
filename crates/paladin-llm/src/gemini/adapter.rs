@@ -97,6 +97,7 @@ use crate::registry::{
 use crate::response_guards::{StreamCompletion, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
+use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
 
 /// The provider name this adapter reports through [`LlmPort::get_provider_name`]
 /// and stamps on every [`LlmError::ProviderError`] it emits (Phase 25 D-03).
@@ -372,6 +373,8 @@ pub struct GeminiAdapter {
     /// Which (model, adjustment) `response_format` changes this instance has already warned
     /// about.
     format_log: FormatLog,
+    /// Which (model, check) usage findings this instance has already warned about (G-50-5a).
+    usage_log: UsageLog,
 }
 
 /// What this adapter declares to the port, stated once so the adapter-wide fallback profile and
@@ -482,6 +485,7 @@ impl GeminiAdapter {
             model_registry,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
+            usage_log: UsageLog::new(),
         })
     }
 
@@ -690,7 +694,16 @@ impl GeminiAdapter {
             &self.config.api_key,
         )?;
 
-        let usage = response.usage_metadata.unwrap_or_default();
+        let (usage, vendor_total) = map_gemini_usage(&response.usage_metadata.unwrap_or_default());
+        // G-50-5a: Gemini's own `totalTokenCount` is the check on the mapping -- a disagreement
+        // is warned once and recorded, never written over the mapped total (D-02).
+        let mut metadata = HashMap::new();
+        if let Some(value) = self
+            .usage_log
+            .record(GEMINI_PROVIDER, model, &usage, vendor_total)
+        {
+            metadata.insert(USAGE_UNRECONCILED_METADATA_KEY.to_string(), value);
+        }
 
         Ok(LlmResponse {
             id: Uuid::new_v4(),
@@ -698,10 +711,10 @@ impl GeminiAdapter {
             model: model.to_string(),
             content,
             finish_reason,
-            usage: map_gemini_usage(&usage),
+            usage,
             cost: None,
             created_at: Utc::now(),
-            metadata: HashMap::new(),
+            metadata,
             function_call: None,
             reasoning: None,
         })
@@ -1083,8 +1096,9 @@ impl LlmPort for GeminiAdapter {
         let mut response = self
             .execute_with_retry(operation, self.config.max_retries)
             .await?;
-        // The request-time notes (ADR-0061 visibility rule) ride on the successful response.
-        response.metadata = notes.into_metadata();
+        // The request-time notes (ADR-0061 visibility rule) ride on the successful response,
+        // beside any usage finding `parse_response` recorded.
+        response.metadata.extend(notes.into_metadata());
         Ok(response)
     }
 
@@ -1188,6 +1202,10 @@ impl LlmPort for GeminiAdapter {
         let model = request.model.clone();
         let api_key = self.config.api_key.clone();
         let mut completion = StreamCompletion::default();
+        // G-50-5a: the terminal frame's `totalTokenCount`, reconciled on the `Ok` terminal chunk
+        // against the usage mapped from the same frame. A clone shares this instance's log.
+        let usage_log = self.usage_log.clone();
+        let mut held_vendor_total: Option<u32> = None;
 
         // A network read can end inside a `data:` line (or inside a multi-byte character), so the
         // bytes are reassembled into whole lines before any line is parsed (CR-02).
@@ -1204,8 +1222,14 @@ impl LlmPort for GeminiAdapter {
                 };
                 let items: Vec<Result<StreamingResponse, LlmError>> = match chunk_result {
                     Ok(lines) => {
-                        let mut items = parse_sse_lines(&lines);
+                        let mut items = parse_sse_lines(&lines, &mut held_vendor_total);
                         classify_stream_items(&mut items, &mut completion, &model, &api_key);
+                        reconcile_terminal_usage(
+                            &mut items,
+                            &usage_log,
+                            &model,
+                            &mut held_vendor_total,
+                        );
                         stamp_terminal_metadata(&mut items, &stream_metadata);
                         items
                     }
@@ -1333,13 +1357,21 @@ struct GeminiUsageMetadata {
     prompt_token_count: u32,
     #[serde(default, rename = "candidatesTokenCount")]
     candidates_token_count: u32,
-    // Deliberately unread: `TokenUsage::new` recomputes `total_tokens` as
-    // `prompt_tokens + completion_tokens` (D-02), so the provider's own
-    // reported total is discarded rather than trusted. Kept on the struct so
-    // the deserializer still matches the full wire shape for debugging.
-    #[allow(dead_code)]
+    /// Gemini's own reported total (G-50-5a). Parsed and handed to the
+    /// reconciliation ([`crate::usage_reconcile`]), never copied:
+    /// `TokenUsage::new` derives `total_tokens` as `prompt_tokens +
+    /// completion_tokens` (D-02), and a disagreement is recorded under
+    /// [`USAGE_UNRECONCILED_METADATA_KEY`]. `None` when the key is absent --
+    /// never a fabricated `0`.
     #[serde(default, rename = "totalTokenCount")]
-    total_token_count: u32,
+    total_token_count: Option<u32>,
+    /// Prompt tokens Gemini spent on tool-use (built-in tool) results, billed
+    /// as input and reported **beside** `promptTokenCount` (G-50-5a): folded
+    /// into [`TokenUsage::prompt_tokens`]. Latent today, because
+    /// `GeminiRequest` sends no tools, but correct before one lands. `None`
+    /// when absent.
+    #[serde(default, rename = "toolUsePromptTokenCount")]
+    tool_use_prompt_token_count: Option<u32>,
     /// Cached-content tokens counted toward `prompt_token_count` (D-20 ->
     /// [`TokenUsage::cache_read_tokens`]). `Option<u32>`, not a bare `u32`
     /// like the three fields above, so an absent key maps to `None`
@@ -1357,26 +1389,34 @@ struct GeminiUsageMetadata {
 }
 
 /// Maps Gemini's wire-shape [`GeminiUsageMetadata`] onto [`TokenUsage`],
-/// applying the D-02 inclusive-total contract: `completion_tokens =
-/// candidatesTokenCount + thoughtsTokenCount` (saturating) so `total_tokens`
-/// stays `prompt + completion` — this agrees with Gemini's own documented
-/// `totalTokenCount = prompt + candidates + toolUsePrompt + thoughts`
-/// arithmetic. Gemini reports no cache-write figure, so
-/// [`TokenUsage::cache_write_tokens`] always stays `None`. Shared by both
-/// the non-streaming path and the streaming path's terminal-frame attachment
-/// (D-15) so the two paths cannot drift.
-fn map_gemini_usage(usage: &GeminiUsageMetadata) -> TokenUsage {
+/// applying the D-02 inclusive-total contract: `prompt_tokens =
+/// promptTokenCount + toolUsePromptTokenCount` and `completion_tokens =
+/// candidatesTokenCount + thoughtsTokenCount` (both saturating), so
+/// `total_tokens` stays `prompt + completion` and agrees with Gemini's own
+/// documented `totalTokenCount = prompt + candidates + toolUsePrompt +
+/// thoughts` arithmetic -- every category in that sum lands in a count (plan
+/// 50-23 added the tool-use fold, G-50-5a). Gemini reports no cache-write
+/// figure, so [`TokenUsage::cache_write_tokens`] always stays `None`.
+///
+/// Returns the mapped usage together with Gemini's `totalTokenCount` (when
+/// reported), which the caller reconciles rather than copies (D-02). Shared
+/// by both the non-streaming path and the streaming path's terminal-frame
+/// attachment (D-15) so the two paths cannot drift.
+fn map_gemini_usage(usage: &GeminiUsageMetadata) -> (TokenUsage, Option<u32>) {
     let thoughts = usage.thoughts_token_count.unwrap_or(0);
     let completion_tokens = usage.candidates_token_count.saturating_add(thoughts);
+    let prompt_tokens = usage
+        .prompt_token_count
+        .saturating_add(usage.tool_use_prompt_token_count.unwrap_or(0));
 
-    let mut mapped = TokenUsage::new(usage.prompt_token_count, completion_tokens);
+    let mut mapped = TokenUsage::new(prompt_tokens, completion_tokens);
     if let Some(cached) = usage.cached_content_token_count {
         mapped = mapped.with_cache_read(cached);
     }
     if let Some(thoughts_tokens) = usage.thoughts_token_count {
         mapped = mapped.with_reasoning(thoughts_tokens);
     }
-    mapped
+    (mapped, usage.total_token_count)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1564,6 +1604,37 @@ fn classify_stream_items(
     }
 }
 
+/// Reconcile the terminal chunk's usage against the vendor total held from the same frame
+/// (G-50-5a), recording any finding under [`USAGE_UNRECONCILED_METADATA_KEY`] on that chunk.
+///
+/// Runs after [`classify_stream_items`], so only an `Ok` terminal chunk is checked and carries a
+/// finding; a terminal replaced with an `Err` carries no metadata (the 50-18 rule). The held
+/// total is taken by the first terminal chunk seen, so it is reconciled once.
+fn reconcile_terminal_usage(
+    items: &mut [Result<StreamingResponse, LlmError>],
+    usage_log: &UsageLog,
+    model: &str,
+    held_vendor_total: &mut Option<u32>,
+) {
+    for item in items.iter_mut() {
+        let Ok(chunk) = item else {
+            continue;
+        };
+        if chunk.finish_reason.is_none() {
+            continue;
+        }
+        let vendor_total = held_vendor_total.take();
+        let finding = chunk
+            .usage
+            .as_ref()
+            .and_then(|usage| usage_log.record(GEMINI_PROVIDER, model, usage, vendor_total));
+        if let Some(value) = finding {
+            let taken = std::mem::replace(chunk, StreamingResponse::delta(String::new()));
+            *chunk = taken.with_metadata(USAGE_UNRECONCILED_METADATA_KEY, value);
+        }
+    }
+}
+
 /// Stamp `metadata` (the request's `paladin.*` visibility keys, ADR-0061 (h)) on the terminal
 /// chunk -- the `Ok` item that carries the finish reason -- and on no other item. A terminal
 /// that [`classify_stream_items`] replaced with an `Err` (an empty answer) carries none.
@@ -1599,7 +1670,14 @@ fn stamp_terminal_metadata(
 /// discipline. There is no `[DONE]` sentinel in Gemini's SSE framing; the
 /// stream simply ends when the body ends. A frame with no `candidates` at
 /// all (e.g. a metadata-only frame) yields no item, not an error.
-fn parse_sse_lines(lines: &[String]) -> Vec<Result<StreamingResponse, LlmError>> {
+///
+/// The finish-reason frame's `totalTokenCount` is written to `held_vendor_total`
+/// for [`reconcile_terminal_usage`] (G-50-5a); a frame with no usage leaves it
+/// `None`.
+fn parse_sse_lines(
+    lines: &[String],
+    held_vendor_total: &mut Option<u32>,
+) -> Vec<Result<StreamingResponse, LlmError>> {
     let mut items = Vec::new();
 
     for line in lines {
@@ -1638,7 +1716,9 @@ fn parse_sse_lines(lines: &[String]) -> Vec<Result<StreamingResponse, LlmError>>
                     if item.finish_reason.is_some()
                         && let Some(usage) = parsed.usage_metadata.as_ref()
                     {
-                        item = item.with_usage(map_gemini_usage(usage));
+                        let (mapped, vendor_total) = map_gemini_usage(usage);
+                        *held_vendor_total = vendor_total;
+                        item = item.with_usage(mapped);
                     }
 
                     items.push(Ok(item));
@@ -2146,6 +2226,177 @@ mod tests {
             .unwrap();
 
         assert_eq!(llm_response.usage, TokenUsage::new(0, 0));
+    }
+
+    // ── Plan 50-23 (G-50-5a): tool-use prompt tokens folded, Gemini's own total reconciled ──
+
+    /// A buffered Gemini success body carrying `usage_metadata` as its `usageMetadata`.
+    fn gemini_usage_response_body(usage_metadata: serde_json::Value) -> String {
+        json!({
+            "candidates": [{
+                "content": {"role": "model", "parts": [{"text": "Hi there"}]},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": usage_metadata
+        })
+        .to_string()
+    }
+
+    /// Serve `body` on the buffered endpoint and return the adapter's response.
+    async fn generate_against(body: String) -> LlmResponse {
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/models/gemini-2.5-flash:generateContent")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(body)
+            .create_async()
+            .await;
+        let adapter = test_adapter(&server.url());
+        let request = build_request(
+            "gemini-2.5-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        );
+        adapter.generate(request).await.unwrap()
+    }
+
+    /// Tracer (plan 50-23 Task 1): `toolUsePromptTokenCount` is billed input, so it is folded into
+    /// `prompt_tokens` and the mapped total agrees with Gemini's `totalTokenCount` (debug repro
+    /// 430: prompt 100 + toolUse 300 = 400, candidates 20 + thoughts 10 = 30). A total that still
+    /// disagrees is recorded, never copied (D-02).
+    #[tokio::test]
+    async fn gemini_tool_use_prompt_tokens_reach_prompt_tokens() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let agreeing = generate_against(gemini_usage_response_body(json!({
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 20,
+            "toolUsePromptTokenCount": 300,
+            "thoughtsTokenCount": 10,
+            "totalTokenCount": 430
+        })))
+        .await;
+        assert_eq!(agreeing.usage.prompt_tokens, 400, "prompt + toolUse");
+        assert_eq!(
+            agreeing.usage.completion_tokens, 30,
+            "candidates + thoughts"
+        );
+        assert_eq!(agreeing.usage.reasoning_tokens, Some(10));
+        assert_eq!(agreeing.usage.total_tokens, 430);
+        assert!(
+            !agreeing
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "an agreeing total records no finding: {:?}",
+            agreeing.metadata
+        );
+
+        let disagreeing = generate_against(gemini_usage_response_body(json!({
+            "promptTokenCount": 100,
+            "candidatesTokenCount": 20,
+            "toolUsePromptTokenCount": 300,
+            "thoughtsTokenCount": 10,
+            "totalTokenCount": 999
+        })))
+        .await;
+        assert_eq!(
+            disagreeing.usage, agreeing.usage,
+            "the mapped usage is kept"
+        );
+        assert_eq!(
+            disagreeing
+                .metadata
+                .get(USAGE_UNRECONCILED_METADATA_KEY)
+                .map(String::as_str),
+            Some("total:vendor=999,mapped=430")
+        );
+    }
+
+    #[tokio::test]
+    async fn gemini_absent_total_and_tool_use_map_as_before_with_no_finding() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let response = generate_against(gemini_usage_response_body(json!({
+            "promptTokenCount": 310,
+            "candidatesTokenCount": 88,
+            "cachedContentTokenCount": 96,
+            "thoughtsTokenCount": 41
+        })))
+        .await;
+        assert_eq!(response.usage.prompt_tokens, 310);
+        assert_eq!(response.usage.completion_tokens, 129);
+        assert_eq!(response.usage.total_tokens, 439);
+        assert_eq!(response.usage.cache_read_tokens, Some(96));
+        assert_eq!(response.usage.reasoning_tokens, Some(41));
+        assert!(
+            !response
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "an absent vendor total is not a finding: {:?}",
+            response.metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn gemini_stream_terminal_usage_is_folded_and_reconciled() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let sse_body = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hel\"}]}}]}\n\n",
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"lo\"}],\"role\":\"model\"},",
+            "\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":100,",
+            "\"candidatesTokenCount\":20,\"toolUsePromptTokenCount\":300,",
+            "\"thoughtsTokenCount\":10,\"totalTokenCount\":999}}\n\n",
+        );
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/models/gemini-2.5-flash:streamGenerateContent")
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(sse_body)
+            .create_async()
+            .await;
+        let adapter = test_adapter(&server.url());
+        let request = build_request(
+            "gemini-2.5-flash",
+            PromptType::User(UserPrompt {
+                query: "Hello".to_string(),
+                context: None,
+            }),
+        );
+
+        let mut stream = Box::into_pin(adapter.generate_stream(request).await.unwrap());
+        let mut chunks = Vec::new();
+        while let Some(item) = stream.next().await {
+            chunks.push(item.unwrap());
+        }
+
+        let (terminal, earlier) = chunks.split_last().expect("at least one chunk");
+        assert!(terminal.finish_reason.is_some());
+        let usage = terminal
+            .usage
+            .as_ref()
+            .expect("the terminal chunk carries usage");
+        assert_eq!(usage.prompt_tokens, 400);
+        assert_eq!(usage.completion_tokens, 30);
+        assert_eq!(usage.total_tokens, 430);
+        assert_eq!(
+            terminal
+                .metadata
+                .get(USAGE_UNRECONCILED_METADATA_KEY)
+                .map(String::as_str),
+            Some("total:vendor=999,mapped=430")
+        );
+        for chunk in earlier {
+            assert!(
+                !chunk.metadata.contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+                "only the terminal chunk carries the finding"
+            );
+        }
     }
 
     // ── WR-03 (new): a truncated-to-empty completion is an error, not a success ──
@@ -3014,10 +3265,11 @@ mod tests {
             "the finish-reason chunk and the usage chunk must be the SAME (last) chunk"
         );
 
-        let expected = map_gemini_usage(&GeminiUsageMetadata {
+        let (expected, _) = map_gemini_usage(&GeminiUsageMetadata {
             prompt_token_count: 310,
             candidates_token_count: 88,
-            total_token_count: 439,
+            total_token_count: Some(439),
+            tool_use_prompt_token_count: None,
             cached_content_token_count: Some(96),
             thoughts_token_count: Some(41),
         });

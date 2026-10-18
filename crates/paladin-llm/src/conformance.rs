@@ -59,6 +59,7 @@ use serde_json::Value;
 
 use crate::redaction::RESPONSE_EXCERPT_CHAR_BUDGET;
 use crate::sampling::{PARAMS_OMITTED_METADATA_KEY, RESPONSE_FORMAT_ADJUSTED_METADATA_KEY};
+use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
 
 /// Which response-wire shape a [`ConformanceFixture`]'s adapter speaks.
 ///
@@ -408,7 +409,9 @@ pub mod wire_defaults {
             })
             .to_string(),
             // `candidatesTokenCount` excludes thoughts, so the adapter's completion is
-            // 25 + 15 = 40; Gemini reports no cache-write figure.
+            // 25 + 15 = 40; `promptTokenCount` excludes the tool-use prompt tokens, so the
+            // adapter's prompt is 100 + 50 = 150 (plan 50-23, G-50-5a), and the vendor total
+            // 190 agrees with the mapped one. Gemini reports no cache-write figure.
             Wire::Gemini => json!({
                 "candidates": [{
                     "content": {"role": "model", "parts": [{"text": "Hi there"}]},
@@ -417,9 +420,10 @@ pub mod wire_defaults {
                 "usageMetadata": {
                     "promptTokenCount": 100,
                     "candidatesTokenCount": 25,
+                    "toolUsePromptTokenCount": 50,
                     "cachedContentTokenCount": 30,
                     "thoughtsTokenCount": 15,
-                    "totalTokenCount": 140
+                    "totalTokenCount": 190
                 }
             })
             .to_string(),
@@ -432,13 +436,19 @@ pub mod wire_defaults {
             Wire::OpenAiChat | Wire::Gemini => (Some(30), None, Some(15)),
             Wire::Anthropic => (Some(30), Some(20), Some(15)),
         };
+        // Gemini's prompt carries the 50 tool-use prompt tokens its body reports beside
+        // `promptTokenCount`.
+        let prompt = match wire {
+            Wire::Gemini => 150,
+            Wire::OpenAiChat | Wire::Anthropic => 100,
+        };
         ExpectedUsage {
-            prompt: 100,
+            prompt,
             completion: 40,
             cache_read,
             cache_write,
             reasoning,
-            total: 140,
+            total: prompt + 40,
         }
     }
 }
@@ -1425,6 +1435,11 @@ pub mod cases {
     /// exactly the figures the fixture declares for its vendor (`None` where the vendor does not
     /// report the field), and `total_tokens` is `prompt + completion` -- the invariant
     /// `TokenUsage` guarantees, not a vendor figure (WINDOWS row 74).
+    ///
+    /// Plan 50-23 (G-50-5a): the mapped sub-counts also stay inside their parents (`reasoning <=
+    /// completion`, `cache_read + cache_write <= prompt`), and an agreeing fixture's response
+    /// carries no [`USAGE_UNRECONCILED_METADATA_KEY`] -- its vendor total, where it reports one,
+    /// agrees with the mapped total.
     pub async fn usage_fields_are_mapped<F: ConformanceFixture>() {
         let mut server = Server::new_async().await;
         server
@@ -1436,12 +1451,39 @@ pub mod cases {
             .await;
 
         let adapter = F::adapter(&server.url());
-        let usage = adapter
+        let response = adapter
             .generate(conformance_request())
             .await
-            .expect("usage_body() must produce a well-formed response")
-            .usage;
+            .expect("usage_body() must produce a well-formed response");
+        let usage = response.usage;
         let expected = F::expected_usage();
+
+        if let Some(reasoning) = usage.reasoning_tokens {
+            assert!(
+                reasoning <= usage.completion_tokens,
+                "{}: reasoning_tokens {reasoning} escapes completion_tokens {}",
+                F::provider_name(),
+                usage.completion_tokens
+            );
+        }
+        let cache = usage
+            .cache_read_tokens
+            .unwrap_or(0)
+            .saturating_add(usage.cache_write_tokens.unwrap_or(0));
+        assert!(
+            cache <= usage.prompt_tokens,
+            "{}: cache read + write {cache} escape prompt_tokens {}",
+            F::provider_name(),
+            usage.prompt_tokens
+        );
+        assert!(
+            !response
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "{}: an agreeing usage body must record no {USAGE_UNRECONCILED_METADATA_KEY}, got {:?}",
+            F::provider_name(),
+            response.metadata.get(USAGE_UNRECONCILED_METADATA_KEY)
+        );
 
         assert_eq!(usage.prompt_tokens, expected.prompt, "prompt_tokens");
         assert_eq!(

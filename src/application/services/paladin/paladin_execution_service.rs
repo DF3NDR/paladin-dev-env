@@ -80,7 +80,7 @@ use crate::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use log::{debug, error, info, warn};
 use paladin_battalion::llm_failure::to_paladin_error;
 use paladin_core::platform::container::allowance::{AllowanceWarning, DerivedTokenBudget};
-use paladin_core::platform::container::cost::Cost;
+use paladin_core::platform::container::cost::{Cost, CostTally};
 use paladin_core::platform::container::run::RunId;
 use paladin_core::platform::container::run_scope::RunScope;
 use paladin_core::platform::container::structured::render_instruction_block;
@@ -455,6 +455,39 @@ fn priced_bill_parts<'a>(
         };
         bill.cost.as_ref().map(|cost| (model, cost))
     })
+}
+
+/// Where a streamed call settles (D-07/D-08, 39-05; Phase 40 D-16): the
+/// ledger, the caller's resolved scope and the execution's own run id,
+/// resolved once before the stream opens. `None` outside `EveryCall` mode.
+type StreamSettlement = (Arc<dyn TreasuryLedgerPort>, LedgerScope, RunId);
+
+/// Report every hopped-past bill of a streamed call to the active attempt
+/// scope (G-50-5a: plan 50-29's scope, plan 50-30's bills) and settle the
+/// call's priced parts once under `(execution id, 1, 1)`: the hop bills
+/// against their own models, then `own` (the terminal chunk's cost, or a
+/// billed terminal error's) under `model_used`, the only model identity a
+/// stream carries. Called at every exit of the streamed call -- terminal
+/// chunk, terminal error, an early `generate_stream` error, a stream that
+/// ended without a final marker, and a dropped receiver -- so no billed hop
+/// is lost however the stream ends. `own` is NOT recorded here: its caller
+/// already recorded it beside its own fold.
+async fn settle_streamed_call(
+    settlement: Option<&StreamSettlement>,
+    model_used: &str,
+    hop_bills: &[BilledUsage],
+    own: Option<&Cost>,
+) {
+    for bill in hop_bills {
+        record_incurred_spend(&bill.usage, bill.cost.as_ref());
+    }
+    let Some((ledger, scope, run_id)) = settlement else {
+        return;
+    };
+    let parts: Vec<(&str, &Cost)> = priced_bill_parts(hop_bills, model_used)
+        .chain(own.map(|cost| (model_used, cost)))
+        .collect();
+    settle_agent_loop_call(ledger, scope, run_id, 1, &parts).await;
 }
 
 /// Settle one priced agent-loop model call (D-07, D-08, 39-05): an
@@ -2935,15 +2968,16 @@ impl PaladinExecutionService {
     ///
     /// # Returns
     ///
-    /// LLM response on success
+    /// A [`CallOutcome`]: the served response plus the bills of every billed
+    /// fallback hop moved past on the way (plan 50-30)
     ///
     /// # Errors
     ///
     /// Returns a [`CallFailure`] whose `error` is the `PaladinError` the
-    /// caller sees, and whose `bills` carry the [`BilledUsage`] of any
-    /// attempt the vendor billed but that failed (G-50-5a, plan 50-28),
-    /// recorded beside the `to_paladin_error` conversion. The `error` is
-    /// returned if:
+    /// caller sees, and whose `bills` carry the [`BilledUsage`] of every
+    /// billed hop moved past (plan 50-30) and then of any attempt the vendor
+    /// billed but that failed (G-50-5a, plan 50-28), recorded beside the
+    /// `to_paladin_error` conversion. The `error` is returned if:
     /// - Circuit breaker is open
     /// - The failure is [`Transience::Permanent`](paladin_core::platform::container::transience::Transience::Permanent)
     ///   (e.g. a rejected credential or a malformed prompt) -- returned
@@ -3699,7 +3733,7 @@ impl PaladinExecutionService {
         cx.response_format = Some(response_format);
         cx.trace_emitter = self.trace_emitter.clone();
 
-        let response = self
+        let outcome = self
             .execute_with_retry_and_temperature(
                 paladin,
                 prompt,
@@ -3720,8 +3754,14 @@ impl PaladinExecutionService {
                     record_incurred_spend(&bill.usage, bill.cost.as_ref());
                 }
                 failure.error
-            })?
-            .response;
+            })?;
+        // G-50-5a remainder (a), plan 50-30: a structured call whose chain
+        // hopped past a billed refusal was billed for that hop too; the
+        // engine's structured arm reads the attempt scope for the whole spend.
+        for bill in &outcome.bills {
+            record_incurred_spend(&bill.usage, bill.cost.as_ref());
+        }
+        let response = outcome.response;
         record_incurred_spend(&response.usage, response.cost.as_ref());
 
         Ok(PaladinResult {
@@ -3801,6 +3841,15 @@ impl PaladinExecutionService {
     /// forwarding task, exactly like the trace emitter, so the terminal
     /// chunk's usage and cost and a billed terminal error's bill are both
     /// reported to the attempt that opened the stream.
+    ///
+    /// A fallback chain that hopped past billed refusals before its first
+    /// chunk (G-50-5a remainder (a), plan 50-30) records those bills into a
+    /// [`HOPPED_BILLS`] collector installed around the `generate_stream` call
+    /// and re-installed in the forwarding task. Every exit -- the terminal
+    /// chunk, a terminal error, an early `generate_stream` error, a stream
+    /// that ends without a final marker, a dropped receiver -- reports them
+    /// to the attempt scope and settles them in the call's one row with a
+    /// per-model breakdown; the terminal chunk's usage and cost fold them in.
     async fn execute_stream_inner(
         &self,
         paladin: &Paladin,
@@ -3888,13 +3937,77 @@ impl PaladinExecutionService {
         )
         .with_stream(true);
 
+        // D-12: `Uuid` is `Copy`; cloned into the spawned task explicitly
+        // (rather than relying on the implicit `Copy` move) so the intent
+        // reads at the call site -- every final chunk's `ExecutionMetadata`
+        // is stamped with the SAME execution id as this call's `run_id`.
+        let execution_id = run_id;
+
+        // D-07/D-08 (39-05): the streamed path carries no Platform run id
+        // (a stream is never worker-dispatched), so only `EveryCall` mode
+        // ever settles a stream, always under this execution's own id --
+        // resolved ONCE, before the stream opens (an early `generate_stream`
+        // error settles too, plan 50-30) and before the spawn, since the
+        // spawned task owns no `&self`. Phase 40 D-16: the scope it settles
+        // under is the caller's `ledger_scope` (`execute_stream_scoped`, from
+        // the HTTP agent handler's principal), or the unattributed sentinel
+        // when the caller passed none (D-10).
+        let stream_settlement: Option<StreamSettlement> = self
+            .treasury_ledger
+            .as_ref()
+            .filter(|(_, mode)| *mode == AgentLoopSettlement::EveryCall)
+            .and_then(|(ledger, _)| {
+                RunId::parse(execution_id.to_string())
+                    .inspect_err(|e| {
+                        error!("execution id {execution_id} did not parse as a RunId: {e}");
+                    })
+                    .ok()
+                    .map(|run_id| {
+                        (
+                            ledger.clone(),
+                            ledger_scope.unwrap_or_else(LedgerScope::unattributed),
+                            run_id,
+                        )
+                    })
+            });
+
+        // G-50-5a remainder (a), plan 50-30: one fresh collector around the
+        // streamed call, so a `FallbackLlmAdapter` that hops past a billed
+        // refusal before its first chunk hands that bill to THIS call
+        // (`PricingLlmAdapter` prices it in place). The handle is moved into
+        // the chunk task below and re-installed there; every exit of the call
+        // takes the entries and settles them with the call's own part.
+        let stream_hopped = HoppedBills::new();
+
         // Open the provider stream eagerly so an unsupported provider errors here
         // (before the caller starts an SSE response).
-        let provider_stream = self
-            .llm_port
-            .generate_stream(request)
-            .await
-            .map_err(|e| to_paladin_error(&e))?;
+        let opened = HOPPED_BILLS
+            .scope(
+                stream_hopped.clone(),
+                self.llm_port.generate_stream(request),
+            )
+            .await;
+        let provider_stream = match opened {
+            Ok(provider_stream) => provider_stream,
+            Err(e) => {
+                // Plan 50-30: a chain that hopped past billed refusals and then
+                // ran out (`AllProvidersFailed`, carrying the last hop's own
+                // bill) fails here, before any chunk. Every bill is still
+                // recorded to the attempt scope and settled once.
+                let own = e.billed_usage();
+                if let Some(bill) = own {
+                    record_incurred_spend(&bill.usage, bill.cost.as_ref());
+                }
+                settle_streamed_call(
+                    stream_settlement.as_ref(),
+                    &model_used,
+                    &stream_hopped.take(),
+                    own.and_then(|bill| bill.cost.as_ref()),
+                )
+                .await;
+                return Err(to_paladin_error(&e));
+            }
+        };
 
         let (tx, rx) = mpsc::channel::<Result<PaladinStreamChunk, PaladinError>>(64);
 
@@ -3918,39 +4031,11 @@ impl PaladinExecutionService {
         // `self`) purely to name the provider in the no-usage warning below
         // -- never any request/response content.
         let provider_name = self.llm_port.get_provider_name();
-        // D-12: `Uuid` is `Copy`; cloned into the spawned task explicitly
-        // (rather than relying on the implicit `Copy` move) so the intent
-        // reads at the call site -- every final chunk's `ExecutionMetadata`
-        // is stamped with the SAME execution id as this call's `run_id`.
-        let execution_id = run_id;
 
-        // D-07/D-08 (39-05): the streamed path carries no Platform run id
-        // (a stream is never worker-dispatched), so only `EveryCall` mode
-        // ever settles a stream, always under this execution's own id --
-        // resolved ONCE, before the spawn, since the spawned task owns no
-        // `&self`. Phase 40 D-16: the scope it settles under is the
-        // caller's `ledger_scope` (`execute_stream_scoped`, from the HTTP
-        // agent handler's principal), or the unattributed sentinel when
-        // the caller passed none (D-10).
-        let stream_settlement = self
-            .treasury_ledger
-            .as_ref()
-            .filter(|(_, mode)| *mode == AgentLoopSettlement::EveryCall)
-            .and_then(|(ledger, _)| {
-                RunId::parse(execution_id.to_string())
-                    .inspect_err(|e| {
-                        error!("execution id {execution_id} did not parse as a RunId: {e}");
-                    })
-                    .ok()
-                    .map(|run_id| {
-                        (
-                            ledger.clone(),
-                            ledger_scope.unwrap_or_else(LedgerScope::unattributed),
-                            run_id,
-                        )
-                    })
-            });
-
+        // Plan 50-30: the collector handle the chunk task takes the entries
+        // from at every exit; a second clone is re-installed as the task's
+        // `HOPPED_BILLS` (a task-local never crosses a `tokio::spawn`).
+        let hopped = stream_hopped.clone();
         let forward_chunks = async move {
             use futures::StreamExt;
             let mut stream = Box::into_pin(provider_stream);
@@ -3998,19 +4083,39 @@ impl PaladinExecutionService {
                             // priced terminal chunk under (execution id, 1,
                             // 1), naming `model_used` -- the only model
                             // identity a stream carries -- before the chunk
-                            // is sent.
-                            if let (Some((ledger, scope, run_id)), Some(cost)) =
-                                (stream_settlement.as_ref(), cost.as_ref())
-                            {
-                                settle_agent_loop_call(
-                                    ledger,
-                                    scope,
-                                    run_id,
-                                    1,
-                                    &[(model_used.as_str(), cost)],
-                                )
-                                .await;
-                            }
+                            // is sent. Plan 50-30: the bills of the hops the
+                            // chain moved past settle in the same row.
+                            let hop_bills = hopped.take();
+                            settle_streamed_call(
+                                stream_settlement.as_ref(),
+                                &model_used,
+                                &hop_bills,
+                                cost.as_ref(),
+                            )
+                            .await;
+                            // Plan 50-30: the run's reported figures fold the
+                            // hop bills in, as the buffered loop's do -- the
+                            // cost by the `CostTally` rule (any unpriced part
+                            // makes it unknown), the usage only when the
+                            // provider reported one for the served call (a
+                            // usage-less terminal chunk stays usage-less,
+                            // D-17; its hop bills still settled above).
+                            let (usage, cost) = if hop_bills.is_empty() {
+                                (usage, cost)
+                            } else {
+                                let mut tally = CostTally::new();
+                                tally.record_call(cost.as_ref());
+                                let usage = usage.map(|mut served| {
+                                    for bill in &hop_bills {
+                                        served += bill.usage.clone();
+                                    }
+                                    served
+                                });
+                                for bill in &hop_bills {
+                                    tally.record_call(bill.cost.as_ref());
+                                }
+                                (usage, tally.total())
+                            };
                             let mut chunk_metadata = ChunkMetadata::new();
                             if let Some(usage) = usage.clone() {
                                 chunk_metadata = chunk_metadata.with_usage(usage);
@@ -4061,7 +4166,16 @@ impl PaladinExecutionService {
                             heartbeat.beat();
                         }
                         // A send error means the receiver was dropped — stop producing.
+                        // Plan 50-30: a hop bill is never left unsettled (a no-op
+                        // after the terminal chunk, which already took them).
                         if tx.send(Ok(chunk)).await.is_err() {
+                            settle_streamed_call(
+                                stream_settlement.as_ref(),
+                                &model_used,
+                                &hopped.take(),
+                                None,
+                            )
+                            .await;
                             return;
                         }
                         if is_final {
@@ -4080,19 +4194,14 @@ impl PaladinExecutionService {
                         if let Some(bill) = e.billed_usage() {
                             record_incurred_spend(&bill.usage, bill.cost.as_ref());
                         }
-                        if let (Some((ledger, scope, run_id)), Some(cost)) = (
+                        // Plan 50-30: with the bills of any hops moved past.
+                        settle_streamed_call(
                             stream_settlement.as_ref(),
+                            &model_used,
+                            &hopped.take(),
                             e.billed_usage().and_then(|bill| bill.cost.as_ref()),
-                        ) {
-                            settle_agent_loop_call(
-                                ledger,
-                                scope,
-                                run_id,
-                                1,
-                                &[(model_used.as_str(), cost)],
-                            )
-                            .await;
-                        }
+                        )
+                        .await;
                         let _ = tx.send(Err(to_paladin_error(&e))).await;
                         return;
                     }
@@ -4101,7 +4210,15 @@ impl PaladinExecutionService {
             // Provider stream ended without an explicit final marker — emit
             // one, still carrying a produced ExecutionMetadata (D-12) with
             // no usage and no cost (the stream never reported a terminal
-            // chunk to read either from).
+            // chunk to read either from). Plan 50-30: the bills of any hops
+            // moved past still settle.
+            settle_streamed_call(
+                stream_settlement.as_ref(),
+                &model_used,
+                &hopped.take(),
+                None,
+            )
+            .await;
             let execution = Self::stream_execution_metadata(
                 execution_id,
                 started_at,
@@ -4120,6 +4237,7 @@ impl PaladinExecutionService {
                 .await;
         };
         tokio::spawn(async move {
+            let forward_chunks = HOPPED_BILLS.scope(stream_hopped, forward_chunks);
             match stream_spend_scope {
                 Some(scope) => ATTEMPT_SPEND.scope(scope, forward_chunks).await,
                 None => forward_chunks.await,
@@ -8198,6 +8316,163 @@ mod streamed_cost_tests {
         assert_eq!(spend.cost(), Some(Cost::new(1_000_000, usd)));
     }
 
+    /// `Pricing(Fallback[hop1 -> m1, hop2 -> m2].hop_on_refusal(true))` over two mock hops on
+    /// the stream path: hop 1 answers `first`, hop 2 answers `second` (plan 50-30).
+    fn priced_refusal_stream_chain(
+        first: MockLlmAdapter,
+        second: MockLlmAdapter,
+    ) -> (Arc<dyn LlmPort>, Arc<PriceTable>) {
+        use paladin_llm::fallback::{FallbackLlmAdapter, FallbackStep};
+
+        let usd = CurrencyCode::new("USD").unwrap();
+        let table = Arc::new(
+            PriceTable::new(usd)
+                .with_row("m1", PriceRow::new(3_000_000_000, 15_000_000_000).unwrap())
+                .with_row("m2", PriceRow::new(2_500_000_000, 10_000_000_000).unwrap()),
+        );
+        let chain = FallbackLlmAdapter::from_steps(vec![
+            FallbackStep::new(Arc::new(first) as Arc<dyn LlmPort>, "m1"),
+            FallbackStep::new(Arc::new(second) as Arc<dyn LlmPort>, "m2"),
+        ])
+        .unwrap()
+        .hop_on_refusal(true);
+        let llm: Arc<dyn LlmPort> =
+            Arc::new(PricingLlmAdapter::new(Arc::new(chain), table.clone()));
+        (llm, table)
+    }
+
+    fn billed_refusal_hop(name: &'static str, model: &str, usage: TokenUsage) -> MockLlmAdapter {
+        use paladin_ports::output::llm_port::{BilledUsage, LlmError};
+
+        MockLlmAdapter::new().with_provider_name(name).with_error(
+            LlmError::refusal(name, model, "I can't help with that.")
+                .with_billed_usage(BilledUsage::new(model, usage)),
+        )
+    }
+
+    async fn spend_by_model(
+        ledger: &InMemoryTreasuryLedger,
+    ) -> std::collections::BTreeMap<String, (i64, u64)> {
+        ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Model,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by model succeeds")
+            .into_iter()
+            .map(|row| (row.group, (row.amount.nanos(), row.settlements)))
+            .collect()
+    }
+
+    /// G-50-5a remainder (a), plan 50-30, streamed: hop 1 refuses after billing U1 on `m1`, hop
+    /// 2 streams the answer on `m2` with U2. The terminal settle (ordinal 1) is ONE row carrying
+    /// both parts, the final chunk reports U1 + U2 and c1 + c2, and the attempt scope holds both.
+    #[tokio::test]
+    async fn hopped_refusal_bill_is_settled_on_the_stream() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(1_000, 2_000);
+        let (llm, table) = priced_refusal_stream_chain(
+            billed_refusal_hop("hop1", "m1", u1.clone()),
+            MockLlmAdapter::new()
+                .with_provider_name("hop2")
+                .with_response("streamed")
+                .with_token_usage_struct(u2.clone()),
+        );
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let c2 = table.price("m2", &u2).expect("m2 is priced");
+        let total = c1.checked_add(&c2).expect("one currency");
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        // The stream names its call by the Paladin's model (Phase 31: a stream carries no
+        // served-model string), so the served part is keyed and priced under `m2`.
+        let paladin = make_paladin("m2");
+
+        let scope = SpendScope::new();
+        let metadata = ATTEMPT_SPEND
+            .scope(scope.clone(), drain_final_chunk(&service, &paladin))
+            .await;
+
+        let mut both = u1;
+        both += u2;
+        assert_eq!(
+            metadata.usage,
+            Some(both.clone()),
+            "the hop bill is in the run usage"
+        );
+        assert_eq!(metadata.cost, Some(total.clone()), "and in its price");
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(by_run[0].settlements, 1, "one terminal row");
+        assert_eq!(by_run[0].amount, total);
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            std::collections::BTreeMap::from([
+                ("m1".to_string(), (c1.nanos(), 1)),
+                ("m2".to_string(), (c2.nanos(), 1)),
+            ])
+        );
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2);
+        assert_eq!(spend.usage(), &both);
+        assert_eq!(spend.cost(), Some(total));
+    }
+
+    /// Plan 50-30, streamed exhaustion: both hops refuse after billing, so `generate_stream`
+    /// itself fails before any chunk. Both bills still settle in one row and reach the attempt
+    /// scope, and the caller gets the converted error.
+    #[tokio::test]
+    async fn hopped_bills_survive_stream_exhaustion() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(800, 30);
+        let (llm, table) = priced_refusal_stream_chain(
+            billed_refusal_hop("hop1", "m1", u1.clone()),
+            billed_refusal_hop("hop2", "m2", u2.clone()),
+        );
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let c2 = table.price("m2", &u2).expect("m2 is priced");
+        let total = c1.checked_add(&c2).expect("one currency");
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+        let paladin = make_paladin("m2");
+
+        let scope = SpendScope::new();
+        let opened = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute_stream(&paladin, "hi"))
+            .await;
+        assert!(
+            matches!(opened, Err(PaladinError::LlmFailure { .. })),
+            "every hop refused: {:?}",
+            opened.err()
+        );
+
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            std::collections::BTreeMap::from([
+                ("m1".to_string(), (c1.nanos(), 1)),
+                ("m2".to_string(), (c2.nanos(), 1)),
+            ]),
+            "one row, both hops, each at its own model's rate"
+        );
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2);
+        assert_eq!(spend.cost(), Some(total));
+    }
+
     /// 40-04 (D-16, HTTP path): through `Arc<dyn StreamingExecutorPort>` in
     /// `EveryCall` mode, `execute_stream_scoped` settles the streamed priced
     /// call under the scope's `ledger_scope` -- `(acme, svc-a)`, never the
@@ -9447,6 +9722,119 @@ mod agent_loop_cost_tests {
             spend_by_model(&ledger).await,
             BTreeMap::from([("m2".to_string(), (c2.nanos(), 1))])
         );
+    }
+
+    /// G-50-5a remainder (a), plan 50-30: both hops refuse after billing, so the chain ends in
+    /// `AllProvidersFailed`. Hop 1's bill was recorded at its hop, hop 2's rides on the error;
+    /// the call settles ONE row holding both, each priced against its own model, and the run
+    /// still fails with the converted error.
+    #[tokio::test]
+    async fn hopped_bills_survive_chain_exhaustion() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(800, 30);
+        let table = hop_price_table();
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let c2 = table.price("m2", &u2).expect("m2 is priced");
+        let total = c1.checked_add(&c2).expect("one currency");
+
+        let llm = priced_refusal_chain(
+            vec![Err(billed_refusal("hop1", "m1", u1.clone()))],
+            vec![Err(billed_refusal("hop2", "m2", u2.clone()))],
+        );
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        let service =
+            make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
+
+        let scope = SpendScope::new();
+        let err = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&make_paladin(1), "hi"))
+            .await
+            .expect_err("every hop refused");
+        assert!(
+            matches!(
+                err,
+                PaladinError::LlmFailure {
+                    transience: Transience::Permanent,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(by_run[0].settlements, 1, "one row for the call");
+        assert_eq!(by_run[0].amount, total);
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            BTreeMap::from([
+                ("m1".to_string(), (c1.nanos(), 1)),
+                ("m2".to_string(), (c2.nanos(), 1)),
+            ])
+        );
+
+        let mut both = u1;
+        both += u2;
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2, "both refused hops were billed");
+        assert_eq!(spend.usage(), &both);
+        assert_eq!(spend.cost(), Some(total));
+    }
+
+    /// Plan 50-30: a structured call whose chain hopped past a billed refusal records the hop
+    /// bill in the attempt scope beside the served call, so the engine's structured arm (which
+    /// reads the scope) charges both.
+    #[tokio::test]
+    async fn structured_call_records_its_hopped_bill() {
+        use paladin_core::platform::container::structured::StructuredOptions;
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(300, 20);
+        let table = hop_price_table();
+        let total = table
+            .price("m1", &u1)
+            .and_then(|c1| table.price("m2", &u2).and_then(|c2| c1.checked_add(&c2)))
+            .expect("both priced, one currency");
+        let llm = priced_refusal_chain(
+            vec![Err(billed_refusal("hop1", "m1", u1.clone()))],
+            vec![Ok((r#"{"city": "Paris"}"#, u2.clone(), None))],
+        );
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["city"],
+            "properties": {"city": {"type": "string"}}
+        });
+        let service = make_service(llm);
+
+        let scope = SpendScope::new();
+        ATTEMPT_SPEND
+            .scope(
+                scope.clone(),
+                service.execute_json_schema(
+                    &make_paladin(1),
+                    "weather",
+                    &schema,
+                    &StructuredOptions::new(0),
+                ),
+            )
+            .await
+            .expect("hop 2 answers a conforming object");
+
+        let mut both = u1;
+        both += u2;
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 2, "the hop bill and the served call");
+        assert_eq!(spend.usage(), &both);
+        assert_eq!(spend.cost(), Some(total));
     }
 }
 

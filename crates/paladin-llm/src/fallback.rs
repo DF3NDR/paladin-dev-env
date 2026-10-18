@@ -59,11 +59,24 @@
 //! [`FallbackLlmAdapter::hop_on_refusal`] is the explicit opt-in to trying the next step on a
 //! refusal; it never widens to any other `Permanent` error.
 //!
+//! ## A hopped-past bill is carried, not dropped (G-50-5a remainder (a))
+//!
+//! A refusal the vendor billed carries its usage ([`LlmError::billed_usage`]). When the chain
+//! hops past such an error -- and only then -- it records the bill through
+//! [`record_hopped_bill`] into the call's `HOPPED_BILLS` collector
+//! (`paladin_ports::output::spend_scope`), which `PaladinExecutionService` installs around every
+//! model call; the pricing decorator outside the chain prices it against its own model, and the
+//! execution service settles it with the call. An exhausted chain's last hop is not recorded:
+//! [`LlmError::AllProvidersFailed`] carries that bill itself. A billed hop with no collector
+//! installed (a direct [`LlmPort`] caller) is not silently lost: the chain logs one `warn!` per
+//! (provider, model) under the `paladin::usage` log target, with token counts only.
+//!
 //! ## Composition
 //!
 //! `Pricing(Fallback(Cadence(hop1), Cadence(hop2)))`: pricing stays outermost so it prices the
 //! response that was actually served (ADR-0052), and each hop is gated under its own provider
-//! name, never under `"fallback"`.
+//! name, never under `"fallback"`. Pricing also prices every billed hop the chain moved past and
+//! recorded for settlement, each against its own model (G-50-5a).
 //!
 //! ## No trait change, no policy type (D-24, RT-FR-09)
 //!
@@ -133,8 +146,9 @@
 //! Not feature-gated (ADR-0046): it composes whichever provider adapters are
 //! compiled in and needs none of them itself.
 
+use std::collections::HashSet;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -142,7 +156,7 @@ use futures::stream::{self, Stream, StreamExt};
 use paladin_core::platform::container::transience::Transience;
 use paladin_ports::output::cadence_port::{CADENCE_LOG_TARGET, CadenceKey, CadencePort};
 use paladin_ports::output::llm_port::{
-    LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
+    BilledUsage, LlmError, LlmPort, LlmRequest, LlmResponse, ModelProfile, ProviderCapabilities,
     StreamingResponse,
 };
 use paladin_ports::output::spend_scope::record_hopped_bill;
@@ -168,6 +182,71 @@ pub const SERVED_MODEL_METADATA_KEY: &str = "paladin.served_model";
 /// The provider name the adapter itself reports from
 /// [`LlmPort::get_provider_name`].
 pub const FALLBACK_PROVIDER_NAME: &str = "fallback";
+
+/// The log target of the one-per-(provider, model) warning a billed hop with no hopped-bill
+/// collector installed produces (G-50-5a remainder (a)): the usage-accounting target the usage
+/// reconciliation warnings already use.
+const HOP_BILL_LOG_TARGET: &str = "paladin::usage";
+
+/// How many distinct (provider, model) pairs this process warns about for an uncollected hop
+/// bill before it stops, bounding memory against an attacker-chosen model string (the
+/// `UNPRICED_MODEL_WARNING_CAPACITY` precedent, T-38-07).
+const HOP_BILL_WARNING_CAPACITY: usize = 256;
+
+/// A bounded warn-once set keyed on (provider, model): [`Self::should_warn`] answers `true`
+/// exactly once per pair, then `false`, and `false` for any new pair once `capacity` pairs are
+/// held. A poisoned lock is recovered, never propagated.
+struct HopBillWarnings {
+    seen: Mutex<HashSet<(String, String)>>,
+    capacity: usize,
+}
+
+impl HopBillWarnings {
+    fn new(capacity: usize) -> Self {
+        Self {
+            seen: Mutex::new(HashSet::new()),
+            capacity,
+        }
+    }
+
+    fn should_warn(&self, provider: &str, model: &str) -> bool {
+        let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
+        let key = (provider.to_string(), model.to_string());
+        if seen.contains(&key) || seen.len() >= self.capacity {
+            return false;
+        }
+        seen.insert(key)
+    }
+}
+
+/// The process-wide instance every [`FallbackLlmAdapter`] consults.
+static HOP_BILL_WARNINGS: LazyLock<HopBillWarnings> =
+    LazyLock::new(|| HopBillWarnings::new(HOP_BILL_WARNING_CAPACITY));
+
+/// Carry the bill of a hop the chain is moving past (G-50-5a remainder (a)): record it into the
+/// call's collector, or -- with none installed -- warn once per (provider, model) under
+/// `HOP_BILL_LOG_TARGET` that it will not be settled. The line names the provider, the model
+/// and the token counts only: never refusal text, content or a credential (T-50-30-04).
+/// Returns `true` when the bill was recorded.
+fn carry_hopped_bill(warnings: &HopBillWarnings, from: &str, billed: &BilledUsage) -> bool {
+    if record_hopped_bill(billed.clone()) {
+        return true;
+    }
+    if warnings.should_warn(from, &billed.model) {
+        log::warn!(
+            target: HOP_BILL_LOG_TARGET,
+            "provider '{from}' model '{model}': the fallback chain moved past a billed call \
+             ({prompt} prompt and {completion} completion tokens) with no hopped-bill collector \
+             installed, so this bill is not settled; route the call through \
+             PaladinExecutionService or install paladin_ports::output::spend_scope::HOPPED_BILLS \
+             (G-50-5a)",
+            model = billed.model,
+            prompt = billed.usage.prompt_tokens,
+            completion = billed.usage.completion_tokens,
+        );
+    }
+    false
+}
 
 /// Construction-time errors for [`FallbackLlmAdapter`].
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -391,6 +470,11 @@ impl FallbackLlmAdapter {
     /// `Permanent` error (a bad key, a malformed request) still short-circuits. When the last
     /// step refuses too, the chain ends in [`LlmError::AllProvidersFailed`], whose `attempts`
     /// list every refusal.
+    ///
+    /// A refusal the vendor billed is not lost when the chain hops past it (G-50-5a): its bill
+    /// is recorded for settlement into the call's hopped-bill collector, priced by the pricing
+    /// decorator outside the chain against its own model and settled with the call by
+    /// `PaladinExecutionService` (see the module docs).
     #[must_use]
     pub fn hop_on_refusal(mut self, enabled: bool) -> Self {
         self.hop_on_refusal = enabled;
@@ -520,7 +604,7 @@ impl FallbackLlmAdapter {
                 // the error. An exhausted chain records nothing here: `AllProvidersFailed`
                 // keeps the last hop's own bill (`LlmError::billed_usage` looks through it).
                 if let Some(billed) = err.billed_usage() {
-                    record_hopped_bill(billed.clone());
+                    carry_hopped_bill(&HOP_BILL_WARNINGS, from, billed);
                 }
                 self.record_hop(from, next.get_provider_name(), &err).await;
                 Ok(())
@@ -2458,5 +2542,175 @@ mod tests {
         assert_eq!(profile.temperature, ParamSupport::Fixed(1.0));
         assert_eq!(first.asked(), ["m1"]);
         assert_eq!(second.asked(), ["m2"]);
+    }
+
+    // ---- G-50-5a remainder (a), plan 50-30: hopped-past bills ----
+
+    use paladin_ports::output::llm_port::{BilledUsage, TokenUsage};
+    use paladin_ports::output::spend_scope::{HOPPED_BILLS, HoppedBills};
+
+    fn billed_refusal(provider: &str, model: &str, usage: TokenUsage) -> LlmError {
+        refusal(provider, model).with_billed_usage(BilledUsage::new(model, usage))
+    }
+
+    /// A billed refusal the chain hops past is recorded, unpriced, into the call's collector;
+    /// the served response is unchanged.
+    #[tokio::test]
+    async fn a_billed_hop_is_recorded_for_settlement() {
+        let first = failing(
+            "anthropic",
+            billed_refusal("anthropic", "m1", TokenUsage::new(40, 2)),
+        );
+        let second = provider("kimi");
+        let adapter = FallbackLlmAdapter::from_steps(vec![step(&first, "m1"), step(&second, "m2")])
+            .unwrap()
+            .hop_on_refusal(true);
+
+        let bills = HoppedBills::new();
+        let response = HOPPED_BILLS
+            .scope(bills.clone(), adapter.generate(request()))
+            .await
+            .unwrap();
+
+        assert_eq!(served_model(&response), Some("m2"));
+        assert_eq!(
+            bills.take(),
+            vec![BilledUsage::new("m1", TokenUsage::new(40, 2))]
+        );
+    }
+
+    /// An unbilled hop (a 5xx, an unbilled refusal) records nothing.
+    #[tokio::test]
+    async fn an_unbilled_hop_records_nothing() {
+        let first = failing("openai", transient("openai", 503));
+        let second = failing("anthropic", refusal("anthropic", "m2"));
+        let third = provider("kimi");
+        let adapter = FallbackLlmAdapter::from_steps(vec![
+            step(&first, "m1"),
+            step(&second, "m2"),
+            step(&third, "m3"),
+        ])
+        .unwrap()
+        .hop_on_refusal(true);
+
+        let bills = HoppedBills::new();
+        HOPPED_BILLS
+            .scope(bills.clone(), adapter.generate(request()))
+            .await
+            .unwrap();
+
+        assert!(bills.take().is_empty());
+    }
+
+    /// On exhaustion every hop but the last is recorded; the last hop's bill rides on
+    /// `AllProvidersFailed` itself, so nothing is counted twice.
+    #[tokio::test]
+    async fn exhaustion_records_every_hop_but_the_last() {
+        let first = failing(
+            "anthropic",
+            billed_refusal("anthropic", "m1", TokenUsage::new(40, 2)),
+        );
+        let second = failing("kimi", billed_refusal("kimi", "m2", TokenUsage::new(30, 3)));
+        let adapter = FallbackLlmAdapter::from_steps(vec![step(&first, "m1"), step(&second, "m2")])
+            .unwrap()
+            .hop_on_refusal(true);
+
+        let bills = HoppedBills::new();
+        let err = HOPPED_BILLS
+            .scope(bills.clone(), adapter.generate(request()))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, LlmError::AllProvidersFailed { .. }),
+            "{err:?}"
+        );
+        assert_eq!(
+            err.billed_usage().map(|bill| bill.model.as_str()),
+            Some("m2")
+        );
+        assert_eq!(
+            bills.take(),
+            vec![BilledUsage::new("m1", TokenUsage::new(40, 2))]
+        );
+    }
+
+    /// The streamed path records a billed hop the same way.
+    #[tokio::test]
+    async fn a_billed_hop_on_the_stream_is_recorded() {
+        let first = failing(
+            "anthropic",
+            billed_refusal("anthropic", "m1", TokenUsage::new(40, 2)),
+        );
+        let second = MockLlmAdapter::new()
+            .with_provider_name("kimi")
+            .with_stream_items(vec![Ok("ok".to_string())]);
+        let adapter = FallbackLlmAdapter::from_steps(vec![step(&first, "m1"), step(&second, "m2")])
+            .unwrap()
+            .hop_on_refusal(true);
+
+        let bills = HoppedBills::new();
+        let stream = HOPPED_BILLS
+            .scope(bills.clone(), adapter.generate_stream(request()))
+            .await
+            .unwrap();
+        assert_eq!(collect(stream).await.len(), 1);
+        assert_eq!(
+            bills.take(),
+            vec![BilledUsage::new("m1", TokenUsage::new(40, 2))]
+        );
+    }
+
+    /// With no collector installed the chain behaves exactly as before, and the lost bill is
+    /// made visible: one warning per (provider, model), never a second.
+    #[tokio::test]
+    async fn a_billed_hop_with_no_collector_warns_once_per_provider_and_model() {
+        let first = failing(
+            "anthropic",
+            billed_refusal("anthropic", "m1", TokenUsage::new(40, 2)),
+        );
+        let second = provider("kimi");
+        let adapter = FallbackLlmAdapter::from_steps(vec![step(&first, "m1"), step(&second, "m2")])
+            .unwrap()
+            .hop_on_refusal(true);
+        let response = adapter.generate(request()).await.unwrap();
+        assert_eq!(
+            served_model(&response),
+            Some("m2"),
+            "the chain is unchanged"
+        );
+
+        let warnings = HopBillWarnings::new(3);
+        let bill = BilledUsage::new("m1", TokenUsage::new(40, 2));
+        assert!(
+            !carry_hopped_bill(&warnings, "anthropic", &bill),
+            "nothing recorded"
+        );
+        assert!(
+            !warnings.should_warn("anthropic", "m1"),
+            "the first call warned"
+        );
+        assert!(
+            warnings.should_warn("anthropic", "m9"),
+            "another model warns once"
+        );
+        assert!(
+            warnings.should_warn("kimi", "m1"),
+            "another provider warns once"
+        );
+        assert!(
+            !warnings.should_warn("openai", "m1"),
+            "past the capacity nothing more is held"
+        );
+
+        // Inside a collector the bill is recorded and nothing is warned.
+        let bills = HoppedBills::new();
+        let fresh = HopBillWarnings::new(2);
+        let recorded = HOPPED_BILLS.sync_scope(bills.clone(), || {
+            carry_hopped_bill(&fresh, "anthropic", &bill)
+        });
+        assert!(recorded);
+        assert!(fresh.should_warn("anthropic", "m1"), "no warning was spent");
+        assert_eq!(bills.take(), vec![bill]);
     }
 }

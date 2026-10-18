@@ -35,7 +35,9 @@
 //! `paladin_ports::output::spend_scope::HOPPED_BILLS` collector, unpriced. Once the inner call
 //! returns, `Ok` or `Err`, this decorator prices every entry still at `cost: None` against the
 //! entry's own model, through the same `price_or_warn`, so each hop is charged at its own
-//! model's rate. No collector installed: nothing to price.
+//! model's rate. No collector installed: nothing to price. A stream prices the collector it
+//! captured when `generate_stream` was called, once that call returns and again when the
+//! stream yields its terminal chunk or an error item (idempotent: only unpriced entries).
 
 use std::collections::HashSet;
 use std::fmt;
@@ -248,11 +250,24 @@ impl LlmPort for PricingLlmAdapter {
     ) -> Result<Box<dyn Stream<Item = Result<StreamingResponse, LlmError>> + Send>, LlmError> {
         let model = request.model.clone();
         let table = Arc::clone(&self.table);
-        let raw = self.inner.generate_stream(request).await?;
+        // G-50-5a remainder (a), plan 50-30: the call's collector, captured here because the
+        // stream is polled later, possibly from another task.
+        let hopped = HOPPED_BILLS.try_with(Clone::clone).ok();
+        let opened = self.inner.generate_stream(request).await;
+        if let Some(bills) = &hopped {
+            Self::price_hopped_bills(&table, bills);
+        }
+        // A billed error the chain returns before any chunk (`AllProvidersFailed` after billed
+        // refusals) is priced against its bill's own model -- the hop that answered last, not
+        // the request's model.
+        let raw = opened.map_err(|err| Self::price_billed_error(&table, None, err))?;
         let priced = Box::into_pin(raw).map(move |item| match item {
             Ok(chunk) => {
                 if chunk.finish_reason.is_none() {
                     return Ok(chunk);
+                }
+                if let Some(bills) = &hopped {
+                    Self::price_hopped_bills(&table, bills);
                 }
                 let Some(usage) = chunk.usage.clone() else {
                     return Ok(chunk);
@@ -264,7 +279,12 @@ impl LlmPort for PricingLlmAdapter {
             }
             // G-50-5a: a billed error item is priced like a terminal chunk, against the
             // request's model, through the same helper `generate` uses (D-09).
-            Err(err) => Err(Self::price_billed_error(&table, Some(&model), err)),
+            Err(err) => {
+                if let Some(bills) = &hopped {
+                    Self::price_hopped_bills(&table, bills);
+                }
+                Err(Self::price_billed_error(&table, Some(&model), err))
+            }
         });
         Ok(Box::new(priced))
     }
@@ -860,5 +880,101 @@ mod tests {
 
         assert_eq!(composed.model_profile("m"), Some(sample_profile()));
         assert_eq!(composed.model_profile("unknown"), None);
+    }
+
+    // ---- G-50-5a remainder (a), plan 50-30 ----
+
+    /// `m1` and `m2` priced at different rates, so a hop priced at the served model's rate
+    /// would show.
+    fn two_model_table() -> Arc<PriceTable> {
+        Arc::new(
+            PriceTable::new(CurrencyCode::new("USD").unwrap())
+                .with_row("m1", PriceRow::new(3_000_000_000, 15_000_000_000).unwrap())
+                .with_row("m2", PriceRow::new(2_500_000_000, 10_000_000_000).unwrap()),
+        )
+    }
+
+    /// `Pricing(Fallback[m1 refuses after billing, m2 answers].hop_on_refusal(true))`.
+    fn hop_chain(second: MockLlmAdapter, table: Arc<PriceTable>) -> PricingLlmAdapter {
+        use crate::fallback::FallbackStep;
+        use paladin_ports::output::llm_port::BilledUsage;
+
+        let first = MockLlmAdapter::new().with_provider_name("hop1").with_error(
+            LlmError::refusal("hop1", "m1", "I can't help with that.")
+                .with_billed_usage(BilledUsage::new("m1", TokenUsage::new(1_000, 40))),
+        );
+        let chain = FallbackLlmAdapter::from_steps(vec![
+            FallbackStep::new(Arc::new(first) as Arc<dyn LlmPort>, "m1"),
+            FallbackStep::new(Arc::new(second) as Arc<dyn LlmPort>, "m2"),
+        ])
+        .unwrap()
+        .hop_on_refusal(true);
+        PricingLlmAdapter::new(Arc::new(chain), table)
+    }
+
+    /// Each hopped-past bill is priced against its OWN model (`m1`), not the served model
+    /// (`m2`), on `generate` and on `generate_stream`; an unpriced model keeps `cost: None`.
+    #[tokio::test]
+    async fn hopped_bills_are_priced_against_their_own_model() {
+        use paladin_ports::output::spend_scope::{HOPPED_BILLS, HoppedBills};
+
+        let table = two_model_table();
+        let own = table.price("m1", &TokenUsage::new(1_000, 40)).unwrap();
+        let at_served_rate = table.price("m2", &TokenUsage::new(1_000, 40)).unwrap();
+        assert_ne!(own, at_served_rate, "the two rates differ");
+
+        let answer = || {
+            MockLlmAdapter::new()
+                .with_provider_name("hop2")
+                .with_response("served")
+                .with_token_usage_struct(TokenUsage::new(10, 20))
+        };
+
+        let bills = HoppedBills::new();
+        let adapter = hop_chain(answer(), Arc::clone(&table));
+        let response = HOPPED_BILLS
+            .scope(bills.clone(), adapter.generate(request("m2")))
+            .await
+            .unwrap();
+        assert_eq!(response.model, "m2");
+        let taken = bills.take();
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].model, "m1");
+        assert_eq!(
+            taken[0].cost,
+            Some(own.clone()),
+            "generate: priced at m1's rate"
+        );
+
+        let bills = HoppedBills::new();
+        let adapter = hop_chain(answer(), Arc::clone(&table));
+        let stream = HOPPED_BILLS
+            .scope(bills.clone(), adapter.generate_stream(request("m2")))
+            .await
+            .unwrap();
+        let items: Vec<_> = Box::into_pin(stream).collect().await;
+        assert!(items.iter().all(Result::is_ok));
+        let taken = bills.take();
+        assert_eq!(taken.len(), 1);
+        assert_eq!(
+            taken[0].cost,
+            Some(own),
+            "generate_stream: priced at m1's rate"
+        );
+
+        // An unpriced hop model keeps `cost: None` (D-00c).
+        let only_m2 = Arc::new(
+            PriceTable::new(CurrencyCode::new("USD").unwrap())
+                .with_row("m2", PriceRow::new(2_500_000_000, 10_000_000_000).unwrap()),
+        );
+        let bills = HoppedBills::new();
+        let adapter = hop_chain(answer(), only_m2);
+        HOPPED_BILLS
+            .scope(bills.clone(), adapter.generate(request("m2")))
+            .await
+            .unwrap();
+        let taken = bills.take();
+        assert_eq!(taken.len(), 1);
+        assert_eq!(taken[0].cost, None, "m1 is unpriced here");
     }
 }

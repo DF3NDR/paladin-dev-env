@@ -18,8 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instance per (model, check) (target `paladin::usage`) and recorded under
   `paladin.usage_unreconciled` (`USAGE_UNRECONCILED_METADATA_KEY`) on `LlmResponse.metadata` or the
   stream's terminal chunk, as `total:vendor=<n>,mapped=<m>`, `reasoning:reasoning=<n>,completion=<m>`
-  or `cache:cache=<n>,prompt=<m>` joined by `;`. The value holds token counts only. The four
-  bespoke adapters follow in plan 50-23. Additive: one new public constant.
+  or `cache:cache=<n>,prompt=<m>` joined by `;`. The value holds token counts only. Plan 50-23
+  extended the check to the four bespoke adapters (see *Changed*). Additive: one new public
+  constant.
 
 - **Per-model parameter support (PARITY-02; Phase 50 plan 50-02; ADR-0061).** `paladin-ports`
   gains `ModelProfile`, `ParamSupport` (`Range`, `Fixed`, `NotSent`), `StopSupport` and
@@ -750,6 +751,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Vendor usage totals are reconciled on every adapter (G-50-5a; Phase 50 plans 50-23 and 50-24;
+  `MIGRATION.md` 9.1 M-B-20).**
+  - The OpenAI, DeepSeek and Gemini adapters now parse the vendor's own total (`total_tokens`,
+    `totalTokenCount`) on both paths. They compare it with the mapped
+    `prompt_tokens + completion_tokens`, and also check reasoning and cache containment. A finding
+    is recorded under `paladin.usage_unreconciled` and logged once per model (target
+    `paladin::usage`), as the five compat presets have done since plan 50-21. The total is never
+    copied: `total_tokens` stays `prompt + completion` (D-02).
+  - The total is optional on the wire. A usage object without one now parses on these three
+    instead of failing.
+  - The Anthropic adapter reports no vendor total, so it runs the containment checks only.
+  - Plan 50-24 applied an operator's live usage probe of 2026-10-18 to every provider's reading of
+    reasoning tokens. The probe covered seven providers, one reasoning-eliciting call per seeded
+    model, numbers only. No reading changed.
+    - Grok's reasoning-beside-completion fold is now measured on `grok-4.3`, `grok-4.5` and
+      `grok-4.6`. xAI's billed `cost_in_usd_ticks` matches reasoning billed at the completion rate
+      on all three, to the tick.
+    - DeepSeek, Kimi and Qwen (`qwen3.8-flash`) were measured reasoning-inside-completion.
+    - Gemini thoughts were measured beside candidates, which is the fold the adapter already
+      applies.
+    - OpenAI, `qwen-plus`, `gemini-3.5-flash-lite` and Anthropic stayed unsettled, as did Ollama
+      and OpenAI-compatible, which were not configured. They keep their documented readings.
+  - The Switching providers guide labels each provider's reading *measured 2026-10-18* or *not
+    live-measured*, and describes every fold and the reconciliation for all nine adapters.
+
 - **`llm.<provider>` blocks now take effect: the server builds every agent through
   `create_from_config` (PARITY-03; Phase 50 plan 50-10; D-12, D-13, D-02; `MIGRATION.md` 9.1
   M-B-15 and 9.5).** `build_agent_registry*`, `paladin_port_from_settings*` and
@@ -1103,6 +1129,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Gemini tool-use prompt tokens and Anthropic vision cache tokens are counted (G-50-5a; Phase 50
+  plan 50-23; `MIGRATION.md` 9.1 M-B-20).**
+  - Gemini reports `toolUsePromptTokenCount` beside `promptTokenCount`, and its `totalTokenCount`
+    includes it. The Gemini adapter dropped it, so it reported, and the Treasurer priced, fewer
+    prompt tokens than Gemini bills. The adapter now folds it into `prompt_tokens` (saturating).
+    Repro: prompt 100, candidates 20, tool use 300, thoughts 10 and vendor total 430 used to map
+    to prompt 100, total 130. It now maps to prompt 400, total 430. The path is latent today,
+    because the adapter sends no tools.
+  - The Anthropic vision path ignored `cache_read_input_tokens` and `cache_creation_input_tokens`.
+    It now folds them into `prompt_tokens` as the chat path does, on both vision surfaces.
+
 - **Grok reasoning tokens are counted and priced (G-50-5a; Phase 50 plan 50-21; `MIGRATION.md`
   9.1 M-B-19).** xAI reports `completion_tokens_details.reasoning_tokens` beside
   `completion_tokens` (its total is prompt + completion + reasoning), while the shared compat
@@ -1113,9 +1150,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (or the row's reasoning rate). Repro at $1/M input and $10/M output for prompt 663, completion
   50, reasoning 124, vendor total 837: 1_163_000 nanos before, 2_403_000 nanos now, the amount xAI
   bills. `total_tokens` is still `prompt_tokens + completion_tokens` (D-02). xAI's
-  reasoning-exclusive `completion_tokens` is secondary-sourced and not yet live-measured (plan
-  50-22 measures it); a wrong reading would be flagged on every reasoning call by the
-  reconciliation below. Kimi, Qwen, Ollama and OpenAI-compatible keep the inclusive reading.
+  reasoning-exclusive `completion_tokens` was live-measured on 2026-10-18 (plans 50-22 and 50-24)
+  on `grok-4.3`, `grok-4.5` and `grok-4.6`, and xAI's billed `cost_in_usd_ticks` matched
+  reasoning billed at the completion rate. A future model that reads differently would be
+  flagged on every reasoning call by the reconciliation below. Kimi, Qwen, Ollama and OpenAI-compatible keep the inclusive reading.
 
 - **The OpenAI adapter sends `max_completion_tokens`, so `gpt-5.4-nano` no longer returns HTTP 400
   (G-50-5b; Phase 50 plan 50-19; `MIGRATION.md` 9.1 M-B-18).** The adapter sent the output limit
@@ -1294,8 +1332,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once a body is captured. (3) A caller that builds an `LlmRequest` directly gets omit, `warn!` and
   metadata, not a refusal. (4) `TokenUsage.total_tokens` stays `prompt + completion`; a vendor's
   own total is not copied over it. On the five compat presets it is compared and a disagreement is
-  recorded under `paladin.usage_unreconciled` (plan 50-21); OpenAI, Anthropic, DeepSeek and Gemini
-  follow in plan 50-23. (5) The retry counters are not unified: Anthropic and Gemini count total
+  recorded under `paladin.usage_unreconciled` (plan 50-21). OpenAI, DeepSeek and Gemini do the
+  same since plan 50-23, and Anthropic, which reports no total, runs the containment checks. (5) The retry counters are not unified: Anthropic and Gemini count total
   attempts, the other seven count retries after the first attempt. (6) The Grok and OpenAI
   temperature upper bounds, and every `top_p` and penalty span, are stated or contract-derived
   rather than measured edges; the Switching providers page labels each.

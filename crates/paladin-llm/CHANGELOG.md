@@ -14,7 +14,8 @@ and this project follows lockstep workspace versioning.
   own `total_tokens` on both paths and compare it, and the reasoning and cache containment, with the
   mapped usage. A finding is warned once per (model, check) (target `paladin::usage`) and recorded
   under the key on the buffered response or the stream's terminal chunk; `total_tokens` stays
-  `prompt_tokens + completion_tokens`. The four bespoke adapters follow in plan 50-23.
+  `prompt_tokens + completion_tokens`. Plan 50-23 extended the check to the four bespoke
+  adapters (see *Changed*).
 - Phase 50 (provider parity and configuration-driven model swap; PARITY-01..08; ADR-0061):
   - **Sampling policy and registry.** `sampling` (the one wire filter every request builder calls: an
     explicit value the model cannot honour is refused at build, any other is omitted with a
@@ -68,11 +69,16 @@ and this project follows lockstep workspace versioning.
 
 ### Fixed
 
+- Gemini `toolUsePromptTokenCount` is folded into `prompt_tokens` (G-50-5a, Phase 50 plan 50-23).
+  Gemini counts it in `totalTokenCount`, and the adapter used to drop it. Repro 100/20/300/10
+  (total 430) mapped to prompt 100, and now maps to prompt 400. The Anthropic vision path now
+  folds `cache_read_input_tokens` and `cache_creation_input_tokens` into `prompt_tokens`.
 - Grok reasoning tokens are counted and priced (G-50-5a, Phase 50 plan 50-21): xAI reports
   `reasoning_tokens` beside `completion_tokens`, so the Grok adapter now folds them into
   `completion_tokens` and `total_tokens`, priced at the completion rate. Repro at $1/M input and
   $10/M output (prompt 663, completion 50, reasoning 124, vendor total 837): 1_163_000 nanos before,
-  2_403_000 now. Secondary-sourced, not yet live-measured (plan 50-22 measures it).
+  2_403_000 now. Live-measured 2026-10-18 on `grok-4.3`, `grok-4.5` and `grok-4.6` (plans 50-22
+  and 50-24), with xAI's billed cost matching reasoning billed at the completion rate.
 - The OpenAI adapter sends its output limit as `max_completion_tokens` on every chat-completions
   body (buffered, streamed, every `response_format`) and on the vision request (G-50-5b, Phase 50
   plan 50-19), so `gpt-5.4-nano` no longer answers HTTP 400. Measured accepting the key:
@@ -92,6 +98,17 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- Vendor usage totals are reconciled on every adapter (G-50-5a, Phase 50 plans 50-23 and 50-24).
+  - The OpenAI, DeepSeek and Gemini adapters parse their vendor total on both paths. The total is
+    now optional on the wire, so a usage object without one parses. They record any disagreement,
+    and any reasoning or cache containment breach, under `paladin.usage_unreconciled`, the same
+    key the compat presets use.
+  - The Anthropic adapter runs the containment checks only, because it gets no vendor total.
+  - No total is ever copied.
+  - The 2026-10-18 live usage probe was applied to every provider's reasoning reading, and changed
+    none. Grok (beside completion, with billed cost confirmed), DeepSeek, Kimi, Qwen and Gemini
+    are now labelled measured in code and in the guide. OpenAI, Anthropic, Ollama and
+    OpenAI-compatible are labelled not live-measured.
 - Phase 50: every adapter builds the user turn through one shared rule (the query, then the
   context, each only when non-empty after trimming, joined by one blank line); the OpenAI adapter
   previously sent an empty user message when only the query was set (PARITY-08). OpenAI no longer

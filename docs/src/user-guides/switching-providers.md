@@ -268,7 +268,7 @@ on the International endpoint); the other Grok chat ids (not probed).
 
 ## Responses
 
-Every adapter maps the same outcomes to the same typed results, measured by one 17-case
+Every adapter maps the same outcomes to the same typed results, measured by one 19-case
 conformance suite over all nine adapters. The suite drives mock vendor bodies shaped like each
 vendor's published response contract; the live probe did not capture a vendor refusal or a
 quota-exhaustion body.
@@ -280,31 +280,53 @@ quota-exhaustion body.
   `LlmError::Refusal { .. }`.
 - **A blocked answer with no refusal signal** is `Ok` with `FinishReason::ContentFilter`.
 - **Reasoning** text is on `LlmResponse.reasoning` (and `StreamingResponse.reasoning` while
-  streaming) where the vendor returns it; reasoning and cache counts are on `TokenUsage` and are
-  `None` when the vendor did not report them. `TokenUsage.total_tokens` is always
-  `prompt_tokens + completion_tokens`, and sub-counts sit inside their parents: an adapter folds a
-  category its vendor reports outside the parent into it (Gemini thoughts and Grok reasoning into
-  `completion_tokens`, Anthropic cache reads and writes into `prompt_tokens`), so the counts the
-  Treasurer prices are what the vendor bills.
-- **The vendor's own total** on the five OpenAI-compatible presets (kimi, qwen, grok, ollama,
-  openai-compatible) is parsed, buffered and streamed, and compared with the mapped total; it is
-  never copied over it. A disagreement, a reasoning count above `completion_tokens`, or cache
-  counts above `prompt_tokens` is logged once per model (target `paladin::usage`) and recorded
-  under `paladin.usage_unreconciled` (for example `total:vendor=900,mapped=837`) on the buffered
-  response or the stream's terminal chunk. On openai, anthropic, deepseek and gemini the vendor
-  total is not yet reconciled; plan 50-23 extends the check to them.
+  streaming) where the vendor returns it.
+- **Usage** is mapped the same way on all nine adapters.
+  - Reasoning and cache counts are on `TokenUsage`, and are `None` when the vendor did not report
+    them.
+  - `TokenUsage.total_tokens` is always `prompt_tokens + completion_tokens`.
+  - Every billed category a vendor reports is folded into one of those two counts, so the counts
+    the Treasurer prices are what the vendor bills. The folds are:
+    - Grok reasoning tokens, which xAI reports beside `completion_tokens`, into
+      `completion_tokens`;
+    - Gemini `thoughtsTokenCount` into `completion_tokens`, and Gemini `toolUsePromptTokenCount`
+      into `prompt_tokens`;
+    - Anthropic cache reads and writes (`cache_read_input_tokens`, `cache_creation_input_tokens`)
+      into `prompt_tokens`, on the chat path and the vision path alike.
+  - Every other adapter's vendor already reports reasoning and cache counts inside their parents,
+    and those counts are copied as reported. Sub-counts therefore always sit inside their parents.
+- **The vendor's own total** is checked against the mapped total on every adapter except
+  anthropic, which reports no total.
+  - It is parsed on both paths (buffered and streamed) and compared with the mapped
+    `prompt_tokens + completion_tokens`.
+  - It is never copied over the mapped total.
+  - A usage object without a total still parses, and the missing total is not a finding.
+  - These are findings: a disagreement, a reasoning count above `completion_tokens`, or cache
+    counts above `prompt_tokens`. On anthropic only the two containment checks apply.
+  - A finding is logged once per model (target `paladin::usage`) and recorded under
+    `paladin.usage_unreconciled` (for example `total:vendor=900,mapped=837`), on the buffered
+    response or on the stream's terminal chunk.
+  - So if a vendor changes how it reports reasoning, the change shows up on the first affected
+    call; it is never priced silently.
+- **Which readings are measured.** Each provider's reading of reasoning against
+  `completion_tokens` carries a label in the reasoning column below:
+  - *measured 2026-10-18*: confirmed by an operator-run probe on the raw vendor wire that day, one
+    reasoning-eliciting call per seeded model. The probe recorded only the usage numbers.
+  - *not live-measured*: the reading follows the vendor's documented contract. Either the probe
+    could not settle it (no reasoning count, or no vendor total), or the preset fronts a server of
+    your choosing.
 
 | Provider | Empty output (buffered, streamed) | Refusal | Content filter | Usage cap | Cache read, write | Reasoning tokens, text | Stop sequences |
 |----------|-----------------------------------|---------|----------------|-----------|-------------------|------------------------|----------------|
-| openai | `EmptyCompletion`, both | typed, from `message.refusal` | `ContentFilter` | `UsageLimitExceeded` on a 429 coded `insufficient_quota` (unit-tested; not part of owner reading R-2; no quota body in the probe) | read yes (`cached_tokens`); write not reported | tokens yes; text not mapped | `stop`, in declared order, up to the profile's maximum |
-| anthropic | `EmptyCompletion`, both (streamed: at `message_stop`; a stream that ends without it is not classified) | typed, from `stop_reason: refusal`, checked before emptiness; detail from `stop_details` | not applicable: the refusal stop reason is the typed signal | `UsageLimitExceeded` on a 429 whose `error.details.error_code` is `enforced_spend_limit_reached`, or a 400 carrying the usage-cap signature (unit-tested; not part of R-2) | read yes; write yes (`cache_creation_input_tokens`) | tokens yes (`thinking_tokens`); text yes (thinking blocks; `thinking_delta` while streaming) | `stop_sequences`, no known maximum |
-| deepseek | `EmptyCompletion`, both | no typed refusal field on the wire; a blocked answer arrives as a `content_filter` finish | `ContentFilter` | `UsageLimitExceeded` on HTTP 402 (the shared status mapping, unit-tested; not part of R-2) | read yes (`prompt_cache_hit_tokens`); write not reported | tokens yes; text yes (`reasoning_content`, both paths) | `stop`, no known maximum |
-| kimi | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write yes (`cache_write_tokens`, observed on Kimi) | tokens yes; text yes (`reasoning_content`) | `stop`, no known maximum |
-| qwen | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes; text yes (`reasoning_content`) | `stop`, no known maximum |
-| grok | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes: xAI reports `reasoning_tokens` beside `completion_tokens`, and the adapter folds them into `completion_tokens` (secondary-sourced, not yet live-measured; plan 50-22 measures it); text yes (`reasoning_content`) | not sent: `stop` is omitted and recorded; an agent's stop words are enforced client-side |
-| gemini | `EmptyCompletion`, both (streamed: at the item that carries `finishReason`; a stream with no such frame is not classified) | no refusal signal on the wire; `SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT` and `SPII` finishes are `Ok(ContentFilter)` | `ContentFilter` | no usage-cap mapping: a 429 is a rate limit (the free-tier body of 2026-10-15 was one) | read yes (`cachedContentTokenCount`); write not reported | tokens yes (`thoughtsTokenCount`); text not mapped | `generationConfig.stopSequences`, no known maximum |
-| ollama | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes; text yes (`reasoning_content`) | `stop`, no known maximum |
-| openai-compatible | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes; text yes (`reasoning_content`) | `stop`, no known maximum |
+| openai | `EmptyCompletion`, both | typed, from `message.refusal` | `ContentFilter` | `UsageLimitExceeded` on a 429 coded `insufficient_quota` (unit-tested; not part of owner reading R-2; no quota body in the probe) | read yes (`cached_tokens`); write not reported | tokens yes, inside `completion_tokens` (not live-measured: the probe got 0 reasoning tokens from `gpt-5.4-nano` and `gpt-4o-mini`); text not mapped | `stop`, in declared order, up to the profile's maximum |
+| anthropic | `EmptyCompletion`, both (streamed: at `message_stop`; a stream that ends without it is not classified) | typed, from `stop_reason: refusal`, checked before emptiness; detail from `stop_details` | not applicable: the refusal stop reason is the typed signal | `UsageLimitExceeded` on a 429 whose `error.details.error_code` is `enforced_spend_limit_reached`, or a 400 carrying the usage-cap signature (unit-tested; not part of R-2) | read yes; write yes (`cache_creation_input_tokens`); both folded into `prompt_tokens`, chat and vision | tokens yes (`thinking_tokens`), inside `output_tokens` (not live-measured: no vendor total to check against; the containment check guards it); text yes (thinking blocks; `thinking_delta` while streaming) | `stop_sequences`, no known maximum |
+| deepseek | `EmptyCompletion`, both | no typed refusal field on the wire; a blocked answer arrives as a `content_filter` finish | `ContentFilter` | `UsageLimitExceeded` on HTTP 402 (the shared status mapping, unit-tested; not part of R-2) | read yes (`prompt_cache_hit_tokens`); write not reported | tokens yes, inside `completion_tokens` (measured 2026-10-18: `deepseek-flash`); text yes (`reasoning_content`, both paths) | `stop`, no known maximum |
+| kimi | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write yes (`cache_write_tokens`, observed on Kimi) | tokens yes, inside `completion_tokens` (measured 2026-10-18: `kimi-k2.6`, `kimi-k3`); text yes (`reasoning_content`) | `stop`, no known maximum |
+| qwen | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes, inside `completion_tokens` (measured 2026-10-18: `qwen3.8-flash`; `qwen-plus` reported none); text yes (`reasoning_content`) | `stop`, no known maximum |
+| grok | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes: xAI reports `reasoning_tokens` beside `completion_tokens`, and the adapter folds them into `completion_tokens` (measured 2026-10-18: `grok-4.3`, `grok-4.5`, `grok-4.6`; xAI's billed `cost_in_usd_ticks` matched reasoning billed at the completion rate); text yes (`reasoning_content`) | not sent: `stop` is omitted and recorded; an agent's stop words are enforced client-side |
+| gemini | `EmptyCompletion`, both (streamed: at the item that carries `finishReason`; a stream with no such frame is not classified) | no refusal signal on the wire; `SAFETY`, `RECITATION`, `BLOCKLIST`, `PROHIBITED_CONTENT` and `SPII` finishes are `Ok(ContentFilter)` | `ContentFilter` | no usage-cap mapping: a 429 is a rate limit (the free-tier body of 2026-10-15 was one) | read yes (`cachedContentTokenCount`); write not reported | tokens yes (`thoughtsTokenCount`), reported beside `candidatesTokenCount` and folded into `completion_tokens` (measured 2026-10-18: `gemini-3.5-flash`, `gemini-3.6-flash`; `gemini-3.5-flash-lite` reported none); text not mapped | `generationConfig.stopSequences`, no known maximum |
+| ollama | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes, inside `completion_tokens` (not live-measured: the preset fronts whichever server you point it at); text yes (`reasoning_content`) | `stop`, no known maximum |
+| openai-compatible | `EmptyCompletion`, both | typed, from `message.refusal` or the stream delta | `ContentFilter` | unverified -- owner accepted (2026-10-16) | read yes (`cached_tokens`); write mapped when reported, not observed | tokens yes, inside `completion_tokens` (not live-measured: the preset fronts whichever server you point it at); text yes (`reasoning_content`) | `stop`, no known maximum |
 
 The usage-cap column follows owner reading R-2 (plan 50-17, 2026-10-16): no quota-exhaustion body
 was captured for any of the five compat presets, so none has a vendor-specific usage-cap mapping.

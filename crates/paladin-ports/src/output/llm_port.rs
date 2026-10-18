@@ -238,6 +238,88 @@ use crate::output::rate_limit_hints::RateLimitHints;
 /// Re-exported so `paladin_ports::output::llm_port::ModelProfile` resolves (ADR-0061).
 pub use super::model_profile::{ModelProfile, ParamSupport, SamplingParam, StopSupport};
 
+/// The usage of a call the vendor answered and billed even though the call
+/// failed (G-50-5a): a reasoning model that spent its whole budget thinking and
+/// returned no text ([`LlmError::EmptyCompletion`]), or a refusal the vendor
+/// still charged for ([`LlmError::Refusal`]).
+///
+/// `model` is the vendor-reported served model when the response named one,
+/// else the request model. `usage` is the adapter's mapped [`TokenUsage`],
+/// under the same inclusive contract as a successful response's. `cost` is set
+/// only by a pricing decorator (`paladin_llm::pricing::PricingLlmAdapter`);
+/// an adapter leaves it `None`. Holds numbers, a model id and a [`Cost`] only:
+/// no response text and no credential.
+///
+/// Marked `#[non_exhaustive]`: build it with [`BilledUsage::new`] and
+/// [`BilledUsage::with_cost`].
+///
+/// # Examples
+///
+/// ```rust
+/// use paladin_core::platform::container::cost::{Cost, CostError, CurrencyCode};
+/// use paladin_ports::output::llm_port::{BilledUsage, TokenUsage};
+///
+/// let billed = BilledUsage::new("deepseek-flash", TokenUsage::new(1_000, 62_000));
+/// assert_eq!(billed.usage.total_tokens, 63_000);
+/// assert!(billed.cost.is_none());
+///
+/// let priced = billed.with_cost(Cost::new(4_200, CurrencyCode::new("USD")?));
+/// assert_eq!(priced.cost.map(|cost| cost.nanos()), Some(4_200));
+/// # Ok::<(), CostError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct BilledUsage {
+    /// The model the vendor billed: the served model when the response named
+    /// one, else the request model.
+    pub model: String,
+    /// The billed usage, mapped under [`TokenUsage`]'s inclusive contract.
+    pub usage: TokenUsage,
+    /// The priced cost, set only by a pricing decorator; `None` when unpriced.
+    pub cost: Option<Cost>,
+}
+
+impl BilledUsage {
+    /// A bill for `usage` on `model`, not yet priced (`cost` is `None`).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{BilledUsage, TokenUsage};
+    ///
+    /// let billed = BilledUsage::new("gpt-x", TokenUsage::new(3, 2));
+    /// assert_eq!(billed.model, "gpt-x");
+    /// assert!(billed.cost.is_none());
+    /// ```
+    pub fn new(model: impl Into<String>, usage: TokenUsage) -> Self {
+        Self {
+            model: model.into(),
+            usage,
+            cost: None,
+        }
+    }
+
+    /// The same bill, priced at `cost`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_core::platform::container::cost::{Cost, CostError, CurrencyCode};
+    /// use paladin_ports::output::llm_port::{BilledUsage, TokenUsage};
+    ///
+    /// let usd = CurrencyCode::new("USD")?;
+    /// let priced = BilledUsage::new("gpt-x", TokenUsage::new(3, 2))
+    ///     .with_cost(Cost::new(10, usd.clone()));
+    /// assert_eq!(priced.cost, Some(Cost::new(10, usd)));
+    /// # Ok::<(), CostError>(())
+    /// ```
+    #[must_use]
+    pub fn with_cost(mut self, cost: Cost) -> Self {
+        self.cost = Some(cost);
+        self
+    }
+}
+
 /// Errors that can occur during LLM operations
 ///
 /// Each variant represents a specific failure mode with context for recovery strategies.
@@ -444,24 +526,28 @@ pub enum LlmError {
     /// it reproduces the same refusal. A caller may deliberately try another
     /// provider or model. `FallbackLlmAdapter` stops on a refusal by default.
     ///
+    /// A refused call the vendor still billed carries that bill in `billed`
+    /// (G-50-5a); read it with [`LlmError::billed_usage`]. Marked
+    /// `#[non_exhaustive]`: build it with [`LlmError::refusal`] (plus
+    /// [`LlmError::with_billed_usage`]) and match it with `Refusal { .. }`.
+    ///
     /// # Examples
     ///
     /// ```rust
     /// use paladin_core::platform::container::transience::Transience;
     /// use paladin_ports::output::llm_port::LlmError;
     ///
-    /// let error = LlmError::Refusal {
-    ///     provider: "anthropic".to_string(),
-    ///     model: "claude-sonnet-4".to_string(),
-    ///     detail: "I can't help with that.".to_string(),
-    /// };
+    /// let error = LlmError::refusal("anthropic", "claude-sonnet-4", "I can't help with that.");
     /// let rendered = error.to_string();
     /// assert!(rendered.contains("anthropic"));
     /// assert!(rendered.contains("claude-sonnet-4"));
     /// assert!(rendered.contains("I can't help with that."));
     /// assert_eq!(error.transience(), Transience::Permanent);
+    /// assert!(matches!(&error, LlmError::Refusal { model, .. } if model == "claude-sonnet-4"));
+    /// assert!(error.billed_usage().is_none());
     /// ```
     #[error("Refused by provider '{provider}' (model '{model}'): {detail}")]
+    #[non_exhaustive]
     Refusal {
         /// The provider whose model refused (e.g. `"anthropic"`, `"openai"`).
         provider: String,
@@ -469,6 +555,9 @@ pub enum LlmError {
         model: String,
         /// The vendor's refusal text, redacted then bounded. Display-only.
         detail: String,
+        /// The usage the vendor billed for the refused call, when it reported
+        /// any. `None` when it reported none, never a fabricated zero.
+        billed: Option<Box<BilledUsage>>,
     },
 
     /// Requested model not available or not supported by provider
@@ -501,20 +590,37 @@ pub enum LlmError {
     /// reproduce the same truncation. For a `stop` with no text, rephrase the
     /// request or try another model.
     ///
+    /// The vendor usually bills such a call (a `length` truncation bills the
+    /// whole budget). That bill rides in `billed` (G-50-5a); read it with
+    /// [`LlmError::billed_usage`]. Marked `#[non_exhaustive]`: build it with
+    /// [`LlmError::empty_completion`] (plus [`LlmError::with_billed_usage`])
+    /// and match it with `EmptyCompletion { .. }` or
+    /// `EmptyCompletion { detail, .. }`.
+    ///
     /// # Examples
     ///
     /// ```rust
     /// use paladin_ports::output::llm_port::LlmError;
     ///
-    /// let error = LlmError::EmptyCompletion(
+    /// let error = LlmError::empty_completion(
     ///     "finish_reason=length, content empty (reasoning consumed max_tokens budget); \
-    ///      retry with a larger max_tokens budget".to_string()
+    ///      retry with a larger max_tokens budget",
     /// );
     /// assert!(error.to_string().starts_with("Empty completion:"));
     /// assert!(error.to_string().contains("max_tokens"));
+    /// if let LlmError::EmptyCompletion { detail, .. } = &error {
+    ///     assert!(detail.starts_with("finish_reason=length"));
+    /// }
     /// ```
-    #[error("Empty completion: {0}")]
-    EmptyCompletion(String),
+    #[error("Empty completion: {detail}")]
+    #[non_exhaustive]
+    EmptyCompletion {
+        /// The finish reason and the advice that fits it. Display-only.
+        detail: String,
+        /// The usage the vendor billed for the empty call, when it reported
+        /// any. `None` when it reported none, never a fabricated zero.
+        billed: Option<Box<BilledUsage>>,
+    },
 
     /// General processing error during LLM interaction
     ///
@@ -595,10 +701,9 @@ impl LlmError {
     /// Build a [`LlmError::EmptyCompletion`]: the provider answered but returned no usable
     /// text. `detail` names the finish reason and carries the advice that fits it.
     ///
-    /// This is the supported way to build the variant. A later change adds a slot for the
-    /// usage of a call the vendor billed even though it failed; this constructor keeps
-    /// working unchanged when it does, so build the variant with it and match it with
-    /// `EmptyCompletion { .. }`.
+    /// This is the supported way to build the variant (it is `#[non_exhaustive]`). The value
+    /// carries no bill; attach the vendor's billed usage with [`LlmError::with_billed_usage`].
+    /// Match it with `EmptyCompletion { .. }`.
     ///
     /// # Examples
     ///
@@ -615,16 +720,18 @@ impl LlmError {
     /// assert_eq!(error.transience(), Transience::Permanent);
     /// ```
     pub fn empty_completion(detail: impl Into<String>) -> Self {
-        LlmError::EmptyCompletion(detail.into())
+        LlmError::EmptyCompletion {
+            detail: detail.into(),
+            billed: None,
+        }
     }
 
     /// Build a [`LlmError::Refusal`]: `model` at `provider` declined to answer. `detail` is
     /// the vendor's refusal text, already redacted and then bounded by the caller.
     ///
-    /// This is the supported way to build the variant. A later change adds a slot for the
-    /// usage of a call the vendor billed even though it refused; this constructor keeps
-    /// working unchanged when it does, so build the variant with it and match it with
-    /// `Refusal { .. }` (naming fields followed by `..`).
+    /// This is the supported way to build the variant (it is `#[non_exhaustive]`). The value
+    /// carries no bill; attach the vendor's billed usage with [`LlmError::with_billed_usage`].
+    /// Match it with `Refusal { .. }` (naming fields followed by `..`).
     ///
     /// # Examples
     ///
@@ -652,6 +759,88 @@ impl LlmError {
             provider: provider.into(),
             model: model.into(),
             detail: detail.into(),
+            billed: None,
+        }
+    }
+
+    /// Attach the usage the vendor billed for a call that still failed (G-50-5a).
+    ///
+    /// Only [`LlmError::EmptyCompletion`] and [`LlmError::Refusal`] carry a bill: they are the
+    /// outcomes of a response the vendor returned and charged for. On
+    /// [`LlmError::AllProvidersFailed`] the bill goes to its last error. Every other variant
+    /// (transport, status, rate-limit errors, which never carry a billed body) is returned
+    /// unchanged. An existing bill is replaced.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{BilledUsage, LlmError, TokenUsage};
+    ///
+    /// let billed = BilledUsage::new("deepseek-flash", TokenUsage::new(1_000, 62_000));
+    /// let error = LlmError::empty_completion("finish_reason=length").with_billed_usage(billed);
+    /// assert_eq!(
+    ///     error.billed_usage().map(|bill| bill.usage.total_tokens),
+    ///     Some(63_000)
+    /// );
+    ///
+    /// // A transport error never carries a bill.
+    /// let network = LlmError::NetworkError("reset".to_string())
+    ///     .with_billed_usage(BilledUsage::new("m", TokenUsage::new(1, 1)));
+    /// assert!(network.billed_usage().is_none());
+    /// ```
+    #[must_use]
+    pub fn with_billed_usage(self, billed: BilledUsage) -> Self {
+        match self {
+            LlmError::EmptyCompletion { detail, .. } => LlmError::EmptyCompletion {
+                detail,
+                billed: Some(Box::new(billed)),
+            },
+            LlmError::Refusal {
+                provider,
+                model,
+                detail,
+                ..
+            } => LlmError::Refusal {
+                provider,
+                model,
+                detail,
+                billed: Some(Box::new(billed)),
+            },
+            LlmError::AllProvidersFailed { attempts, last } => LlmError::AllProvidersFailed {
+                attempts,
+                last: Box::new(last.with_billed_usage(billed)),
+            },
+            other => other,
+        }
+    }
+
+    /// The usage the vendor billed for this failed call, if it reported any (G-50-5a).
+    ///
+    /// `Some` only on an [`LlmError::EmptyCompletion`] or [`LlmError::Refusal`] that an adapter
+    /// billed; like [`retry_after`](LlmError::retry_after) this looks through
+    /// [`LlmError::AllProvidersFailed`] to its last error. `None` means no usage was reported,
+    /// never a zero bill.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use paladin_ports::output::llm_port::{BilledUsage, LlmError, TokenUsage};
+    ///
+    /// let refusal = LlmError::refusal("openai", "gpt-x", "I can't help with that.");
+    /// assert!(refusal.billed_usage().is_none());
+    ///
+    /// let billed = refusal.with_billed_usage(BilledUsage::new("gpt-x", TokenUsage::new(12, 3)));
+    /// let bill = billed.billed_usage();
+    /// assert_eq!(bill.map(|bill| bill.model.as_str()), Some("gpt-x"));
+    /// assert_eq!(bill.and_then(|bill| bill.cost.as_ref()), None);
+    /// ```
+    pub fn billed_usage(&self) -> Option<&BilledUsage> {
+        match self {
+            LlmError::EmptyCompletion { billed, .. } | LlmError::Refusal { billed, .. } => {
+                billed.as_deref()
+            }
+            LlmError::AllProvidersFailed { last, .. } => last.billed_usage(),
+            _ => None,
         }
     }
 
@@ -753,7 +942,7 @@ impl LlmError {
             LlmError::UsageLimitExceeded { .. } => Transience::Permanent,
             LlmError::ModelNotAvailable(_) => Transience::Permanent,
             LlmError::TokenLimitExceeded => Transience::Permanent,
-            LlmError::EmptyCompletion(_) => Transience::Permanent,
+            LlmError::EmptyCompletion { .. } => Transience::Permanent,
             LlmError::Refusal { .. } => Transience::Permanent,
 
             // Unresolvable from a bare string: no typed field distinguishes
@@ -2712,13 +2901,16 @@ mod tests {
             ),
             (LlmError::ModelNotAvailable("x".into()), Permanent),
             (LlmError::TokenLimitExceeded, Permanent),
-            (LlmError::EmptyCompletion("x".into()), Permanent),
+            (LlmError::empty_completion("x"), Permanent),
+            (LlmError::refusal("anthropic", "m", "d"), Permanent),
             (
-                LlmError::Refusal {
-                    provider: "anthropic".into(),
-                    model: "m".into(),
-                    detail: "d".into(),
-                },
+                LlmError::empty_completion("x")
+                    .with_billed_usage(BilledUsage::new("m", TokenUsage::new(1, 1))),
+                Permanent,
+            ),
+            (
+                LlmError::refusal("anthropic", "m", "d")
+                    .with_billed_usage(BilledUsage::new("m", TokenUsage::new(1, 1))),
                 Permanent,
             ),
             (LlmError::ProcessingError("x".into()), Unknown),
@@ -2737,11 +2929,7 @@ mod tests {
     /// (already redacted and bounded) detail.
     #[test]
     fn refusal_display_names_provider_model_and_detail() {
-        let err = LlmError::Refusal {
-            provider: "openai".into(),
-            model: "gpt-x".into(),
-            detail: "I can't help with that.".into(),
-        };
+        let err = LlmError::refusal("openai", "gpt-x", "I can't help with that.");
         let rendered = err.to_string();
         assert!(rendered.contains("openai"), "{rendered}");
         assert!(rendered.contains("gpt-x"), "{rendered}");
@@ -2781,12 +2969,98 @@ mod tests {
         assert_eq!(refusal.transience(), Transience::Permanent);
     }
 
+    /// G-50-5a (plan 50-26): `BilledUsage::new(..).with_cost(..)` round-trips
+    /// its model, usage and cost; `new` leaves the cost unset.
+    #[test]
+    fn billed_usage_new_and_with_cost_round_trip() {
+        use paladin_core::platform::container::cost::CurrencyCode;
+
+        let usage = TokenUsage::new(1_000, 62_000);
+        let unpriced = BilledUsage::new("deepseek-flash", usage.clone());
+        assert_eq!(unpriced.model, "deepseek-flash");
+        assert_eq!(unpriced.usage, usage);
+        assert_eq!(unpriced.cost, None);
+
+        let usd = CurrencyCode::new("USD").expect("USD is a valid currency code");
+        let cost = Cost::new(4_200, usd);
+        let priced = unpriced.with_cost(cost.clone());
+        assert_eq!(priced.cost, Some(cost));
+        assert_eq!(priced.usage.total_tokens, 63_000);
+    }
+
+    /// G-50-5a: `with_billed_usage` attaches the bill to both billable
+    /// variants, and `billed_usage()` reads it back; the `Display` text and
+    /// `Permanent` transience are unchanged by the bill.
+    #[test]
+    fn with_billed_usage_sets_the_bill_on_empty_completion_and_refusal() {
+        let bill = BilledUsage::new("m", TokenUsage::new(3, 2));
+
+        let empty = LlmError::empty_completion("x").with_billed_usage(bill.clone());
+        assert_eq!(empty.billed_usage(), Some(&bill));
+        assert_eq!(empty.to_string(), "Empty completion: x");
+        assert_eq!(empty.transience(), Transience::Permanent);
+        assert!(matches!(empty, LlmError::EmptyCompletion { .. }));
+
+        let refusal = LlmError::refusal("p", "m", "d").with_billed_usage(bill.clone());
+        assert_eq!(refusal.billed_usage(), Some(&bill));
+        assert_eq!(
+            refusal.to_string(),
+            "Refused by provider 'p' (model 'm'): d"
+        );
+        assert_eq!(refusal.transience(), Transience::Permanent);
+
+        // Unbilled values carry no bill: never a fabricated zero (D-00c).
+        assert_eq!(LlmError::empty_completion("x").billed_usage(), None);
+        assert_eq!(LlmError::refusal("p", "m", "d").billed_usage(), None);
+    }
+
+    /// G-50-5a: a fallback chain's bill is its last error's bill, in both
+    /// directions (`with_billed_usage` reaches `last`, `billed_usage` reads it).
+    #[test]
+    fn billed_usage_looks_through_all_providers_failed_to_its_last_error() {
+        let bill = BilledUsage::new("m", TokenUsage::new(10, 0));
+        for last in [
+            LlmError::empty_completion("x"),
+            LlmError::refusal("p", "m", "d"),
+        ] {
+            let chain = LlmError::AllProvidersFailed {
+                attempts: vec![("p".into(), "boom".into())],
+                last: Box::new(last),
+            };
+            assert_eq!(chain.billed_usage(), None);
+            let chain = chain.with_billed_usage(bill.clone());
+            assert_eq!(chain.billed_usage(), Some(&bill));
+            match &chain {
+                LlmError::AllProvidersFailed { last, .. } => {
+                    assert_eq!(last.billed_usage(), Some(&bill));
+                }
+                other => panic!("expected AllProvidersFailed, got {other:?}"),
+            }
+        }
+    }
+
+    /// G-50-5a (A2-50-26): only the two billable variants carry a bill; any
+    /// other variant has none and `with_billed_usage` returns it unchanged.
+    #[test]
+    fn with_billed_usage_leaves_other_variants_unchanged() {
+        let bill = BilledUsage::new("m", TokenUsage::new(1, 1));
+        let limited = LlmError::rate_limited(Some(Duration::from_secs(7)));
+        assert_eq!(limited.billed_usage(), None);
+        let limited = limited.with_billed_usage(bill.clone());
+        assert_eq!(limited.billed_usage(), None);
+        assert_eq!(limited.retry_after(), Some(Duration::from_secs(7)));
+        assert!(matches!(limited, LlmError::RateLimitExceeded { .. }));
+
+        let network = LlmError::NetworkError("reset".into()).with_billed_usage(bill);
+        assert_eq!(network.billed_usage(), None);
+        assert_eq!(network.to_string(), "Network error: reset");
+    }
+
     /// D-11a: `EmptyCompletion`'s `Display` no longer appends max-tokens
     /// advice for every finish reason; the payload carries its own advice.
     #[test]
     fn empty_completion_display_has_no_fixed_max_tokens_suffix() {
-        let stop =
-            LlmError::EmptyCompletion("finish_reason=stop, the model returned no text".into());
+        let stop = LlmError::empty_completion("finish_reason=stop, the model returned no text");
         assert_eq!(
             stop.to_string(),
             "Empty completion: finish_reason=stop, the model returned no text"

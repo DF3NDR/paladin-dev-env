@@ -98,6 +98,14 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- A billed empty or refused completion on the shared engine's buffered path (Kimi, Qwen, Grok,
+  Ollama, OpenAI-compatible) now carries its usage on the error (G-50-5a, Phase 50 plan 50-26).
+  The response's usage is mapped before the shared guard classifies it, and the guard's
+  `LlmError::EmptyCompletion` / `LlmError::Refusal` gets `billed_usage()`: the served model (else
+  the request model), the mapped `TokenUsage` and no cost. A body with no `usage` object yields no
+  bill, never a zero one. An empty or refused body that omits `usage` now reaches the guard instead
+  of failing as a schema mismatch; a successful body without `usage` is still that schema-mismatch
+  `ProcessingError`. Every other adapter path bills from plan 50-27.
 - Vendor usage totals are reconciled on every adapter (G-50-5a, Phase 50 plans 50-23 and 50-24).
   - The OpenAI, DeepSeek and Gemini adapters parse their vendor total on both paths. The total is
     now optional on the wire, so a usage object without one parses. They record any disagreement,

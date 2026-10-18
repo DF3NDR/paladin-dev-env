@@ -686,7 +686,7 @@ impl AnthropicAdapter {
                         e,
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
-                            | LlmError::EmptyCompletion(_)
+                            | LlmError::EmptyCompletion { .. }
                             | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
                             | LlmError::RateLimitExceeded { .. }
@@ -1367,22 +1367,21 @@ fn refusal_text(
 /// model spent its whole budget thinking" in one step (the guard's own payload names only the
 /// finish reason). Any other error passes through untouched. The block-type names are vendor
 /// text, so they go through `diagnostic_excerpt`.
-fn with_block_census(err: LlmError, content: &[ClaudeContent], api_key: &str) -> LlmError {
-    match err {
-        LlmError::EmptyCompletion(msg) => {
-            let block_types = content
-                .iter()
-                .map(|block| block.content_type.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            LlmError::EmptyCompletion(format!(
-                "{msg}; {} content block(s) (types: [{}])",
-                content.len(),
-                crate::redaction::diagnostic_excerpt(&block_types, api_key)
-            ))
-        }
-        other => other,
+fn with_block_census(mut err: LlmError, content: &[ClaudeContent], api_key: &str) -> LlmError {
+    // The detail is extended in place, so any other field the variant carries is kept as is.
+    if let LlmError::EmptyCompletion { detail, .. } = &mut err {
+        let block_types = content
+            .iter()
+            .map(|block| block.content_type.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        *detail = format!(
+            "{detail}; {} content block(s) (types: [{}])",
+            content.len(),
+            crate::redaction::diagnostic_excerpt(&block_types, api_key)
+        );
     }
+    err
 }
 
 #[derive(Debug, Deserialize)]
@@ -1752,7 +1751,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
         let result = adapter.parse_response(Uuid::new_v4(), response);
 
         match result {
-            Err(LlmError::EmptyCompletion(msg)) => {
+            Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                 assert!(
                     msg.contains("thinking"),
                     "message must name the block type it saw: {msg}"
@@ -1762,7 +1761,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
                     "message must name the stop reason it arrived with: {msg}"
                 );
             }
-            other => panic!("expected Err(LlmError::EmptyCompletion(_)), got {other:?}"),
+            other => panic!("expected Err(LlmError::EmptyCompletion {{ .. }}), got {other:?}"),
         }
     }
 
@@ -1817,7 +1816,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
                     let calls = Arc::clone(&calls_clone);
                     async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Err(LlmError::EmptyCompletion("no text".to_string()))
+                        Err(LlmError::empty_completion("no text".to_string()))
                     }
                 },
                 3,
@@ -3219,6 +3218,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
                     provider,
                     model,
                     detail,
+                    ..
                 }) => {
                     assert_eq!(provider, "anthropic");
                     assert_eq!(model, "claude-opus-5");
@@ -3333,7 +3333,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
         fn anthropic_empty_content_on_end_turn_is_an_empty_completion() {
             for content in ["[]", r#"[{"type":"text","text":"  "}]"#] {
                 match parse(&body(content, r#""end_turn""#, "null")) {
-                    Err(LlmError::EmptyCompletion(msg)) => {
+                    Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                         assert!(msg.contains("finish_reason=stop"), "{msg}");
                         assert!(msg.contains("content block(s)"), "{msg}");
                     }
@@ -3345,7 +3345,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
         #[test]
         fn anthropic_context_window_stop_with_no_text_names_the_cause() {
             match parse(&body("[]", r#""model_context_window_exceeded""#, "null")) {
-                Err(LlmError::EmptyCompletion(msg)) => {
+                Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                     assert!(msg.contains("finish_reason=length"), "{msg}");
                 }
                 other => panic!("expected Err(EmptyCompletion), got {other:?}"),
@@ -3497,6 +3497,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
                     provider,
                     model,
                     detail,
+                    ..
                 }) => {
                     assert_eq!(provider, "anthropic");
                     assert_eq!(model, "claude-sonnet-5");
@@ -3550,7 +3551,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
                 Some("more")
             );
             match &items[2] {
-                Err(LlmError::EmptyCompletion(msg)) => {
+                Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                     assert!(msg.contains("finish_reason=stop"), "{msg}");
                 }
                 other => panic!("expected Err(EmptyCompletion) last, got {other:?}"),

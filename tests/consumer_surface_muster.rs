@@ -399,6 +399,29 @@ async fn phase_50_surface(llm: Arc<dyn LlmPort>) {
         }
     };
 
+    // PARITY-05 / G-50-5a (plan 50-26): an empty completion is a `#[non_exhaustive]` struct
+    // variant matched by field, and a billed-but-failed call's usage is read through
+    // `billed_usage()` (model, usage total, cost), never by naming the variant's fields.
+    let _empty = |error: &LlmError| -> Option<String> {
+        match error {
+            LlmError::EmptyCompletion { detail, .. } => Some(detail.clone()),
+            _ => None,
+        }
+    };
+    let _billed = |error: &LlmError| -> Option<(String, u32, bool)> {
+        error.billed_usage().map(|billed| {
+            (
+                billed.model.clone(),
+                billed.usage.total_tokens,
+                billed.cost.is_some(),
+            )
+        })
+    };
+    let _built: (LlmError, LlmError) = (
+        LlmError::empty_completion("finish_reason=length"),
+        LlmError::refusal("openai", "m", "no"),
+    );
+
     // PARITY-06: a fallback chain whose hops each send their own model.
     let step = FallbackStep::new(llm, "m");
     let _chain: Result<FallbackLlmAdapter, FallbackChainError> =

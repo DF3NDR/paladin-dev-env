@@ -679,7 +679,7 @@ impl GeminiAdapter {
         response: GeminiResponse,
     ) -> Result<LlmResponse, LlmError> {
         let candidate = response.candidates.first().ok_or_else(|| {
-            LlmError::EmptyCompletion("Gemini response contained no candidates".to_string())
+            LlmError::empty_completion("Gemini response contained no candidates".to_string())
         })?;
 
         let content = candidate_text(candidate);
@@ -925,7 +925,7 @@ impl GeminiAdapter {
                         e,
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
-                            | LlmError::EmptyCompletion(_)
+                            | LlmError::EmptyCompletion { .. }
                             | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
                             // D-02: surface the first 429; the Cadence decorator waits.
@@ -2124,7 +2124,7 @@ mod tests {
         };
 
         let result = adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response);
-        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
+        assert!(matches!(result, Err(LlmError::EmptyCompletion { .. })));
     }
 
     #[test]
@@ -2461,10 +2461,13 @@ mod tests {
         let result = adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response);
 
         assert!(
-            matches!(result, Err(LlmError::EmptyCompletion(_))),
-            "expected Err(EmptyCompletion(_)) for a MAX_TOKENS finish with no parts, got {result:?}"
+            matches!(result, Err(LlmError::EmptyCompletion { .. })),
+            "expected Err(EmptyCompletion {{ .. }}) for a MAX_TOKENS finish with no parts, got {result:?}"
         );
-        if let Err(LlmError::EmptyCompletion(message)) = result {
+        if let Err(LlmError::EmptyCompletion {
+            detail: message, ..
+        }) = result
+        {
             assert!(
                 message.contains("max_tokens"),
                 "EmptyCompletion message should name the remedy (a larger max_tokens), got: {message}"
@@ -2486,8 +2489,8 @@ mod tests {
         let result = adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response);
 
         assert!(
-            matches!(result, Err(LlmError::EmptyCompletion(_))),
-            "expected Err(EmptyCompletion(_)) for a MAX_TOKENS finish with whitespace-only text, got {result:?}"
+            matches!(result, Err(LlmError::EmptyCompletion { .. })),
+            "expected Err(EmptyCompletion {{ .. }}) for a MAX_TOKENS finish with whitespace-only text, got {result:?}"
         );
     }
 
@@ -2530,7 +2533,7 @@ mod tests {
             let response: GeminiResponse = serde_json::from_value(body).unwrap();
 
             match adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response) {
-                Err(LlmError::EmptyCompletion(msg)) => {
+                Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                     assert!(msg.contains("finish_reason=stop"), "{msg}");
                     assert!(!msg.contains("max_tokens"), "{msg}");
                 }
@@ -2559,7 +2562,7 @@ mod tests {
         let result = adapter.parse_response(Uuid::new_v4(), "gemini-2.5-flash", response);
 
         assert!(
-            !matches!(result, Err(LlmError::EmptyCompletion(_))),
+            !matches!(result, Err(LlmError::EmptyCompletion { .. })),
             "a SAFETY refusal must not be reported as EmptyCompletion (token-budget problem), got {result:?}"
         );
     }
@@ -2641,7 +2644,7 @@ mod tests {
         assert_eq!(items.len(), 2, "{items:?}");
         assert!(items[0].is_ok(), "the non-terminal frame stays yielded");
         match &items[1] {
-            Err(LlmError::EmptyCompletion(msg)) => {
+            Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                 assert!(msg.contains("finish_reason=stop"), "{msg}");
             }
             other => panic!("expected Err(EmptyCompletion) last, got {other:?}"),
@@ -2652,7 +2655,7 @@ mod tests {
     async fn gemini_empty_stream_on_max_tokens_advises_a_larger_budget() {
         let items = run_stream(frame("", Some("MAX_TOKENS"))).await;
         match items.last() {
-            Some(Err(LlmError::EmptyCompletion(msg))) => {
+            Some(Err(LlmError::EmptyCompletion { detail: msg, .. })) => {
                 assert!(msg.contains("larger max_tokens"), "{msg}");
             }
             other => panic!("expected Err(EmptyCompletion), got {other:?}"),
@@ -2881,7 +2884,7 @@ mod tests {
                     let calls = Arc::clone(&calls_clone);
                     async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Err(LlmError::EmptyCompletion("no text".to_string()))
+                        Err(LlmError::empty_completion("no text".to_string()))
                     }
                 },
                 3,

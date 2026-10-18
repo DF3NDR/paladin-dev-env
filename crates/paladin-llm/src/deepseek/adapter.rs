@@ -423,20 +423,19 @@ fn map_usage(usage: DeepSeekUsage) -> (TokenUsage, Option<u32>) {
 ///
 /// A usage object that omitted `total_tokens` renders it as `not reported`,
 /// never as a fabricated `0` (G-50-5a).
-fn annotate_with_usage(err: LlmError, usage: &DeepSeekUsage) -> LlmError {
-    match err {
-        LlmError::EmptyCompletion(msg) => {
-            let total = usage
-                .total_tokens
-                .map_or_else(|| "not reported".to_string(), |total| total.to_string());
-            LlmError::EmptyCompletion(format!(
-                "{msg} (provider-reported usage: prompt_tokens={}, completion_tokens={}, \
-                 total_tokens={total})",
-                usage.prompt_tokens, usage.completion_tokens
-            ))
-        }
-        other => other,
+fn annotate_with_usage(mut err: LlmError, usage: &DeepSeekUsage) -> LlmError {
+    // The detail is extended in place, so any other field the variant carries is kept as is.
+    if let LlmError::EmptyCompletion { detail, .. } = &mut err {
+        let total = usage
+            .total_tokens
+            .map_or_else(|| "not reported".to_string(), |total| total.to_string());
+        *detail = format!(
+            "{detail} (provider-reported usage: prompt_tokens={}, completion_tokens={}, \
+             total_tokens={total})",
+            usage.prompt_tokens, usage.completion_tokens
+        );
     }
+    err
 }
 
 /// Deserialize a possibly-`null` (or absent) string field as an empty string.
@@ -851,7 +850,7 @@ impl DeepSeekAdapter {
                         e,
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
-                            | LlmError::EmptyCompletion(_)
+                            | LlmError::EmptyCompletion { .. }
                             | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
                             // D-02: surface the first 429; the Cadence decorator waits.
@@ -1341,13 +1340,13 @@ mod tests {
     #[test]
     fn test_empty_completion_length_and_empty_is_truncation() {
         let result = classify("", &FinishReason::Length);
-        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
+        assert!(matches!(result, Err(LlmError::EmptyCompletion { .. })));
     }
 
     #[test]
     fn test_empty_completion_length_and_whitespace_is_truncation() {
         let result = classify("   \n\t", &FinishReason::Length);
-        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
+        assert!(matches!(result, Err(LlmError::EmptyCompletion { .. })));
     }
 
     #[test]
@@ -1363,12 +1362,12 @@ mod tests {
     #[test]
     fn test_empty_completion_empty_but_stop_is_empty_completion() {
         let result = classify("", &FinishReason::Stop);
-        assert!(matches!(result, Err(LlmError::EmptyCompletion(_))));
+        assert!(matches!(result, Err(LlmError::EmptyCompletion { .. })));
     }
 
     #[test]
     fn test_annotate_with_usage_names_all_three_token_counts_on_empty_completion() {
-        let err = LlmError::EmptyCompletion("finish_reason=length with empty content".to_string());
+        let err = LlmError::empty_completion("finish_reason=length with empty content".to_string());
         let usage = DeepSeekUsage {
             prompt_tokens: 31_000,
             completion_tokens: 32_000,
@@ -1380,7 +1379,7 @@ mod tests {
         let annotated = annotate_with_usage(err, &usage);
 
         match annotated {
-            LlmError::EmptyCompletion(msg) => {
+            LlmError::EmptyCompletion { detail: msg, .. } => {
                 assert!(
                     msg.contains("finish_reason=length with empty content"),
                     "original message must survive, got: {msg}"
@@ -1492,7 +1491,7 @@ mod tests {
         let message: DeepSeekMessage = serde_json::from_str(json).expect("should deserialize");
 
         let detected = classify(&message.content, &FinishReason::Length);
-        assert!(matches!(detected, Err(LlmError::EmptyCompletion(_))));
+        assert!(matches!(detected, Err(LlmError::EmptyCompletion { .. })));
     }
 
     #[test]
@@ -1824,7 +1823,7 @@ mod tests {
                     let calls = Arc::clone(&calls_clone);
                     async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Err(LlmError::EmptyCompletion("no text".to_string()))
+                        Err(LlmError::empty_completion("no text".to_string()))
                     }
                 },
                 3,
@@ -2601,7 +2600,7 @@ mod tests {
             let result =
                 generate_from(body(json!({"role": "assistant", "content": ""}), "stop")).await;
             match result {
-                Err(LlmError::EmptyCompletion(msg)) => {
+                Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                     assert!(msg.contains("finish_reason=stop"), "{msg}");
                     assert!(
                         msg.contains("provider-reported usage"),
@@ -2642,7 +2641,7 @@ mod tests {
             let items = stream_from(sse).await;
             let (last, yielded) = items.split_last().unwrap();
             assert!(
-                matches!(last, Err(LlmError::EmptyCompletion(_))),
+                matches!(last, Err(LlmError::EmptyCompletion { .. })),
                 "got {last:?}"
             );
             assert_eq!(
@@ -2821,7 +2820,7 @@ mod tests {
 
         #[test]
         fn annotate_with_usage_renders_an_absent_total_plainly() {
-            let err = LlmError::EmptyCompletion("finish_reason=length".to_string());
+            let err = LlmError::empty_completion("finish_reason=length".to_string());
             let usage = DeepSeekUsage {
                 prompt_tokens: 31_000,
                 completion_tokens: 32_000,
@@ -2830,7 +2829,7 @@ mod tests {
                 completion_tokens_details: None,
             };
             match annotate_with_usage(err, &usage) {
-                LlmError::EmptyCompletion(msg) => {
+                LlmError::EmptyCompletion { detail: msg, .. } => {
                     assert!(msg.contains("total_tokens=not reported"), "{msg}");
                 }
                 other => panic!("expected EmptyCompletion, got {other:?}"),

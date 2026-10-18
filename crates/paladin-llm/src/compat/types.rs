@@ -100,7 +100,11 @@ pub(crate) struct CompatResponse {
     pub _id: String,
     pub model: String,
     pub choices: Vec<CompatChoice>,
-    pub usage: CompatUsage,
+    /// Optional so an empty or refused response with no usage object still reaches the guard
+    /// (G-50-5a): such a failure carries no bill. A successful response without it is still a
+    /// schema mismatch (`CompatEngine::generate`).
+    #[serde(default)]
+    pub usage: Option<CompatUsage>,
 }
 
 #[derive(Debug, Deserialize)]

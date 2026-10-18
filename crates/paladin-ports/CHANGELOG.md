@@ -104,6 +104,16 @@ and this project follows lockstep workspace versioning.
   gains `run_metadata` after `served_by`; use `..Default::default()` or `PaladinResult::new(..)`.
   `LlmError` gains the `Refusal` variant (the enum is `#[non_exhaustive]`; a classifier needs an
   arm). Each is registered in `MIGRATION.md` section 9.2 and the semver allowlist.
+- Phase 50 (G-50-5a, PARITY-05; plans 50-25 and 50-26): `LlmError::EmptyCompletion(String)`
+  becomes the `#[non_exhaustive]` struct variant `EmptyCompletion { detail, billed }`, and
+  `LlmError::Refusal` gains `billed` and is marked `#[non_exhaustive]`. `billed:
+  Option<Box<BilledUsage>>` carries the usage of a call the vendor billed although it failed. The
+  new `BilledUsage { model, usage, cost }` has `BilledUsage::new` and `with_cost`. Build the
+  variants with the new `LlmError::empty_completion` / `LlmError::refusal`, attach a bill with
+  `LlmError::with_billed_usage`, and read it with `LlmError::billed_usage`. Both look through
+  `AllProvidersFailed` to its last error. Match with `EmptyCompletion { .. }` / `Refusal { .. }`.
+  `Display` and `Permanent` are unchanged. Registered in `MIGRATION.md` section 9.2 (the
+  `LlmError` row) and the semver allowlist (`enum_tuple_variant_changed_kind`).
 
 ## [0.10.1] - 2026-09-20
 

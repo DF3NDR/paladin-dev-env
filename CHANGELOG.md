@@ -1319,6 +1319,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `constructible_struct_adds_field` on `PaladinResult.run_metadata`; registered by extending the
   existing `paladin-ai-core | PaladinResult` `MIGRATION.md` 9.2 row and allowlist entry. The
   consumer takes it in its single move to v0.11.0.
+- **BREAKING (`paladin-ports`): `LlmError::EmptyCompletion` and `LlmError::Refusal` are
+  `#[non_exhaustive]` struct variants that carry the bill of a billed-but-failed call** (G-50-5a,
+  PARITY-05; Phase 50 plans 50-25 and 50-26). `EmptyCompletion(String)` becomes
+  `EmptyCompletion { detail, billed }` and `Refusal { provider, model, detail }` gains `billed`, an
+  `Option<Box<BilledUsage>>`. The new `BilledUsage { model, usage, cost }` holds the usage of a call
+  the vendor answered and charged for even though it returned no text or refused, so it is no
+  longer lost. Build the variants with `LlmError::empty_completion(..)` / `LlmError::refusal(..)`
+  (plus `with_billed_usage`), match them with `EmptyCompletion { .. }` / `Refusal { .. }`, and read
+  the bill with `error.billed_usage()`, which looks through `AllProvidersFailed`. `Display` and the
+  `Permanent` classification are unchanged. The shared engine's buffered path (Kimi, Qwen, Grok,
+  Ollama, OpenAI-compatible) fills the bill from this release. Every other adapter path and the
+  pricing and settlement of the bill follow in plans 50-27 to 50-31. Measured by cargo-semver-checks
+  as `enum_tuple_variant_changed_kind` and `enum_variant_marked_non_exhaustive` on
+  `EmptyCompletion`, and registered on the `paladin-ports | LlmError` `MIGRATION.md` 9.2 row, its
+  allowlist entries and the 9.8 consumer row DR-17.
 
 ### Known limitations
 

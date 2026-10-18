@@ -40,7 +40,7 @@ use crate::http_status::map_http_status_with_hints;
 use crate::rate_limit_headers::{RateLimitHeaderFamily, hints_from_headers};
 use crate::redaction::diagnostic_excerpt as redact_and_bound;
 use crate::registry::{ModelRegistry, fallback_from_compat};
-use crate::response_guards::{StreamCompletion, classify_completion};
+use crate::response_guards::{StreamCompletion, bill, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
 use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
@@ -309,7 +309,7 @@ fn classify_fetch_failure(error: &LlmError) -> FetchFailureClass {
         LlmError::TokenLimitExceeded => FetchFailureClass::Supported,
         // Never produced by a model-list fetch either (no completion is
         // requested) — same reason.
-        LlmError::EmptyCompletion(_) => FetchFailureClass::Supported,
+        LlmError::EmptyCompletion { .. } => FetchFailureClass::Supported,
         // A refusal is a policy decision by a model about a prompt; a
         // model-list fetch sends no prompt, so a vendor answering `/models`
         // with one means the endpoint is not the OpenAI-compatible service
@@ -918,7 +918,7 @@ impl CompatEngine {
                         e,
                         LlmError::AuthenticationError(_)
                             | LlmError::InvalidPrompt(_)
-                            | LlmError::EmptyCompletion(_)
+                            | LlmError::EmptyCompletion { .. }
                             | LlmError::Refusal { .. }
                             | LlmError::UsageLimitExceeded { .. }
                             // D-02: surface the first 429; the Cadence decorator waits.
@@ -1010,10 +1010,23 @@ impl CompatEngine {
             })?;
 
             let choice = api_response.choices.first().ok_or_else(|| {
-                LlmError::EmptyCompletion("Response contained no choices".to_string())
+                LlmError::empty_completion("Response contained no choices".to_string())
             })?;
 
             let finish_reason = Self::map_finish_reason(choice.finish_reason.clone());
+
+            // G-50-5a: usage is mapped BEFORE the guard, so a call the vendor billed but the
+            // guard classifies as empty or refused still carries its bill on the error. The
+            // billed model is the served model the body names, else the request model
+            // (A3-50-26). No usage object means no bill, never a fabricated zero (D-00c).
+            let mapped = api_response
+                .usage
+                .map(|usage| Self::map_compat_usage(usage, self.usage_semantics));
+            let billed_model = if api_response.model.is_empty() {
+                request.model.as_str()
+            } else {
+                api_response.model.as_str()
+            };
 
             // One rule for refusal, content filter, function call and empty text on any
             // finish reason (PARITY-05, D-09/D-11a).
@@ -1024,10 +1037,25 @@ impl CompatEngine {
                 &finish_reason,
                 choice.message.refusal.as_deref(),
                 &self.config.api_key,
-            )?;
+            )
+            .map_err(|err| {
+                bill(
+                    err,
+                    billed_model,
+                    mapped.as_ref().map(|(usage, _)| usage.clone()),
+                )
+            })?;
 
-            let (usage, vendor_total) =
-                Self::map_compat_usage(api_response.usage, self.usage_semantics);
+            // A successful response must still report its usage: the field was required
+            // before G-50-5a made it optional for billed failures, and the same schema-mismatch
+            // error is kept for a body without it.
+            let Some((usage, vendor_total)) = mapped else {
+                return Err(LlmError::ProcessingError(format!(
+                    "Failed to parse response (schema mismatch — field: missing field `usage`) — \
+                     body excerpt: {}",
+                    self.diagnostic_excerpt(&body)
+                )));
+            };
             // G-50-5a: the vendor's own total is the check on the mapping -- a disagreement is
             // warned once and recorded, never written over the mapped total (D-02).
             let unreconciled =
@@ -1672,7 +1700,7 @@ mod tests {
                     let calls = Arc::clone(&calls_clone);
                     async move {
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Err(LlmError::EmptyCompletion("no text".to_string()))
+                        Err(LlmError::empty_completion("no text".to_string()))
                     }
                 },
                 3,
@@ -2427,7 +2455,7 @@ mod tests {
     #[test]
     fn classify_fetch_failure_empty_completion_is_supported() {
         assert_eq!(
-            classify_fetch_failure(&LlmError::EmptyCompletion("no text".to_string())),
+            classify_fetch_failure(&LlmError::empty_completion("no text".to_string())),
             FetchFailureClass::Supported
         );
     }
@@ -2435,11 +2463,7 @@ mod tests {
     #[test]
     fn classify_fetch_failure_refusal_is_misconfiguration() {
         assert_eq!(
-            classify_fetch_failure(&LlmError::Refusal {
-                provider: "kimi".to_string(),
-                model: "m".to_string(),
-                detail: "no".to_string(),
-            }),
+            classify_fetch_failure(&LlmError::refusal("kimi", "m", "no")),
             FetchFailureClass::Misconfiguration
         );
     }
@@ -3283,6 +3307,52 @@ mod tests {
         items
     }
 
+    /// G-50-5a (plan 50-26 tracer): a call the vendor answered and billed but that returned no
+    /// text -- a reasoning model that spent its whole budget thinking -- reaches the caller with
+    /// its usage on the error: the body's served model, the mapped usage and no cost (pricing it
+    /// is plan 50-27). With no usage reported there is no bill, never a fabricated zero (D-00c).
+    #[tokio::test]
+    async fn compat_billed_empty_completion_carries_its_usage() {
+        let mut body = json!({
+            "id": "cmpl-1",
+            "model": "kimi-served-test",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": ""},
+                "finish_reason": "length"
+            }],
+            "usage": {"prompt_tokens": 1_000, "completion_tokens": 62_000, "total_tokens": 63_000}
+        });
+
+        let err = generate_from_body(body.clone())
+            .await
+            .expect_err("an empty length completion is an error");
+        assert!(
+            matches!(err, LlmError::EmptyCompletion { .. }),
+            "expected EmptyCompletion, got {err:?}"
+        );
+        let billed = err
+            .billed_usage()
+            .expect("a billed empty completion carries its usage");
+        assert_eq!(billed.model, "kimi-served-test");
+        assert_eq!(billed.usage.prompt_tokens, 1_000);
+        assert_eq!(billed.usage.completion_tokens, 62_000);
+        assert_eq!(billed.usage.total_tokens, 63_000);
+        assert_eq!(billed.cost, None);
+
+        body.as_object_mut()
+            .expect("the body is a JSON object")
+            .remove("usage");
+        let err = generate_from_body(body)
+            .await
+            .expect_err("an empty length completion is an error");
+        assert!(
+            matches!(err, LlmError::EmptyCompletion { .. }),
+            "expected EmptyCompletion, got {err:?}"
+        );
+        assert_eq!(err.billed_usage(), None);
+    }
+
     /// D-11a: empty text on a `stop` finish is an `EmptyCompletion`, no longer `Ok("")`.
     #[tokio::test]
     async fn empty_stop_completion_is_empty_completion() {
@@ -3292,7 +3362,7 @@ mod tests {
         ))
         .await;
         match result {
-            Err(LlmError::EmptyCompletion(msg)) => {
+            Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                 assert!(msg.contains("finish_reason=stop"), "{msg}");
                 assert!(!msg.contains("larger max_tokens"), "{msg}");
             }
@@ -3308,7 +3378,7 @@ mod tests {
         ] {
             let result = generate_from_body(buffered_body(message, "stop")).await;
             assert!(
-                matches!(result, Err(LlmError::EmptyCompletion(_))),
+                matches!(result, Err(LlmError::EmptyCompletion { .. })),
                 "got {result:?}"
             );
         }
@@ -3322,7 +3392,7 @@ mod tests {
         ))
         .await;
         match result {
-            Err(LlmError::EmptyCompletion(msg)) => {
+            Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                 assert!(msg.contains("finish_reason=length"), "{msg}");
                 assert!(msg.contains("larger max_tokens"), "{msg}");
             }
@@ -3370,6 +3440,7 @@ mod tests {
                 provider,
                 model,
                 detail,
+                ..
             }) => {
                 assert_eq!(provider, "test-preset");
                 assert_eq!(model, "test-model");
@@ -3549,7 +3620,7 @@ mod tests {
 
         let (last, yielded) = items.split_last().expect("the stream yields items");
         assert!(
-            matches!(last, Err(LlmError::EmptyCompletion(_))),
+            matches!(last, Err(LlmError::EmptyCompletion { .. })),
             "the last item must be EmptyCompletion, got {last:?}"
         );
         assert!(
@@ -3597,6 +3668,7 @@ mod tests {
                 provider,
                 model,
                 detail,
+                ..
             }) => {
                 assert_eq!(provider, "test-preset");
                 assert_eq!(model, "test-model");

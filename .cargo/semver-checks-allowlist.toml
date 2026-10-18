@@ -305,7 +305,19 @@ crate = "paladin-ports"
 lint = "enum_variant_marked_non_exhaustive"
 migration_row = "paladin-ports | LlmError"
 requirement_id = "PACE-01"
-justification = "The reshaped LlmError::RateLimitExceeded variant is marked #[non_exhaustive] so a later field (a further parsed header, say) can be added without a break, in the same way the enclosing enum already is. Out-of-crate code can no longer build the variant with a literal; LlmError::rate_limited and LlmError::rate_limited_with_hints are the constructors."
+justification = "The reshaped LlmError::RateLimitExceeded variant is marked #[non_exhaustive] so a later field (a further parsed header, say) can be added without a break, in the same way the enclosing enum already is. Out-of-crate code can no longer build the variant with a literal; LlmError::rate_limited and LlmError::rate_limited_with_hints are the constructors. Phase 50 plan 50-26 (G-50-5a, PARITY-05) marks LlmError::EmptyCompletion and LlmError::Refusal #[non_exhaustive] the same way, so a later field is free; the D-27 run (cargo-semver-checks 0.50.0 vs 0.10.1, crate-wide allows disabled) reports this lint on EmptyCompletion (Refusal is new since 0.10.1), which this one entry covers (no new pair). LlmError::empty_completion and LlmError::refusal are the constructors."
+
+# --- Phase 50 plan 50-26 (G-50-5a, PARITY-05) -------------------------------
+# Mirrors the extended `paladin-ports | LlmError` 9.2 row. The D-27 run fired
+# enum_tuple_variant_changed_kind (new below) and enum_variant_marked_non_exhaustive
+# (covered above) for EmptyCompletion; Refusal and BilledUsage fired nothing.
+
+[[entry]]
+crate = "paladin-ports"
+lint = "enum_tuple_variant_changed_kind"
+migration_row = "paladin-ports | LlmError"
+requirement_id = "PARITY-05"
+justification = "LlmError::EmptyCompletion changed from the tuple variant EmptyCompletion(String) to the #[non_exhaustive] struct variant { detail, billed } so a call the vendor answered and billed but the shared guard classified as empty carries its usage (BilledUsage) out of LlmPort::generate (G-50-5a). Its Display text (Empty completion: {detail}) and its Permanent classification are unchanged; build it with LlmError::empty_completion(..), match it with EmptyCompletion { .. }, read the bill with billed_usage(). Every in-tree value and pattern site migrated in the same commit series (plans 50-25 and 50-26)."
 
 [[entry]]
 crate = "paladin-ai"

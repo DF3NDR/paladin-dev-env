@@ -31,8 +31,15 @@
 //! they pass and [`StreamCompletion::finish`] runs [`classify_completion`] on the accumulated
 //! facts at the terminal chunk. Deltas already yielded stay yielded; only the terminal item
 //! changes.
+//!
+//! # Billing (G-50-5a)
+//!
+//! The vendor bills an empty or refused response like any other. An adapter maps the response's
+//! usage before it classifies, then routes the guard's error through [`bill`], which attaches the
+//! usage to the error ([`LlmError::billed_usage`]) so a caller can still settle the call. No
+//! usage reported means no bill, never a fabricated zero (D-00c).
 
-use paladin_ports::output::llm_port::{FinishReason, LlmError};
+use paladin_ports::output::llm_port::{BilledUsage, FinishReason, LlmError, TokenUsage};
 
 use crate::redaction::diagnostic_excerpt;
 
@@ -56,11 +63,11 @@ pub(crate) fn classify_completion(
     api_key: &str,
 ) -> Result<(), LlmError> {
     if let Some(text) = refusal.filter(|text| !text.trim().is_empty()) {
-        return Err(LlmError::Refusal {
-            provider: provider.to_string(),
-            model: model.to_string(),
-            detail: diagnostic_excerpt(text, api_key),
-        });
+        return Err(LlmError::refusal(
+            provider,
+            model,
+            diagnostic_excerpt(text, api_key),
+        ));
     }
 
     if matches!(
@@ -71,13 +78,29 @@ pub(crate) fn classify_completion(
     }
 
     if content.trim().is_empty() {
-        return Err(LlmError::EmptyCompletion(empty_payload(
+        return Err(LlmError::empty_completion(empty_payload(
             content.len(),
             finish,
         )));
     }
 
     Ok(())
+}
+
+/// Attach a failed call's billed `usage` on `model` to the guard's `err` (G-50-5a).
+///
+/// `model` is the vendor-reported served model when the response named one, else the request
+/// model (A3-50-26). `None` usage returns `err` unchanged: nothing was reported, so nothing is
+/// billed. Only [`LlmError::EmptyCompletion`] and [`LlmError::Refusal`] take the bill; any other
+/// error passes through as it is ([`LlmError::with_billed_usage`]).
+// Only the compat engine's buffered path bills as of plan 50-26; a build without a compat preset
+// compiles it unused until plan 50-27 bills every adapter.
+#[allow(dead_code)]
+pub(crate) fn bill(err: LlmError, model: &str, usage: Option<TokenUsage>) -> LlmError {
+    match usage {
+        Some(usage) => err.with_billed_usage(BilledUsage::new(model, usage)),
+        None => err,
+    }
 }
 
 /// The `EmptyCompletion` payload: the finish reason, and the advice that fits it.
@@ -198,15 +221,15 @@ mod tests {
         // Empty on a `stop`, whitespace-only on a `stop`: both empty.
         assert!(matches!(
             classify("", &FinishReason::Stop, None),
-            Err(LlmError::EmptyCompletion(_))
+            Err(LlmError::EmptyCompletion { .. })
         ));
         assert!(matches!(
             classify("   \n\t", &FinishReason::Stop, None),
-            Err(LlmError::EmptyCompletion(_))
+            Err(LlmError::EmptyCompletion { .. })
         ));
         // Empty on `length` names the larger-max_tokens remedy.
         match classify("", &FinishReason::Length, None) {
-            Err(LlmError::EmptyCompletion(msg)) => {
+            Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                 assert!(msg.contains("finish_reason=length"), "{msg}");
                 assert!(msg.contains("larger max_tokens"), "{msg}");
             }
@@ -214,7 +237,7 @@ mod tests {
         }
         // Empty on `stop` names the finish reason and does NOT advise a larger budget.
         match classify("", &FinishReason::Stop, None) {
-            Err(LlmError::EmptyCompletion(msg)) => {
+            Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
                 assert!(msg.contains("finish_reason=stop"), "{msg}");
                 assert!(!msg.contains("max_tokens"), "{msg}");
             }
@@ -234,6 +257,7 @@ mod tests {
                 provider,
                 model,
                 detail,
+                ..
             }) => {
                 assert_eq!(provider, "acme");
                 assert_eq!(model, "acme-1");
@@ -310,7 +334,7 @@ mod tests {
         stream.observe_content("\n");
         assert!(matches!(
             stream.finish("acme", "m", &FinishReason::Stop, ""),
-            Err(LlmError::EmptyCompletion(_))
+            Err(LlmError::EmptyCompletion { .. })
         ));
 
         stream.observe_content("hi");
@@ -330,6 +354,38 @@ mod tests {
             Err(LlmError::Refusal { detail, .. }) => assert_eq!(detail, "I can't help."),
             other => panic!("expected Refusal, got {other:?}"),
         }
+    }
+
+    /// G-50-5a: `bill` attaches reported usage to the guard's two errors, and leaves an
+    /// unreported bill (`None`) and any other error alone.
+    #[test]
+    fn bill_attaches_reported_usage_only() {
+        let usage = TokenUsage::new(1_000, 62_000);
+        let billed = bill(
+            LlmError::empty_completion("x"),
+            "served-1",
+            Some(usage.clone()),
+        );
+        assert_eq!(
+            billed.billed_usage(),
+            Some(&BilledUsage::new("served-1", usage.clone()))
+        );
+        let refused = bill(
+            LlmError::refusal("acme", "acme-1", "no"),
+            "acme-1",
+            Some(usage.clone()),
+        );
+        assert_eq!(
+            refused.billed_usage().map(|bill| bill.usage.total_tokens),
+            Some(63_000)
+        );
+
+        assert_eq!(
+            bill(LlmError::empty_completion("x"), "m", None).billed_usage(),
+            None
+        );
+        let network = bill(LlmError::NetworkError("reset".into()), "m", Some(usage));
+        assert_eq!(network.billed_usage(), None);
     }
 
     #[test]

@@ -80,3 +80,8 @@ struct_marked_non_exhaustive = "allow"
 constructible_struct_adds_field = "allow"
 enum_unit_variant_changed_kind = "allow"
 enum_variant_marked_non_exhaustive = "allow"
+# Phase 50 plan 50-26 (G-50-5a, PARITY-05): LlmError::EmptyCompletion changes from a tuple
+# variant to the #[non_exhaustive] struct variant { detail, billed }. Measured by the D-27 run
+# (cargo-semver-checks 0.50.0 vs 0.10.1, crate-wide allows disabled); mirrored by the MIGRATION.md
+# section 9.2 `paladin-ports | LlmError` row and its allowlist entry.
+enum_tuple_variant_changed_kind = "allow"

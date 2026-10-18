@@ -1448,7 +1448,7 @@ Plans:
 
 **Wave 19** *(gap-closure wave 4; blocked on Wave 18 completion)*
 
-- [ ] 50-23-PLAN.md — G-50-5a: Gemini tool-use prompt tokens folded; vendor totals reconciled on OpenAI, DeepSeek and Gemini (Anthropic containment, vision cache counts); disagreement conformance case on all nine (`CASE_COUNT` 19)
+- [x] 50-23-PLAN.md — G-50-5a: Gemini tool-use prompt tokens folded; vendor totals reconciled on OpenAI, DeepSeek and Gemini (Anthropic containment, vision cache counts); disagreement conformance case on all nine (`CASE_COUNT` 19)
 
 **Wave 20** *(gap-closure wave 5; blocked on Wave 19 completion)*
 

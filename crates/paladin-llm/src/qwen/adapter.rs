@@ -427,6 +427,12 @@ impl QwenAdapter {
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(QWEN_PROVIDER)
                 .with_default_max_tokens(config.max_tokens)
+                // G-50-5a (plan 50-24): no `with_usage_semantics` -- Qwen keeps the engine default
+                // `CompatUsageSemantics::ReasoningInsideCompletion`. Live-measured 2026-10-18
+                // (`50-USAGE-PROBE.md`, operator run on the raw DashScope wire): qwen3.8-flash
+                // reads `reasoning inside completion` (83 + 75 = 158, reasoning 69); qwen-plus
+                // reported no reasoning (`indeterminate`, 30 + 3 = 33), which neither confirms
+                // nor contradicts it.
                 .with_model_registry(registry),
         })
     }
@@ -527,6 +533,67 @@ mod tests {
         assert_eq!(
             profile.temperature,
             paladin_ports::output::model_profile::ParamSupport::Range(0.0, 1.99)
+        );
+    }
+
+    /// G-50-5a (plan 50-24): the live-measured qwen3.8-flash usage object
+    /// (`50-USAGE-PROBE.md`, 2026-10-18: prompt 83 with 0 cached, completion 75 of which
+    /// reasoning 69, total 158) is read with the engine-default inclusive semantics and
+    /// reconciles with DashScope's own total. Read beside completion it would map to 227.
+    #[tokio::test]
+    async fn qwen_measured_usage_is_read_inside_completion() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "id": "cmpl-qwen-measured",
+                    "model": "qwen3.8-flash",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "391"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 83,
+                        "completion_tokens": 75,
+                        "total_tokens": 158,
+                        "prompt_tokens_details": {"cached_tokens": 0},
+                        "completion_tokens_details": {"reasoning_tokens": 69}
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let adapter = QwenAdapter::new(QwenConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            "qwen3.8-flash".to_string(),
+        ))
+        .unwrap();
+
+        let response = adapter
+            .generate(build_request("qwen3.8-flash"))
+            .await
+            .expect("well-formed response");
+
+        let usage = &response.usage;
+        assert_eq!(usage.prompt_tokens, 83);
+        assert_eq!(usage.cache_read_tokens, Some(0));
+        assert_eq!(usage.completion_tokens, 75, "{usage:?}");
+        assert_eq!(usage.reasoning_tokens, Some(69));
+        assert_eq!(usage.total_tokens, 158);
+        assert!(
+            !response
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "{:?}",
+            response.metadata
         );
     }
 

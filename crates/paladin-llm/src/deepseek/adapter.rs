@@ -379,6 +379,10 @@ struct DeepSeekStreamDelta {
 ///
 /// Returns the mapped usage together with DeepSeek's own `total_tokens` (when
 /// reported), which the caller reconciles rather than copies (D-02, G-50-5a).
+///
+/// Reasoning is read inside `completion_tokens`, live-measured 2026-10-18
+/// (`50-USAGE-PROBE.md`, plan 50-24): deepseek-flash reads `reasoning inside
+/// completion` (50 + 32 = 82, reasoning 30).
 fn map_usage(usage: DeepSeekUsage) -> (TokenUsage, Option<u32>) {
     let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
     if let Some(cached) = usage.prompt_cache_hit_tokens {
@@ -2704,6 +2708,33 @@ mod tests {
                 .generate(build_response_format_request(None))
                 .await
                 .expect("a well-formed body must parse")
+        }
+
+        /// G-50-5a (plan 50-24): the live-measured deepseek-flash usage object
+        /// (`50-USAGE-PROBE.md`, 2026-10-18: prompt 50, completion 32 of which reasoning 30,
+        /// total 82) is read inside completion and reconciles with DeepSeek's own total. Read
+        /// beside completion it would map to 112 and disagree.
+        #[tokio::test]
+        async fn deepseek_measured_usage_is_read_inside_completion() {
+            let response = generate_with_usage(json!({
+                "prompt_tokens": 50,
+                "completion_tokens": 32,
+                "total_tokens": 82,
+                "completion_tokens_details": {"reasoning_tokens": 30}
+            }))
+            .await;
+            let usage = &response.usage;
+            assert_eq!(usage.prompt_tokens, 50);
+            assert_eq!(usage.completion_tokens, 32, "{usage:?}");
+            assert_eq!(usage.reasoning_tokens, Some(30));
+            assert_eq!(usage.total_tokens, 82);
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+                "{:?}",
+                response.metadata
+            );
         }
 
         #[tokio::test]

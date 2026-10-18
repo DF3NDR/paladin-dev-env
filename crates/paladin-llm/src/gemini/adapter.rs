@@ -1398,6 +1398,13 @@ struct GeminiUsageMetadata {
 /// 50-23 added the tool-use fold, G-50-5a). Gemini reports no cache-write
 /// figure, so [`TokenUsage::cache_write_tokens`] always stays `None`.
 ///
+/// The thoughts fold is live-measured 2026-10-18 (`50-USAGE-PROBE.md`, plan
+/// 50-24): gemini-3.5-flash (23 + 3 + 192 = 218) and gemini-3.6-flash
+/// (23 + 3 + 202 = 228) read `reasoning beside completion`, meaning
+/// `thoughtsTokenCount` sits outside `candidatesTokenCount`. That is the reading
+/// applied here. gemini-3.5-flash-lite reported no thoughts (`indeterminate`).
+/// The tool-use fold is not live-measured, because this adapter sends no tools.
+///
 /// Returns the mapped usage together with Gemini's `totalTokenCount` (when
 /// reported), which the caller reconciles rather than copies (D-02). Shared
 /// by both the non-streaming path and the streaming path's terminal-frame
@@ -2312,6 +2319,37 @@ mod tests {
                 .get(USAGE_UNRECONCILED_METADATA_KEY)
                 .map(String::as_str),
             Some("total:vendor=999,mapped=430")
+        );
+    }
+
+    /// G-50-5a (plan 50-24): the live-measured gemini-3.5-flash usage metadata
+    /// (`50-USAGE-PROBE.md`, 2026-10-18: prompt 23, candidates 3, thoughts 192, total 218) maps
+    /// with thoughts folded into completion (3 + 192 = 195) and reconciles with Gemini's own
+    /// `totalTokenCount`. Without the fold it would map to 26 and disagree.
+    #[tokio::test]
+    async fn gemini_measured_thoughts_are_beside_candidates() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let response = generate_against(gemini_usage_response_body(json!({
+            "promptTokenCount": 23,
+            "candidatesTokenCount": 3,
+            "thoughtsTokenCount": 192,
+            "totalTokenCount": 218
+        })))
+        .await;
+        assert_eq!(response.usage.prompt_tokens, 23);
+        assert_eq!(
+            response.usage.completion_tokens, 195,
+            "candidates + thoughts"
+        );
+        assert_eq!(response.usage.reasoning_tokens, Some(192));
+        assert_eq!(response.usage.total_tokens, 218);
+        assert!(
+            !response
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "{:?}",
+            response.metadata
         );
     }
 

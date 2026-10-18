@@ -346,6 +346,11 @@ impl KimiAdapter {
             engine: CompatEngine::new(engine_config)?
                 .with_provider_name(KIMI_PROVIDER)
                 .with_default_max_tokens(config.max_tokens)
+                // G-50-5a (plan 50-24): no `with_usage_semantics` -- Kimi keeps the engine default
+                // `CompatUsageSemantics::ReasoningInsideCompletion`. Live-measured 2026-10-18
+                // (`50-USAGE-PROBE.md`, operator run on the raw Moonshot wire): kimi-k2.6
+                // (27 + 147 = 174, reasoning 144) and kimi-k3 (105 + 158 = 263, reasoning 142)
+                // both read `reasoning inside completion`.
                 .with_model_registry(registry),
         })
     }
@@ -409,6 +414,65 @@ mod tests {
             }))
             .unwrap(),
         )
+    }
+
+    /// G-50-5a (plan 50-24): the live-measured kimi-k2.6 usage object (`50-USAGE-PROBE.md`,
+    /// 2026-10-18: prompt 27, completion 147 of which reasoning 144, total 174) is read with the
+    /// engine-default inclusive semantics -- `completion_tokens` copied as is -- and reconciles
+    /// with Moonshot's own total. Read beside completion it would map to 291 and disagree.
+    #[tokio::test]
+    async fn kimi_measured_usage_is_read_inside_completion() {
+        use crate::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY;
+
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", "/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!({
+                    "id": "cmpl-kimi-measured",
+                    "model": "kimi-k2.6",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "391"},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": 27,
+                        "completion_tokens": 147,
+                        "total_tokens": 174,
+                        "completion_tokens_details": {"reasoning_tokens": 144}
+                    }
+                })
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let adapter = KimiAdapter::new(KimiConfig::new(
+            "test-key".to_string(),
+            server.url(),
+            "kimi-k2.6".to_string(),
+        ))
+        .unwrap();
+
+        let response = adapter
+            .generate(build_request("kimi-k2.6"))
+            .await
+            .expect("well-formed response");
+
+        let usage = &response.usage;
+        assert_eq!(usage.prompt_tokens, 27);
+        assert_eq!(usage.completion_tokens, 147, "{usage:?}");
+        assert_eq!(usage.reasoning_tokens, Some(144));
+        assert_eq!(usage.total_tokens, 174);
+        assert!(
+            !response
+                .metadata
+                .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+            "{:?}",
+            response.metadata
+        );
     }
 
     // ── KimiConfig::from_env() defaulting logic ──

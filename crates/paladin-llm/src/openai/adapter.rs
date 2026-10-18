@@ -790,6 +790,12 @@ impl OpenAIAdapter {
     /// Returns the mapped usage together with OpenAI's own `total_tokens`
     /// (when reported), which the caller reconciles rather than copies (D-02,
     /// G-50-5a).
+    ///
+    /// Reasoning is read inside `completion_tokens`, OpenAI's documented
+    /// contract. Not live-measured: the 2026-10-18 probe
+    /// (`50-USAGE-PROBE.md`, plan 50-24) got no reasoning count above 0 from
+    /// gpt-5.4-nano or gpt-4o-mini (`indeterminate`), though both vendor
+    /// totals agreed with prompt + completion (26 + 4 = 30, 27 + 1 = 28).
     fn map_usage(usage: OpenAIUsage) -> (TokenUsage, Option<u32>) {
         let mut mapped = TokenUsage::new(usage.prompt_tokens, usage.completion_tokens);
         if let Some(cached) = usage
@@ -3103,6 +3109,34 @@ mod tests {
                 .generate(build_request())
                 .await
                 .expect("a well-formed body must parse")
+        }
+
+        /// G-50-5a (plan 50-24): the live-measured gpt-5.4-nano usage object
+        /// (`50-USAGE-PROBE.md`, 2026-10-18: prompt 26 with 0 cached, completion 4, reasoning
+        /// 0, total 30) maps as reported and reconciles with OpenAI's own total.
+        #[tokio::test]
+        async fn openai_measured_usage_reconciles() {
+            let response = generate_with_usage(json!({
+                "prompt_tokens": 26,
+                "completion_tokens": 4,
+                "total_tokens": 30,
+                "prompt_tokens_details": {"cached_tokens": 0},
+                "completion_tokens_details": {"reasoning_tokens": 0}
+            }))
+            .await;
+            let usage = &response.usage;
+            assert_eq!(usage.prompt_tokens, 26);
+            assert_eq!(usage.cache_read_tokens, Some(0));
+            assert_eq!(usage.completion_tokens, 4);
+            assert_eq!(usage.reasoning_tokens, Some(0));
+            assert_eq!(usage.total_tokens, 30);
+            assert!(
+                !response
+                    .metadata
+                    .contains_key(USAGE_UNRECONCILED_METADATA_KEY),
+                "{:?}",
+                response.metadata
+            );
         }
 
         #[tokio::test]

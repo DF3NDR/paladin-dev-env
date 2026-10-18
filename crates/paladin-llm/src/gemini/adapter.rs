@@ -94,7 +94,7 @@ use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
     default_timeout_seconds, seeded, seeded_window,
 };
-use crate::response_guards::{StreamCompletion, classify_completion};
+use crate::response_guards::{StreamCompletion, bill, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
 use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
@@ -678,9 +678,20 @@ impl GeminiAdapter {
         model: &str,
         response: GeminiResponse,
     ) -> Result<LlmResponse, LlmError> {
-        let candidate = response.candidates.first().ok_or_else(|| {
-            LlmError::empty_completion("Gemini response contained no candidates".to_string())
-        })?;
+        // G-50-5a: usage is mapped BEFORE the guard (and before the no-candidates check), so a
+        // call Gemini billed but that is classified as empty carries the same folded usage a
+        // success would have. A body with no `usageMetadata` bills nothing, never a fabricated
+        // zero (D-00c); a success without one still maps the default, as before.
+        let mapped = response.usage_metadata.as_ref().map(map_gemini_usage);
+        let billed = || mapped.as_ref().map(|(usage, _)| usage.clone());
+
+        let Some(candidate) = response.candidates.first() else {
+            return Err(bill(
+                LlmError::empty_completion("Gemini response contained no candidates".to_string()),
+                model,
+                billed(),
+            ));
+        };
 
         let content = candidate_text(candidate);
         let finish_reason = map_finish_reason(candidate.finish_reason.as_deref());
@@ -692,9 +703,11 @@ impl GeminiAdapter {
             &finish_reason,
             None,
             &self.config.api_key,
-        )?;
+        )
+        .map_err(|err| bill(err, model, billed()))?;
 
-        let (usage, vendor_total) = map_gemini_usage(&response.usage_metadata.unwrap_or_default());
+        let (usage, vendor_total) =
+            mapped.unwrap_or_else(|| map_gemini_usage(&GeminiUsageMetadata::default()));
         // G-50-5a: Gemini's own `totalTokenCount` is the check on the mapping -- a disagreement
         // is warned once and recorded, never written over the mapped total (D-02).
         let mut metadata = HashMap::new();
@@ -1137,7 +1150,10 @@ impl LlmPort for GeminiAdapter {
     /// `Err(`[`LlmError::EmptyCompletion`]`)`; a blocked-content finish
     /// (`SAFETY` and its siblings) stays an `Ok` terminal chunk with
     /// [`FinishReason::ContentFilter`] (D-09). Frames already yielded stay
-    /// yielded; only the terminal item changes.
+    /// yielded; only the terminal item changes. That error item carries the
+    /// finish frame's `usageMetadata` as its billed usage
+    /// ([`LlmError::billed_usage`], G-50-5a) on the request model, or `None`
+    /// when the frame reported none.
     async fn generate_stream(
         &self,
         request: LlmRequest,
@@ -1599,7 +1615,11 @@ fn classify_stream_items(
             Ok(chunk) => {
                 completion.observe_content(&chunk.delta);
                 match &chunk.finish_reason {
-                    Some(finish) => completion.finish(GEMINI_PROVIDER, model, finish, api_key),
+                    // G-50-5a: a rejected terminal carries the finish frame's usage as its
+                    // bill on the request model, `None` when that frame reported none.
+                    Some(finish) => completion
+                        .finish(GEMINI_PROVIDER, model, finish, api_key)
+                        .map_err(|err| bill(err, model, chunk.usage.clone())),
                     None => Ok(()),
                 }
             }

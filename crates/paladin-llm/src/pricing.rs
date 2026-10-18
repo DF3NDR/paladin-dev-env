@@ -20,6 +20,13 @@
 //! stream prices the REQUEST's model, since [`StreamingResponse`] carries no served-model
 //! string of its own. Both paths share one `price_or_warn` so the pricing/warn-once rule
 //! cannot diverge between them.
+//!
+//! ## Billed errors (G-50-5a)
+//!
+//! A call the vendor billed but that ended as an `EmptyCompletion` or a `Refusal` carries its
+//! usage on the error (`LlmError::billed_usage`). Both paths price that bill as they price a
+//! success, through one shared helper: `generate` against the bill's served model, a stream's
+//! error item against the request's model. An unpriced model keeps `cost: None` (D-00c).
 
 use std::collections::HashSet;
 use std::fmt;
@@ -205,6 +212,11 @@ impl LlmPort for PricingLlmAdapter {
     /// model name per process (D-08) -- never a fabricated zero. A terminal chunk with no usage
     /// at all gets no cost and no pricing warning (the execution service already warns about
     /// the missing usage, Phase 31 D-17). Every non-terminal chunk passes through unchanged.
+    ///
+    /// An `Err` item that carries a bill ([`LlmError::billed_usage`], G-50-5a: a stream that
+    /// ended empty or refused) is priced the same way, against the request's model, through the
+    /// helper `generate` uses for billed errors; an unpriced model keeps `cost: None` and warns
+    /// once. Any other `Err` item passes through unchanged.
     async fn generate_stream(
         &self,
         request: LlmRequest,
@@ -212,19 +224,22 @@ impl LlmPort for PricingLlmAdapter {
         let model = request.model.clone();
         let table = Arc::clone(&self.table);
         let raw = self.inner.generate_stream(request).await?;
-        let priced = Box::into_pin(raw).map(move |item| {
-            item.map(|chunk| {
+        let priced = Box::into_pin(raw).map(move |item| match item {
+            Ok(chunk) => {
                 if chunk.finish_reason.is_none() {
-                    return chunk;
+                    return Ok(chunk);
                 }
                 let Some(usage) = chunk.usage.clone() else {
-                    return chunk;
+                    return Ok(chunk);
                 };
-                match Self::price_or_warn(&table, &model, &usage) {
+                Ok(match Self::price_or_warn(&table, &model, &usage) {
                     Some(cost) => chunk.with_cost(cost),
                     None => chunk,
-                }
-            })
+                })
+            }
+            // G-50-5a: a billed error item is priced like a terminal chunk, against the
+            // request's model, through the same helper `generate` uses (D-09).
+            Err(err) => Err(Self::price_billed_error(&table, Some(&model), err)),
         });
         Ok(Box::new(priced))
     }
@@ -695,6 +710,66 @@ mod tests {
             err.billed_usage(),
             Some(&bill),
             "an unpriced bill is returned exactly as it came"
+        );
+    }
+
+    /// G-50-5a / D-09: a stream's billed `Err` item is priced against the REQUEST's model (the
+    /// Phase 31 stream contract), not the bill's own model; deltas already yielded are
+    /// unchanged; an unpriced request model leaves `cost: None`; an unbilled error is untouched.
+    #[tokio::test]
+    async fn priced_billed_stream_error_carries_its_cost() {
+        use paladin_ports::output::llm_port::BilledUsage;
+
+        let billed = || {
+            LlmError::empty_completion("finish_reason=stop with empty content").with_billed_usage(
+                BilledUsage::new("bill-model-not-in-table", TokenUsage::new(1_000, 2_000)),
+            )
+        };
+        let items = |adapter: PricingLlmAdapter, model: &'static str| async move {
+            let stream = adapter.generate_stream(request(model)).await.unwrap();
+            Box::into_pin(stream).collect::<Vec<_>>().await
+        };
+
+        let mock = Arc::new(
+            MockLlmAdapter::new().with_stream_items(vec![Ok("partial".to_string()), Err(billed())]),
+        );
+        let got = items(PricingLlmAdapter::new(mock, usd_table()), "gpt-4").await;
+        assert_eq!(got.len(), 2);
+        let first = got[0].as_ref().expect("the delta is yielded unchanged");
+        assert_eq!(first.delta, "partial");
+        assert!(first.cost.is_none());
+        let err = got[1].as_ref().expect_err("the terminal item is the error");
+        let bill = err.billed_usage().expect("the bill survives pricing");
+        assert_eq!(bill.usage.total_tokens, 3_000);
+        let cost = bill
+            .cost
+            .as_ref()
+            .expect("priced against the request model's row");
+        assert_eq!(cost.nanos(), 22_500_000);
+        assert_eq!(cost.currency().as_str(), "USD");
+
+        let mock = Arc::new(MockLlmAdapter::new().with_stream_items(vec![Err(billed())]));
+        let got = items(
+            PricingLlmAdapter::new(mock, usd_table()),
+            "p50-27-unpriced-stream",
+        )
+        .await;
+        let err = got[0].as_ref().expect_err("the item is the error");
+        assert_eq!(
+            err.billed_usage().map(|bill| bill.cost.clone()),
+            Some(None),
+            "an unpriced request model must never carry a cost"
+        );
+
+        let mock = Arc::new(
+            MockLlmAdapter::new()
+                .with_stream_items(vec![Err(LlmError::NetworkError("reset".to_string()))]),
+        );
+        let got = items(PricingLlmAdapter::new(mock, usd_table()), "gpt-4").await;
+        assert!(
+            matches!(&got[0], Err(LlmError::NetworkError(msg)) if msg == "reset"),
+            "an unbilled error passes through unchanged, got {:?}",
+            got[0]
         );
     }
 

@@ -93,9 +93,6 @@ pub(crate) fn classify_completion(
 /// model (A3-50-26). `None` usage returns `err` unchanged: nothing was reported, so nothing is
 /// billed. Only [`LlmError::EmptyCompletion`] and [`LlmError::Refusal`] take the bill; any other
 /// error passes through as it is ([`LlmError::with_billed_usage`]).
-// Only the compat engine's buffered path bills as of plan 50-26; a build without a compat preset
-// compiles it unused until plan 50-27 bills every adapter.
-#[allow(dead_code)]
 pub(crate) fn bill(err: LlmError, model: &str, usage: Option<TokenUsage>) -> LlmError {
     match usage {
         Some(usage) => err.with_billed_usage(BilledUsage::new(model, usage)),

@@ -1009,16 +1009,11 @@ impl CompatEngine {
                 ))
             })?;
 
-            let choice = api_response.choices.first().ok_or_else(|| {
-                LlmError::empty_completion("Response contained no choices".to_string())
-            })?;
-
-            let finish_reason = Self::map_finish_reason(choice.finish_reason.clone());
-
-            // G-50-5a: usage is mapped BEFORE the guard, so a call the vendor billed but the
-            // guard classifies as empty or refused still carries its bill on the error. The
-            // billed model is the served model the body names, else the request model
-            // (A3-50-26). No usage object means no bill, never a fabricated zero (D-00c).
+            // G-50-5a: usage is mapped BEFORE the guard (and before the no-choices check), so a
+            // call the vendor billed but that is classified as empty or refused still carries
+            // its bill on the error. The billed model is the served model the body names, else
+            // the request model (A3-50-26). No usage object means no bill, never a fabricated
+            // zero (D-00c).
             let mapped = api_response
                 .usage
                 .map(|usage| Self::map_compat_usage(usage, self.usage_semantics));
@@ -1027,6 +1022,16 @@ impl CompatEngine {
             } else {
                 api_response.model.as_str()
             };
+
+            let Some(choice) = api_response.choices.first() else {
+                return Err(bill(
+                    LlmError::empty_completion("Response contained no choices".to_string()),
+                    billed_model,
+                    mapped.map(|(usage, _)| usage),
+                ));
+            };
+
+            let finish_reason = Self::map_finish_reason(choice.finish_reason.clone());
 
             // One rule for refusal, content filter, function call and empty text on any
             // finish reason (PARITY-05, D-09/D-11a).
@@ -1129,7 +1134,10 @@ impl CompatEngine {
     /// [`USAGE_UNRECONCILED_METADATA_KEY`] finding in its
     /// [`StreamingResponse::metadata`] -- beside any ADR-0061 omission keys.
     /// Content chunks never carry it, and an `Err` terminal item carries no
-    /// metadata at all.
+    /// metadata at all. An `Err(EmptyCompletion)` or `Err(Refusal)` terminal
+    /// item carries the usage frame's figures as its billed usage
+    /// ([`LlmError::billed_usage`], G-50-5a) on the request model, or `None`
+    /// when the stream reported no usage.
     pub async fn generate_stream(
         &self,
         request: LlmRequest,
@@ -1276,7 +1284,11 @@ impl CompatEngine {
                                     }
                                     // A refusal or an empty answer replaces the terminal chunk;
                                     // deltas already yielded (reasoning included) stay yielded.
-                                    Err(error) => items.push(Err(error)),
+                                    // G-50-5a: the error carries the usage frame's bill on the
+                                    // request model, `None` when the stream reported none.
+                                    Err(error) => {
+                                        items.push(Err(bill(error, &model, held_usage.take())))
+                                    }
                                 }
                                 continue;
                             }

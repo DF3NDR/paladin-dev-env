@@ -26,7 +26,7 @@ use crate::redaction::RedactedKey;
 use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders, seeded,
 };
-use crate::response_guards::{StreamCompletion, classify_completion};
+use crate::response_guards::{StreamCompletion, bill, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
 use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
@@ -1025,8 +1025,12 @@ impl OpenAIAdapter {
                                         items.push(Ok(terminal));
                                     }
                                     // A refusal or an empty answer replaces the terminal chunk;
-                                    // deltas already yielded stay yielded.
-                                    Err(error) => items.push(Err(error)),
+                                    // deltas already yielded stay yielded. G-50-5a: the error
+                                    // carries the usage frame's bill on the request model,
+                                    // `None` when the stream reported none.
+                                    Err(error) => {
+                                        items.push(Err(bill(error, &model, held_usage.take())))
+                                    }
                                 }
                                 continue;
                             }
@@ -1090,6 +1094,16 @@ impl LlmPort for OpenAIAdapter {
         let finish_reason = Self::convert_finish_reason(choice.finish_reason.as_deref());
         let content = choice.message.content.clone().unwrap_or_default();
 
+        // G-50-5a: usage is mapped BEFORE the guard, so a call OpenAI billed but the guard
+        // classifies as empty or refused carries the same folded, reconciled usage a success
+        // would have, on the served model (else the request model, A3-50-26).
+        let (usage, vendor_total) = Self::map_usage(response.usage);
+        let billed_model = if response.model.is_empty() {
+            request.model.as_str()
+        } else {
+            response.model.as_str()
+        };
+
         // One rule for refusal, content filter, function call and empty text on any finish
         // reason -- OpenAI included (PARITY-05, D-09/D-11a). It used to return `Ok("")`.
         classify_completion(
@@ -1099,9 +1113,8 @@ impl LlmPort for OpenAIAdapter {
             &finish_reason,
             choice.message.refusal.as_deref(),
             &self.config.api_key,
-        )?;
-
-        let (usage, vendor_total) = Self::map_usage(response.usage);
+        )
+        .map_err(|err| bill(err, billed_model, Some(usage.clone())))?;
         // G-50-5a: OpenAI's own total is the check on the mapping -- a disagreement is warned
         // once and recorded, never written over the mapped total (D-02).
         let unreconciled = self.usage_log.record(
@@ -1122,6 +1135,11 @@ impl LlmPort for OpenAIAdapter {
         Ok(llm_response)
     }
 
+    /// Streams the completion. A stream that ends refused or with no text ends with
+    /// `Err(LlmError::Refusal)` / `Err(LlmError::EmptyCompletion)` in place of the terminal
+    /// chunk, and that error item carries the usage frame's figures as its billed usage
+    /// ([`LlmError::billed_usage`], G-50-5a) on the request model, or `None` when the stream
+    /// reported no usage. Deltas already yielded stay yielded.
     async fn generate_stream(
         &self,
         request: LlmRequest,

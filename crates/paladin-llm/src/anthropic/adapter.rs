@@ -30,7 +30,7 @@ use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
     default_timeout_seconds, seeded, seeded_window,
 };
-use crate::response_guards::{StreamCompletion, classify_completion};
+use crate::response_guards::{StreamCompletion, bill, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
 use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
@@ -530,6 +530,11 @@ impl AnthropicAdapter {
             response.stop_details.as_ref(),
         );
 
+        // G-50-5a: usage is mapped BEFORE the guard, so a call Anthropic billed but the guard
+        // classifies as refused or empty carries the same folded usage a success would have,
+        // on the served model the response names.
+        let usage = map_claude_usage(&response.usage);
+
         classify_completion(
             ANTHROPIC_PROVIDER,
             &response.model,
@@ -538,18 +543,20 @@ impl AnthropicAdapter {
             refusal.as_deref(),
             &self.config.api_key,
         )
-        .map_err(|err| with_block_census(err, &response.content, &self.config.api_key))?;
+        .map_err(|err| {
+            bill(
+                with_block_census(err, &response.content, &self.config.api_key),
+                &response.model,
+                Some(usage.clone()),
+            )
+        })?;
 
         // `with_reasoning` stores blank text (every captured thinking block carries an empty
         // `thinking` string) as `None`.
-        Ok(LlmResponse::new(
-            request_id,
-            response.model,
-            content,
-            finish_reason,
-            map_claude_usage(&response.usage),
+        Ok(
+            LlmResponse::new(request_id, response.model, content, finish_reason, usage)
+                .with_reasoning(concat_thinking_blocks(&response.content)),
         )
-        .with_reasoning(concat_thinking_blocks(&response.content)))
     }
 
     /// Map a non-2xx Anthropic response to [`LlmError`] with no rate-limit headers.
@@ -783,7 +790,10 @@ impl LlmPort for AnthropicAdapter {
     /// after partial output) therefore ends the stream with `Err(`[`LlmError::Refusal`]`)`, and
     /// a stream that carried no text ends with `Err(`[`LlmError::EmptyCompletion`]`)` (D-11a).
     /// Chunks already yielded stay yielded: partial text and `thinking_delta` reasoning are not
-    /// withdrawn, only the terminal item becomes the typed error. A `thinking_delta` is yielded as
+    /// withdrawn, only the terminal item becomes the typed error. That error item carries the
+    /// merged `message_start`/`message_delta` usage as its billed usage
+    /// ([`LlmError::billed_usage`], G-50-5a) on the request model, or `None` when the stream
+    /// reported no usage. A `thinking_delta` is yielded as
     /// an empty-delta chunk carrying [`StreamingResponse::reasoning`], in wire order.
     async fn generate_stream(
         &self,
@@ -973,7 +983,14 @@ impl LlmPort for AnthropicAdapter {
                                             }
                                             items.push(Ok(terminal));
                                         }
-                                        Err(err) => items.push(Err(err)),
+                                        // G-50-5a: the error carries the merged
+                                        // `message_start`/`message_delta` usage as its bill on
+                                        // the request model, `None` when none arrived.
+                                        Err(err) => items.push(Err(bill(
+                                            err,
+                                            &usage_model,
+                                            held_usage.take().map(|usage| map_claude_usage(&usage)),
+                                        ))),
                                     }
                                 }
                                 _ => {}

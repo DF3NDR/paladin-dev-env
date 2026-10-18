@@ -29,7 +29,7 @@ use crate::registry::{
     DEFAULT_MAX_RETRIES, ModelOverride, ModelRegistry, config_knob_builders,
     default_timeout_seconds, seeded, seeded_window,
 };
-use crate::response_guards::{StreamCompletion, classify_completion};
+use crate::response_guards::{StreamCompletion, bill, classify_completion};
 use crate::sampling::{self, FormatLog, OmissionLog, RequestNotes};
 use crate::sse::SseLines;
 use crate::usage_reconcile::{USAGE_UNRECONCILED_METADATA_KEY, UsageLog};
@@ -395,47 +395,6 @@ fn map_usage(usage: DeepSeekUsage) -> (TokenUsage, Option<u32>) {
         mapped = mapped.with_reasoning(reasoning);
     }
     (mapped, usage.total_tokens)
-}
-
-/// Annotate an [`LlmError::EmptyCompletion`] with the provider's own reported
-/// `usage` so a caller's error message names `prompt_tokens`,
-/// `completion_tokens`, and `total_tokens` instead of discarding them.
-///
-/// A reasoning model that returns `finish_reason=length` with empty content
-/// is ambiguous between two distinct failure modes: "the prompt itself
-/// consumed the whole context window" and "reasoning genuinely overran the
-/// completion budget on a well-sized prompt". `prompt_tokens` is the number
-/// that distinguishes them — before this function existed, `api_response.usage`
-/// was deserialized and then thrown away on exactly the failure path where it
-/// mattered (`classify_completion` returns its error, at the call site
-/// below, BEFORE the `LlmResponse` carrying `usage` is ever constructed).
-///
-/// Deliberately additive and narrow: every non-`EmptyCompletion` variant
-/// passes through byte-identical (no reconstruction), and this does NOT
-/// change `classify_completion`'s signature: the usage rides on the
-/// `EmptyCompletion` payload only on this adapter's buffered path.
-///
-/// Recording `prompt_tokens`/`completion_tokens`/`total_tokens` here is a
-/// strictly smaller, separately-scoped change from full [`TokenUsage`]
-/// mapping — see [`map_usage`], which is now responsible for the full
-/// D-20 cache/reasoning sub-count split (including
-/// `completion_tokens_details.reasoning_tokens`).
-///
-/// A usage object that omitted `total_tokens` renders it as `not reported`,
-/// never as a fabricated `0` (G-50-5a).
-fn annotate_with_usage(mut err: LlmError, usage: &DeepSeekUsage) -> LlmError {
-    // The detail is extended in place, so any other field the variant carries is kept as is.
-    if let LlmError::EmptyCompletion { detail, .. } = &mut err {
-        let total = usage
-            .total_tokens
-            .map_or_else(|| "not reported".to_string(), |total| total.to_string());
-        *detail = format!(
-            "{detail} (provider-reported usage: prompt_tokens={}, completion_tokens={}, \
-             total_tokens={total})",
-            usage.prompt_tokens, usage.completion_tokens
-        );
-    }
-    err
 }
 
 /// Deserialize a possibly-`null` (or absent) string field as an empty string.
@@ -960,22 +919,31 @@ impl LlmPort for DeepSeekAdapter {
 
             let finish_reason = Self::map_finish_reason(choice.finish_reason.clone());
 
+            // G-50-5a: usage is mapped BEFORE the guard, so a call DeepSeek billed but the guard
+            // classifies as empty carries the same typed usage a success would have, on the
+            // served model (else the request model, A3-50-26). The counts are typed on the
+            // error now, so the detail text no longer embeds them (D-09: nothing parses text).
+            let (usage, vendor_total) = map_usage(api_response.usage);
+            let billed_model = if api_response.model.is_empty() {
+                request.model.as_str()
+            } else {
+                api_response.model.as_str()
+            };
+
             // One rule for refusal, content filter, function call and empty text on any
             // finish reason (PARITY-05, D-11a); this adapter's private copy is gone. DeepSeek
             // sends no dedicated refusal field, so there is none to pass.
-            if let Err(err) = classify_completion(
+            classify_completion(
                 self.get_provider_name(),
                 &request.model,
                 &choice.message.content,
                 &finish_reason,
                 None,
                 &self.config.api_key,
-            ) {
-                return Err(annotate_with_usage(err, &api_response.usage));
-            }
+            )
+            .map_err(|err| bill(err, billed_model, Some(usage.clone())))?;
 
             let content = choice.message.content.clone();
-            let (usage, vendor_total) = map_usage(api_response.usage);
             // G-50-5a: DeepSeek's own total is the check on the mapping -- a disagreement is
             // warned once and recorded, never written over the mapped total (D-02).
             let unreconciled = self.usage_log.record(
@@ -1139,8 +1107,12 @@ impl LlmPort for DeepSeekAdapter {
                                         items.push(Ok(terminal));
                                     }
                                     // An empty answer replaces the terminal chunk; deltas already
-                                    // yielded (reasoning included) stay yielded.
-                                    Err(error) => items.push(Err(error)),
+                                    // yielded (reasoning included) stay yielded. G-50-5a: the
+                                    // error carries the usage frame's bill on the request
+                                    // model, `None` when the stream reported none.
+                                    Err(error) => {
+                                        items.push(Err(bill(error, &model, held_usage.take())))
+                                    }
                                 }
                                 continue;
                             }
@@ -1363,57 +1335,6 @@ mod tests {
     fn test_empty_completion_empty_but_stop_is_empty_completion() {
         let result = classify("", &FinishReason::Stop);
         assert!(matches!(result, Err(LlmError::EmptyCompletion { .. })));
-    }
-
-    #[test]
-    fn test_annotate_with_usage_names_all_three_token_counts_on_empty_completion() {
-        let err = LlmError::empty_completion("finish_reason=length with empty content".to_string());
-        let usage = DeepSeekUsage {
-            prompt_tokens: 31_000,
-            completion_tokens: 32_000,
-            total_tokens: Some(63_000),
-            prompt_cache_hit_tokens: None,
-            completion_tokens_details: None,
-        };
-
-        let annotated = annotate_with_usage(err, &usage);
-
-        match annotated {
-            LlmError::EmptyCompletion { detail: msg, .. } => {
-                assert!(
-                    msg.contains("finish_reason=length with empty content"),
-                    "original message must survive, got: {msg}"
-                );
-                assert!(msg.contains("31000"), "must name prompt_tokens, got: {msg}");
-                assert!(
-                    msg.contains("32000"),
-                    "must name completion_tokens, got: {msg}"
-                );
-                assert!(msg.contains("63000"), "must name total_tokens, got: {msg}");
-            }
-            other => {
-                panic!("expected EmptyCompletion to round-trip as EmptyCompletion, got {other:?}")
-            }
-        }
-    }
-
-    #[test]
-    fn test_annotate_with_usage_passes_through_non_empty_completion_variants_unchanged() {
-        let err = LlmError::Timeout("request timed out".to_string());
-        let usage = DeepSeekUsage {
-            prompt_tokens: 1,
-            completion_tokens: 2,
-            total_tokens: Some(3),
-            prompt_cache_hit_tokens: None,
-            completion_tokens_details: None,
-        };
-
-        let annotated = annotate_with_usage(err, &usage);
-
-        match annotated {
-            LlmError::Timeout(msg) => assert_eq!(msg, "request timed out"),
-            other => panic!("expected Timeout to round-trip unchanged, got {other:?}"),
-        }
     }
 
     #[test]
@@ -2073,7 +1994,7 @@ mod tests {
 
     /// Direct unit test on the shared mapping function -- no network needed
     /// (matches this file's own pre-existing style: `build_request`/
-    /// `map_error`/`annotate_with_usage` are all tested this way, never
+    /// `map_error` are all tested this way, never
     /// through a real HTTP round trip). Distinct, non-round figures so a
     /// swapped or dropped field cannot pass by coincidence.
     #[test]
@@ -2595,20 +2516,96 @@ mod tests {
             assert_eq!(blank.reasoning, None);
         }
 
+        /// G-50-5a deliberate flip: the buffered path used to append the usage counts to the
+        /// `detail` text (`annotate_with_usage`); the counts are typed on the error now
+        /// ([`LlmError::billed_usage`]), so the text no longer embeds them (D-09).
         #[tokio::test]
         async fn deepseek_empty_stop_completion_is_empty_completion_with_usage() {
             let result =
                 generate_from(body(json!({"role": "assistant", "content": ""}), "stop")).await;
             match result {
-                Err(LlmError::EmptyCompletion { detail: msg, .. }) => {
+                Err(err @ LlmError::EmptyCompletion { .. }) => {
+                    let LlmError::EmptyCompletion { detail: msg, .. } = &err else {
+                        unreachable!("matched as EmptyCompletion above");
+                    };
                     assert!(msg.contains("finish_reason=stop"), "{msg}");
                     assert!(
-                        msg.contains("provider-reported usage"),
-                        "the buffered path still annotates usage: {msg}"
+                        !msg.contains("provider-reported usage"),
+                        "the counts are typed now, never embedded in the detail: {msg}"
+                    );
+                    assert_eq!(
+                        err.billed_usage().map(|bill| bill.usage.total_tokens),
+                        Some(2)
                     );
                 }
                 other => panic!("expected EmptyCompletion, got {other:?}"),
             }
+        }
+
+        /// G-50-5a: a 63_000-token reasoning truncation DeepSeek billed (`finish_reason:
+        /// length`, empty content) carries its usage on the error as a typed bill on the served
+        /// model, and its `detail` names no token counts. A body that omits `total_tokens`
+        /// still bills `prompt + completion` (D-02), never a fabricated zero.
+        #[tokio::test]
+        async fn deepseek_empty_completion_carries_its_billed_usage() {
+            let truncated = |usage: Value| {
+                json!({
+                    "id": "cmpl-1",
+                    "model": "deepseek-served-test",
+                    "choices": [{
+                        "index": 0,
+                        "message": {"role": "assistant", "content": ""},
+                        "finish_reason": "length"
+                    }],
+                    "usage": usage
+                })
+                .to_string()
+            };
+
+            let err = generate_from(truncated(json!({
+                "prompt_tokens": 31_000,
+                "completion_tokens": 32_000,
+                "total_tokens": 63_000,
+                "completion_tokens_details": {"reasoning_tokens": 31_500}
+            })))
+            .await
+            .expect_err("an empty length completion is an error");
+            let LlmError::EmptyCompletion { detail, .. } = &err else {
+                panic!("expected EmptyCompletion, got {err:?}");
+            };
+            for count in [
+                "31000",
+                "32000",
+                "63000",
+                "31_000",
+                "provider-reported usage",
+            ] {
+                assert!(
+                    !detail.contains(count),
+                    "the detail must not embed the token counts ({count}): {detail}"
+                );
+            }
+            let billed = err
+                .billed_usage()
+                .expect("a billed empty completion carries its usage");
+            assert_eq!(billed.model, "deepseek-served-test");
+            assert_eq!(billed.usage.prompt_tokens, 31_000);
+            assert_eq!(billed.usage.completion_tokens, 32_000);
+            assert_eq!(billed.usage.reasoning_tokens, Some(31_500));
+            assert_eq!(billed.usage.total_tokens, 63_000);
+            assert_eq!(billed.cost, None, "pricing is the decorator's job");
+
+            let err = generate_from(truncated(json!({
+                "prompt_tokens": 31_000,
+                "completion_tokens": 32_000
+            })))
+            .await
+            .expect_err("an empty length completion is an error");
+            assert_eq!(
+                err.billed_usage().map(|bill| bill.usage.total_tokens),
+                Some(63_000),
+                "an absent vendor total bills prompt + completion"
+            );
         }
 
         #[tokio::test]
@@ -2816,24 +2813,6 @@ mod tests {
                     .iter()
                     .all(|chunk| !chunk.metadata.contains_key(USAGE_UNRECONCILED_METADATA_KEY))
             );
-        }
-
-        #[test]
-        fn annotate_with_usage_renders_an_absent_total_plainly() {
-            let err = LlmError::empty_completion("finish_reason=length".to_string());
-            let usage = DeepSeekUsage {
-                prompt_tokens: 31_000,
-                completion_tokens: 32_000,
-                total_tokens: None,
-                prompt_cache_hit_tokens: None,
-                completion_tokens_details: None,
-            };
-            match annotate_with_usage(err, &usage) {
-                LlmError::EmptyCompletion { detail: msg, .. } => {
-                    assert!(msg.contains("total_tokens=not reported"), "{msg}");
-                }
-                other => panic!("expected EmptyCompletion, got {other:?}"),
-            }
         }
     }
 

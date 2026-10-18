@@ -38,7 +38,10 @@
 //! `usage_fields_are_mapped` (sub-counts stay inside their parents, and an agreeing body records
 //! no `paladin.usage_unreconciled`) and added `vendor_total_disagreement_is_recorded`, which raises
 //! the fixture's own vendor total by 1000 and asserts the mapped usage is unchanged (D-02) and the
-//! disagreement recorded. A vendor that
+//! disagreement recorded. Plan 50-27 (G-50-5a) added `billed_failures_carry_their_usage`: an
+//! empty completion (buffered and streamed) and a typed refusal carry the usage their body
+//! reported on the error ([`LlmError::billed_usage`]), bringing the suite to twenty cases. A
+//! vendor that
 //! lacks a feature never skips a case: it states its documented alternative shape through the
 //! fixture ([`RefusalShape::ContentFilterOnly`], [`MalformedFrame::SkippedWithWarning`]), so every
 //! adapter is measured against every case. The default bodies for these cases live in
@@ -1605,6 +1608,115 @@ pub mod cases {
         }
     }
 
+    /// Case (G-50-5a, plan 50-27): a call the vendor answered and billed but that the shared
+    /// guard classifies as a failure carries its usage on the error, on both paths.
+    ///
+    /// The empty-stop body (buffered), the empty-stop stream (its terminal `Err` item) and, where
+    /// the wire has one ([`RefusalShape::Typed`]), the typed refusal each report a usage object, so
+    /// each error's [`LlmError::billed_usage`] must be `Some` with a non-zero
+    /// `total_tokens == prompt_tokens + completion_tokens` (D-02) on a named model, and no cost
+    /// (pricing is the decorator's job). A vendor with no refusal signal states its
+    /// content-filter alternative, which is an `Ok` finish and so carries no error to bill.
+    pub async fn billed_failures_carry_their_usage<F: ConformanceFixture>() {
+        fn assert_billed<F: ConformanceFixture>(err: &LlmError, path: &str) {
+            let billed = err.billed_usage().unwrap_or_else(|| {
+                panic!(
+                    "{}: a billed {path} must carry its usage on the error, got {err:?}",
+                    F::provider_name()
+                )
+            });
+            let usage = &billed.usage;
+            assert_eq!(
+                usage.total_tokens,
+                usage.prompt_tokens + usage.completion_tokens,
+                "{}: the {path} bill's total must be prompt + completion (D-02)",
+                F::provider_name()
+            );
+            assert!(
+                usage.total_tokens > 0,
+                "{}: the {path} body reported usage, so its bill is never a zero",
+                F::provider_name()
+            );
+            assert!(
+                !billed.model.is_empty(),
+                "{}: the {path} bill must name its model",
+                F::provider_name()
+            );
+            assert_eq!(
+                billed.cost,
+                None,
+                "{}: an adapter never prices its own bill",
+                F::provider_name()
+            );
+        }
+
+        // Buffered empty completion.
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(F::empty_stop_body())
+            .create_async()
+            .await;
+        match F::adapter(&server.url())
+            .generate(conformance_request())
+            .await
+        {
+            Err(err @ LlmError::EmptyCompletion { .. }) => {
+                assert_billed::<F>(&err, "buffered empty completion");
+            }
+            other => panic!("an empty stop completion must be EmptyCompletion, got {other:?}"),
+        }
+
+        // Streamed empty completion: the terminal `Err` item carries the bill.
+        let mut server = Server::new_async().await;
+        server
+            .mock("POST", Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "text/event-stream")
+            .with_body(F::empty_stop_stream_body())
+            .create_async()
+            .await;
+        let stream = F::adapter(&server.url())
+            .generate_stream(conformance_request())
+            .await
+            .expect("the stream must open; the emptiness is only known at the terminal frame");
+        let mut stream = Box::into_pin(stream);
+        let mut items = Vec::new();
+        while let Some(item) = stream.next().await {
+            items.push(item);
+        }
+        match items.last() {
+            Some(Err(err @ LlmError::EmptyCompletion { .. })) => {
+                assert_billed::<F>(err, "streamed empty completion");
+            }
+            other => panic!(
+                "the last stream item must be Err(EmptyCompletion), got {other:?} (all items: \
+                 {items:?})"
+            ),
+        }
+
+        // Typed refusal, where the wire has one.
+        if let RefusalShape::Typed(body) = F::refusal_shape(F::api_key()) {
+            let mut server = Server::new_async().await;
+            server
+                .mock("POST", Matcher::Any)
+                .with_status(200)
+                .with_header("content-type", "application/json")
+                .with_body(body)
+                .create_async()
+                .await;
+            match F::adapter(&server.url())
+                .generate(conformance_request())
+                .await
+            {
+                Err(err @ LlmError::Refusal { .. }) => assert_billed::<F>(&err, "typed refusal"),
+                other => panic!("a typed refusal must be Err(Refusal), got {other:?}"),
+            }
+        }
+    }
+
     /// Case (ADR-0061 (a)): a temperature `99.0` -- admitted by no profile -- is omitted from every
     /// wire, never clamped or substituted, and the response records the omission under
     /// `paladin.params_omitted`.
@@ -1649,12 +1761,12 @@ pub mod cases {
 /// [`ConformanceFixture`], plus a `CASE_COUNT` derived from the SAME identifier lists the tests
 /// are generated from -- so a case silently dropped from the lists shrinks `CASE_COUNT` too,
 /// which `suite_generates_the_full_case_list_for_a_fixture` (below) pins against the documented
-/// `19`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
+/// `20`, turning a silently-dropped case into a build/test failure rather than a quiet pass.
 ///
 /// The lists are split in two groups: the ten transport cases (status mapping, streaming
-/// framing, redaction, redirects, rate limits) and the nine behaviour cases
+/// framing, redaction, redirects, rate limits) and the ten behaviour cases
 /// (capability truthfulness, structured output, empty completion, refusal, usage, vendor-total
-/// reconciliation, the parameter policy). `llm_conformance_suite!(Fixture)` generates both.
+/// reconciliation, billed failures, the parameter policy). `llm_conformance_suite!(Fixture)` generates both.
 /// `llm_conformance_suite!(Fixture, transport_only)` generates only the first group and exists
 /// for one caller, the macro's own
 /// self-test fixture, which is a bare transport with no profile, sampling or refusal surface;
@@ -1692,6 +1804,7 @@ macro_rules! llm_conformance_suite {
                 refusal_is_typed_and_permanent,
                 usage_fields_are_mapped,
                 vendor_total_disagreement_is_recorded,
+                billed_failures_carry_their_usage,
                 unsupported_parameters_are_omitted_and_recorded,
             ]
         );
@@ -1980,8 +2093,8 @@ mod tests {
     #[test]
     fn suite_generates_the_full_case_list_for_a_fixture() {
         assert_eq!(
-            CASE_COUNT, 19,
-            "llm_conformance_suite! must generate exactly the documented 19 fixed cases -- if this \
+            CASE_COUNT, 20,
+            "llm_conformance_suite! must generate exactly the documented 20 fixed cases -- if this \
              fails, a case was added to or removed from the macro's list without updating this \
              pinned expectation"
         );

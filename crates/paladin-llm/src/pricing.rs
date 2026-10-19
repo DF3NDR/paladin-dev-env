@@ -194,9 +194,21 @@ impl PricingLlmAdapter {
     }
 
     /// [`Self::price_hopped_bills`] on the active call's [`HOPPED_BILLS`] collector; a no-op
-    /// when none is installed.
+    /// when none is installed. The after-call safety net (A2-50-32): an idempotent pass over
+    /// entries the installed pricer did not price, such as ones added with `push`.
     fn price_active_hopped_bills(table: &PriceTable) {
         let _ = HOPPED_BILLS.try_with(|bills| Self::price_hopped_bills(table, bills));
+    }
+
+    /// Install this decorator's hop-bill pricer on `bills` BEFORE the call is delegated (WR-03,
+    /// plan 50-32). The pricer prices an entry against the entry's OWN model through
+    /// [`Self::price_or_warn`] (PARITY-06, D-15): the same warn-once rule, and `None` for an
+    /// unpriced model. With it installed, a bill the chain records at its hop is priced and then
+    /// counted into the attempt scope at that moment, rather than only after the whole call
+    /// returns. The first pricer installed on a collector wins (the outermost decorator's table).
+    fn install_hop_pricer(table: &Arc<PriceTable>, bills: &HoppedBills) {
+        let table = Arc::clone(table);
+        bills.install_pricer(move |bill| Self::price_or_warn(&table, &bill.model, &bill.usage));
     }
 }
 
@@ -222,9 +234,13 @@ impl LlmPort for PricingLlmAdapter {
     /// gets its bill's cost from the bill's own served model, through the same warn-once rule,
     /// so an unpriced model keeps `cost: None`.
     async fn generate(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+        // WR-03, plan 50-32: the pricer goes onto the call's collector BEFORE the chain runs, so
+        // every billed hop it moves past is priced against its own model and counted into the
+        // attempt scope at the hop, even when a later hop is cut off by the engine.
+        let _ = HOPPED_BILLS.try_with(|bills| Self::install_hop_pricer(&self.table, bills));
         let outcome = self.inner.generate(request).await;
-        // G-50-5a remainder (a), plan 50-30: the chain inside has recorded every billed hop
-        // it moved past by now, whichever way the call ended.
+        // G-50-5a remainder (a), plan 50-30: the idempotent safety net -- by now the chain
+        // inside has recorded every billed hop it moved past, whichever way the call ended.
         Self::price_active_hopped_bills(&self.table);
         let mut response =
             outcome.map_err(|err| Self::price_billed_error(&self.table, None, err))?;
@@ -255,6 +271,10 @@ impl LlmPort for PricingLlmAdapter {
         // G-50-5a remainder (a), plan 50-30: the call's collector, captured here because the
         // stream is polled later, possibly from another task.
         let hopped = HOPPED_BILLS.try_with(Clone::clone).ok();
+        // WR-03, plan 50-32: install the hop pricer before the chain opens (see `generate`).
+        if let Some(bills) = &hopped {
+            Self::install_hop_pricer(&table, bills);
+        }
         let opened = self.inner.generate_stream(request).await;
         if let Some(bills) = &hopped {
             Self::price_hopped_bills(&table, bills);
@@ -1004,5 +1024,63 @@ mod tests {
         let taken = bills.take();
         assert_eq!(taken.len(), 1);
         assert_eq!(taken[0].cost, None, "m1 is unpriced here");
+    }
+
+    /// WR-03 (plan 50-32): a hopped-past bill is priced against its own model and counted into
+    /// the active attempt scope AT THE HOP. `generate`: hop 2 never answers, the attempt is cut
+    /// by a deadline, and the scope already holds hop 1's bill priced at `m1`'s rate.
+    /// `generate_stream`: the bill reaches the scope priced, not unpriced.
+    #[tokio::test(start_paused = true)]
+    async fn hop_bills_are_priced_and_counted_at_the_hop() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+        use std::time::Duration;
+
+        let table = two_model_table();
+        let u1 = TokenUsage::new(1_000, 40);
+        let c1 = table.price("m1", &u1).unwrap();
+
+        let stalled = MockLlmAdapter::new()
+            .with_provider_name("hop2")
+            .with_response("never served")
+            .with_delay(Duration::from_secs(3_600));
+        let adapter = hop_chain(stalled, Arc::clone(&table));
+        let scope = SpendScope::new();
+        let cut = tokio::time::timeout(
+            Duration::from_millis(500),
+            ATTEMPT_SPEND.scope(
+                scope.clone(),
+                HOPPED_BILLS.scope(HoppedBills::new(), adapter.generate(request("m2"))),
+            ),
+        )
+        .await;
+        assert!(cut.is_err(), "the attempt was dropped mid-call");
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "hop 1's bill is already counted");
+        assert_eq!(spend.usage(), &u1);
+        assert_eq!(spend.cost(), Some(c1.clone()), "priced at m1's own rate");
+
+        let answer = MockLlmAdapter::new()
+            .with_provider_name("hop2")
+            .with_response("served")
+            .with_token_usage_struct(TokenUsage::new(10, 20));
+        let adapter = hop_chain(answer, Arc::clone(&table));
+        let scope = SpendScope::new();
+        let stream = ATTEMPT_SPEND
+            .scope(
+                scope.clone(),
+                HOPPED_BILLS.scope(HoppedBills::new(), adapter.generate_stream(request("m2"))),
+            )
+            .await
+            .unwrap();
+        let items: Vec<_> = Box::into_pin(stream).collect().await;
+        assert!(items.iter().all(Result::is_ok));
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "the hop bill was counted when recorded");
+        assert_eq!(spend.usage(), &u1);
+        assert_eq!(
+            spend.cost(),
+            Some(c1),
+            "and it was priced when it was recorded"
+        );
     }
 }

@@ -408,16 +408,25 @@ struct AgentLoopLedgerTarget {
 /// conversion and returns it here, so the buffered loop can fold it into the
 /// run's tallies and settle it before the error leaves the loop. Private: no
 /// public type changes. `bills` lists the bills of every hop a fallback chain
-/// moved past during the call (plan 50-30, [`HOPPED_BILLS`]) first, then the
-/// failing call's own bill (A1-50-28); it is empty for an unbilled error
-/// with no billed hop.
+/// moved past during the call (plan 50-30, [`HOPPED_BILLS`]) are kept apart in
+/// `hop_bills` (plan 50-32, A5-50-32), because the collector already counted
+/// them into the attempt scope at their hop and this loop only folds and
+/// settles them; `bills` is the failing call's own bill, which this loop
+/// records into the attempt scope itself. Both are empty for an unbilled
+/// error with no billed hop.
 #[derive(Debug)]
 struct CallFailure {
     /// The error the caller sees.
     error: PaladinError,
-    /// What the vendor billed for the failed call and for every hop moved
-    /// past on the way, priced when a `PricingLlmAdapter` priced them.
+    /// What the vendor billed for the failed call itself, priced when a
+    /// `PricingLlmAdapter` priced it.
     bills: Vec<BilledUsage>,
+    /// The bills of every hop the chain moved past on the way, in hop order,
+    /// priced when a `PricingLlmAdapter` priced them. Already counted into the
+    /// attempt scope by [`HoppedBills::count_and_take`] (WR-03, plan 50-32):
+    /// the loop folds them into the run's tallies and settles them, and never
+    /// records them into the scope again.
+    hop_bills: Vec<BilledUsage>,
 }
 
 /// A served model call as the agent loop's retry helper reports it
@@ -429,7 +438,9 @@ struct CallFailure {
 /// and returns what it collected here, so the loop folds every part into the
 /// run's tallies and settles them in the call's one row. Private: no public
 /// type changes (`LlmResponse` keeps its fields). `bills` is empty for every
-/// call that hopped past no billed error.
+/// call that hopped past no billed error. The collector counted each of them
+/// into the attempt scope at its hop (WR-03, plan 50-32); the loop folds and
+/// settles them and does not count them again.
 #[derive(Debug)]
 struct CallOutcome {
     /// The response that served the call.
@@ -474,26 +485,23 @@ fn priced_bill_part<'a>(
 /// resolved once before the stream opens. `None` outside `EveryCall` mode.
 type StreamSettlement = (Arc<dyn TreasuryLedgerPort>, LedgerScope, RunId);
 
-/// Report every hopped-past bill of a streamed call to the active attempt
-/// scope (G-50-5a: plan 50-29's scope, plan 50-30's bills) and settle the
-/// call's priced parts once under `(execution id, 1, 1)`: the hop bills
-/// against their own models, then `own`: the terminal chunk's cost under
+/// Settle a streamed call's priced parts once under `(execution id, 1, 1)`:
+/// the hop bills against their own models, then `own`: the terminal chunk's cost under
 /// `model_used` (the only model identity a terminal chunk carries), or a
 /// billed terminal error's cost under that bill's own model (WR-02, see
 /// [`priced_bill_part`]). Called at every exit of the streamed call -- terminal
 /// chunk, terminal error, an early `generate_stream` error, a stream that
 /// ended without a final marker, and a dropped receiver -- so no billed hop
-/// is lost however the stream ends. `own` is NOT recorded here: its caller
-/// already recorded it beside its own fold.
+/// is lost however the stream ends. Neither `hop_bills` nor `own` is recorded
+/// into the attempt scope here: the hop bills were counted by their collector
+/// at the hop and taken with [`HoppedBills::count_and_take`] (WR-03, plan
+/// 50-32), and `own`'s caller already recorded it beside its own fold.
 async fn settle_streamed_call(
     settlement: Option<&StreamSettlement>,
     model_used: &str,
     hop_bills: &[BilledUsage],
     own: Option<(&str, &Cost)>,
 ) {
-    for bill in hop_bills {
-        record_incurred_spend(&bill.usage, bill.cost.as_ref());
-    }
     let Some((ledger, scope, run_id)) = settlement else {
         return;
     };
@@ -1987,26 +1995,34 @@ impl PaladinExecutionService {
                     // error leaves the loop. A billed failure is `Permanent`,
                     // so it is never retried and never settled twice; an
                     // unpriced bill (`cost: None`) folds its usage and settles
-                    // nothing (D-00c). Plan 50-30: `bills` also holds the bill
+                    // nothing (D-00c). Plan 50-30: `hop_bills` holds the bill
                     // of every fallback hop moved past (a chain that ended in
                     // `AllProvidersFailed` after billed refusals), so all of
                     // the call's priced parts settle in ONE row.
-                    for bill in &failure.bills {
+                    //
+                    // WR-03 (plan 50-32): the hop bills were counted into the
+                    // attempt scope by their collector at the hop; only the
+                    // failing call's own bills are recorded here.
+                    for bill in failure.hop_bills.iter().chain(&failure.bills) {
                         usage += bill.usage.clone();
                         cost_tally.record_call(bill.cost.as_ref());
+                    }
+                    for bill in &failure.bills {
                         // G-50-5a (plan 50-29): a billed failure is a call the
                         // attempt was charged for -- reported to the attempt
                         // scope at the same fold as a success's call.
                         record_incurred_spend(&bill.usage, bill.cost.as_ref());
                     }
                     if let Some(target) = ledger_target.as_ref() {
+                        let fallback_model = paladin.data.model.as_str();
                         let parts: Vec<(&str, &Cost)> =
-                            priced_bill_parts(&failure.bills, paladin.data.model.as_str())
+                            priced_bill_parts(&failure.hop_bills, fallback_model)
+                                .chain(priced_bill_parts(&failure.bills, fallback_model))
                                 .collect();
                         self.settle_model_call(target, u64::from(loop_num), &parts)
                             .await;
                     }
-                    if !failure.bills.is_empty() {
+                    if !failure.hop_bills.is_empty() || !failure.bills.is_empty() {
                         debug!(
                             "billed model call failed: id={}, loop={}, run_total_tokens={}",
                             execution_id, loop_num, usage.total_tokens
@@ -2031,11 +2047,12 @@ impl PaladinExecutionService {
             // G-50-5a remainder (a), plan 50-30: the bill of every fallback hop
             // this call moved past (a refusal the vendor billed) is folded the
             // same way first -- each one was a billed request, so it counts in
-            // the run's usage and price and in the attempt's spend.
+            // the run's usage and price. WR-03 (plan 50-32): the attempt's spend
+            // already counted each one at its hop, so they are not recorded
+            // into the scope again.
             for bill in &hop_bills {
                 usage += bill.usage.clone();
                 cost_tally.record_call(bill.cost.as_ref());
-                record_incurred_spend(&bill.usage, bill.cost.as_ref());
             }
             usage += response.usage.clone();
             cost_tally.record_call(response.cost.as_ref());
@@ -3029,12 +3046,15 @@ impl PaladinExecutionService {
                 ),
             )
             .await;
-        let mut bills = hopped.take();
+        // WR-03 (plan 50-32): `count_and_take` counts into the attempt scope
+        // any hop bill the chain recorded where no scope was visible, and
+        // returns every hop bill; the ones recorded at their hop inside the
+        // scope were counted then and are not counted again.
+        let bills = hopped.count_and_take();
         match outcome {
             Ok(response) => Ok(CallOutcome { response, bills }),
             Err(mut failure) => {
-                bills.append(&mut failure.bills);
-                failure.bills = bills;
+                failure.hop_bills = bills;
                 Err(failure)
             }
         }
@@ -3162,6 +3182,7 @@ impl PaladinExecutionService {
                     return Err(CallFailure {
                         error: PaladinError::CircuitBreakerOpen,
                         bills,
+                        hop_bills: Vec::new(),
                     });
                 }
                 // WR-02 (`25-REVIEW.md`), D-11: a `Permanent` failure (e.g. a
@@ -3184,7 +3205,11 @@ impl PaladinExecutionService {
                         "LLM call failed permanently, not retrying: id={}, loop={}, attempt={}, error={}",
                         execution_id, loop_num, attempt, e
                     );
-                    return Err(CallFailure { error: e, bills });
+                    return Err(CallFailure {
+                        error: e,
+                        bills,
+                        hop_bills: Vec::new(),
+                    });
                 }
                 // D-11: with an active retry policy, `RetryPredicate::admits`
                 // -- the SAME pure function
@@ -3203,7 +3228,11 @@ impl PaladinExecutionService {
                         "LLM call failed with a policy-declined transience, not retrying: id={}, loop={}, attempt={}, error={}",
                         execution_id, loop_num, attempt, e
                     );
-                    return Err(CallFailure { error: e, bills });
+                    return Err(CallFailure {
+                        error: e,
+                        bills,
+                        hop_bills: Vec::new(),
+                    });
                 }
                 Err(_e) if attempt >= max_attempts => {
                     // Exhausted retries
@@ -3214,6 +3243,7 @@ impl PaladinExecutionService {
                     return Err(CallFailure {
                         error: PaladinError::MaxRetriesExceeded(attempt),
                         bills,
+                        hop_bills: Vec::new(),
                     });
                 }
                 Err(e) => {
@@ -3769,11 +3799,10 @@ impl PaladinExecutionService {
                 failure.error
             })?;
         // G-50-5a remainder (a), plan 50-30: a structured call whose chain
-        // hopped past a billed refusal was billed for that hop too; the
-        // engine's structured arm reads the attempt scope for the whole spend.
-        for bill in &outcome.bills {
-            record_incurred_spend(&bill.usage, bill.cost.as_ref());
-        }
+        // hopped past a billed refusal was billed for that hop too. WR-03
+        // (plan 50-32): the collector already counted it into the attempt
+        // scope at its hop (the engine's structured arm reads the scope for
+        // the whole spend), so it is not recorded again here.
         let response = outcome.response;
         record_incurred_spend(&response.usage, response.cost.as_ref());
 
@@ -3858,11 +3887,15 @@ impl PaladinExecutionService {
     /// A fallback chain that hopped past billed refusals before its first
     /// chunk (G-50-5a remainder (a), plan 50-30) records those bills into a
     /// [`HOPPED_BILLS`] collector installed around the `generate_stream` call
-    /// and re-installed in the forwarding task. Every exit -- the terminal
-    /// chunk, a terminal error, an early `generate_stream` error, a stream
-    /// that ends without a final marker, a dropped receiver -- reports them
-    /// to the attempt scope and settles them in the call's one row with a
-    /// per-model breakdown; the terminal chunk's usage and cost fold them in.
+    /// and re-installed in the forwarding task. The chain counts each bill
+    /// into the attempt scope at its hop (WR-03, plan 50-32), so an attempt
+    /// cut off while the stream is still opening has already been charged for
+    /// it. Every exit -- the terminal chunk, a terminal error, an early
+    /// `generate_stream` error, a stream that ends without a final marker, a
+    /// dropped receiver -- takes them with [`HoppedBills::count_and_take`]
+    /// (which counts only a bill not yet counted) and settles them in the
+    /// call's one row with a per-model breakdown; the terminal chunk's usage
+    /// and cost fold them in.
     async fn execute_stream_inner(
         &self,
         paladin: &Paladin,
@@ -3988,8 +4021,11 @@ impl PaladinExecutionService {
         // streamed call, so a `FallbackLlmAdapter` that hops past a billed
         // refusal before its first chunk hands that bill to THIS call
         // (`PricingLlmAdapter` prices it in place). The handle is moved into
-        // the chunk task below and re-installed there; every exit of the call
-        // takes the entries and settles them with the call's own part.
+        // the chunk task below and re-installed there. WR-03 (plan 50-32): a
+        // hop bill is counted into the attempt scope at its hop, while the
+        // stream is still opening; every exit of the call takes the entries
+        // with `count_and_take` (counting only any not yet counted) and
+        // settles them with the call's own part.
         let stream_hopped = HoppedBills::new();
 
         // Open the provider stream eagerly so an unsupported provider errors here
@@ -4014,7 +4050,7 @@ impl PaladinExecutionService {
                 settle_streamed_call(
                     stream_settlement.as_ref(),
                     &model_used,
-                    &stream_hopped.take(),
+                    &stream_hopped.count_and_take(),
                     own.and_then(|bill| priced_bill_part(bill, &model_used)),
                 )
                 .await;
@@ -4098,7 +4134,7 @@ impl PaladinExecutionService {
                             // identity a stream carries -- before the chunk
                             // is sent. Plan 50-30: the bills of the hops the
                             // chain moved past settle in the same row.
-                            let hop_bills = hopped.take();
+                            let hop_bills = hopped.count_and_take();
                             settle_streamed_call(
                                 stream_settlement.as_ref(),
                                 &model_used,
@@ -4185,7 +4221,7 @@ impl PaladinExecutionService {
                             settle_streamed_call(
                                 stream_settlement.as_ref(),
                                 &model_used,
-                                &hopped.take(),
+                                &hopped.count_and_take(),
                                 None,
                             )
                             .await;
@@ -4211,7 +4247,7 @@ impl PaladinExecutionService {
                         settle_streamed_call(
                             stream_settlement.as_ref(),
                             &model_used,
-                            &hopped.take(),
+                            &hopped.count_and_take(),
                             e.billed_usage()
                                 .and_then(|bill| priced_bill_part(bill, &model_used)),
                         )
@@ -4229,7 +4265,7 @@ impl PaladinExecutionService {
             settle_streamed_call(
                 stream_settlement.as_ref(),
                 &model_used,
-                &hopped.take(),
+                &hopped.count_and_take(),
                 None,
             )
             .await;
@@ -8334,8 +8370,8 @@ mod streamed_cost_tests {
     /// `Pricing(Fallback[hop1 -> m1, hop2 -> m2].hop_on_refusal(true))` over two mock hops on
     /// the stream path: hop 1 answers `first`, hop 2 answers `second` (plan 50-30).
     fn priced_refusal_stream_chain(
-        first: MockLlmAdapter,
-        second: MockLlmAdapter,
+        first: impl LlmPort + 'static,
+        second: impl LlmPort + 'static,
     ) -> (Arc<dyn LlmPort>, Arc<PriceTable>) {
         use paladin_llm::fallback::{FallbackLlmAdapter, FallbackStep};
 
@@ -8548,6 +8584,36 @@ mod streamed_cost_tests {
             sentinel.is_empty(),
             "a scoped stream never settles under the sentinel"
         );
+    }
+
+    /// WR-03, plan 50-32, streamed: hop 1 refuses after billing U1 on `m1`, then hop 2's
+    /// `generate_stream` never resolves, so the attempt is dropped by a deadline while the
+    /// stream is still opening. Hop 1's priced bill is already in the attempt scope.
+    #[tokio::test(start_paused = true)]
+    async fn streamed_hop_bill_counts_when_the_attempt_is_dropped_mid_open() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let (llm, table) = priced_refusal_stream_chain(
+            billed_refusal_hop("hop1", "m1", u1.clone()),
+            super::agent_loop_cost_tests::StallingLlmPort,
+        );
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let service = make_service(llm);
+        let paladin = make_paladin("m2");
+
+        let scope = SpendScope::new();
+        let cut = tokio::time::timeout(
+            Duration::from_millis(500),
+            ATTEMPT_SPEND.scope(scope.clone(), drain_final_chunk(&service, &paladin)),
+        )
+        .await;
+        assert!(cut.is_err(), "the attempt was dropped mid-open");
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "hop 1's bill is already counted");
+        assert_eq!(spend.usage(), &u1);
+        assert_eq!(spend.cost(), Some(c1), "and it is priced");
     }
 }
 
@@ -9852,6 +9918,300 @@ mod agent_loop_cost_tests {
         assert_eq!(spend.calls(), 2, "the hop bill and the served call");
         assert_eq!(spend.usage(), &both);
         assert_eq!(spend.cost(), Some(total));
+    }
+
+    // ---- WR-03, plan 50-32: a hopped-past bill is counted at its hop ----
+
+    /// A model port that accepts a call and never answers it: `generate` and `generate_stream`
+    /// both stay pending forever, so a test can cut the attempt off by a deadline while a later
+    /// fallback hop is still in flight.
+    pub(super) struct StallingLlmPort;
+
+    #[async_trait]
+    impl LlmPort for StallingLlmPort {
+        async fn generate(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            std::future::pending().await
+        }
+
+        async fn generate_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<
+            Box<dyn futures::Stream<Item = Result<StreamingResponse, LlmError>> + Send>,
+            LlmError,
+        > {
+            std::future::pending().await
+        }
+
+        async fn validate_model(&self, _model: &str) -> Result<bool, LlmError> {
+            Ok(true)
+        }
+
+        async fn get_available_models(&self) -> Result<Vec<String>, LlmError> {
+            Ok(vec![])
+        }
+
+        fn get_provider_name(&self) -> &'static str {
+            "stalling-stub"
+        }
+
+        fn get_capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::default()
+        }
+    }
+
+    /// `Pricing(Fallback[hop1 -> m1, hop2 -> m2].hop_on_refusal(true))`: hop 1 refuses after the
+    /// vendor billed `u1` on `m1`, hop 2 never answers.
+    fn stalling_second_hop_chain(u1: TokenUsage) -> Arc<dyn LlmPort> {
+        let hop1: Arc<dyn LlmPort> = Arc::new(ScriptedOutcomeLlmPort::new(vec![Err(
+            billed_refusal("hop1", "m1", u1),
+        )]));
+        let hop2: Arc<dyn LlmPort> = Arc::new(StallingLlmPort);
+        let chain = FallbackLlmAdapter::from_steps(vec![
+            FallbackStep::new(hop1, "m1"),
+            FallbackStep::new(hop2, "m2"),
+        ])
+        .unwrap()
+        .hop_on_refusal(true);
+        Arc::new(PricingLlmAdapter::new(Arc::new(chain), hop_price_table()))
+    }
+
+    /// WR-03: the engine drops an attempt mid-call (`race_attempt`'s exact shape: the attempt
+    /// future runs under a deadline inside the `ATTEMPT_SPEND` scope the engine holds outside it).
+    /// Hop 1 returned a billed refusal and hop 2 had not answered, yet the scope already holds
+    /// hop 1's priced bill.
+    #[tokio::test(start_paused = true)]
+    async fn hop_bill_counts_when_the_attempt_is_dropped_mid_call() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let c1 = hop_price_table().price("m1", &u1).expect("m1 is priced");
+        let service = make_service(stalling_second_hop_chain(u1.clone()));
+        let paladin = make_paladin(1);
+
+        let scope = SpendScope::new();
+        let cut = tokio::time::timeout(
+            Duration::from_millis(500),
+            ATTEMPT_SPEND.scope(scope.clone(), service.execute(&paladin, "hi")),
+        )
+        .await;
+        assert!(cut.is_err(), "the attempt was dropped by the deadline");
+
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 1, "hop 1's bill is already counted");
+        assert_eq!(spend.usage(), &u1);
+        assert_eq!(spend.cost(), Some(c1), "priced at m1's own rate");
+    }
+
+    /// The engine-facing [`PaladinPort`](paladin_ports::output::paladin_port::PaladinPort) seam
+    /// over the real execution service, local to this test (the same minimal adapter
+    /// `run::tracer_e2e` uses; no production adapter of this shape exists yet).
+    struct PaladinPortAdapter(Arc<PaladinExecutionService>);
+
+    #[async_trait]
+    impl paladin_ports::output::paladin_port::PaladinPort for PaladinPortAdapter {
+        async fn execute(
+            &self,
+            paladin: &Paladin,
+            input: &str,
+        ) -> Result<PaladinResult, PaladinError> {
+            self.0.execute(paladin, input).await
+        }
+
+        async fn execute_stream(
+            &self,
+            _paladin: &Paladin,
+            _input: &str,
+        ) -> Result<PaladinStream, PaladinError> {
+            unreachable!("this test's WarGraph never streams")
+        }
+
+        fn validate(&self, _paladin: &Paladin) -> Result<(), PaladinError> {
+            Ok(())
+        }
+    }
+
+    /// WR-03, the literal Battalion case: a real `WarEngine` over the real execution service runs
+    /// a one-node Paladin graph whose chain refuses on hop 1 (billed) and stalls on hop 2. The
+    /// attempt is cut by the run deadline (variant A) or the idle bound (variant B); the node
+    /// fails with the typed timeout and the superstep settle charges hop 1's priced bill once.
+    #[tokio::test(start_paused = true)]
+    async fn engine_charges_a_hop_bill_when_the_attempt_is_cut_mid_call() {
+        use paladin_battalion::engine::{
+            EngineLimits, InputMapping, NodeSpec, WarEngine, WarGraph,
+        };
+        use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
+        use paladin_core::platform::container::battlefield::{
+            BattlefieldSchema, DispatchRule, FieldName, FieldSpec, StateDelta,
+        };
+        use paladin_core::platform::container::node_error::{NodeErrorSource, TimeoutKind};
+        use paladin_core::platform::container::treasury_ledger::{LedgerScope, SettlementContext};
+        use paladin_core::platform::container::waypoint::{NodeId, ThreadId};
+        use paladin_storage::waypoint::in_memory::InMemoryWaypointStore;
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let c1 = hop_price_table().price("m1", &u1).expect("m1 is priced");
+
+        for (label, run_timeout, idle_timeout, expected_kind) in [
+            (
+                "run-deadline",
+                Duration::from_millis(500),
+                None,
+                TimeoutKind::Run,
+            ),
+            (
+                "idle-window",
+                Duration::from_secs(20),
+                Some(Duration::from_millis(250)),
+                TimeoutKind::Idle,
+            ),
+        ] {
+            let service = Arc::new(make_service(stalling_second_hop_chain(u1.clone())));
+            let port: Arc<dyn paladin_ports::output::paladin_port::PaladinPort> =
+                Arc::new(PaladinPortAdapter(service));
+
+            let out = FieldName::new("out").unwrap();
+            let schema = BattlefieldSchema::new(vec![FieldSpec::new(
+                out.clone(),
+                DispatchRule::LastWrite,
+                None,
+                false,
+            )]);
+            let mut graph = WarGraph::new(schema, EngineLimits::default());
+            let node_id = NodeId::new("scout");
+            graph.add_node(
+                node_id.clone(),
+                NodeSpec::paladin(make_paladin(1), InputMapping::new("go"), out),
+            );
+            graph.add_entry(node_id.clone());
+            graph.set_aegis(
+                node_id,
+                Aegis {
+                    timeout: Some(TimeoutPolicy {
+                        run_timeout: Some(run_timeout),
+                        idle_timeout,
+                    }),
+                    ..Default::default()
+                },
+            );
+
+            let ledger = Arc::new(InMemoryTreasuryLedger::new());
+            let run_id = RunId::new_v7();
+            let context = SettlementContext {
+                scope: LedgerScope::unattributed(),
+                run_id: run_id.clone(),
+                attempt: 1,
+            };
+            let engine = WarEngine::new(port, Arc::new(InMemoryWaypointStore::new()))
+                .with_treasury_ledger(ledger.clone(), context);
+            let outcome = engine
+                .start(
+                    &graph,
+                    ThreadId::new(format!("wr-03-{label}")).unwrap(),
+                    StateDelta::new(),
+                )
+                .await
+                .unwrap();
+
+            let node_error = outcome
+                .node_error()
+                .unwrap_or_else(|| panic!("{label}: expected a timed-out node, got {outcome:?}"));
+            assert_eq!(
+                node_error.source,
+                NodeErrorSource::Timeout(expected_kind),
+                "{label}: the typed bound fired"
+            );
+            let rows = ledger
+                .spend(SpendQuery {
+                    group_by: SpendGroupBy::Run,
+                    run_ids: vec![run_id],
+                    ..Default::default()
+                })
+                .await
+                .expect("spend by run succeeds");
+            assert_eq!(
+                rows.first()
+                    .map(|row| (row.amount.clone(), row.settlements)),
+                Some((c1.clone(), 1)),
+                "{label}: the boundary settles hop 1's priced bill once"
+            );
+        }
+    }
+
+    /// Guard (plan 50-32; green before and after the fix): a call whose retries hop past the
+    /// same billed refusal twice counts each hop bill into the attempt scope once and settles
+    /// them once, in the call's one row. Hop 1 refuses (billed U1 on `m1`) on every attempt;
+    /// hop 2 fails with a 503 on the first attempt and answers on the second.
+    #[tokio::test(start_paused = true)]
+    async fn hop_bills_are_counted_once_across_the_calls_retries() {
+        use paladin_ports::output::spend_scope::{ATTEMPT_SPEND, SpendScope};
+
+        let u1 = TokenUsage::new(1_000, 40);
+        let u2 = TokenUsage::new(1_000, 2_000);
+        let table = hop_price_table();
+        let c1 = table.price("m1", &u1).expect("m1 is priced");
+        let c2 = table.price("m2", &u2).expect("m2 is priced");
+        let two_c1 = c1.checked_add(&c1).expect("one currency");
+        let total = two_c1.checked_add(&c2).expect("one currency");
+
+        let llm = priced_refusal_chain(
+            vec![Err(billed_refusal("hop1", "m1", u1.clone()))],
+            vec![
+                Err(LlmError::ProviderError {
+                    provider: "hop2".to_string(),
+                    status: 503,
+                    message: "upstream unavailable".to_string(),
+                }),
+                Ok(("answer", u2.clone(), None)),
+            ],
+        );
+        let ledger = Arc::new(InMemoryTreasuryLedger::new());
+        // One reasoning loop, two attempts of its model call: the retry policy (not `max_loops`,
+        // which would run a second loop and a second call) allows the second attempt.
+        let service = make_service(llm)
+            .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall)
+            .with_middleware(Arc::new(
+                crate::application::services::paladin::middleware::ModelRetryMiddleware::new(
+                    paladin_core::platform::container::aegis::RetryPolicy {
+                        max_attempts: 2,
+                        initial_interval: Duration::from_millis(100),
+                        jitter: false,
+                        ..Default::default()
+                    },
+                ),
+            ));
+
+        let scope = SpendScope::new();
+        let result = ATTEMPT_SPEND
+            .scope(scope.clone(), service.execute(&make_paladin(1), "hi"))
+            .await
+            .expect("the retry is served by hop 2");
+
+        let mut all = u1.clone();
+        all += u1;
+        all += u2;
+        assert_eq!(result.usage, all);
+        let spend = scope.snapshot();
+        assert_eq!(spend.calls(), 3, "two hop bills and the served call");
+        assert_eq!(spend.usage(), &all);
+        assert_eq!(spend.cost(), Some(total));
+
+        let by_run = ledger
+            .spend(SpendQuery {
+                group_by: SpendGroupBy::Run,
+                ..Default::default()
+            })
+            .await
+            .expect("spend by run succeeds");
+        assert_eq!(by_run.len(), 1);
+        assert_eq!(by_run[0].settlements, 1, "one row for the one call");
+        assert_eq!(
+            spend_by_model(&ledger).await,
+            BTreeMap::from([
+                ("m1".to_string(), (two_c1.nanos(), 1)),
+                ("m2".to_string(), (c2.nanos(), 1)),
+            ])
+        );
     }
 }
 

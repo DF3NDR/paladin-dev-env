@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 50
-current_phase_name: provider-parity-config-driven-model-swap
-status: verifying
+current_phase: 51
+current_phase_name: Adjustable Reasoning Effort
+status: planning
 stopped_at: Completed 50-31-PLAN.md
-last_updated: "2026-10-19T00:32:02.328Z"
+last_updated: "2026-10-19T02:42:49.700Z"
 last_activity: 2026-10-19
-last_activity_desc: Phase 50 gap-closure set complete (13 plans, 50-19..50-31); ready for verification
+last_activity_desc: Phase 50 complete, transitioned to Phase 51
 progress:
   total_phases: 12
   completed_phases: 11
@@ -62,16 +62,16 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 50 (provider-parity-config-driven-model-swap) — GAP CLOSURE COMPLETE, ready for verification
-Plan: 31 of 31 (gap closure 50-19..50-31, --gaps-only; all 13 gap-closure plans complete)
-Status: Phase complete — ready for verification
-Last activity: 2026-10-19 — Plan 50-31 complete: the Phase 50 gap-closure set (13 plans, 50-19..50-31) is complete. G-50-5b (50-19, WINDOWS row 75 fixed), G-50-5c (50-20, row 76 fixed) and G-50-5a (50-21..50-31, row 74 fixed) are closed; G-50-5a remainder (c), Grok `cost_in_usd_ticks` / `num_sources_used`, stays open as WINDOWS row 77 (owner-accepted deferral, 2026-10-17). Next: re-verify the Phase 50 UAT gaps (`/gsd-verify-work 50`).
+Phase: 51 — Adjustable Reasoning Effort
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-19 — Phase 50 complete, transitioned to Phase 51
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 504
+- Total plans completed: 535
 - Average duration: —
 - Total execution time: —
 
@@ -127,6 +127,7 @@ Last activity: 2026-10-19 — Plan 50-31 complete: the Phase 50 gap-closure set 
 | 44 | 13 | - | - |
 | 48 | 9 | - | - |
 | 49 | 3 | - | - |
+| 50 | 31 | - | - |
 
 *Updated after each plan completion*
 

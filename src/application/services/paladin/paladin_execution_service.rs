@@ -447,14 +447,26 @@ fn priced_bill_parts<'a>(
     bills: &'a [BilledUsage],
     fallback_model: &'a str,
 ) -> impl Iterator<Item = (&'a str, &'a Cost)> + 'a {
-    bills.iter().filter_map(move |bill| {
-        let model = if bill.model.is_empty() {
-            fallback_model
-        } else {
-            bill.model.as_str()
-        };
-        bill.cost.as_ref().map(|cost| (model, cost))
-    })
+    bills
+        .iter()
+        .filter_map(move |bill| priced_bill_part(bill, fallback_model))
+}
+
+/// One bill's priced `(model, cost)` settle part: `None` for an unpriced bill
+/// (D-00c), and `fallback_model` when the bill names no model. The single
+/// keying rule for a bill, shared by the buffered loop's failure settle, the
+/// hop bills and a streamed call's own billed terminal error (WR-02), so the
+/// same event never lands under two different `model_breakdown` keys.
+fn priced_bill_part<'a>(
+    bill: &'a BilledUsage,
+    fallback_model: &'a str,
+) -> Option<(&'a str, &'a Cost)> {
+    let model = if bill.model.is_empty() {
+        fallback_model
+    } else {
+        bill.model.as_str()
+    };
+    bill.cost.as_ref().map(|cost| (model, cost))
 }
 
 /// Where a streamed call settles (D-07/D-08, 39-05; Phase 40 D-16): the
@@ -465,9 +477,10 @@ type StreamSettlement = (Arc<dyn TreasuryLedgerPort>, LedgerScope, RunId);
 /// Report every hopped-past bill of a streamed call to the active attempt
 /// scope (G-50-5a: plan 50-29's scope, plan 50-30's bills) and settle the
 /// call's priced parts once under `(execution id, 1, 1)`: the hop bills
-/// against their own models, then `own` (the terminal chunk's cost, or a
-/// billed terminal error's) under `model_used`, the only model identity a
-/// stream carries. Called at every exit of the streamed call -- terminal
+/// against their own models, then `own`: the terminal chunk's cost under
+/// `model_used` (the only model identity a terminal chunk carries), or a
+/// billed terminal error's cost under that bill's own model (WR-02, see
+/// [`priced_bill_part`]). Called at every exit of the streamed call -- terminal
 /// chunk, terminal error, an early `generate_stream` error, a stream that
 /// ended without a final marker, and a dropped receiver -- so no billed hop
 /// is lost however the stream ends. `own` is NOT recorded here: its caller
@@ -476,7 +489,7 @@ async fn settle_streamed_call(
     settlement: Option<&StreamSettlement>,
     model_used: &str,
     hop_bills: &[BilledUsage],
-    own: Option<&Cost>,
+    own: Option<(&str, &Cost)>,
 ) {
     for bill in hop_bills {
         record_incurred_spend(&bill.usage, bill.cost.as_ref());
@@ -485,7 +498,7 @@ async fn settle_streamed_call(
         return;
     };
     let parts: Vec<(&str, &Cost)> = priced_bill_parts(hop_bills, model_used)
-        .chain(own.map(|cost| (model_used, cost)))
+        .chain(own)
         .collect();
     settle_agent_loop_call(ledger, scope, run_id, 1, &parts).await;
 }
@@ -4002,7 +4015,7 @@ impl PaladinExecutionService {
                     stream_settlement.as_ref(),
                     &model_used,
                     &stream_hopped.take(),
-                    own.and_then(|bill| bill.cost.as_ref()),
+                    own.and_then(|bill| priced_bill_part(bill, &model_used)),
                 )
                 .await;
                 return Err(to_paladin_error(&e));
@@ -4090,7 +4103,7 @@ impl PaladinExecutionService {
                                 stream_settlement.as_ref(),
                                 &model_used,
                                 &hop_bills,
-                                cost.as_ref(),
+                                cost.as_ref().map(|cost| (model_used.as_str(), cost)),
                             )
                             .await;
                             // Plan 50-30: the run's reported figures fold the
@@ -4186,7 +4199,7 @@ impl PaladinExecutionService {
                         // G-50-5a (plan 50-28): a billed, priced terminal error
                         // (a stream that ended empty or refused) is settled
                         // exactly like a priced terminal chunk -- (execution
-                        // id, 1, 1), naming `model_used` -- once, before the
+                        // id, 1, 1), naming the bill's own model (WR-02) -- once, before the
                         // converted error is sent. An unbilled or unpriced
                         // error settles nothing (D-00c). G-50-5a (plan
                         // 50-29): the bill is reported to the re-installed
@@ -4199,7 +4212,8 @@ impl PaladinExecutionService {
                             stream_settlement.as_ref(),
                             &model_used,
                             &hopped.take(),
-                            e.billed_usage().and_then(|bill| bill.cost.as_ref()),
+                            e.billed_usage()
+                                .and_then(|bill| priced_bill_part(bill, &model_used)),
                         )
                         .await;
                         let _ = tx.send(Err(to_paladin_error(&e))).await;
@@ -8185,8 +8199,8 @@ mod streamed_cost_tests {
 
     /// G-50-5a (plan 50-28): a stream that yields one delta and then ends in
     /// a billed, priced `EmptyCompletion` settles exactly once -- ordinal 1,
-    /// naming `model_used` (the paladin's model, the only model identity a
-    /// stream carries), the billed nanos -- while the caller still receives
+    /// naming the bill's own model (WR-02; `model_used` only when the bill
+    /// names none), the billed nanos -- while the caller still receives
     /// the delta and then the converted `LlmFailure`. Control: a stream that
     /// ends in an unbilled error settles nothing.
     #[tokio::test]
@@ -8226,7 +8240,8 @@ mod streamed_cost_tests {
             .await
             .expect("spend query succeeds");
         assert_eq!(rows.len(), 1, "exactly one settled row: {rows:?}");
-        assert_eq!(rows[0].group, "gpt-4");
+        // WR-02: keyed by the model that billed it (the bill's own), not `model_used`.
+        assert_eq!(rows[0].group, "bill-model");
         assert_eq!(rows[0].amount.nanos(), 22_500_000);
         assert_eq!(rows[0].settlements, 1);
 
@@ -8448,7 +8463,9 @@ mod streamed_cost_tests {
         let ledger = Arc::new(InMemoryTreasuryLedger::new());
         let service =
             make_service(llm).with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall);
-        let paladin = make_paladin("m2");
+        // WR-02: the Paladin's configured model is neither hop's model, so the last hop's own
+        // bill (carried on `AllProvidersFailed`) must be keyed by `m2`, not by this name.
+        let paladin = make_paladin("configured-model");
 
         let scope = SpendScope::new();
         let opened = ATTEMPT_SPEND

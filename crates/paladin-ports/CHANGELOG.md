@@ -9,6 +9,13 @@ and this project follows lockstep workspace versioning.
 
 ### Added
 
+- Phase 50 (G-50-5a, PARITY-05; plans 50-25 and 50-26): the additive half of the billed-failure
+  change. `output::llm_port::BilledUsage` (`new`, `with_cost`), the constructors
+  `LlmError::empty_completion` and `LlmError::refusal`, and `LlmError::with_billed_usage` /
+  `LlmError::billed_usage` (the latter looks through `AllProvidersFailed`), each with a doc
+  example. The variant reshaping they go with is under *Breaking Changes*. Every adapter fills the
+  bill, and the execution service prices and settles it (plans 50-27 to 50-30).
+
 - Phase 50 (G-50-5a remainder (a), PARITY-05; plan 50-30): `output::spend_scope::HoppedBills` (a
   shared, ordered list of the `BilledUsage` a fallback chain moved past during one model call;
   `new`, `push`, `price_unpriced` (idempotent: only entries at `cost: None`), `take`; a poisoned

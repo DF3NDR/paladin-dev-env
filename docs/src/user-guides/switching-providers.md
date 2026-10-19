@@ -195,6 +195,10 @@ over HTTP is a separate decision about a published contract.
 - The retry counters are not unified: the compat presets (Kimi, Qwen, Grok, Ollama,
   OpenAI-compatible), OpenAI and DeepSeek retry that many times after the first attempt (`0` sends
   once); Anthropic and Gemini count total attempts (`0` and `1` both send once).
+- Grok's vendor-computed `cost_in_usd_ticks` and `num_sources_used` are not parsed, so xAI's own
+  cost figure is not compared with the Treasurer's price on any call. The 2026-10-18 usage probe
+  recorded xAI's figure once, as a cross-check (see the grok row below). The owner deferred this
+  on 2026-10-17, and it stays open on the `WINDOWS.md` ledger.
 
 ## Per-provider and per-model behaviour
 
@@ -275,9 +279,9 @@ quota-exhaustion body.
 
 - **Empty output** (empty text on any finish reason) is `LlmError::EmptyCompletion`, never an
   empty success.
-- **A refusal** is `LlmError::Refusal { provider, model, detail }`, `Permanent`, so a fallback chain
-  stops on it by default. The detail is redacted before it is bounded. Match it with
-  `LlmError::Refusal { .. }`.
+- **A refusal** is `LlmError::Refusal { provider, model, detail, .. }`, `Permanent`, so a fallback
+  chain stops on it by default. The detail is redacted before it is bounded. Match it with
+  `LlmError::Refusal { .. }`; the variant is `#[non_exhaustive]`.
 - **A blocked answer with no refusal signal** is `Ok` with `FinishReason::ContentFilter`.
 - **Reasoning** text is on `LlmResponse.reasoning` (and `StreamingResponse.reasoning` while
   streaming) where the vendor returns it.
@@ -308,6 +312,33 @@ quota-exhaustion body.
     response or on the stream's terminal chunk.
   - So if a vendor changes how it reports reasoning, the change shows up on the first affected
     call; it is never priced silently.
+- **Billing.** Every call a vendor bills is counted, priced and charged, whether it succeeds or
+  fails.
+  - A call the vendor answered and billed but that ends as `EmptyCompletion` or `Refusal` carries
+    its bill on the error. `LlmError::billed_usage()` returns the billed model, its `TokenUsage`
+    and, behind `PricingLlmAdapter`, its `Cost`. It looks through `AllProvidersFailed` to the last
+    hop's error, and it is `None` when the vendor reported no usage object. All nine adapters fill
+    it, buffered and streamed.
+  - `PaladinExecutionService` folds a billed failure into the run's usage and cost and settles it
+    to the treasury ledger under the call's ordinal. It also counts as its Battalion engine
+    attempt's spend. This holds for a stream's terminal error and for an error from the call that
+    opens the stream.
+  - A fallback hop the chain moved past after a billed refusal (`hop_on_refusal(true)`) is priced
+    against its own model and settled in its call's ledger row: one row per call, with a
+    per-model breakdown. This holds whether a later hop serves the call or the chain ends in
+    `AllProvidersFailed`, and on every exit of a stream, a dropped stream included. A streamed
+    call's terminal chunk folds the hop bills into its cost, and into its usage when the provider
+    reported the served call's usage.
+  - A failed or timed-out Battalion attempt counts the spend it recorded (`ATTEMPT_SPEND`), and a
+    structured attempt counts every repair call. A successful attempt still reports
+    `PaladinResult.cost`, so nothing is counted twice.
+  - A bill on a model with no `treasurer.pricing` row keeps `cost: None` and settles nothing, as
+    an unpriced success does.
+  - `TokenUsage.total_tokens` stays `prompt_tokens + completion_tokens` (D-02); the vendor's own
+    total is the check on it, as above.
+  - A caller that drives `LlmPort` directly reads a failed call's bill from the error. A caller
+    that wants a failed execution's spend installs a `SpendScope` around the call with
+    `ATTEMPT_SPEND.scope(..)` (`paladin_ports::output::spend_scope`; `MIGRATION.md` 9.8 DR-18).
 - **Which readings are measured.** Each provider's reading of reasoning against
   `completion_tokens` carries a label in the reasoning column below:
   - *measured 2026-10-18*: confirmed by an operator-run probe on the raw vendor wire that day, one

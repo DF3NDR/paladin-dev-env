@@ -80,6 +80,19 @@ and this project follows lockstep workspace versioning.
 
 ### Fixed
 
+- Every adapter bills its empty and refused calls (G-50-5a, Phase 50 plan 50-27). OpenAI,
+  DeepSeek, Anthropic, Gemini and the shared engine (Kimi, Qwen, Grok, Ollama, OpenAI-compatible)
+  map usage before the shared guard and put it on `LlmError::EmptyCompletion` /
+  `LlmError::Refusal` (`billed_usage()`), on the buffered path and on the stream's terminal error
+  item. The buffered bill names the served model, else the request model; a stream's bill names the
+  request model. The compat "no choices" and Gemini "no candidates" failures bill the usage they
+  report. No usage object means no bill, never a zero one.
+- `PricingLlmAdapter` prices a billed error as it prices a success (G-50-5a, Phase 50 plans 50-27
+  and 50-30): `generate` against the bill's model, a stream's error item against the request's
+  model, and an error returned by `generate_stream` itself against its bill's model. It also prices
+  every hopped-past bill a `FallbackLlmAdapter` recorded, against each hop's own model (see
+  *Added*). An unpriced model keeps `cost: None` and its existing warn-once line.
+
 - Gemini `toolUsePromptTokenCount` is folded into `prompt_tokens` (G-50-5a, Phase 50 plan 50-23).
   Gemini counts it in `totalTokenCount`, and the adapter used to drop it. Repro 100/20/300/10
   (total 430) mapped to prompt 100, and now maps to prompt 400. The Anthropic vision path now
@@ -109,6 +122,11 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- DeepSeek's `EmptyCompletion` detail no longer embeds the provider-reported token counts (G-50-5a,
+  Phase 50 plan 50-27). The message used to end in `(provider-reported usage: prompt_tokens=..,
+  completion_tokens=.., total_tokens=..)`; that annotation (`annotate_with_usage`) is removed, and
+  the counts are on the typed bill, `billed_usage()`. Code that read them from the text must read
+  the bill.
 - A billed empty or refused completion on the shared engine's buffered path (Kimi, Qwen, Grok,
   Ollama, OpenAI-compatible) now carries its usage on the error (G-50-5a, Phase 50 plan 50-26).
   The response's usage is mapped before the shared guard classifies it, and the guard's
@@ -116,7 +134,7 @@ and this project follows lockstep workspace versioning.
   the request model), the mapped `TokenUsage` and no cost. A body with no `usage` object yields no
   bill, never a zero one. An empty or refused body that omits `usage` now reaches the guard instead
   of failing as a schema mismatch; a successful body without `usage` is still that schema-mismatch
-  `ProcessingError`. Every other adapter path bills from plan 50-27.
+  `ProcessingError` (`MIGRATION.md` 9.1 M-B-22). Every other adapter path bills from plan 50-27.
 - Vendor usage totals are reconciled on every adapter (G-50-5a, Phase 50 plans 50-23 and 50-24).
   - The OpenAI, DeepSeek and Gemini adapters parse their vendor total on both paths. The total is
     now optional on the wire, so a usage object without one parses. They record any disagreement,

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The bill of a billed-but-failed call, on the error (G-50-5a, PARITY-05; Phase 50 plans 50-25
+  and 50-26).** `paladin_ports::output::llm_port::BilledUsage { model, usage, cost }`
+  (`#[non_exhaustive]`; `BilledUsage::new(model, usage)`, `with_cost(cost)`), the constructors
+  `LlmError::empty_completion(detail)` and `LlmError::refusal(provider, model, detail)`, and the
+  bill's writer and reader `LlmError::with_billed_usage(billed)` and `LlmError::billed_usage()`
+  (which looks through `AllProvidersFailed` to its last error). Each has a doc example. The
+  variant shape change they go with is under *Breaking Changes*; the spend-scope items
+  (`IncurredSpend`, `paladin_ports::output::spend_scope`) are the two entries below.
+
 - **Attempt spend scope: a Battalion attempt is charged for every call it made, however it
   ends** (G-50-5a remainder (b), PARITY-05; Phase 50 plan 50-29). `paladin_core::platform::container::cost::IncurredSpend`
   (the usage, `CostTally` cost and call count an operation has incurred so far) and
@@ -1160,6 +1169,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Billed failures, hopped-past fallback bills and failed engine attempts are priced and settled
+  (G-50-5a, PARITY-05; Phase 50 plans 50-26 to 50-30; `MIGRATION.md` 9.1 M-B-21).** A vendor
+  bills a call that ends in an empty completion or a refusal, but Paladin used to drop that usage
+  with the error, so the Treasurer under-charged. Now:
+  - every adapter, buffered and streamed, puts the call's usage on the error
+    (`LlmError::billed_usage()`), on the served model, else the request model; no usage object
+    means no bill (plans 50-26 and 50-27);
+  - `PricingLlmAdapter` prices that bill like a success, including an error returned by the call
+    that opens a stream (plans 50-27 and 50-30);
+  - `PaladinExecutionService` folds it into the run's usage and cost, settles it to the treasury
+    ledger under the call's ordinal, and records it in the attempt spend scope, buffered and
+    streamed (plans 50-28 and 50-29);
+  - a fallback hop moved past after a billed refusal (`hop_on_refusal(true)`) is priced against its
+    own model and settled in its call's one ledger row with a per-model breakdown. This holds
+    whether a later hop serves or the chain is exhausted, and on every exit of a stream, a dropped
+    stream included; the stream's terminal chunk folds the hop bills into its cost, and into its
+    usage when the provider reported the served call's usage (plan 50-30);
+  - a failed or timed-out Battalion attempt reports the spend it recorded on `NodeFinished`, and
+    the superstep settle charges it once; a structured attempt counts every repair call
+    (plan 50-29).
+  `total_tokens` stays `prompt_tokens + completion_tokens` (D-02). A bill on an unpriced model
+  keeps `cost: None` and settles nothing. Proved end to end through real adapters by the
+  `provider_swap_matrix` case `billed_failures_and_hopped_refusals_reach_the_ledger` (plan 50-31).
+
 - **Gemini tool-use prompt tokens and Anthropic vision cache tokens are counted (G-50-5a; Phase 50
   plan 50-23; `MIGRATION.md` 9.1 M-B-20).**
   - Gemini reports `toolUsePromptTokenCount` beside `promptTokenCount`, and its `totalTokenCount`
@@ -1359,16 +1392,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer lost. Build the variants with `LlmError::empty_completion(..)` / `LlmError::refusal(..)`
   (plus `with_billed_usage`), match them with `EmptyCompletion { .. }` / `Refusal { .. }`, and read
   the bill with `error.billed_usage()`, which looks through `AllProvidersFailed`. `Display` and the
-  `Permanent` classification are unchanged. The shared engine's buffered path (Kimi, Qwen, Grok,
-  Ollama, OpenAI-compatible) fills the bill from this release. Every other adapter path and the
-  pricing and settlement of the bill follow in plans 50-27 to 50-31. Measured by cargo-semver-checks
+  `Permanent` classification are unchanged. Every adapter fills the bill on both paths, and it is
+  priced and settled (plans 50-27 to 50-30; see *Fixed*). Measured by cargo-semver-checks
   as `enum_tuple_variant_changed_kind` and `enum_variant_marked_non_exhaustive` on
   `EmptyCompletion`, and registered on the `paladin-ports | LlmError` `MIGRATION.md` 9.2 row, its
   allowlist entries and the 9.8 consumer row DR-17.
 
 ### Known limitations
 
-- **Phase 50 provider-parity limits (ADR-0061; `MIGRATION.md` 9.1 M-B-13 to M-B-17).** (1) Seven of
+- **Phase 50 provider-parity limits (ADR-0061; `MIGRATION.md` 9.1 M-B-13 to M-B-22).** (1) Seven of
   the nine providers were probed on 2026-10-15; Ollama and OpenAI-compatible were skipped (no
   daemon or endpoint), so they have no seeded models and run on adapter-wide values. Every model
   the registry does not list does too, visibly unprofiled (`paladin.unprofiled_model`).
@@ -1376,10 +1408,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no quota body was captured and the owner accepted each as unverified (owner reading R-2,
   2026-10-16); each keeps the shared status mapping and an override is a single `error_override`
   once a body is captured. (3) A caller that builds an `LlmRequest` directly gets omit, `warn!` and
-  metadata, not a refusal. (4) `TokenUsage.total_tokens` stays `prompt + completion`; a vendor's
-  own total is not copied over it. On the five compat presets it is compared and a disagreement is
-  recorded under `paladin.usage_unreconciled` (plan 50-21). OpenAI, DeepSeek and Gemini do the
-  same since plan 50-23, and Anthropic, which reports no total, runs the containment checks. (5) The retry counters are not unified: Anthropic and Gemini count total
+  metadata, not a refusal. (4) Usage and billing: `TokenUsage.total_tokens` stays
+  `prompt + completion` (D-02, kept by the owner). Every billed category a vendor reports is folded
+  into those two counts, and the vendor's own total is the check on them: a disagreement is
+  recorded under `paladin.usage_unreconciled` (plans 50-21 to 50-24; Anthropic, which reports no
+  total, runs the containment checks only). Billed failures, hopped-past fallback bills and failed
+  or timed-out engine attempts are priced and settled (plans 50-26 to 50-30; see *Fixed*). The one
+  open item is Grok's vendor-computed `cost_in_usd_ticks` and `num_sources_used`, which are not
+  parsed, so xAI's own cost is not compared with the Treasurer's price; the owner deferred it on
+  2026-10-17 and it stays open on the `WINDOWS.md` ledger. (5) The retry counters are not unified: Anthropic and Gemini count total
   attempts, the other seven count retries after the first attempt. (6) The Grok and OpenAI
   temperature upper bounds, and every `top_p` and penalty span, are stated or contract-derived
   rather than measured edges; the Switching providers page labels each.

@@ -3,15 +3,16 @@ status: testing
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md, 50-19-SUMMARY.md, 50-20-SUMMARY.md, 50-21-SUMMARY.md, 50-22-SUMMARY.md, 50-23-SUMMARY.md, 50-24-SUMMARY.md, 50-25-SUMMARY.md, 50-26-SUMMARY.md, 50-27-SUMMARY.md, 50-28-SUMMARY.md, 50-29-SUMMARY.md, 50-30-SUMMARY.md, 50-31-SUMMARY.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-19T01:43:56Z
+updated: 2026-10-19T01:59:46Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 12
-name: CI test-integration-docker job on the gap-closure head
-expected: All Docker-backed suites (Redis, RustFS, Postgres, Ollama Tier 2) are green on the head that carries plans 50-19..50-31; Docker is absent here.
+number: 13
+name: mdBook build with the rewritten usage, billing and migration docs
+expected: |
+  `mdbook build` exits 0. In `docs/src/user-guides/switching-providers.md` the `## Responses` section names every fold (Grok reasoning, Gemini thoughts and tool-use prompt, Anthropic cache read/write including vision), each of the nine reasoning cells carries a `measured 2026-10-18` or `not live-measured` label, the Billing bullet describes `billed_usage()`, hop bills and failed attempts, the refusal pattern reads `Refusal { provider, model, detail, .. }`, and Known limits lists only remainder (c). MIGRATION 9.1 rows M-B-18..M-B-22 and 9.8 rows DR-17/DR-18 render.
 awaiting: user response
 
 ## Tests
@@ -77,7 +78,7 @@ result: pass
 
 ### 12. CI test-integration-docker job on the gap-closure head
 expected: All Docker-backed suites (Redis, RustFS, Postgres, Ollama Tier 2) are green on the head that carries plans 50-19..50-31; Docker is absent here.
-result: [pending]
+result: pass
 
 ### 13. mdBook build with the rewritten usage, billing and migration docs
 expected: |
@@ -92,9 +93,9 @@ result: [pending]
 ## Summary
 
 total: 14
-passed: 10
+passed: 11
 issues: 1
-pending: 3
+pending: 2
 skipped: 0
 blocked: 0
 

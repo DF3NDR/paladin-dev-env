@@ -32,17 +32,25 @@ use std::time::Duration;
 use mockito::{Matcher, ServerGuard};
 use paladin::application::services::paladin::middleware::{ModelCallContext, PromptAssembly};
 use paladin::application::services::paladin::paladin_builder::PaladinBuilder;
-use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
+use paladin::application::services::paladin::paladin_execution_service::{
+    AgentLoopSettlement, PaladinExecutionService,
+};
 use paladin::config::agent_runtime::{
     AgentRuntimeConfig, AgentRuntimeDeps, FallbackStepConfig, ModelFallbackConfig,
 };
 use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use paladin::prelude::{LlmPort, PaladinError};
 use paladin::{LlmConfig, LlmProviderConfig, LlmProviderFactory};
+use paladin_core::platform::container::cost::{Cost, CurrencyCode, PriceRow, PriceTable};
 use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+use paladin_core::platform::container::token_usage::TokenUsage;
 use paladin_core::platform::container::transience::Transience;
+use paladin_core::platform::container::treasury_ledger::{SpendGroupBy, SpendQuery};
 use paladin_llm::fallback::{FallbackLlmAdapter, FallbackStep};
+use paladin_llm::pricing::with_pricing;
 use paladin_ports::output::llm_port::{LlmRequest, LlmResponse, StopSupport};
+use paladin_ports::output::treasury_ledger_port::TreasuryLedgerPort;
+use paladin_storage::treasury::in_memory::InMemoryTreasuryLedger;
 use serde_json::{Value, json};
 
 /// The query every case sends: multibyte on purpose, so a normalising or truncating adapter fails.
@@ -330,6 +338,66 @@ fn empty_stop_body(wire: Wire) -> Value {
         }),
         Wire::Gemini => success_body(wire, ""),
     }
+}
+
+/// `body` served under `model` and billed `prompt` / `completion` tokens, in the wire's own
+/// usage shape (G-50-5a): the billed model and the usage are what the adapter reports and the
+/// Treasurer prices, so a case that checks the ledger names both explicitly.
+fn served_and_billed(
+    wire: Wire,
+    mut body: Value,
+    model: &str,
+    prompt: u32,
+    completion: u32,
+) -> Value {
+    match wire {
+        Wire::OpenAiChat => {
+            body["model"] = json!(model);
+            body["usage"] = json!({
+                "prompt_tokens": prompt,
+                "completion_tokens": completion,
+                "total_tokens": prompt + completion
+            });
+        }
+        Wire::Anthropic => {
+            body["model"] = json!(model);
+            body["usage"] = json!({ "input_tokens": prompt, "output_tokens": completion });
+        }
+        Wire::Gemini => {
+            body["modelVersion"] = json!(model);
+            body["usageMetadata"] = json!({
+                "promptTokenCount": prompt,
+                "candidatesTokenCount": completion,
+                "totalTokenCount": prompt + completion
+            });
+        }
+    }
+    body
+}
+
+/// An OpenAI-chat body whose model refused through the wire's typed `refusal` field
+/// (`content: null`), billed `prompt` / `completion` tokens on `model`.
+fn openai_refusal_body(model: &str, prompt: u32, completion: u32) -> Value {
+    let body = json!({
+        "id": "chatcmpl-matrix",
+        "object": "chat.completion",
+        "created": 0,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": { "role": "assistant", "content": null, "refusal": "I can't help with that." },
+            "finish_reason": "stop"
+        }]
+    });
+    served_and_billed(Wire::OpenAiChat, body, model, prompt, completion)
+}
+
+/// An OpenAI-chat body that hit the length cap with no text (all the budget spent thinking),
+/// billed `prompt` / `completion` tokens on `model`.
+fn openai_empty_length_body(model: &str, prompt: u32, completion: u32) -> Value {
+    let mut body = success_body(Wire::OpenAiChat, "");
+    body["choices"][0]["finish_reason"] = json!("length");
+    served_and_billed(Wire::OpenAiChat, body, model, prompt, completion)
 }
 
 // ---- reading the wire --------------------------------------------------------------------
@@ -854,6 +922,203 @@ async fn case_config_fallback_steps_send_each_hop_its_own_model() {
     );
 }
 
+/// The price table the ledger case charges against: a distinct rate per model, so a part
+/// priced against the wrong model shows up as a wrong amount.
+fn ledger_price_table(models: &[(&str, i64, i64)]) -> Arc<PriceTable> {
+    let usd = CurrencyCode::new("USD").expect("USD is a currency code");
+    let table = models.iter().fold(
+        PriceTable::new(usd),
+        |table, (model, prompt, completion)| {
+            table.with_row(
+                *model,
+                PriceRow::new(*prompt, *completion).expect("a non-negative price row"),
+            )
+        },
+    );
+    Arc::new(table)
+}
+
+/// The ledger's settled spend grouped by `group_by`: group -> (nanos, settlement rows).
+async fn ledger_spend(
+    ledger: &InMemoryTreasuryLedger,
+    group_by: SpendGroupBy,
+) -> std::collections::BTreeMap<String, (i64, u64)> {
+    ledger
+        .spend(SpendQuery {
+            group_by,
+            ..SpendQuery::default()
+        })
+        .await
+        .expect("the in-memory ledger answers a spend query")
+        .into_iter()
+        .map(|row| (row.group, (row.amount.nanos(), row.settlements)))
+        .collect()
+}
+
+/// (g) G-50-5a end to end, through real adapters over mock HTTP, `PricingLlmAdapter`,
+/// `FallbackLlmAdapter` and `PaladinExecutionService` with an `InMemoryTreasuryLedger`
+/// (`AgentLoopSettlement::EveryCall`): every call a vendor billed is charged exactly once, priced
+/// against the model that billed it (plans 50-26 to 50-30 together).
+///
+/// 1. A chain `[openai -> anthropic]` with `hop_on_refusal(true)`: OpenAI refuses through its
+///    typed `refusal` field after billing 1_000 / 40 tokens; Anthropic answers with 1_000 /
+///    2_000. The run succeeds, its usage and cost include the refused hop, and the ledger holds
+///    ONE row for the call whose per-model breakdown names both models at their own prices.
+/// 2. A single provider (Kimi, compat engine) answers an empty `length` completion after billing
+///    1_000 / 62_000 tokens. The run fails with a permanent `LlmFailure`, and the ledger holds
+///    one row carrying that call's price.
+async fn case_billed_failures_and_hopped_refusals_reach_the_ledger() {
+    // ---- 1. a hopped-past billed refusal is settled with the served call ----
+    let refusing = provider("openai");
+    let serving = provider("anthropic");
+    let table = ledger_price_table(&[
+        (refusing.model, 3_000_000_000, 15_000_000_000),
+        (serving.model, 2_500_000_000, 10_000_000_000),
+    ]);
+    let (refusing_vendor, refusing_port) = vendor_and_port(
+        &refusing,
+        200,
+        openai_refusal_body(refusing.model, 1_000, 40),
+    )
+    .await;
+    let (serving_vendor, serving_port) = vendor_and_port(
+        &serving,
+        200,
+        served_and_billed(
+            serving.wire,
+            success_body(serving.wire, "Paris"),
+            serving.model,
+            1_000,
+            2_000,
+        ),
+    )
+    .await;
+    let chain = FallbackLlmAdapter::from_steps(vec![
+        FallbackStep::new(refusing_port, refusing.model),
+        FallbackStep::new(serving_port, serving.model),
+    ])
+    .expect("a two-step chain must build")
+    .hop_on_refusal(true);
+    let llm = with_pricing(Arc::new(chain), &table);
+
+    let refused_usage = TokenUsage::new(1_000, 40);
+    let served_usage = TokenUsage::new(1_000, 2_000);
+    let c1 = table
+        .price(refusing.model, &refused_usage)
+        .expect("the refusing model is priced");
+    let c2 = table
+        .price(serving.model, &served_usage)
+        .expect("the serving model is priced");
+    let total: Cost = c1.checked_add(&c2).expect("one currency");
+
+    let ledger = Arc::new(InMemoryTreasuryLedger::new());
+    let paladin = agent_builder(Arc::clone(&llm), refusing.model)
+        .build()
+        .await
+        .unwrap_or_else(|error| panic!("the chain agent must build: {error}"));
+    let result = execution_service(llm)
+        .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall)
+        .execute(&paladin, MATRIX_QUERY)
+        .await
+        .unwrap_or_else(|error| panic!("the second hop must serve the run: {error}"));
+
+    assert_eq!(
+        refusing_vendor.bodies().len(),
+        1,
+        "the refusing vendor is called once"
+    );
+    assert_eq!(
+        serving_vendor.bodies().len(),
+        1,
+        "the serving vendor is called once"
+    );
+    assert_eq!(result.output, "Paris");
+    assert_eq!(
+        (
+            result.usage.prompt_tokens,
+            result.usage.completion_tokens,
+            result.usage.total_tokens
+        ),
+        (2_000, 2_040, 4_040),
+        "the run's usage includes the refused hop's billed tokens"
+    );
+    assert_eq!(
+        result.cost,
+        Some(total.clone()),
+        "and the run's cost its price"
+    );
+    let by_run = ledger_spend(&ledger, SpendGroupBy::Run).await;
+    assert_eq!(
+        by_run.values().copied().collect::<Vec<_>>(),
+        vec![(total.nanos(), 1)],
+        "one run, one row for the call (not one per hop), carrying both parts"
+    );
+    assert_eq!(
+        ledger_spend(&ledger, SpendGroupBy::Model).await,
+        std::collections::BTreeMap::from([
+            (refusing.model.to_string(), (c1.nanos(), 1)),
+            (serving.model.to_string(), (c2.nanos(), 1)),
+        ]),
+        "the row's breakdown names each model at its own price"
+    );
+
+    // ---- 2. a billed empty completion is settled although the run fails ----
+    let kimi = provider("kimi");
+    let table = ledger_price_table(&[(kimi.model, 600_000_000, 2_500_000_000)]);
+    let (_vendor, port) = vendor_and_port(
+        &kimi,
+        200,
+        openai_empty_length_body(kimi.model, 1_000, 62_000),
+    )
+    .await;
+    let llm = with_pricing(port, &table);
+    let billed = table
+        .price(kimi.model, &TokenUsage::new(1_000, 62_000))
+        .expect("the Kimi model is priced");
+
+    let ledger = Arc::new(InMemoryTreasuryLedger::new());
+    let paladin = agent_builder(Arc::clone(&llm), kimi.model)
+        .build()
+        .await
+        .unwrap_or_else(|error| panic!("the Kimi agent must build: {error}"));
+    let outcome = execution_service(llm)
+        .with_treasury_ledger(ledger.clone(), AgentLoopSettlement::EveryCall)
+        .execute(&paladin, MATRIX_QUERY)
+        .await;
+    match outcome {
+        Err(PaladinError::LlmFailure {
+            transience,
+            message,
+            ..
+        }) => {
+            assert_eq!(
+                transience,
+                Transience::Permanent,
+                "a billed empty completion is permanent; message was: {message}"
+            );
+            assert!(
+                message.contains("Empty completion"),
+                "the failure is the typed empty completion; message was: {message}"
+            );
+        }
+        Err(other) => panic!("expected a typed LlmFailure, got {other}"),
+        Ok(result) => panic!(
+            "an empty length completion was returned as an answer: {:?}",
+            result.output
+        ),
+    }
+    assert_eq!(
+        ledger_spend(&ledger, SpendGroupBy::Model).await,
+        std::collections::BTreeMap::from([(kimi.model.to_string(), (billed.nanos(), 1))]),
+        "the failed call is settled once, at its own model's price"
+    );
+    assert_eq!(
+        ledger_spend(&ledger, SpendGroupBy::Run).await.len(),
+        1,
+        "under the execution's own run"
+    );
+}
+
 // ---- the matrix --------------------------------------------------------------------------
 
 /// Emit one `#[tokio::test]` per (provider, case). Each test owns its own `MockVendor`, so cases
@@ -939,6 +1204,12 @@ async fn fallback_hop_gets_its_own_model() {
 #[tokio::test]
 async fn config_fallback_steps_send_each_hop_its_own_model() {
     case_config_fallback_steps_send_each_hop_its_own_model().await
+}
+
+// (g) billed failures and hopped refusals reach the treasury ledger (G-50-5a)
+#[tokio::test]
+async fn billed_failures_and_hopped_refusals_reach_the_ledger() {
+    case_billed_failures_and_hopped_refusals_reach_the_ledger().await
 }
 
 /// The provider list the macro invocations above cover, so a provider added to the registry but

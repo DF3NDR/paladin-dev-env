@@ -3,16 +3,16 @@ status: testing
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md, 50-19-SUMMARY.md, 50-20-SUMMARY.md, 50-21-SUMMARY.md, 50-22-SUMMARY.md, 50-23-SUMMARY.md, 50-24-SUMMARY.md, 50-25-SUMMARY.md, 50-26-SUMMARY.md, 50-27-SUMMARY.md, 50-28-SUMMARY.md, 50-29-SUMMARY.md, 50-30-SUMMARY.md, 50-31-SUMMARY.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-19T00:50:00Z
+updated: 2026-10-19T00:50:24Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 7
-name: Unseeded Kimi model id runs on the no-sampling fallback (G-50-5c, WINDOWS 76)
+number: 8
+name: Live usage-containment probe on record (G-50-5a)
 expected: |
-  A call to a Kimi id that is not seeded (anything other than kimi-k2.6 / kimi-k3) is ACCEPTED (200) and its request body carries no temperature, top_p, frequency_penalty or presence_penalty, exactly like the seeded Kimi rows; max_tokens is still sent. The Switching providers fallback row and note [f] describe this NotSent profile, not the old Fixed(1.0)/Fixed(0.95) one.
+  `live_vendor_smoke --usage` makes one call per seeded model and prints one containment verdict per line (reasoning inside completion, reasoning beside completion, indeterminate, no vendor total). The 2026-10-18 run in 50-USAGE-PROBE.md shows all three Grok models beside completion with the billed-cost cross-check consistent to the tick on each, and Kimi/DeepSeek/Qwen inside. The adapter semantics match those verdicts: Grok keeps ReasoningBesideCompletion (now labelled measured), no other provider flipped, and no new WINDOWS row was needed.
 awaiting: user response
 
 ## Tests
@@ -55,7 +55,7 @@ result: pass
 ### 7. Unseeded Kimi model id runs on the no-sampling fallback (G-50-5c, WINDOWS 76)
 expected: |
   A call to a Kimi id that is not seeded (anything other than kimi-k2.6 / kimi-k3) is ACCEPTED (200) and its request body carries no temperature, top_p, frequency_penalty or presence_penalty, exactly like the seeded Kimi rows; max_tokens is still sent. The Switching providers fallback row and note [f] describe this NotSent profile, not the old Fixed(1.0)/Fixed(0.95) one.
-result: [pending]
+result: pass
 
 ### 8. Live usage-containment probe on record (G-50-5a)
 expected: |
@@ -93,9 +93,9 @@ result: [pending]
 ## Summary
 
 total: 14
-passed: 5
+passed: 6
 issues: 1
-pending: 8
+pending: 7
 skipped: 0
 blocked: 0
 

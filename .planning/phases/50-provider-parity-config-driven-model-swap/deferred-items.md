@@ -27,3 +27,8 @@ Out-of-scope discoveries logged by executors, not fixed in the plan that found t
   lints table reports one failure, `enum_struct_variant_field_added` on `RunOutcome::Halted.cause`
   (Phase 42, ALLOW-03). It is not a Phase 50 item and is not registered here. CI's `semver` job
   compares against 0.9.0, so it does not see it; the 0.10.1 baseline is the D-27 register method.
+- Plan 50-32 gate run (2026-10-19): `make security` exits 2 in `make audit`. `cargo audit` reports 3 vulnerabilities in
+  `zip 3.0.0` (RUSTSEC-2026-0367, -0368, -0369: extraction symlink and SUID handling) plus the allowed unmaintained and
+  unsound warnings. Plan 50-32 changes no `Cargo.toml` or `Cargo.lock`, so none of these is caused by it; the advisories
+  are newly published against a transitive dependency. Not fixed here (scope boundary). Needs a dependency bump or a
+  reasoned `.cargo/audit.toml` allowlist entry in a plan that owns dependencies.

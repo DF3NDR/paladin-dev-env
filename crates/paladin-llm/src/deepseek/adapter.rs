@@ -913,22 +913,30 @@ impl LlmPort for DeepSeekAdapter {
                 ))
             })?;
 
-            let choice = api_response.choices.first().ok_or_else(|| {
-                LlmError::ProcessingError("DeepSeek response contained no choices".to_string())
-            })?;
-
-            let finish_reason = Self::map_finish_reason(choice.finish_reason.clone());
-
-            // G-50-5a: usage is mapped BEFORE the guard, so a call DeepSeek billed but the guard
-            // classifies as empty carries the same typed usage a success would have, on the
-            // served model (else the request model, A3-50-26). The counts are typed on the
-            // error now, so the detail text no longer embeds them (D-09: nothing parses text).
+            // G-50-5a: usage is mapped BEFORE the no-choices check and the guard, so a call
+            // DeepSeek billed but that is classified as empty carries the same typed usage a
+            // success would have, on the served model (else the request model, A3-50-26). The
+            // counts are typed on the error now, so the detail text no longer embeds them (D-09:
+            // nothing parses text).
             let (usage, vendor_total) = map_usage(api_response.usage);
             let billed_model = if api_response.model.is_empty() {
                 request.model.as_str()
             } else {
                 api_response.model.as_str()
             };
+
+            // WR-04: a body with no choices is an `EmptyCompletion` carrying the bill, as on the
+            // compat engine and Gemini -- not a `ProcessingError`, which dropped the usage and
+            // read as `Transience::Unknown` to the retry loop (a billed request re-sent).
+            let Some(choice) = api_response.choices.first() else {
+                return Err(bill(
+                    LlmError::empty_completion("Response contained no choices".to_string()),
+                    billed_model,
+                    Some(usage),
+                ));
+            };
+
+            let finish_reason = Self::map_finish_reason(choice.finish_reason.clone());
 
             // One rule for refusal, content filter, function call and empty text on any
             // finish reason (PARITY-05, D-11a); this adapter's private copy is gone. DeepSeek
@@ -2606,6 +2614,34 @@ mod tests {
                 Some(63_000),
                 "an absent vendor total bills prompt + completion"
             );
+        }
+
+        /// WR-04: a no-choices body DeepSeek billed is an `EmptyCompletion` carrying the bill
+        /// on the served model (as the compat engine and Gemini do), not a `ProcessingError`
+        /// that drops the usage and reads as `Transience::Unknown` to the retry loop.
+        #[tokio::test]
+        async fn deepseek_no_choices_body_is_a_billed_empty_completion() {
+            let err = generate_from(
+                json!({
+                    "id": "cmpl-1",
+                    "model": "deepseek-served-test",
+                    "choices": [],
+                    "usage": {"prompt_tokens": 40, "completion_tokens": 0, "total_tokens": 40}
+                })
+                .to_string(),
+            )
+            .await
+            .expect_err("a body with no choices is an error");
+            let LlmError::EmptyCompletion { detail, .. } = &err else {
+                panic!("expected EmptyCompletion, got {err:?}");
+            };
+            assert!(detail.contains("no choices"), "{detail}");
+            let billed = err
+                .billed_usage()
+                .expect("a billed no-choices body carries its usage");
+            assert_eq!(billed.model, "deepseek-served-test");
+            assert_eq!(billed.usage.total_tokens, 40);
+            assert_eq!(billed.cost, None, "pricing is the decorator's job");
         }
 
         #[tokio::test]

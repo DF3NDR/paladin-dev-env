@@ -80,6 +80,13 @@ and this project follows lockstep workspace versioning.
 
 ### Fixed
 
+- OpenAI and DeepSeek bill a buffered body with no `choices` (WR-04, Phase 50 iteration 2). They
+  used to fail it as `LlmError::ProcessingError` ("No choices in response" / "DeepSeek response
+  contained no choices"), which dropped the parsed `usage` and read as `Transience::Unknown`, so the
+  retry loop could re-send a request the vendor had already billed. It is now
+  `LlmError::EmptyCompletion("Response contained no choices")` carrying `billed_usage()` on the
+  served model (else the request model) -- the shape the shared engine and Gemini already return --
+  and is `Transience::Permanent` (`MIGRATION.md` 9.1 M-B-22).
 - Every adapter bills its empty and refused calls (G-50-5a, Phase 50 plan 50-27). OpenAI,
   DeepSeek, Anthropic, Gemini and the shared engine (Kimi, Qwen, Grok, Ollama, OpenAI-compatible)
   map usage before the shared guard and put it on `LlmError::EmptyCompletion` /
@@ -88,8 +95,9 @@ and this project follows lockstep workspace versioning.
   request model. The compat "no choices" and Gemini "no candidates" failures bill the usage they
   report. No usage object means no bill, never a zero one.
 - `PricingLlmAdapter` prices a billed error as it prices a success (G-50-5a, Phase 50 plans 50-27
-  and 50-30): `generate` against the bill's model, a stream's error item against the request's
-  model, and an error returned by `generate_stream` itself against its bill's model. It also prices
+  and 50-30): `generate` against the bill's model, a stream's error item against its bill's model
+  (the request's model only when the bill names none; WR-01), and an error returned by
+  `generate_stream` itself against its bill's model. It also prices
   every hopped-past bill a `FallbackLlmAdapter` recorded, against each hop's own model (see
   *Added*). An unpriced model keeps `cost: None` and its existing warn-once line.
 

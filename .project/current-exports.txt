@@ -1,4 +1,4 @@
-# Public API Surface - Generated 2026-10-16 17:44:18 UTC
+# Public API Surface - Generated 2026-10-19 21:57:26 UTC
 # This file tracks all publicly exported items from the paladin crate
 # Generated using cargo-public-api v0.52.0
 
@@ -7524,9 +7524,11 @@ pub mod paladin::core
 pub use paladin::core::base
 pub mod paladin::core::platform
 pub mod paladin::core::platform::container
+pub use paladin::core::platform::container::aegis
 pub use paladin::core::platform::container::allowance
 pub use paladin::core::platform::container::arsenal
 pub use paladin::core::platform::container::autonomous_config
+pub use paladin::core::platform::container::battlefield
 pub use paladin::core::platform::container::citadel
 pub use paladin::core::platform::container::citadel_error
 pub use paladin::core::platform::container::comment
@@ -7543,6 +7545,7 @@ pub use paladin::core::platform::container::herald
 pub use paladin::core::platform::container::herald_error
 pub use paladin::core::platform::container::job
 pub use paladin::core::platform::container::log
+pub use paladin::core::platform::container::node_error
 pub use paladin::core::platform::container::notification
 pub use paladin::core::platform::container::orchestration_context
 pub use paladin::core::platform::container::paladin
@@ -7558,11 +7561,13 @@ pub use paladin::core::platform::container::sanctum
 pub use paladin::core::platform::container::schedule
 pub use paladin::core::platform::container::task
 pub use paladin::core::platform::container::token_usage
+pub use paladin::core::platform::container::transience
 pub use paladin::core::platform::container::treasury_ledger
 pub use paladin::core::platform::container::trigger
 pub use paladin::core::platform::container::user
 pub use paladin::core::platform::container::user_group
 pub use paladin::core::platform::container::vision
+pub use paladin::core::platform::container::waypoint
 pub use paladin::core::platform::container::workflow
 pub mod paladin::core::platform::container::battalion
 pub use paladin::core::platform::container::battalion::<<paladin_core::platform::container::battalion::*>>
@@ -8245,6 +8250,7 @@ impl !core::panic::unwind_safe::RefUnwindSafe for paladin::infrastructure::telem
 impl !core::panic::unwind_safe::UnwindSafe for paladin::infrastructure::telemetry::persisting_sink::PersistingTraceSink
 pub fn paladin::infrastructure::telemetry::build_run_sink(&paladin::config::trace::TraceConfig, core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::trace_sink_port::TraceSink>>, core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::run_trace_port::RunTracePort>>) -> core::option::Option<alloc::sync::Arc<dyn paladin_ports::output::trace_sink_port::TraceSink>>
 pub mod paladin::prelude
+pub use paladin::prelude::Aegis
 pub use paladin::prelude::Armament
 pub use paladin::prelude::ArsenalError
 pub use paladin::prelude::ArsenalPort
@@ -8258,6 +8264,7 @@ pub use paladin::prelude::ChainOfCommand
 pub use paladin::prelude::CommanderBuilder
 pub use paladin::prelude::ConfinedVault
 pub use paladin::prelude::CouncilBuilder
+pub use paladin::prelude::ErrorHandlerSpec
 pub use paladin::prelude::Formation
 pub use paladin::prelude::GarrisonError
 pub use paladin::prelude::GarrisonPort
@@ -8268,6 +8275,9 @@ pub use paladin::prelude::LlmError
 pub use paladin::prelude::LlmPort
 pub use paladin::prelude::LlmRequest
 pub use paladin::prelude::LlmResponse
+pub use paladin::prelude::NodeError
+pub use paladin::prelude::NodeErrorSource
+pub use paladin::prelude::NodeId
 pub use paladin::prelude::Paladin
 pub use paladin::prelude::PaladinConfig
 pub use paladin::prelude::PaladinData
@@ -8277,7 +8287,11 @@ pub use paladin::prelude::PaladinStatus
 pub use paladin::prelude::Phalanx
 pub use paladin::prelude::SanctumError
 pub use paladin::prelude::SanctumPort
+pub use paladin::prelude::StateDelta
 pub use paladin::prelude::StopReason
+pub use paladin::prelude::TimeoutKind
+pub use paladin::prelude::TimeoutPolicy
+pub use paladin::prelude::Transience
 #[non_exhaustive] pub enum paladin::prelude::MiddlewareFlow
 pub paladin::prelude::MiddlewareFlow::Continue
 pub paladin::prelude::MiddlewareFlow::Fail(paladin_core::platform::container::paladin_error::PaladinError)
@@ -8610,4 +8624,4 @@ pub fn T::execute_structured<'life0, 'life1, 'life2, 'async_trait, D>(&'life0 se
 pub fn T::execute_structured_with_options<'life0, 'life1, 'life2, 'life3, 'async_trait, D>(&'life0 self, &'life1 paladin_core::platform::container::paladin::Paladin, &'life2 str, &'life3 paladin_core::platform::container::structured::StructuredOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<paladin_core::platform::container::structured::Structured<D>, paladin_core::platform::container::paladin_error::PaladinError>> + core::marker::Send + 'async_trait)>> where D: serde_core::de::DeserializeOwned + schemars::JsonSchema + core::marker::Send + 'async_trait, Self: core::marker::Sync + 'async_trait, 'life0: 'async_trait, 'life1: 'async_trait, 'life2: 'async_trait, 'life3: 'async_trait
 
 ## Summary
-Total public items: 4298
+Total public items: 4312

@@ -5,8 +5,10 @@
 #[allow(missing_docs)]
 pub mod container {
     // ── flat file modules from paladin-core ───────────────────────────────────
+    pub use paladin_core::platform::container::aegis;
     pub use paladin_core::platform::container::allowance;
     pub use paladin_core::platform::container::autonomous_config;
+    pub use paladin_core::platform::container::battlefield;
     pub use paladin_core::platform::container::citadel;
     pub use paladin_core::platform::container::citadel_error;
     pub use paladin_core::platform::container::comment;
@@ -23,6 +25,7 @@ pub mod container {
     pub use paladin_core::platform::container::herald_error;
     pub use paladin_core::platform::container::job;
     pub use paladin_core::platform::container::log;
+    pub use paladin_core::platform::container::node_error;
     pub use paladin_core::platform::container::notification;
     pub use paladin_core::platform::container::orchestration_context;
     pub use paladin_core::platform::container::paladin;
@@ -38,11 +41,13 @@ pub mod container {
     pub use paladin_core::platform::container::schedule;
     pub use paladin_core::platform::container::task;
     pub use paladin_core::platform::container::token_usage;
+    pub use paladin_core::platform::container::transience;
     pub use paladin_core::platform::container::treasury_ledger;
     pub use paladin_core::platform::container::trigger;
     pub use paladin_core::platform::container::user;
     pub use paladin_core::platform::container::user_group;
     pub use paladin_core::platform::container::vision;
+    pub use paladin_core::platform::container::waypoint;
     pub use paladin_core::platform::container::workflow;
 
     // ── directory modules from paladin-core ──────────────────────────────────

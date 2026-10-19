@@ -47,12 +47,17 @@ use uuid::Uuid;
 use paladin::application::services::battalion::phalanx_service::PhalanxExecutionService;
 use paladin::application::services::paladin::paladin_execution_service::PaladinExecutionService;
 use paladin::core::base::entity::Entity;
+use paladin::core::platform::container::aegis::{Aegis, ErrorHandlerSpec, TimeoutPolicy};
 use paladin::core::platform::container::arsenal::{
     Armament, ArmamentCall, ArmamentResult, ArsenalError,
 };
 use paladin::core::platform::container::battalion::{BattalionConfig, BattalionError};
+use paladin::core::platform::container::battlefield::StateDelta;
+use paladin::core::platform::container::node_error::{NodeError, NodeErrorSource, TimeoutKind};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
 use paladin::core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+use paladin::core::platform::container::transience::Transience;
+use paladin::core::platform::container::waypoint::NodeId;
 use paladin::infrastructure::adapters::arsenal::mcp_protocol::MCPClient;
 use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use paladin::prelude::{
@@ -446,6 +451,67 @@ async fn phase_50_surface(llm: Arc<dyn LlmPort>) {
         .with_model_overrides(BTreeMap::new());
     anthropic.timeout_seconds = 1;
     let _adapter = AnthropicAdapter::new(anthropic);
+}
+
+// ---- Phase 50.1 (SURFACE-01, D-04) ----
+// The Aegis family is named through the `paladin` facade alone: a consumer needs no direct
+// dependency on the core crate for DR-1, DR-2, DR-8 or DR-9. `Aegis` is the one struct built with
+// `..Aegis::default()` -- that is the consumer's own shape (it sets two of four policies).
+
+/// DR-1 / DR-8: a Battalion configured with an Aegis whose `on_error` absorbs a failure and whose
+/// `timeout` bounds a run. `ErrorHandlerSpec` is `#[non_exhaustive]` but its variants are built
+/// by name.
+fn aegis_construction_pin(d: Duration) -> BattalionConfig {
+    BattalionConfig::new("n").with_aegis(Aegis {
+        on_error: Some(ErrorHandlerSpec::Absorb {
+            fallback_delta: StateDelta::new(),
+        }),
+        timeout: Some(TimeoutPolicy {
+            run_timeout: Some(d),
+            idle_timeout: None,
+        }),
+        ..Aegis::default()
+    })
+}
+
+/// DR-2 / DR-9: read every `node_errors` entry of a result. The vector is iterated, never
+/// indexed, so the empty case type-checks the same as a populated one. `NodeErrorSource` is
+/// `#[non_exhaustive]`, so the match keeps a wildcard arm.
+fn node_error_read_pin(result: &BattalionResult) -> Vec<(String, u32, Transience, String)> {
+    result
+        .node_errors
+        .iter()
+        .map(|e| {
+            let id: &NodeId = &e.node_id;
+            let attempt: u32 = e.attempt;
+            let transience: Transience = e.transience;
+            let detail = match &e.source {
+                NodeErrorSource::Timeout(kind) => {
+                    let kind: &TimeoutKind = kind;
+                    format!("{kind}")
+                }
+                NodeErrorSource::Paladin { message, .. }
+                | NodeErrorSource::Llm { message, .. }
+                | NodeErrorSource::Function { message } => message.clone(),
+                // `NodeErrorSource` is `#[non_exhaustive]`: a consumer match needs this arm.
+                _ => String::new(),
+            };
+            (id.as_str().to_string(), attempt, transience, detail)
+        })
+        .collect()
+}
+
+/// The prelude names and the module paths name ONE type each.
+fn prelude_aegis_names_agree() {
+    let _aegis: fn(paladin::prelude::Aegis) -> Aegis = |a| a;
+    let _handler: fn(paladin::prelude::ErrorHandlerSpec) -> ErrorHandlerSpec = |a| a;
+    let _timeout: fn(paladin::prelude::TimeoutPolicy) -> TimeoutPolicy = |a| a;
+    let _delta: fn(paladin::prelude::StateDelta) -> StateDelta = |a| a;
+    let _error: fn(paladin::prelude::NodeError) -> NodeError = |a| a;
+    let _source: fn(paladin::prelude::NodeErrorSource) -> NodeErrorSource = |a| a;
+    let _kind: fn(paladin::prelude::TimeoutKind) -> TimeoutKind = |a| a;
+    let _node_id: fn(paladin::prelude::NodeId) -> NodeId = |a| a;
+    let _transience: fn(paladin::prelude::Transience) -> Transience = |a| a;
 }
 
 #[test]

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The Aegis family through the `paladin` facade (SURFACE-01, D-01, D-02; Phase 50.1 plan 01).**
+  Five whole-module re-exports resolve at the same path as in the core crate:
+  `paladin::core::platform::container::aegis`, `paladin::core::platform::container::battlefield`,
+  `paladin::core::platform::container::node_error`, `paladin::core::platform::container::transience`
+  and `paladin::core::platform::container::waypoint`. `paladin::prelude` also names `Aegis`,
+  `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`, `NodeErrorSource`, `TimeoutKind`,
+  `NodeId` and `Transience`. A consumer no longer needs a direct core-crate dependency for the
+  MIGRATION.md section 9.8 rows DR-1, DR-2, DR-8 and DR-9. Purely additive; the consumer-surface
+  muster pins both forms.
 - **The bill of a billed-but-failed call, on the error (G-50-5a, PARITY-05; Phase 50 plans 50-25
   and 50-26).** `paladin_ports::output::llm_port::BilledUsage { model, usage, cost }`
   (`#[non_exhaustive]`; `BilledUsage::new(model, usage)`, `with_cost(cost)`), the constructors

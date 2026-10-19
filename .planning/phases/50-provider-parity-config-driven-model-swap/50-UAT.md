@@ -3,16 +3,16 @@ status: testing
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md, 50-19-SUMMARY.md, 50-20-SUMMARY.md, 50-21-SUMMARY.md, 50-22-SUMMARY.md, 50-23-SUMMARY.md, 50-24-SUMMARY.md, 50-25-SUMMARY.md, 50-26-SUMMARY.md, 50-27-SUMMARY.md, 50-28-SUMMARY.md, 50-29-SUMMARY.md, 50-30-SUMMARY.md, 50-31-SUMMARY.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-19T00:42:05Z
+updated: 2026-10-19T00:50:00Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 6
-name: OpenAI default model gpt-5.4-nano accepts the request (G-50-5b, WINDOWS 75)
+number: 7
+name: Unseeded Kimi model id runs on the no-sampling fallback (G-50-5c, WINDOWS 76)
 expected: |
-  With OPENAI_API_KEY set, `cargo run -p paladin-llm --example live_vendor_smoke --features openai` prints PASS for openai against its new default model `gpt-5.4-nano` (no HTTP 400). The request body carries `max_completion_tokens` and no `max_tokens` key on `generate`, `generate_stream` and a `ResponseFormat::JsonSchema` call; `--dry-run` shows the same body without credentials.
+  A call to a Kimi id that is not seeded (anything other than kimi-k2.6 / kimi-k3) is ACCEPTED (200) and its request body carries no temperature, top_p, frequency_penalty or presence_penalty, exactly like the seeded Kimi rows; max_tokens is still sent. The Switching providers fallback row and note [f] describe this NotSent profile, not the old Fixed(1.0)/Fixed(0.95) one.
 awaiting: user response
 
 ## Tests
@@ -50,7 +50,7 @@ severity: major
 ### 6. OpenAI default model gpt-5.4-nano accepts the request (G-50-5b, WINDOWS 75)
 expected: |
   With OPENAI_API_KEY set, `cargo run -p paladin-llm --example live_vendor_smoke --features openai` prints PASS for openai against its new default model `gpt-5.4-nano` (no HTTP 400). The request body carries `max_completion_tokens` and no `max_tokens` key on `generate`, `generate_stream` and a `ResponseFormat::JsonSchema` call; `--dry-run` shows the same body without credentials.
-result: [pending]
+result: pass
 
 ### 7. Unseeded Kimi model id runs on the no-sampling fallback (G-50-5c, WINDOWS 76)
 expected: |
@@ -93,9 +93,9 @@ result: [pending]
 ## Summary
 
 total: 14
-passed: 4
+passed: 5
 issues: 1
-pending: 9
+pending: 8
 skipped: 0
 blocked: 0
 

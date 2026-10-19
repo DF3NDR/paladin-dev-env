@@ -26,12 +26,12 @@ use async_trait::async_trait;
 use paladin::application::services::battalion::campaign_service::CampaignExecutionService;
 use paladin::application::services::paladin::error::PaladinError;
 use paladin::core::base::entity::Entity;
+use paladin::core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use paladin::core::platform::container::battalion::BattalionConfig;
 use paladin::core::platform::container::battalion::campaign::{
     Campaign, CampaignEdge, EdgeCondition,
 };
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
-use paladin_core::platform::container::aegis::{Aegis, TimeoutPolicy};
 use paladin_ports::output::paladin_port::{PaladinPort, PaladinResult, StopReason};
 use std::sync::Arc;
 use std::time::Duration;

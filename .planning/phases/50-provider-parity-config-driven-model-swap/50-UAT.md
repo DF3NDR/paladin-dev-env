@@ -3,16 +3,16 @@ status: testing
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md, 50-19-SUMMARY.md, 50-20-SUMMARY.md, 50-21-SUMMARY.md, 50-22-SUMMARY.md, 50-23-SUMMARY.md, 50-24-SUMMARY.md, 50-25-SUMMARY.md, 50-26-SUMMARY.md, 50-27-SUMMARY.md, 50-28-SUMMARY.md, 50-29-SUMMARY.md, 50-30-SUMMARY.md, 50-31-SUMMARY.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-19T00:50:24Z
+updated: 2026-10-19T00:54:16Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 8
-name: Live usage-containment probe on record (G-50-5a)
+number: 9
+name: Vendor total is reconciled, never discarded (G-50-5a, WINDOWS 74)
 expected: |
-  `live_vendor_smoke --usage` makes one call per seeded model and prints one containment verdict per line (reasoning inside completion, reasoning beside completion, indeterminate, no vendor total). The 2026-10-18 run in 50-USAGE-PROBE.md shows all three Grok models beside completion with the billed-cost cross-check consistent to the tick on each, and Kimi/DeepSeek/Qwen inside. The adapter semantics match those verdicts: Grok keeps ReasoningBesideCompletion (now labelled measured), no other provider flipped, and no new WINDOWS row was needed.
+  On every adapter except Anthropic (which reports no total), the vendor's total_tokens / totalTokenCount is parsed and compared with prompt + completion. `total_tokens` stays `prompt + completion` (D-02). When they disagree, the response (and a stream's terminal chunk) carries `paladin.usage_unreconciled` metadata reading `total:vendor=N,mapped=M`, and one warn line per (provider, model) is logged at target `paladin::usage`. Gemini `toolUsePromptTokenCount` folds into prompt; Grok reasoning folds into completion; Anthropic vision cache read/write fold into prompt on both vision surfaces.
 awaiting: user response
 
 ## Tests
@@ -60,7 +60,7 @@ result: pass
 ### 8. Live usage-containment probe on record (G-50-5a)
 expected: |
   `live_vendor_smoke --usage` makes one call per seeded model and prints one containment verdict per line (reasoning inside completion, reasoning beside completion, indeterminate, no vendor total). The 2026-10-18 run in 50-USAGE-PROBE.md shows all three Grok models beside completion with the billed-cost cross-check consistent to the tick on each, and Kimi/DeepSeek/Qwen inside. The adapter semantics match those verdicts: Grok keeps ReasoningBesideCompletion (now labelled measured), no other provider flipped, and no new WINDOWS row was needed.
-result: [pending]
+result: pass
 
 ### 9. Vendor total is reconciled, never discarded (G-50-5a, WINDOWS 74)
 expected: |
@@ -93,9 +93,9 @@ result: [pending]
 ## Summary
 
 total: 14
-passed: 6
+passed: 7
 issues: 1
-pending: 7
+pending: 6
 skipped: 0
 blocked: 0
 

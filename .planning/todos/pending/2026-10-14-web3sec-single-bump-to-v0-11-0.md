@@ -63,3 +63,19 @@ Still open on the consumer side, so the todo stays pending until the consumer mo
 the bump itself, its own gates, and the choice among the drifted `new(..)` signatures
 (`2026-10-16-harmonise-llm-config-new-signatures.md`), which is a second break and not in v0.11.0
 unless the owner rides it on this bump.
+
+## Update 2026-10-19 (Phase 50.1 inserted)
+
+web3sec pre-measured the bump against the Phase 50 tip `21426037` (112 errors in 3 crates, all on
+registered rows, suite back at 2,592 / 0 / 2) and sent a fourth handoff (2026-10-18) asking for six
+consumer-surface fixes before the tag. It is filed as **Phase 50.1** (SURFACE-01..06), sequenced
+after Phase 50 and before Phase 51. Consequences for this todo:
+
+- The harmonisation of the nine `new(..)` signatures **does** ride this bump now (SURFACE-02, owner
+  decision 2026-10-18); the consumer meets it together with DR-1..DR-18 and Phase 51.
+- Step 2's spec gains SURFACE-04's four §9.8 additions (pre-`v0.10.0` P31/P32/P33 pointers, 429 /
+  Cadence, decorator `model_profile` forwarding, adapter-wide context window).
+- Step 3's reconciliation is pre-done upstream by SURFACE-03 (handoff Appendix B pinned, red proof
+  recorded); the consumer returns its real import inventory against that muster.
+- web3sec starts its adaptation when 50.1 seals, on a branch pinned to the sealed SHA, and reports
+  divergences before Phase 46 freezes the guide; the return list in step 5 is unchanged.

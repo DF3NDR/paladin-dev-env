@@ -53,3 +53,15 @@ second break on all nine published types and must be registered and migrated on 
   `make api-surface-update`, and pin the new shapes in `tests/consumer_surface_muster.rs`.
 - Natural home: the v0.11 migration-guide pass (Phase 46) if it can ride the same consumer
   bump, otherwise a later API-hygiene phase before v1.0.
+
+## Update 2026-10-19 (owner decision 2026-10-18, filed as Phase 50.1)
+
+The owner chose to ride this break on the single v0.11.0 consumer bump rather than defer it:
+it is **SURFACE-02** of the inserted **Phase 50.1 — Consumer-Surface Readiness for v0.11.0**
+(`.planning/phases/50.1-consumer-surface-readiness/50.1-HANDOFF-web3sec-consumer-surface.md`
+§3.2), sequenced after Phase 50 and before Phase 51 so that Phase 51 extends a settled
+constructor shape. The phase also adds `with_timeout_seconds` (and `with_base_url` where the chosen
+shape drops `base_url` from `new`) to `config_knob_builders!`, and amends MIGRATION §9.8 DR-12's
+"not part of v0.11.0" sentence. The shape itself is decision D-B at `/gsd-discuss-phase 50.1`;
+web3sec's and this todo's shared preference is `new(api_key, model)` + builders. The todo stays
+pending until SURFACE-02 seals, then moves to `completed/` with `resolves_phase: 50.1`.

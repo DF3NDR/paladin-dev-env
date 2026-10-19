@@ -616,6 +616,18 @@ Phases 30-33. The PRD's open operator question is answered: **full governance** 
   bounds and `max_tokens`; an ADR amending 0004 and an mdBook "Reasoning effort" page close it. The
   third consumer-driven phase before Phases 46-47; the handoff read `v0.10.1`, the feature ships in
   v0.11.0.
+- **Consumer-surface readiness (inserted 2026-10-19, Phase 50.1, after Phase 50 and before
+  Phase 51):** the six gaps web3sec's pre-measured v0.11.0 bump found (fourth handoff, 2026-10-18)
+  are closed before the tag: the Aegis family is nameable through the `paladin` facade so the
+  MIGRATION §9.8 Battalion recipes need no `paladin-ai-core` dependency; the nine `*Config` types
+  share one `new(..)` shape with `with_timeout_seconds` / `with_base_url` on the shared knob
+  builders (the 2026-10-16 harmonisation todo, resolved as a registered clean break by owner
+  decision 2026-10-18, so Phase 51 extends a settled shape); the consumer-surface muster pins what
+  the consumer actually uses, proven red first; §9.8 names the pre-`v0.10.0` rows, the lost
+  in-adapter 429 retry with the Cadence recipe, decorator `model_profile` forwarding and the
+  adapter-wide context-window consequence; a pacing-only composition path reaches the facade; and
+  the consumer's two production models are seeded within the seed rule (D-E). Rides the single
+  consumer bump; web3sec adapts once 50.1 seals and reports back before Phase 46 freezes the guide.
 - **RustFS (FUT-10):** replace the terminal quay.io MinIO pin in the dev/test stack, CI and the
   Kubernetes smoke test.
 - **Platform deviations:** scope `GET /runs*` per caller (`WINDOWS.md` row 32); SSE and webhook
@@ -2032,6 +2044,16 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
+
+---
+*Last updated: 2026-10-19 after **Phase 50.1: Consumer-Surface Readiness for v0.11.0** was inserted
+after the Phase 50 seal and before Phase 51, from the fourth web3sec handoff of 2026-10-18
+(`50.1-HANDOFF-web3sec-consumer-surface.md`, filed verbatim). SURFACE-01..06 minted (forty-first
+prefix); the handoff's six asks re-verified on `a1128fc1` — five hold as written, the sixth
+(seeding `claude-opus-4-8` / `deepseek-v4-pro` from listing rows) conflicts with the
+"measured end to end" seed rule and is raised as decision D-E beside the handoff's D-A..D-D.
+Phase 51 now depends on 50.1 for the harmonised `*Config::new` shape. Next:
+`/gsd-discuss-phase 50.1`.*
 
 ---
 *Last updated: 2026-10-19 after **Phase 50: Provider Parity & Configuration-Driven Model Swap**

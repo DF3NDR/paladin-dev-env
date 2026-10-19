@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 51
-current_phase_name: Adjustable Reasoning Effort
+current_phase: 50.1
+current_phase_name: Consumer-Surface Readiness for v0.11.0
 status: planning
 stopped_at: Completed 50-32-PLAN.md
-last_updated: "2026-10-19T16:41:15.773Z"
+last_updated: "2026-10-19T18:00:00.000Z"
 last_activity: 2026-10-19
-last_activity_desc: Phase 50 complete, transitioned to Phase 51
+last_activity_desc: Phase 50.1 inserted after Phase 50 from the fourth web3sec handoff; Phase 51 resequenced behind it
 progress:
-  total_phases: 12
+  total_phases: 13
   completed_phases: 11
   total_plans: 121
   completed_plans: 121
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-10-14 after Phase 48)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 50 — provider-parity-config-driven-model-swap
+**Current focus:** Phase 50.1 — consumer-surface-readiness (inserted 2026-10-19 after the Phase 50 seal, before Phase 51, from the fourth web3sec handoff; six SURFACE-* requirements: facade Aegis exports, harmonised `*Config::new` + `with_timeout_seconds`, muster coverage, four §9.8 consumer-guide gaps, pacing-only composition, two model seeds). Previously: Phase 50 — provider-parity-config-driven-model-swap
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
 2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
@@ -62,10 +62,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 51 — Adjustable Reasoning Effort
+Phase: 50.1 — Consumer-Surface Readiness for v0.11.0 (INSERTED after Phase 50, before Phase 51)
 Plan: Not started
-Status: Ready to plan
-Last activity: 2026-10-19 — Phase 50 complete, transitioned to Phase 51
+Status: Ready to discuss — handoff filed, SURFACE-01..06 minted, decisions D-A..D-E open
+Last activity: 2026-10-19 — Phase 50.1 inserted from the fourth web3sec handoff (`50.1-HANDOFF-web3sec-consumer-surface.md`); Phase 51 now runs after 50.1
 
 ## Performance Metrics
 
@@ -688,6 +688,7 @@ carry-forward) was disposed by Phases 5-16 and is preserved in this file's git h
 - Phase 49 added: Downstream Adoption of v0.10.1 (web3sec Consumer Bump) — Paladin's only consumer moves from pin 35fd839 onto the v0.10.1 tag in one coordinated step (Milestone 13 §5, no shims); B-1/B-2/B-3 adopted consumer-side with the D-2 token-usage mapping decided; Paladin gains a compile-only consumer-surface muster and a MIGRATION.md consumer note (ADOPT-01..05 minted, from the web3sec handoff filed as 49-HANDOFF-web3sec.md); **sequenced before Phases 46-47**, the first of a series of consumer-driven phases (owner decision 2026-10-14)
 - Phase 50 added: Provider Parity & Configuration-Driven Model Swap — any agent movable between the nine LLM providers by config only, or an early build error naming provider/model/parameter: OpenAI empty-user-message defect fixed first, parameter support per provider and per model (ADR amending 0004), config-driven provider construction as a library API with all nine adapter/config pairs on the facade, dated per-model profile registry feeding Commissary, response/error parity (empty output, typed refusal, usage cap, cache-write, reasoning text, stop sequences), per-step fallback models, nine-adapter conformance + live smoke + mdBook "Switching providers" page (PARITY-01..08 minted, from the second web3sec handoff filed as 50-HANDOFF-web3sec-parity.md; D-1..D-4 settled at discuss); **sequenced after Phase 49 and before Phases 46-47** (owner decision 2026-10-14)
 - Phase 51 added: Adjustable Reasoning Effort — a provider-neutral `ReasoningEffort` on `LlmRequest`, `PaladinData`, the YAML agent definition and `llm.<provider>` config (request → agent → provider → vendor default), translated exactly to each vendor's native wire form or refused before the HTTP call with `LlmError::UnsupportedParameter`; compile-enforced `ReasoningWire` per compat preset, model-aware mapping in the native adapters, levels from Phase 50's model-profile registry, Kimi silent-no-op regression test, requested/effective effort on the response and trace stream, `Budget(n)` bounds, live per-vendor invalid-effort probes, ADR amending 0004, mdBook "Reasoning effort" page (REASON-01..07 minted, fortieth prefix; source `51-HANDOFF-web3sec-reasoning-effort.md`; runs after 50, before 46-47; ships in v0.11.0)
+- Phase 50.1 inserted after Phase 50: Consumer-Surface Readiness for v0.11.0 — the Aegis family (`Aegis`, `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`, `NodeErrorSource`, `TimeoutKind`, `NodeId`, `Transience`) on the facade so §9.8 DR-1/2/8/9 compile without `paladin-ai-core`; one `*Config::new(..)` shape plus `with_timeout_seconds` / `with_base_url` on the shared knob builders as a registered clean break (resolves the 2026-10-16 harmonisation todo by owner decision 2026-10-18); the consumer-surface muster extended to handoff Appendix B with a red proof; four MIGRATION §9.8 gaps (pre-`v0.10.0` P31/P32/P33 pointers, lost in-adapter 429 retry + Cadence recipe, decorator `model_profile` forwarding, adapter-wide context window following the seeded default); a facade pacing-only path; `claude-opus-4-8` / `deepseek-v4-pro` seeds under the seed rule (D-E: listing-only evidence conflicts with `seeded.rs`'s measured-end-to-end rule — probe re-run, listing tier, or decline). SURFACE-01..06 minted, forty-first prefix; source `50.1-HANDOFF-web3sec-consumer-surface.md`; runs after 50, before 51, because 51 extends the same nine `*Config` types (owner decision 2026-10-18, filed 2026-10-19)
 
 ## Deferred Items
 
@@ -801,8 +802,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-19T15:51:19.812Z
-**Stopped at:** Completed 50-32-PLAN.md
+**Last session:** 2026-10-19T18:00:00.000Z
+**Stopped at:** Phase 50.1 inserted and filed (handoff, ROADMAP, REQUIREMENTS, STATE, PROJECT, todos); not yet discussed or planned
 **Resume file:** None
 
 ## Operator Next Steps
@@ -843,7 +844,23 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
   0.23.46 in 9b5fa65d); unsafe-libyaml's unmaintained advisory is register row 12 (12c6a5fa).
   ROADMAP row 48 reads 9/9 Complete; ENTITY-01..05 Complete.
 
-- **Next:** `/clear` then `/gsd-discuss-phase 46` (no `46-CONTEXT.md` yet) or `/gsd-plan-phase 46`.
+- **Phase 50.1 (Consumer-Surface Readiness for v0.11.0) inserted 2026-10-19 after Phase 50, before
+  Phase 51:** the fourth web3sec handoff (dated 2026-10-18, pre-measured bump against `21426037`:
+  112 errors / 3 crates, all on registered rows, suite back at 2,592 / 0 / 2) is filed verbatim as
+  `phases/50.1-consumer-surface-readiness/50.1-HANDOFF-web3sec-consumer-surface.md`; SURFACE-01..06
+  minted; ROADMAP carries the phase with a verified ground-truth block (five of the six asks hold
+  exactly as written on `a1128fc1`; SURFACE-06 as asked conflicts with the `registry/seeded.rs`
+  "measured end to end" rule, raised as **D-E**). Open decisions for discuss: **D-A** whole modules
+  or selected items on the facade; **D-B** `new(api_key, model)` + builders (web3sec's and the
+  todo's preference) or a shared builder; **D-C** a dedicated CI step for the muster (it is already
+  compiled by `make check`/`lint` and CI's all-targets steps); **D-D** SURFACE-05/06 in-phase or
+  deferred; **D-E** seed via probe re-run on the operator's keys, a listing-only tier, or decline
+  with a `model_overrides` recipe. Phase 51's "Depends on" now names 50.1.
+
+- **Next:** `/clear` then `/gsd-discuss-phase 50.1` (no `50.1-CONTEXT.md` yet), then
+  `/gsd-plan-phase 50.1`; Phase 51 follows and plans against the harmonised `*Config::new` shape.
+
+- *(superseded 2026-10-19 by the Phase 50.1 insertion)* **Next:** `/clear` then `/gsd-discuss-phase 46` (no `46-CONTEXT.md` yet) or `/gsd-plan-phase 46`.
   Phase 46's migration guide (CURR-23) must carry Phase 48's `MIGRATION.md` §9.2 rows; Phase 47
   follows.
 

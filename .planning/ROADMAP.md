@@ -103,7 +103,7 @@ frozen at 311 lines that two milestones made invisible.
 | **Provider Expansion** | 17 | ✅ **Shipped v0.8.0 (2026-08-24)** — [archive](milestones/v0.8.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-15 per *Roadmap Extension Protocol* item 1. |
 | **Security Tooling** | 18-21 | ✅ **Shipped v0.9.0 (2026-09-01)** — [archive](milestones/v0.9.0-ROADMAP.md) | Forward work — not ingest-derived. Added 2026-08-24 per *Roadmap Extension Protocol* item 1, closing the Rust-SAST gap the v0.8.0 milestone audit left as its one genuinely open item; extended 2026-08-25 with Phases 19-21 (publish credential, publish operations, release artifacts). |
 | **Durable Agent Execution Runtime** | 22-37.1 | ✅ **Shipped v0.10.0 (2026-09-23)** — [archive](milestones/v0.10.0-ROADMAP.md). Released to crates.io as `0.10.1` (tag `v0.10.1` on merge commit `f7dae267`, 2026-09-21) after the `v0.10.0` tag published 3 of 12 crates — see MILESTONES.md. Phases 22-29 complete 2026-09-10; Phases 30-33 added 2026-09-14, complete 2026-09-16; Phases 34-37 added 2026-09-17, Phase 36.1 and 37.1 inserted; all 19 phases complete 2026-09-23 | Forward work — not ingest-derived. Added 2026-09-01, sourced from the user-authored design corpus in `.project/v0.10.0/` (program overview `00`, epic PRDs `01`-`07`, traceability matrix `08`) rather than the historical `.project/Milestone_*` ingest. **Extended 2026-09-14** with Phases 30-33 (Token Economy — Commissary anchoring, lossless accounting, primitive unification, Commissary adoption), sourced from `.project/Milestone_13-Token-Economy/` (overview + Epics 1-4). Milestone 14 (Treasurer, `.project/Milestone_14-Treasurer/`) is reserved, not roadmapped. **Extended 2026-09-17** with Phases 34-37 (Release Readiness — documentation currency audit, mdBook currency, rustdoc zero-warning bar & examples currency, the crate release) — operator-instructed pre-tag work, not corpus-sourced. |
-| **Treasurer Spend Governance** | 38-50 | 🚧 **In progress** | Forward work — not ingest-derived. Sourced from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD `prd-treasurer-spend-governance.md`, R1-R6), the supporting scope in PROJECT.md *Current Milestone*, and `.planning/research/SUMMARY.md` (2026-09-24). Operator-confirmed full governance (per-tenant + per-API-key), 2026-09-24. Extended 2026-10-12 with Phase 48 (Base Entity Rename) and 2026-10-14 with Phase 49 (Downstream Adoption of v0.10.1, from the web3sec handoff), both sequenced before Phases 46-47; extended again 2026-10-14 with Phase 50 (Provider Parity & Configuration-Driven Model Swap, from the second web3sec handoff), also sequenced before Phases 46-47. |
+| **Treasurer Spend Governance** | 38-50 | 🚧 **In progress** | Forward work — not ingest-derived. Sourced from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD `prd-treasurer-spend-governance.md`, R1-R6), the supporting scope in PROJECT.md *Current Milestone*, and `.planning/research/SUMMARY.md` (2026-09-24). Operator-confirmed full governance (per-tenant + per-API-key), 2026-09-24. Extended 2026-10-12 with Phase 48 (Base Entity Rename) and 2026-10-14 with Phase 49 (Downstream Adoption of v0.10.1, from the web3sec handoff), both sequenced before Phases 46-47; extended again 2026-10-14 with Phase 50 (Provider Parity & Configuration-Driven Model Swap, from the second web3sec handoff), also sequenced before Phases 46-47; extended again 2026-10-19 with Phase 50.1 (Consumer-Surface Readiness for v0.11.0, inserted from the fourth web3sec handoff), sequenced after Phase 50 and before Phase 51. |
 
 **The ingest is complete.** All 263 documents in `.project/` are covered — 199 classified across
 five runs and 64 `tasks-*.md` measured deterministically by `intel/task-completion-state.md`. There
@@ -240,7 +240,8 @@ from `.project/Milestone_14-Treasurer/` (overview + Epic 1 PRD R1-R6) and
 - [x] **Phase 48: Base Entity Rename** - Rename the base-layer entity wrapper `Node<T>` → `Entity<T>` (payload field `node` → `data`; clean break under a Phase-48-only X-03 supersession, or a one-release deprecated alias — decided at discuss; serde alias for persisted JSON), disposition the unused base-layer items, and reserve "node" for the graph sense only — **executes before Phases 46 and 47** (added 2026-10-12, after Phase 44 sealed) (completed 2026-10-14)
 - [x] **Phase 49: Downstream Adoption of v0.10.1 (web3sec Consumer Bump)** - Scope cut to its Paladin-side half on 2026-10-14 (owner decision): the compile-only consumer-surface muster and the `MIGRATION.md` library-consumer note landed (plans 49-01..03); the consumer bump itself (ADOPT-01..03) is superseded by one web3sec move straight to `v0.11.0` after Phases 50 and 51 (todo `2026-10-14-web3sec-single-bump-to-v0-11-0.md`) (completed 2026-10-14)
 - [x] **Phase 50: Provider Parity & Configuration-Driven Model Swap** - Make any Paladin agent movable between the nine LLM providers by changing configuration only, or fail the build early naming the provider, model and parameter: fix the OpenAI adapter's empty user message, model parameter support per provider *and* per model (ADR amending 0004), config-driven provider construction through a public library API with all nine adapter/config pairs exported from the facade, a dated per-model profile registry feeding Commissary, response/error parity (empty output, typed refusal, usage cap, cache-write, reasoning text, stop sequences), per-step models in fallback chains, and all nine adapters in the conformance suite, live smoke and an mdBook "Switching providers" page — **executes after Phase 49, before Phases 46 and 47** (added 2026-10-14 from the second web3sec handoff) (completed 2026-10-19)
-- [ ] **Phase 51: Adjustable Reasoning Effort** - One provider-neutral `ReasoningEffort` setting per request, per agent and per provider that every adapter translates exactly to its vendor's native wire form (compile-enforced per compat preset, model-aware in the native adapters, levels read from Phase 50's model-profile registry) or refuses loudly before the HTTP call with a new additive `LlmError::UnsupportedParameter`; a silent-no-op regression test for Kimi, requested and effective effort on the response and trace stream, `Budget(n)` validated against vendor bounds and `max_tokens`, live per-vendor proof that the effort field is parsed, an ADR amending 0004 and an mdBook "Reasoning effort" page — **executes after Phase 50, before Phases 46 and 47** (added 2026-10-14 from the third web3sec handoff; the handoff read `v0.10.1`, the feature ships in v0.11.0)
+- [ ] **Phase 50.1: Consumer-Surface Readiness for v0.11.0 (INSERTED)** - Close the six consumer-surface gaps web3sec's pre-measured bump found before the tag: the Aegis family (`Aegis`, `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`, `NodeErrorSource`, `TimeoutKind`, `NodeId`, `Transience`) nameable through the `paladin` facade so MIGRATION §9.8 DR-1/2/8/9 compile without `paladin-ai-core`; one `new(..)` shape across the nine `*Config` types plus `with_timeout_seconds` (and `with_base_url`) on the shared knob builders as a registered clean break; the consumer-surface muster extended to everything the consumer actually uses with a red proof; four §9.8 gaps closed (pre-`v0.10.0` P31/P32/P33 pointers, the loss of in-adapter 429 retry and the Cadence recipe, decorator `model_profile` forwarding, the adapter-wide context window following the seeded default model); a facade-reachable pacing-only composition path; and seeds for `claude-opus-4-8` / `deepseek-v4-pro` under the seed rule — **executes after Phase 50, before Phase 51** (inserted 2026-10-19 from the fourth web3sec handoff; owner decision 2026-10-18)
+- [ ] **Phase 51: Adjustable Reasoning Effort** - One provider-neutral `ReasoningEffort` setting per request, per agent and per provider that every adapter translates exactly to its vendor's native wire form (compile-enforced per compat preset, model-aware in the native adapters, levels read from Phase 50's model-profile registry) or refuses loudly before the HTTP call with a new additive `LlmError::UnsupportedParameter`; a silent-no-op regression test for Kimi, requested and effective effort on the response and trace stream, `Budget(n)` validated against vendor bounds and `max_tokens`, live per-vendor proof that the effort field is parsed, an ADR amending 0004 and an mdBook "Reasoning effort" page — **executes after Phase 50.1, before Phases 46 and 47** (added 2026-10-14 from the third web3sec handoff; resequenced behind the inserted Phase 50.1 on 2026-10-19 so it plans against the harmonised `*Config::new` shape; the handoff read `v0.10.1`, the feature ships in v0.11.0)
 
 ## Phase Details
 
@@ -734,7 +735,7 @@ format) is MEDIUM-confidence only; the phase's first work item should close this
 milestone's validation/tech-debt bookkeeping is current.
 **Depends on**: Phase 45 and Phase 48 (documents everything the milestone shipped, so it runs
 last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48's
-`Node<T>` → `Entity<T>` rows — added 2026-10-12), and Phase 49 (the consumer-surface muster and its `MIGRATION.md` consumer note are inputs to the v0.10 → v0.11 migration guide — added 2026-10-14), and Phase 50 (the ADR amending 0004, the facade re-exports, the typed refusal and the "Switching providers" mdBook page are inputs to the docs pass and the migration guide — added 2026-10-14), and Phase 51 (the ADR amending 0004 a second time, the `ReasoningEffort` public type, its MIGRATION §9.2 rows and the "Reasoning effort" mdBook page are inputs to the docs pass and the migration guide — added 2026-10-14)
+`Node<T>` → `Entity<T>` rows — added 2026-10-12), and Phase 49 (the consumer-surface muster and its `MIGRATION.md` consumer note are inputs to the v0.10 → v0.11 migration guide — added 2026-10-14), and Phase 50 (the ADR amending 0004, the facade re-exports, the typed refusal and the "Switching providers" mdBook page are inputs to the docs pass and the migration guide — added 2026-10-14), and Phase 51 (the ADR amending 0004 a second time, the `ReasoningEffort` public type, its MIGRATION §9.2 rows and the "Reasoning effort" mdBook page are inputs to the docs pass and the migration guide — added 2026-10-14), and Phase 50.1 (the §9.8 consumer-guide additions — pre-`v0.10.0` pointers, 429/Cadence, decorator forwarding, context-window consequence — the harmonised `*Config::new` §9.2/§9.8 rows and the facade Aegis exports are inputs to the v0.10 → v0.11 migration guide, as is web3sec's adaptation feedback after 50.1 seals — added 2026-10-19)
 **Requirements**: CURR-22, CURR-23, CURR-24, CURR-25
 **Success Criteria** (what must be TRUE):
 
@@ -757,7 +758,7 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 ### Phase 47: v0.11.0 Crate Release
 
 **Goal**: v0.11.0 ships to crates.io with every gate green.
-**Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release); Phase 49 (the consumer-surface muster is green before v0.11.0 is tagged — added 2026-10-14; the consumer bump itself was moved to a single post-release move to `v0.11.0`, scope cut 2026-10-14); Phase 50 (the provider-swap matrix, the `api-surface` refresh for the nine facade exports and their CHANGELOG/MIGRATION entries land before the tag — added 2026-10-14); Phase 51 (the `ReasoningEffort` type, the `UnsupportedParameter` variant and the per-provider effort config key are additive public surface that the `api-surface` refresh and the CHANGELOG/MIGRATION entries must carry before the tag — added 2026-10-14)
+**Depends on**: Phase 46 (needs the milestone's docs/hygiene current before release); Phase 49 (the consumer-surface muster is green before v0.11.0 is tagged — added 2026-10-14; the consumer bump itself was moved to a single post-release move to `v0.11.0`, scope cut 2026-10-14); Phase 50 (the provider-swap matrix, the `api-surface` refresh for the nine facade exports and their CHANGELOG/MIGRATION entries land before the tag — added 2026-10-14); Phase 51 (the `ReasoningEffort` type, the `UnsupportedParameter` variant and the per-provider effort config key are additive public surface that the `api-surface` refresh and the CHANGELOG/MIGRATION entries must carry before the tag — added 2026-10-14); Phase 50.1 (the harmonised `*Config::new` break, the facade Aegis exports and the extended muster land and the `api-surface` baseline is refreshed before the tag — added 2026-10-19)
 **Requirements**: SHIP-07
 **Success Criteria** (what must be TRUE):
 
@@ -801,7 +802,8 @@ last among feature work; the v0.10 → v0.11 migration guide must carry Phase 48
 | 48. Base Entity Rename (runs after 44, before 46-47) | v0.11.0 | 9/9 | Complete    | 2026-10-14 |
 | 49. Downstream Adoption of v0.10.1 (web3sec Consumer Bump) (runs after 48, before 46-47) | v0.11.0 | 3/3 | Complete    | 2026-10-14 |
 | 50. Provider Parity & Configuration-Driven Model Swap (runs after 49, before 46-47) | v0.11.0 | 32/32 | Complete    | 2026-10-19 |
-| 51. Adjustable Reasoning Effort (runs after 50, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
+| 50.1 Consumer-Surface Readiness for v0.11.0 (INSERTED; runs after 50, before 51) | v0.11.0 | 0/TBD | Not started | - |
+| 51. Adjustable Reasoning Effort (runs after 50.1, before 46-47) | v0.11.0 | 0/TBD | Not started | - |
 
 **v0.8.0 shipped 2026-08-24:** 14 phases, 149 plans, 65/65 requirements, 1,014 commits
 (`be2ff05..48ac11a5`). Audit status `tech_debt` — no blockers; see
@@ -1483,6 +1485,142 @@ Plans:
 
 - [x] 50-32-PLAN.md — review WR-03: a hopped-past fallback bill is priced (pricer installed by `PricingLlmAdapter` before it delegates) and counted into `ATTEMPT_SPEND` at its hop, so an attempt cut off mid-call by the engine's deadline or idle bound is charged for it; `HoppedBills::install_pricer` / `count_and_take`, exactly-once fold; paused-clock drop tests (buffered, streamed, real engine); spend_scope docs and MIGRATION DR-18 limit text replaced; WR-03 WINDOWS row opened and closed
 
+### Phase 50.1: Consumer-Surface Readiness for v0.11.0 (INSERTED)
+
+**Goal**: A library consumer that moves onto `v0.11.0` can follow every recipe in `MIGRATION.md`
+§9.8 "Library consumers" through the `paladin` facade alone, construct any of the nine `*Config`
+types with one `new(..)` shape and set every knob (the timeout included) through a `with_*`
+builder, and meet no silent behaviour change the guide does not name. web3sec measured the bump
+ahead of time against the Phase 50 tip `21426037` (handoff Appendix A): 112 compile errors in 3
+of its 12 crates, every one mapping to a registered row, fixed mechanically, suite back at its
+2,592 / 0 / 2 baseline. The same exercise found six gaps that cost every consumer: the Aegis
+family (`Aegis`, `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`,
+`NodeErrorSource`, `TimeoutKind`, `NodeId`, `Transience`) is not nameable through the facade, so
+DR-1 / DR-2 / DR-8 / DR-9 force a direct `paladin-ai-core` dependency (28 of the 112 errors plus
+the Aegis construction sites); the nine `*Config::new(..)` signatures still differ per provider
+and `with_timeout_seconds` exists only on `LlmProviderConfig`, so a `#[non_exhaustive]` config's
+timeout is set by assigning a public field; the consumer-surface muster pins almost none of what
+actually broke; §9.8 omits the pre-`v0.10.0` §9.2 rows (31 of the 112 errors), the loss of
+in-adapter 429 retry since Phase 43 (a direct-adapter consumer has **no pacing** unless it
+composes Cadence), the decorator `model_profile` forwarding duty and the adapter-wide context
+window following the seeded default model (Anthropic 200,000 → 1,000,000, DeepSeek 64,000 →
+1,048,576, so `Commissary::from_port` rations 5× / 16× more); `compose_llm` needs a `PriceTable`
+just to install Cadence; and the consumer's production models run on the unprofiled fallback. The
+phase closes all six before the tag, where each is one additive export, one registered break, a
+test, a docs row or a seed, rather than a v0.11.1 or a second consumer break afterwards.
+**Depends on**: Phase 50 (sealed 2026-10-19: the nine `#[non_exhaustive]` `*Config` types and the
+`config_knob_builders!` macro SURFACE-02 extends — PARITY-03; the dated seed tables and the
+`50-SEED-PROBE.md` evidence SURFACE-06 reads — PARITY-04; the §9.8 rows DR-12..DR-18 SURFACE-04
+extends) and Phase 49 (the muster and `make check-consumer-surface` SURFACE-03 extends — ADOPT-04).
+**Sequenced after Phase 50 and before Phase 51** (owner decision 2026-10-18): SURFACE-02 changes
+the `new(..)` shape of the nine types Phase 51 extends with a `reasoning_effort` field, so Phase
+51 plans against the settled shape instead of migrating it twice; and it rides the single
+coordinated v0.11.0 consumer bump (todo `2026-10-14-web3sec-single-bump-to-v0-11-0.md`), so
+web3sec meets every change here in the same move as DR-1..DR-18. The harmonisation todo of
+2026-10-16 (`2026-10-16-harmonise-llm-config-new-signatures.md`), which Phase 50 deferred to
+"Phase 46 if it can ride the same bump, otherwise a later API-hygiene phase", is resolved here by
+owner decision; MIGRATION §9.8 DR-12's sentence that harmonisation is "not part of v0.11.0" is
+amended by this phase.
+**Requirements**: SURFACE-01, SURFACE-02, SURFACE-03, SURFACE-04, SURFACE-05, SURFACE-06
+**UI hint**: no
+**Source**: the fourth web3sec handoff of 2026-10-18, filed verbatim as
+`50.1-HANDOFF-web3sec-consumer-surface.md` — a pre-measurement of the consumer bump against the
+Phase 50 tip `21426037` plus a read of `8488f11e`. Its §4 decisions **D-A** (whole `aegis` /
+`node_error` modules or selected items on the facade), **D-B** (constructor shape:
+`new(api_key, model)` + `with_base_url` / `with_timeout_seconds` / the existing knobs, or a shared
+`ProviderConfig` builder; endpoint-only providers keep their endpoint argument), **D-C** (whether
+`make check-consumer-surface` joins `check-gates` or CI) and **D-D** (SURFACE-05 / SURFACE-06 in
+this phase or deferred) are settled at discuss, together with a fifth the filing raised, **D-E**
+(below). The handoff's §5 shape — three plans: additive exports + pacing path; the registered
+constructor break; docs + muster pins + seeds — is the starting point for planning, not a
+constraint.
+**Ground truth** (verified 2026-10-19 on `a1128fc1`, the Phase 50 seal; the handoff's
+`8488f11e` line numbers still hold where re-read):
+**SURFACE-01** — `src/core/platform/mod.rs` declares the local `pub mod container` with a
+hand-picked list of `paladin_core::platform::container` modules and omits `aegis`, `node_error`,
+`battlefield`, `waypoint` and `transience`; no other `pub use` under `src/` re-exports any of their
+items. The types exist at `aegis.rs:43` (`Aegis`), `:243` (`TimeoutPolicy`), `:262`
+(`ErrorHandlerSpec`), `battlefield.rs:222` (`StateDelta`), `node_error.rs:40` / `:72` / `:152`
+(`TimeoutKind`, `NodeErrorSource`, `NodeError`), `transience.rs:32` (`Transience`) and
+`waypoint.rs:295` (`NodeId`). **SURFACE-02** — `config_knob_builders!`
+(`crates/paladin-llm/src/registry/mod.rs:158`) generates `with_max_tokens`, `with_max_retries`,
+`with_context_window` and `with_model_overrides` only; `with_timeout_seconds` exists on
+`LlmProviderConfig` alone (`config/llm.rs`); the nine `new(..)` signatures are as the todo tabulates.
+**SURFACE-03** — of the twenty-one items in handoff Appendix B, `tests/consumer_surface_muster.rs`
+mentions only `FinishReason` (as a value, never an exhaustive match) and `ArsenalError` (as a
+return type); the other nineteen have zero hits. Neither `FinishReason`
+(`crates/paladin-ports/src/output/llm_port.rs:1493`) nor `ArsenalError`
+(`paladin-core/.../arsenal/core.rs:138`) is `#[non_exhaustive]`. `make check-consumer-surface` is
+deliberately outside `check-gates` (Makefile: the gate members are one-second offline scripts, this
+target compiles the facade) — but the Makefile also records that `make check`, `make lint`, and
+CI's clippy, all-targets check and integration-test steps already compile or run the muster, which
+bounds D-C to "is a dedicated CI step worth naming". **SURFACE-04** — §9.8 "Library consumers"
+(`MIGRATION.md` from `## 9.8`) now carries DR-1..DR-18 (DR-18 was added by plans 50-29/50-30 after
+the handoff's read); it has no mention of 429, Cadence, `model_profile` forwarding,
+`max_context_tokens` or the P31 / P32 / P33 rows (its one pre-`v0.10.1` note is the
+`TokenUsage::from_total` pitfall). The adapter window change is real: `anthropic/adapter.rs:1521`
+and `:1561` assert `max_context_tokens == Some(1_000_000)` from the seed, `deepseek/adapter.rs:451`
+follows the same `context_window` → seed → fallback chain, and the knob macro's own rustdoc states
+that a 429 "is never retried here, because the Cadence decorator owns waiting". **SURFACE-05** —
+`src/infrastructure/cadence.rs:170` `compose_llm(llm, &price_table, cadence)` is the only facade
+composition path; `paladin_llm::cadence::with_cadence` is not re-exported anywhere under `src/`.
+**SURFACE-06 — the ask conflicts with the seed rule as written, hence D-E.**
+`registry/seeded.rs` states "a model is listed only when it was measured end to end" and "a value
+with no evidence in that transcript is not written here", and its DeepSeek table says in so many
+words that `deepseek-v4-pro` "is listed but was not probed, so it is not seeded"; the Anthropic
+table likewise seeds only the one probed model and says the other listed ids "were not probed, so
+their sampling behaviour is unknown and they are not listed". `50-SEED-PROBE.md` holds listing
+rows for `claude-opus-4-8` (`max_input_tokens=1000000`, `max_tokens=128000`, effort
+`low..max`+`xhigh`) and `deepseek-v4-pro` (`context_window=1048576`, `max_output_tokens=393216`,
+effort `low/high/max`) but no sampling, stop or JSON probe for either. Seeding them from the
+listing alone would write a half-measured entry, which the rule forbids because a seeded entry
+*replaces* the fallback and every unmeasured field becomes a refusal. **D-E**, for the operator:
+(a) re-run the 50-04 probe on the operator's keys for exactly these two models (a 50-17-style
+human-action checkpoint) and seed from the new transcript; (b) extend the registry with a
+listing-only seed tier that carries window / output / reasoning facts and leaves the sampling
+fields at their fail-closed values, documented as such in ADR-0061; or (c) decline SURFACE-06 and
+let the consumer set `model_overrides` for its two models (recipe added to §9.8). The filing
+recommends (a) if a key run is cheap, otherwise (c); (b) changes a Phase 50 decision (D-05/D-08)
+and would need its own ADR note. `deepseek-v4-flash` is not seedable under any option (absent from
+DeepSeek's own listing; only `deepseek-v4-flash-0731` appears, in the Qwen listing), as the
+handoff itself says.
+**Success Criteria** (what must be TRUE):
+
+  1. The DR-1, DR-2, DR-8 and DR-9 recipes in MIGRATION §9.8 compile using only `paladin::`
+     paths; the muster pins a `with_aegis(Aegis { on_error: Some(ErrorHandlerSpec::Absorb { .. }),
+     timeout: Some(TimeoutPolicy { .. }), .. })` construction and a read of
+     `node_errors[i].{node_id, attempt, transience, source}` through the facade; the four §9.8 rows
+     name the import path; `make api-surface-update` and the CHANGELOG carry the additive exports.
+
+  2. All nine `*Config` types construct with the same `new(..)` shape (endpoint-only providers
+     excepted per the todo), every knob including the timeout is settable through a `with_*`
+     builder, `from_env()` is unchanged, the break is registered in
+     `.cargo/semver-checks-allowlist.toml`, MIGRATION §9.2 and a §9.8 DR row with DR-12's deferral
+     sentence amended, `make api-surface-update` is refreshed, every in-tree call site (examples,
+     `config::bridge`, the provider factory, tests) is migrated in the same commits, and the
+     `paladin-llm` doctests show the new shape.
+
+  3. Every item in handoff Appendix B is pinned in `tests/consumer_surface_muster.rs`, at least one
+     new pin was proven red before it went green (recorded as `50.1-MUSTER-RED-EVIDENCE.md`, the
+     Phase 49 pattern), the muster compiles at the seal, the `FinishReason` / `ArsenalError`
+     exhaustiveness question is answered one way (exhaustive match pinned, or `#[non_exhaustive]`
+     registered in §9.2), and D-C is recorded.
+
+  4. MIGRATION §9.8 "Library consumers" carries the pre-`v0.10.0` pointer list (P31, P32, P33), the
+     429 / Cadence behaviour row with the `build_cadence` / `compose_llm` (or the SURFACE-05 path)
+     recipe and the spend-cap `UsageLimitExceeded` note, the decorator `model_profile` forwarding
+     line, and the adapter-wide context-window consequence with its two remedies (`context_window`
+     or `Commissary::for_model`).
+
+  5. One doc test wraps an `Arc<dyn LlmPort>` in Cadence through a `paladin::` path with no
+     `PriceTable` (or D-D records the deferral).
+
+  6. `claude-opus-4-8` and `deepseek-v4-pro` resolve to seeded profiles with no
+     `paladin.unprofiled_model` for them, under the D-E option the operator chooses, with the seed
+     rule in `registry/seeded.rs` and ADR-0061 still true of the tree (or D-D / D-E record the
+     deferral and the §9.8 `model_overrides` recipe stands in).
+**Plans**: TBD
+
 ### Phase 51: Adjustable Reasoning Effort
 
 **Goal**: One provider-neutral, per-agent (and per-request) **reasoning-effort** setting that
@@ -1511,7 +1649,7 @@ policy this phase extends — PARITY-02; the `llm.<provider>` config-driven cons
 300 s reasoning-capable defaults the per-provider effort default rides on — PARITY-03; the dated
 per-model profile registry that holds each model's supported levels and budget bounds — PARITY-04;
 the reasoning-text and reasoning-token surfaces — PARITY-05; and per-hop models in fallback chains
-so each step resolves effort against its own model — PARITY-06; handoff §9). The handoff's
+so each step resolves effort against its own model — PARITY-06; handoff §9). **Also Phase 50.1** (inserted 2026-10-19): SURFACE-02 settles the one `new(..)` shape of the nine `*Config` types this phase extends with a `reasoning_effort` field, so plan against the 50.1 shapes; nothing in 50.1 touches `LlmRequest`, `ReasoningEffort` or `LlmError::UnsupportedParameter`. The handoff's
 "sooner" option — Plans 1-3 against adapter-wide supported sets, migrated to model profiles later —
 is declined: it costs a second pass over every preset. **Sequenced ahead of Phases 46 and 47**
 (owner decision 2026-10-14): the third consumer-driven phase that must land in **v0.11.0**,

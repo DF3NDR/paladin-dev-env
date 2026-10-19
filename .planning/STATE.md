@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
 status: executing
-stopped_at: Completed 50-31-PLAN.md
-last_updated: "2026-10-19T12:57:18.388Z"
+stopped_at: Completed 50-32-PLAN.md
+last_updated: "2026-10-19T15:51:19.849Z"
 last_activity: 2026-10-19
 last_activity_desc: Phase 50 execution started
 progress:
   total_phases: 12
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 121
-  completed_plans: 120
+  completed_plans: 121
 ---
 
 # Project State
@@ -63,8 +63,8 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 1 of 32
-Status: Executing Phase 50
+Plan: 32 of 32 (gap-closure 50-32 complete)
+Status: Phase 50 plans complete; awaiting post-merge gates and verification
 Last activity: 2026-10-19 — Phase 50 execution started
 
 ## Performance Metrics
@@ -328,6 +328,7 @@ Last activity: 2026-10-19 — Phase 50 execution started
 | Phase 50 P29 | 58min | 3 tasks | 10 files |
 | Phase 50 P30 | 30min | 2 tasks | 7 files |
 | Phase 50 P31 | 16min | 3 tasks | 8 files |
+| Phase 50 P32 | approx 1h20m | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -581,6 +582,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-29: IncurredSpend + paladin_ports spend_scope (SpendScope, ATTEMPT_SPEND task-local, record_incurred_spend, current_attempt_spend); race_attempt scopes every attempt so failed, timed-out and structured attempts report their recorded spend; successes keep PaladinResult.cost; no public type changes shape
 - [Phase ?]: 50-30: paladin_ports spend_scope HoppedBills / HOPPED_BILLS / record_hopped_bill; FallbackLlmAdapter records every billed hop it moves past (warn-once with no collector), PricingLlmAdapter prices each against its own model; the agent loop folds hop bills into usage, cost and the attempt scope and settles each call's parts in ONE row (run_id, ordinal, 1) with a per-model breakdown, buffered, structured and at every streamed exit; no public type changes shape
 - [Phase ?]: 50-31: G-50-5a closed end to end: provider_swap_matrix case billed_failures_and_hopped_refusals_reach_the_ledger (real adapters, Pricing(Fallback), execution service, InMemoryTreasuryLedger); docs, CHANGELOGs, MIGRATION M-B-21/M-B-22/DR-18 and ADR-0061 limit (6) describe the shipped billing contract; WINDOWS row 74 fixed, remainder (c) (Grok cost_in_usd_ticks / num_sources_used) open as row 77 by the owner's 2026-10-17 deferral
+- [Phase ?]: 50-32: a hopped-past fallback bill is priced (collector-installed pricer, own model) and counted into ATTEMPT_SPEND at the hop; count_and_take counts only uncounted entries; additive unreleased surface (D-00b)
 
 ### Pending Todos
 
@@ -799,8 +801,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-19T00:32:02.291Z
-**Stopped at:** Completed 50-31-PLAN.md
+**Last session:** 2026-10-19T15:51:19.812Z
+**Stopped at:** Completed 50-32-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

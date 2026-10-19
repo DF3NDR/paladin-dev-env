@@ -1481,7 +1481,7 @@ Plans:
 
 **Wave 27** *(gap-closure wave 12; blocked on Wave 26 completion)*
 
-- [ ] 50-32-PLAN.md — review WR-03: a hopped-past fallback bill is priced (pricer installed by `PricingLlmAdapter` before it delegates) and counted into `ATTEMPT_SPEND` at its hop, so an attempt cut off mid-call by the engine's deadline or idle bound is charged for it; `HoppedBills::install_pricer` / `count_and_take`, exactly-once fold; paused-clock drop tests (buffered, streamed, real engine); spend_scope docs and MIGRATION DR-18 limit text replaced; WR-03 WINDOWS row opened and closed
+- [x] 50-32-PLAN.md — review WR-03: a hopped-past fallback bill is priced (pricer installed by `PricingLlmAdapter` before it delegates) and counted into `ATTEMPT_SPEND` at its hop, so an attempt cut off mid-call by the engine's deadline or idle bound is charged for it; `HoppedBills::install_pricer` / `count_and_take`, exactly-once fold; paused-clock drop tests (buffered, streamed, real engine); spend_scope docs and MIGRATION DR-18 limit text replaced; WR-03 WINDOWS row opened and closed
 
 ### Phase 51: Adjustable Reasoning Effort
 

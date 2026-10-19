@@ -75,6 +75,21 @@
 //!
 //! Entries are [`BilledUsage`] values: a model id, token counts and a [`Cost`], never refusal
 //! text or a credential (T-50-30-04).
+//!
+//! ### The limit: a hop bill is counted when its model call ends
+//!
+//! The attempt scope above is fed the moment each call is folded, so a deadline or idle drop
+//! keeps everything folded before it. A hopped-past bill is different: it sits in the call's
+//! [`HoppedBills`] collector and reaches the attempt scope only when the whole model call (every
+//! retry and every hop) completes, because it can only be priced once the call has returned to
+//! the `PricingLlmAdapter` outside the chain, and recording an unpriced bill into the scope
+//! would make the attempt's whole cost unknown. If the engine drops an attempt while a LATER
+//! hop of that call is still in flight -- hop 1 returned a billed refusal, hop 2 had not
+//! answered -- the collector is dropped with the future and the attempt is not charged for
+//! hop 1's refusal. The "however the attempt ends" guarantee therefore covers every call that
+//! has completed; it does not extend to a bill held by a model call that has not. A caller that
+//! needs the bill of a call it cut off installs its own [`HOPPED_BILLS`] collector around that
+//! call and reads it with [`HoppedBills::take`].
 
 use std::sync::{Arc, Mutex, PoisonError};
 

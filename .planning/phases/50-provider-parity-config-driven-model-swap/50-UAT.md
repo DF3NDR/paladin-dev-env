@@ -3,15 +3,15 @@ status: testing
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md, 50-19-SUMMARY.md, 50-20-SUMMARY.md, 50-21-SUMMARY.md, 50-22-SUMMARY.md, 50-23-SUMMARY.md, 50-24-SUMMARY.md, 50-25-SUMMARY.md, 50-26-SUMMARY.md, 50-27-SUMMARY.md, 50-28-SUMMARY.md, 50-29-SUMMARY.md, 50-30-SUMMARY.md, 50-31-SUMMARY.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-19T01:27:41Z
+updated: 2026-10-19T01:43:56Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 11
-name: CI coverage job on the gap-closure head (82 % workspace floor, ADR-0006)
-expected: The `coverage` job is green on the head that carries plans 50-19..50-31 (commit e0b01fdc or later); cargo-llvm-cov is absent here, so only CI can measure it.
+number: 12
+name: CI test-integration-docker job on the gap-closure head
+expected: All Docker-backed suites (Redis, RustFS, Postgres, Ollama Tier 2) are green on the head that carries plans 50-19..50-31; Docker is absent here.
 awaiting: user response
 
 ## Tests
@@ -73,7 +73,7 @@ result: pass
 
 ### 11. CI coverage job on the gap-closure head (82 % workspace floor, ADR-0006)
 expected: The `coverage` job is green on the head that carries plans 50-19..50-31 (commit e0b01fdc or later); cargo-llvm-cov is absent here, so only CI can measure it.
-result: [pending]
+result: pass
 
 ### 12. CI test-integration-docker job on the gap-closure head
 expected: All Docker-backed suites (Redis, RustFS, Postgres, Ollama Tier 2) are green on the head that carries plans 50-19..50-31; Docker is absent here.
@@ -92,9 +92,9 @@ result: [pending]
 ## Summary
 
 total: 14
-passed: 9
+passed: 10
 issues: 1
-pending: 4
+pending: 3
 skipped: 0
 blocked: 0
 

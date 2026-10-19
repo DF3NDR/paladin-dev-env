@@ -1,8 +1,8 @@
 ---
 phase: 50-provider-parity-config-driven-model-swap
-verified: 2026-10-19T16:30:00Z
-status: gaps_found
-score: 13/14 must-haves verified
+verified: 2026-10-19T17:00:00Z
+status: passed
+score: 14/14 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
 re_verification:
@@ -10,13 +10,15 @@ re_verification:
   previous_score: 9/9
   gaps_closed:
     - "WR-03 (G-50-5a remainder (b)): a hopped-past fallback bill is priced against its own model and counted into ATTEMPT_SPEND at the hop, so a Battalion attempt cut off by the run deadline or idle bound while a later hop is in flight is charged for it once (WINDOWS row 78 fixed)"
+    - "SC6 `make security` clause (owner decision of 2026-10-19): RUSTSEC-2026-0367/0368/0369 (zip 3.0.0, build-dependency of utoipa-swagger-ui 9.0.2) registered in SECURITY-EXCEPTIONS.md with owner, review date, build-time-only scope and the never-calls-extract compensating control, mirrored into .cargo/audit.toml and deny.toml; make security exits 0 and scripts/check-advisory-register.sh reports 15 rows, all clauses satisfied"
   gaps_remaining: []
-  regressions:
+  regressions_found_then_closed:
     - "SC6 clause 'make security stays green': cargo audit exits 1 on HEAD e45abf77 with RUSTSEC-2026-0367/0368/0369 on zip 3.0.0 (build-dependency of utoipa-swagger-ui 9.0.2). Not caused by Phase 50 (Cargo.lock unchanged since 3886b94c; advisories published 2026-10-09/10); the previous report accepted this clause from the 50-UAT.md CI record, which predates the audit run that now fails."
 gaps:
   - truth: "SC6: make clean-code, make check-gates, make api-surface, make security and the 82 % coverage floor stay green"
-    status: partial
-    reason: "make security (make audit) fails on the current tree: cargo audit exits 1 with three vulnerabilities in zip 3.0.0 (RUSTSEC-2026-0367, -0368, -0369; patched in zip >= 9.0.0). zip is pulled in only as a build-dependency of utoipa-swagger-ui 9.0.2 (vendored swagger-ui extraction at build time), is not a runtime dependency, and was not touched by any Phase 50 plan. The project's security rule (security.instructions.md) treats a new advisory as a blocker unless allowlisted in .cargo/audit.toml with a reason, and SC6 names make security explicitly. All other SC6 clauses hold."
+    status: closed
+    closed_by: "SECURITY-EXCEPTIONS.md rows RUSTSEC-2026-0367/0368/0369 (+ .cargo/audit.toml, deny.toml, CHANGELOG Security entry), 2026-10-19; make security exit 0; check-advisory-register.sh OK (15 rows)"
+    reason: "Before closure: make security (make audit) failed on the tree: cargo audit exits 1 with three vulnerabilities in zip 3.0.0 (RUSTSEC-2026-0367, -0368, -0369; patched in zip >= 9.0.0). zip is pulled in only as a build-dependency of utoipa-swagger-ui 9.0.2 (vendored swagger-ui extraction at build time), is not a runtime dependency, and was not touched by any Phase 50 plan. The project's security rule (security.instructions.md) treats a new advisory as a blocker unless allowlisted in .cargo/audit.toml with a reason, and SC6 names make security explicitly. All other SC6 clauses hold."
     artifacts:
       - path: "Cargo.lock"
         issue: "zip 3.0.0 (via utoipa-swagger-ui 9.0.2 [build-dependencies]) carries three open RustSec advisories"
@@ -33,7 +35,7 @@ human_verification: []
 
 **Phase Goal:** Any Paladin agent can be moved between the nine LLM providers by changing configuration only: equivalent behaviour, or an early build failure naming provider, model and parameter. Library-level APIs matter as much as server config.
 **Verified:** 2026-10-19T16:30:00Z, on HEAD `e45abf77`
-**Status:** gaps_found (one gap, outside the phase's own code; see Gaps Summary)
+**Status:** passed (the one gap found at 16:30Z, SC6's `make security` clause, was closed at 17:00Z by the owner-accepted exception; see Gaps Summary)
 **Re-verification:** Yes. The prior report (2026-10-19T12:00Z, `passed`, 9/9) predates gap-closure plan 50-32 (code commit `7edec618`, docs `dea5ee5a`, ledger `13a87145`, review `e45abf77`). This pass re-checked the nine prior must-haves for regression and fully verified the five plan 50-32 truths, with particular attention to the G-50-5a clause about counting hopped-past fallback hops, which is the behaviour 50-32 changed. SUMMARY and REVIEW claims were treated as leads only; I read the diff `git diff 3886b94c..HEAD` for the four code paths and ran the named tests myself.
 
 ## Goal Achievement
@@ -57,7 +59,7 @@ human_verification: []
 | 13 | 50-32 T4: failing first; red output recorded; guards green before and after | VERIFIED | Structural: at `3886b94c`, `record_hopped_bill` is `HOPPED_BILLS.try_with(\|bills\| bills.push(billed))` (push only, no pricing, no scope record) and the file contains zero occurrences of `install_pricer`/`count_and_take`, so the five new paladin-ports tests cannot compile and the four behaviour tests must fail on their `calls()==1` / ledger-row assertions. The SUMMARY's recorded red messages ("hop 1's bill is already counted  left: 0 right: 1", "run-deadline: the boundary settles hop 1's priced bill once  left: None", "counted at the hop  left: 0 right: 1", E0599 on `install_pricer`/`count_and_take`) match the test sources verbatim. The red run itself is a process record I cannot replay; its content is consistent with the tree. |
 | 14 | 50-32 T5: docs match the code; 0cdbc302 limit text removed; CHANGELOGs `### Added`; WINDOWS WR-03 row opened and closed via the tool | VERIFIED | `spend_scope.rs:82-96` subsection "Counted at the hop, however the attempt ends"; `grep -c 'when its model call ends'` is 0 in `spend_scope.rs` and `MIGRATION.md`. MIGRATION DR-18 (line 1018) describes `install_pricer` before delegation, `count_and_take`, the out-of-tree decorator rule, "additive, no compile break", "9.1 M-B-21". `crates/paladin-ports/CHANGELOG.md:27-31` lists both methods as additive; `crates/paladin-llm/CHANGELOG.md:84` and root `CHANGELOG.md:50-52,1197` describe the fix. WINDOWS row 78 (`spend_scope.rs`, WR-03, closing condition "priced and counted at its hop, proven by paused-clock drop tests") is `fixed`; frontmatter `open_count: 12, fixed_count: 29, total_count: 78`. ROADMAP line 242 now `[x]` and 50-32 plan line 1484 `[x]`. |
 
-**Score:** 13/14 truths verified (0 present-but-behavior-unverified). The one PARTIAL is SC6's `make security` clause.
+**Score:** 14/14 truths verified (0 present-but-behavior-unverified). SC6's `make security` clause was PARTIAL at 16:30Z and is verified since the 17:00Z closure.
 
 ### WR-03 behaviour: confirmed
 
@@ -74,7 +76,7 @@ The behaviour plan 50-32 set out to change is in the tree and proven by tests I 
 
 ### Disconfirmation pass
 
-1. **Partially met requirement:** SC6's `make security` clause (gap above).
+1. **Requirement met after closure:** SC6's `make security` clause (closed; see Gaps Summary).
 2. **A test that could pass without testing the claim:** the streamed drop test wraps `drain_final_chunk` and asserts after the timeout; because hop 1's bill is recorded inside the `ATTEMPT_SPEND` scope that the test holds outside the dropped future, the assertion genuinely depends on the at-hop record (the pre-fix code would leave `calls()==0`, which is exactly the recorded red). The engine test asserts the ledger row, not just the scope, so it also covers the superstep settle. No vacuous test found.
 3. **An error path with no dedicated test:** the "stream ended without a final marker" exit (`4262-4273`) takes with `count_and_take` but no test drives a hop bill through that exit specifically. Under 50-32 the bill is already counted at the hop, so this exit is only the settle/safety net; `hopped_bills_survive_stream_exhaustion` covers the open-error exit. Info, not a gap.
 
@@ -135,7 +137,7 @@ Scan of all `+` lines in `git diff 3886b94c..HEAD` for the four code files: ever
 
 | File | Line | Pattern | Severity | Impact |
 |---|---|---|---|---|
-| `Cargo.lock` | 7467 | `zip 3.0.0` with RUSTSEC-2026-0367/0368/0369 (build-dep of `utoipa-swagger-ui 9.0.2`) | WARNING (gap) | `make security` red; SC6 clause fails. Not introduced by Phase 50. |
+| `Cargo.lock` | 7467 | `zip 3.0.0` with RUSTSEC-2026-0367/0368/0369 (build-dep of `utoipa-swagger-ui 9.0.2`) | CLOSED | Registered exception (SECURITY-EXCEPTIONS.md, mirrored in .cargo/audit.toml and deny.toml); `make security` exit 0. Not introduced by Phase 50. |
 | `paladin_execution_service.rs` | 410-416, 3004-3010 | Stale/garbled rustdoc on `CallFailure` and the `# Errors` of `execute_with_retry_and_temperature` still says `bills` carries hop bills (review IN-01) | Info | Private-item docs; code is correct (`hop_bills` is separate). Worth a docs follow-up. |
 | `fallback.rs` | 230, 234 | Doc lines over 100 columns (IN-02) | Info | Style only; `cargo fmt --check` passes. |
 | `spend_scope.rs` | 355-365 / 437-448 | A bill counted unpriced can later be priced by `price_unpriced` for the ledger but not the scope (IN-03) | Info | Documented; unreachable in-tree because `PricingLlmAdapter` installs its pricer first. |
@@ -153,17 +155,9 @@ The phase goal is achieved in code and WR-03 is confirmed closed: a hopped-past 
 
 The single gap is SC6's `make security stays green`: `cargo audit` exits 1 on this tree because of three RustSec advisories (published 2026-10-09/10) against `zip 3.0.0`, which enters only as a build-dependency of `utoipa-swagger-ui 9.0.2`. Phase 50 did not add or change this dependency, and plan 50-32 logged it in `deferred-items.md`, but `security.instructions.md` says `make security` must pass before a phase is sealed and that a new advisory is a blocker unless allowlisted with a reason, and SC6 names the gate. No dependency bump closes it: every published `utoipa-swagger-ui` release pins `zip` below the patched 9.0.0 (9.0.2 requires `^3.0`, 10.0.0/10.0.1 require `^8.6`; checked against the crates.io index on 2026-10-19). The advisories concern `ZipArchive::extract`/`ZipStreamReader::extract` (symlink targets, permissions through symlinks, SUID/SGID bits); the `utoipa-swagger-ui` build script never calls `extract`, it walks entries with `enclosed_name()` and writes them itself, and with the `vendored` feature the archive is the crate's own embedded bundle, read at build time only. Closing the gap is therefore an owner decision (as `50-VALIDATION.md` already records): allowlist the three IDs in `SECURITY-EXCEPTIONS.md` with that rationale, mirrored into `.cargo/audit.toml` and `deny.toml` per ADR-0024, then rerun `make security` and `scripts/check-advisory-register.sh`.
 
-**This may be intentional.** If the owner accepts the `deferred-items.md` deferral and wants the phase sealed with the advisory open, add to this file's frontmatter and re-run verification:
-
-```yaml
-overrides:
-  - must_have: "SC6: make security stays green"
-    reason: "RUSTSEC-2026-0367/0368/0369 are on zip 3.0.0, a build-only dependency of utoipa-swagger-ui 9.0.2 (vendored swagger-ui extraction); no runtime exposure; not touched by Phase 50; fix tracked in deferred-items.md for a dependency-owning plan"
-    accepted_by: "<owner>"
-    accepted_at: "<ISO timestamp>"
-```
+**Closure (2026-10-19T17:00:00Z).** The owner chose the exception route. `SECURITY-EXCEPTIONS.md` now carries one row per advisory (class `vulnerability`, crate `zip`, owner DF3NDR, review date 2026-12-31, scope: build time only, zip linked into no shipped binary, the archive is the embedded vendored bundle; compensating control: the build script never calls `ZipArchive::extract`/`ZipStreamReader::extract`, it walks entries with `by_index` + `enclosed_name()` and writes them itself; revisit when `utoipa-swagger-ui` depends on `zip >= 9`), mirrored into `.cargo/audit.toml` and `deny.toml`, with a `### Security` entry in `CHANGELOG.md`. Re-run on the same tree: `scripts/check-advisory-register.sh` = OK (15 rows, 15 deny.toml and 8 .cargo/audit.toml entries, all clauses satisfied); `make security` (cargo audit + cargo deny) = exit 0 with the 9 pre-existing allowed warnings. SC6 is fully green; no override was applied (`overrides_applied: 0`).
 
 ---
 
-_Verified: 2026-10-19T16:30:00Z_
+_Verified: 2026-10-19T16:30:00Z; gap closed and re-checked 2026-10-19T17:00:00Z_
 _Verifier: Claude (gsd-verifier)_

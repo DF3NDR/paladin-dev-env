@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 50
-current_phase_name: provider-parity-config-driven-model-swap
-status: executing
+current_phase: 51
+current_phase_name: Adjustable Reasoning Effort
+status: planning
 stopped_at: Completed 50-32-PLAN.md
-last_updated: "2026-10-19T15:51:19.849Z"
+last_updated: "2026-10-19T16:41:15.773Z"
 last_activity: 2026-10-19
-last_activity_desc: Phase 50 execution started
+last_activity_desc: Phase 50 complete, transitioned to Phase 51
 progress:
   total_phases: 12
   completed_phases: 11
@@ -62,16 +62,16 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 32 of 32 (gap-closure 50-32 complete)
-Status: Phase 50 plans complete; post-merge gates done on e45abf77 (workspace lib/bins 14 binaries, 5169 passed, only the ledgered WINDOWS row 73 pair failing; `make api-surface` unchanged; review iteration 3: 0 critical, 0 warning). Re-verification: gaps_found, 13/14 — the one gap is SC6 `make security`, blocked by RUSTSEC-2026-0367/0368/0369 on `zip 3.0.0` (build-dependency of `utoipa-swagger-ui`, not a Phase 50 change, no upstream release fixes it). Awaiting the owner decision recorded in 50-VALIDATION.md: register an exception or hold the seal.
-Last activity: 2026-10-19 — Plan 50-32 gates and re-verification complete; phase seal blocked on the `make security` owner decision
+Phase: 51 — Adjustable Reasoning Effort
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-10-19 — Phase 50 complete, transitioned to Phase 51
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 535
+- Total plans completed: 536
 - Average duration: —
 - Total execution time: —
 
@@ -127,7 +127,7 @@ Last activity: 2026-10-19 — Plan 50-32 gates and re-verification complete; pha
 | 44 | 13 | - | - |
 | 48 | 9 | - | - |
 | 49 | 3 | - | - |
-| 50 | 31 | - | - |
+| 50 | 32 | - | - |
 
 *Updated after each plan completion*
 

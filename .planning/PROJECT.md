@@ -2039,8 +2039,14 @@ completed and re-verified — nine-provider config-only swap with build-time ref
 (ADR-0061), per-model profile registry, config-driven construction and facade exports, response/error
 parity with vendor-total reconciliation and billed failures settled to the ledger, per-hop fallback
 models, 52-case swap matrix and 20-case conformance suite, live smoke and the "Switching providers"
-page. Verification `passed` 9/9; UAT 14/14; security verified; Nyquist validated; code review
-iteration 2 leaves 4 warnings for `--fix`. Next: `/gsd-discuss-phase 51`.*
+page. 32/32 plans: gap-closure plan 50-32 closed review finding WR-03 (a hopped-past fallback bill
+is priced against its own model and counted into the attempt scope at the hop, exactly once; WINDOWS
+row 78). Re-verification `passed` 14/14 on `e45abf77` (the one gap found, SC6's `make security`, was
+closed the same day by the owner-accepted exception for RUSTSEC-2026-0367/0368/0369 on `zip 3.0.0`,
+a build-only dependency of `utoipa-swagger-ui` with no upstream fix, registered in
+`SECURITY-EXCEPTIONS.md`); UAT 14/14; security verified; Nyquist validated; code review iteration 3
+0 critical / 0 warning / 4 info; post-merge gates green except the ledgered WINDOWS row 73 pair;
+`make api-surface` unchanged. Next: `/gsd-discuss-phase 51`.*
 
 ---
 *Last updated: 2026-10-14 after **Phase 48: Base Entity Rename** completed and verified — the

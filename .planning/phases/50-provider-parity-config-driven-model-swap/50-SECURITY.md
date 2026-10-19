@@ -6,14 +6,16 @@ status: verified
 threats_open: 0
 asvs_level: 1
 created: 2026-10-17
+updated: 2026-10-19
 ---
 
 # Phase 50 — Security
 
 > Per-phase security contract: threat register, accepted risks, and audit trail.
 
-Register source: the `<threat_model>` blocks of plans 50-01 to 50-18 (66 threats, all authored at
-plan time). No SUMMARY raised a new threat flag. Verification depth: ASVS L1 (each mitigation located
+Register source: the `<threat_model>` blocks of plans 50-01 to 50-31 (113 threats, all authored at
+plan time; 66 from plans 50-01 to 50-18 in the first audit, 47 from gap-closure plans 50-19 to 50-31
+added on 2026-10-19). No SUMMARY raised a new threat flag. Verification depth: ASVS L1 (each mitigation located
 in the implementation or its named test). The auditor was skipped under the short-circuit rule
 (`threats_open: 0`, register authored at plan time, ASVS level 1).
 
@@ -32,6 +34,10 @@ in the implementation or its named test). The auditor was skipped under the shor
 | hop N failure -> hop N+1 (fallback chain) | an error on one provider decides whether another is called and billed | cost / refusal signal |
 | adapter metadata -> run result / stream chunk | `paladin.*` keys are copied onto structures callers persist and log | provider names, model ids, parameter names |
 | documentation / register -> operators and consumer | the Switching providers page and the 9.2 register drive downstream changes | configuration guidance |
+| vendor response body -> `TokenUsage` | untrusted vendor counts become the figures the Treasurer prices and budgets compare | token counts (integrity-sensitive) |
+| vendor response -> `LlmError` (`BilledUsage`) | billed counts and refusal text ride on an error a caller may log or settle | token counts, model id, cost |
+| execution service / engine -> `TreasuryLedgerPort` | failed, timed-out and hopped-past calls are settled into the spend ledger | cost (integrity-sensitive) |
+| execution service -> attempt spend scope (task-local) | per-call spend crosses into engine accounting | token counts, cost |
 
 ---
 
@@ -105,6 +111,53 @@ in the implementation or its named test). The auditor was skipped under the shor
 | T-50-18-01 | Information Disclosure | secret carried onto `PaladinResult` / `StreamingResponse` | low | mitigate | only `paladin.`-prefixed keys copied; merge test asserts `x-request-id` is ignored; `ExecuteResponse` not extended | closed |
 | T-50-18-02 | Repudiation | omission/fallback lost before the run result | medium | mitigate | merge and terminal-chunk tests prove every key arrives (`run_metadata`) | closed |
 | T-50-18-03 | Tampering | consumer `PaladinResult` literal broken by new field | low | accept | AR-50-06 | closed |
+| T-50-19-01 | Denial of Service | non-OpenAI server behind `OPENAI_BASE_URL` rejecting `max_completion_tokens` | low | mitigate | MIGRATION 9.1 M-B-18 names the `openai-compatible` preset route; docs state the measured scope | closed |
+| T-50-19-02 | Tampering | wire-shape regression on streamed/structured path | medium | mitigate | gpt-5.4-nano body test covers all three `build_request` callers; old-key absence asserted (`openai/adapter.rs`) | closed |
+| T-50-19-03 | Information Disclosure | credential in a captured body or fixture | low | accept | AR-50-07 | closed |
+| T-50-20-01 | Repudiation | explicit value silently dropped for an unseeded Kimi model | medium | mitigate | `case_unseeded_kimi_refuses_an_explicit_temperature` (`tests/provider_swap_matrix.rs`); defaults omitted with `warn!` and `paladin.params_omitted` | closed |
+| T-50-20-02 | Denial of Service | unseeded Kimi requests rejected for a stale admitted value | medium | mitigate | four parameters `NotSent` on the fallback; `kimi_fallback_matches_the_seeded_sampling_declarations` (`kimi/adapter.rs`) | closed |
+| T-50-20-03 | Tampering | preset edit re-enabling a flag through a struct-update spread | low | mitigate | explicit `request_parameters` fields (WR-02); fallback-vs-seed test pins the outcome | closed |
+| T-50-21-01 | Repudiation | billed reasoning tokens vanishing from the bill (Grok) | high | mitigate | inclusive fold in `compat/engine.rs`; `grok_reasoning_tokens_reach_completion_and_the_price` through `PricingLlmAdapter` (`grok/adapter.rs`) | closed |
+| T-50-21-02 | Repudiation | vendor/mapper disagreement hidden by the D-02 recompute | high | mitigate | vendor total compared on both paths; `warn!` once and `paladin.usage_unreconciled` (`usage_reconcile.rs`, conformance) | closed |
+| T-50-21-03 | Tampering | hostile counts overflowing a sum | medium | mitigate | saturating folds (`compat/engine.rs`, `gemini/adapter.rs`, `usage_reconcile.rs`); `u32::MAX` table test | closed |
+| T-50-21-04 | Denial of Service | log flooding from disagreeing responses | low | mitigate | `UsageLog` warns once per instance per (model, check); `usage_log_warns_once_per_model_and_check` | closed |
+| T-50-21-05 | Information Disclosure | content or credential in the new key or warn line | low | mitigate | value grammar carries numbers only; warn names provider, model, check and numbers (50-21 SUMMARY review) | closed |
+| T-50-21-06 | Repudiation | Grok semantics assumed from secondary sources | medium | mitigate | "not live-measured" labels in rustdoc, CHANGELOG and `switching-providers.md`; measured by 50-22 | closed |
+| T-50-22-01 | Information Disclosure | key in a vendor error body reaching the committed file | high | mitigate | error bodies through `diagnostic_excerpt`; success bodies contribute numbers only; re-run here: 0 key-shape matches in `50-USAGE-PROBE.md` | closed |
+| T-50-22-02 | Repudiation | unmeasured semantics presented as measured | medium | mitigate | `indeterminate` / `not measured` verdict grammar, verdicts copied verbatim (50-22 SUMMARY) | closed |
+| T-50-22-03 | Denial of Service (cost) | reasoning model running on the operator's bill | low | mitigate | one call per model; `USAGE_MAX_TOKENS = 1024` (`live_vendor_smoke.rs`), 120 s timeout | closed |
+| T-50-22-04 | Information Disclosure | credential header forwarded on a redirect | medium | mitigate | call goes through `run_probe_call`, client keeps `Policy::none()` | closed |
+| T-50-23-01 | Repudiation | Gemini tool-use prompt tokens missing from the bill | medium | mitigate | `tool_use_prompt_token_count` folded with `saturating_add` (`gemini/adapter.rs`); conformance fixture | closed |
+| T-50-23-02 | Repudiation | vendor-total disagreement unseen on a bespoke adapter | high | mitigate | `UsageLog` wired in `openai`, `deepseek`, `gemini` adapters and `compat/engine.rs`; Anthropic containment checks; conformance case on all nine | closed |
+| T-50-23-04 | Tampering | malformed or overflowing counts | low | mitigate | saturating folds; absent totals are `None`, never 0 | closed |
+| T-50-23-05 | Information Disclosure | content or credential in warn lines or metadata | low | mitigate | numbers, provider and model only (50-21 grammar; 50-23 SUMMARY review) | closed |
+| T-50-24-01 | Tampering | semantics flip on weak or mixed evidence | medium | mitigate | fixed decision rules; no flip made, no mixed result (50-24 SUMMARY) | closed |
+| T-50-24-02 | Repudiation | unmeasured provider reading presented as measured | medium | mitigate | every provider labelled `measured <date>` or `not live-measured` in code and `switching-providers.md` | closed |
+| T-50-24-03 | Information Disclosure | probe figures copied into docs | low | accept | AR-50-08 | closed |
+| T-50-25-01 | Tampering | mechanical migration changing what a test asserts | medium | mitigate | assertions unchanged by rule; suites and doc tests run; sites listed in 50-25 SUMMARY | closed |
+| T-50-25-02 | Information Disclosure | refusal text reaching a log through the new constructors | low | accept | AR-50-09 | closed |
+| T-50-26-01 | Repudiation | billed compat call recorded as free because it failed | high | mitigate | usage mapped before classification and carried as `BilledUsage` on the error (`llm_port.rs`); 63_000-token tracer | closed |
+| T-50-26-02 | Information Disclosure | refusal text or key leaking via the new fields | medium | mitigate | `BilledUsage` holds numbers, a model id and a `Cost` only; `detail` redacted-then-bounded (D-00a) | closed |
+| T-50-26-03 | Tampering | consumers mis-matching the changed variants | medium | mitigate | `#[non_exhaustive]` on `BilledUsage` and `Refusal` (`llm_port.rs`); break registered (M-B-22, 9.2 row) | closed |
+| T-50-26-04 | Repudiation | fabricated zero bill when no usage reported | low | mitigate | `billed` is `None` without usage (D-00c); tracer covers the no-usage body | closed |
+| T-50-27-01 | Repudiation | billed call recorded as free because it failed | high | mitigate | both paths of all nine adapters; conformance `billed_failures_carry_their_usage` (`conformance.rs`) | closed |
+| T-50-27-02 | Tampering | buffered and stream pricing diverging for billed errors | medium | mitigate | one helper for both paths in `pricing.rs`, tested on each | closed |
+| T-50-27-03 | Repudiation | fabricated zero cost for an unpriced model | low | mitigate | `price_or_warn` warn-once and `cost: None` (`pricing.rs`) | closed |
+| T-50-27-04 | Information Disclosure | refusal text or counts in a new log line | low | mitigate | no log line beyond the existing unpriced warn (model name only) | closed |
+| T-50-28-01 | Repudiation | billed failure never reaching the ledger | high | mitigate | settled on buffered loop and stream; `billed_stream_failure_is_settled` (`paladin_execution_service.rs`) | closed |
+| T-50-28-02 | Tampering | failed call charged twice | high | mitigate | one settle per call ordinal; billed failure is `Permanent`, never retried; `billed_failure_after_a_priced_call_settles_both_ordinals` | closed |
+| T-50-28-03 | Information Disclosure | settle logs carrying content or credentials | medium | mitigate | 39-05 log rule kept (run id, ordinal, nanos, currency) | closed |
+| T-50-29-01 | Repudiation | failed or timed-out attempt's billed calls never reaching the ledger | high | mitigate | task-local scope in `paladin-ports/src/output/spend_scope.rs` survives a dropped future; `timed_out_attempt_records_its_incurred_spend` (`paladin-battalion/src/engine/mod.rs`) | closed |
+| T-50-29-02 | Tampering | spend counted twice | high | mitigate | successes keep one source (A1-50-29); fresh scope per attempt; `each_failed_retry_attempt_is_charged_once` | closed |
+| T-50-29-03 | Denial of Service | poisoned accumulator lock panicking the engine | low | mitigate | `unwrap_or_else(PoisonError::into_inner)` in `spend_scope.rs`; `a_poisoned_lock_is_recovered_not_propagated` | closed |
+| T-50-29-04 | Information Disclosure | content or credentials entering the scope | low | mitigate | scope holds `TokenUsage` and `Cost` only | closed |
+| T-50-30-01 | Repudiation | hopped-past billed refusal never reaching the ledger | high | mitigate | `record_hopped_bill` at the hop decision point (`fallback.rs`); `hopped_bills_survive_chain_exhaustion`, `hopped_refusal_bill_is_settled_on_the_stream` | closed |
+| T-50-30-02 | Tampering | hop bill settled twice or dropped as duplicate key | high | mitigate | one row per call ordinal with per-model breakdown (A1-50-30); fresh collector per call; `settlements == 1` asserted in hop tests | closed |
+| T-50-30-03 | Tampering | hop bill priced at the served model's rate | medium | mitigate | `hopped_bills_are_priced_against_their_own_model` (`pricing.rs`) | closed |
+| T-50-30-04 | Information Disclosure | refusal text or credentials in collector or warn line | low | mitigate | `BilledUsage` holds numbers, model id and `Cost`; warn names provider, model and counts only | closed |
+| T-50-31-01 | Repudiation | remaining gaps read as closed | medium | mitigate | remainder (c) kept open as `.planning/WINDOWS.md` row 77 with closing condition; named in ADR-0061, CHANGELOG and docs | closed |
+| T-50-31-02 | Tampering | operators surprised by higher charges | medium | mitigate | MIGRATION 9.1 M-B-21 (who is affected, re-size) and M-B-22 | closed |
+| T-50-31-03 | Repudiation | integrated chain regressing while unit tests pass | high | mitigate | `case_billed_failures_and_hopped_refusals_reach_the_ledger` (`tests/provider_swap_matrix.rs`) drives real adapters, pricing, fallback, execution service and ledger | closed |
 
 *Status: open · closed · open — below high threshold (non-blocking)*
 *Severity: critical > high > medium > low — only open threats at or above workflow.security_block_on count toward threats_open*
@@ -122,6 +175,9 @@ in the implementation or its named test). The auditor was skipped under the shor
 | AR-50-04 | T-50-11-01 | Reasoning text is model output of the same trust class as `content`, which is already persisted; adapters fill it from response bodies only, so no credential flows into it. | plan 50-11 threat model | 2026-10-17 |
 | AR-50-05 | T-50-12-04 | Callers relying on `Ok("")` for a refusal were relying on the defect the handoff reported (G-2); the change is recorded as an M-B register row. | plan 50-12 threat model | 2026-10-17 |
 | AR-50-06 | T-50-18-03 | Registered break: the 9.2 row was extended from a measured D-27 run, muster updated in the same commit, and the change is carried in the 9.8 consumer note before the single v0.11.0 move. | plan 50-18 threat model | 2026-10-17 |
+| AR-50-07 | T-50-19-03 | Plan 50-19 changes no credential handling; the redirect policy and redaction paths are untouched, and the manual review is recorded in the 50-19 SUMMARY. | plan 50-19 threat model | 2026-10-19 |
+| AR-50-08 | T-50-24-03 | Token counts and dates copied into docs and changelogs are billing metadata, not secrets (A4-50-22); no credential path is touched. | plan 50-24 threat model | 2026-10-19 |
+| AR-50-09 | T-50-25-02 | The new constructors only build today's values; `detail` stays redacted-then-bounded at the guard (D-00a) and no log line or label was added. | plan 50-25 threat model | 2026-10-19 |
 
 *Accepted risks do not resurface in future audit runs.*
 
@@ -132,6 +188,7 @@ in the implementation or its named test). The auditor was skipped under the shor
 | Audit Date | Threats Total | Closed | Open | Run By |
 |------------|---------------|--------|------|--------|
 | 2026-10-17 | 66 | 66 | 0 | /gsd-secure-phase orchestrator (L1 grep-depth; auditor skipped by short-circuit rule) |
+| 2026-10-19 | 113 | 113 | 0 | /gsd-secure-phase orchestrator (State A re-audit: +47 threats from gap-closure plans 50-19 to 50-31; L1 grep-depth; auditor skipped by short-circuit rule) |
 
 ---
 
@@ -142,4 +199,11 @@ in the implementation or its named test). The auditor was skipped under the shor
 - [x] `threats_open: 0` confirmed
 - [x] `status: verified` set in frontmatter
 
-**Approval:** verified 2026-10-17
+**Approval:** verified 2026-10-17; re-verified 2026-10-19 (plans 50-19 to 50-31)
+
+## Security Audit 2026-10-19
+| Metric | Count |
+|--------|-------|
+| Threats found | 47 |
+| Closed | 47 |
+| Open | 0 |

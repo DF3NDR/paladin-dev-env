@@ -1477,7 +1477,7 @@ Plans:
 
 **Wave 26** *(gap-closure wave 11; blocked on Wave 25 completion)*
 
-- [ ] 50-31-PLAN.md — G-50-5a: end-to-end matrix case through real adapters to the ledger; billing contract documented (docs, changelogs, MIGRATION, ADR-0061); WINDOWS row 74 fixed; remainder (c) Grok cost cross-check kept open as the owner's accepted deferral
+- [x] 50-31-PLAN.md — G-50-5a: end-to-end matrix case through real adapters to the ledger; billing contract documented (docs, changelogs, MIGRATION, ADR-0061); WINDOWS row 74 fixed; remainder (c) Grok cost cross-check kept open as the owner's accepted deferral
 
 ### Phase 51: Adjustable Reasoning Effort
 

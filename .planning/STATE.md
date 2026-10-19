@@ -4,16 +4,16 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 50
 current_phase_name: provider-parity-config-driven-model-swap
-status: executing
-stopped_at: Completed 50-30-PLAN.md
-last_updated: "2026-10-18T23:57:36.740Z"
-last_activity: 2026-10-17
-last_activity_desc: Phase 50 gap-closure execution started (plans 50-19..50-31)
+status: verifying
+stopped_at: Completed 50-31-PLAN.md
+last_updated: "2026-10-19T00:32:02.328Z"
+last_activity: 2026-10-19
+last_activity_desc: Phase 50 gap-closure set complete (13 plans, 50-19..50-31); ready for verification
 progress:
   total_phases: 12
-  completed_phases: 10
+  completed_phases: 11
   total_plans: 120
-  completed_plans: 119
+  completed_plans: 120
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([██████████] 99%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([██████████] 100%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -62,10 +62,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
-Plan: 31 of 31 (gap closure 50-19..50-31, --gaps-only; 50-19..50-30 complete; 50-31 next)
-Status: Ready to execute
-Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-19..50-31)
+Phase: 50 (provider-parity-config-driven-model-swap) — GAP CLOSURE COMPLETE, ready for verification
+Plan: 31 of 31 (gap closure 50-19..50-31, --gaps-only; all 13 gap-closure plans complete)
+Status: Phase complete — ready for verification
+Last activity: 2026-10-19 — Plan 50-31 complete: the Phase 50 gap-closure set (13 plans, 50-19..50-31) is complete. G-50-5b (50-19, WINDOWS row 75 fixed), G-50-5c (50-20, row 76 fixed) and G-50-5a (50-21..50-31, row 74 fixed) are closed; G-50-5a remainder (c), Grok `cost_in_usd_ticks` / `num_sources_used`, stays open as WINDOWS row 77 (owner-accepted deferral, 2026-10-17). Next: re-verify the Phase 50 UAT gaps (`/gsd-verify-work 50`).
 
 ## Performance Metrics
 
@@ -326,6 +326,7 @@ Last activity: 2026-10-17 — Phase 50 gap-closure execution started (plans 50-1
 | Phase 50 P28 | 40min | 2 tasks | 1 files |
 | Phase 50 P29 | 58min | 3 tasks | 10 files |
 | Phase 50 P30 | 30min | 2 tasks | 7 files |
+| Phase 50 P31 | 16min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -578,6 +579,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-28: private CallFailure { error, bills } carries a failed call's BilledUsage out of the retry helper; buffered loop folds and settles priced bills (ordinal loop_num), stream settles a billed terminal error once (ordinal 1, model_used); no public type change
 - [Phase ?]: 50-29: IncurredSpend + paladin_ports spend_scope (SpendScope, ATTEMPT_SPEND task-local, record_incurred_spend, current_attempt_spend); race_attempt scopes every attempt so failed, timed-out and structured attempts report their recorded spend; successes keep PaladinResult.cost; no public type changes shape
 - [Phase ?]: 50-30: paladin_ports spend_scope HoppedBills / HOPPED_BILLS / record_hopped_bill; FallbackLlmAdapter records every billed hop it moves past (warn-once with no collector), PricingLlmAdapter prices each against its own model; the agent loop folds hop bills into usage, cost and the attempt scope and settles each call's parts in ONE row (run_id, ordinal, 1) with a per-model breakdown, buffered, structured and at every streamed exit; no public type changes shape
+- [Phase ?]: 50-31: G-50-5a closed end to end: provider_swap_matrix case billed_failures_and_hopped_refusals_reach_the_ledger (real adapters, Pricing(Fallback), execution service, InMemoryTreasuryLedger); docs, CHANGELOGs, MIGRATION M-B-21/M-B-22/DR-18 and ADR-0061 limit (6) describe the shipped billing contract; WINDOWS row 74 fixed, remainder (c) (Grok cost_in_usd_ticks / num_sources_used) open as row 77 by the owner's 2026-10-17 deferral
 
 ### Pending Todos
 
@@ -796,8 +798,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-18T23:55:51.326Z
-**Stopped at:** Completed 50-30-PLAN.md
+**Last session:** 2026-10-19T00:32:02.291Z
+**Stopped at:** Completed 50-31-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

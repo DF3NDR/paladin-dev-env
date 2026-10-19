@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
-current_phase: 51
-current_phase_name: Adjustable Reasoning Effort
-status: planning
+current_phase: 50
+current_phase_name: provider-parity-config-driven-model-swap
+status: executing
 stopped_at: Completed 50-31-PLAN.md
-last_updated: "2026-10-19T02:42:49.700Z"
+last_updated: "2026-10-19T12:57:18.388Z"
 last_activity: 2026-10-19
-last_activity_desc: Phase 50 complete, transitioned to Phase 51
+last_activity_desc: Phase 50 execution started
 progress:
   total_phases: 12
-  completed_phases: 11
-  total_plans: 120
+  completed_phases: 10
+  total_plans: 121
   completed_plans: 120
 ---
 
@@ -62,10 +62,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 51 — Adjustable Reasoning Effort
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-10-19 — Phase 50 complete, transitioned to Phase 51
+Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
+Plan: 1 of 32
+Status: Executing Phase 50
+Last activity: 2026-10-19 — Phase 50 execution started
 
 ## Performance Metrics
 

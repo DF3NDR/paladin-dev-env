@@ -1,16 +1,22 @@
 ---
-status: diagnosed
+status: testing
 phase: 50-provider-parity-config-driven-model-swap
-source: [50-VERIFICATION.md]
+source: [50-VERIFICATION.md, 50-19-SUMMARY.md, 50-20-SUMMARY.md, 50-21-SUMMARY.md, 50-22-SUMMARY.md, 50-23-SUMMARY.md, 50-24-SUMMARY.md, 50-25-SUMMARY.md, 50-26-SUMMARY.md, 50-27-SUMMARY.md, 50-28-SUMMARY.md, 50-29-SUMMARY.md, 50-30-SUMMARY.md, 50-31-SUMMARY.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-17T16:53:23Z
+updated: 2026-10-19T00:42:05Z
 ---
 
 ## Current Test
+<!-- OVERWRITE each test - shows where we are -->
 
-[testing complete]
+number: 6
+name: OpenAI default model gpt-5.4-nano accepts the request (G-50-5b, WINDOWS 75)
+expected: |
+  With OPENAI_API_KEY set, `cargo run -p paladin-llm --example live_vendor_smoke --features openai` prints PASS for openai against its new default model `gpt-5.4-nano` (no HTTP 400). The request body carries `max_completion_tokens` and no `max_tokens` key on `generate`, `generate_stream` and a `ResponseFormat::JsonSchema` call; `--dry-run` shows the same body without credentials.
+awaiting: user response
 
 ## Tests
+
 
 ### 1. CI coverage job on the Phase 50 head (82 % workspace floor, ADR-0006)
 expected: The `coverage` job is green on the Phase 50 head; cargo-llvm-cov is absent here, so only CI can measure it.
@@ -41,12 +47,55 @@ result: issue
 reported: "Row 74: don't dismiss the provider's total token counts -- those are what the vendor charges for, and the Treasurer and Commissary depend on these counts; record as a gap and create a gap-closure plan. Row 75: option (a) -- switch the OpenAI adapter to always send max_completion_tokens. Row 76: option (a) -- align the Kimi adapter-wide fallback profile with the seeded Kimi profiles (temperature, top_p and penalties not sent)."
 severity: major
 
+### 6. OpenAI default model gpt-5.4-nano accepts the request (G-50-5b, WINDOWS 75)
+expected: |
+  With OPENAI_API_KEY set, `cargo run -p paladin-llm --example live_vendor_smoke --features openai` prints PASS for openai against its new default model `gpt-5.4-nano` (no HTTP 400). The request body carries `max_completion_tokens` and no `max_tokens` key on `generate`, `generate_stream` and a `ResponseFormat::JsonSchema` call; `--dry-run` shows the same body without credentials.
+result: [pending]
+
+### 7. Unseeded Kimi model id runs on the no-sampling fallback (G-50-5c, WINDOWS 76)
+expected: |
+  A call to a Kimi id that is not seeded (anything other than kimi-k2.6 / kimi-k3) is ACCEPTED (200) and its request body carries no temperature, top_p, frequency_penalty or presence_penalty, exactly like the seeded Kimi rows; max_tokens is still sent. The Switching providers fallback row and note [f] describe this NotSent profile, not the old Fixed(1.0)/Fixed(0.95) one.
+result: [pending]
+
+### 8. Live usage-containment probe on record (G-50-5a)
+expected: |
+  `live_vendor_smoke --usage` makes one call per seeded model and prints one containment verdict per line (reasoning inside completion, reasoning beside completion, indeterminate, no vendor total). The 2026-10-18 run in 50-USAGE-PROBE.md shows all three Grok models beside completion with the billed-cost cross-check consistent to the tick on each, and Kimi/DeepSeek/Qwen inside. The adapter semantics match those verdicts: Grok keeps ReasoningBesideCompletion (now labelled measured), no other provider flipped, and no new WINDOWS row was needed.
+result: [pending]
+
+### 9. Vendor total is reconciled, never discarded (G-50-5a, WINDOWS 74)
+expected: |
+  On every adapter except Anthropic (which reports no total), the vendor's total_tokens / totalTokenCount is parsed and compared with prompt + completion. `total_tokens` stays `prompt + completion` (D-02). When they disagree, the response (and a stream's terminal chunk) carries `paladin.usage_unreconciled` metadata reading `total:vendor=N,mapped=M`, and one warn line per (provider, model) is logged at target `paladin::usage`. Gemini `toolUsePromptTokenCount` folds into prompt; Grok reasoning folds into completion; Anthropic vision cache read/write fold into prompt on both vision surfaces.
+result: [pending]
+
+### 10. Billed empty and refused calls carry usage, cost and a ledger row (G-50-5a)
+expected: |
+  An `LlmError::EmptyCompletion { .. }` or `LlmError::Refusal { .. }` from any of the nine adapters, buffered or streamed, returns `Some` from `billed_usage()` with the served model and the vendor's token counts; behind `PricingLlmAdapter` the bill carries a cost. In the agent loop the failed call is folded into the run's usage and cost and settled once to the treasury ledger under its own ordinal. A hopped-past fallback refusal is priced at its own model and settled in the call's one row with a per-model breakdown; failed, timed-out and structured Battalion attempts count their recorded spend. Matrix case `billed_failures_and_hopped_refusals_reach_the_ledger` passes under `--features llm-all`.
+result: [pending]
+
+### 11. CI coverage job on the gap-closure head (82 % workspace floor, ADR-0006)
+expected: The `coverage` job is green on the head that carries plans 50-19..50-31 (commit e0b01fdc or later); cargo-llvm-cov is absent here, so only CI can measure it.
+result: [pending]
+
+### 12. CI test-integration-docker job on the gap-closure head
+expected: All Docker-backed suites (Redis, RustFS, Postgres, Ollama Tier 2) are green on the head that carries plans 50-19..50-31; Docker is absent here.
+result: [pending]
+
+### 13. mdBook build with the rewritten usage, billing and migration docs
+expected: |
+  `mdbook build` exits 0. In `docs/src/user-guides/switching-providers.md` the `## Responses` section names every fold (Grok reasoning, Gemini thoughts and tool-use prompt, Anthropic cache read/write including vision), each of the nine reasoning cells carries a `measured 2026-10-18` or `not live-measured` label, the Billing bullet describes `billed_usage()`, hop bills and failed attempts, the refusal pattern reads `Refusal { provider, model, detail, .. }`, and Known limits lists only remainder (c). MIGRATION 9.1 rows M-B-18..M-B-22 and 9.8 rows DR-17/DR-18 render.
+result: [pending]
+
+### 14. Owner sign-off on the breaking change and the one open ledger row
+expected: |
+  Two items are recorded as owner decisions, not code gaps. (1) `paladin-ports` `LlmError::EmptyCompletion` changed from a tuple to a struct variant (semver `enum_tuple_variant_changed_kind`, allowlisted with a reason; MIGRATION DR-17 / M-B-22; root and crate CHANGELOG Breaking Changes). (2) WINDOWS row 77 stays open by the 2026-10-17 decision: Grok's `cost_in_usd_ticks` / `num_sources_used` are not parsed or compared with the Treasurer price (G-50-5a remainder (c)); ADR-0061 limit (6), the root CHANGELOG known limitation and the guide's Known limits name it. Rows 74, 75 and 76 read `fixed`.
+result: [pending]
+
 ## Summary
 
-total: 5
+total: 14
 passed: 4
 issues: 1
-pending: 0
+pending: 9
 skipped: 0
 blocked: 0
 
@@ -55,7 +104,9 @@ blocked: 0
 <!-- YAML format for plan-phase --gaps consumption -->
 - gap_id: G-50-5a
   truth: "Every billable token category a vendor reports reaches a TokenUsage sub-count (prompt, completion, cache-read, cache-write, reasoning), so Treasurer pricing (cost_of_call) and the allowance check see the full billed usage; the vendor's own total is parsed and reconciled against prompt + completion rather than silently discarded, while the D-02 invariant total_tokens == prompt + completion is kept (WINDOWS row 74)"
-  status: failed
+  status: resolved
+  resolved_by: [50-21-PLAN.md, 50-22-PLAN.md, 50-23-PLAN.md, 50-24-PLAN.md, 50-25-PLAN.md, 50-26-PLAN.md, 50-27-PLAN.md, 50-28-PLAN.md, 50-29-PLAN.md, 50-30-PLAN.md, 50-31-PLAN.md]
+  resolved_at: 2026-10-19
   reason: "User reported: don't dismiss the provider's total token counts -- those are what the vendor charges for, and the Treasurer and Commissary depend on these counts; record as a gap and create a gap-closure plan."
   severity: major
   test: 5
@@ -81,7 +132,9 @@ blocked: 0
   debug_session: ".planning/debug/vendor-token-usage-fidelity.md"
 - gap_id: G-50-5b
   truth: "The OpenAI adapter sends the output-token limit as max_completion_tokens, so the seeded default model gpt-5.4-nano accepts requests built from OpenAIConfig::new / from_env defaults instead of rejecting max_tokens with HTTP 400 (WINDOWS row 75, owner chose option (a))"
-  status: failed
+  status: resolved
+  resolved_by: 50-19-PLAN.md
+  resolved_at: 2026-10-19
   reason: "User reported: Row 75: option (a) -- switch the OpenAI adapter to always send max_completion_tokens."
   severity: major
   test: 5
@@ -105,7 +158,9 @@ blocked: 0
   debug_session: ".planning/debug/openai-max-completion-tokens.md"
 - gap_id: G-50-5c
   truth: "The Kimi adapter-wide fallback profile (unseeded Kimi model ids) matches the seeded Kimi profiles: temperature, top_p, frequency_penalty and presence_penalty are not sent, replacing the stale 2026-08-22 Fixed(1.0)/Fixed(0.95)/(-2.0..2.0) declarations that the 2026-10-15 probe contradicts (WINDOWS row 76, owner chose option (a))"
-  status: failed
+  status: resolved
+  resolved_by: 50-20-PLAN.md
+  resolved_at: 2026-10-19
   reason: "User reported: Row 76: option (a) -- align the Kimi adapter-wide fallback profile with the seeded Kimi profiles (temperature, top_p and penalties not sent)."
   severity: minor
   test: 5

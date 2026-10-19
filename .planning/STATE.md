@@ -4,11 +4,11 @@ milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 50.1
 current_phase_name: Consumer-Surface Readiness for v0.11.0
-status: planning
-stopped_at: Phase 50.1 context gathered
+status: ready_to_execute
+stopped_at: Phase 50.1 planned (9 plans, 7 waves) — ready to execute
 last_updated: "2026-10-19T20:01:37.619Z"
 last_activity: 2026-10-19
-last_activity_desc: Phase 50.1 inserted from the fourth web3sec handoff (`50.1-HANDOFF-web3sec-consumer-surface.md`); Phase 51 now runs after 50.1
+last_activity_desc: Phase 50.1 planned — 9 plans in 7 waves, plan-checker passed (iteration 2), requirements 6/6 and decisions 29/29 covered
 progress:
   total_phases: 13
   completed_phases: 11
@@ -65,7 +65,7 @@ under `milestones/`.
 Phase: 50.1 — Consumer-Surface Readiness for v0.11.0 (INSERTED after Phase 50, before Phase 51)
 Plan: Not started
 Status: Ready to discuss — handoff filed, SURFACE-01..06 minted, decisions D-A..D-E open
-Last activity: 2026-10-19 — Phase 50.1 inserted from the fourth web3sec handoff (`50.1-HANDOFF-web3sec-consumer-surface.md`); Phase 51 now runs after 50.1
+Last activity: 2026-10-19 — Phase 50.1 planned: 9 plans in 7 waves (`50.1-01..09-PLAN.md`), plan-checker passed, requirements 6/6 and CONTEXT decisions 29/29 covered; plans 02/06/07 carry owner checkpoints (D-05 door, D-07 `max_tokens`, operator probe)
 
 ## Performance Metrics
 
@@ -803,8 +803,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 ## Session Continuity
 
 **Last session:** 2026-10-19T20:01:33.790Z
-**Stopped at:** Phase 50.1 context gathered
-**Resume file:** .planning/phases/50.1-consumer-surface-readiness/50.1-CONTEXT.md
+**Stopped at:** Phase 50.1 planned (9 plans, 7 waves) — ready to execute
+**Resume file:** .planning/phases/50.1-consumer-surface-readiness/50.1-01-PLAN.md
 
 ## Operator Next Steps
 
@@ -858,8 +858,13 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
   deferred; **D-E** seed via probe re-run on the operator's keys, a listing-only tier, or decline
   with a `model_overrides` recipe. Phase 51's "Depends on" now names 50.1.
 
-- **Next:** `/clear` then `/gsd-discuss-phase 50.1` (no `50.1-CONTEXT.md` yet), then
-  `/gsd-plan-phase 50.1`; Phase 51 follows and plans against the harmonised `*Config::new` shape.
+- **Next:** `/clear` then `/gsd-execute-phase 50.1` — 9 plans in 7 waves; three owner checkpoints
+  along the way (50.1-02 the one-way D-05 constructor door, 50.1-06 the D-07 `max_tokens` source,
+  50.1-07 the probe run on the operator's keys with the D-16 candidate table). Research corrected
+  two CONTEXT premises (C1: `config.model` is not read by the adapters' window chain, so OpenAI's
+  `declared_capabilities` is not rewired; C2: "P31/P32/P33" are Phase 31/32/33 §9.2 rows, cited
+  by type). Phase 51 follows and plans against the harmonised `*Config::new` shape.
+- *(done 2026-10-19)* `/gsd-discuss-phase 50.1` and `/gsd-plan-phase 50.1`.
 
 - *(superseded 2026-10-19 by the Phase 50.1 insertion)* **Next:** `/clear` then `/gsd-discuss-phase 46` (no `46-CONTEXT.md` yet) or `/gsd-plan-phase 46`.
   Phase 46's migration guide (CURR-23) must carry Phase 48's `MIGRATION.md` §9.2 rows; Phase 47

@@ -1621,7 +1621,38 @@ handoff itself says.
      `paladin.unprofiled_model` for them, under the D-E option the operator chooses, with the seed
      rule in `registry/seeded.rs` and ADR-0061 still true of the tree (or D-D / D-E record the
      deferral and the §9.8 `model_overrides` recipe stands in).
-**Plans**: TBD
+**Plans**: 9 plans in 7 waves (planned 2026-10-19; plans 02, 06 and 07 are `autonomous: false`)
+
+Plans:
+**Wave 1**
+
+- [ ] 50.1-01-PLAN.md — Tracer: the Aegis family through the facade (five whole-module re-exports in `src/core/platform/mod.rs` plus nine prelude names, D-01/D-02) with the D-04 muster pins proven red first (`50.1-MUSTER-RED-EVIDENCE.md`, D-12); the `with_cadence`/`CadenceWiring` re-export with a facade-only doc test (SURFACE-05, D-13); the four §9.8 D-19 additions (Phase 31/32/33 rows cited by type); the 17 in-tree examples moved to `paladin::` paths (D-03)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 50.1-02-PLAN.md — `checkpoint:decision` on the one-way D-05 door (plus the D-06/C1 choice), then the tracer for the registered break: `with_base_url` and `with_timeout_seconds` macro arms for all nine types, `DeepSeekConfig::new(api_key, model)` with every call site and its muster pin, semver measured before any allowlist text, §9.2 row, new §9.8 DR-19, DR-12 amended
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 50.1-03-PLAN.md — Exhaustive `FinishReason`/`ArsenalError` pins (D-11) with a scripted-mutation red proof, the named `consumer-surface` CI job (D-10), the remaining Appendix B pins 3, 4, 6-12
+- [ ] 50.1-04-PLAN.md — Gemini (tracer), then Qwen + Grok, then Kimi move to `new(api_key, model)`; each commit carries its type's code, call sites, measured register entry and §9.2 row
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 50.1-05-PLAN.md — `OpenAIConfig.model` added without a break (stored, validated, `Debug`-printed; `declared_capabilities` not rewired per research C1) plus `with_organization`; then `OpenAIConfig::new(api_key, model)` with every call site and its register entry
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 50.1-06-PLAN.md — `checkpoint:decision` on the D-07 `max_tokens` source (new vs `from_env` asymmetry), the Anthropic tracer, then the SURFACE-02 seal: final semver measurement, DR-19 complete, §9.8 muster paragraph, harmonise todo moved to `completed/` with `resolves_phase: 50.1`
+- [ ] 50.1-07-PLAN.md — `autonomous: false`: the D-16 candidate id table (D-15 rule over the `50-SEED-PROBE.md` listings) plus an offline dry run (tracer), the operator's human-action probe run on their keys, the scrubbed `50.1-SEED-PROBE.md` (depends on no code plan; placed here so the operator checkpoint does not hold waves 2-5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 50.1-08-PLAN.md — Seed `claude-opus-4-8` and `deepseek-v4-pro` from the new transcript only (tracer, every ripple closed), then the rest of the measured Anthropic and Gemini range (D-15, D-17 defaults unchanged)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 50.1-09-PLAN.md — OpenAI, then Grok/Kimi/Qwen seeds; the §9.8 "Models seeded in Phase 50.1" bullet naming every behaviour a new seed brings; the conditional `model_overrides` recipe if a web3sec model failed the probe (success criterion 6 closes one way); the phase seal gates run once as plan-level verification
 
 ### Phase 51: Adjustable Reasoning Effort
 

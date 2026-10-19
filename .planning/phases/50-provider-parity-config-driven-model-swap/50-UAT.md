@@ -3,16 +3,16 @@ status: testing
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md, 50-19-SUMMARY.md, 50-20-SUMMARY.md, 50-21-SUMMARY.md, 50-22-SUMMARY.md, 50-23-SUMMARY.md, 50-24-SUMMARY.md, 50-25-SUMMARY.md, 50-26-SUMMARY.md, 50-27-SUMMARY.md, 50-28-SUMMARY.md, 50-29-SUMMARY.md, 50-30-SUMMARY.md, 50-31-SUMMARY.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-19T01:59:46Z
+updated: 2026-10-19T02:06:13Z
 ---
 
 ## Current Test
 <!-- OVERWRITE each test - shows where we are -->
 
-number: 13
-name: mdBook build with the rewritten usage, billing and migration docs
+number: 14
+name: Owner sign-off on the breaking change and the one open ledger row
 expected: |
-  `mdbook build` exits 0. In `docs/src/user-guides/switching-providers.md` the `## Responses` section names every fold (Grok reasoning, Gemini thoughts and tool-use prompt, Anthropic cache read/write including vision), each of the nine reasoning cells carries a `measured 2026-10-18` or `not live-measured` label, the Billing bullet describes `billed_usage()`, hop bills and failed attempts, the refusal pattern reads `Refusal { provider, model, detail, .. }`, and Known limits lists only remainder (c). MIGRATION 9.1 rows M-B-18..M-B-22 and 9.8 rows DR-17/DR-18 render.
+  Two items are recorded as owner decisions, not code gaps. (1) `paladin-ports` `LlmError::EmptyCompletion` changed from a tuple to a struct variant (semver `enum_tuple_variant_changed_kind`, allowlisted with a reason; MIGRATION DR-17 / M-B-22; root and crate CHANGELOG Breaking Changes). (2) WINDOWS row 77 stays open by the 2026-10-17 decision: Grok's `cost_in_usd_ticks` / `num_sources_used` are not parsed or compared with the Treasurer price (G-50-5a remainder (c)); ADR-0061 limit (6), the root CHANGELOG known limitation and the guide's Known limits name it. Rows 74, 75 and 76 read `fixed`.
 awaiting: user response
 
 ## Tests
@@ -83,7 +83,7 @@ result: pass
 ### 13. mdBook build with the rewritten usage, billing and migration docs
 expected: |
   `mdbook build` exits 0. In `docs/src/user-guides/switching-providers.md` the `## Responses` section names every fold (Grok reasoning, Gemini thoughts and tool-use prompt, Anthropic cache read/write including vision), each of the nine reasoning cells carries a `measured 2026-10-18` or `not live-measured` label, the Billing bullet describes `billed_usage()`, hop bills and failed attempts, the refusal pattern reads `Refusal { provider, model, detail, .. }`, and Known limits lists only remainder (c). MIGRATION 9.1 rows M-B-18..M-B-22 and 9.8 rows DR-17/DR-18 render.
-result: [pending]
+result: pass
 
 ### 14. Owner sign-off on the breaking change and the one open ledger row
 expected: |
@@ -93,9 +93,9 @@ result: [pending]
 ## Summary
 
 total: 14
-passed: 11
+passed: 12
 issues: 1
-pending: 2
+pending: 1
 skipped: 0
 blocked: 0
 

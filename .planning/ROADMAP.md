@@ -1365,7 +1365,7 @@ the existing credential gate with the env vars Paladin already reads.
      every intentional break; `make clean-code`, `make check-gates`, `make api-surface`,
      `make security` and the 82 % coverage floor stay green, with no `unwrap`/`expect`/`panic!`
      added to library code.
-**Plans**: 31 plans (18 executed + 13 gap closure)
+**Plans**: 32 plans (18 executed + 14 gap closure)
 
 Plans:
 **Wave 1**
@@ -1478,6 +1478,10 @@ Plans:
 **Wave 26** *(gap-closure wave 11; blocked on Wave 25 completion)*
 
 - [x] 50-31-PLAN.md — G-50-5a: end-to-end matrix case through real adapters to the ledger; billing contract documented (docs, changelogs, MIGRATION, ADR-0061); WINDOWS row 74 fixed; remainder (c) Grok cost cross-check kept open as the owner's accepted deferral
+
+**Wave 27** *(gap-closure wave 12; blocked on Wave 26 completion)*
+
+- [ ] 50-32-PLAN.md — review WR-03: a hopped-past fallback bill is priced (pricer installed by `PricingLlmAdapter` before it delegates) and counted into `ATTEMPT_SPEND` at its hop, so an attempt cut off mid-call by the engine's deadline or idle bound is charged for it; `HoppedBills::install_pricer` / `count_and_take`, exactly-once fold; paused-clock drop tests (buffered, streamed, real engine); spend_scope docs and MIGRATION DR-18 limit text replaced; WR-03 WINDOWS row opened and closed
 
 ### Phase 51: Adjustable Reasoning Effort
 

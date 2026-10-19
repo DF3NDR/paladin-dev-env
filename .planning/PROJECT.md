@@ -145,6 +145,28 @@ Phase 37 plans; 2 open artifacts acknowledged — both already deferred by Phase
 entry points with `# Examples` doctests, `WINDOWS.md` `open_count: 0`, MSRV 1.88 measured. Full
 record: `MILESTONES.md`. **Next: `/gsd-new-milestone`** — new phases start at Phase 38.
 
+**Phase 50 complete (2026-10-19)** — provider-parity-config-driven-model-swap (PARITY-01..08; 31
+plans: 18 original plus the 13-plan gap-closure set 50-19..50-31, 167 phase commits). In the tree: any
+Paladin agent moves between the nine LLM providers by configuration only, or `PaladinBuilder` refuses
+at build time naming provider, model and parameter (ADR-0061 amending ADR-0004: refuse an explicit
+unsupported value, omit an auto-selected one visibly under `paladin.params_omitted`); the OpenAI
+adapter sends the real user turn (`turn::user_turn_text` on all five request builders) and
+`max_completion_tokens`; `ModelProfile`/`ParamSupport` in paladin-ports with a dated per-model registry
+(`registry/seeded.rs`, 14 ids probed 2026-10-15) that `Commissary::for_model` and the `HistoryTrimmer`
+ration against; `LlmProviderFactory::create_from_config` honours every `llm.<provider>` block and the
+facade exports all nine adapter/config pairs behind the ADR-0046 features; every adapter shares
+`classify_completion` (typed `Refusal`, `EmptyCompletion` on any stop reason), reconciles the vendor
+token total (`usage_reconcile.rs`, `paladin.usage_unreconciled`) and bills empty/refused calls through
+`BilledUsage` so the Treasurer ledger settles them, including hopped-past fallback hops and failed
+Battalion attempts (`IncurredSpend`, `ATTEMPT_SPEND`, `HOPPED_BILLS`); fallback chains send each hop its
+own model; the nine-provider swap matrix (52 cases) and the 20-case conformance suite are green; the
+credential-gated `live_vendor_smoke` (with `--probe`/`--usage`) and the mdBook "Switching providers"
+page ship. Re-verification `passed` 9/9 (6 success criteria + gaps G-50-5a/5b/5c), UAT 14/14, security
+verified (0 open), Nyquist validated, code review iteration 2: 0 critical, 4 warnings open for
+`/gsd-code-review 50 --fix`. WINDOWS rows 74-76 fixed; row 77 (Grok `cost_in_usd_ticks` cross-check)
+stays open as the owner's accepted deferral. Next: `/gsd-discuss-phase 51` (Adjustable Reasoning
+Effort, depends on PARITY-02..06).
+
 **Phase 42 complete (2026-10-07)** — mid-run-halt-sse-terminal-status, the enforcement half of the
 Treasurer (ALLOW-03, ALLOW-05, PLAT-09; 12 plans in 12 sequential waves, 68 phase commits plus two
 review-fix rounds). In the tree: the `WarEngine` consults a `SpendGuard` port at every superstep
@@ -2010,6 +2032,15 @@ This document evolves at phase transitions and milestone boundaries.
 2. Core Value check — still the right priority?
 3. Audit Out of Scope — reasons still valid?
 4. Update Context with current state
+
+---
+*Last updated: 2026-10-19 after **Phase 50: Provider Parity & Configuration-Driven Model Swap**
+completed and re-verified — nine-provider config-only swap with build-time refusal by name
+(ADR-0061), per-model profile registry, config-driven construction and facade exports, response/error
+parity with vendor-total reconciliation and billed failures settled to the ledger, per-hop fallback
+models, 52-case swap matrix and 20-case conformance suite, live smoke and the "Switching providers"
+page. Verification `passed` 9/9; UAT 14/14; security verified; Nyquist validated; code review
+iteration 2 leaves 4 warnings for `--fix`. Next: `/gsd-discuss-phase 51`.*
 
 ---
 *Last updated: 2026-10-14 after **Phase 48: Base Entity Rename** completed and verified — the

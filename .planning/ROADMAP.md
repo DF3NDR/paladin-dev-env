@@ -1626,7 +1626,7 @@ handoff itself says.
 Plans:
 **Wave 1**
 
-- [ ] 50.1-01-PLAN.md — Tracer: the Aegis family through the facade (five whole-module re-exports in `src/core/platform/mod.rs` plus nine prelude names, D-01/D-02) with the D-04 muster pins proven red first (`50.1-MUSTER-RED-EVIDENCE.md`, D-12); the `with_cadence`/`CadenceWiring` re-export with a facade-only doc test (SURFACE-05, D-13); the four §9.8 D-19 additions (Phase 31/32/33 rows cited by type); the 17 in-tree examples moved to `paladin::` paths (D-03)
+- [x] 50.1-01-PLAN.md — Tracer: the Aegis family through the facade (five whole-module re-exports in `src/core/platform/mod.rs` plus nine prelude names, D-01/D-02) with the D-04 muster pins proven red first (`50.1-MUSTER-RED-EVIDENCE.md`, D-12); the `with_cadence`/`CadenceWiring` re-export with a facade-only doc test (SURFACE-05, D-13); the four §9.8 D-19 additions (Phase 31/32/33 rows cited by type); the 17 in-tree examples moved to `paladin::` paths (D-03)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

@@ -324,7 +324,7 @@ harmonisation todo of 2026-10-16 by owner decision (2026-10-18) and must land be
 the same nine types. Depends on PARITY-03/04 and ADOPT-04. A new prefix, the forty-first. Decisions
 D-A..D-D of the handoff plus D-E (the seed-rule conflict found at filing) are settled at discuss.*
 
-- [ ] **SURFACE-01**: The Aegis family — `Aegis`, `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`,
+- [x] **SURFACE-01**: The Aegis family — `Aegis`, `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`,
   `NodeError`, `NodeErrorSource`, `TimeoutKind`, `NodeId`, `Transience` — is nameable through the
   `paladin` facade (whole `aegis` / `node_error` modules or selected items, D-A), so the MIGRATION
   §9.8 DR-1, DR-2, DR-8 and DR-9 recipes compile with `paladin::` paths alone and no direct
@@ -344,7 +344,7 @@ D-A..D-D of the handoff plus D-E (the seed-rule conflict found at filing) are se
   refreshed, every in-tree call site (examples, `config::bridge`, the provider factory, tests)
   migrated in the same commits and the `paladin-llm` doctests showing the new shape
 
-- [ ] **SURFACE-03**: `tests/consumer_surface_muster.rs` pins every item in handoff Appendix B —
+- [x] **SURFACE-03**: `tests/consumer_surface_muster.rs` pins every item in handoff Appendix B —
   `with_aegis` and the `node_errors` element shape; `LlmError::rate_limited` and the
   `RateLimitExceeded { .. }`, `UsageLimitExceeded { .. }` and `ProcessingError(..)` arms;
   `DeepSeekConfig::new` / `AnthropicConfig::new` in the SURFACE-02 shape with
@@ -357,7 +357,7 @@ D-A..D-D of the handoff plus D-E (the seed-rule conflict found at filing) are se
   one new pin proven red first (`50.1-MUSTER-RED-EVIDENCE.md`), the muster compiling at the seal,
   and D-C (a dedicated gate or CI step for `make check-consumer-surface`) recorded
 
-- [ ] **SURFACE-04**: MIGRATION §9.8 "Library consumers" carries four additions a direct-adapter
+- [x] **SURFACE-04**: MIGRATION §9.8 "Library consumers" carries four additions a direct-adapter
   consumer needs: a pointer list to the pre-`v0.10.0` §9.2 rows (P31 `TokenUsage` fields and
   `from_total`, `PaladinResult.token_count` → `usage`, `StreamingResponse` `#[non_exhaustive]`;
   P32 `Commissary::new` / `from_port` without `is_exact_counter`, `TokenCounter` /
@@ -370,7 +370,7 @@ D-A..D-D of the handoff plus D-E (the seed-rule conflict found at filing) are se
   its two remedies (`context_window`, or `Commissary::for_model`) — so Phase 46's migration guide
   inherits them
 
-- [ ] **SURFACE-05**: A facade-reachable pacing-only composition path (a re-export of
+- [x] **SURFACE-05**: A facade-reachable pacing-only composition path (a re-export of
   `paladin_llm::cadence::with_cadence`, or a `pace_llm(llm, wiring)`) lets a direct-adapter
   consumer wrap an `Arc<dyn LlmPort>` in Cadence through `paladin::` with no `PriceTable`,
   proven by one doc test (or D-D records the deferral)
@@ -538,11 +538,11 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REASON-05 | Phase 51 | Pending |
 | REASON-06 | Phase 51 | Pending |
 | REASON-07 | Phase 51 | Pending |
-| SURFACE-01 | Phase 50.1 | Pending |
+| SURFACE-01 | Phase 50.1 | Complete |
 | SURFACE-02 | Phase 50.1 | Pending |
-| SURFACE-03 | Phase 50.1 | Pending |
-| SURFACE-04 | Phase 50.1 | Pending |
-| SURFACE-05 | Phase 50.1 | Pending |
+| SURFACE-03 | Phase 50.1 | Complete |
+| SURFACE-04 | Phase 50.1 | Complete |
+| SURFACE-05 | Phase 50.1 | Complete |
 | SURFACE-06 | Phase 50.1 | Pending |
 
 **Coverage:**

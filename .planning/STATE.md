@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: Crate Release
 current_phase: 50.1
-current_phase_name: Consumer-Surface Readiness for v0.11.0
-status: ready_to_execute
-stopped_at: Phase 50.1 planned (9 plans, 7 waves) — ready to execute
-last_updated: "2026-10-19T20:01:37.619Z"
+current_phase_name: consumer-surface-readiness
+status: executing
+stopped_at: Completed 50.1-01-PLAN.md
+last_updated: "2026-10-19T22:20:40.914Z"
 last_activity: 2026-10-19
-last_activity_desc: Phase 50.1 planned — 9 plans in 7 waves, plan-checker passed (iteration 2), requirements 6/6 and decisions 29/29 covered
+last_activity_desc: Phase 50.1 execution started
 progress:
   total_phases: 13
   completed_phases: 11
-  total_plans: 121
-  completed_plans: 121
+  total_plans: 130
+  completed_plans: 122
 ---
 
 # Project State
@@ -25,7 +25,7 @@ See: .planning/PROJECT.md (updated 2026-10-14 after Phase 48)
 **Core value:** A Rust developer can compose and run multi-agent workflows against any supported
 LLM provider through stable port abstractions — without their own domain code depending on a
 provider, transport, or storage implementation.
-**Current focus:** Phase 50.1 — consumer-surface-readiness (inserted 2026-10-19 after the Phase 50 seal, before Phase 51, from the fourth web3sec handoff; six SURFACE-* requirements: facade Aegis exports, harmonised `*Config::new` + `with_timeout_seconds`, muster coverage, four §9.8 consumer-guide gaps, pacing-only composition, two model seeds). Previously: Phase 50 — provider-parity-config-driven-model-swap
+**Current focus:** Phase 50.1 — consumer-surface-readiness
 2026-10-14 from the web3sec handoff and sequenced before Phases 46-47 (the first of a series of
 consumer-driven phases). Phase 50 (Provider Parity & Configuration-Driven Model Swap, added
 2026-10-14 from the second web3sec handoff, `50-HANDOFF-web3sec-parity.md`) follows it, then Phase 51
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([██████████] 100%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([█████████░] 94%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -62,10 +62,10 @@ under `milestones/`.
 
 ## Current Position
 
-Phase: 50.1 — Consumer-Surface Readiness for v0.11.0 (INSERTED after Phase 50, before Phase 51)
-Plan: Not started
-Status: Ready to discuss — handoff filed, SURFACE-01..06 minted, decisions D-A..D-E open
-Last activity: 2026-10-19 — Phase 50.1 planned: 9 plans in 7 waves (`50.1-01..09-PLAN.md`), plan-checker passed, requirements 6/6 and CONTEXT decisions 29/29 covered; plans 02/06/07 carry owner checkpoints (D-05 door, D-07 `max_tokens`, operator probe)
+Phase: 50.1 (consumer-surface-readiness) — EXECUTING
+Plan: 2 of 9
+Status: Ready to execute
+Last activity: 2026-10-19 — Phase 50.1 execution started
 
 ## Performance Metrics
 
@@ -329,6 +329,7 @@ Last activity: 2026-10-19 — Phase 50.1 planned: 9 plans in 7 waves (`50.1-01..
 | Phase 50 P30 | 30min | 2 tasks | 7 files |
 | Phase 50 P31 | 16min | 3 tasks | 8 files |
 | Phase 50 P32 | approx 1h20m | 3 tasks | 10 files |
+| Phase 50.1 P01 | 35min | 3 tasks | 26 files |
 
 ## Accumulated Context
 
@@ -583,6 +584,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50-30: paladin_ports spend_scope HoppedBills / HOPPED_BILLS / record_hopped_bill; FallbackLlmAdapter records every billed hop it moves past (warn-once with no collector), PricingLlmAdapter prices each against its own model; the agent loop folds hop bills into usage, cost and the attempt scope and settles each call's parts in ONE row (run_id, ordinal, 1) with a per-model breakdown, buffered, structured and at every streamed exit; no public type changes shape
 - [Phase ?]: 50-31: G-50-5a closed end to end: provider_swap_matrix case billed_failures_and_hopped_refusals_reach_the_ledger (real adapters, Pricing(Fallback), execution service, InMemoryTreasuryLedger); docs, CHANGELOGs, MIGRATION M-B-21/M-B-22/DR-18 and ADR-0061 limit (6) describe the shipped billing contract; WINDOWS row 74 fixed, remainder (c) (Grok cost_in_usd_ticks / num_sources_used) open as row 77 by the owner's 2026-10-17 deferral
 - [Phase ?]: 50-32: a hopped-past fallback bill is priced (collector-installed pricer, own model) and counted into ATTEMPT_SPEND at the hop; count_and_take counts only uncounted entries; additive unreleased surface (D-00b)
+- [Phase ?]: 50.1-01: Aegis family reaches consumers through five facade module re-exports plus nine prelude names; pacing-only path is public with_cadence; section 9.8 spend-cap wording names only evidenced vendors
 
 ### Pending Todos
 
@@ -802,9 +804,9 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-19T20:01:33.790Z
-**Stopped at:** Phase 50.1 planned (9 plans, 7 waves) — ready to execute
-**Resume file:** .planning/phases/50.1-consumer-surface-readiness/50.1-01-PLAN.md
+**Last session:** 2026-10-19T22:20:40.874Z
+**Stopped at:** Completed 50.1-01-PLAN.md
+**Resume file:** None
 
 ## Operator Next Steps
 
@@ -864,6 +866,7 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
   two CONTEXT premises (C1: `config.model` is not read by the adapters' window chain, so OpenAI's
   `declared_capabilities` is not rewired; C2: "P31/P32/P33" are Phase 31/32/33 §9.2 rows, cited
   by type). Phase 51 follows and plans against the harmonised `*Config::new` shape.
+
 - *(done 2026-10-19)* `/gsd-discuss-phase 50.1` and `/gsd-plan-phase 50.1`.
 
 - *(superseded 2026-10-19 by the Phase 50.1 insertion)* **Next:** `/clear` then `/gsd-discuss-phase 46` (no `46-CONTEXT.md` yet) or `/gsd-plan-phase 46`.

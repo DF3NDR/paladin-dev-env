@@ -1296,6 +1296,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Governed exception for `zip 3.0.0` (RUSTSEC-2026-0367/0368/0369; Phase 50 seal).** The three
+  extraction advisories published 2026-10-09/10 (SUID/SGID bits, symlink targets outside the
+  destination, permissions through symlinks) reach this workspace only as a build-dependency of
+  `utoipa-swagger-ui 9.0.2` under `paladin-web`'s `vendored` Swagger UI bundle. No published
+  `utoipa-swagger-ui` release depends on the patched `zip >= 9` (9.0.2 pins `^3.0`, 10.0.x pins
+  `^8.6`), so three register rows were added to `SECURITY-EXCEPTIONS.md` (owner, review date
+  2026-12-31, build-time-only scope, never-calls-`extract` compensating control) and mirrored into
+  `.cargo/audit.toml` and `deny.toml`; `make security` and `scripts/check-advisory-register.sh`
+  pass. Revisit when `utoipa-swagger-ui` moves to `zip >= 9`. No `Cargo.lock` change.
+
 - Lockfile-only dependency refresh. `quinn-proto` 0.11.16 -> 0.11.19 (with `quinn` 0.11.12 and
   `quinn-udp` 0.5.16), clearing RUSTSEC-2026-0338, -0339, -0340, -0341 and -0342, the five
   vulnerability advisories that failed the `Security Audit` and `License & Dependency Policy`

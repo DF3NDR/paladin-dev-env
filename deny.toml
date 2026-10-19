@@ -120,6 +120,9 @@ ignore = [
     "RUSTSEC-2026-0187", # lopdf (stack-overflow) — transitive via pdf-extract (paladin-content)
     "RUSTSEC-2026-0194", # quick-xml (quadratic attr parsing DoS) — transitive via rust-s3/aws-creds (optional s3)
     "RUSTSEC-2026-0195", # quick-xml (namespace-alloc DoS) — transitive via rust-s3/aws-creds (optional s3)
+    "RUSTSEC-2026-0367", # zip (SUID/SGID bits on extract) — build-dependency of utoipa-swagger-ui (paladin-web), build time only
+    "RUSTSEC-2026-0368", # zip (symlink target outside destination) — build-dependency of utoipa-swagger-ui (paladin-web), build time only
+    "RUSTSEC-2026-0369", # zip (permissions through symlinks) — build-dependency of utoipa-swagger-ui (paladin-web), build time only
 
     # --- Unmaintained advisories (cargo-deny only; cargo-audit does not gate on these; see SECURITY-EXCEPTIONS.md) ---
     "RUSTSEC-2021-0141", # dotenv (unmaintained) — local .env file loading; replace with dotenvy later

@@ -34,10 +34,20 @@
 #   allocation (DoS). The remaining < 0.41 instance is transitive via `rust-s3`/`aws-creds`
 #   (optional `s3`); no `rust-s3` release uses quick-xml >= 0.41 yet. The `rss`/`atom_syndication`
 #   path was upgraded to quick-xml 0.41. Revisit when `rust-s3` bumps quick-xml.
+#
+# RUSTSEC-2026-0367 / -0368 / -0369: zip 3.0.0 extraction advisories (SUID/SGID bits, symlink
+#   targets outside the destination, permissions applied through symlinks). zip is a
+#   build-dependency of `utoipa-swagger-ui` (paladin-web, `vendored` feature) only: its build
+#   script unpacks the crate's own embedded Swagger UI bundle, never calls the affected
+#   `extract` APIs, and zip is linked into no shipped binary. No utoipa-swagger-ui release
+#   depends on zip >= 9 (9.0.2 -> ^3.0, 10.0.x -> ^8.6, checked 2026-10-19). Revisit when one does.
 ignore = [
     "RUSTSEC-2023-0071",
     "RUSTSEC-2025-0111",
     "RUSTSEC-2026-0187",
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]

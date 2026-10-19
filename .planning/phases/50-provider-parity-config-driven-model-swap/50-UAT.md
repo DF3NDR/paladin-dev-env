@@ -1,19 +1,14 @@
 ---
-status: testing
+status: complete
 phase: 50-provider-parity-config-driven-model-swap
 source: [50-VERIFICATION.md, 50-19-SUMMARY.md, 50-20-SUMMARY.md, 50-21-SUMMARY.md, 50-22-SUMMARY.md, 50-23-SUMMARY.md, 50-24-SUMMARY.md, 50-25-SUMMARY.md, 50-26-SUMMARY.md, 50-27-SUMMARY.md, 50-28-SUMMARY.md, 50-29-SUMMARY.md, 50-30-SUMMARY.md, 50-31-SUMMARY.md]
 started: 2026-10-16T22:51:11Z
-updated: 2026-10-19T02:06:13Z
+updated: 2026-10-19T02:09:17Z
 ---
 
 ## Current Test
-<!-- OVERWRITE each test - shows where we are -->
 
-number: 14
-name: Owner sign-off on the breaking change and the one open ledger row
-expected: |
-  Two items are recorded as owner decisions, not code gaps. (1) `paladin-ports` `LlmError::EmptyCompletion` changed from a tuple to a struct variant (semver `enum_tuple_variant_changed_kind`, allowlisted with a reason; MIGRATION DR-17 / M-B-22; root and crate CHANGELOG Breaking Changes). (2) WINDOWS row 77 stays open by the 2026-10-17 decision: Grok's `cost_in_usd_ticks` / `num_sources_used` are not parsed or compared with the Treasurer price (G-50-5a remainder (c)); ADR-0061 limit (6), the root CHANGELOG known limitation and the guide's Known limits name it. Rows 74, 75 and 76 read `fixed`.
-awaiting: user response
+[testing complete]
 
 ## Tests
 
@@ -43,7 +38,9 @@ expected: |
   Row 75: OpenAI adapter sends `max_tokens`, which `gpt-5.4-nano` rejects with HTTP 400; decide whether to switch to `max_completion_tokens` per model.
   Row 76: the Kimi adapter-wide fallback profile (Fixed 1.0 temperature) contradicts the 2026-10-15 probe for unseeded Kimi ids.
   Each is an accepted, ledgered deviation that needs an owner call code cannot make.
-result: issue
+result: pass
+resolved_by: [50-19-PLAN.md, 50-20-PLAN.md, 50-21-PLAN.md, 50-22-PLAN.md, 50-23-PLAN.md, 50-24-PLAN.md, 50-25-PLAN.md, 50-26-PLAN.md, 50-27-PLAN.md, 50-28-PLAN.md, 50-29-PLAN.md, 50-30-PLAN.md, 50-31-PLAN.md]
+resolved_at: 2026-10-19
 reported: "Row 74: don't dismiss the provider's total token counts -- those are what the vendor charges for, and the Treasurer and Commissary depend on these counts; record as a gap and create a gap-closure plan. Row 75: option (a) -- switch the OpenAI adapter to always send max_completion_tokens. Row 76: option (a) -- align the Kimi adapter-wide fallback profile with the seeded Kimi profiles (temperature, top_p and penalties not sent)."
 severity: major
 
@@ -88,14 +85,14 @@ result: pass
 ### 14. Owner sign-off on the breaking change and the one open ledger row
 expected: |
   Two items are recorded as owner decisions, not code gaps. (1) `paladin-ports` `LlmError::EmptyCompletion` changed from a tuple to a struct variant (semver `enum_tuple_variant_changed_kind`, allowlisted with a reason; MIGRATION DR-17 / M-B-22; root and crate CHANGELOG Breaking Changes). (2) WINDOWS row 77 stays open by the 2026-10-17 decision: Grok's `cost_in_usd_ticks` / `num_sources_used` are not parsed or compared with the Treasurer price (G-50-5a remainder (c)); ADR-0061 limit (6), the root CHANGELOG known limitation and the guide's Known limits name it. Rows 74, 75 and 76 read `fixed`.
-result: [pending]
+result: pass
 
 ## Summary
 
 total: 14
-passed: 12
-issues: 1
-pending: 1
+passed: 14
+issues: 0
+pending: 0
 skipped: 0
 blocked: 0
 

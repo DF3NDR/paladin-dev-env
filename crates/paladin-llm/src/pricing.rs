@@ -167,8 +167,9 @@ impl PricingLlmAdapter {
     /// the priced bill is set back on the error ([`LlmError::with_billed_usage`]). Any other
     /// error, or a bill that already carries a cost, is returned unchanged. Shared by `generate`
     /// (priced against the bill's served model, as a success is priced against
-    /// `response.model`) and the `generate_stream` error items (priced against the request
-    /// model, the Phase 31 stream contract), so the two run paths cannot diverge (D-09).
+    /// `response.model`) and the `generate_stream` error items (also priced against the bill's
+    /// model; the request model only when the bill names none), so the two run paths cannot
+    /// diverge (D-09).
     fn price_billed_error(table: &PriceTable, model: Option<&str>, err: LlmError) -> LlmError {
         let priced = match err.billed_usage() {
             Some(billed) if billed.cost.is_none() => {
@@ -241,9 +242,10 @@ impl LlmPort for PricingLlmAdapter {
     /// the missing usage, Phase 31 D-17). Every non-terminal chunk passes through unchanged.
     ///
     /// An `Err` item that carries a bill ([`LlmError::billed_usage`], G-50-5a: a stream that
-    /// ended empty or refused) is priced the same way, against the request's model, through the
-    /// helper `generate` uses for billed errors; an unpriced model keeps `cost: None` and warns
-    /// once. Any other `Err` item passes through unchanged.
+    /// ended empty or refused) is priced against the BILL's own model -- the hop that billed it,
+    /// which a billed error names unlike an `Ok` terminal chunk -- through the helper `generate`
+    /// uses for billed errors (the request's model only when the bill names none); an unpriced
+    /// model keeps `cost: None` and warns once. Any other `Err` item passes through unchanged.
     async fn generate_stream(
         &self,
         request: LlmRequest,
@@ -277,13 +279,20 @@ impl LlmPort for PricingLlmAdapter {
                     None => chunk,
                 })
             }
-            // G-50-5a: a billed error item is priced like a terminal chunk, against the
-            // request's model, through the same helper `generate` uses (D-09).
+            // G-50-5a / WR-01: a billed error item names the hop that billed it
+            // (`BilledUsage::model`), unlike an `Ok` terminal chunk, so it is priced against that
+            // model through the helper `generate` uses (D-09) -- after a fallback hop rewrote the
+            // request model the request's row would be the wrong rate. Only a bill that names no
+            // model falls back to the request's model.
             Err(err) => {
                 if let Some(bills) = &hopped {
                     Self::price_hopped_bills(&table, bills);
                 }
-                Err(Self::price_billed_error(&table, Some(&model), err))
+                let unnamed = err
+                    .billed_usage()
+                    .filter(|billed| billed.model.is_empty())
+                    .map(|_| model.as_str());
+                Err(Self::price_billed_error(&table, unnamed, err))
             }
         });
         Ok(Box::new(priced))
@@ -758,27 +767,35 @@ mod tests {
         );
     }
 
-    /// G-50-5a / D-09: a stream's billed `Err` item is priced against the REQUEST's model (the
-    /// Phase 31 stream contract), not the bill's own model; deltas already yielded are
-    /// unchanged; an unpriced request model leaves `cost: None`; an unbilled error is untouched.
+    /// G-50-5a / D-09 / WR-01: a stream's billed `Err` item is priced against the BILL's own
+    /// model (the hop that billed it, as `generate` prices it), not the request's model, so a
+    /// fallback-served stream is not mispriced; an empty bill model falls back to the request's
+    /// model; an unpriced bill model leaves `cost: None`; deltas already yielded and unbilled
+    /// errors are untouched.
     #[tokio::test]
     async fn priced_billed_stream_error_carries_its_cost() {
         use paladin_ports::output::llm_port::BilledUsage;
 
-        let billed = || {
-            LlmError::empty_completion("finish_reason=stop with empty content").with_billed_usage(
-                BilledUsage::new("bill-model-not-in-table", TokenUsage::new(1_000, 2_000)),
-            )
+        let billed = |model: &str| {
+            LlmError::empty_completion("finish_reason=stop with empty content")
+                .with_billed_usage(BilledUsage::new(model, TokenUsage::new(1_000, 2_000)))
         };
         let items = |adapter: PricingLlmAdapter, model: &'static str| async move {
             let stream = adapter.generate_stream(request(model)).await.unwrap();
             Box::into_pin(stream).collect::<Vec<_>>().await
         };
 
+        // The bill names `gpt-4`; the request names a model with no row. The bill's own model
+        // is what is priced.
         let mock = Arc::new(
-            MockLlmAdapter::new().with_stream_items(vec![Ok("partial".to_string()), Err(billed())]),
+            MockLlmAdapter::new()
+                .with_stream_items(vec![Ok("partial".to_string()), Err(billed("gpt-4"))]),
         );
-        let got = items(PricingLlmAdapter::new(mock, usd_table()), "gpt-4").await;
+        let got = items(
+            PricingLlmAdapter::new(mock, usd_table()),
+            "p50-request-model-not-in-table",
+        )
+        .await;
         assert_eq!(got.len(), 2);
         let first = got[0].as_ref().expect("the delta is yielded unchanged");
         assert_eq!(first.delta, "partial");
@@ -789,21 +806,32 @@ mod tests {
         let cost = bill
             .cost
             .as_ref()
-            .expect("priced against the request model's row");
+            .expect("priced against the bill model's row");
         assert_eq!(cost.nanos(), 22_500_000);
         assert_eq!(cost.currency().as_str(), "USD");
 
-        let mock = Arc::new(MockLlmAdapter::new().with_stream_items(vec![Err(billed())]));
-        let got = items(
-            PricingLlmAdapter::new(mock, usd_table()),
-            "p50-27-unpriced-stream",
-        )
-        .await;
+        // The request's model has a row, the bill's model does not: the bill stays unpriced
+        // rather than being charged at the request model's rate (WR-01).
+        let mock =
+            Arc::new(MockLlmAdapter::new().with_stream_items(vec![Err(billed("bill-model-x"))]));
+        let got = items(PricingLlmAdapter::new(mock, usd_table()), "gpt-4").await;
         let err = got[0].as_ref().expect_err("the item is the error");
         assert_eq!(
             err.billed_usage().map(|bill| bill.cost.clone()),
             Some(None),
-            "an unpriced request model must never carry a cost"
+            "an unpriced bill model must never carry a cost"
+        );
+
+        // A bill that names no model is priced at the request's model.
+        let mock = Arc::new(MockLlmAdapter::new().with_stream_items(vec![Err(billed(""))]));
+        let got = items(PricingLlmAdapter::new(mock, usd_table()), "gpt-4").await;
+        let err = got[0].as_ref().expect_err("the item is the error");
+        assert_eq!(
+            err.billed_usage()
+                .and_then(|bill| bill.cost.as_ref())
+                .map(Cost::nanos),
+            Some(22_500_000),
+            "an empty bill model falls back to the request model"
         );
 
         let mock = Arc::new(

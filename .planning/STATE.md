@@ -64,8 +64,8 @@ under `milestones/`.
 
 Phase: 50 (provider-parity-config-driven-model-swap) — EXECUTING
 Plan: 32 of 32 (gap-closure 50-32 complete)
-Status: Phase 50 plans complete; awaiting post-merge gates and verification
-Last activity: 2026-10-19 — Phase 50 execution started
+Status: Phase 50 plans complete; post-merge gates done on e45abf77 (workspace lib/bins 14 binaries, 5169 passed, only the ledgered WINDOWS row 73 pair failing; `make api-surface` unchanged; review iteration 3: 0 critical, 0 warning). Re-verification: gaps_found, 13/14 — the one gap is SC6 `make security`, blocked by RUSTSEC-2026-0367/0368/0369 on `zip 3.0.0` (build-dependency of `utoipa-swagger-ui`, not a Phase 50 change, no upstream release fixes it). Awaiting the owner decision recorded in 50-VALIDATION.md: register an exception or hold the seal.
+Last activity: 2026-10-19 — Plan 50-32 gates and re-verification complete; phase seal blocked on the `make security` owner decision
 
 ## Performance Metrics
 

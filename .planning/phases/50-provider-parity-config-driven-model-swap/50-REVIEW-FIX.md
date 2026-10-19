@@ -1,152 +1,106 @@
 ---
 phase: 50-provider-parity-config-driven-model-swap
-fixed_at: 2026-10-17T00:00:00Z
+fixed_at: 2026-10-19T00:00:00Z
 review_path: .planning/phases/50-provider-parity-config-driven-model-swap/50-REVIEW.md
-iteration: 1
-fix_scope: critical_warning
-findings_in_scope: 6
-fixed: 6
+iteration: 2
+findings_in_scope: 4
+fixed: 4
 skipped: 0
 status: all_fixed
 ---
 
-# Phase 50: Code Review Fix Report
+# Phase 50: Code Review Fix Report (iteration 2)
 
-**Fixed at:** 2026-10-17
+**Fixed at:** 2026-10-19
 **Source review:** `.planning/phases/50-provider-parity-config-driven-model-swap/50-REVIEW.md`
-**Iteration:** 1
-**Scope:** Critical and Warning (IN-01..IN-06 left alone)
+**Iteration:** 2
 
 **Summary:**
-- Findings in scope: 6
-- Fixed: 6
+- Findings in scope: 4 (WR-01..WR-04; IN-01..IN-06 are out of scope for `critical_warning`)
+- Fixed: 4 (WR-03 by documenting the limit, not by a code change; see below)
 - Skipped: 0
 
-All six commits are on `claude/laughing-dirac-e0h2ax` (not pushed). Work was done in an isolated worktree and
-fast-forwarded onto the branch; the worktree, temp branch and recovery sentinel are gone. A seventh commit
-(`004dcae7`) adds the paladin-llm CHANGELOG note.
+Each fix landed with a failing regression test first (WR-01, WR-02, WR-04). Work was done directly on
+branch `claude/laughing-dirac-e0h2ax` in the main checkout, as the caller instructed, rather than in a
+separate worktree.
 
 ## Fixed Issues
 
-### CR-01: A vendor refusal is retried as if it were transient
+### WR-01: A streamed billed error is priced at the request model, not the bill's own model
 
-**Status:** fixed
-**Commit:** `5f2746fa`
-**Files modified:** `crates/paladin-llm/src/anthropic/adapter.rs`, `crates/paladin-llm/src/compat/engine.rs`,
-`crates/paladin-llm/src/deepseek/adapter.rs`, `crates/paladin-llm/src/gemini/adapter.rs`,
-`crates/paladin-llm/src/conformance.rs`
-**Applied fix:** Added `LlmError::Refusal { .. }` to the non-retryable set of the Anthropic, shared-engine,
-DeepSeek and Gemini retry loops (the review named two; DeepSeek and Gemini carry the same set and also classify
-inside the retried closure, so they had the same defect). OpenAI classifies outside its retry loop and needed no
-change. Updated the "Non-retryable set" doc comment in `compat/engine.rs`. The conformance case
-`refusal_is_typed_and_permanent` now registers its mock with `.expect(1)` and calls `assert_async()`. Red-first:
-with only the test change, the five shared-engine fixtures (Kimi, Qwen, Grok, Ollama, OpenAI-compatible) failed;
-all nine pass after the fix.
+**Files modified:** `crates/paladin-llm/src/pricing.rs`
+**Commit:** 5a9f61d0
+**Applied fix:** In `PricingLlmAdapter::generate_stream`, the `Err` item arm now prices a billed error
+at `billed.model` through `price_billed_error(.., None, ..)`, as `generate` and the early-open error do.
+The request model is used only when the bill names no model. Traced first: every streaming adapter
+builds its bill with the hop's own (already rewritten) request model, so the bill's model is the right
+one. `priced_billed_stream_error_carries_its_cost` was rewritten to pin the new behaviour (bill model
+priced even when the request model has no row; a priced request model does not leak onto an unpriced
+bill; an empty bill model falls back to the request model). Rustdoc on `generate_stream` and
+`price_billed_error` and the paladin-llm CHANGELOG wording were updated.
 
-### CR-02: A streamed SSE event split across two network chunks is silently dropped
+### WR-02: A streamed call's own bill is settled under `model_used`, not the model that billed it
 
-**Status:** fixed (EOF-without-terminal-frame behaviour deliberately not changed, see below)
-**Commit:** `857cd9c1`
-**Files modified:** new `crates/paladin-llm/src/sse.rs`, `crates/paladin-llm/src/lib.rs`,
-`crates/paladin-llm/src/anthropic/adapter.rs`, `openai/adapter.rs`, `deepseek/adapter.rs`, `gemini/adapter.rs`,
-`compat/engine.rs`, `crates/paladin-llm/src/conformance.rs`
-**Applied fix:** New crate-private `SseLines` buffer: holds bytes until a line's newline arrives, decodes only
-whole lines (so a multi-byte character split across reads is intact), strips `\r\n`, bounds a never-terminated
-line at 4 MiB, and `finish()` releases a final line that had no trailing newline (needed so existing
-no-trailing-newline bodies keep working). The byte stream is chained with an end-of-body marker so `finish()`
-runs inside the same `flat_map` closure. Wired into all five streaming paths (Anthropic, OpenAI, DeepSeek,
-Gemini via `parse_sse_lines`, shared engine). New conformance case
-`stream_frames_split_across_reads_are_reassembled` serves each fixture's stream body in separate writes cut inside
-the first and last `data:` payload; it failed for all nine adapters before the fix and passes after (run 3x for
-flakiness). `CASE_COUNT` pinned test moved 17 to 18; case sits in the behaviour group so the transport-only
-trivial fixture is unaffected. Unit tests in `sse.rs` cover split lines, multi-line reads, a split multi-byte
-character, the final-line flush and the bound.
-**Not done (decision for the owner):** the review's optional suggestion that a stream reaching EOF with no
-terminal frame should yield `Err(ProcessingError)`. It changes behaviour for every adapter and could break
-bodies that legitimately omit a terminal frame, so it was left as-is. The docs table in
-`switching-providers.md` already states that Anthropic and Gemini do not classify a stream without a terminal
-frame.
+**Files modified:** `src/application/services/paladin/paladin_execution_service.rs`
+**Commit:** 62f1a764
+**Applied fix:** `settle_streamed_call` now takes `own: Option<(&str, &Cost)>`. A billed terminal error
+(early open error and mid-stream `Err` item) builds that pair with a new shared `priced_bill_part`
+helper (bill model, `model_used` only when the bill names none); `priced_bill_parts` for the hop bills
+now uses the same helper, so the buffered and streamed paths key identically. The terminal chunk keeps
+`model_used` because a chunk carries no served-model string. Tests: `billed_stream_failure_is_settled`
+now expects the ledger group to be the bill's model (`bill-model`), and
+`hopped_bills_survive_stream_exhaustion` uses a Paladin model distinct from both hops so the last hop's
+bill cannot be masked by coincidence (both were red before the change). This differs from the review's
+suggested signature (`Option<&BilledUsage>`) because the terminal-chunk caller has a `Cost`, not a bill.
 
-### WR-01: Explicit stop_words defeat the client-side StopWordDetected check; build refuses them
+### WR-03: Hopped-past bills are lost when the attempt future is dropped mid-call
 
-**Status:** fixed: requires human verification (semantic decision)
-**Commit:** `2739c420`
-**Files modified:** `src/application/services/paladin/paladin_builder.rs`,
-`src/application/services/paladin/paladin_execution_service.rs`, `tests/provider_swap_matrix.rs`,
-`crates/paladin-llm/src/grok/adapter.rs`, `crates/paladin-llm/src/sampling.rs`,
-`crates/paladin-llm/src/registry/mod.rs`, `docs/src/user-guides/switching-providers.md`
-**Decision recorded:** option 2 of the review, as directed. The client-side `check_stop_words` stays the source of
-truth; `StopSupport::NotSent` is no longer a build refusal in `PaladinBuilder::validate`. The sampler already
-omits an unsupported `stop` at send time and records it in `paladin.params_omitted`, so such an agent builds, runs,
-and still aborts with `StopWordDetected`. A count above a numeric maximum (`Supported { max: Some(n) }`) is still
-refused by name, which keeps the existing test for it; say if you want that relaxed too, since the sampler omits
-that case at send time as well. ADR files were not edited.
-**Known residual:** on a model that does accept `stop`, the stop words are still forwarded as wire
-`stop_sequences`, so a vendor may end generation at the word and the client-side check will not fire. This is the
-review's issue paragraph 3 and is not changed by option 2; option 1 (stop forwarding `Paladin.data.stop_words` at
-the three call sites in the execution service) would close it and is a separate, larger decision. Documented in
-the switching-providers parameter-policy table.
-**Tests:** `stop_words_the_profile_does_not_take_are_refused_by_name` became
-`stop_words_on_a_model_that_sends_no_stop_still_build`; new
-`an_output_containing_a_stop_word_aborts_with_stop_word_detected` in the execution service; the
-`provider_swap_matrix` case `*_same_agent_is_equivalent_or_refused_by_name` now expects no wire `stop` for a
-`NotSent` model (temperature still asserted). The matrix (50 tests, `--features llm-all`) passes.
+**Files modified:** `crates/paladin-ports/src/output/spend_scope.rs`, `MIGRATION.md`
+**Commit:** 0cdbc302
+**Status:** fixed: requires human verification (documented limit, no behaviour change)
+**Applied fix:** The finding holds when traced: a hop bill reaches `ATTEMPT_SPEND` only after the whole
+model call returns, so an attempt dropped while a later hop is in flight is not charged for the earlier
+hop's billed refusal. The review's first option (record eagerly) was not applied: the bill can only be
+priced once the call returns to `PricingLlmAdapter` outside the chain, and recording an unpriced bill
+into the scope would make the attempt's whole cost unknown (`IncurredSpend` treats any `None` as unknown
+for good), losing the settlement of the attempt's other, priced calls. Doing it right means giving the
+collector a pricer and a counted-flag across the ports public surface, the pricing decorator and three
+service settle sites, which is a redesign beyond a review fix. The review's second option was applied:
+`spend_scope` module docs gain a "The limit: a hop bill is counted when its model call ends" section,
+and MIGRATION DR-18 states the same, so "however the attempt ends" is no longer overstated. The paused-clock
+test was not added, since it would only pin the documented limit. If the owner wants the eager behaviour,
+it should be planned as its own gap-closure plan.
 
-### WR-02: max_retries and timeout_seconds unvalidated; back-off overflows or sleeps for hours
+### WR-04: OpenAI and DeepSeek drop the bill on a no-choices response
 
-**Status:** fixed
-**Commit:** `946f5f86`
-**Files modified:** new `crates/paladin-llm/src/backoff.rs`, `crates/paladin-llm/src/lib.rs`,
-`crates/paladin-llm/src/openai/adapter.rs`, `compat/engine.rs`, `deepseek/adapter.rs`,
-`crates/paladin-llm/src/config/layers.rs`, `crates/paladin-llm/src/config/llm.rs` (doc only)
-**Applied fix:** New saturating `exponential_backoff(base, attempt, cap)` (checked shift and checked multiply,
-capped at 10 s) used by the three loops; defaults (3 retries) are unchanged. `layers::resolve` now refuses
-`timeout_seconds == 0` and `max_retries > 10` (`MAX_RETRIES_CEILING`), naming the provider and the key. Unit tests
-for the helper (attempts up to `u32::MAX`) and for the refusals (block and environment sources, the ceiling itself
-allowed).
-**Limit:** validation is in the layered resolution path (factory/config). A caller building an adapter directly
-with `with_max_retries(u32::MAX)` or the lenient `From<&LlmProviderConfig>` conversion is not refused, but the
-back-off can no longer overflow or exceed 10 s per wait in that case.
+**Files modified:** `crates/paladin-llm/src/openai/adapter.rs`, `crates/paladin-llm/src/deepseek/adapter.rs`,
+`crates/paladin-llm/CHANGELOG.md`, `MIGRATION.md`
+**Commit:** a28b4f48
+**Applied fix:** Both adapters now map usage before the choices check and return
+`bill(LlmError::empty_completion("Response contained no choices"), billed_model, Some(usage))`, the
+shape the compat engine and Gemini already use (`EmptyCompletion` is `Transience::Permanent`, so the
+billed request is no longer re-sent). Their `usage` is a required field, so the bill is always present.
+New tests `openai_no_choices_body_is_a_billed_empty_completion` and
+`deepseek_no_choices_body_is_a_billed_empty_completion` (both red before). MIGRATION M-B-22 and the
+paladin-llm CHANGELOG record the behaviour change. This commit also carries the one-line CHANGELOG
+wording update for WR-01.
 
-### WR-03: live_vendor_smoke restates stale model constants; its own drift test fails
+## Skipped Issues
 
-**Status:** fixed
-**Commit:** `9594c640`
-**Files modified:** `crates/paladin-llm/examples/live_vendor_smoke.rs`, `Makefile`
-**Applied fix:** Imported `ANTHROPIC_DEFAULT_MODEL` and `DEEPSEEK_DEFAULT_MODEL` from the adapters and removed the
-restated copies; `ANTHROPIC_MODELS` and `DEEPSEEK_MODELS` are built from them (each seeded table holds exactly the
-default today) and the drift test fails if a table grows. `cargo test -p paladin-llm --example live_vendor_smoke
---features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible` now passes (24 tests,
-including `the_static_model_lists_match_the_adapters`). Added a `make test-llm-examples` target so the example's
-tests have a local entry point.
-**Not done:** the review suggested running example tests in CI. `.github/workflows/ci.yml` was not edited; the
-gap (CI never runs example tests) remains until someone wires `make test-llm-examples` into a job.
-
-### WR-04: LlmProviderConfig redacts the key in Debug but still serialises it
-
-**Status:** fixed
-**Commit:** `fff2952f`
-**Files modified:** `crates/paladin-llm/src/config/llm.rs`
-**Applied fix:** `#[serde(default, skip_serializing)]` on `api_key`. Round-trip grep first: no
-Serialize-then-Deserialize of `LlmProviderConfig`, `LlmConfig`, `Settings` or `AgentRuntimeDeps` exists in source
-or tests (config is loaded from files and the environment via `config::Config`; the only serialisation test of the
-block checks skipped empty fields). `skip_serializing` was chosen over `serialize_with` a placeholder because a
-`"<redacted>"` string written to a dump and read back would become a literal credential; with skip, a round trip
-yields an empty key that the provider's environment variable fills. New test `the_api_key_is_never_serialized`
-covers the block, `LlmConfig`, and the round trip. `paladin-ai` config tests (251) and `consumer_surface_muster`
-pass.
+None.
 
 ## Verification run
 
 - `cargo fmt --check`: clean.
-- `cargo clippy -p paladin-llm --all-targets --features openai,anthropic,deepseek,kimi,qwen,grok,ollama,gemini,openai-compatible,mock,vision -- -D warnings`: clean. Also `cargo clippy -p paladin-ai --all-targets` and the `provider_swap_matrix` test target (`--features llm-all`): clean. `cargo check` with single features (anthropic, gemini, openai, deepseek, kimi, ollama): no warnings.
-- `cargo test -p paladin-llm --lib --features ...` (all adapters + mock + vision): 1137 passed, 0 failed.
-- `cargo test --test unit llm`: 55 passed. `cargo test --test provider_swap_matrix --features llm-all`: 50 passed.
-- Not run: the full workspace suite, `make api-surface` (no public item added or changed: `sse` and `backoff` are
-  private modules, the new `MAX_RETRIES_CEILING` is `pub(crate)`), `make security`.
+- `cargo clippy -p paladin-llm --all-features --all-targets -- -D warnings`: clean (also run for
+  `paladin-ports` and `paladin-ai`, root crate, with `--all-targets`).
+- `cargo test -p paladin-llm --all-features`: 1204 passed, 0 failed.
+- `cargo test -p paladin-ai --lib`: 1333 passed, 0 failed.
+- `cargo test -p paladin-ports`: 270 + 209 passed, 0 failed (94 ignored).
+- `make api-surface`: unchanged (4298 items); no public-surface change, so no `api-surface-update`.
 
 ---
 
-_Fixed: 2026-10-17_
+_Fixed: 2026-10-19_
 _Fixer: Claude (gsd-code-fixer)_
-_Iteration: 1_
+_Iteration: 2_

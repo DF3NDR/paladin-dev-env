@@ -24,6 +24,17 @@ and this project follows lockstep workspace versioning.
   call by `PaladinExecutionService`, filled by `FallbackLlmAdapter`, priced by
   `PricingLlmAdapter`; entries hold a model id, token counts and a `Cost` only.
 
+- Phase 50 (G-50-5a, review WR-03, PARITY-05, PARITY-06; plan 50-32): two additive methods on
+  `output::spend_scope::HoppedBills`. `install_pricer(pricer) -> bool` installs the pricer the
+  collector applies to every unpriced bill it records (the first pricer installed wins, so the
+  outermost `PricingLlmAdapter`'s table prices every hop bill; it returns whether this call
+  installed it). `count_and_take() -> Vec<BilledUsage>` takes the entries and counts into the
+  attempt scope only those not yet counted. `record_hopped_bill` now prices the bill through the
+  installed pricer and counts it into `ATTEMPT_SPEND` at once, so an attempt dropped while a later
+  hop of the same call is in flight is still charged for the earlier hop; with no pricer the bill
+  counts with `cost: None`. `price_unpriced` stays as the after-call safety net. `spend_scope` is
+  unreleased, so this is not a break.
+
 - Phase 50 (G-50-5a remainder (b), PARITY-05; plan 50-29): the `output::spend_scope` module --
   `SpendScope` (a shared accumulator of `paladin_core`'s `IncurredSpend`; `new`, `record`,
   `snapshot`; a poisoned lock is recovered, never unwrapped), the `tokio::task_local!`

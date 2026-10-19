@@ -80,6 +80,12 @@ and this project follows lockstep workspace versioning.
 
 ### Fixed
 
+- `PricingLlmAdapter` installs its hop-bill pricer on the active `HOPPED_BILLS` collector before
+  `generate` and `generate_stream` delegate (plan 50-32, review WR-03). A billed refusal a
+  `FallbackLlmAdapter` hops past is therefore priced against its own model and counted into the
+  attempt's spend at the hop, not when the whole call returns. The after-call pricing passes stay
+  as an idempotent safety net.
+
 - OpenAI and DeepSeek bill a buffered body with no `choices` (WR-04, Phase 50 iteration 2). They
   used to fail it as `LlmError::ProcessingError` ("No choices in response" / "DeepSeek response
   contained no choices"), which dropped the parsed `usage` and read as `Transience::Unknown`, so the

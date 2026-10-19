@@ -47,7 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   early `generate_stream` error, which `PricingLlmAdapter` now prices against its bill's own model.
   A call with no hop bill settles exactly the one-part row it did before. A billed hop with no
   collector installed (a direct `LlmPort` caller) is warned once per (provider, model) under
-  `paladin::usage`, token counts only. Additive: no public type changes shape.
+  `paladin::usage`, token counts only. Additive: no public type changes shape. Plan 50-32 adds
+  `HoppedBills::install_pricer` (the first pricer installed wins; `PricingLlmAdapter` installs its
+  own before it delegates) and `HoppedBills::count_and_take`; a hop bill is priced and counted
+  into the attempt spend scope at its hop, and the service settles it without counting it again.
 
 - **Usage reconciliation and `paladin_llm::usage_reconcile::USAGE_UNRECONCILED_METADATA_KEY`
   (G-50-5a; Phase 50 plan 50-21).** The five OpenAI-compatible presets (Kimi, Qwen, Grok, Ollama,
@@ -1188,7 +1191,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     usage when the provider reported the served call's usage (plan 50-30);
   - a failed or timed-out Battalion attempt reports the spend it recorded on `NodeFinished`, and
     the superstep settle charges it once; a structured attempt counts every repair call
-    (plan 50-29).
+    (plan 50-29);
+  - a hopped-past bill now reaches the attempt's spend at its hop, priced against its own model,
+    so a Battalion attempt cut off by its deadline or idle bound while a later hop is still in
+    flight is charged for it (review WR-03, plan 50-32).
   `total_tokens` stays `prompt_tokens + completion_tokens` (D-02). A bill on an unpriced model
   keeps `cost: None` and settles nothing. Proved end to end through real adapters by the
   `provider_swap_matrix` case `billed_failures_and_hopped_refusals_reach_the_ledger` (plan 50-31).

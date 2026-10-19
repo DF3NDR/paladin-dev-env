@@ -65,11 +65,15 @@
 //! hops past such an error -- and only then -- it records the bill through
 //! [`record_hopped_bill`] into the call's `HOPPED_BILLS` collector
 //! (`paladin_ports::output::spend_scope`), which `PaladinExecutionService` installs around every
-//! model call; the pricing decorator outside the chain prices it against its own model, and the
-//! execution service settles it with the call. An exhausted chain's last hop is not recorded:
+//! model call. The bill is recorded at the one hop decision point and priced there, against the
+//! hop's own model (D-15), by the pricer the `PricingLlmAdapter` outside the chain installed. It
+//! is counted into the attempt's `ATTEMPT_SPEND` scope at once, so it is charged even when the
+//! attempt is cut off while a later hop is in flight; the execution service then settles it in
+//! the call's ledger row. An exhausted chain's last hop is not recorded:
 //! [`LlmError::AllProvidersFailed`] carries that bill itself. A billed hop with no collector
 //! installed (a direct [`LlmPort`] caller) is not silently lost: the chain logs one `warn!` per
-//! (provider, model) under the `paladin::usage` log target, with token counts only.
+//! (provider, model) under the `paladin::usage` log target, with token counts only. The chain's
+//! hop rules do not change: `hop_on_refusal` stays opt-in (D-10).
 //!
 //! ## Composition
 //!
@@ -223,9 +227,11 @@ impl HopBillWarnings {
 static HOP_BILL_WARNINGS: LazyLock<HopBillWarnings> =
     LazyLock::new(|| HopBillWarnings::new(HOP_BILL_WARNING_CAPACITY));
 
-/// Carry the bill of a hop the chain is moving past (G-50-5a remainder (a)): record it into the
-/// call's collector, or -- with none installed -- warn once per (provider, model) under
-/// `HOP_BILL_LOG_TARGET` that it will not be settled. The line names the provider, the model
+/// Carry the bill of a hop the chain is moving past (G-50-5a remainder (a), WR-03): record it into
+/// the call's collector, which prices it with the pricer the decorator outside the chain
+/// installed and counts it into the attempt's spend scope at once (so it is charged even if the
+/// attempt is cut off while a later hop is in flight), or -- with no collector installed -- warn
+/// once per (provider, model) under `HOP_BILL_LOG_TARGET` that it will not be settled. The line names the provider, the model
 /// and the token counts only: never refusal text, content or a credential (T-50-30-04).
 /// Returns `true` when the bill was recorded.
 fn carry_hopped_bill(warnings: &HopBillWarnings, from: &str, billed: &BilledUsage) -> bool {

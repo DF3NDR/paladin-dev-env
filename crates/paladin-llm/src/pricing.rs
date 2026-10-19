@@ -30,14 +30,20 @@
 //!
 //! ## Hopped-past bills (G-50-5a remainder (a), plan 50-30)
 //!
+//! Before it delegates, this decorator installs its pricer on the call's
+//! `paladin_ports::output::spend_scope::HOPPED_BILLS` collector (`HoppedBills::install_pricer`).
 //! A `FallbackLlmAdapter` inside this decorator records the bill of every billed hop it moves
-//! past (a refusal under `hop_on_refusal`) into the call's
-//! `paladin_ports::output::spend_scope::HOPPED_BILLS` collector, unpriced. Once the inner call
-//! returns, `Ok` or `Err`, this decorator prices every entry still at `cost: None` against the
-//! entry's own model, through the same `price_or_warn`, so each hop is charged at its own
-//! model's rate. No collector installed: nothing to price. A stream prices the collector it
-//! captured when `generate_stream` was called, once that call returns and again when the
-//! stream yields its terminal chunk or an error item (idempotent: only unpriced entries).
+//! past (a refusal under `hop_on_refusal`) into that collector; the pricer prices the bill
+//! against the entry's own model, through the same `price_or_warn`, and the bill is counted into
+//! the attempt's spend scope at that hop. So each hop is charged at its own model's rate the
+//! moment the chain hops, even if the attempt is cut off while a later hop is in flight. A model
+//! with no price row stays `cost: None`. No collector installed: nothing to price.
+//!
+//! The passes after the inner call are the idempotent safety net: once the inner call returns,
+//! `Ok` or `Err`, this decorator prices any entry still at `cost: None` (an entry added with
+//! `push`). A stream prices the collector it captured when `generate_stream` was called, once
+//! that call returns and again when the stream yields its terminal chunk or an error item
+//! (only unpriced entries).
 
 use std::collections::HashSet;
 use std::fmt;

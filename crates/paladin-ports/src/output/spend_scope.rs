@@ -64,32 +64,36 @@
 //!
 //! - **`PaladinExecutionService` installs a fresh collector around every model call**, buffered
 //!   and streamed (the streamed task re-installs the handle it captured before the spawn).
+//! - **`PricingLlmAdapter`, outside the chain, installs its pricer first**
+//!   ([`HoppedBills::install_pricer`]) before it delegates; the first pricer installed wins, so
+//!   the outermost decorator's table prices every hop bill, each against the entry's OWN model,
+//!   never the served model's rate.
 //! - **`FallbackLlmAdapter` fills it** through [`record_hopped_bill`] at its single hop decision
-//!   point, only when it really hops past a billed error.
-//! - **`PricingLlmAdapter`, outside the chain, prices it**: every entry still at `cost: None` is
-//!   priced against the entry's OWN model ([`HoppedBills::price_unpriced`]), never the served
-//!   model's rate.
-//! - **The execution service takes the entries** when the call ends, folds each into the run's
-//!   tallies and the attempt scope above, and settles them in the call's own settlement row with
-//!   a per-model breakdown.
+//!   point, only when it really hops past a billed error. The bill is priced and counted into
+//!   [`ATTEMPT_SPEND`] right then.
+//! - **The execution service takes the entries** with [`HoppedBills::count_and_take`] when the
+//!   call ends, folds each into the run's tallies, and settles them in the call's own
+//!   settlement row with a per-model breakdown. It does not count them again: each entry carries
+//!   a counted flag, and `count_and_take` counts only the entries that were not counted yet.
 //!
 //! Entries are [`BilledUsage`] values: a model id, token counts and a [`Cost`], never refusal
 //! text or a credential (T-50-30-04).
 //!
-//! ### The limit: a hop bill is counted when its model call ends
+//! ### Counted at the hop, however the attempt ends
 //!
-//! The attempt scope above is fed the moment each call is folded, so a deadline or idle drop
-//! keeps everything folded before it. A hopped-past bill is different: it sits in the call's
-//! [`HoppedBills`] collector and reaches the attempt scope only when the whole model call (every
-//! retry and every hop) completes, because it can only be priced once the call has returned to
-//! the `PricingLlmAdapter` outside the chain, and recording an unpriced bill into the scope
-//! would make the attempt's whole cost unknown. If the engine drops an attempt while a LATER
-//! hop of that call is still in flight -- hop 1 returned a billed refusal, hop 2 had not
-//! answered -- the collector is dropped with the future and the attempt is not charged for
-//! hop 1's refusal. The "however the attempt ends" guarantee therefore covers every call that
-//! has completed; it does not extend to a bill held by a model call that has not. A caller that
-//! needs the bill of a call it cut off installs its own [`HOPPED_BILLS`] collector around that
-//! call and reads it with [`HoppedBills::take`].
+//! A hopped-past bill reaches the attempt scope the moment the chain hops past it, priced, not
+//! when the whole model call returns. So a deadline or idle drop that lands after hop 1
+//! returned a billed refusal, while hop 2 of the same call is still in flight, still leaves
+//! hop 1's priced bill in the attempt scope; the engine reads it with the rest of the attempt's
+//! spend and the superstep settle charges it once. A stack with no pricing decorator, or a bill
+//! on a model with no price row, counts with `cost: None`, exactly as the end-of-call fold
+//! would have counted it.
+//!
+//! An entry recorded where no attempt scope was visible (a bare [`HoppedBills::push`], or a
+//! record made outside [`ATTEMPT_SPEND`]) is counted by [`HoppedBills::count_and_take`] if a
+//! scope is visible when the collector is taken. A decorator that prices later with
+//! [`HoppedBills::price_unpriced`] reaches the call's ledger row but not the attempt scope, so
+//! an out-of-tree pricing decorator calls [`HoppedBills::install_pricer`] before it delegates.
 
 use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, TryLockError};

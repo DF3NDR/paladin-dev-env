@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Pacing-only composition through the facade (SURFACE-05, D-13; Phase 50.1 plan 01).**
+  `paladin::infrastructure::cadence::with_cadence` and `paladin::infrastructure::cadence::CadenceWiring`
+  are now public re-exports beside `build_cadence` and `compose_llm`. A consumer that builds adapters
+  directly and wants rate pacing without pricing builds one wiring with `build_cadence` and wraps each
+  adapter with `with_cadence`; the module's "Pacing only" doc test shows it through `paladin::` paths
+  alone, with no pricing table. MIGRATION.md section 9.8 gains the matching consumer-guide entries
+  (SURFACE-04): the pre-`v0.10.0` pointer list, the no-pacing-for-a-directly-built-adapter row (M-B-05),
+  the `LlmPort::model_profile` forwarding rule for a consumer's own decorator, and the
+  adapter-wide context-window consequence.
 - **The Aegis family through the `paladin` facade (SURFACE-01, D-01, D-02; Phase 50.1 plan 01).**
   Five whole-module re-exports resolve at the same path as in the core crate:
   `paladin::core::platform::container::aegis`, `paladin::core::platform::container::battlefield`,

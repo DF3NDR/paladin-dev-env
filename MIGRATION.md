@@ -996,6 +996,16 @@ completion)` plus the chainable `with_cache_read` / `with_cache_write` / `with_r
 `..Default::default()` for the three optional fields, where `None` means the provider did not
 report the figure.
 
+**Starting before `v0.10.0`.** A consumer whose pin predates `v0.10.0` also applies these section 9.2
+rows, each cited by type and phase:
+section 9.2, the `TokenUsage` row (Phase 31: three new `Option` fields; `from_total` removed), the
+`PaladinResult` row (Phase 31: `token_count` replaced by `usage`) and the `StreamingResponse` row
+(Phase 31: `#[non_exhaustive]`, with `StreamingResponse::delta` / `terminal` / `with_usage`); section 9.2,
+the `Commissary` row (Phase 32: `new` and `from_port` no longer take `is_exact_counter`), and the
+`TokenCounter` and `TokenCounterFactory` rows (Phase 32: removed from `paladin-memory`); section 9.2,
+the `RagRetrievalService` row (Phase 33: `retrieve_context` and `retrieve_context_with_timeout` change
+their return type).
+
 | # | Item | What changed | Replacement | Register |
 |---|---|---|---|---|
 | DR-1 | Battalion error-strategy enum (`battalion::ErrorStrategy`) | removed outright, with no alias | `aegis.on_error` on `BattalionConfig`: `Some(ErrorHandlerSpec::Absorb { .. })` continues past a failed Paladin and records it in `node_errors`, `None` fails fast; honoured by Formation and Phalanx, ignored by Campaign. Import `paladin::core::platform::container::aegis::{Aegis, ErrorHandlerSpec, TimeoutPolicy}` and `paladin::core::platform::container::battlefield::StateDelta` (also in `paladin::prelude`) | 9.2 `ErrorStrategy` row (Phase 44); 9.1 M-B-07, M-B-11 |
@@ -1049,6 +1059,38 @@ swaps providers or models meets these at run time, not at the compiler:
   profile (M-B-15).
 - The run-metadata keys of DR-15 are visible per call, per run and on a stream's terminal chunk
   (owner reading R-1, ADR-0061 (h)).
+
+**Direct-adapter consumers (no compile break).** A consumer that builds an adapter from a `*Config`
+itself, instead of going through the server's composition root, meets three more run-time changes:
+
+- **A directly built adapter has no 429 pacing unless Cadence is composed (M-B-05).** Since Phase 43 no
+  adapter retries a 429 inside its own loop: each surfaces it on the first answer, because the Cadence
+  decorator owns the waiting. A consumer that builds an adapter from a `*Config` therefore gets no pacing
+  at all unless it composes Cadence; with no Cadence composed, a 429 is returned to the caller as
+  `LlmError::RateLimitExceeded` (transient) and the next call goes straight back into the limit. Recipe:
+  `let wiring = paladin::infrastructure::cadence::build_cadence(&CadenceConfig::default())?;` then
+  `let llm = paladin::infrastructure::cadence::with_cadence(llm, wiring.as_ref());` (build the wiring
+  once per process and wrap every adapter with it), or
+  `compose_llm(llm, &prices, wiring.as_ref())` when the consumer also prices. A quota or spend-cap 429 is
+  a different error: `LlmError::UsageLimitExceeded { .. }` is permanent and is never paced and never
+  retried, where `RateLimitExceeded` is transient and is paced by Cadence. It is mapped for OpenAI
+  (`insufficient_quota`) and Anthropic (`enforced_spend_limit_reached`). DeepSeek maps its documented
+  insufficient-balance status, an HTTP 402, to `UsageLimitExceeded`, not a 429; Gemini maps a
+  `RESOURCE_EXHAUSTED` answer to `RateLimitExceeded`, so a Gemini spend cap is paced as a rate limit.
+  Kimi, qwen, grok, ollama and openai-compatible keep their existing error mapping and are unverified
+  (owner reading R-2, ADR-0061: no quota-exhaustion body was captured for them); see
+  `docs/src/user-guides/switching-providers.md`.
+- **An `LlmPort` decorator must forward `model_profile`.** A consumer's own wrapper that does not forward
+  `LlmPort::model_profile` returns the default `None`, so every model it wraps runs unprofiled for the
+  layers above it. The in-tree decorators (`PricingLlmAdapter`, `CadenceLlmAdapter`,
+  `FallbackLlmAdapter`) forward it.
+- **The adapter-wide context window follows the seeded default model.** With `context_window` unset,
+  `get_capabilities().max_context_tokens` is the seeded window of the provider's default-model constant,
+  not of the configured model: Anthropic 200,000 at `v0.10.1`, now 1,000,000 (`claude-haiku-5-5`);
+  DeepSeek 64,000, now 1,048,576 (`deepseek-flash`); OpenAI unchanged at 128,000. So
+  `Commissary::from_port` rations 5x more prompt on Anthropic (1,000,000 / 200,000) and about 16x more on
+  DeepSeek (1,048,576 / 64,000 = 16.384). Two remedies: set the window with `with_context_window(n)` on
+  the config, or ration per model with `Commissary::for_model(&port, model, counter, plan)`.
 
 **Insulating the next bump (consumer-side; no Paladin change).** Prefer
 `PaladinResult { .., ..Default::default() }` or `PaladinResult::new(..)` over a full struct literal;

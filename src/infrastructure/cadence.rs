@@ -25,6 +25,36 @@
 //! A default `treasurer.cadence` section yields `Some(wiring)` over the in-process adapter (D-08);
 //! only `enabled: false` yields `None`, and then [`compose_llm`] installs no pacing layer at all.
 //!
+//! ## Pacing only
+//!
+//! A consumer that builds adapters directly (from a `*Config`, not through the server) gets no
+//! pacing at all, because no adapter retries a 429 inside its own loop since Phase 43. To pace
+//! without any pricing, build ONE wiring with [`build_cadence`] and wrap each adapter with
+//! [`with_cadence`]; [`compose_llm`] stays for a consumer that also prices. With
+//! `treasurer.cadence.enabled: false` the wiring is `None` and [`with_cadence`] hands the adapter
+//! back unchanged.
+//!
+//! ```
+//! use std::sync::Arc;
+//!
+//! use paladin::MockLlmAdapter;
+//! use paladin::config::treasurer::CadenceConfig;
+//! use paladin::infrastructure::cadence::{build_cadence, with_cadence};
+//! use paladin::prelude::LlmPort;
+//!
+//! let llm: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new());
+//!
+//! // One wiring for the whole process, then one wrap per adapter.
+//! let wiring = build_cadence(&CadenceConfig::default())?;
+//! let paced = with_cadence(llm.clone(), wiring.as_ref());
+//! assert!(!Arc::ptr_eq(&paced, &llm), "the adapter is wrapped in Cadence");
+//! assert_eq!(paced.get_provider_name(), llm.get_provider_name());
+//!
+//! // No wiring (pacing disabled): the very same adapter comes back.
+//! assert!(Arc::ptr_eq(&with_cadence(llm.clone(), None), &llm));
+//! # Ok::<(), String>(())
+//! ```
+//!
 //! ## Backends
 //!
 //! | `treasurer.cadence.backend` | Port built | Needs |
@@ -50,7 +80,10 @@
 use std::sync::Arc;
 
 use paladin_core::platform::container::cost::PriceTable;
-use paladin_llm::cadence::{CadenceWiring, with_cadence};
+/// The pacing-only composition path: build one [`CadenceWiring`] with [`build_cadence`] and wrap
+/// each adapter with [`with_cadence`] (see the module's "Pacing only" section). [`compose_llm`]
+/// is the path for a consumer that also prices.
+pub use paladin_llm::cadence::{CadenceWiring, with_cadence};
 use paladin_llm::pricing::with_pricing;
 use paladin_ports::output::llm_port::LlmPort;
 use paladin_storage::cadence::InMemoryCadence;

@@ -846,7 +846,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 - **Phase 50.1 (Consumer-Surface Readiness for v0.11.0) inserted 2026-10-19 after Phase 50, before
   Phase 51:** the fourth web3sec handoff (dated 2026-10-18, pre-measured bump against `21426037`:
-  112 errors / 3 crates, all on registered rows, suite back at 2,592 / 0 / 2) is filed verbatim as
+  112 errors / 3 crates, all on registered rows, suite back at 2,592 / 0 / 2; 147 at the sealed
+  `a1128fc1` with DR-17's 35; the author re-verified every claim there, zero drift) is filed verbatim as
   `phases/50.1-consumer-surface-readiness/50.1-HANDOFF-web3sec-consumer-surface.md`; SURFACE-01..06
   minted; ROADMAP carries the phase with a verified ground-truth block (five of the six asks hold
   exactly as written on `a1128fc1`; SURFACE-06 as asked conflicts with the `registry/seeded.rs`

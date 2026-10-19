@@ -1493,7 +1493,8 @@ types with one `new(..)` shape and set every knob (the timeout included) through
 builder, and meet no silent behaviour change the guide does not name. web3sec measured the bump
 ahead of time against the Phase 50 tip `21426037` (handoff Appendix A): 112 compile errors in 3
 of its 12 crates, every one mapping to a registered row, fixed mechanically, suite back at its
-2,592 / 0 / 2 baseline. The same exercise found six gaps that cost every consumer: the Aegis
+2,592 / 0 / 2 baseline; re-measured at the sealed `a1128fc1`, DR-17 adds 35 more (147 in total,
+workspace clean once fixed) and Phase 50's later plans add no other consumer break. The same exercise found six gaps that cost every consumer: the Aegis
 family (`Aegis`, `ErrorHandlerSpec`, `TimeoutPolicy`, `StateDelta`, `NodeError`,
 `NodeErrorSource`, `TimeoutKind`, `NodeId`, `Transience`) is not nameable through the facade, so
 DR-1 / DR-2 / DR-8 / DR-9 force a direct `paladin-ai-core` dependency (28 of the 112 errors plus
@@ -1523,9 +1524,10 @@ owner decision; MIGRATION §9.8 DR-12's sentence that harmonisation is "not part
 amended by this phase.
 **Requirements**: SURFACE-01, SURFACE-02, SURFACE-03, SURFACE-04, SURFACE-05, SURFACE-06
 **UI hint**: no
-**Source**: the fourth web3sec handoff of 2026-10-18, filed verbatim as
-`50.1-HANDOFF-web3sec-consumer-surface.md` — a pre-measurement of the consumer bump against the
-Phase 50 tip `21426037` plus a read of `8488f11e`. Its §4 decisions **D-A** (whole `aegis` /
+**Source**: the fourth web3sec handoff of 2026-10-18, re-verified by its author 2026-10-19 after
+the Phase 50 seal and filed verbatim in that final form as `50.1-HANDOFF-web3sec-consumer-surface.md`
+— a pre-measurement of the consumer bump against the Phase 50 tip `21426037`, re-measured at
+`a1128fc1`, with every `path:line` re-read there (zero drift from its first draft at `8488f11e`). Its §4 decisions **D-A** (whole `aegis` /
 `node_error` modules or selected items on the facade), **D-B** (constructor shape:
 `new(api_key, model)` + `with_base_url` / `with_timeout_seconds` / the existing knobs, or a shared
 `ProviderConfig` builder; endpoint-only providers keep their endpoint argument), **D-C** (whether

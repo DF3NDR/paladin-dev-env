@@ -67,7 +67,8 @@ unless the owner rides it on this bump.
 ## Update 2026-10-19 (Phase 50.1 inserted)
 
 web3sec pre-measured the bump against the Phase 50 tip `21426037` (112 errors in 3 crates, all on
-registered rows, suite back at 2,592 / 0 / 2) and sent a fourth handoff (2026-10-18) asking for six
+registered rows, suite back at 2,592 / 0 / 2; re-measured at the sealed `a1128fc1`: 147 with DR-17's
+35, workspace clean once fixed) and sent a fourth handoff (2026-10-18, re-verified 2026-10-19) asking for six
 consumer-surface fixes before the tag. It is filed as **Phase 50.1** (SURFACE-01..06), sequenced
 after Phase 50 and before Phase 51. Consequences for this todo:
 

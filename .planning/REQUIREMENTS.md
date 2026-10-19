@@ -317,7 +317,8 @@ handoff are settled at discuss.*
 *Added 2026-10-19 (Phase 50.1, inserted after Phase 50 and before Phase 51) from the fourth web3sec
 handoff of 2026-10-18 (`50.1-HANDOFF-web3sec-consumer-surface.md`). web3sec pre-measured the single
 v0.11.0 bump against the Phase 50 tip `21426037`: 112 compile errors in 3 of 12 crates, every one on a
-registered row, fixed mechanically, suite back at 2,592 / 0 / 2. The exercise found six gaps in the
+registered row, fixed mechanically, suite back at 2,592 / 0 / 2; re-measured at the sealed `a1128fc1`,
+147 with DR-17's 35, workspace clean once fixed. The exercise found six gaps in the
 consumer surface and the consumer guide, each cheapest before the tag. SURFACE-02 resolves the
 harmonisation todo of 2026-10-16 by owner decision (2026-10-18) and must land before Phase 51 extends
 the same nine types. Depends on PARITY-03/04 and ADOPT-04. A new prefix, the forty-first. Decisions

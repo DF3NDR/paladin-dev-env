@@ -576,7 +576,7 @@ crate = "paladin-llm"
 lint = "struct_marked_non_exhaustive"
 migration_row = "paladin-llm | DeepSeekConfig"
 requirement_id = "PARITY-03"
-justification = "DeepSeekConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, every constructor signature is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+justification = "DeepSeekConfig gained max_tokens, max_retries, context_window and model_overrides (Phase 50, plans 50-08/50-09) and is marked #[non_exhaustive] with with_* builders (owner decision option-a) so the next field is free; only a downstream struct literal breaks, and its new(..) shape changes in Phase 50.1 (SURFACE-02, the entry below). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
 
 [[entry]]
 crate = "paladin-llm"
@@ -652,3 +652,21 @@ lint = "enum_discriminants_undefined_non_unit_variant"
 migration_row = "paladin-llm | FallbackChainError"
 requirement_id = "PARITY-06"
 justification = "FallbackChainError gained the struct variant EmptyStepModel { index } (Phase 50, plan 50-14, D-15), returned by FallbackLlmAdapter::from_steps for a step whose model is empty. The enum was already #[non_exhaustive], so a match with a wildcard arm is unaffected; its only variant was a unit variant, so the new struct variant removes its defined discriminants and a numeric cast of a variant stops compiling (nothing in the tree casts it). Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."
+
+# --- Phase 50.1 (Consumer-Surface Readiness, SURFACE-02) ---
+# Plan 50.1-02 (D-05, D-09, D-00b), measured 2026-10-20: cargo-semver-checks 0.50.0 vs the
+# published `paladin-llm` 0.10.1, `--release-type minor`, with `crates/paladin-llm/Cargo.toml`'s
+# lint table removed and restored byte-for-byte (`cmp`-verified), run with the default features
+# and again with all nine adapter features (`openai,anthropic,deepseek,kimi,qwen,grok,ollama,
+# gemini,openai-compatible`): 196 checks, 3 lints fired in both runs -- the two already allowed
+# (`struct_marked_non_exhaustive`, `enum_discriminants_undefined_non_unit_variant`) and
+# `method_parameter_count_changed`, new here, on `DeepSeekConfig::new` (3 parameters before, 2
+# now; reported on both the `deepseek::adapter` and the `deepseek` re-export path). The other
+# six types' `new` changes add their entries beside this one in plans 50.1-04, -05 and -06.
+
+[[entry]]
+crate = "paladin-llm"
+lint = "method_parameter_count_changed"
+migration_row = "paladin-llm | DeepSeekConfig"
+requirement_id = "SURFACE-02"
+justification = "DeepSeekConfig::new(api_key, base_url, model) became new(api_key, model) (Phase 50.1, plan 50.1-02, D-05): the endpoint defaults to DEEPSEEK_DEFAULT_BASE_URL and is set with the with_base_url builder, the timeout with with_timeout_seconds. A clean break with no alias (ADR-0060): new(k, url, m) becomes new(k, m).with_base_url(url); from_env() is unchanged. Suppressed by the crate-wide allow line in crates/paladin-llm/Cargo.toml."

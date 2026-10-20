@@ -57,6 +57,12 @@ const DEEPSEEK_PROVIDER: &str = "deepseek";
 /// time). Pin `DEEPSEEK_MODEL` to keep `deepseek-chat`.
 pub const DEEPSEEK_DEFAULT_MODEL: &str = "deepseek-flash";
 
+/// The DeepSeek endpoint [`DeepSeekConfig::new`] and [`DeepSeekConfig::from_env`] use when no
+/// other is chosen, and the compiled default of the layered `llm.deepseek` configuration.
+///
+/// Replace it with [`DeepSeekConfig::with_base_url`] (or `DEEPSEEK_BASE_URL` for `from_env`).
+pub const DEEPSEEK_DEFAULT_BASE_URL: &str = "https://api.deepseek.com/v1";
+
 /// Parse a `429` response's rate-limit headers through the generic family (PACE-01).
 ///
 /// Must run BEFORE `response.text()` consumes the response (research Pitfall 2). Only a 429
@@ -76,21 +82,23 @@ fn snapshot_rate_limit_hints(
 /// Configuration for DeepSeek LLM adapter.
 ///
 /// Marked `#[non_exhaustive]` (owner decision, Phase 50 plan 50-08, option-a): build one with
-/// [`DeepSeekConfig::new`] or [`DeepSeekConfig::from_env`] and set fields or call the `with_*`
-/// builders, so a later field is not another break for callers.
+/// [`DeepSeekConfig::new`] (an API key and a model) or [`DeepSeekConfig::from_env`] and set
+/// fields or call the `with_*` builders (`with_base_url`, `with_timeout_seconds`, ...), so a later field is not another break for callers.
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct DeepSeekConfig {
     /// API key for DeepSeek authentication.
     pub api_key: String,
-    /// Base URL for DeepSeek API.
+    /// Base URL for DeepSeek API; [`DEEPSEEK_DEFAULT_BASE_URL`] unless replaced with
+    /// [`with_base_url`](Self::with_base_url) (or `DEEPSEEK_BASE_URL` for `from_env`).
     pub base_url: String,
     /// Default model to use; [`DEEPSEEK_DEFAULT_MODEL`] when constructed from the environment
     /// with `DEEPSEEK_MODEL` unset.
     pub model: String,
     /// Request timeout in seconds. [`DeepSeekConfig::new`] and [`DeepSeekConfig::from_env`]
     /// default it to 300 for a seeded reasoning model and to 60 otherwise (D-13); an explicit
-    /// `DEEPSEEK_TIMEOUT_SECONDS` or field assignment always wins. A model marked `reasoning`
+    /// `DEEPSEEK_TIMEOUT_SECONDS`, [`with_timeout_seconds`](Self::with_timeout_seconds) call or
+    /// field assignment always wins. A model marked `reasoning`
     /// only through [`model_overrides`](Self::model_overrides) does not change this default
     /// here: set this field in the same place.
     pub timeout_seconds: u64,
@@ -151,8 +159,8 @@ impl DeepSeekConfig {
         let api_key = env::var("DEEPSEEK_API_KEY")
             .map_err(|_| "DEEPSEEK_API_KEY environment variable not set")?;
 
-        let base_url = env::var("DEEPSEEK_BASE_URL")
-            .unwrap_or_else(|_| "https://api.deepseek.com/v1".to_string());
+        let base_url =
+            env::var("DEEPSEEK_BASE_URL").unwrap_or_else(|_| DEEPSEEK_DEFAULT_BASE_URL.to_string());
 
         let model =
             env::var("DEEPSEEK_MODEL").unwrap_or_else(|_| DEEPSEEK_DEFAULT_MODEL.to_string());
@@ -179,12 +187,33 @@ impl DeepSeekConfig {
         Ok(config)
     }
 
-    /// Create configuration with custom values.
-    pub fn new(api_key: String, base_url: String, model: String) -> Self {
+    /// Create a configuration for `model`, authenticating with `api_key`.
+    ///
+    /// - `api_key`: the DeepSeek API key, never a URL.
+    /// - `model`: the default model requested when a call names none.
+    ///
+    /// The endpoint is [`DEEPSEEK_DEFAULT_BASE_URL`] (replace it with
+    /// [`with_base_url`](Self::with_base_url)) and the timeout is 300 s for a seeded reasoning
+    /// model and 60 s otherwise (replace it with
+    /// [`with_timeout_seconds`](Self::with_timeout_seconds)). Construction is infallible: an
+    /// empty key or model, or a non-`http(s)` endpoint, is refused when the adapter is built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::deepseek::DeepSeekConfig;
+    /// use paladin_llm::deepseek::adapter::DEEPSEEK_DEFAULT_BASE_URL;
+    ///
+    /// let key = "sk-example".to_string();
+    /// let config = DeepSeekConfig::new(key, "deepseek-flash".to_string()).with_timeout_seconds(600);
+    /// assert_eq!(config.base_url, DEEPSEEK_DEFAULT_BASE_URL);
+    /// assert_eq!(config.timeout_seconds, 600);
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
         let timeout_seconds = default_timeout_seconds(DEEPSEEK_PROVIDER, &model, 60);
         Self {
             api_key,
-            base_url,
+            base_url: DEEPSEEK_DEFAULT_BASE_URL.to_string(),
             model,
             timeout_seconds,
             max_tokens: None,
@@ -1204,52 +1233,99 @@ mod tests {
 
     #[test]
     fn test_deepseek_config_validation() {
-        let config = DeepSeekConfig::new(
-            "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
-            "deepseek-chat".to_string(),
-        );
+        let config = DeepSeekConfig::new("test-key".to_string(), "deepseek-chat".to_string());
         assert!(config.validate().is_ok());
     }
 
     #[test]
     fn test_deepseek_config_empty_api_key() {
-        let config = DeepSeekConfig::new(
-            "".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
-            "deepseek-chat".to_string(),
-        );
+        let config = DeepSeekConfig::new("".to_string(), "deepseek-chat".to_string());
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_deepseek_config_invalid_url() {
-        let config = DeepSeekConfig::new(
-            "test-key".to_string(),
-            "invalid-url".to_string(),
-            "deepseek-chat".to_string(),
-        );
+        let config = DeepSeekConfig::new("test-key".to_string(), "deepseek-chat".to_string())
+            .with_base_url("invalid-url");
         assert!(config.validate().is_err());
     }
 
     #[test]
     fn test_deepseek_adapter_creation() {
-        let config = DeepSeekConfig::new(
-            "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
-            "deepseek-chat".to_string(),
-        );
+        let config = DeepSeekConfig::new("test-key".to_string(), "deepseek-chat".to_string());
         let adapter = DeepSeekAdapter::new(config);
         assert!(adapter.is_ok());
     }
 
+    #[test]
+    fn new_defaults_the_endpoint_and_keeps_the_model() {
+        let config = DeepSeekConfig::new("k".to_string(), "deepseek-chat".to_string());
+        assert_eq!(config.base_url, DEEPSEEK_DEFAULT_BASE_URL);
+        assert_eq!(config.model, "deepseek-chat");
+        assert_eq!(DEEPSEEK_DEFAULT_BASE_URL, "https://api.deepseek.com/v1");
+    }
+
+    #[test]
+    fn new_defaults_the_timeout_by_whether_the_model_is_a_seeded_reasoning_model() {
+        // `deepseek-flash` is seeded as a reasoning model (D-13): 300 s.
+        let reasoning = DeepSeekConfig::new("k".to_string(), "deepseek-flash".to_string());
+        assert_eq!(reasoning.timeout_seconds, 300);
+        // An unseeded model keeps the provider's own default of 60 s.
+        let plain = DeepSeekConfig::new("k".to_string(), "unseeded-model".to_string());
+        assert_eq!(plain.timeout_seconds, 60);
+    }
+
+    #[test]
+    fn the_endpoint_and_timeout_builders_are_order_independent() {
+        let a = DeepSeekConfig::new("k".to_string(), "m".to_string())
+            .with_base_url("https://example.invalid/v1")
+            .with_timeout_seconds(7);
+        let b = DeepSeekConfig::new("k".to_string(), "m".to_string())
+            .with_timeout_seconds(7)
+            .with_base_url("https://example.invalid/v1");
+        assert_eq!(
+            (&a.base_url, a.timeout_seconds, &a.model),
+            (&b.base_url, b.timeout_seconds, &b.model)
+        );
+        assert_eq!(a.base_url, "https://example.invalid/v1");
+        assert_eq!(a.timeout_seconds, 7);
+    }
+
+    #[test]
+    fn the_last_endpoint_or_timeout_call_wins_and_beats_the_reasoning_default() {
+        let config = DeepSeekConfig::new("k".to_string(), "deepseek-flash".to_string())
+            .with_base_url("https://first.invalid/v1")
+            .with_base_url("https://second.invalid/v1")
+            .with_timeout_seconds(7)
+            .with_timeout_seconds(9);
+        assert_eq!(config.base_url, "https://second.invalid/v1");
+        // An explicit value beats the 300 s reasoning default `new` chose.
+        assert_eq!(config.timeout_seconds, 9);
+    }
+
+    #[test]
+    fn empty_arguments_build_a_config_but_not_an_adapter() {
+        // `new` is infallible; the empty key and model are refused when the adapter is built.
+        let config = DeepSeekConfig::new(String::new(), String::new());
+        assert!(config.validate().is_err());
+        assert!(DeepSeekAdapter::new(config).is_err());
+    }
+
+    #[test]
+    fn a_builder_set_non_http_base_url_fails_deepseek_construction() {
+        for bad in ["ftp://x", "", "api.deepseek.com/v1"] {
+            let config = DeepSeekConfig::new("k".to_string(), "deepseek-chat".to_string())
+                .with_base_url(bad);
+            assert!(
+                DeepSeekAdapter::new(config).is_err(),
+                "base URL {bad:?} must fail adapter construction"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn test_deepseek_provider_capabilities() {
-        let config = DeepSeekConfig::new(
-            "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
-            "deepseek-chat".to_string(),
-        );
+        let config = DeepSeekConfig::new("test-key".to_string(), "deepseek-chat".to_string());
         let adapter = DeepSeekAdapter::new(config).unwrap();
         let capabilities = adapter.get_capabilities();
 
@@ -1266,7 +1342,6 @@ mod tests {
     fn deepseek_default_model_is_seeded() {
         let adapter = DeepSeekAdapter::new(DeepSeekConfig::new(
             "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
             DEEPSEEK_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
@@ -1290,7 +1365,6 @@ mod tests {
     async fn deepseek_available_models_come_from_the_seeded_table_and_include_the_default() {
         let adapter = DeepSeekAdapter::new(DeepSeekConfig::new(
             "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
             DEEPSEEK_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
@@ -1465,11 +1539,7 @@ mod tests {
         // written straight to an operator-facing log line, so it must never
         // carry a credential — asserted, not assumed.
         let secret = "sk-livekey-abcdef0123456789";
-        let config = DeepSeekConfig::new(
-            secret.to_string(),
-            "https://api.deepseek.com/v1".to_string(),
-            "deepseek-chat".to_string(),
-        );
+        let config = DeepSeekConfig::new(secret.to_string(), "deepseek-chat".to_string());
         let adapter = DeepSeekAdapter::new(config).expect("valid config");
 
         // A gateway echoing the whole request back, headers included.
@@ -1516,11 +1586,7 @@ mod tests {
     fn parse_failure_message_carries_serde_detail_and_a_body_excerpt() {
         // The regression guard for this whole debug session: the message must
         // no longer be the information-free constant reqwest hands back.
-        let config = DeepSeekConfig::new(
-            "sk-test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
-            "deepseek-chat".to_string(),
-        );
+        let config = DeepSeekConfig::new("sk-test-key".to_string(), "deepseek-chat".to_string());
         let adapter = DeepSeekAdapter::new(config).expect("valid config");
 
         // An HTTP-200 error object — a shape `DeepSeekResponse` cannot accept.
@@ -1551,11 +1617,7 @@ mod tests {
     // ── Task 41-01/3: DeepSeek retryable-set parity + the 402 arm (D-02) ──
 
     fn test_adapter() -> DeepSeekAdapter {
-        let config = DeepSeekConfig::new(
-            "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
-            "deepseek-chat".to_string(),
-        );
+        let config = DeepSeekConfig::new("test-key".to_string(), "deepseek-chat".to_string());
         DeepSeekAdapter::new(config).expect("test config must build a valid adapter")
     }
 
@@ -1992,11 +2054,8 @@ mod tests {
     //    contract, and cache/reasoning sub-count mapping on both paths ────
 
     fn test_adapter_at(base_url: &str) -> DeepSeekAdapter {
-        let config = DeepSeekConfig::new(
-            "test-key".to_string(),
-            base_url.to_string(),
-            "deepseek-chat".to_string(),
-        );
+        let config = DeepSeekConfig::new("test-key".to_string(), "deepseek-chat".to_string())
+            .with_base_url(base_url);
         DeepSeekAdapter::new(config).expect("test config must build a valid adapter")
     }
 
@@ -2870,11 +2929,9 @@ mod tests {
             }
 
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
-                let config = DeepSeekConfig::new(
-                    "test-key".to_string(),
-                    base_url.to_string(),
-                    "deepseek-chat".to_string(),
-                );
+                let config =
+                    DeepSeekConfig::new("test-key".to_string(), "deepseek-chat".to_string())
+                        .with_base_url(base_url);
                 Arc::new(DeepSeekAdapter::new(config).expect("test config must build"))
             }
 
@@ -2958,11 +3015,7 @@ mod knob_tests {
     const UNSEEDED: &str = "deepseek-unseeded-test-model";
 
     fn config(base_url: &str, model: &str) -> DeepSeekConfig {
-        DeepSeekConfig::new(
-            "test-key".to_string(),
-            base_url.to_string(),
-            model.to_string(),
-        )
+        DeepSeekConfig::new("test-key".to_string(), model.to_string()).with_base_url(base_url)
     }
 
     fn window_override(window: u32) -> ModelOverride {

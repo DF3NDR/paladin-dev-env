@@ -2398,11 +2398,10 @@ mod tests {
             16,
         ))
         .expect("anthropic adapter");
-        let deepseek = DeepSeekAdapter::new(DeepSeekConfig::new(
-            "k".to_string(),
-            "https://example.invalid/v1".to_string(),
-            DEEPSEEK_DEFAULT_MODEL.to_string(),
-        ))
+        let deepseek = DeepSeekAdapter::new(
+            DeepSeekConfig::new("k".to_string(), DEEPSEEK_DEFAULT_MODEL.to_string())
+                .with_base_url("https://example.invalid/v1"),
+        )
         .expect("deepseek adapter");
         let a = rt
             .block_on(anthropic.get_available_models())

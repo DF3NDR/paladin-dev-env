@@ -1788,7 +1788,6 @@ mod tests {
     fn deepseek_llm_port() -> Arc<dyn LlmPort> {
         let config = paladin_llm::deepseek::DeepSeekConfig::new(
             "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
             "deepseek-chat".to_string(),
         );
         Arc::new(paladin_llm::deepseek::DeepSeekAdapter::new(config).unwrap())

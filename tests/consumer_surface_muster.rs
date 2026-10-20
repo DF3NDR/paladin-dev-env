@@ -514,6 +514,18 @@ fn prelude_aegis_names_agree() {
     let _transience: fn(paladin::prelude::Transience) -> Transience = |a| a;
 }
 
+/// Phase 50.1 (SURFACE-02, D-05, D-09; Appendix B item 5): the `*Config::new(api_key, model)`
+/// shape and the two endpoint builders every `*Config` carries, pinned on `DeepSeekConfig`. The
+/// first argument is the key, never a URL. NEVER CALLED: building the adapter would create an
+/// HTTP client, and every credential-shaped argument is an empty string.
+fn phase_50_1_config_shapes() -> Result<DeepSeekAdapter, LlmError> {
+    let _new: fn(String, String) -> DeepSeekConfig = DeepSeekConfig::new;
+    let chained: DeepSeekConfig = DeepSeekConfig::new(String::new(), String::new())
+        .with_base_url(String::new())
+        .with_timeout_seconds(1);
+    DeepSeekAdapter::new(chained)
+}
+
 #[test]
 fn the_consumer_surface_still_resolves() {
     // Reaching this point means every `use`, fn-pointer, literal and trait-impl pin above

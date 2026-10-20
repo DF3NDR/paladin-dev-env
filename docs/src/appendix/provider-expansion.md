@@ -233,11 +233,10 @@ let config = DeepSeekConfig::from_env()?;
 let adapter = DeepSeekAdapter::new(config)?;
 
 // Or custom
-let config = DeepSeekConfig::new(
-    api_key,
-    "https://api.deepseek.com/v1".to_string(),
-    "deepseek-flash".to_string()
-);
+let config = DeepSeekConfig::new(api_key, "deepseek-flash".to_string())
+    // Optional: the endpoint defaults to DEEPSEEK_DEFAULT_BASE_URL.
+    .with_base_url("https://api.deepseek.com/v1")
+    .with_timeout_seconds(600);
 let adapter = DeepSeekAdapter::new(config)?;
 ```
 

@@ -117,7 +117,8 @@ To construct one adapter directly, each provider has a `*Config` type (`OpenAICo
 `AnthropicConfig`, `DeepSeekConfig`, `KimiConfig`, `QwenConfig`, `GrokConfig`, `GeminiConfig`,
 `OllamaConfig`, `OpenAiCompatibleConfig`). All nine are `#[non_exhaustive]`: build one with its
 `new(..)` or `from_env()` and set knobs through the builders `with_max_tokens`, `with_max_retries`,
-`with_context_window` and `with_model_overrides` (or by assigning the public fields):
+`with_context_window`, `with_model_overrides`, `with_timeout_seconds` and `with_base_url` (or by
+assigning the public fields):
 
 ```rust,ignore
 use std::collections::BTreeMap;
@@ -130,9 +131,10 @@ let config = AnthropicConfig::new(api_key, base_url, "claude-haiku-5-5".to_strin
 let adapter = AnthropicAdapter::new(config)?;
 ```
 
-The `new(..)` signatures differ between providers; harmonising them is a separate, deferred owner
-item (`.planning/todos/pending/2026-10-16-harmonise-llm-config-new-signatures.md`), not part of
-this phase.
+The `new(..)` signatures are being harmonised to `new(api_key, model)` by Phase 50.1 (SURFACE-02,
+MIGRATION.md section 9.8 DR-19); `DeepSeekConfig::new(api_key, model)` is the first, with the
+endpoint set through `with_base_url`. The first argument is the API key, never a URL:
+`OllamaConfig::new(base_url, model)` keeps the endpoint as its first argument.
 
 A direct constructor applies the same 300 s default to a seeded reasoning model, but it cannot see
 a model marked reasoning only through `model_overrides`; set `timeout_seconds` yourself on the

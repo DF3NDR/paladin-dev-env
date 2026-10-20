@@ -114,6 +114,19 @@ required-features = ["openai", "anthropic", "deepseek", "kimi", "qwen", "grok", 
 # additions to this crate (`FallbackStep`, `from_steps`, `hop_on_refusal`,
 # `SERVED_MODEL_METADATA_KEY`) fired no lint. The new line has its own `FallbackChainError` row
 # and entry, registered in the same commit as this line.
+#
+# SURFACE-02 (D-05, MIGRATION.md §9.2, Phase 50.1 plan 02): `DeepSeekConfig::new(api_key,
+# base_url, model)` became `new(api_key, model)`; the endpoint defaults to
+# `DEEPSEEK_DEFAULT_BASE_URL` and is set with `with_base_url`. The D-00b measurement
+# (cargo-semver-checks 0.50.0 vs the published 0.10.1, `--release-type minor`, run with the
+# default features and again with all nine adapter features, this table removed and restored
+# byte-for-byte) ran 196 checks and fired three lints in both runs: the two already allowed
+# above, and `method_parameter_count_changed`, the third line below, on
+# `paladin_llm::deepseek::DeepSeekConfig::new` and its `deepseek::adapter` path, three
+# parameters before and two now. It has a `DeepSeekConfig` SURFACE-02 row and entry, registered
+# in the same commit as this line; the plans that move the other six types' `new` add their
+# rows and entries beside it.
 [package.metadata.cargo-semver-checks.lints]
 struct_marked_non_exhaustive = "allow"
 enum_discriminants_undefined_non_unit_variant = "allow"
+method_parameter_count_changed = "allow"

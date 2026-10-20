@@ -147,11 +147,12 @@ pub(crate) fn default_timeout_seconds(provider: &str, model: &str, compiled_defa
     }
 }
 
-/// Generate the `with_*` builders of the PARITY-03 knobs on one `*Config` type (D-12).
+/// Generate the `with_*` builders of the shared knobs on one `*Config` type (D-12).
 ///
-/// Every adapter config carries the same four knobs -- `max_tokens`, `max_retries`,
-/// `context_window` and `model_overrides` -- so their builders (and rustdoc) come from one place
-/// and cannot drift between the nine types. The one-argument form is for a config whose
+/// Every adapter config carries the same knobs -- `max_tokens`, `max_retries`,
+/// `context_window`, `model_overrides`, and (Phase 50.1, SURFACE-02) the `base_url` and
+/// `timeout_seconds` a constructor defaults -- so their builders (and rustdoc) come from one
+/// place and cannot drift between the nine types. The one-argument form is for a config whose
 /// `max_tokens` is an `Option<u32>`; `plain_max_tokens` is for Anthropic, whose `max_tokens` is a
 /// required `u32`.
 #[allow(unused_macros)]
@@ -189,6 +190,30 @@ macro_rules! config_knob_builders {
         }
     };
     (@common $config:ident) => {
+        /// Set the endpoint, replacing the vendor default [`new`](Self::new) chose.
+        ///
+        /// The credential header goes wherever this points, so point it only at an endpoint you
+        /// trust: a gateway or proxy you operate, or the vendor's own host. Redirects are never
+        /// followed, so a `3xx` answer cannot carry the credential on to another host. The value
+        /// is checked to be an `http` or `https` URL when the adapter is built, and an empty or
+        /// other-scheme value fails construction.
+        #[must_use]
+        pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+            self.base_url = base_url.into();
+            self
+        }
+
+        /// Set the request timeout, in seconds, replacing the default [`new`](Self::new) chose.
+        ///
+        /// That default is 300 s for a seeded reasoning model and the provider's own default
+        /// otherwise (Phase 50 D-13); a value set here always wins over it, whichever order the
+        /// builders are called in and however often this one is called (the last call wins).
+        #[must_use]
+        pub fn with_timeout_seconds(mut self, timeout_seconds: u64) -> Self {
+            self.timeout_seconds = timeout_seconds;
+            self
+        }
+
         /// Set the retry budget for a retryable error (network failure, timeout, 5xx).
         ///
         /// The compat presets, OpenAI and DeepSeek retry up to this many times after the first
@@ -1999,5 +2024,120 @@ mod switching_page_tests {
         assert_eq!(with_thousands(999), "999");
         assert_eq!(with_thousands(1_000), "1,000");
         assert_eq!(with_thousands(1_048_576), "1,048,576");
+    }
+}
+
+/// The `with_base_url` / `with_timeout_seconds` builders `config_knob_builders!` generates on
+/// every `*Config` type (Phase 50.1 plan 02, SURFACE-02, D-05, D-00d: one mechanism, nine types).
+#[cfg(test)]
+mod endpoint_builder_tests {
+    /// An endpoint no vendor serves, so a builder that fell through to a default is visible.
+    const URL: &str = "https://example.invalid/v1";
+
+    /// Every compiled `*Config` takes the same two builders and stores their values in its
+    /// plain `base_url` / `timeout_seconds` fields. One feature-gated block per type, each
+    /// building its config with that type's own `new`.
+    #[test]
+    fn knob_builders_set_base_url_and_timeout_on_every_config() {
+        #[cfg(feature = "openai")]
+        {
+            let config = crate::openai::OpenAIConfig::new("k".to_string())
+                .with_base_url(URL)
+                .with_timeout_seconds(7);
+            assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
+        }
+        #[cfg(feature = "anthropic")]
+        {
+            let config = crate::anthropic::AnthropicConfig::new(
+                "k".to_string(),
+                "https://api.anthropic.com".to_string(),
+                "claude-haiku-5-5".to_string(),
+                16,
+            )
+            .with_base_url(URL)
+            .with_timeout_seconds(7);
+            assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
+        }
+        #[cfg(feature = "deepseek")]
+        {
+            let config =
+                crate::deepseek::DeepSeekConfig::new("k".to_string(), "deepseek-chat".to_string())
+                    .with_base_url(URL)
+                    .with_timeout_seconds(7);
+            assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
+        }
+        #[cfg(feature = "gemini")]
+        {
+            let config = crate::gemini::GeminiConfig::new(
+                "k".to_string(),
+                "https://generativelanguage.googleapis.com".to_string(),
+                "gemini-3.5-flash".to_string(),
+            )
+            .with_base_url(URL)
+            .with_timeout_seconds(7);
+            assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
+        }
+        #[cfg(feature = "kimi")]
+        {
+            let config = crate::kimi::KimiConfig::new(
+                "k".to_string(),
+                "https://api.moonshot.ai/v1".to_string(),
+                "kimi-k3".to_string(),
+            )
+            .with_base_url(URL)
+            .with_timeout_seconds(7);
+            assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
+        }
+        #[cfg(feature = "qwen")]
+        {
+            let config = crate::qwen::QwenConfig::new(
+                "k".to_string(),
+                "https://dashscope.example/v1".to_string(),
+                "qwen-plus".to_string(),
+            )
+            .with_base_url(URL)
+            .with_timeout_seconds(7);
+            assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
+        }
+        #[cfg(feature = "grok")]
+        {
+            let config = crate::grok::GrokConfig::new(
+                "k".to_string(),
+                "https://api.x.ai/v1".to_string(),
+                "grok-4.3".to_string(),
+            )
+            .with_base_url(URL)
+            .with_timeout_seconds(7);
+            assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
+        }
+        #[cfg(feature = "ollama")]
+        {
+            // `OllamaConfig::new` keeps the endpoint as its first argument (D-08); the builder
+            // replaces it all the same.
+            let config = crate::ollama::OllamaConfig::new(
+                "http://localhost:11434".to_string(),
+                "llama3".to_string(),
+            )
+            .with_base_url(URL)
+            .with_timeout_seconds(7);
+            assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
+        }
+        #[cfg(feature = "openai-compatible")]
+        {
+            let capabilities =
+                crate::openai_compatible::OpenAiCompatibleCapabilitiesConfig::from_lookup(&|_| {
+                    None
+                })
+                .expect("no variables set is the conservative default");
+            let config = crate::openai_compatible::OpenAiCompatibleConfig::new(
+                "k".to_string(),
+                "https://gateway.example/v1".to_string(),
+                "some-model".to_string(),
+                capabilities,
+            )
+            .with_base_url(URL)
+            .with_timeout_seconds(7);
+            assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
+        }
     }
 }

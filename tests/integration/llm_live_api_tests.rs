@@ -281,11 +281,7 @@ async fn test_openai_capabilities() {
 async fn test_deepseek_basic_completion() {
     let api_key = require_api_key("DEEPSEEK_API_KEY", "DeepSeek");
 
-    let config = DeepSeekConfig::new(
-        api_key,
-        "https://api.deepseek.com/v1".to_string(),
-        "deepseek-chat".to_string(),
-    );
+    let config = DeepSeekConfig::new(api_key, "deepseek-chat".to_string());
     let adapter = DeepSeekAdapter::new(config).expect("Failed to create DeepSeek adapter");
 
     let prompt = create_test_prompt("Say 'Hello from DeepSeek' and nothing else.");
@@ -312,11 +308,7 @@ async fn test_deepseek_basic_completion() {
 async fn test_deepseek_streaming_completion() {
     let api_key = require_api_key("DEEPSEEK_API_KEY", "DeepSeek");
 
-    let config = DeepSeekConfig::new(
-        api_key,
-        "https://api.deepseek.com/v1".to_string(),
-        "deepseek-chat".to_string(),
-    );
+    let config = DeepSeekConfig::new(api_key, "deepseek-chat".to_string());
     let adapter = DeepSeekAdapter::new(config).expect("Failed to create DeepSeek adapter");
 
     let prompt = create_test_prompt("Count from 1 to 5, one number per line.");
@@ -362,11 +354,7 @@ async fn test_deepseek_streaming_completion() {
 async fn test_deepseek_error_handling() {
     let api_key = require_api_key("DEEPSEEK_API_KEY", "DeepSeek");
 
-    let config = DeepSeekConfig::new(
-        api_key,
-        "https://api.deepseek.com/v1".to_string(),
-        "deepseek-chat".to_string(),
-    );
+    let config = DeepSeekConfig::new(api_key, "deepseek-chat".to_string());
     let adapter = DeepSeekAdapter::new(config).expect("Failed to create DeepSeek adapter");
 
     let prompt = create_test_prompt("This should fail with an invalid model.");
@@ -389,11 +377,7 @@ async fn test_deepseek_error_handling() {
 async fn test_deepseek_capabilities() {
     let api_key = require_api_key("DEEPSEEK_API_KEY", "DeepSeek");
 
-    let config = DeepSeekConfig::new(
-        api_key,
-        "https://api.deepseek.com/v1".to_string(),
-        "deepseek-chat".to_string(),
-    );
+    let config = DeepSeekConfig::new(api_key, "deepseek-chat".to_string());
     let adapter = DeepSeekAdapter::new(config).expect("Failed to create DeepSeek adapter");
 
     let capabilities = adapter.get_capabilities();

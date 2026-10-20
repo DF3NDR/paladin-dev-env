@@ -82,11 +82,8 @@ fn show_deepseek_config() {
     println!("   let adapter = DeepSeekAdapter::new(config)?;");
     println!();
     println!("   // Option 2: Custom configuration");
-    println!("   let config = DeepSeekConfig::new(");
-    println!("       api_key,");
-    println!("       \"https://api.deepseek.com/v1\".to_string(),");
-    println!("       \"deepseek-chat\".to_string()");
-    println!("   );");
+    println!("   let config = DeepSeekConfig::new(api_key, \"deepseek-flash\".to_string())");
+    println!("       .with_timeout_seconds(600); // endpoint: .with_base_url(..)");
     println!("   let adapter = DeepSeekAdapter::new(config)?;");
     println!();
 }

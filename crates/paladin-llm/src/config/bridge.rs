@@ -310,9 +310,6 @@ impl From<&LlmProviderConfig> for AnthropicConfig {
 // ── DeepSeek ─────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "deepseek")]
-const DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com/v1";
-
-#[cfg(feature = "deepseek")]
 const DEEPSEEK_ENV: ProviderEnv = ProviderEnv {
     provider: "deepseek",
     key: Some("DEEPSEEK_API_KEY"),
@@ -325,7 +322,7 @@ const DEEPSEEK_ENV: ProviderEnv = ProviderEnv {
 
 #[cfg(feature = "deepseek")]
 const DEEPSEEK_DEFAULTS: CompiledDefaults = CompiledDefaults {
-    base_url: Some(DEEPSEEK_BASE_URL),
+    base_url: Some(crate::deepseek::adapter::DEEPSEEK_DEFAULT_BASE_URL),
     model: Some(crate::deepseek::adapter::DEEPSEEK_DEFAULT_MODEL),
     model_required: false,
     timeout_seconds: 60,
@@ -1335,7 +1332,10 @@ mod tests {
             defaulted.model,
             crate::deepseek::adapter::DEEPSEEK_DEFAULT_MODEL
         );
-        assert_eq!(defaulted.base_url, DEEPSEEK_BASE_URL);
+        assert_eq!(
+            defaulted.base_url,
+            crate::deepseek::adapter::DEEPSEEK_DEFAULT_BASE_URL
+        );
         // `deepseek-flash` is a seeded reasoning model: 300 s, not the old bridge's 60 s.
         assert_eq!(defaulted.timeout_seconds, 300);
     }

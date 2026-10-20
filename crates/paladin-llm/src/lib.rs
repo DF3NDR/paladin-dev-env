@@ -308,7 +308,6 @@ mod capability_invariants {
         .unwrap();
         let deepseek = DeepSeekAdapter::new(DeepSeekConfig::new(
             "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
             "deepseek-chat".to_string(),
         ))
         .unwrap();
@@ -365,7 +364,6 @@ mod capability_invariants {
         .unwrap();
         let deepseek = DeepSeekAdapter::new(DeepSeekConfig::new(
             "test-key".to_string(),
-            "https://api.deepseek.com/v1".to_string(),
             "deepseek-chat".to_string(),
         ))
         .unwrap();

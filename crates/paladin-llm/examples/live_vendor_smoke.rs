@@ -2391,12 +2391,11 @@ mod tests {
         let rt = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("runtime");
-        let anthropic = AnthropicAdapter::new(AnthropicConfig::new(
-            "k".to_string(),
-            "https://example.invalid/v1".to_string(),
-            ANTHROPIC_DEFAULT_MODEL.to_string(),
-            16,
-        ))
+        let anthropic = AnthropicAdapter::new(
+            AnthropicConfig::new("k".to_string(), ANTHROPIC_DEFAULT_MODEL.to_string())
+                .with_base_url("https://example.invalid/v1".to_string())
+                .with_max_tokens(16),
+        )
         .expect("anthropic adapter");
         let deepseek = DeepSeekAdapter::new(
             DeepSeekConfig::new("k".to_string(), DEEPSEEK_DEFAULT_MODEL.to_string())

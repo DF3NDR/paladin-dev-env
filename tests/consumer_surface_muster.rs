@@ -329,12 +329,7 @@ async fn service_and_adapter_signatures(args: &[String]) {
     let _c: Result<MCPClient, ArsenalError> = MCPClient::connect_stdio("cmd", args).await;
 
     let _adapters = (
-        AnthropicAdapter::new(AnthropicConfig::new(
-            String::new(),
-            String::new(),
-            String::new(),
-            1,
-        )),
+        AnthropicAdapter::new(AnthropicConfig::new(String::new(), String::new())),
         DeepSeekConfig::from_env().map(DeepSeekAdapter::new),
         MockLlmAdapter::new(),
         MultiStepMockLlmPort::new(Vec::new()),
@@ -445,14 +440,18 @@ async fn phase_50_surface(llm: Arc<dyn LlmPort>) {
     )
     .with_reasoning("thinking");
 
-    // PARITY-03: the `AnthropicConfig` knob set in the option-a shape (`new(..)` keeps its four
-    // arguments; the knobs are builders or public fields).
-    let mut anthropic = AnthropicConfig::new(String::new(), String::new(), String::new(), 1)
+    // PARITY-03 / SURFACE-02 (D-05, D-07, D-09): the `AnthropicConfig` knob set in the
+    // `new(api_key, model)` shape. The first argument is the key, never a URL; every other knob,
+    // the output budget, the retry budget, the windows, the overrides, the timeout and the
+    // endpoint, is a builder. No field is assigned.
+    let _new: fn(String, String) -> AnthropicConfig = AnthropicConfig::new;
+    let anthropic = AnthropicConfig::new(String::new(), String::new())
         .with_max_tokens(1)
         .with_max_retries(1)
         .with_context_window(1)
-        .with_model_overrides(BTreeMap::new());
-    anthropic.timeout_seconds = 1;
+        .with_model_overrides(BTreeMap::new())
+        .with_timeout_seconds(1)
+        .with_base_url(String::new());
     let _adapter = AnthropicAdapter::new(anthropic);
 }
 

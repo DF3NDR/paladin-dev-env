@@ -129,8 +129,10 @@ required-features = ["openai", "anthropic", "deepseek", "kimi", "qwen", "grok", 
 # now) and the same lint named each one, so each has its own SURFACE-02 row and entry under this
 # line. Plan 50.1-05 measured `OpenAIConfig::new` the same way (`new(api_key)` became
 # `new(api_key, model)`, one parameter before and two now, same lint, default features and all nine
-# adapter features agreeing; no lint named the new `model` field), so it has its own entry too; the
-# plan that moves `AnthropicConfig` adds its entry beside them.
+# adapter features agreeing; no lint named the new `model` field), so it has its own entry too; Plan
+# 50.1-06 measured `AnthropicConfig::new` the same way (`new(api_key, base_url, model, max_tokens)`
+# became `new(api_key, model)`, four parameters before and two now, same lint, default features and
+# all nine adapter features agreeing), so it has its own entry beside them.
 [package.metadata.cargo-semver-checks.lints]
 struct_marked_non_exhaustive = "allow"
 enum_discriminants_undefined_non_unit_variant = "allow"

@@ -305,9 +305,7 @@ mod capability_invariants {
         .unwrap();
         let anthropic = AnthropicAdapter::new(AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         ))
         .unwrap();
         let deepseek = DeepSeekAdapter::new(DeepSeekConfig::new(
@@ -365,9 +363,7 @@ mod capability_invariants {
         .unwrap();
         let anthropic = AnthropicAdapter::new(AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         ))
         .unwrap();
         let deepseek = DeepSeekAdapter::new(DeepSeekConfig::new(

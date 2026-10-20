@@ -555,9 +555,7 @@ mod tests {
     fn create_test_adapter() -> AnthropicAdapter {
         let config = super::super::adapter::AnthropicConfig::new(
             "sk-ant-test-key".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-opus-20240229".to_string(),
-            4096,
         );
         AnthropicAdapter::new(config).unwrap()
     }

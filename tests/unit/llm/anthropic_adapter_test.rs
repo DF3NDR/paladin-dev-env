@@ -20,10 +20,9 @@ async fn setup_mock_server() -> (ServerGuard, AnthropicAdapter) {
     // `AnthropicConfig` is `#[non_exhaustive]`: build it with `new` and set what differs.
     let mut config = AnthropicConfig::new(
         "test-api-key".to_string(),
-        server.url(),
         "claude-3-5-sonnet-20241022".to_string(),
-        4096,
-    );
+    )
+    .with_base_url(server.url());
     config.timeout_seconds = 30;
     let adapter = AnthropicAdapter::new(config).unwrap();
     (server, adapter)

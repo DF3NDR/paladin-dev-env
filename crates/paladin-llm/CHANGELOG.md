@@ -15,6 +15,8 @@ and this project follows lockstep workspace versioning.
   `deepseek::adapter::DEEPSEEK_DEFAULT_BASE_URL`, now the one copy of the DeepSeek endpoint (used by
   `from_env()` and the `llm.deepseek` bridge). The credential header goes wherever `with_base_url`
   points and redirects are never followed.
+- Phase 50.1 (SURFACE-02, D-05; plan 50.1-06): `anthropic::adapter::ANTHROPIC_DEFAULT_BASE_URL`, now the
+  one copy of the Anthropic endpoint (used by `new`, `from_env()` and the `llm.anthropic` bridge).
 - Phase 50.1 (SURFACE-02, D-06; plan 50.1-05): `openai::adapter::OPENAI_DEFAULT_MODEL`,
   `openai::adapter::OPENAI_DEFAULT_BASE_URL`, the `OpenAIConfig.model` field and
   `OpenAIConfig::with_organization(impl Into<String>)` (the one knob only OpenAI carries, from a
@@ -213,6 +215,15 @@ and this project follows lockstep workspace versioning.
   The endpoint defaults to `OPENAI_DEFAULT_BASE_URL` (`with_base_url` replaces it) and the timeout
   stays 300 s. `new(k)` becomes `new(k, OPENAI_DEFAULT_MODEL.to_string())`. Registered in
   `MIGRATION.md` section 9.2 and 9.8 (DR-19) and the crate's `cargo-semver-checks` lints table
+  (`method_parameter_count_changed`).
+- Phase 50.1 (SURFACE-02, D-05, D-07; plan 50.1-06): `AnthropicConfig::new(api_key, base_url, model,
+  max_tokens)` becomes `new(api_key, model)`, with no alias. The endpoint defaults to the new
+  `anthropic::adapter::ANTHROPIC_DEFAULT_BASE_URL` (`with_base_url` replaces it) and the timeout to
+  300 s for a seeded reasoning model and 60 s otherwise (`with_timeout_seconds` replaces it);
+  `max_tokens` is 4,096 for every model, as `from_env()` and the layered path already had it (owner
+  decision `compiled-default`, 2026-10-20), and `with_max_tokens` is the override. `new(k, url, m,
+  n)` becomes `new(k, m).with_base_url(url).with_max_tokens(n)`. Registered in `MIGRATION.md`
+  section 9.2 and 9.8 (DR-19) and the crate's `cargo-semver-checks` lints table
   (`method_parameter_count_changed`).
 - Phase 50 (PARITY-03, PARITY-06; owner decision option-a): the nine `*Config` types and
   `LlmProviderConfig` are `#[non_exhaustive]`, so a struct literal outside the crate no longer

@@ -98,8 +98,7 @@ fn show_anthropic_config() {
     println!("   // Option 2: Custom configuration");
     println!("   let config = AnthropicConfig::new(");
     println!("       api_key,");
-    println!("       \"https://api.anthropic.com/v1\".to_string(),");
-    println!("       \"claude-3-5-sonnet-20241022\".to_string()");
+    println!("       \"claude-haiku-5-5\".to_string()");
     println!("   );");
     println!("   let adapter = AnthropicAdapter::new(config)?;");
     println!();

@@ -124,20 +124,29 @@ assigning the public fields):
 use std::collections::BTreeMap;
 use paladin::{AnthropicAdapter, AnthropicConfig, ModelOverride};
 
-let config = AnthropicConfig::new(api_key, base_url, "claude-haiku-5-5".to_string(), 4096)
+let config = AnthropicConfig::new(api_key, "claude-haiku-5-5".to_string())
+    .with_base_url(base_url)
+    .with_max_tokens(8192)
     .with_max_retries(2)
     .with_context_window(1_000_000)
     .with_model_overrides(BTreeMap::<String, ModelOverride>::new());
 let adapter = AnthropicAdapter::new(config)?;
 ```
 
-The `new(..)` signatures are being harmonised to `new(api_key, model)` by Phase 50.1 (SURFACE-02,
-MIGRATION.md section 9.8 DR-19); `DeepSeekConfig::new(api_key, model)` is the first, with the
-endpoint set through `with_base_url`. The first argument is the API key, never a URL:
-`OllamaConfig::new(base_url, model)` keeps the endpoint as its first argument.
+Seven of the nine construct with the same shape, `new(api_key, model)` (Phase 50.1, SURFACE-02,
+MIGRATION.md section 9.8 DR-19): `OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`,
+`KimiConfig`, `QwenConfig`, `GrokConfig` and `GeminiConfig`. The first argument is the API key,
+never a URL. The endpoint defaults to the vendor's own (`ANTHROPIC_DEFAULT_BASE_URL` and its
+siblings) and is replaced with `with_base_url`. The two endpoint-only configs keep their
+endpoint argument: `OllamaConfig::new(base_url, model)` and
+`OpenAiCompatibleConfig::new(api_key, base_url, model, capabilities)`.
+
+`AnthropicConfig::new` sends `max_tokens` 4,096 on a request that sets none, for every model, the
+same value `from_env()` and the layered `llm.anthropic` block use. A model's larger maximum
+output is yours to ask for: `.with_max_tokens(16_000)`.
 
 A direct constructor applies the same 300 s default to a seeded reasoning model, but it cannot see
-a model marked reasoning only through `model_overrides`; set `timeout_seconds` yourself on the
+a model marked reasoning only through `model_overrides`; call `with_timeout_seconds` yourself on the
 direct path in that case.
 
 All nine adapters are re-exported from the `paladin` facade, each behind its own feature:

@@ -215,15 +215,13 @@ earlier `claude-3-*` ids this page used to list now answer HTTP 404 (see
 ```rust,ignore
 use paladin_llm::anthropic::{AnthropicAdapter, AnthropicConfig};
 
-// `AnthropicConfig` is `#[non_exhaustive]`: `new(..)` takes the key, base URL, model and
-// `max_tokens`; the other knobs are `with_*` builders or public fields
-let mut config = AnthropicConfig::new(
+// `AnthropicConfig` is `#[non_exhaustive]`: `new(..)` takes the key and the model; the endpoint,
+// output budget (4,096 by default) and the other knobs are `with_*` builders
+let config = AnthropicConfig::new(
     env::var("ANTHROPIC_API_KEY")?,
-    "https://api.anthropic.com/v1".to_string(),
     "claude-haiku-5-5".to_string(), // ANTHROPIC_DEFAULT_MODEL
-    4096,
-);
-config.timeout_seconds = 300;
+)
+.with_timeout_seconds(300);
 
 let llm = Arc::new(AnthropicAdapter::new(config)?);
 ```

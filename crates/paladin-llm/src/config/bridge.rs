@@ -205,9 +205,6 @@ impl From<&LlmProviderConfig> for OpenAIConfig {
 // ── Anthropic ────────────────────────────────────────────────────────────────
 
 #[cfg(feature = "anthropic")]
-const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com/v1";
-
-#[cfg(feature = "anthropic")]
 const ANTHROPIC_ENV: ProviderEnv = ProviderEnv {
     provider: "anthropic",
     key: Some("ANTHROPIC_API_KEY"),
@@ -220,7 +217,7 @@ const ANTHROPIC_ENV: ProviderEnv = ProviderEnv {
 
 #[cfg(feature = "anthropic")]
 const ANTHROPIC_DEFAULTS: CompiledDefaults = CompiledDefaults {
-    base_url: Some(ANTHROPIC_BASE_URL),
+    base_url: Some(crate::anthropic::adapter::ANTHROPIC_DEFAULT_BASE_URL),
     model: Some(crate::anthropic::adapter::ANTHROPIC_DEFAULT_MODEL),
     model_required: false,
     timeout_seconds: 60,
@@ -943,7 +940,10 @@ mod tests {
             let block = LlmProviderConfig::new("k");
             let config = AnthropicConfig::from(&block);
             assert_eq!(config.model, ANTHROPIC_DEFAULT_MODEL);
-            assert_eq!(config.base_url, ANTHROPIC_BASE_URL);
+            assert_eq!(
+                config.base_url,
+                crate::anthropic::adapter::ANTHROPIC_DEFAULT_BASE_URL
+            );
             assert_eq!(config.max_tokens, ANTHROPIC_DEFAULT_MAX_TOKENS);
             // The adapter's own compiled timeout, not the 300 s the bridge used to carry.
             assert_eq!(config.timeout_seconds, 60);

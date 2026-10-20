@@ -49,9 +49,17 @@ const ANTHROPIC_PROVIDER: &str = "anthropic";
 /// `not_found_error`. Pin `ANTHROPIC_MODEL` to keep any other model.
 pub const ANTHROPIC_DEFAULT_MODEL: &str = "claude-haiku-5-5";
 
-/// The `max_tokens` budget [`AnthropicConfig::from_env`] and the layered config path
-/// (`config::bridge`) use when neither `ANTHROPIC_MAX_TOKENS` nor the config block sets one. The
-/// Claude API requires the field, so this adapter always has a value.
+/// The Anthropic endpoint [`AnthropicConfig::new`] and [`AnthropicConfig::from_env`] use when no
+/// other is chosen, and the compiled default of the layered `llm.anthropic` configuration.
+///
+/// Replace it with [`AnthropicConfig::with_base_url`] (or `ANTHROPIC_BASE_URL` for `from_env`).
+pub const ANTHROPIC_DEFAULT_BASE_URL: &str = "https://api.anthropic.com/v1";
+
+/// The `max_tokens` budget [`AnthropicConfig::new`], [`AnthropicConfig::from_env`] and the
+/// layered config path (`config::bridge`) use when neither `ANTHROPIC_MAX_TOKENS`, the config
+/// block nor [`AnthropicConfig::with_max_tokens`] sets one (owner decision D-07,
+/// `compiled-default`, 2026-10-20: one value on every construction path, whatever the model).
+/// The Claude API requires the field, so this adapter always has a value.
 pub(crate) const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 4096;
 
 /// The exact phrase observed VERBATIM in Anthropic's HTTP 400
@@ -119,12 +127,15 @@ pub struct AnthropicConfig {
     /// with `ANTHROPIC_MODEL` unset.
     pub model: String,
     /// Output budget (`max_tokens`, required by the Claude API) sent when a request sets none.
-    /// Checked against the model's profiled maximum output exactly as a request's own
+    /// [`AnthropicConfig::new`], [`AnthropicConfig::from_env`] and the layered path all default it
+    /// to 4,096 whatever the model; raise it with [`AnthropicConfig::with_max_tokens`] (or
+    /// `ANTHROPIC_MAX_TOKENS` for `from_env`). Checked against the model's profiled maximum output exactly as a request's own
     /// `max_tokens` is (ADR-0061 (i)): above it, the request is refused before any HTTP call.
     pub max_tokens: u32,
     /// Request timeout in seconds. [`AnthropicConfig::new`] and [`AnthropicConfig::from_env`]
     /// default it to 300 for a seeded reasoning model and to 60 otherwise (D-13); an explicit
-    /// `ANTHROPIC_TIMEOUT_SECONDS` or field assignment always wins. A model marked `reasoning`
+    /// `ANTHROPIC_TIMEOUT_SECONDS`, [`AnthropicConfig::with_timeout_seconds`] or field assignment
+    /// always wins. A model marked `reasoning`
     /// only through [`model_overrides`](Self::model_overrides) does not change this default
     /// here: set this field in the same place.
     pub timeout_seconds: u64,
@@ -182,7 +193,7 @@ impl AnthropicConfig {
             .map_err(|_| "ANTHROPIC_API_KEY environment variable not set")?;
 
         let base_url = env::var("ANTHROPIC_BASE_URL")
-            .unwrap_or_else(|_| "https://api.anthropic.com/v1".to_string());
+            .unwrap_or_else(|_| ANTHROPIC_DEFAULT_BASE_URL.to_string());
 
         let model =
             env::var("ANTHROPIC_MODEL").unwrap_or_else(|_| ANTHROPIC_DEFAULT_MODEL.to_string());
@@ -214,14 +225,41 @@ impl AnthropicConfig {
         Ok(config)
     }
 
-    /// Create configuration with custom values.
-    pub fn new(api_key: String, base_url: String, model: String, max_tokens: u32) -> Self {
+    /// Create a configuration for `model`, authenticating with `api_key`.
+    ///
+    /// - `api_key`: the Anthropic API key, never a URL.
+    /// - `model`: the default model requested when a call names none.
+    ///
+    /// The endpoint is [`ANTHROPIC_DEFAULT_BASE_URL`] (replace it with
+    /// [`with_base_url`](Self::with_base_url)); the timeout is 300 s for a seeded reasoning model
+    /// and 60 s otherwise (replace it with
+    /// [`with_timeout_seconds`](Self::with_timeout_seconds)).
+    ///
+    /// `max_tokens`, the output budget the Claude API requires on every request, is 4,096 for
+    /// every `model`, the same value [`from_env`](Self::from_env) and the layered
+    /// `llm.anthropic` configuration use, so the three construction paths agree. A model's
+    /// larger seeded maximum output is not used here: ask for it with
+    /// [`with_max_tokens`](Self::with_max_tokens). Construction is infallible: an empty key or
+    /// model, or a non-`http(s)` endpoint, is refused when the adapter is built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::anthropic::AnthropicConfig;
+    /// use paladin_llm::anthropic::adapter::ANTHROPIC_DEFAULT_BASE_URL;
+    ///
+    /// let key = "sk-ant-example".to_string();
+    /// let config = AnthropicConfig::new(key, "claude-haiku-5-5".to_string()).with_max_tokens(16_000);
+    /// assert_eq!(config.base_url, ANTHROPIC_DEFAULT_BASE_URL);
+    /// assert_eq!(config.max_tokens, 16_000);
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
         let timeout_seconds = default_timeout_seconds(ANTHROPIC_PROVIDER, &model, 60);
         Self {
             api_key,
-            base_url,
+            base_url: ANTHROPIC_DEFAULT_BASE_URL.to_string(),
             model,
-            max_tokens,
+            max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
             timeout_seconds,
             max_retries: DEFAULT_MAX_RETRIES,
             context_window: None,
@@ -1459,34 +1497,26 @@ mod tests {
     fn test_anthropic_config_validation() {
         let config = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         );
         assert!(config.validate().is_ok());
 
-        let config_empty_key = AnthropicConfig::new(
-            "".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
-            "claude-3-5-sonnet-20241022".to_string(),
-            4096,
-        );
+        let config_empty_key =
+            AnthropicConfig::new("".to_string(), "claude-3-5-sonnet-20241022".to_string());
         assert!(config_empty_key.validate().is_err());
 
         let config_invalid_url = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "invalid-url".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
-        );
+        )
+        .with_base_url("invalid-url".to_string());
         assert!(config_invalid_url.validate().is_err());
 
         let config_zero_tokens = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            0,
-        );
+        )
+        .with_max_tokens(0);
         assert!(config_zero_tokens.validate().is_err());
     }
 
@@ -1494,9 +1524,7 @@ mod tests {
     async fn test_anthropic_adapter_creation() {
         let config = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         );
         assert!(AnthropicAdapter::new(config).is_ok());
     }
@@ -1505,9 +1533,7 @@ mod tests {
     async fn test_anthropic_provider_capabilities() {
         let config = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         );
         let adapter = AnthropicAdapter::new(config).unwrap();
         let capabilities = adapter.get_capabilities();
@@ -1528,9 +1554,7 @@ mod tests {
     fn seeded_test_adapter() -> AnthropicAdapter {
         AnthropicAdapter::new(AnthropicConfig::new(
             "test-key".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             ANTHROPIC_DEFAULT_MODEL.to_string(),
-            4096,
         ))
         .expect("a valid config builds")
     }
@@ -1658,9 +1682,7 @@ stake, so an attacker donating to himself alone is a strict loss.";
     fn test_adapter() -> AnthropicAdapter {
         let config = AnthropicConfig::new(
             "sk-ant-test123".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
             "claude-3-5-sonnet-20241022".to_string(),
-            4096,
         );
         AnthropicAdapter::new(config).expect("test config must build a valid adapter")
     }
@@ -2161,12 +2183,10 @@ stake, so an attacker donating to himself alone is a strict loss.";
         const RESPONSE_DATE: &str = "Tue, 14 Nov 2023 22:11:40 GMT";
 
         fn adapter_at(base_url: &str) -> AnthropicAdapter {
-            AnthropicAdapter::new(AnthropicConfig::new(
-                "sk-ant-test123".to_string(),
-                base_url.to_string(),
-                "claude-opus-4-8".to_string(),
-                4096,
-            ))
+            AnthropicAdapter::new(
+                AnthropicConfig::new("sk-ant-test123".to_string(), "claude-opus-4-8".to_string())
+                    .with_base_url(base_url),
+            )
             .expect("test config must build a valid adapter")
         }
 
@@ -2459,12 +2479,9 @@ stake, so an attacker donating to himself alone is a strict loss.";
             .create_async()
             .await;
 
-        let config = AnthropicConfig::new(
-            "sk-ant-test123".to_string(),
-            server.url(),
-            "claude-opus-4-8".to_string(),
-            4096,
-        );
+        let config =
+            AnthropicConfig::new("sk-ant-test123".to_string(), "claude-opus-4-8".to_string())
+                .with_base_url(server.url());
         let adapter =
             AnthropicAdapter::new(config).expect("test config must build a valid adapter");
 
@@ -2515,12 +2532,10 @@ stake, so an attacker donating to himself alone is a strict loss.";
         const MODEL: &str = "claude-opus-4-8";
 
         fn adapter_at(base_url: &str) -> AnthropicAdapter {
-            AnthropicAdapter::new(AnthropicConfig::new(
-                "sk-ant-test123".to_string(),
-                base_url.to_string(),
-                MODEL.to_string(),
-                4096,
-            ))
+            AnthropicAdapter::new(
+                AnthropicConfig::new("sk-ant-test123".to_string(), MODEL.to_string())
+                    .with_base_url(base_url),
+            )
             .expect("test config must build a valid adapter")
         }
 
@@ -2836,12 +2851,9 @@ stake, so an attacker donating to himself alone is a strict loss.";
         use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 
         fn adapter_at(base_url: &str) -> AnthropicAdapter {
-            let config = AnthropicConfig::new(
-                "sk-ant-test123".to_string(),
-                base_url.to_string(),
-                "claude-sonnet-5".to_string(),
-                4096,
-            );
+            let config =
+                AnthropicConfig::new("sk-ant-test123".to_string(), "claude-sonnet-5".to_string())
+                    .with_base_url(base_url);
             AnthropicAdapter::new(config).expect("test config must build a valid adapter")
         }
 
@@ -2998,12 +3010,9 @@ stake, so an attacker donating to himself alone is a strict loss.";
         use paladin_core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
 
         fn adapter_at(base_url: &str) -> AnthropicAdapter {
-            let config = AnthropicConfig::new(
-                "sk-ant-test123".to_string(),
-                base_url.to_string(),
-                "claude-sonnet-5".to_string(),
-                4096,
-            );
+            let config =
+                AnthropicConfig::new("sk-ant-test123".to_string(), "claude-sonnet-5".to_string())
+                    .with_base_url(base_url);
             AnthropicAdapter::new(config).expect("test config must build a valid adapter")
         }
 
@@ -3125,10 +3134,9 @@ stake, so an attacker donating to himself alone is a strict loss.";
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
                 let mut config = AnthropicConfig::new(
                     "test-key".to_string(),
-                    base_url.to_string(),
                     ANTHROPIC_DEFAULT_MODEL.to_string(),
-                    4096,
-                );
+                )
+                .with_base_url(base_url);
                 // The suite measures one attempt per call (the status cases would otherwise sleep
                 // through this adapter's retry back-off), like the OpenAI fixture's `max_retries: 0`.
                 config.max_retries = 0;
@@ -3408,12 +3416,9 @@ stake, so an attacker donating to himself alone is a strict loss.";
         // ── stream ────────────────────────────────────────────────────────
 
         fn adapter_at(base_url: &str) -> AnthropicAdapter {
-            let config = AnthropicConfig::new(
-                "sk-ant-test123".to_string(),
-                base_url.to_string(),
-                "claude-sonnet-5".to_string(),
-                4096,
-            );
+            let config =
+                AnthropicConfig::new("sk-ant-test123".to_string(), "claude-sonnet-5".to_string())
+                    .with_base_url(base_url);
             AnthropicAdapter::new(config).expect("test config must build a valid adapter")
         }
 
@@ -3603,12 +3608,7 @@ mod knob_tests {
     const PATH: &str = "/messages";
 
     fn config(base_url: &str, model: &str) -> AnthropicConfig {
-        AnthropicConfig::new(
-            "test-key".to_string(),
-            base_url.to_string(),
-            model.to_string(),
-            4096,
-        )
+        AnthropicConfig::new("test-key".to_string(), model.to_string()).with_base_url(base_url)
     }
 
     fn window_override(window: u32) -> ModelOverride {
@@ -3639,18 +3639,52 @@ mod knob_tests {
     }
 
     #[test]
-    fn anthropic_new_keeps_its_four_argument_signature_and_defaults() {
+    fn anthropic_new_takes_key_and_model_and_defaults_the_rest() {
         // The consumer muster pins this signature; the knobs arrive through builders.
-        let config = AnthropicConfig::new(
-            "test-key".to_string(),
-            "https://api.anthropic.com/v1".to_string(),
-            "claude-haiku-5-5".to_string(),
-            4096,
-        );
+        let config = AnthropicConfig::new("test-key".to_string(), "claude-haiku-5-5".to_string());
+        assert_eq!(config.base_url, ANTHROPIC_DEFAULT_BASE_URL);
+        assert_eq!(config.model, "claude-haiku-5-5");
         assert_eq!(config.max_tokens, 4096);
+        assert_eq!(config.timeout_seconds, 60);
         assert_eq!(config.max_retries, 3);
         assert_eq!(config.context_window, None);
         assert!(config.model_overrides.is_empty());
+    }
+
+    /// D-07, `compiled-default` (owner decision, 2026-10-20): `new` sets the one compiled
+    /// output budget for every model, seeded or not, so no default moves when a model is seeded
+    /// and `new` agrees with `from_env` and the layered path. The seeded maximum output (128,000
+    /// for the default model) is reachable only through `with_max_tokens`.
+    #[test]
+    fn anthropic_new_max_tokens_is_the_compiled_default_for_every_model() {
+        assert_eq!(ANTHROPIC_DEFAULT_MAX_TOKENS, 4096);
+        for model in ["claude-haiku-5-5", UNSEEDED, "claude-opus-4-8"] {
+            let config = AnthropicConfig::new("test-key".to_string(), model.to_string());
+            assert_eq!(config.max_tokens, ANTHROPIC_DEFAULT_MAX_TOKENS, "{model}");
+        }
+        let config = AnthropicConfig::new("k".to_string(), "claude-haiku-5-5".to_string())
+            .with_max_tokens(16);
+        assert_eq!(config.max_tokens, 16);
+        let seeded_maximum = seeded::ANTHROPIC
+            .iter()
+            .find(|entry| entry.model == "claude-haiku-5-5")
+            .and_then(|entry| (entry.build)().max_output_tokens);
+        assert_eq!(seeded_maximum, Some(128_000));
+        let config = AnthropicConfig::new("k".to_string(), "claude-haiku-5-5".to_string())
+            .with_max_tokens(seeded_maximum.unwrap());
+        assert_eq!(config.max_tokens, 128_000);
+    }
+
+    #[test]
+    fn anthropic_new_timeout_follows_the_model_and_builders_override_it() {
+        // Unchanged D-13 default: 60 s for a non-reasoning model.
+        let config = AnthropicConfig::new("k".to_string(), UNSEEDED.to_string());
+        assert_eq!(config.timeout_seconds, 60);
+        let config = config
+            .with_timeout_seconds(7)
+            .with_base_url("https://example.invalid/v1");
+        assert_eq!(config.timeout_seconds, 7);
+        assert_eq!(config.base_url, "https://example.invalid/v1");
     }
 
     #[tokio::test]

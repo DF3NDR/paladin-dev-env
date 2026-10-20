@@ -136,12 +136,7 @@ async fn test_anthropic_vision_integration() {
     };
 
     // Create adapter with real API key
-    let config = AnthropicConfig::new(
-        api_key,
-        "https://api.anthropic.com/v1".to_string(),
-        "claude-3-5-sonnet-20241022".to_string(),
-        4096,
-    );
+    let config = AnthropicConfig::new(api_key, "claude-3-5-sonnet-20241022".to_string());
     let adapter = AnthropicAdapter::new(config).expect("Should create Anthropic adapter");
 
     // Verify capabilities include vision

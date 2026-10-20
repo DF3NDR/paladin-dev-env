@@ -1366,8 +1366,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   never a URL; `OllamaConfig::new` keeps the endpoint as its first argument (D-08). Registered in
   `MIGRATION.md` section 9.2 and section 9.8 (DR-19; DR-12 amended) and the allowlist entries
   `paladin-llm | <Type>Config` (`method_parameter_count_changed`, measured with
-  cargo-semver-checks 0.50.0 against 0.10.1). `AnthropicConfig::new` follows in plan 50.1-06
-  (`OpenAIConfig::new` is the next entry).
+  cargo-semver-checks 0.50.0 against 0.10.1).
 - **BREAKING (`paladin-llm`): `OpenAIConfig::new(api_key)` becomes `new(api_key, model)`**
   (SURFACE-02, D-05, D-06; Phase 50.1 plan 05). The second argument is the adapter's default
   model, stored in the new public field `OpenAIConfig.model` (additive on the `#[non_exhaustive]`
@@ -1382,6 +1381,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Registered in `MIGRATION.md` section 9.2 (`paladin-llm | OpenAIConfig`, SURFACE-02) and section
   9.8 (DR-19) and the allowlist entry (`method_parameter_count_changed`, measured with
   cargo-semver-checks 0.50.0 against 0.10.1; no lint named the new field).
+- **BREAKING (`paladin-llm`): `AnthropicConfig::new(api_key, base_url, model, max_tokens)` becomes
+  `new(api_key, model)`** (SURFACE-02, D-05, D-07; Phase 50.1 plan 06). The endpoint defaults to the
+  new `ANTHROPIC_DEFAULT_BASE_URL` (`paladin_llm::anthropic::adapter`, now the one copy, also used
+  by `from_env()` and the `llm.anthropic` block); replace it with `with_base_url`, the timeout with
+  `with_timeout_seconds`. `max_tokens` is 4,096 for every model, the same value `from_env()` and the
+  layered path use (owner decision `compiled-default`, 2026-10-20): the model's larger seeded
+  maximum output is reachable only through `with_max_tokens`, and the wire field stays mandatory.
+  There is no alias: `new(k, url, m, n)` becomes `new(k, m).with_base_url(url).with_max_tokens(n)`.
+  `from_env()` is unchanged. Registered in `MIGRATION.md` section 9.2 (`paladin-llm |
+  AnthropicConfig`, SURFACE-02) and section 9.8 (DR-19) and the allowlist entry
+  (`method_parameter_count_changed`, measured with cargo-semver-checks 0.50.0 against 0.10.1).
 - **BREAKING (`paladin-web`): `Principal` gains the required `tenant_id: TenantId` field and is
   marked `#[non_exhaustive]`** — build it with `Principal::new(id, role, tenant_id)`; a struct
   literal outside the crate no longer compiles (TENANT-01; Phase 40 plan 40-01; `MIGRATION.md`

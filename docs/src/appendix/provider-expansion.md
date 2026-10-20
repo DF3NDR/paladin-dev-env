@@ -252,10 +252,9 @@ let adapter = AnthropicAdapter::new(config)?;
 // Or custom
 let config = AnthropicConfig::new(
     api_key,
-    "https://api.anthropic.com/v1".to_string(),
     "claude-haiku-5-5".to_string(), // ANTHROPIC_DEFAULT_MODEL
-    4096,                           // max_tokens, required by the Messages API
 )
+.with_max_tokens(4096) // required by the Messages API; 4,096 is already the default
 .with_max_retries(3);
 let adapter = AnthropicAdapter::new(config)?;
 ```
@@ -463,8 +462,7 @@ Different providers may have different response times:
 
 ```rust,ignore
 // Higher timeout for Claude with long contexts
-let claude_config = AnthropicConfig::new(/* ... */);
-// Timeout handled internally
+let claude_config = AnthropicConfig::new(/* api_key, model */).with_timeout_seconds(300);
 
 // Standard timeout for others
 let openai = OpenAIAdapter::new(OpenAIConfig::from_env()?)?;

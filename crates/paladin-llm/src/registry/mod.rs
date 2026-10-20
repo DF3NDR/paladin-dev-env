@@ -2082,9 +2082,7 @@ mod endpoint_builder_tests {
         {
             let config = crate::anthropic::AnthropicConfig::new(
                 "k".to_string(),
-                "https://api.anthropic.com".to_string(),
                 "claude-haiku-5-5".to_string(),
-                16,
             )
             .with_base_url(URL)
             .with_timeout_seconds(7);

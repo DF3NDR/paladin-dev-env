@@ -55,19 +55,22 @@ use paladin::core::platform::container::battalion::{BattalionConfig, BattalionEr
 use paladin::core::platform::container::battlefield::StateDelta;
 use paladin::core::platform::container::node_error::{NodeError, NodeErrorSource, TimeoutKind};
 use paladin::core::platform::container::paladin::{MaxLoops, Paladin, PaladinData, PaladinStatus};
-use paladin::core::platform::container::prompt::{PromptItem, PromptType, UserPrompt};
+use paladin::core::platform::container::prompt::{
+    PromptItem, PromptParameters, PromptType, UserPrompt,
+};
 use paladin::core::platform::container::transience::Transience;
 use paladin::core::platform::container::waypoint::NodeId;
 use paladin::infrastructure::adapters::arsenal::mcp_protocol::MCPClient;
 use paladin::infrastructure::resilience::circuit_breaker::CircuitBreaker;
 use paladin::prelude::{
-    ArsenalPort, BattalionResult, LlmPort, PaladinError, PaladinResult, Phalanx, StopReason,
+    ArsenalPort, BattalionResult, LlmPort, PaladinBuilder, PaladinError, PaladinResult, Phalanx,
+    StopReason,
 };
 use paladin::{
     AnthropicAdapter, AnthropicConfig, Commissary, CommissaryError, CommissaryPlan, Consignment,
     ConsignmentItem, DeepSeekAdapter, DeepSeekConfig, FallbackChainError, FallbackLlmAdapter,
     FallbackStep, LlmConfig, LlmProviderConfig, LlmProviderFactory, MockLlmAdapter, ModelOverride,
-    MultiStepMockLlmPort,
+    MultiStepMockLlmPort, Stockpile,
 };
 
 // ---- direct path dependencies ----
@@ -554,6 +557,123 @@ fn arsenal_error_is_exhaustive(error: &ArsenalError) -> u8 {
         ArsenalError::ProtocolError(_) => 3,
         ArsenalError::TransportError(_) => 4,
         ArsenalError::AuthFailed(_) => 5,
+    }
+}
+
+// ---- Phase 50.1 (SURFACE-03; handoff Appendix B items 3, 4, 6-11) ----
+// Each pin is in the shape, and through the path, the consumer uses: the `paladin` facade, the
+// `paladin_ports` crate and `paladin_memory`. Every pin lives in a never-called fn, every
+// credential- or endpoint-shaped argument is an empty string or `None`, and nothing executes.
+
+/// Appendix B item 3: a rate-limit is built by `LlmError::rate_limited(..)` and matched by
+/// `RateLimitExceeded { .. }`. `LlmError` and the variant are `#[non_exhaustive]`, so the
+/// constructor is the only way to build one and a match keeps a wildcard arm.
+fn rate_limit_pin() -> (LlmError, impl Fn(&LlmError) -> Option<&'static str>) {
+    let _limited: LlmError = LlmError::rate_limited(None);
+    let with_hint: LlmError = LlmError::rate_limited(Some(Duration::from_secs(1)));
+    let rate_limited = |error: &LlmError| -> Option<&'static str> {
+        match error {
+            LlmError::RateLimitExceeded { .. } => Some("rate limited"),
+            _ => None,
+        }
+    };
+    (with_hint, rate_limited)
+}
+
+/// Appendix B item 4: a spend cap is `UsageLimitExceeded { provider, regain_hint }` (both fields
+/// named, neither dropped by `..`) and a generic failure is `ProcessingError(..)`.
+fn usage_limit_and_processing_pin() {
+    let _usage = |error: &LlmError| -> Option<(String, Option<String>)> {
+        match error {
+            LlmError::UsageLimitExceeded {
+                provider,
+                regain_hint,
+            } => Some((provider.clone(), regain_hint.clone())),
+            _ => None,
+        }
+    };
+    let _processing = |error: &LlmError| -> Option<String> {
+        match error {
+            LlmError::ProcessingError(message) => Some(message.clone()),
+            _ => None,
+        }
+    };
+}
+
+/// Appendix B item 6: the model-aware `Commissary` constructor, `dispense` and `verify_fits`
+/// signatures, and every `Stockpile` field the consumer reads.
+fn commissary_dispense_pins() {
+    let _for_model: fn(
+        &dyn LlmPort,
+        &str,
+        Arc<dyn TokenCounterPort>,
+        CommissaryPlan,
+    ) -> Result<Commissary, CommissaryError> = Commissary::for_model;
+    let _dispense: fn(&Commissary, &str, &Consignment) -> Result<Stockpile, CommissaryError> =
+        Commissary::dispense;
+    let _verify_fits: fn(&Commissary, &str) -> Result<u32, CommissaryError> =
+        Commissary::verify_fits;
+}
+
+/// Appendix B item 6: the `Stockpile` fields are read, never constructed (the type is built only
+/// by `Commissary::dispense`).
+fn stockpile_read_pin(stockpile: &Stockpile) -> (usize, usize, u32, u32, bool) {
+    (
+        stockpile.dispensed.len(),
+        stockpile.shed.len(),
+        stockpile.prompt_tokens,
+        stockpile.allotted_tokens,
+        stockpile.exact_tally,
+    )
+}
+
+/// Appendix B item 7: the four `MockLlmAdapter` builders, each coerced to `Arc<dyn LlmPort>`.
+fn mock_builder_pins() -> Vec<Arc<dyn LlmPort>> {
+    let one: Arc<dyn LlmPort> = Arc::new(MockLlmAdapter::new().with_response("x"));
+    let many: Arc<dyn LlmPort> =
+        Arc::new(MockLlmAdapter::new().with_responses(vec![String::new()]));
+    let failing: Arc<dyn LlmPort> =
+        Arc::new(MockLlmAdapter::new().with_error(LlmError::rate_limited(None)));
+    let slow: Arc<dyn LlmPort> =
+        Arc::new(MockLlmAdapter::new().with_delay(Duration::from_millis(1)));
+    vec![one, many, failing, slow]
+}
+
+/// Appendix B items 8 and 9, which are `async`. NEVER CALLED: connecting would open a socket.
+/// The builder's `build` is `async` and returns `Result<Paladin, PaladinError>`; the Streamable
+/// HTTP connect takes an empty URI, `None` for the bearer token and `None` for the header map,
+/// and `invoke_tool` takes a tool name and an argument map.
+async fn builder_and_mcp_http_pins(llm: Arc<dyn LlmPort>) {
+    let _built: Result<Paladin, PaladinError> = PaladinBuilder::new(llm)
+        .name("n")
+        .system_prompt("s")
+        .build()
+        .await;
+
+    let connected: Result<MCPClient, ArsenalError> =
+        MCPClient::connect_streamable_http("", None, None).await;
+    if let Ok(client) = connected {
+        let _value: Result<serde_json::Value, ArsenalError> =
+            client.invoke_tool("", HashMap::new()).await;
+    }
+}
+
+/// Appendix B item 10: a prompt item's parameters are read as `&PromptParameters` and replaced
+/// through `set_parameters`.
+fn prompt_parameters_pin(item: &mut PromptItem) {
+    let current: &PromptParameters = item.parameters();
+    let copy: PromptParameters = current.clone();
+    item.set_parameters(copy);
+}
+
+/// Appendix B item 11: `Armament` is built by a full four-field literal with no `..`, so an
+/// added field turns this target red on purpose.
+fn armament_literal() -> Armament {
+    Armament {
+        name: String::new(),
+        description: String::new(),
+        parameters: serde_json::Value::Null,
+        required_params: Vec::new(),
     }
 }
 

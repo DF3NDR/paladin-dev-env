@@ -1270,6 +1270,10 @@ mod tests {
         // `deepseek-flash` is seeded as a reasoning model (D-13): 300 s.
         let reasoning = DeepSeekConfig::new("k".to_string(), "deepseek-flash".to_string());
         assert_eq!(reasoning.timeout_seconds, 300);
+        // `deepseek-v4-pro` is seeded as a reasoning model too (Phase 50.1, probe 1 returned
+        // reasoning text): 300 s.
+        let pro = DeepSeekConfig::new("k".to_string(), "deepseek-v4-pro".to_string());
+        assert_eq!(pro.timeout_seconds, 300);
         // An unseeded model keeps the provider's own default of 60 s.
         let plain = DeepSeekConfig::new("k".to_string(), "unseeded-model".to_string());
         assert_eq!(plain.timeout_seconds, 60);
@@ -2468,6 +2472,19 @@ mod tests {
                     .map(String::as_str),
                 Some("deepseek-chat"),
                 "`deepseek-chat` has no seeded entry (an undocumented alias), so it runs on the adapter-wide fallback"
+            );
+        }
+
+        /// SURFACE-06 (D-14): `deepseek-v4-pro` is in the dated table, so a call to it carries no
+        /// `paladin.unprofiled_model` stamp (the converse of `deepseek_unprofiled_model_is_stamped`).
+        #[tokio::test]
+        async fn deepseek_v4_pro_is_not_stamped_unprofiled() {
+            let mut request = request_with(unset());
+            request.model = "deepseek-v4-pro".to_string();
+            let (_, metadata) = generate_capture(request).await;
+            assert!(
+                !metadata.contains_key(UNPROFILED_MODEL_METADATA_KEY),
+                "deepseek-v4-pro is seeded, so no unprofiled stamp: {metadata:?}"
             );
         }
 

@@ -1589,10 +1589,29 @@ mod tests {
 
     #[test]
     fn anthropic_unlisted_model_still_resolves_the_adapter_default() {
+        // Not `claude-opus-4-8`: Phase 50.1 (SURFACE-06) seeded it.
         let (_, origin) = seeded_test_adapter()
             .model_registry
-            .resolve("claude-opus-4-8");
+            .resolve("claude-unlisted-test-model");
         assert_eq!(origin, crate::registry::ProfileOrigin::AdapterDefault);
+    }
+
+    /// SURFACE-06 (D-14): `claude-opus-4-8`, the model web3sec runs, is in the dated table, so
+    /// the adapter resolves it as seeded (2026-10-20, `50.1-SEED-PROBE.md`) and never as the
+    /// adapter-wide fallback.
+    #[test]
+    fn anthropic_opus_4_8_resolves_seeded_through_the_adapter() {
+        let (profile, origin) = seeded_test_adapter()
+            .model_registry
+            .resolve("claude-opus-4-8");
+        assert_eq!(
+            origin,
+            crate::registry::ProfileOrigin::Seeded {
+                verified_on: "2026-10-20"
+            }
+        );
+        assert_eq!(profile.context_window, Some(1_000_000));
+        assert_eq!(profile.max_output_tokens, Some(128_000));
     }
 
     #[tokio::test]
@@ -2529,7 +2548,10 @@ stake, so an attacker donating to himself alone is a strict loss.";
         use serde_json::{Value, json};
         use std::sync::Mutex as StdMutex;
 
-        const MODEL: &str = "claude-opus-4-8";
+        /// A model id that is in no seeded table, so these tests exercise the adapter-wide
+        /// fallback profile (`claude-opus-4-8` was seeded by Phase 50.1, SURFACE-06; its own
+        /// seeded behaviour is tested separately below).
+        const MODEL: &str = "claude-unseeded-test-model";
 
         fn adapter_at(base_url: &str) -> AnthropicAdapter {
             AnthropicAdapter::new(
@@ -2792,7 +2814,21 @@ stake, so an attacker donating to himself alone is a strict loss.";
                     .get(UNPROFILED_MODEL_METADATA_KEY)
                     .map(String::as_str),
                 Some(MODEL),
-                "no seeded entry exists yet, so the model runs on the adapter-wide fallback"
+                "no seeded entry exists for this id, so it runs on the adapter-wide fallback"
+            );
+        }
+
+        /// SURFACE-06 (D-14): a call to `claude-opus-4-8` is on a seeded profile, so the
+        /// response carries no `paladin.unprofiled_model` stamp (the converse of
+        /// `anthropic_unprofiled_model_is_stamped`).
+        #[tokio::test]
+        async fn anthropic_opus_4_8_is_not_stamped_unprofiled() {
+            let mut request = request_with(unset());
+            request.model = "claude-opus-4-8".to_string();
+            let (_, metadata) = generate_capture(request).await;
+            assert!(
+                !metadata.contains_key(UNPROFILED_MODEL_METADATA_KEY),
+                "claude-opus-4-8 is seeded, so no unprofiled stamp: {metadata:?}"
             );
         }
 
@@ -3662,6 +3698,13 @@ mod knob_tests {
             let config = AnthropicConfig::new("test-key".to_string(), model.to_string());
             assert_eq!(config.max_tokens, ANTHROPIC_DEFAULT_MAX_TOKENS, "{model}");
         }
+        // `claude-opus-4-8` is seeded (Phase 50.1) with a 128,000 maximum output; `new` still
+        // sends 4,096 for it, and the seeded maximum is reachable only through `with_max_tokens`.
+        let opus_maximum = seeded::ANTHROPIC
+            .iter()
+            .find(|entry| entry.model == "claude-opus-4-8")
+            .and_then(|entry| (entry.build)().max_output_tokens);
+        assert_eq!(opus_maximum, Some(128_000));
         let config = AnthropicConfig::new("k".to_string(), "claude-haiku-5-5".to_string())
             .with_max_tokens(16);
         assert_eq!(config.max_tokens, 16);
@@ -3673,6 +3716,32 @@ mod knob_tests {
         let config = AnthropicConfig::new("k".to_string(), "claude-haiku-5-5".to_string())
             .with_max_tokens(seeded_maximum.unwrap());
         assert_eq!(config.max_tokens, 128_000);
+    }
+
+    /// A seeded model whose row says `reasoning: false` keeps the provider's own 60 s default:
+    /// only a seeded reasoning row moves `new` to 300 s (Phase 50 D-13). `claude-opus-4-8`'s
+    /// default call carried no reasoning text (`50.1-SEED-PROBE.md`, probe 1), so it is 60 s.
+    #[test]
+    fn anthropic_new_timeout_for_seeded_opus_4_8_is_the_non_reasoning_default() {
+        let config = AnthropicConfig::new("k".to_string(), "claude-opus-4-8".to_string());
+        assert_eq!(config.timeout_seconds, 60);
+    }
+
+    /// The two Phase 50.1 Anthropic rows whose default call returned reasoning text
+    /// (`claude-fable-5`, `claude-opus-5`; `50.1-SEED-PROBE.md`, probe 1) move `new` to the
+    /// reasoning-model 300 s (D-13); every other seeded Anthropic row stays at 60 s.
+    #[test]
+    fn anthropic_new_timeout_is_300_only_for_the_seeded_reasoning_rows() {
+        for entry in seeded::ANTHROPIC {
+            let reasoning = (entry.build)().reasoning;
+            let config = AnthropicConfig::new("k".to_string(), entry.model.to_string());
+            let expected = if reasoning { 300 } else { 60 };
+            assert_eq!(config.timeout_seconds, expected, "{}", entry.model);
+        }
+        for model in ["claude-fable-5", "claude-opus-5"] {
+            let config = AnthropicConfig::new("k".to_string(), model.to_string());
+            assert_eq!(config.timeout_seconds, 300, "{model}");
+        }
     }
 
     #[test]

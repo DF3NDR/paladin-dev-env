@@ -217,17 +217,30 @@ One row per seeded model, then one adapter-wide fallback row per provider. Rows 
 provider in the fixed order above, then by model id ascending, and a drift test
 (`switching_providers_page_lists_every_seeded_model`) fails when a seeded model is missing from the
 page, extra, out of order, or listed with a different value or verified-on date than its registry
-entry. Every seeded row was verified on 2026-10-15. The fallback rows describe what each adapter
-sends today and are **unverified**: they apply to any model the registry does not list.
+entry. A seeded row's verified-on date names the seed probe transcript its values come from:
+2026-10-15 is `50-SEED-PROBE.md`, 2026-10-20 is `50.1-SEED-PROBE.md`. The fallback rows describe
+what each adapter sends today and are **unverified**: they apply to any model the registry does not
+list.
 
 | Provider | Model | Verified on | Context window | Max output | Temperature | top_p | Penalties | Stop sequences | Reasoning | JSON mode |
 |----------|-------|-------------|----------------|------------|-------------|-------|-----------|----------------|-----------|-----------|
 | openai | `gpt-4o-mini` | 2026-10-15 | 128,000 [d] | 16,384 [d] | 0.0 to 1.0 [a] | 0.0 to 1.0 [c] | not sent [e] | up to 4 | no | object, schema |
 | openai | `gpt-5.4-nano` | 2026-10-15 | 400,000 [d] | 128,000 [d] | 0.0 to 1.0 [a] | 0.0 to 1.0 [c] | not sent [e] | not sent | no | object, schema |
 | openai | (adapter-wide fallback) | unverified | 128,000 | not set | 0.0 to 1.0 | 0.0 to 1.0 | not sent | up to 4 | no | object, schema |
+| anthropic | `claude-fable-5` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | yes | none |
+| anthropic | `claude-fable-5-1` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | no | none |
 | anthropic | `claude-haiku-5-5` | 2026-10-15 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | no | none |
+| anthropic | `claude-opus-4-6` | 2026-10-20 | 1,000,000 | 128,000 | 0.0 to 1.0 | 0.0 to 1.0 [c] | not sent | yes | no | none |
+| anthropic | `claude-opus-4-7` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | no | none |
+| anthropic | `claude-opus-4-8` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | no | none |
+| anthropic | `claude-opus-5` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | yes | none |
+| anthropic | `claude-opus-5-5` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | no | none |
+| anthropic | `claude-sonnet-4-6` | 2026-10-20 | 1,000,000 | 128,000 | 0.0 to 1.0 | 0.0 to 1.0 [c] | not sent | yes | no | none |
+| anthropic | `claude-sonnet-5` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | no | none |
+| anthropic | `claude-sonnet-5-5` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | no | none |
 | anthropic | (adapter-wide fallback) | unverified | 1,000,000 | not set | not sent | not sent | not sent | yes | no | none |
 | deepseek | `deepseek-flash` | 2026-10-15 | 1,048,576 | 393,216 | 0.0 to 2.0 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object |
+| deepseek | `deepseek-v4-pro` | 2026-10-20 | 1,048,576 | 393,216 | 0.0 to 2.0 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object |
 | deepseek | (adapter-wide fallback) | unverified | 1,048,576 | not set | 0.0 to 2.0 | 0.0 to 1.0 | -2.0 to 2.0 | yes | no | object |
 | kimi | `kimi-k2.6` | 2026-10-15 | 262,144 | not set | not sent | not sent | not sent | yes | yes | object, schema |
 | kimi | `kimi-k3` | 2026-10-15 | 1,048,576 | not set | not sent | not sent | not sent | yes | yes | object, schema |
@@ -239,9 +252,18 @@ sends today and are **unverified**: they apply to any model the registry does no
 | grok | `grok-4.5` | 2026-10-15 | 500,000 | not set | 0.0 to 1.99 [b] | 0.0 to 1.0 [c] | not sent | not sent | yes | object, schema |
 | grok | `grok-4.6` | 2026-10-15 | 500,000 | not set | 0.0 to 1.99 [b] | 0.0 to 1.0 [c] | not sent | not sent | yes | object, schema |
 | grok | (adapter-wide fallback) | unverified | 1,000,000 | not set | 0.0 to 2.0 | 0.0 to 1.0 | not sent | not sent | no | object |
+| gemini | `gemini-3-flash-preview` | 2026-10-20 [g] | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
+| gemini | `gemini-3.1-flash-lite` | 2026-10-20 | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
+| gemini | `gemini-3.1-pro-preview` | 2026-10-20 [g] | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
 | gemini | `gemini-3.5-flash` | 2026-10-15 | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
 | gemini | `gemini-3.5-flash-lite` | 2026-10-15 | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
 | gemini | `gemini-3.6-flash` | 2026-10-15 | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
+| gemini | `gemini-3.7-flash` | 2026-10-20 | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
+| gemini | `gemini-3.8-flash` | 2026-10-20 | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
+| gemini | `gemini-4-argon` | 2026-10-20 | 1,048,576 | 32,768 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
+| gemini | `gemini-flash-latest` | 2026-10-20 [g] | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
+| gemini | `gemini-flash-lite-latest` | 2026-10-20 [g] | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
+| gemini | `gemini-pro-latest` | 2026-10-20 [g] | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
 | gemini | (adapter-wide fallback) | unverified | 1,048,576 | not set | 0.0 to 2.0 | 0.0 to 1.0 | not sent | yes | no | object, schema |
 | ollama | (adapter-wide fallback) | unverified | not set | not set | 0.0 to 2.0 | 0.0 to 1.0 | -2.0 to 2.0 | yes | no | object |
 | openai-compatible | (adapter-wide fallback) | unverified | not set | not set | 0.0 to 1.0 | 0.0 to 1.0 | -2.0 to 2.0 | yes | no | object |
@@ -273,12 +295,16 @@ window of `not set` is not a statement that the model has none.
   declared and omitting the parameter lets the vendor apply its own. An explicit value on an
   unseeded Kimi model is refused at build, naming `kimi`, the model and the parameter; a default
   the framework supplies is omitted and recorded in `paladin.params_omitted`.
+- **[g]** A moving alias (`*-latest`) or a preview id: the row is true on its verified-on date only,
+  because the vendor re-points an alias at a newer model without changing the id and may change or
+  retire a preview without notice.
 
 **Probed but not seeded** (so they run on the adapter-wide fallback): the eight retired Claude ids
-(`claude-3-*`, `claude-2.*`, `claude-instant-1.2`, all HTTP 404) and the other current Claude ids
-(not probed); `deepseek-chat` and `deepseek-coder` (answered 200 but are undocumented aliases) and
-`deepseek-v4-pro` (not probed); `kimi-k2.7-code` and `kimi-k2.7-code-highspeed` (every probe was
-rejected); `qwen-turbo` (rate-limited on every probe, nothing measured) and `qwen3-max` (HTTP 404
+(`claude-3-*`, `claude-2.*`, `claude-instant-1.2`, all HTTP 404) and the other Claude ids in the
+live listing (the 4.5 generation; not candidates, not probed); `gemini-2.5-pro`, `gemini-2.5-flash`
+and `gemini-2.5-flash-lite` (the default call answered HTTP 404, "no longer available to new
+users", so nothing was measured); `deepseek-chat` and `deepseek-coder` (answered 200 but are undocumented aliases);
+`kimi-k2.7-code` and `kimi-k2.7-code-highspeed` (every probe was rejected); `qwen-turbo` (rate-limited on every probe, nothing measured) and `qwen3-max` (HTTP 404
 on the International endpoint); the other Grok chat ids (not probed).
 
 ## Responses

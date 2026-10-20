@@ -404,7 +404,7 @@ mod capability_invariants {
     feature = "openai-compatible"
 ))]
 mod capability_invariants_new_providers {
-    use crate::gemini::adapter::{GEMINI_DEFAULT_BASE_URL, GEMINI_DEFAULT_MODEL};
+    use crate::gemini::adapter::GEMINI_DEFAULT_MODEL;
     use crate::gemini::{GeminiAdapter, GeminiConfig};
     use crate::grok::adapter::{GROK_DEFAULT_BASE_URL, GROK_DEFAULT_MODEL};
     use crate::grok::{GrokAdapter, GrokConfig};
@@ -454,7 +454,6 @@ mod capability_invariants_new_providers {
         .unwrap();
         let gemini = GeminiAdapter::new(GeminiConfig::new(
             "test-key".to_string(),
-            GEMINI_DEFAULT_BASE_URL.to_string(),
             GEMINI_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
@@ -549,7 +548,6 @@ mod capability_invariants_new_providers {
         .unwrap();
         let gemini = GeminiAdapter::new(GeminiConfig::new(
             "test-key".to_string(),
-            GEMINI_DEFAULT_BASE_URL.to_string(),
             GEMINI_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();

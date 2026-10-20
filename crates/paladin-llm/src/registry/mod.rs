@@ -2068,13 +2068,10 @@ mod endpoint_builder_tests {
         }
         #[cfg(feature = "gemini")]
         {
-            let config = crate::gemini::GeminiConfig::new(
-                "k".to_string(),
-                "https://generativelanguage.googleapis.com".to_string(),
-                "gemini-3.5-flash".to_string(),
-            )
-            .with_base_url(URL)
-            .with_timeout_seconds(7);
+            let config =
+                crate::gemini::GeminiConfig::new("k".to_string(), "gemini-3.5-flash".to_string())
+                    .with_base_url(URL)
+                    .with_timeout_seconds(7);
             assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
         }
         #[cfg(feature = "kimi")]

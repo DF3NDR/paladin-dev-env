@@ -327,12 +327,34 @@ impl GeminiConfig {
         Ok(config)
     }
 
-    /// Create configuration with custom values.
-    pub fn new(api_key: String, base_url: String, model: String) -> Self {
+    /// Create a configuration for `model`, authenticating with `api_key`.
+    ///
+    /// - `api_key`: the Gemini API key, never a URL.
+    /// - `model`: the default model requested when a call names none.
+    ///
+    /// The endpoint is [`GEMINI_DEFAULT_BASE_URL`] (replace it with
+    /// [`with_base_url`](Self::with_base_url)) and the timeout is 300 s for a seeded reasoning
+    /// model and 60 s otherwise (replace it with
+    /// [`with_timeout_seconds`](Self::with_timeout_seconds)). Construction is infallible: an
+    /// empty key or model, or a non-`http(s)` endpoint, is refused when the adapter is built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::gemini::GeminiConfig;
+    /// use paladin_llm::gemini::adapter::{GEMINI_DEFAULT_BASE_URL, GEMINI_DEFAULT_MODEL};
+    ///
+    /// let key = "gemini-example-key".to_string();
+    /// let config = GeminiConfig::new(key, GEMINI_DEFAULT_MODEL.to_string())
+    ///     .with_timeout_seconds(600);
+    /// assert_eq!(config.base_url, GEMINI_DEFAULT_BASE_URL);
+    /// assert_eq!(config.timeout_seconds, 600);
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
         let timeout_seconds = default_timeout_seconds(GEMINI_PROVIDER, &model, 60);
         Self {
             api_key,
-            base_url,
+            base_url: GEMINI_DEFAULT_BASE_URL.to_string(),
             model,
             timeout_seconds,
             max_tokens: None,
@@ -1777,9 +1799,9 @@ mod tests {
     fn test_config(base_url: &str) -> GeminiConfig {
         GeminiConfig::new(
             "test-key-abc123".to_string(),
-            base_url.to_string(),
             "gemini-2.5-flash".to_string(),
         )
+        .with_base_url(base_url)
     }
 
     fn test_adapter(base_url: &str) -> GeminiAdapter {
@@ -1822,6 +1844,34 @@ mod tests {
             .model_registry
             .resolve("gemini-3.1-flash-lite");
         assert_eq!(origin, crate::registry::ProfileOrigin::AdapterDefault);
+    }
+
+    // ── GeminiConfig::new (SURFACE-02, D-05) ──
+
+    #[test]
+    fn gemini_config_new_takes_key_and_model_and_defaults_the_endpoint() {
+        let config = GeminiConfig::new("k".to_string(), "gemini-2.5-flash".to_string());
+        assert_eq!(config.base_url, GEMINI_DEFAULT_BASE_URL);
+        assert_eq!(config.model, "gemini-2.5-flash");
+        assert_eq!(config.api_key, "k");
+        // The timeout default is unchanged: 60 s for an unseeded model, 300 s for a seeded
+        // reasoning one, exactly what `default_timeout_seconds` answered before.
+        assert_eq!(
+            config.timeout_seconds,
+            default_timeout_seconds(GEMINI_PROVIDER, "gemini-2.5-flash", 60)
+        );
+        let reasoning = GeminiConfig::new("k".to_string(), GEMINI_DEFAULT_MODEL.to_string());
+        assert_eq!(
+            reasoning.timeout_seconds,
+            default_timeout_seconds(GEMINI_PROVIDER, GEMINI_DEFAULT_MODEL, 60)
+        );
+    }
+
+    #[test]
+    fn gemini_config_with_base_url_replaces_the_default_endpoint() {
+        let config = GeminiConfig::new("k".to_string(), "m".to_string())
+            .with_base_url("http://localhost:1234");
+        assert_eq!(config.base_url, "http://localhost:1234");
     }
 
     // ── GeminiConfig::from_parts / from_env defaulting ──
@@ -4704,11 +4754,7 @@ mod knob_tests {
     }
 
     fn config(base_url: &str, model: &str) -> GeminiConfig {
-        GeminiConfig::new(
-            "test-key".to_string(),
-            base_url.to_string(),
-            model.to_string(),
-        )
+        GeminiConfig::new("test-key".to_string(), model.to_string()).with_base_url(base_url)
     }
 
     fn window_override(window: u32) -> ModelOverride {

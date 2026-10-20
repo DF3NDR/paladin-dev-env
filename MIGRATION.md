@@ -1099,6 +1099,12 @@ itself, instead of going through the server's composition root, meets four more 
   `Commissary::from_port` rations 5x more prompt on Anthropic (1,000,000 / 200,000) and about 16x more on
   DeepSeek (1,048,576 / 64,000 = 16.384). Two remedies: set the window with `with_context_window(n)` on
   the config, or ration per model with `Commissary::for_model(&port, model, counter, plan)`.
+- **A base URL must start with `http://` or `https://`.** On OpenAI, DeepSeek, Kimi, Qwen, Grok,
+  Ollama and OpenAI-compatible, a `base_url` that only began with `http` (`httpx://host`,
+  `http-gateway.internal/v1`) used to pass `validate()` and fail later at the HTTP layer; it is now
+  refused by `Adapter::new` with `"Base URL must start with http:// or https://"`, as Anthropic and
+  Gemini already did. Remedy: give the full scheme. Code that matched the old error text
+  (`"... with http or https"`) must match the new one.
 - **Models seeded in Phase 50.1.** The models listed on the Switching providers page with the
   `verified_on` date 2026-10-20 (`docs/src/user-guides/switching-providers.md`; the per-model list is
   there, not repeated here) now resolve to a seeded profile instead of the adapter-wide fallback. That

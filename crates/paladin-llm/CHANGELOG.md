@@ -162,6 +162,12 @@ and this project follows lockstep workspace versioning.
 
 ### Changed
 
+- Every `*Config::validate()` now requires the base URL to start with `http://` or `https://`
+  through one shared `registry::is_http_url` (WR-03, Phase 50.1 review fix `5ebd315b`). OpenAI,
+  DeepSeek, Kimi, Qwen, Grok, Ollama and OpenAI-compatible used to test only `starts_with("http")`,
+  so `httpx://host` or `http-gateway.internal/v1` was accepted; it is now refused by
+  `Adapter::new` with `"Base URL must start with http:// or https://"` (the old text ended
+  `"http or https"`). Anthropic and Gemini already checked the full prefix and are unchanged.
 - DeepSeek's `EmptyCompletion` detail no longer embeds the provider-reported token counts (G-50-5a,
   Phase 50 plan 50-27). The message used to end in `(provider-reported usage: prompt_tokens=..,
   completion_tokens=.., total_tokens=..)`; that annotation (`annotate_with_usage`) is removed, and

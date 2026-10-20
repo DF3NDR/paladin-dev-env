@@ -849,6 +849,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A base URL must start with `http://` or `https://` on all nine adapters (WR-03; Phase 50.1
+  review fix `5ebd315b`; `MIGRATION.md` 9.8).** The OpenAI, DeepSeek, Kimi, Qwen, Grok, Ollama and
+  OpenAI-compatible configs used to accept any `base_url` that began with `http`, so `httpx://host`
+  or a scheme-less `http-gateway.internal/v1` passed `validate()` and failed later at the HTTP
+  layer. They now apply the same full-prefix check Anthropic and Gemini already did (one shared
+  `is_http_url`), so such a value fails `Adapter::new` at construction with
+  `"Base URL must start with http:// or https://"` (previously `"... with http or https"`). The
+  `with_base_url` rustdoc already promised this. A valid `http://` or `https://` URL is unaffected.
 - **Vendor usage totals are reconciled on every adapter (G-50-5a; Phase 50 plans 50-23 and 50-24;
   `MIGRATION.md` 9.1 M-B-20).**
   - The OpenAI, DeepSeek and Gemini adapters now parse the vendor's own total (`total_tokens`,

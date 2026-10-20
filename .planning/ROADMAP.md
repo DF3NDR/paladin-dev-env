@@ -1648,7 +1648,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 50.1-08-PLAN.md — Seed `claude-opus-4-8` and `deepseek-v4-pro` from the new transcript only (tracer, every ripple closed), then the rest of the measured Anthropic and Gemini range (D-15, D-17 defaults unchanged)
+- [x] 50.1-08-PLAN.md — Seed `claude-opus-4-8` and `deepseek-v4-pro` from the new transcript only (tracer, every ripple closed), then the rest of the measured Anthropic and Gemini range (D-15, D-17 defaults unchanged)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 

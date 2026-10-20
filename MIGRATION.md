@@ -1069,7 +1069,7 @@ swaps providers or models meets these at run time, not at the compiler:
   (owner reading R-1, ADR-0061 (h)).
 
 **Direct-adapter consumers (no compile break).** A consumer that builds an adapter from a `*Config`
-itself, instead of going through the server's composition root, meets three more run-time changes:
+itself, instead of going through the server's composition root, meets four more run-time changes:
 
 - **A directly built adapter has no 429 pacing unless Cadence is composed (M-B-05).** Since Phase 43 no
   adapter retries a 429 inside its own loop: each surfaces it on the first answer, because the Cadence
@@ -1099,6 +1099,45 @@ itself, instead of going through the server's composition root, meets three more
   `Commissary::from_port` rations 5x more prompt on Anthropic (1,000,000 / 200,000) and about 16x more on
   DeepSeek (1,048,576 / 64,000 = 16.384). Two remedies: set the window with `with_context_window(n)` on
   the config, or ration per model with `Commissary::for_model(&port, model, counter, plan)`.
+- **Models seeded in Phase 50.1.** The models listed on the Switching providers page with the
+  `verified_on` date 2026-10-20 (`docs/src/user-guides/switching-providers.md`; the per-model list is
+  there, not repeated here) now resolve to a seeded profile instead of the adapter-wide fallback. That
+  covers `claude-opus-4-8` and `deepseek-v4-pro` (the two models web3sec runs), the other measured
+  Anthropic, Gemini and Qwen ids, 17 OpenAI ids, and `grok-4.20-reasoning`, `grok-4.20-non-reasoning`
+  and `grok-4.7`. A seeded row matches its id exactly, so an alias or dated id of the same model (for
+  example `grok-4.20-0309-reasoning`) still runs on the fallback. Six things change for a model that
+  gains a row:
+  1. **An explicit parameter the profile does not admit is now refused at build**, naming provider,
+     model and parameter (ADR-0061), where the fallback used to send it. Examples: a `temperature`
+     other than 1.0, any `top_p` and any `stop` on `gpt-6.1-sol`, `gpt-5.5` or `o3` (measured "Only
+     the default (1) value is supported"); any `stop` on any of the 17 new OpenAI ids; a
+     `max_tokens` above the seeded maximum output (8,192 on `qwen-max`, 100,000 on `o3`, 32,768 on
+     `qwen-flash`); a `temperature` of 2.0 on `grok-4.7` (its 2.00 probe failed at the vendor, so the
+     seeded range stops at 1.99). Drop the parameter or change it to a value the page lists.
+  2. **`paladin.unprofiled_model` is no longer stamped** for these models.
+  3. **Anthropic and DeepSeek `validate_model` and `get_available_models` now include them**, because
+     both return their seeded table. The other providers' lists are unchanged.
+  4. **A direct `new` defaults a seeded reasoning model to 300 s** (the other models keep the
+     provider's own default). The reasoning rows are the ones whose default call returned reasoning
+     text or whose listing says so: `claude-fable-5`, `claude-opus-5`, `deepseek-v4-pro`, the nine
+     new Gemini ids, eight of the new Qwen ids, `grok-4.20-reasoning` and `grok-4.7`. No new OpenAI
+     row is marked reasoning, because Chat Completions returns no reasoning text.
+  5. **`AnthropicConfig::new`'s `max_tokens` for these models is 4,096**, the compiled default, for
+     every model including the new ones (owner decision `compiled-default` in plan 50.1-06, 2026-10-20).
+     A model's larger seeded maximum output (128,000 for the Claude ids) is reached only by
+     `with_max_tokens`.
+  6. **`Commissary::for_model` rations against the seeded window**: for example 1,050,000 on
+     `gpt-5.4` and `gpt-6-sol` against the OpenAI fallback's 128,000, but 32,768 on `qwen-max`
+     against the Qwen fallback's 1,000,000, so a prompt that used to be admitted for a model with a
+     smaller seeded window can now be rationed or refused.
+- **A small output cap can come back empty on a model that reasons before it answers.** The probe
+  measured it (`50.1-SEED-PROBE.md`, the `### Probes:` tables, finish reason and content columns):
+  `gemini-3.5-flash`, `gemini-3.6-flash`, `gemini-3.7-flash` and `gemini-flash-latest` answered
+  `max_tokens=64` with finish `MAX_TOKENS` and empty content; `gpt-5` and `gpt-5-nano` answered
+  `max_completion_tokens=64` with finish `length` and empty content, and so did their `json_schema`
+  probe at the baseline 256-token cap. Hidden reasoning spends the budget before any answer, so give
+  such a model a generous output cap. Paladin changes no behaviour for it: an empty completion
+  surfaces as `LlmError::EmptyCompletion`, as for any model.
 
 **Insulating the next bump (consumer-side; no Paladin change).** Prefer
 `PaladinResult { .., ..Default::default() }` or `PaladinResult::new(..)` over a full struct literal;

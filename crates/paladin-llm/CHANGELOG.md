@@ -21,6 +21,20 @@ and this project follows lockstep workspace versioning.
   `openai::adapter::OPENAI_DEFAULT_BASE_URL`, the `OpenAIConfig.model` field and
   `OpenAIConfig::with_organization(impl Into<String>)` (the one knob only OpenAI carries, from a
   variant form of `config_knob_builders!`).
+- Phase 50.1 (SURFACE-06, D-14, D-15; plans 50.1-08 and 50.1-09): 51 dated `SeededProfile` rows
+  from `50.1-SEED-PROBE.md` (2026-10-20): ten Anthropic (including `claude-opus-4-8`), `deepseek-v4-pro`,
+  nine Gemini, 17 OpenAI, 11 Qwen and three Grok ids, listed with their values on the
+  Switching providers page (guarded by `switching_providers_page_lists_every_seeded_model`). OpenAI
+  and Qwen windows and maximum outputs come only from the operator's dated docs evidence; the four
+  OpenAI pro-tier ids are not seeded (404 on chat completions). `grok-4.7` is seeded under a
+  recorded exception (its `temperature=2.00` probe failed at the vendor in both runs; the range
+  stops at 1.99). A model that gains a row now has an explicit parameter its profile does not admit,
+  or a `max_tokens` above its seeded maximum output, refused at build; is no longer stamped
+  `paladin.unprofiled_model`; appears in Anthropic's and DeepSeek's `validate_model` /
+  `get_available_models`; gets a 300 s direct-`new` timeout when seeded as reasoning; and is
+  rationed by `Commissary::for_model` against its seeded window. No default-model constant and none
+  of the 14 rows dated 2026-10-15 changed. `max_completion_tokens` is now also measured accepted on
+  the 17 new OpenAI ids.
 - Phase 50 (G-50-5a remainder (a), PARITY-05, PARITY-06; plan 50-30): a hopped-past bill is
   carried, not dropped. `FallbackLlmAdapter` records the `BilledUsage` of every billed error it hops
   past (a `Refusal` under `hop_on_refusal(true)`) into the call's

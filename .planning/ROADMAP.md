@@ -1643,7 +1643,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 50.1-06-PLAN.md — `checkpoint:decision` on the D-07 `max_tokens` source (new vs `from_env` asymmetry), the Anthropic tracer, then the SURFACE-02 seal: final semver measurement, DR-19 complete, §9.8 muster paragraph, harmonise todo moved to `completed/` with `resolves_phase: 50.1`
+- [x] 50.1-06-PLAN.md — `checkpoint:decision` on the D-07 `max_tokens` source (new vs `from_env` asymmetry), the Anthropic tracer, then the SURFACE-02 seal: final semver measurement, DR-19 complete, §9.8 muster paragraph, harmonise todo moved to `completed/` with `resolves_phase: 50.1`
 - [ ] 50.1-07-PLAN.md — `autonomous: false`: the D-16 candidate id table (D-15 rule over the `50-SEED-PROBE.md` listings) plus an offline dry run (tracer), the operator's human-action probe run on their keys, the scrubbed `50.1-SEED-PROBE.md` (depends on no code plan; placed here so the operator checkpoint does not hold waves 2-5)
 
 **Wave 6** *(blocked on Wave 5 completion)*

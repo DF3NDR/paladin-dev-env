@@ -5,15 +5,15 @@ milestone_name: Crate Release
 current_phase: 50.1
 current_phase_name: consumer-surface-readiness
 status: executing
-stopped_at: Completed 50.1-05-PLAN.md
-last_updated: "2026-10-20T02:32:16.357Z"
+stopped_at: Completed 50.1-06-PLAN.md
+last_updated: "2026-10-20T12:59:20.821Z"
 last_activity: 2026-10-19
 last_activity_desc: Phase 50.1 execution started
 progress:
   total_phases: 13
   completed_phases: 11
   total_plans: 130
-  completed_plans: 126
+  completed_plans: 127
 ---
 
 # Project State
@@ -43,7 +43,7 @@ delivered the green CI run its UAT test 4 was blocked on; Phase 41 sealed 2026-1
 operator signed off its four human UAT items). Source of truth:
 `.project/Milestone_14-Treasurer/` plus the supporting scope in PROJECT.md *Current Milestone*.
 
-**Progress:** [████████████████████] 86/86 plans ([██████████] 97%) of the phases planned so far (38-45, 48);
+**Progress:** [████████████████████] 86/86 plans ([██████████] 98%) of the phases planned so far (38-45, 48);
 Phases 46, 47, 50 and 51 are not yet planned; Phase 49 closed 2026-10-14 (3/3 kept plans, 3 cancelled); Phase 50 is next, then Phase 51.
 
 **Previous milestone:** v0.10.0 "Durable Agent Execution Runtime" closed 2026-09-23 — 19 phases
@@ -63,7 +63,7 @@ under `milestones/`.
 ## Current Position
 
 Phase: 50.1 (consumer-surface-readiness) — EXECUTING
-Plan: 6 of 9
+Plan: 7 of 9
 Status: Ready to execute
 Last activity: 2026-10-19 — Phase 50.1 execution started
 
@@ -334,6 +334,7 @@ Last activity: 2026-10-19 — Phase 50.1 execution started
 | Phase 50.1 P03 | 30min | 2 tasks | 5 files |
 | Phase 50.1 P04 | 50min | 3 tasks | 13 files |
 | Phase 50.1 P05 | 60min | 2 tasks | 24 files |
+| Phase 50.1 P06 | 75min | 3 tasks | 21 files |
 
 ## Accumulated Context
 
@@ -593,6 +594,7 @@ The pre-close text of this section (Phase 33/32/29/28/23 decision digests and th
 - [Phase ?]: 50.1-03: Experiment 2 mutates FinishReason (one library site, finish_label); consumer-surface CI job is Advisory attribution, not a new merge gate
 - [Phase ?]: 50.1-04: D-05 applied as locked to Gemini, Qwen, Grok and Kimi; each allowlist entry names method_parameter_count_changed as measured per task; SURFACE-02 stays open until 50.1-05 and -06
 - [Phase ?]: 50.1-05: D-06 applied as proceed-as-locked; OpenAIConfig.model is a default-model label with no context-window change (128,000 stays); D-05 new(api_key, model) with no alias
+- [Phase ?]: Phase 50.1-06: D-07 resolved by owner as compiled-default (2026-10-20): AnthropicConfig::new sets max_tokens 4096 for every model; with_max_tokens is the override; no seeded_max_output helper
 
 ### Pending Todos
 
@@ -812,8 +814,8 @@ The full debt inventory — 25 recorded items across 10 phases, plus 12 open and
 
 ## Session Continuity
 
-**Last session:** 2026-10-20T02:32:16.327Z
-**Stopped at:** Completed 50.1-05-PLAN.md
+**Last session:** 2026-10-20T12:59:20.789Z
+**Stopped at:** Completed 50.1-06-PLAN.md
 **Resume file:** None
 
 ## Operator Next Steps

@@ -333,7 +333,7 @@ D-A..D-D of the handoff plus D-E (the seed-rule conflict found at filing) are se
   facade; the four rows name the import path; additive, with `make api-surface-update` and a
   CHANGELOG entry
 
-- [ ] **SURFACE-02**: The nine `*Config` types (`OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`,
+- [x] **SURFACE-02**: The nine `*Config` types (`OpenAIConfig`, `AnthropicConfig`, `DeepSeekConfig`,
   `GeminiConfig`, `KimiConfig`, `QwenConfig`, `GrokConfig`, `OllamaConfig`,
   `OpenAiCompatibleConfig`) construct with one `new(..)` shape (D-B; endpoint-only providers keep
   their endpoint argument), every knob including `timeout_seconds` (and `base_url` where `new`
@@ -539,7 +539,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | REASON-06 | Phase 51 | Pending |
 | REASON-07 | Phase 51 | Pending |
 | SURFACE-01 | Phase 50.1 | Complete |
-| SURFACE-02 | Phase 50.1 | Pending |
+| SURFACE-02 | Phase 50.1 | Complete |
 | SURFACE-03 | Phase 50.1 | Complete |
 | SURFACE-04 | Phase 50.1 | Complete |
 | SURFACE-05 | Phase 50.1 | Complete |

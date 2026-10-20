@@ -193,13 +193,13 @@ and this project follows lockstep workspace versioning.
 ### Breaking Changes
 
 - Phase 50.1 (SURFACE-02, D-05; plans 50.1-02, 50.1-04): `new(api_key, base_url, model)` becomes
-  `new(api_key, model)` on `DeepSeekConfig`, `GeminiConfig`, `QwenConfig` and `GrokConfig`, with
-  no alias. Each endpoint defaults to the type's `*_DEFAULT_BASE_URL` constant
+  `new(api_key, model)` on `DeepSeekConfig`, `GeminiConfig`, `QwenConfig`, `GrokConfig` and
+  `KimiConfig`, with no alias. Each endpoint defaults to the type's `*_DEFAULT_BASE_URL` constant
   (`DEEPSEEK_DEFAULT_BASE_URL`, `GEMINI_DEFAULT_BASE_URL`, `QWEN_DEFAULT_BASE_URL`,
-  `GROK_DEFAULT_BASE_URL`; `with_base_url` replaces it) and the timeout to 300 s for a seeded
-  reasoning model and 60 s otherwise (`with_timeout_seconds` replaces it); `from_env()` is
-  unchanged. `new(k, url, m)` becomes `new(k, m).with_base_url(url)`. Registered in `MIGRATION.md`
-  section 9.2 and 9.8 (DR-19) and the crate's `cargo-semver-checks` lints table
+  `GROK_DEFAULT_BASE_URL`, `KIMI_DEFAULT_BASE_URL`; `with_base_url` replaces it) and the timeout
+  to 300 s for a seeded reasoning model and 60 s otherwise (`with_timeout_seconds` replaces it);
+  `from_env()` is unchanged. `new(k, url, m)` becomes `new(k, m).with_base_url(url)`. Registered
+  in `MIGRATION.md` section 9.2 and 9.8 (DR-19) and the crate's `cargo-semver-checks` lints table
   (`method_parameter_count_changed`).
 - Phase 50 (PARITY-03, PARITY-06; owner decision option-a): the nine `*Config` types and
   `LlmProviderConfig` are `#[non_exhaustive]`, so a struct literal outside the crate no longer

@@ -2076,13 +2076,9 @@ mod endpoint_builder_tests {
         }
         #[cfg(feature = "kimi")]
         {
-            let config = crate::kimi::KimiConfig::new(
-                "k".to_string(),
-                "https://api.moonshot.ai/v1".to_string(),
-                "kimi-k3".to_string(),
-            )
-            .with_base_url(URL)
-            .with_timeout_seconds(7);
+            let config = crate::kimi::KimiConfig::new("k".to_string(), "kimi-k3".to_string())
+                .with_base_url(URL)
+                .with_timeout_seconds(7);
             assert_eq!((config.base_url.as_str(), config.timeout_seconds), (URL, 7));
         }
         #[cfg(feature = "qwen")]

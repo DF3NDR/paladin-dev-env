@@ -705,11 +705,10 @@ mod tests {
             .create_async()
             .await;
         let kimi: Arc<dyn LlmPort> = Arc::new(
-            KimiAdapter::new(KimiConfig::new(
-                "test-key".to_string(),
-                server.url(),
-                KIMI_DEFAULT_MODEL.to_string(),
-            ))
+            KimiAdapter::new(
+                KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+                    .with_base_url(server.url()),
+            )
             .unwrap(),
         );
 

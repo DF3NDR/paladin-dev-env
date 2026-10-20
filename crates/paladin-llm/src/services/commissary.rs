@@ -1362,11 +1362,10 @@ mod tests {
         /// The Kimi adapter's own seeded `kimi-k3` window, read through the port a caller
         /// holds -- no network is touched at construction.
         fn kimi_adapter() -> KimiAdapter {
-            KimiAdapter::new(KimiConfig::new(
-                "test-key".to_string(),
-                "http://127.0.0.1:9".to_string(),
-                "kimi-k3".to_string(),
-            ))
+            KimiAdapter::new(
+                KimiConfig::new("test-key".to_string(), "kimi-k3".to_string())
+                    .with_base_url("http://127.0.0.1:9"),
+            )
             .unwrap()
         }
 
@@ -1468,12 +1467,9 @@ mod tests {
             // compiled seeded window for `kimi-k3` -- and reaches the Commissary through the
             // same profile.
             let adapter = KimiAdapter::new(
-                KimiConfig::new(
-                    "test-key".to_string(),
-                    "http://127.0.0.1:9".to_string(),
-                    "kimi-k3".to_string(),
-                )
-                .with_context_window(500_000),
+                KimiConfig::new("test-key".to_string(), "kimi-k3".to_string())
+                    .with_base_url("http://127.0.0.1:9")
+                    .with_context_window(500_000),
             )
             .unwrap();
             let commissary =

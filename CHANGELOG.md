@@ -1356,18 +1356,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Breaking Changes
 
 - **BREAKING (`paladin-llm`): `new(api_key, base_url, model)` becomes `new(api_key, model)` on
-  `DeepSeekConfig`, `GeminiConfig`, `QwenConfig` and `GrokConfig`** (SURFACE-02, D-05; Phase 50.1
-  plans 02 and 04). Each endpoint defaults to the type's `*_DEFAULT_BASE_URL` constant
-  (`DEEPSEEK_DEFAULT_BASE_URL`, `GEMINI_DEFAULT_BASE_URL`, `QWEN_DEFAULT_BASE_URL`,
-  `GROK_DEFAULT_BASE_URL`, in the type's `adapter` module); replace it with the new
-  `with_base_url`, and the timeout with the new `with_timeout_seconds`. There is no alias:
-  `new(k, url, m)` becomes `new(k, m).with_base_url(url)`. `from_env()` is unchanged. Both
+  `DeepSeekConfig`, `GeminiConfig`, `QwenConfig`, `GrokConfig` and `KimiConfig`** (SURFACE-02,
+  D-05; Phase 50.1 plans 02 and 04). Each endpoint defaults to the type's `*_DEFAULT_BASE_URL`
+  constant (`DEEPSEEK_DEFAULT_BASE_URL`, `GEMINI_DEFAULT_BASE_URL`, `QWEN_DEFAULT_BASE_URL`,
+  `GROK_DEFAULT_BASE_URL`, `KIMI_DEFAULT_BASE_URL`, in the type's `adapter` module); replace it
+  with the new `with_base_url`, and the timeout with the new `with_timeout_seconds`. There is no
+  alias: `new(k, url, m)` becomes `new(k, m).with_base_url(url)`. `from_env()` is unchanged. Both
   builders exist on all nine `*Config` types (see *Added*). The first argument is the API key,
   never a URL; `OllamaConfig::new` keeps the endpoint as its first argument (D-08). Registered in
   `MIGRATION.md` section 9.2 and section 9.8 (DR-19; DR-12 amended) and the allowlist entries
   `paladin-llm | <Type>Config` (`method_parameter_count_changed`, measured with
-  cargo-semver-checks 0.50.0 against 0.10.1). The other three types' `new` follow in the later
-  plans of the phase.
+  cargo-semver-checks 0.50.0 against 0.10.1). The other two types' `new` (`OpenAIConfig`,
+  `AnthropicConfig`) follow in plans 50.1-05 and -06.
 - **BREAKING (`paladin-web`): `Principal` gains the required `tenant_id: TenantId` field and is
   marked `#[non_exhaustive]`** — build it with `Principal::new(id, role, tenant_id)`; a struct
   literal outside the crate no longer compiles (TENANT-01; Phase 40 plan 40-01; `MIGRATION.md`

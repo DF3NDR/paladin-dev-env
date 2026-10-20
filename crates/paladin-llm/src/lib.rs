@@ -408,7 +408,7 @@ mod capability_invariants_new_providers {
     use crate::gemini::{GeminiAdapter, GeminiConfig};
     use crate::grok::adapter::GROK_DEFAULT_MODEL;
     use crate::grok::{GrokAdapter, GrokConfig};
-    use crate::kimi::adapter::{KIMI_DEFAULT_BASE_URL, KIMI_DEFAULT_MODEL};
+    use crate::kimi::adapter::KIMI_DEFAULT_MODEL;
     use crate::kimi::{KimiAdapter, KimiConfig};
     use crate::ollama::adapter::{OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL};
     use crate::ollama::{OllamaAdapter, OllamaConfig};
@@ -431,7 +431,6 @@ mod capability_invariants_new_providers {
     fn every_new_provider_declares_a_temperature_range() {
         let kimi = KimiAdapter::new(KimiConfig::new(
             "test-key".to_string(),
-            KIMI_DEFAULT_BASE_URL.to_string(),
             KIMI_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();
@@ -523,7 +522,6 @@ mod capability_invariants_new_providers {
         // these adapters make a request in this test, so the URL need not resolve.
         let kimi = KimiAdapter::new(KimiConfig::new(
             "test-key".to_string(),
-            KIMI_DEFAULT_BASE_URL.to_string(),
             KIMI_DEFAULT_MODEL.to_string(),
         ))
         .unwrap();

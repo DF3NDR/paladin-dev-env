@@ -183,12 +183,33 @@ impl KimiConfig {
         Ok(config)
     }
 
-    /// Create configuration with custom values.
-    pub fn new(api_key: String, base_url: String, model: String) -> Self {
+    /// Create a configuration for `model`, authenticating with `api_key`.
+    ///
+    /// - `api_key`: the Moonshot (Kimi) API key, never a URL.
+    /// - `model`: the default model requested when a call names none.
+    ///
+    /// The endpoint is [`KIMI_DEFAULT_BASE_URL`] (replace it with
+    /// [`with_base_url`](Self::with_base_url)) and the timeout is 300 s for a seeded reasoning
+    /// model and 60 s otherwise (replace it with
+    /// [`with_timeout_seconds`](Self::with_timeout_seconds)). Construction is infallible: an
+    /// empty key or model, or a non-`http(s)` endpoint, is refused when the adapter is built.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use paladin_llm::kimi::KimiConfig;
+    /// use paladin_llm::kimi::adapter::{KIMI_DEFAULT_BASE_URL, KIMI_DEFAULT_MODEL};
+    ///
+    /// let key = "kimi-example-key".to_string();
+    /// let config = KimiConfig::new(key, KIMI_DEFAULT_MODEL.to_string()).with_timeout_seconds(600);
+    /// assert_eq!(config.base_url, KIMI_DEFAULT_BASE_URL);
+    /// assert_eq!(config.timeout_seconds, 600);
+    /// ```
+    pub fn new(api_key: String, model: String) -> Self {
         let timeout_seconds = default_timeout_seconds(KIMI_PROVIDER, &model, 60);
         Self {
             api_key,
-            base_url,
+            base_url: KIMI_DEFAULT_BASE_URL.to_string(),
             model,
             timeout_seconds,
             max_tokens: None,
@@ -405,6 +426,35 @@ mod tests {
     use paladin_ports::output::model_profile::{ParamSupport, SamplingParam};
     use serde_json::json;
 
+    // ── KimiConfig::new (SURFACE-02, D-05) ──
+
+    #[test]
+    fn kimi_config_new_takes_key_and_model_and_defaults_the_endpoint() {
+        let config = KimiConfig::new("k".to_string(), "kimi-k3".to_string());
+        assert_eq!(config.base_url, KIMI_DEFAULT_BASE_URL);
+        assert_eq!(config.model, "kimi-k3");
+        assert_eq!(config.api_key, "k");
+        // The timeout default is unchanged: a seeded reasoning model keeps its 300 s (D-13), an
+        // unseeded one its 60 s.
+        assert_eq!(config.timeout_seconds, 300);
+        assert_eq!(
+            config.timeout_seconds,
+            default_timeout_seconds(KIMI_PROVIDER, "kimi-k3", 60)
+        );
+        let unseeded = KimiConfig::new("k".to_string(), "kimi-unseeded-model".to_string());
+        assert_eq!(
+            unseeded.timeout_seconds,
+            default_timeout_seconds(KIMI_PROVIDER, "kimi-unseeded-model", 60)
+        );
+    }
+
+    #[test]
+    fn kimi_config_with_base_url_replaces_the_default_endpoint() {
+        let config = KimiConfig::new("k".to_string(), "m".to_string())
+            .with_base_url("http://localhost:1234");
+        assert_eq!(config.base_url, "http://localhost:1234");
+    }
+
     fn build_request(model: &str) -> LlmRequest {
         LlmRequest::new(
             model,
@@ -449,11 +499,10 @@ mod tests {
             )
             .create_async()
             .await;
-        let adapter = KimiAdapter::new(KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            "kimi-k2.6".to_string(),
-        ))
+        let adapter = KimiAdapter::new(
+            KimiConfig::new("test-key".to_string(), "kimi-k2.6".to_string())
+                .with_base_url(server.url()),
+        )
         .unwrap();
 
         let response = adapter
@@ -541,11 +590,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let response = adapter
@@ -584,11 +630,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let response = adapter
@@ -624,11 +667,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let response = adapter
@@ -661,11 +701,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let response = adapter
@@ -697,11 +734,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let response = adapter
@@ -734,11 +768,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         // `null` content deserializes to an empty string (no parse failure, no panic) and the
@@ -770,11 +801,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -794,11 +822,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -816,11 +841,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -837,11 +859,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -858,11 +877,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -883,11 +899,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -917,11 +930,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -960,11 +970,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            secret.to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new(secret.to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -993,11 +1000,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let schema_result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -1011,11 +1015,9 @@ mod tests {
         );
 
         // A transport failure: no server listening at this URL at all.
-        let unreachable_config = KimiConfig::new(
-            "test-key".to_string(),
-            "http://127.0.0.1:1".to_string(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let unreachable_config =
+            KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+                .with_base_url("http://127.0.0.1:1");
         let unreachable_adapter = KimiAdapter::new(unreachable_config).unwrap();
         let transport_result = unreachable_adapter
             .generate(build_request(KIMI_DEFAULT_MODEL))
@@ -1054,11 +1056,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let stream = adapter
@@ -1093,11 +1092,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let stream = adapter
@@ -1126,22 +1122,14 @@ mod tests {
 
     #[test]
     fn get_provider_name_returns_kimi() {
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            KIMI_DEFAULT_BASE_URL.to_string(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string());
         let adapter = KimiAdapter::new(config).unwrap();
         assert_eq!(adapter.get_provider_name(), "kimi");
     }
 
     #[test]
     fn get_capabilities_reports_no_tool_or_function_calling() {
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            KIMI_DEFAULT_BASE_URL.to_string(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string());
         let adapter = KimiAdapter::new(config).unwrap();
         let caps = adapter.get_capabilities();
 
@@ -1160,11 +1148,7 @@ mod tests {
         // The cross-adapter invariant in `lib.rs`
         // (`every_new_provider_declares_a_temperature_range`) requires `Some(_)`; this pins the
         // exact value, ADR-0004's framework default. It states no vendor measurement.
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            KIMI_DEFAULT_BASE_URL.to_string(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string());
         let adapter = KimiAdapter::new(config).unwrap();
         let caps = adapter.get_capabilities();
 
@@ -1214,11 +1198,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -1258,11 +1239,10 @@ mod tests {
     ) -> (serde_json::Value, std::collections::HashMap<String, String>) {
         let mut server = crate::compat::test_support::server().await;
         let captured = crate::compat::test_support::mock_completion(&mut server).await;
-        let adapter = KimiAdapter::new(KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            UNSEEDED_MODEL.to_string(),
-        ))
+        let adapter = KimiAdapter::new(
+            KimiConfig::new("test-key".to_string(), UNSEEDED_MODEL.to_string())
+                .with_base_url(server.url()),
+        )
         .unwrap();
         let mut request = build_request(UNSEEDED_MODEL);
         request.prompt.entity.data.parameters = parameters;
@@ -1291,11 +1271,10 @@ mod tests {
         // the four sampling parameters exactly as each seeded Kimi row does. Compared against
         // the seeded table itself, not against restated literals, so a drift in either place
         // fails here (G-50-5c, owner option (a)).
-        let adapter = KimiAdapter::new(KimiConfig::new(
-            "test-key".to_string(),
-            "https://example.invalid/v1".to_string(),
-            UNSEEDED_MODEL.to_string(),
-        ))
+        let adapter = KimiAdapter::new(
+            KimiConfig::new("test-key".to_string(), UNSEEDED_MODEL.to_string())
+                .with_base_url("https://example.invalid/v1"),
+        )
         .unwrap();
         let fallback = adapter
             .model_profile(UNSEEDED_MODEL)
@@ -1328,11 +1307,10 @@ mod tests {
 
     #[test]
     fn kimi_fallback_profile_sends_no_sampling_values() {
-        let adapter = KimiAdapter::new(KimiConfig::new(
-            "test-key".to_string(),
-            "https://example.invalid/v1".to_string(),
-            UNSEEDED_MODEL.to_string(),
-        ))
+        let adapter = KimiAdapter::new(
+            KimiConfig::new("test-key".to_string(), UNSEEDED_MODEL.to_string())
+                .with_base_url("https://example.invalid/v1"),
+        )
         .unwrap();
         let profile = adapter
             .model_profile(UNSEEDED_MODEL)
@@ -1393,11 +1371,10 @@ mod tests {
 
     #[test]
     fn kimi_default_model_is_seeded() {
-        let adapter = KimiAdapter::new(KimiConfig::new(
-            "test-key".to_string(),
-            "https://example.invalid/v1".to_string(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        ))
+        let adapter = KimiAdapter::new(
+            KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+                .with_base_url("https://example.invalid/v1"),
+        )
         .unwrap();
         // A seeded entry stamps its date on the profile; the adapter-wide fallback carries none.
         let profile = adapter
@@ -1416,11 +1393,10 @@ mod tests {
     async fn kimi_default_model_omits_every_sampling_parameter_the_probe_rejected() {
         let mut server = crate::compat::test_support::server().await;
         let captured = crate::compat::test_support::mock_completion(&mut server).await;
-        let adapter = KimiAdapter::new(KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        ))
+        let adapter = KimiAdapter::new(
+            KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+                .with_base_url(server.url()),
+        )
         .unwrap();
         let mut request = build_request(KIMI_DEFAULT_MODEL);
         request.prompt.entity.data.parameters = kimi_parameters(0.7, 0.9);
@@ -1470,11 +1446,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let (a, b) = tokio::join!(
@@ -1497,11 +1470,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let models = adapter.get_available_models().await.unwrap();
@@ -1524,11 +1494,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         assert!(adapter.validate_model(KIMI_DEFAULT_MODEL).await.unwrap());
@@ -1548,11 +1515,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let _ = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -1570,11 +1534,8 @@ mod tests {
             .create_async()
             .await;
 
-        let config = KimiConfig::new(
-            "test-key".to_string(),
-            server.url(),
-            KIMI_DEFAULT_MODEL.to_string(),
-        );
+        let config = KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+            .with_base_url(server.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -1634,9 +1595,9 @@ mod tests {
 
         let config = KimiConfig::new(
             "test-key-abc123".to_string(),
-            primary.url(),
             KIMI_DEFAULT_MODEL.to_string(),
-        );
+        )
+        .with_base_url(primary.url());
         let adapter = KimiAdapter::new(config).unwrap();
 
         let result = adapter.generate(build_request(KIMI_DEFAULT_MODEL)).await;
@@ -1685,11 +1646,9 @@ mod tests {
             }
 
             fn adapter(base_url: &str) -> Arc<dyn LlmPort> {
-                let config = KimiConfig::new(
-                    "test-key".to_string(),
-                    base_url.to_string(),
-                    KIMI_DEFAULT_MODEL.to_string(),
-                );
+                let config =
+                    KimiConfig::new("test-key".to_string(), KIMI_DEFAULT_MODEL.to_string())
+                        .with_base_url(base_url);
                 Arc::new(KimiAdapter::new(config).expect("test config must build"))
             }
 
@@ -1762,11 +1721,7 @@ mod tests {
     // ── PARITY-03 knobs (plan 50-08, D-12) ──
 
     fn kimi_config(base_url: &str, model: &str) -> KimiConfig {
-        KimiConfig::new(
-            "test-key".to_string(),
-            base_url.to_string(),
-            model.to_string(),
-        )
+        KimiConfig::new("test-key".to_string(), model.to_string()).with_base_url(base_url)
     }
 
     fn window_override(window: u32) -> ModelOverride {
@@ -1991,11 +1946,8 @@ mod tests {
 
     #[test]
     fn kimi_config_debug_redacts_the_api_key() {
-        let config = KimiConfig::new(
-            "sk-secret-kimi-key-123".to_string(),
-            "https://api.example.invalid/v1".to_string(),
-            "kimi-k3".to_string(),
-        );
+        let config = KimiConfig::new("sk-secret-kimi-key-123".to_string(), "kimi-k3".to_string())
+            .with_base_url("https://api.example.invalid/v1");
         let debug = format!("{config:?}");
         assert!(!debug.contains("sk-secret-kimi-key-123"), "{debug}");
         assert!(debug.contains("<redacted>"), "{debug}");
@@ -2010,7 +1962,7 @@ mod tests {
         // An empty key is printed as empty, not as a redaction marker.
         let empty = format!(
             "{:?}",
-            KimiConfig::new(String::new(), "https://x".into(), "m".into())
+            KimiConfig::new(String::new(), "m".into()).with_base_url("https://x")
         );
         assert!(!empty.contains("<redacted>"), "{empty}");
     }

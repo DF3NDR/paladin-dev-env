@@ -124,8 +124,10 @@ required-features = ["openai", "anthropic", "deepseek", "kimi", "qwen", "grok", 
 # above, and `method_parameter_count_changed`, the third line below, on
 # `paladin_llm::deepseek::DeepSeekConfig::new` and its `deepseek::adapter` path, three
 # parameters before and two now. It has a `DeepSeekConfig` SURFACE-02 row and entry, registered
-# in the same commit as this line; the plans that move the other six types' `new` add their
-# rows and entries beside it.
+# in the same commit as this line. Plan 50.1-04 re-measured the same way for each of
+# `GeminiConfig`, `QwenConfig`, `GrokConfig` and `KimiConfig` (`new` three parameters before, two
+# now) and the same lint named each one, so each has its own SURFACE-02 row and entry under this
+# line; the plans that move `OpenAIConfig` and `AnthropicConfig` add theirs beside them.
 [package.metadata.cargo-semver-checks.lints]
 struct_marked_non_exhaustive = "allow"
 enum_discriminants_undefined_non_unit_variant = "allow"

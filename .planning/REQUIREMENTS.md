@@ -375,7 +375,7 @@ D-A..D-D of the handoff plus D-E (the seed-rule conflict found at filing) are se
   consumer wrap an `Arc<dyn LlmPort>` in Cadence through `paladin::` with no `PriceTable`,
   proven by one doc test (or D-D records the deferral)
 
-- [ ] **SURFACE-06**: `claude-opus-4-8` and `deepseek-v4-pro` resolve to seeded profiles with no
+- [x] **SURFACE-06**: `claude-opus-4-8` and `deepseek-v4-pro` resolve to seeded profiles with no
   `paladin.unprofiled_model` for them, by the D-E option the operator chooses — a probe re-run on
   the operator's keys for the two models, a documented listing-only seed tier, or a declined seed
   with a §9.8 `model_overrides` recipe — without making the seed rule in `registry/seeded.rs` or
@@ -543,7 +543,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SURFACE-03 | Phase 50.1 | Complete |
 | SURFACE-04 | Phase 50.1 | Complete |
 | SURFACE-05 | Phase 50.1 | Complete |
-| SURFACE-06 | Phase 50.1 | Pending |
+| SURFACE-06 | Phase 50.1 | Complete |
 
 **Coverage:**
 

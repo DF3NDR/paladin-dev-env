@@ -1584,6 +1584,193 @@ mod seeded_tests {
         }
     }
 
+    /// The Grok rows added by Phase 50.1, each pinned to its own `### Probes:` table and listing
+    /// row in `50.1-SEED-PROBE.md` (run 1 for the two `grok-4.20-*` aliases; runs 1 and 2 for
+    /// `grok-4.7`). The maximum output is unset for all three: the docs state none for the
+    /// `grok-4.20-*` pair and "no text output limit" for `grok-4.7` (operator evidence (b) and
+    /// the owner's 2026-10-20 ruling).
+    #[cfg(feature = "grok")]
+    #[test]
+    fn grok_50_1_seeds_match_the_transcript() {
+        // (model, temperature upper bound, stop sequences accepted, reasoning, listing window)
+        let rows = [
+            // Probe 3: 2.00 ACCEPTED, probe 5: 2.01 "must be less than 2". The listing row is
+            // `grok-4.20-0309-reasoning`, whose `aliases` name `grok-4.20-reasoning`. Probes 9
+            // and 10: `stop` rejected. Probe 1 carried reasoning text.
+            ("grok-4.20-reasoning", 2.0, false, true, 1_000_000),
+            // Probes 9 and 10: one and five stop sequences ACCEPTED. Probe 1 carried no
+            // reasoning text. Listing row `grok-4.20-0309-non-reasoning`.
+            ("grok-4.20-non-reasoning", 2.0, true, false, 1_000_000),
+            // Probe 3 (2.00) UNREACHABLE in both runs: the owner's recorded exception seeds the
+            // bound at 1.99, below the 2.00 that fails at the vendor. The listing declares
+            // `reasoning_effort` and the run 2 default call carried reasoning text.
+            ("grok-4.7", 1.99, false, true, 500_000),
+        ];
+        for (model, upper, stop_accepted, reasoning, window) in rows {
+            let p = entry(seeded::GROK, model);
+            assert_eq!(p.temperature, ParamSupport::Range(0.0, upper), "{model}");
+            // Probe 6: top_p 0.5 ACCEPTED, so the contract span (contract-derived).
+            assert_eq!(p.top_p, ParamSupport::Range(0.0, 1.0), "{model}");
+            // Probes 7 and 8: both penalties rejected ("does not support parameter ...").
+            assert_eq!(p.frequency_penalty, ParamSupport::NotSent, "{model}");
+            assert_eq!(p.presence_penalty, ParamSupport::NotSent, "{model}");
+            let stop = if stop_accepted {
+                StopSupport::Supported { max: None }
+            } else {
+                StopSupport::NotSent
+            };
+            assert_eq!(p.stop_sequences, stop, "{model}");
+            // Listing context_length.
+            assert_eq!(p.context_window, Some(window), "{model}");
+            assert_eq!(p.max_output_tokens, None, "{model}");
+            assert_eq!(p.reasoning, reasoning, "{model}");
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            assert!(p.json_object && p.json_schema, "{model}");
+            assert_eq!(p.verified_on.as_deref(), Some("2026-10-20"), "{model}");
+        }
+    }
+
+    /// The recorded `grok-4.7` exception (owner ruling, 2026-10-20): its `temperature=2.00` probe
+    /// failed at the vendor identically in both runs (`UNREACHABLE: error sending request`), so
+    /// the seeded range stops below 2.00 and a caller cannot send it. 0.00 and 0.50 were ACCEPTED
+    /// and 2.01 was a clean 400, which establishes the vendor's 0..2 range.
+    #[cfg(feature = "grok")]
+    #[test]
+    fn grok_4_7_seeded_temperature_range_excludes_2_00() {
+        let p = entry(seeded::GROK, "grok-4.7");
+        assert!(!p.temperature.admits(2.0), "2.00 must not be admitted");
+        assert!(!p.temperature.admits(2.01), "2.01 must not be admitted");
+        // The accepted probe values and the stated bound stay admitted.
+        for accepted in [0.0, 0.5, 1.99] {
+            assert!(
+                p.temperature.admits(accepted),
+                "{accepted} must be admitted"
+            );
+        }
+        // The exception is for `grok-4.7` alone: the two `grok-4.20-*` aliases were ACCEPTED at
+        // 2.00 and still admit it.
+        for model in ["grok-4.20-reasoning", "grok-4.20-non-reasoning"] {
+            assert!(
+                entry(seeded::GROK, model).temperature.admits(2.0),
+                "{model}"
+            );
+        }
+    }
+
+    /// The Qwen rows added by Phase 50.1, each pinned to its own `### Probes:` table in
+    /// `50.1-SEED-PROBE.md` (run 1, or run 2 for `qwen3.7-flash` and `qwen3.5-flash`) and, for
+    /// the limits, to the operator's docs evidence (b) from the International Model Info pages
+    /// (accessed 2026-10-20). The listing exposes no limit.
+    #[cfg(feature = "qwen")]
+    #[test]
+    fn qwen_50_1_seeds_match_the_transcript() {
+        // (model, probe 1 returned reasoning text, window, max output)
+        let rows = [
+            ("qwen3.8-max", true, 1_000_000, 131_072),
+            // The vision-model page says "64k" for the Qwen3.7 maximum output; the operator
+            // resolved the conflict to the Model Info value, 131072.
+            ("qwen3.7-plus", true, 1_000_000, 131_072),
+            ("qwen3.7-max", true, 1_000_000, 131_072),
+            ("qwen3.7-flash", true, 1_000_000, 131_072),
+            ("qwen3.6-plus", true, 1_000_000, 65_536),
+            ("qwen3.6-flash", true, 1_000_000, 65_536),
+            ("qwen3.5-plus", true, 1_000_000, 65_536),
+            ("qwen3.5-flash", true, 1_000_000, 65_536),
+            ("qwen-max", false, 32_768, 8_192),
+            ("qwen-flash", false, 1_000_000, 32_768),
+            ("qwen-plus-latest", false, 1_000_000, 32_768),
+        ];
+        assert_eq!(rows.len(), 11, "the 11 Qwen ids measured end to end");
+        for (model, reasoning, window, max_output) in rows {
+            let p = entry(seeded::QWEN, model);
+            // Probes 2 and 3: 0.00 and 1.99 ACCEPTED; probe 5: 2.00 "should be in [0.0, 2.0)".
+            assert_eq!(p.temperature, ParamSupport::Range(0.0, 1.99), "{model}");
+            // Probes 6-8: top_p and both penalties ACCEPTED at 0.5 (contract-derived spans).
+            assert_eq!(p.top_p, ParamSupport::Range(0.0, 1.0), "{model}");
+            assert_eq!(
+                p.frequency_penalty,
+                ParamSupport::Range(-2.0, 2.0),
+                "{model}"
+            );
+            assert_eq!(
+                p.presence_penalty,
+                ParamSupport::Range(-2.0, 2.0),
+                "{model}"
+            );
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            assert_eq!(
+                p.stop_sequences,
+                StopSupport::Supported { max: None },
+                "{model}"
+            );
+            // Operator evidence (b), Model Info pages accessed 2026-10-20.
+            assert_eq!(p.context_window, Some(window), "{model}");
+            assert_eq!(p.max_output_tokens, Some(max_output), "{model}");
+            // Probe 1: the reasoning-text column.
+            assert_eq!(p.reasoning, reasoning, "{model}");
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            assert!(p.json_object && p.json_schema, "{model}");
+            assert_eq!(p.verified_on.as_deref(), Some("2026-10-20"), "{model}");
+        }
+    }
+
+    /// Every Grok and Qwen id the 2026-10-20 probe measured (`grok-4.7` under the recorded
+    /// exception) resolves `Seeded { verified_on: "2026-10-20" }`; a dated Grok id and an alias
+    /// are distinct exact-match rows, so the dated `grok-4.20-0309-*` ids are not covered.
+    #[test]
+    fn phase_50_1_grok_and_qwen_ids_resolve_seeded() {
+        #[cfg(feature = "grok")]
+        {
+            let registry = ModelRegistry::new("grok", seeded::GROK, ModelProfile::new());
+            for model in ["grok-4.20-reasoning", "grok-4.20-non-reasoning", "grok-4.7"] {
+                assert_eq!(
+                    registry.resolve(model).1,
+                    ProfileOrigin::Seeded {
+                        verified_on: "2026-10-20"
+                    },
+                    "{model}"
+                );
+            }
+            for model in [
+                "grok-4.20-0309-reasoning",
+                "grok-4.20-0309-non-reasoning",
+                "grok-4.20",
+                "grok-4.7-latest",
+            ] {
+                assert_eq!(
+                    registry.resolve(model).1,
+                    ProfileOrigin::AdapterDefault,
+                    "{model}: an alias is not covered by an exact-match row"
+                );
+            }
+        }
+        #[cfg(feature = "qwen")]
+        {
+            let registry = ModelRegistry::new("qwen", seeded::QWEN, ModelProfile::new());
+            for model in [
+                "qwen3.8-max",
+                "qwen3.7-plus",
+                "qwen3.7-max",
+                "qwen3.7-flash",
+                "qwen3.6-plus",
+                "qwen3.6-flash",
+                "qwen3.5-plus",
+                "qwen3.5-flash",
+                "qwen-max",
+                "qwen-flash",
+                "qwen-plus-latest",
+            ] {
+                assert_eq!(
+                    registry.resolve(model).1,
+                    ProfileOrigin::Seeded {
+                        verified_on: "2026-10-20"
+                    },
+                    "{model}"
+                );
+            }
+        }
+    }
+
     /// The Anthropic rows added by Phase 50.1 beyond `claude-opus-4-8`, each pinned to its own
     /// `### Probes:` table in `50.1-SEED-PROBE.md` (run 1, 2026-10-20).
     #[cfg(feature = "anthropic")]

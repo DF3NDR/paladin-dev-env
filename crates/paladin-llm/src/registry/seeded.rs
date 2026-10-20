@@ -1267,9 +1267,20 @@ mod qwen_table {
     use crate::registry::SeededProfile;
     use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
 
-    /// Qwen. `qwen3.8-flash` and `qwen-plus` were measured. `qwen-turbo` answered 429
-    /// `limit_requests` on every probe (a rate limit, nothing measured) and `qwen3-max` answered
-    /// 404 "Model not exist." on the International endpoint: neither is seeded.
+    /// Qwen. `qwen3.8-flash` and `qwen-plus` were measured on 2026-10-15 (`50-SEED-PROBE.md`);
+    /// 11 further ids were measured end to end on 2026-10-20 (`50.1-SEED-PROBE.md`; run 1
+    /// except `qwen3.7-flash` and `qwen3.5-flash`, taken from run 2, which supersedes run 1 for
+    /// those two): `qwen3.8-max`, `qwen3.7-plus`, `qwen3.7-max`, `qwen3.7-flash`, `qwen3.6-plus`,
+    /// `qwen3.6-flash`, `qwen3.5-plus`, `qwen3.5-flash`, `qwen-max`, `qwen-flash` and
+    /// `qwen-plus-latest` (a moving alias: true on its `verified_on` date only). They share one
+    /// sampling shape, measured identically: temperature `0.00` and `1.99` accepted and `2.00`
+    /// refused ("Temperature should be in [0.0, 2.0)"), `top_p` and both penalties accepted at
+    /// 0.5 (contract-derived spans), five stop sequences accepted, both JSON modes accepted. The
+    /// listing exposes no limit, so each window and maximum output is the operator's docs
+    /// evidence (b) from the Alibaba Cloud International Model Info page (URL and access date in
+    /// a comment). `qwen-turbo` answered 429 `limit_requests` on every probe (a rate limit,
+    /// nothing measured) and `qwen3-max` answered 404 "Model not exist." on the International
+    /// endpoint: neither is seeded.
     pub(crate) static QWEN: &[SeededProfile] = &[
         SeededProfile {
             model: "qwen3.8-flash",
@@ -1280,6 +1291,61 @@ mod qwen_table {
             model: "qwen-plus",
             verified_on: "2026-10-15",
             build: qwen_plus,
+        },
+        SeededProfile {
+            model: "qwen3.8-max",
+            verified_on: "2026-10-20",
+            build: qwen3_8_max,
+        },
+        SeededProfile {
+            model: "qwen3.7-plus",
+            verified_on: "2026-10-20",
+            build: qwen3_7_plus,
+        },
+        SeededProfile {
+            model: "qwen3.7-max",
+            verified_on: "2026-10-20",
+            build: qwen3_7_max,
+        },
+        SeededProfile {
+            model: "qwen3.7-flash",
+            verified_on: "2026-10-20",
+            build: qwen3_7_flash,
+        },
+        SeededProfile {
+            model: "qwen3.6-plus",
+            verified_on: "2026-10-20",
+            build: qwen3_6_plus,
+        },
+        SeededProfile {
+            model: "qwen3.6-flash",
+            verified_on: "2026-10-20",
+            build: qwen3_6_flash,
+        },
+        SeededProfile {
+            model: "qwen3.5-plus",
+            verified_on: "2026-10-20",
+            build: qwen3_5_plus,
+        },
+        SeededProfile {
+            model: "qwen3.5-flash",
+            verified_on: "2026-10-20",
+            build: qwen3_5_flash,
+        },
+        SeededProfile {
+            model: "qwen-max",
+            verified_on: "2026-10-20",
+            build: qwen_max,
+        },
+        SeededProfile {
+            model: "qwen-flash",
+            verified_on: "2026-10-20",
+            build: qwen_flash,
+        },
+        SeededProfile {
+            model: "qwen-plus-latest",
+            verified_on: "2026-10-20",
+            build: qwen_plus_latest,
         },
     ];
 
@@ -1319,6 +1385,308 @@ mod qwen_table {
             .with_json_object(true)
             .with_json_schema(true)
     }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `qwen3.8-max``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn qwen3_8_max() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen3-8-max
+            // (Model Info, "Context Limits", accessed 2026-10-20): context window 1,000,000,
+            // max input 991808 (thinking: 983616), max output 131,072.
+            // The listing exposes no limit.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(131_072)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `qwen3.7-plus``, probe numbers as in that table, and operator evidence (b) for the limits.
+    // Docs conflict: the vision-model page gives "64k" for the Qwen3.7 maximum output; the
+    // operator resolved it on 2026-10-20 to the Model Info value, 131072 (`50.1-SEED-PROBE.md`).
+    fn qwen3_7_plus() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen3-7-plus
+            // (Model Info, "Context Limits", accessed 2026-10-20): context window 1,000,000,
+            // max input 991808 (thinking: 983616), max output 131,072.
+            // The listing exposes no limit.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(131_072)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `qwen3.7-max``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn qwen3_7_max() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen3-7-max
+            // (Model Info, "Context Limits", accessed 2026-10-20): context window 1,000,000,
+            // max input 991808 (thinking: 983616), max output 131,072.
+            // The listing exposes no limit.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(131_072)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 2 (2026-10-20), `### Probes:
+    // `qwen3.7-flash``, probe numbers as in that table, and operator evidence (b) for the limits.
+    // Docs conflict: the vision-model page gives "64k" for the Qwen3.7 maximum output; the
+    // operator resolved it on 2026-10-20 to the Model Info value, 131072 (`50.1-SEED-PROBE.md`).
+    fn qwen3_7_flash() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen3-7-flash
+            // (Model Info, "Context Limits", accessed 2026-10-20): context window 1,000,000,
+            // max input 991808 (thinking: 983616), max output 131,072.
+            // The listing exposes no limit.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(131_072)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `qwen3.6-plus``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn qwen3_6_plus() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen3-6-plus
+            // (Model Info, "Context Limits", accessed 2026-10-20): context window 1,000,000,
+            // max input 991808 (thinking: 983616), max output 65,536. The listing exposes no limit.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(65_536)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `qwen3.6-flash``, probe numbers as in that table, and operator evidence (b) for the limits.
+    // Probe 3 (temperature 1.99) was ACCEPTED but returned EMPTY content (finish stop); the
+    // acceptance, not the answer, is what the temperature range rests on.
+    fn qwen3_6_flash() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen3-6-flash
+            // (Model Info, "Context Limits", accessed 2026-10-20): context window 1,000,000,
+            // max input 991808 (thinking: 983616), max output 65,536. The listing exposes no limit.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(65_536)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `qwen3.5-plus``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn qwen3_5_plus() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen3-5-plus
+            // (Model Info, "Context Limits", accessed 2026-10-20): context window 1,000,000,
+            // max input 991808 (thinking: 983616), max output 65,536. The listing exposes no limit.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(65_536)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 2 (2026-10-20), `### Probes:
+    // `qwen3.5-flash``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn qwen3_5_flash() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen3-5-flash
+            // (Model Info, "Context Limits", accessed 2026-10-20): context window 1,000,000,
+            // max input 991808 (thinking: 983616), max output 65,536. The listing exposes no limit.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(65_536)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `qwen-max``, probe numbers as in that table, and operator evidence (b) for the limits.
+    // The docs call it functionally equivalent to the snapshot `qwen-max-2025-01-25`; it is not
+    // `qwen3-max`, which answered 404 and is not seeded.
+    fn qwen_max() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen-max
+            // (Model Info, "Context Limits", accessed 2026-10-20): context window 32,768,
+            // max input 30720, max output 8,192. The listing exposes no limit.
+            .with_context_window(32_768)
+            .with_max_output_tokens(8_192)
+            // Probe 1 (the default call) carried no reasoning text.
+            .with_reasoning(false)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `qwen-flash``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn qwen_flash() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen-flash
+            // (Model Info, "Context Limits", accessed 2026-10-20): context window 1,000,000,
+            // max input 997952, max output 32,768. The listing exposes no limit.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(32_768)
+            // Probe 1 (the default call) carried no reasoning text.
+            .with_reasoning(false)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `qwen-plus-latest``, probe numbers as in that table,
+    // and operator evidence (b) for the limits.
+    // A moving alias ("This dynamically updated version implements changes without prior
+    // notice", docs): the row is true on its `verified_on` date only.
+    fn qwen_plus_latest() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 1.99 ACCEPTED; probe 5: 2.00 answered
+            // "Temperature should be in [0.0, 2.0)".
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties ACCEPTED at 0.5: `-2..=2` is contract-derived.
+            .with_frequency_penalty(ParamSupport::Range(-2.0, 2.0))
+            .with_presence_penalty(ParamSupport::Range(-2.0, 2.0))
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // docs https://www.alibabacloud.com/help/en/model-studio/qwen-plus
+            // (section "Dynamic Updates"; Model Info, "Context Limits", accessed 2026-10-20):
+            // context window 1,000,000, max input 995904, max output 32,768.
+            // The listing exposes no limit.
+            .with_context_window(1_000_000)
+            .with_max_output_tokens(32_768)
+            // Probe 1 (the default call) carried no reasoning text.
+            .with_reasoning(false)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
 }
 #[cfg(feature = "qwen")]
 pub(crate) use qwen_table::QWEN;
@@ -1328,11 +1696,24 @@ mod grok_table {
     use crate::registry::SeededProfile;
     use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
 
-    /// Grok. `grok-4.3`, `grok-4.5` and `grok-4.6` were measured. The other listed chat ids
-    /// (the dated `grok-4.20-*` family, `grok-4.7`, `grok-build-0.1`) were not probed, and the
-    /// image and video ids are not chat models: none is seeded.
+    /// Grok. `grok-4.3`, `grok-4.5` and `grok-4.6` were measured on 2026-10-15
+    /// (`50-SEED-PROBE.md`). On 2026-10-20 (`50.1-SEED-PROBE.md`) `grok-4.20-reasoning` and
+    /// `grok-4.20-non-reasoning` were measured end to end (run 1), and `grok-4.7` was seeded
+    /// under a recorded exception (below). Each id is seeded under the exact id the probe used,
+    /// and the lookup is exact-match: the dated `grok-4.20-0309-*` ids that the listing shows and
+    /// every other alias of the same model (`grok-4.20`, `grok-4.20-beta`, ...) are NOT covered
+    /// and run on the adapter-wide fallback. `grok-build-0.1` and the multi-agent id were not
+    /// probed, and the image and video ids are not chat models: none is seeded.
     ///
-    /// Common to all three:
+    /// **`grok-4.7` exception (owner ruling, 2026-10-20).** Its `temperature=2.00` probe failed
+    /// at the vendor identically in both runs (`UNREACHABLE: error sending request`); `0.00` and
+    /// `0.50` were accepted and `2.01` was a clean 400, so the vendor's 0..2 range is
+    /// established. The owner ruled that a reproducible vendor-side failure at the top endpoint,
+    /// observed identically in two independent runs, counts as a measured outcome for that one
+    /// row, so `grok-4.7` is seeded with a range that stops below 2.00 (`0.0..=1.99`, like the
+    /// three rows above). It applies to `grok-4.7` only and changes no other row.
+    ///
+    /// Common to `grok-4.3`, `grok-4.5` and `grok-4.6`:
     ///
     /// - temperature: `0.00` and `0.50` were accepted and `2.01` was rejected ("Temperature must
     ///   be less than 2 but temperature = 2.01"), but the high-end probe (`2.00`) was UNREACHABLE
@@ -1345,6 +1726,11 @@ mod grok_table {
     /// - `top_p` 0.5 was accepted: `0..=1` is contract-derived.
     /// - both penalties and `stop` (one and five sequences) were rejected ("does not support
     ///   parameter ...").
+    ///
+    /// The two `grok-4.20-*` aliases differ in one respect from the rows above: their
+    /// `temperature=2.00` probe was ACCEPTED, so their range is the measured `0.0..=2.0`.
+    /// `grok-4.20-non-reasoning` also accepted one and five stop sequences; the reasoning alias
+    /// rejected `stop`. The listing and the docs expose no maximum output for either.
     pub(crate) static GROK: &[SeededProfile] = &[
         SeededProfile {
             model: "grok-4.3",
@@ -1360,6 +1746,21 @@ mod grok_table {
             model: "grok-4.5",
             verified_on: "2026-10-15",
             build: grok_4_5,
+        },
+        SeededProfile {
+            model: "grok-4.20-reasoning",
+            verified_on: "2026-10-20",
+            build: grok_4_20_reasoning,
+        },
+        SeededProfile {
+            model: "grok-4.20-non-reasoning",
+            verified_on: "2026-10-20",
+            build: grok_4_20_non_reasoning,
+        },
+        SeededProfile {
+            model: "grok-4.7",
+            verified_on: "2026-10-20",
+            build: grok_4_7,
         },
     ];
 
@@ -1406,6 +1807,103 @@ mod grok_table {
             // The default call carried no reasoning text, but the listing declares
             // capabilities.reasoning_effort (default "high"), which says so.
             .with_reasoning(true)
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `grok-4.20-reasoning``, probe numbers as in that table. The probe used the alias; the
+    // listing row is `grok-4.20-0309-reasoning`, whose `aliases` field names it. Only the alias
+    // is seeded: the dated id is a distinct exact-match key and is not covered.
+    fn grok_4_20_reasoning() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "Temperature must be less than 2 but temperature = 2.01".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties answered "Model grok-4.20-reasoning does not
+            // support parameter ...".
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: `stop` answered "does not support parameter stop" for one and
+            // for five sequences. (Operator evidence (c) documents up to 4 and "not supported
+            // by reasoning models"; the measured rejection decides.)
+            .with_stop_sequences(StopSupport::NotSent)
+            // Listing context_length=1000000. No maximum output is documented (operator
+            // evidence (b), https://docs.x.ai/developers/models/grok-4.20-reasoning, accessed
+            // 2026-10-20), so none is seeded.
+            .with_context_window(1_000_000)
+            // Probe 1 (the default call) returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `grok-4.20-non-reasoning``, probe numbers as in that table. The probe used the alias; the
+    // listing row is `grok-4.20-0309-non-reasoning`. Only the alias is seeded.
+    fn grok_4_20_non_reasoning() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 3: temperature 0.00 and 2.00 ACCEPTED; probe 5: 2.01 answered
+            // "Temperature must be less than 2 but temperature = 2.01".
+            .with_temperature(ParamSupport::Range(0.0, 2.0))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties answered "Model grok-4.20-non-reasoning does not
+            // support parameter ...".
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: one and five stop sequences ACCEPTED.
+            .with_stop_sequences(StopSupport::Supported { max: None })
+            // Listing context_length=1000000. No maximum output is documented (operator
+            // evidence (b), https://docs.x.ai/developers/models/grok-4.20-non-reasoning,
+            // accessed 2026-10-20), so none is seeded.
+            .with_context_window(1_000_000)
+            // Probe 1 (the default call) carried no reasoning text.
+            .with_reasoning(false)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, `### Probes: `grok-4.7`` in run 1 and in run
+    // 2 (both 2026-10-20, commit 8ad298dd), probe numbers as in those tables, and its listing row.
+    //
+    // RECORDED EXCEPTION (owner ruling, 2026-10-20, `50.1-PROBE-CANDIDATES.md`, "Owner
+    // decisions for plan 50.1-09"): probe 3, `temperature=2.00`, was UNREACHABLE ("error sending
+    // request") in BOTH runs, so the temperature upper bound was never measured here. The same
+    // row fails for `grok-4.3`, `grok-4.5` and `grok-4.6`. The owner ruled that a reproducible
+    // vendor-side failure at the top endpoint, observed identically in two independent runs,
+    // counts as a measured outcome for that one row, and that this row is seeded anyway. It
+    // applies to `grok-4.7` only and changes no other row.
+    fn grok_4_7() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2 and 4: temperature 0.00 and 0.50 ACCEPTED in both runs; probe 5: 2.01
+            // answered a clean 400 "Temperature must be less than 2 but temperature = 2.01",
+            // which establishes the vendor's 0..2 range. 2.00 fails at the vendor, so the range
+            // stops at 1.99, the largest value under the stated bound (the shape the Qwen probe
+            // measured, and the one the `grok-4.3`, `grok-4.5` and `grok-4.6` rows use). The
+            // registry's range type is inclusive, so this is how "below 2.00" is expressed;
+            // 1.99 itself was not probed for `grok-4.7`. A caller cannot send 2.00.
+            .with_temperature(ParamSupport::Range(0.0, 1.99))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: both penalties answered "Model grok-4.7 does not support parameter
+            // ...".
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: `stop` answered "does not support parameter stop" for one and for
+            // five sequences.
+            .with_stop_sequences(StopSupport::NotSent)
+            // Listing context_length=500000. No maximum output is seeded: the docs state "No text
+            // output limit" (owner ruling, 2026-10-20), which is no number.
+            .with_context_window(500_000)
+            // The listing declares capabilities.reasoning_effort (default "high") and the run 2
+            // default call returned reasoning text.
+            .with_reasoning(true)
+            // Probes 12 and 13: json_object and json_schema ACCEPTED in both runs.
             .with_json_object(true)
             .with_json_schema(true)
     }

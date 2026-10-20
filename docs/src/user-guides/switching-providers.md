@@ -265,12 +265,26 @@ list.
 | kimi | `kimi-k2.6` | 2026-10-15 | 262,144 | not set | not sent | not sent | not sent | yes | yes | object, schema |
 | kimi | `kimi-k3` | 2026-10-15 | 1,048,576 | not set | not sent | not sent | not sent | yes | yes | object, schema |
 | kimi | (adapter-wide fallback) | unverified | 262,144 | not set | not sent [f] | not sent | not sent | yes | no | object |
+| qwen | `qwen-flash` | 2026-10-20 | 1,000,000 [d] | 32,768 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | no | object, schema |
+| qwen | `qwen-max` | 2026-10-20 | 32,768 [d] | 8,192 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | no | object, schema |
 | qwen | `qwen-plus` | 2026-10-15 | not set | not set | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | no | object, schema |
+| qwen | `qwen-plus-latest` | 2026-10-20 [g] | 1,000,000 [d] | 32,768 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | no | object, schema |
+| qwen | `qwen3.5-flash` | 2026-10-20 | 1,000,000 [d] | 65,536 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object, schema |
+| qwen | `qwen3.5-plus` | 2026-10-20 | 1,000,000 [d] | 65,536 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object, schema |
+| qwen | `qwen3.6-flash` | 2026-10-20 | 1,000,000 [d] | 65,536 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object, schema |
+| qwen | `qwen3.6-plus` | 2026-10-20 | 1,000,000 [d] | 65,536 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object, schema |
+| qwen | `qwen3.7-flash` | 2026-10-20 | 1,000,000 [d] | 131,072 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object, schema |
+| qwen | `qwen3.7-max` | 2026-10-20 | 1,000,000 [d] | 131,072 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object, schema |
+| qwen | `qwen3.7-plus` | 2026-10-20 | 1,000,000 [d] | 131,072 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object, schema |
 | qwen | `qwen3.8-flash` | 2026-10-15 | 1,000,000 [d] | 131,072 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object, schema |
+| qwen | `qwen3.8-max` | 2026-10-20 | 1,000,000 [d] | 131,072 [d] | 0.0 to 1.99 | 0.0 to 1.0 [c] | -2.0 to 2.0 [c] | yes | yes | object, schema |
 | qwen | (adapter-wide fallback) | unverified | 1,000,000 | not set | 0.0 to 1.99 | 0.0 to 1.0 | -2.0 to 2.0 | yes | no | object |
+| grok | `grok-4.20-non-reasoning` | 2026-10-20 | 1,000,000 | not set | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | no | object, schema |
+| grok | `grok-4.20-reasoning` | 2026-10-20 | 1,000,000 | not set | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | not sent | yes | object, schema |
 | grok | `grok-4.3` | 2026-10-15 | 1,000,000 | not set | 0.0 to 1.99 [b] | 0.0 to 1.0 [c] | not sent | not sent | yes | object, schema |
 | grok | `grok-4.5` | 2026-10-15 | 500,000 | not set | 0.0 to 1.99 [b] | 0.0 to 1.0 [c] | not sent | not sent | yes | object, schema |
 | grok | `grok-4.6` | 2026-10-15 | 500,000 | not set | 0.0 to 1.99 [b] | 0.0 to 1.0 [c] | not sent | not sent | yes | object, schema |
+| grok | `grok-4.7` | 2026-10-20 | 500,000 | not set | 0.0 to 1.99 [b] [i] | 0.0 to 1.0 [c] | not sent | not sent | yes | object, schema |
 | grok | (adapter-wide fallback) | unverified | 1,000,000 | not set | 0.0 to 2.0 | 0.0 to 1.0 | not sent | not sent | no | object |
 | gemini | `gemini-3-flash-preview` | 2026-10-20 [g] | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
 | gemini | `gemini-3.1-flash-lite` | 2026-10-20 | 1,048,576 | 65,536 | 0.0 to 2.0 | 0.0 to 1.0 [c] | not sent | yes | yes | object, schema |
@@ -299,9 +313,10 @@ window of `not set` is not a statement that the model has none.
   2026-10-20 ids `gpt-5.1`, `gpt-5.2`, `gpt-5.4` and `gpt-5.4-mini`; every other OpenAI row
   accepts only 1.0 ("Only the default (1) value is supported", measured) and refuses `top_p`.
 - **[b]** Grok temperature: 0.0 and 0.5 were accepted and 2.01 was rejected ("Temperature must be
-  less than 2"), but the 2.00 probe was unreachable (a transport error, three times). The registry
-  holds 1.99, the largest value under the bound the vendor's own text states. The bound is stated,
-  not measured.
+  less than 2"), but the 2.00 probe was unreachable (a transport error: three times on 2026-10-15
+  for the first three rows, and in both 2026-10-20 runs for `grok-4.7`). The registry holds 1.99,
+  the largest value under the bound the vendor's own text states. The bound is stated, not
+  measured. The two `grok-4.20-*` rows were accepted at 2.00 and read `0.0 to 2.0`.
 - **[c]** Contract-derived: `top_p` and the penalties were probed at 0.5 only. An accepted value is
   recorded as the vendor contract's span (`top_p` 0 to 1, penalties -2 to 2), not a measured edge.
 - **[d]** The window and maximum output come from the vendor's documentation page (URL and access
@@ -327,6 +342,15 @@ window of `not set` is not a statement that the model has none.
   column reads `no`), but a small output cap is spent before any answer: at `max_completion_tokens`
   64 `gpt-5` and `gpt-5-nano` finished `length` with empty content, and `gpt-5-mini` answered 400
   "model output limit was reached". Give such a model a larger output budget.
+- **[i]** The `grok-4.7` exception (owner ruling, 2026-10-20). Its `temperature=2.00` probe failed
+  at the vendor in both 2026-10-20 runs (`error sending request`, identical both times); 0.0 and
+  0.5 were accepted and 2.01 was a clean 400, so the vendor's range is 0 to 2. The owner ruled that
+  a reproducible vendor-side failure at the top endpoint, seen identically in two independent
+  runs, counts as a measured outcome for that one row. The registry range therefore stops at 1.99
+  and a caller cannot send 2.00 to `grok-4.7` (an explicit 2.0 is refused at build). The same
+  probe failed for `grok-4.3`, `grok-4.5` and `grok-4.6`, whose rows are unchanged. 1.99 itself was
+  not probed for `grok-4.7`. The window is the listing's `context_length`; no maximum output is
+  set because the docs state no text output limit.
 
 **Probed but not seeded** (so they run on the adapter-wide fallback): the eight retired Claude ids
 (`claude-3-*`, `claude-2.*`, `claude-instant-1.2`, all HTTP 404) and the other Claude ids in the
@@ -337,7 +361,10 @@ chat completions; they are served by the Responses API, which this adapter does 
 tracked in `.planning/todos/pending/2026-10-20-openai-responses-api-for-pro-tier.md`);
 `deepseek-chat` and `deepseek-coder` (answered 200 but are undocumented aliases);
 `kimi-k2.7-code` and `kimi-k2.7-code-highspeed` (every probe was rejected); `qwen-turbo` (rate-limited on every probe, nothing measured) and `qwen3-max` (HTTP 404
-on the International endpoint); the other Grok chat ids (not probed).
+on the International endpoint); the other Grok chat ids (`grok-4.20-multi-agent`,
+`grok-build-0.1`; not probed). A seeded row matches its model id exactly: the dated
+`grok-4.20-0309-*` ids and every other alias of a seeded model run on the fallback, and so does
+any other Qwen or OpenAI id in a live listing.
 
 ## Responses
 

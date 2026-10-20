@@ -1115,7 +1115,20 @@ mod tests {
     fn qwen_config_defaults_a_reasoning_model_to_300s() {
         // (model, expected default timeout): a seeded reasoning model gets 300 s (D-13); any
         // other model keeps this preset's compiled default (60 s).
-        for (model, expected) in [(QWEN_DEFAULT_MODEL, 300), ("qwen-plus", 60), (UNSEEDED, 60)] {
+        for (model, expected) in [
+            (QWEN_DEFAULT_MODEL, 300),
+            ("qwen-plus", 60),
+            // The Phase 50.1 rows: the ones whose default call returned reasoning text get
+            // 300 s, the others keep the hosted-preset 60 s.
+            ("qwen3.8-max", 300),
+            ("qwen3.7-flash", 300),
+            ("qwen3.6-plus", 300),
+            ("qwen3.5-flash", 300),
+            ("qwen-max", 60),
+            ("qwen-flash", 60),
+            ("qwen-plus-latest", 60),
+            (UNSEEDED, 60),
+        ] {
             let url = "https://example.invalid/v1";
             assert_eq!(
                 knob_config(url, model).timeout_seconds,

@@ -90,6 +90,7 @@ use paladin_llm::ollama::adapter::{
     OLLAMA_DEFAULT_BASE_URL, OLLAMA_DEFAULT_MODEL, OLLAMA_FALLBACK_MODELS,
 };
 use paladin_llm::ollama::{OllamaAdapter, OllamaConfig};
+use paladin_llm::openai::adapter::{OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_MODEL};
 use paladin_llm::openai::{OpenAIAdapter, OpenAIConfig};
 use paladin_llm::openai_compatible::{OpenAiCompatibleAdapter, OpenAiCompatibleConfig};
 use paladin_llm::qwen::adapter::{QWEN_DEFAULT_BASE_URL, QWEN_DEFAULT_MODEL, QWEN_FALLBACK_MODELS};
@@ -216,11 +217,10 @@ const ANTHROPIC_MODELS: &[&str] = &[ANTHROPIC_DEFAULT_MODEL];
 /// [`ANTHROPIC_MODELS`], and guarded by the same unit test.
 const DEEPSEEK_MODELS: &[&str] = &[DEEPSEEK_DEFAULT_MODEL];
 
-/// `OpenAIConfig` carries no model (the request does), so the harness names one candidate. It is
-/// the first seeded OpenAI model, and the one whose rejection of the old `max_tokens` key went
-/// unnoticed while the plain smoke drove `gpt-4o-mini` (G-50-5b). Pass others with
-/// `--models openai=<id>`; `gpt-4o-mini` stays reachable that way.
-const OPENAI_PROBE_DEFAULT_MODEL: &str = "gpt-5.4-nano";
+// The harness's OpenAI candidate is `OPENAI_DEFAULT_MODEL`, the adapter's own default (the
+// first seeded OpenAI model, and the one whose rejection of the old `max_tokens` key went
+// unnoticed while the plain smoke drove `gpt-4o-mini`, G-50-5b). Pass others with
+// `--models openai=<id>`; `gpt-4o-mini` stays reachable that way.
 
 /// Build an adapter whose config exposes `base_url` and `model` and whose `new` returns
 /// `Result<_, LlmError>`.
@@ -261,7 +261,7 @@ fn build_openai() -> Result<Built, String> {
         port: Box::new(adapter),
         api_key,
         base_url,
-        model: OPENAI_PROBE_DEFAULT_MODEL.to_string(),
+        model: OPENAI_DEFAULT_MODEL.to_string(),
     })
 }
 
@@ -283,8 +283,8 @@ const PROVIDERS: [ProviderSpec; 9] = [
     ProviderSpec {
         name: "OpenAI",
         cred_vars: &["OPENAI_API_KEY"],
-        default_base_url: Some("https://api.openai.com/v1"),
-        default_model: OPENAI_PROBE_DEFAULT_MODEL,
+        default_base_url: Some(OPENAI_DEFAULT_BASE_URL),
+        default_model: OPENAI_DEFAULT_MODEL,
         curated_models: &[],
         live_model_list: true,
         wire: Wire::OpenAiChat,
@@ -2312,9 +2312,9 @@ mod tests {
     fn the_openai_default_candidate_is_the_first_seeded_model() {
         // The plain smoke must drive the model whose rejection of the old output-cap key it
         // once missed (G-50-5b); `build_openai` and the table both read this one constant.
-        assert_eq!(OPENAI_PROBE_DEFAULT_MODEL, "gpt-5.4-nano");
+        assert_eq!(OPENAI_DEFAULT_MODEL, "gpt-5.4-nano");
         let spec = PROVIDERS.iter().find(|p| p.name == "OpenAI").unwrap();
-        assert_eq!(spec.default_model, OPENAI_PROBE_DEFAULT_MODEL);
+        assert_eq!(spec.default_model, OPENAI_DEFAULT_MODEL);
     }
 
     #[test]

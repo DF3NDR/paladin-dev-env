@@ -47,6 +47,21 @@ const OPENAI_PROVIDER: &str = "openai";
 /// for `gpt-5.4-nano` and `gpt-4o-mini` only (2026-10-15).
 pub(crate) const OPENAI_DEFAULT_MAX_TOKENS: u32 = 4096;
 
+/// The default model an [`OpenAIConfig`] names when the caller states none:
+/// [`OpenAIConfig::from_env`], and the layered path when neither the model argument nor the
+/// block names one.
+///
+/// `gpt-5.4-nano` is the provider default the Phase 50 plan 50-17 probe chose and the operator
+/// kept (Phase 50 D-08, Phase 50.1 D-17). It is a label for the adapter's default model only:
+/// each request's own `LlmRequest.model` still decides what is sent, and this value changes no
+/// adapter-wide limit (the context window stays [`OpenAIConfig::context_window`] or 128,000).
+pub const OPENAI_DEFAULT_MODEL: &str = "gpt-5.4-nano";
+
+/// The endpoint [`OpenAIConfig::new`], [`OpenAIConfig::from_env`] (when `OPENAI_BASE_URL` is
+/// unset) and the layered path use: the OpenAI API. Replace it with
+/// [`OpenAIConfig::with_base_url`].
+pub const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+
 /// The most stop sequences the OpenAI chat-completions API accepts (`stop` is an array with
 /// `maxItems: 4` in the openai-openapi specification). A longer list is omitted and recorded,
 /// never truncated (ADR-0061 (a)).
@@ -103,8 +118,15 @@ fn snapshot_rate_limit_hints(
 pub struct OpenAIConfig {
     /// OpenAI API key.
     pub api_key: String,
-    /// Base URL for the API (default: `https://api.openai.com/v1`).
+    /// Base URL for the API ([`OPENAI_DEFAULT_BASE_URL`] unless replaced with
+    /// [`with_base_url`](Self::with_base_url) or `OPENAI_BASE_URL`).
     pub base_url: String,
+    /// The adapter's default model: what [`OpenAIConfig::new`] was given, what
+    /// [`OpenAIConfig::from_env`] sets ([`OPENAI_DEFAULT_MODEL`]), or what
+    /// `LlmProviderFactory::create_from_config` resolved. Each request's own model decides
+    /// what is sent on the wire, and this field changes no adapter-wide limit: the context
+    /// window stays [`context_window`](Self::context_window) or the compiled 128,000.
+    pub model: String,
     /// Optional organisation ID.
     pub organization: Option<String>,
     /// Request timeout in seconds (default: 300).
@@ -143,6 +165,7 @@ impl std::fmt::Debug for OpenAIConfig {
         f.debug_struct("OpenAIConfig")
             .field("api_key", &RedactedKey(&self.api_key))
             .field("base_url", &self.base_url)
+            .field("model", &self.model)
             .field("organization", &self.organization)
             .field("timeout_seconds", &self.timeout_seconds)
             .field("max_retries", &self.max_retries)
@@ -153,7 +176,7 @@ impl std::fmt::Debug for OpenAIConfig {
     }
 }
 
-config_knob_builders!(OpenAIConfig);
+config_knob_builders!(OpenAIConfig, organization);
 
 impl OpenAIConfig {
     /// Load configuration from environment variables.
@@ -166,12 +189,15 @@ impl OpenAIConfig {
     /// - `OPENAI_ORGANIZATION`
     /// - `OPENAI_TIMEOUT_SECONDS` (default: 300)
     /// - `OPENAI_MAX_RETRIES` (default: 3)
+    ///
+    /// [`model`](Self::model) is the compiled default, [`OPENAI_DEFAULT_MODEL`]; no variable
+    /// names it.
     pub fn from_env() -> Result<Self, String> {
         let api_key = env::var("OPENAI_API_KEY")
             .map_err(|_| "OPENAI_API_KEY environment variable not set")?;
 
         let base_url =
-            env::var("OPENAI_BASE_URL").unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+            env::var("OPENAI_BASE_URL").unwrap_or_else(|_| OPENAI_DEFAULT_BASE_URL.to_string());
 
         let organization = env::var("OPENAI_ORGANIZATION").ok();
 
@@ -188,6 +214,7 @@ impl OpenAIConfig {
         Ok(Self {
             api_key,
             base_url,
+            model: OPENAI_DEFAULT_MODEL.to_string(),
             organization,
             timeout_seconds,
             max_retries,
@@ -201,7 +228,8 @@ impl OpenAIConfig {
     pub fn new(api_key: String) -> Self {
         Self {
             api_key,
-            base_url: "https://api.openai.com/v1".to_string(),
+            base_url: OPENAI_DEFAULT_BASE_URL.to_string(),
+            model: OPENAI_DEFAULT_MODEL.to_string(),
             organization: None,
             timeout_seconds: 300,
             max_retries: DEFAULT_MAX_RETRIES,
@@ -221,6 +249,9 @@ impl OpenAIConfig {
         }
         if !self.base_url.starts_with("http") {
             return Err("Base URL must start with http or https".to_string());
+        }
+        if self.model.is_empty() {
+            return Err("Model name cannot be empty".to_string());
         }
         Ok(())
     }
@@ -1244,9 +1275,56 @@ mod tests {
             max_retries: 3,
             max_tokens: Some(4096),
             context_window: None,
+            model: OPENAI_DEFAULT_MODEL.to_string(),
             model_overrides: BTreeMap::new(),
         };
         assert!(invalid_config.validate().is_err());
+    }
+
+    #[test]
+    fn openai_config_debug_prints_the_model_and_redacts_the_key() {
+        let config = OpenAIConfig::new("sk-secret-key-123".to_string());
+        let printed = format!("{config:?}");
+        assert!(printed.contains(OPENAI_DEFAULT_MODEL), "{printed}");
+        assert!(printed.contains("<redacted>"), "{printed}");
+        assert!(!printed.contains("sk-secret-key-123"), "{printed}");
+    }
+
+    #[test]
+    fn openai_config_validate_rejects_an_empty_model() {
+        let mut config = OpenAIConfig::new("test-key".to_string());
+        config.model = String::new();
+        let error = config.validate().unwrap_err();
+        assert!(error.contains("Model"), "{error}");
+    }
+
+    #[test]
+    fn openai_config_model_changes_no_adapter_wide_limit() {
+        // D-06 as locked (plan 50.1-02 checkpoint, `proceed-as-locked`): `model` is a stored
+        // default-model label. It must not move the adapter-wide window.
+        let mut small = OpenAIConfig::new("test-key".to_string());
+        small.model = "gpt-4o-mini".to_string();
+        let mut nano = OpenAIConfig::new("test-key".to_string());
+        nano.model = "gpt-5.4-nano".to_string();
+        let small = OpenAIAdapter::new(small).unwrap().get_capabilities();
+        let nano = OpenAIAdapter::new(nano).unwrap().get_capabilities();
+        assert_eq!(small.max_context_tokens, Some(128_000));
+        assert_eq!(small.max_context_tokens, nano.max_context_tokens);
+    }
+
+    #[test]
+    fn openai_config_with_organization_sets_the_field() {
+        let config = OpenAIConfig::new("test-key".to_string()).with_organization("org-x");
+        assert_eq!(config.organization, Some("org-x".to_string()));
+        assert_eq!(OpenAIConfig::new("k".to_string()).organization, None);
+    }
+
+    #[test]
+    fn openai_config_constants_name_the_compiled_defaults() {
+        let config = OpenAIConfig::new("test-key".to_string());
+        assert_eq!(OPENAI_DEFAULT_MODEL, "gpt-5.4-nano");
+        assert_eq!(config.model, OPENAI_DEFAULT_MODEL);
+        assert_eq!(config.base_url, OPENAI_DEFAULT_BASE_URL);
     }
 
     #[test]
@@ -1320,6 +1398,7 @@ mod tests {
             max_retries: 3,
             max_tokens: Some(4096),
             context_window: None,
+            model: OPENAI_DEFAULT_MODEL.to_string(),
             model_overrides: BTreeMap::new(),
         };
         assert!(config.validate().is_err());
@@ -1369,6 +1448,7 @@ mod tests {
                 max_retries: 0,
                 max_tokens: Some(4096),
                 context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
                 model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
@@ -1465,6 +1545,7 @@ mod tests {
                 max_retries: 3,
                 max_tokens: Some(4096),
                 context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
                 model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter");
@@ -1571,6 +1652,7 @@ mod tests {
                 max_retries: 3,
                 max_tokens: Some(4096),
                 context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
                 model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
@@ -1863,6 +1945,7 @@ mod tests {
                 max_retries: 0,
                 max_tokens: Some(4096),
                 context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
                 model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
@@ -2004,6 +2087,7 @@ mod tests {
                 max_retries: 0,
                 max_tokens: Some(4096),
                 context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
                 model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
@@ -2107,6 +2191,7 @@ mod tests {
                 max_retries: 0,
                 max_tokens: Some(4096),
                 context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
                 model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
@@ -2338,6 +2423,7 @@ mod tests {
                 max_retries: 0,
                 max_tokens: Some(4096),
                 context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
                 model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
@@ -2783,6 +2869,7 @@ mod tests {
                         max_retries: 0,
                         max_tokens: Some(4096),
                         context_window: None,
+                        model: OPENAI_DEFAULT_MODEL.to_string(),
                         model_overrides: BTreeMap::new(),
                     })
                     .expect("test config must build a valid adapter"),
@@ -2846,6 +2933,7 @@ mod tests {
                 max_retries: 0,
                 max_tokens: Some(4096),
                 context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
                 model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")
@@ -3120,6 +3208,7 @@ mod tests {
                 max_retries: 0,
                 max_tokens: Some(4096),
                 context_window: None,
+                model: OPENAI_DEFAULT_MODEL.to_string(),
                 model_overrides: BTreeMap::new(),
             })
             .expect("test config must build a valid adapter")

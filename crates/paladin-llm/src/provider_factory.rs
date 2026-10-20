@@ -109,7 +109,8 @@ fn construct_openai(
     use crate::openai::OpenAIAdapter;
     let config = openai_from_layers(block, model, env)
         .map_err(ProviderFactoryError::ConfigurationMissing)?;
-    // `OpenAIConfig` has no model; the one named here only labels errors.
+    // The model that labels errors is the one the caller or block named, not the compiled
+    // default `OpenAIConfig.model` falls back to, so a message names only what was stated.
     let named = model
         .map(str::to_string)
         .or_else(|| block.and_then(|b| b.default_model.clone()));

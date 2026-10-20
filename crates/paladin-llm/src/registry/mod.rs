@@ -154,7 +154,9 @@ pub(crate) fn default_timeout_seconds(provider: &str, model: &str, compiled_defa
 /// `timeout_seconds` a constructor defaults -- so their builders (and rustdoc) come from one
 /// place and cannot drift between the nine types. The one-argument form is for a config whose
 /// `max_tokens` is an `Option<u32>`; `plain_max_tokens` is for Anthropic, whose `max_tokens` is a
-/// required `u32`.
+/// required `u32`. The `organization` form is for OpenAI: the one-argument form plus
+/// `with_organization`, the one knob only that config carries (50.1-05; one macro, no second
+/// builder mechanism).
 #[allow(unused_macros)]
 macro_rules! config_knob_builders {
     ($config:ident) => {
@@ -183,6 +185,33 @@ macro_rules! config_knob_builders {
             #[must_use]
             pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
                 self.max_tokens = max_tokens;
+                self
+            }
+
+            $crate::registry::config_knob_builders!(@common $config);
+        }
+    };
+    ($config:ident, organization) => {
+        impl $config {
+            /// Set the default output budget (`max_tokens`) sent when a request sets none.
+            ///
+            /// The value passes through the same maximum-output check as a request's own
+            /// `max_tokens` (ADR-0061 (i)): above the model's profiled maximum, the request is
+            /// refused before any HTTP call.
+            #[must_use]
+            pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+                self.max_tokens = Some(max_tokens);
+                self
+            }
+
+            /// Set the organisation, sent as the `OpenAI-Organization` header value.
+            ///
+            /// [`from_env`](Self::from_env) reads the same value from `OPENAI_ORGANIZATION`.
+            /// The only knob that is specific to OpenAI: no other provider carries an
+            /// organisation.
+            #[must_use]
+            pub fn with_organization(mut self, organization: impl Into<String>) -> Self {
+                self.organization = Some(organization.into());
                 self
             }
 

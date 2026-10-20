@@ -124,17 +124,14 @@ type Env<'a> = &'a dyn Fn(&str) -> Option<String>;
 
 // ── OpenAI ───────────────────────────────────────────────────────────────────
 
-/// The base URL OpenAI is reached at when nothing else says otherwise.
-#[cfg(feature = "openai")]
-const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-
 #[cfg(feature = "openai")]
 const OPENAI_ENV: ProviderEnv = ProviderEnv {
     provider: "openai",
     key: Some("OPENAI_API_KEY"),
     base_url: Some("OPENAI_BASE_URL"),
-    // `OpenAIConfig` carries no model: the model arrives with each request. The layering still
-    // takes one so it can shape-check it, name it in errors and pick the timeout default (A3).
+    // `OpenAIConfig.model` is the adapter's default model, but no variable names it: the
+    // layered value is the agent's or block's model, else `OPENAI_DEFAULT_MODEL` (D-06). The
+    // layering also shape-checks it, names it in errors and picks the timeout default (A3).
     model: None,
     timeout: Some("OPENAI_TIMEOUT_SECONDS"),
     retries: Some("OPENAI_MAX_RETRIES"),
@@ -143,8 +140,8 @@ const OPENAI_ENV: ProviderEnv = ProviderEnv {
 
 #[cfg(feature = "openai")]
 const OPENAI_DEFAULTS: CompiledDefaults = CompiledDefaults {
-    base_url: Some(OPENAI_BASE_URL),
-    model: None,
+    base_url: Some(crate::openai::adapter::OPENAI_DEFAULT_BASE_URL),
+    model: Some(crate::openai::adapter::OPENAI_DEFAULT_MODEL),
     model_required: false,
     timeout_seconds: 300,
     max_retries: DEFAULT_MAX_RETRIES,
@@ -156,6 +153,7 @@ fn openai_config(layered: Layered, organization: Option<String>) -> OpenAIConfig
     OpenAIConfig {
         api_key: layered.api_key,
         base_url: layered.base_url,
+        model: layered.model,
         organization,
         timeout_seconds: layered.timeout_seconds,
         max_retries: layered.max_retries,
@@ -167,10 +165,12 @@ fn openai_config(layered: Layered, organization: Option<String>) -> OpenAIConfig
 
 /// Build an [`OpenAIConfig`] from the layers (D-13).
 ///
-/// `model` only selects the profile the timeout default is decided from (A3-50-09): OpenAI's
-/// config has no model field. The 300 s default is also OpenAI's compiled timeout, so a
-/// reasoning model changes nothing here. `OPENAI_ORGANIZATION` fills `organization`; the block
-/// has no such key.
+/// `model` (the agent's model) becomes [`OpenAIConfig::model`], the adapter's default model;
+/// without one the block's `default_model` is used, else
+/// [`OPENAI_DEFAULT_MODEL`](crate::openai::adapter::OPENAI_DEFAULT_MODEL). It also selects the
+/// profile the timeout default is decided from (A3-50-09); the 300 s default is OpenAI's
+/// compiled timeout too, so a reasoning model changes nothing there, and the field changes no
+/// adapter-wide limit. `OPENAI_ORGANIZATION` fills `organization`; the block has no such key.
 ///
 /// # Errors
 ///
@@ -958,7 +958,7 @@ mod tests {
         }
     }
 
-    // ── OpenAI: retries, organization, no model field ───────────────────────
+    // ── OpenAI: retries, organization, the default-model field ──────────────
 
     #[cfg(feature = "openai")]
     mod openai {
@@ -1009,13 +1009,22 @@ mod tests {
         }
 
         #[test]
-        fn openai_model_argument_only_selects_the_timeout_profile_and_is_shape_checked() {
+        fn openai_model_argument_becomes_the_default_model_and_is_shape_checked() {
             let env = env_of(&[("OPENAI_API_KEY", "sk-env")]);
-            // A well-formed model changes nothing about the config (it has no model field) ...
-            let a = openai_from_layers(None, Some("gpt-5.4-nano"), &env).unwrap();
+            // A well-formed model lands on the config's model field, and the compiled default
+            // is used when none is named ...
+            let a = openai_from_layers(None, Some("gpt-4o-mini"), &env).unwrap();
             let b = openai_from_layers(None, None, &env).unwrap();
+            assert_eq!(a.model, "gpt-4o-mini");
+            assert_eq!(b.model, crate::openai::adapter::OPENAI_DEFAULT_MODEL);
             assert_eq!(a.timeout_seconds, b.timeout_seconds);
             assert_eq!(a.base_url, b.base_url);
+            // ... the block's default model is the fallback below the agent's ...
+            let block = LlmProviderConfig::new("sk-block").with_default_model("gpt-4o");
+            let c = openai_from_layers(Some(&block), None, &env).unwrap();
+            assert_eq!(c.model, "gpt-4o");
+            let d = openai_from_layers(Some(&block), Some("gpt-4o-mini"), &env).unwrap();
+            assert_eq!(d.model, "gpt-4o-mini");
             // ... and a malformed one is still refused, naming it.
             let error = openai_from_layers(None, Some("gpt/../x"), &env).unwrap_err();
             assert!(

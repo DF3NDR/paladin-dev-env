@@ -1897,6 +1897,29 @@ mod tests {
         assert_eq!(config.timeout_seconds, 300);
     }
 
+    /// Every Gemini row seeded by Phase 50.1 has `reasoning: true` (listing `thinking=true`), so
+    /// the direct constructor defaults its timeout to the reasoning-model 300 s (D-13); a
+    /// 2.5-generation id the probe could not measure stays unseeded and keeps 60 s.
+    #[test]
+    fn gemini_config_new_defaults_the_phase_50_1_reasoning_rows_to_300_seconds() {
+        for model in [
+            "gemini-4-argon",
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.1-pro-preview",
+            "gemini-pro-latest",
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-3.1-flash-lite",
+            "gemini-3-flash-preview",
+        ] {
+            let config = GeminiConfig::new("k".to_string(), model.to_string());
+            assert_eq!(config.timeout_seconds, 300, "{model}");
+        }
+        let unseeded = GeminiConfig::new("k".to_string(), "gemini-2.5-flash".to_string());
+        assert_eq!(unseeded.timeout_seconds, 60);
+    }
+
     #[test]
     fn gemini_config_from_parts_honors_overrides() {
         let config = GeminiConfig::from_parts(

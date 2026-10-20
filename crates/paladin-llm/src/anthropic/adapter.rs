@@ -3727,6 +3727,23 @@ mod knob_tests {
         assert_eq!(config.timeout_seconds, 60);
     }
 
+    /// The two Phase 50.1 Anthropic rows whose default call returned reasoning text
+    /// (`claude-fable-5`, `claude-opus-5`; `50.1-SEED-PROBE.md`, probe 1) move `new` to the
+    /// reasoning-model 300 s (D-13); every other seeded Anthropic row stays at 60 s.
+    #[test]
+    fn anthropic_new_timeout_is_300_only_for_the_seeded_reasoning_rows() {
+        for entry in seeded::ANTHROPIC {
+            let reasoning = (entry.build)().reasoning;
+            let config = AnthropicConfig::new("k".to_string(), entry.model.to_string());
+            let expected = if reasoning { 300 } else { 60 };
+            assert_eq!(config.timeout_seconds, expected, "{}", entry.model);
+        }
+        for model in ["claude-fable-5", "claude-opus-5"] {
+            let config = AnthropicConfig::new("k".to_string(), model.to_string());
+            assert_eq!(config.timeout_seconds, 300, "{model}");
+        }
+    }
+
     #[test]
     fn anthropic_new_timeout_follows_the_model_and_builders_override_it() {
         // Unchanged D-13 default: 60 s for a non-reasoning model.

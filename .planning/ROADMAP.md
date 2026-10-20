@@ -1639,7 +1639,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 50.1-05-PLAN.md — `OpenAIConfig.model` added without a break (stored, validated, `Debug`-printed; `declared_capabilities` not rewired per research C1) plus `with_organization`; then `OpenAIConfig::new(api_key, model)` with every call site and its register entry
+- [x] 50.1-05-PLAN.md — `OpenAIConfig.model` added without a break (stored, validated, `Debug`-printed; `declared_capabilities` not rewired per research C1) plus `with_organization`; then `OpenAIConfig::new(api_key, model)` with every call site and its register entry
 
 **Wave 5** *(blocked on Wave 4 completion)*
 

@@ -1703,9 +1703,11 @@ jobs:
   # (`tests/consumer_surface_muster.rs`) rather than surfacing as a generic compile
   # error inside `Code Quality`. It is attribution, not a new merge gate: the muster
   # also compiles inside the required `Code Quality` clippy step
-  # (`--all-targets --all-features`). The test target declares `required-features`, and
-  # Cargo silently skips a target whose features are inactive (no error, zero tests run),
-  # hence the zero-tests guard below.
+  # (`--all-targets --all-features`). The test target declares `required-features`, but
+  # `make check-consumer-surface` selects it with an explicit `--test`, which makes Cargo
+  # fail loudly (not skip) if those features are off. The zero-tests guard below is a
+  # backstop for the other way to run nothing: the target compiling but reporting no
+  # passed tests (an emptied target, or a changed `test result:` line).
   consumer-surface:
     name: Consumer-Surface Muster
     runs-on: ubuntu-latest
@@ -1724,9 +1726,9 @@ jobs:
         run: |
           set -o pipefail
           make check-consumer-surface 2>&1 | tee consumer-surface-output.log
-          executed=$(grep -oE 'test result: ok\. [0-9]+ passed' consumer-surface-output.log | tail -1 | grep -oE '[0-9]+')
+          executed=$(grep -oE 'test result: ok\. [0-9]+ passed' consumer-surface-output.log | tail -1 | grep -oE '[0-9]+' || true)
           if [ -z "$executed" ] || [ "$executed" -eq 0 ]; then
-            echo "::error::consumer-surface reported zero executed tests. This usually means the muster's required provider features were dropped, causing Cargo to silently skip the consumer_surface_muster test target."
+            echo "::error::consumer-surface reported zero executed tests. The consumer_surface_muster target compiled but no 'test result: ok. N passed' line was found, so the target is empty or the test harness output changed."
             exit 1
           fi
           echo "consumer-surface executed $executed test(s)"

@@ -348,8 +348,10 @@ window of `not set` is not a statement that the model has none.
   a reproducible vendor-side failure at the top endpoint, seen identically in two independent
   runs, counts as a measured outcome for that one row. The registry range therefore stops at 1.99
   and a caller cannot send 2.00 to `grok-4.7` (an explicit 2.0 is refused at build). The same
-  probe failed for `grok-4.3`, `grok-4.5` and `grok-4.6`, whose rows are unchanged. 1.99 itself was
-  not probed for `grok-4.7`. The window is the listing's `context_length`; no maximum output is
+  probe did not fail identically for the sibling rows on 2026-10-20: `grok-4.3` was unreachable in
+  both runs, `grok-4.6` was accepted in run 1 and unreachable in run 2, and `grok-4.5` answered
+  500 ("Internal error during token parsing") in run 1 and was unreachable in run 2. Their rows
+  are unchanged and still rest on the 2026-10-15 basis. 1.99 itself was not probed for `grok-4.7`. The window is the listing's `context_length`; no maximum output is
   set because the docs state no text output limit.
 
 **Probed but not seeded** (so they run on the adapter-wide fallback): the eight retired Claude ids

@@ -1782,6 +1782,9 @@ mod grok_table {
 
     fn grok_4_6() -> ModelProfile {
         ModelProfile::new()
+            // The 2026-10-15 basis (`temperature=2.00` UNREACHABLE) is what this range rests on.
+            // The 2026-10-20 re-probe differs: run 1 ACCEPTED 2.00 (200), run 2 was UNREACHABLE
+            // (`50.1-SEED-PROBE.md`, "Differences found"). The range is left as seeded.
             .with_temperature(ParamSupport::Range(0.0, 1.99))
             .with_top_p(ParamSupport::Range(0.0, 1.0))
             .with_frequency_penalty(ParamSupport::NotSent)
@@ -1797,6 +1800,10 @@ mod grok_table {
 
     fn grok_4_5() -> ModelProfile {
         ModelProfile::new()
+            // The 2026-10-15 basis (`temperature=2.00` UNREACHABLE) is what this range rests on.
+            // The 2026-10-20 re-probe differs: run 1 answered REJECTED (500) "Internal error
+            // during token parsing", run 2 was UNREACHABLE (`50.1-SEED-PROBE.md`, "Differences
+            // found"). The range is left as seeded.
             .with_temperature(ParamSupport::Range(0.0, 1.99))
             .with_top_p(ParamSupport::Range(0.0, 1.0))
             .with_frequency_penalty(ParamSupport::NotSent)
@@ -1873,8 +1880,11 @@ mod grok_table {
     //
     // RECORDED EXCEPTION (owner ruling, 2026-10-20, `50.1-PROBE-CANDIDATES.md`, "Owner
     // decisions for plan 50.1-09"): probe 3, `temperature=2.00`, was UNREACHABLE ("error sending
-    // request") in BOTH runs, so the temperature upper bound was never measured here. The same
-    // row fails for `grok-4.3`, `grok-4.5` and `grok-4.6`. The owner ruled that a reproducible
+    // request") in BOTH runs, so the temperature upper bound was never measured here. The
+    // `temperature=2.00` probe of the sibling rows did NOT fail identically on 2026-10-20:
+    // `grok-4.3` was UNREACHABLE in both runs, `grok-4.6` was ACCEPTED (200) in run 1 and
+    // UNREACHABLE in run 2, and `grok-4.5` answered REJECTED (500) "Internal error during token
+    // parsing" in run 1 and was UNREACHABLE in run 2. The owner ruled that a reproducible
     // vendor-side failure at the top endpoint, observed identically in two independent runs,
     // counts as a measured outcome for that one row, and that this row is seeded anyway. It
     // applies to `grok-4.7` only and changes no other row.

@@ -1204,6 +1204,12 @@ mod seeded_tests {
             "gemini-2.5-pro",
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
+            // OpenAI: the pro tier answered the default call 404 on `/v1/chat/completions`
+            // (50.1-SEED-PROBE.md, run 1); it needs the Responses API, a deferred todo.
+            "gpt-5.5-pro",
+            "gpt-5.4-pro",
+            "gpt-5.2-pro",
+            "gpt-5-pro",
             // Kimi: every probe was rejected for the thinking mode.
             "kimi-k2.7-code",
             "kimi-k2.7-code-highspeed",
@@ -1276,6 +1282,116 @@ mod seeded_tests {
         // The adapter's request type carries no penalty field, so none is admitted.
         assert_eq!(p.frequency_penalty, ParamSupport::NotSent);
         assert_eq!(p.presence_penalty, ParamSupport::NotSent);
+    }
+
+    /// The OpenAI rows added by Phase 50.1, each pinned to its own `### Probes:` table in
+    /// `50.1-SEED-PROBE.md` (run 1, or run 2 for `gpt-6-sol` and `gpt-5`) and, for the window and
+    /// the maximum output, to the operator's docs evidence (b) (accessed 2026-10-20).
+    #[cfg(feature = "openai")]
+    #[test]
+    fn openai_50_1_seeds_match_the_transcript() {
+        // (model, temperature accepted only at 1.00 with no top_p, window, max output). The
+        // window and the maximum output are docs values, never listing values: the OpenAI
+        // listing exposes neither.
+        let rows = [
+            // https://developers.openai.com/api/docs/models/<id>: "1,050,000 context window",
+            // "128,000 max output tokens".
+            ("gpt-6.1-sol", true, 1_050_000, 128_000),
+            ("gpt-6-sol", true, 1_050_000, 128_000),
+            ("gpt-6-luna", true, 1_050_000, 128_000),
+            ("gpt-6-astra", true, 1_050_000, 128_000),
+            ("gpt-5.6-sol", true, 1_050_000, 128_000),
+            ("gpt-5.6-luna", true, 1_050_000, 128_000),
+            ("gpt-5.6-terra", true, 1_050_000, 128_000),
+            ("gpt-5.5", true, 1_050_000, 128_000),
+            ("gpt-5.4", false, 1_050_000, 128_000),
+            // "400,000 context window", "128,000 max output tokens".
+            ("gpt-5.4-mini", false, 400_000, 128_000),
+            ("gpt-5.2", false, 400_000, 128_000),
+            ("gpt-5.1", false, 400_000, 128_000),
+            ("gpt-5", true, 400_000, 128_000),
+            ("gpt-5-mini", true, 400_000, 128_000),
+            ("gpt-5-nano", true, 400_000, 128_000),
+            ("chat-latest", true, 400_000, 128_000),
+            // "200,000 context window", "100,000 max output tokens".
+            ("o3", true, 200_000, 100_000),
+        ];
+        assert_eq!(rows.len(), 17, "the 17 OpenAI ids measured end to end");
+        for (model, fixed, window, max_output) in rows {
+            let p = entry(seeded::OPENAI, model);
+            if fixed {
+                // Probe 3: 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) "Only the default
+                // (1) value is supported". Probe 6: top_p "is not supported with this model".
+                assert_eq!(p.temperature, ParamSupport::Fixed(1.0), "{model}");
+                assert_eq!(p.top_p, ParamSupport::NotSent, "{model}");
+            } else {
+                // Probes 2-5: 0.00, 1.00, 0.50 and 1.01 all ACCEPTED, so the upper bound is the
+                // highest probed endpoint, 1.0 (as for `gpt-5.4-nano`). Probe 6: top_p 0.5
+                // ACCEPTED, so the contract span (contract-derived).
+                assert_eq!(p.temperature, ParamSupport::Range(0.0, 1.0), "{model}");
+                assert_eq!(p.top_p, ParamSupport::Range(0.0, 1.0), "{model}");
+            }
+            // Probes 7 and 8: rejected on the fixed-temperature ids, accepted on the others, but
+            // the adapter's request type has no penalty field either way.
+            assert_eq!(p.frequency_penalty, ParamSupport::NotSent, "{model}");
+            assert_eq!(p.presence_penalty, ParamSupport::NotSent, "{model}");
+            // Probes 9 and 10: `stop` "is not supported with this model" for one and for five
+            // sequences. The documented maximum of 4 (operator evidence (c)) is therefore not
+            // used: a model that rejects one sequence takes none.
+            assert_eq!(p.stop_sequences, StopSupport::NotSent, "{model}");
+            // Operator evidence (b), docs accessed 2026-10-20.
+            assert_eq!(p.context_window, Some(window), "{model}");
+            assert_eq!(p.max_output_tokens, Some(max_output), "{model}");
+            // Probe 1 carried no reasoning text on any of the 17; Chat Completions never returns
+            // it, and the `reasoning_tokens` usage key is not evidence.
+            assert!(!p.reasoning, "{model}");
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            assert!(p.json_object && p.json_schema, "{model}");
+            assert_eq!(p.verified_on.as_deref(), Some("2026-10-20"), "{model}");
+        }
+    }
+
+    /// Every OpenAI id the 2026-10-20 probe measured end to end resolves seeded; the four
+    /// pro-tier ids, whose default call answered 404 on `/v1/chat/completions` (they need the
+    /// Responses API), do not.
+    #[cfg(feature = "openai")]
+    #[test]
+    fn phase_50_1_openai_ids_resolve_seeded_and_the_pro_ids_do_not() {
+        let registry = ModelRegistry::new("openai", seeded::OPENAI, ModelProfile::new());
+        for model in [
+            "gpt-6.1-sol",
+            "gpt-6-sol",
+            "gpt-6-luna",
+            "gpt-6-astra",
+            "gpt-5.6-sol",
+            "gpt-5.6-luna",
+            "gpt-5.6-terra",
+            "gpt-5.5",
+            "gpt-5.4",
+            "gpt-5.4-mini",
+            "gpt-5.2",
+            "gpt-5.1",
+            "gpt-5",
+            "gpt-5-mini",
+            "gpt-5-nano",
+            "chat-latest",
+            "o3",
+        ] {
+            assert_eq!(
+                registry.resolve(model).1,
+                ProfileOrigin::Seeded {
+                    verified_on: "2026-10-20"
+                },
+                "{model}"
+            );
+        }
+        for model in ["gpt-5.5-pro", "gpt-5.4-pro", "gpt-5.2-pro", "gpt-5-pro"] {
+            assert_eq!(
+                registry.resolve(model).1,
+                ProfileOrigin::AdapterDefault,
+                "{model}: the default call was rejected on chat completions, nothing was measured"
+            );
+        }
     }
 
     #[cfg(feature = "anthropic")]

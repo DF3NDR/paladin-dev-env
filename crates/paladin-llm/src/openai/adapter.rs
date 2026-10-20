@@ -44,7 +44,8 @@ const OPENAI_PROVIDER: &str = "openai";
 ///
 /// Paladin calls the knob `max_tokens`; the OpenAI wire key is `max_completion_tokens` for every
 /// model (owner decision 2026-10-17, G-50-5b, UAT test 5). Acceptance of that key was measured
-/// for `gpt-5.4-nano` and `gpt-4o-mini` only (2026-10-15).
+/// for `gpt-5.4-nano` and `gpt-4o-mini` (2026-10-15) and for the 17 further ids seeded on
+/// 2026-10-20 (`registry/seeded.rs`); no other OpenAI id has been measured.
 pub(crate) const OPENAI_DEFAULT_MAX_TOKENS: u32 = 4096;
 
 /// The default model an [`OpenAIConfig`] names when the caller states none:
@@ -142,8 +143,9 @@ pub struct OpenAIConfig {
     /// Paladin names the knob `max_tokens`; on the wire the adapter sends it as
     /// `max_completion_tokens` for every model (owner decision 2026-10-17, G-50-5b), the key
     /// `gpt-5.4-nano` requires. Acceptance of that key was measured for `gpt-5.4-nano` and
-    /// `gpt-4o-mini` only (2026-10-15); a server behind `base_url` that accepts only the old
-    /// `max_tokens` key belongs on the `openai-compatible` preset instead.
+    /// `gpt-4o-mini` (2026-10-15) and for the 17 further ids seeded on 2026-10-20; a server
+    /// behind `base_url` that accepts only the old `max_tokens` key belongs on the
+    /// `openai-compatible` preset instead.
     pub max_tokens: Option<u32>,
     /// Adapter-wide context window in tokens, the operator's statement for every model. `None`
     /// (the default) keeps the compiled windows. When set it replaces the adapter's declared
@@ -294,7 +296,8 @@ struct OpenAIRequest {
     /// `max_completion_tokens` for every OpenAI model, because `gpt-5.4-nano` rejects
     /// `max_tokens` with HTTP 400 `unsupported_parameter` (owner decision 2026-10-17, G-50-5b,
     /// option (a)). Acceptance of the new key was measured for `gpt-5.4-nano` and `gpt-4o-mini`
-    /// only (2026-10-15); there is deliberately no per-model switch.
+    /// (2026-10-15) and for the 17 further ids seeded on 2026-10-20; there is deliberately no
+    /// per-model switch.
     #[serde(
         rename = "max_completion_tokens",
         skip_serializing_if = "Option::is_none"
@@ -580,8 +583,9 @@ impl OpenAIAdapter {
         Ok(Self {
             config,
             client,
-            // The dated OpenAI table (`seeded::OPENAI`, probed 2026-10-15): the two measured
-            // models resolve to their own entry, every other model to the adapter-wide fallback.
+            // The dated OpenAI table (`seeded::OPENAI`, probed 2026-10-15 and 2026-10-20): each
+            // measured model resolves to its own entry, every other model to the adapter-wide
+            // fallback.
             model_registry,
             omissions: OmissionLog::new(),
             format_log: FormatLog::new(),
@@ -601,8 +605,9 @@ impl OpenAIAdapter {
     /// adapter has always sent) and the effective value is checked against the
     /// profile's maximum output before anything is sent. It reaches the wire as
     /// `max_completion_tokens` for every model (owner decision 2026-10-17, G-50-5b; measured
-    /// accepted on `gpt-5.4-nano` and `gpt-4o-mini` only, 2026-10-15). The `response_format`
-    /// follows the profile through [`sampling::apply_response_format`].
+    /// accepted on `gpt-5.4-nano` and `gpt-4o-mini` on 2026-10-15 and on the 17 further seeded
+    /// ids on 2026-10-20). The `response_format` follows the profile through
+    /// [`sampling::apply_response_format`].
     ///
     /// Shared by [`LlmPort::generate`] and [`LlmPort::generate_stream`], so the two paths cannot
     /// drift.

@@ -199,8 +199,11 @@ over HTTP is a separate decision about a published contract.
   Every model not in the table below does too, visibly unprofiled.
 - The OpenAI adapter sends its output limit as `max_completion_tokens` for every model, on the chat
   and the vision path; Paladin's own names (`OpenAIConfig.max_tokens`, `PromptParameters.max_tokens`)
-  are unchanged. Only `gpt-5.4-nano` and `gpt-4o-mini` were measured accepting that key
-  (2026-10-15). Other OpenAI model ids, and any non-OpenAI server behind `OPENAI_BASE_URL`, are
+  are unchanged. `gpt-5.4-nano` and `gpt-4o-mini` were measured accepting that key (2026-10-15),
+  and so were the 17 OpenAI ids seeded on 2026-10-20: every one answered `max_tokens` with "Use
+  'max_completion_tokens' instead" and none refused `max_completion_tokens` (`gpt-5-mini`
+  answered 400 "model output limit was reached" at a 64-token cap, which is a spent budget, not a
+  refused key). Other OpenAI model ids, and any non-OpenAI server behind `OPENAI_BASE_URL`, are
   unmeasured; for a server that accepts only `max_tokens`, use the `openai-compatible` preset,
   which still sends it.
 - The retry counters are not unified: the compat presets (Kimi, Qwen, Grok, Ollama,
@@ -224,8 +227,25 @@ list.
 
 | Provider | Model | Verified on | Context window | Max output | Temperature | top_p | Penalties | Stop sequences | Reasoning | JSON mode |
 |----------|-------|-------------|----------------|------------|-------------|-------|-----------|----------------|-----------|-----------|
+| openai | `chat-latest` | 2026-10-20 [g] | 400,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no | object, schema |
 | openai | `gpt-4o-mini` | 2026-10-15 | 128,000 [d] | 16,384 [d] | 0.0 to 1.0 [a] | 0.0 to 1.0 [c] | not sent [e] | up to 4 | no | object, schema |
+| openai | `gpt-5` | 2026-10-20 | 400,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no [h] | object, schema |
+| openai | `gpt-5-mini` | 2026-10-20 | 400,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no [h] | object, schema |
+| openai | `gpt-5-nano` | 2026-10-20 | 400,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no [h] | object, schema |
+| openai | `gpt-5.1` | 2026-10-20 | 400,000 [d] | 128,000 [d] | 0.0 to 1.0 [a] | 0.0 to 1.0 [c] | not sent [e] | not sent | no | object, schema |
+| openai | `gpt-5.2` | 2026-10-20 | 400,000 [d] | 128,000 [d] | 0.0 to 1.0 [a] | 0.0 to 1.0 [c] | not sent [e] | not sent | no | object, schema |
+| openai | `gpt-5.4` | 2026-10-20 | 1,050,000 [d] | 128,000 [d] | 0.0 to 1.0 [a] | 0.0 to 1.0 [c] | not sent [e] | not sent | no | object, schema |
+| openai | `gpt-5.4-mini` | 2026-10-20 | 400,000 [d] | 128,000 [d] | 0.0 to 1.0 [a] | 0.0 to 1.0 [c] | not sent [e] | not sent | no | object, schema |
 | openai | `gpt-5.4-nano` | 2026-10-15 | 400,000 [d] | 128,000 [d] | 0.0 to 1.0 [a] | 0.0 to 1.0 [c] | not sent [e] | not sent | no | object, schema |
+| openai | `gpt-5.5` | 2026-10-20 | 1,050,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no | object, schema |
+| openai | `gpt-5.6-luna` | 2026-10-20 | 1,050,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no | object, schema |
+| openai | `gpt-5.6-sol` | 2026-10-20 | 1,050,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no | object, schema |
+| openai | `gpt-5.6-terra` | 2026-10-20 | 1,050,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no | object, schema |
+| openai | `gpt-6-astra` | 2026-10-20 | 1,050,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no | object, schema |
+| openai | `gpt-6-luna` | 2026-10-20 | 1,050,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no | object, schema |
+| openai | `gpt-6-sol` | 2026-10-20 | 1,050,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no | object, schema |
+| openai | `gpt-6.1-sol` | 2026-10-20 | 1,050,000 [d] | 128,000 [d] | only 1.0 | not sent | not sent | not sent | no | object, schema |
+| openai | `o3` | 2026-10-20 | 200,000 [d] | 100,000 [d] | only 1.0 | not sent | not sent | not sent | no | object, schema |
 | openai | (adapter-wide fallback) | unverified | 128,000 | not set | 0.0 to 1.0 | 0.0 to 1.0 | not sent | up to 4 | no | object, schema |
 | anthropic | `claude-fable-5` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | yes | none |
 | anthropic | `claude-fable-5-1` | 2026-10-20 | 1,000,000 | 128,000 | only 1.0 | not sent | not sent | yes | no | none |
@@ -275,7 +295,9 @@ window of `not set` is not a statement that the model has none.
 
 - **[a]** OpenAI temperature: the probe accepted 0.0, 0.5, 1.0 and 1.01 (the vendor accepted a value
   beyond the declared end), so the upper bound was not located. The registry holds the highest
-  probed value that was accepted, 1.0.
+  probed value that was accepted, 1.0. This applies to `gpt-5.4-nano` and `gpt-4o-mini` and to the
+  2026-10-20 ids `gpt-5.1`, `gpt-5.2`, `gpt-5.4` and `gpt-5.4-mini`; every other OpenAI row
+  accepts only 1.0 ("Only the default (1) value is supported", measured) and refuses `top_p`.
 - **[b]** Grok temperature: 0.0 and 0.5 were accepted and 2.01 was rejected ("Temperature must be
   less than 2"), but the 2.00 probe was unreachable (a transport error, three times). The registry
   holds 1.99, the largest value under the bound the vendor's own text states. The bound is stated,
@@ -283,8 +305,11 @@ window of `not set` is not a statement that the model has none.
 - **[c]** Contract-derived: `top_p` and the penalties were probed at 0.5 only. An accepted value is
   recorded as the vendor contract's span (`top_p` 0 to 1, penalties -2 to 2), not a measured edge.
 - **[d]** The window and maximum output come from the vendor's documentation page (URL and access
-  date in the seed probe, section (b)), not from the models listing. The Qwen figures come from
-  the China/Beijing page; the International pages state no limits.
+  date in the seed probe, section (b)), not from the models listing. The `qwen3.8-flash` figures
+  come from the China/Beijing page (the International pages stated no limits on 2026-10-15); the
+  OpenAI and Qwen rows dated 2026-10-20 come from the vendor's own model pages (OpenAI's
+  `developers.openai.com` model pages and Alibaba Cloud's International Model Info pages, accessed
+  2026-10-20). Where the docs state no value the cell reads `not set`.
 - **[e]** OpenAI penalties: the vendor accepted 0.5 in the probe, but the adapter's request type
   has no penalty field, so the profile says `not sent` rather than admit a value the wire cannot
   carry. The same holds for Anthropic and Gemini, whose wires have no such field.
@@ -295,15 +320,22 @@ window of `not set` is not a statement that the model has none.
   declared and omitting the parameter lets the vendor apply its own. An explicit value on an
   unseeded Kimi model is refused at build, naming `kimi`, the model and the parameter; a default
   the framework supplies is omitted and recorded in `paladin.params_omitted`.
-- **[g]** A moving alias (`*-latest`) or a preview id: the row is true on its verified-on date only,
-  because the vendor re-points an alias at a newer model without changing the id and may change or
-  retire a preview without notice.
+- **[g]** A moving alias (`*-latest`, `chat-latest`) or a preview id: the row is true on its
+  verified-on date only, because the vendor re-points an alias at a newer model without changing
+  the id and may change or retire a preview without notice.
+- **[h]** These OpenAI models returned no reasoning text (Chat Completions never does, so the
+  column reads `no`), but a small output cap is spent before any answer: at `max_completion_tokens`
+  64 `gpt-5` and `gpt-5-nano` finished `length` with empty content, and `gpt-5-mini` answered 400
+  "model output limit was reached". Give such a model a larger output budget.
 
 **Probed but not seeded** (so they run on the adapter-wide fallback): the eight retired Claude ids
 (`claude-3-*`, `claude-2.*`, `claude-instant-1.2`, all HTTP 404) and the other Claude ids in the
 live listing (the 4.5 generation; not candidates, not probed); `gemini-2.5-pro`, `gemini-2.5-flash`
 and `gemini-2.5-flash-lite` (the default call answered HTTP 404, "no longer available to new
-users", so nothing was measured); `deepseek-chat` and `deepseek-coder` (answered 200 but are undocumented aliases);
+users", so nothing was measured); `gpt-5.5-pro`, `gpt-5.4-pro`, `gpt-5.2-pro` and `gpt-5-pro` (the default call answered HTTP 404 on
+chat completions; they are served by the Responses API, which this adapter does not call, and are
+tracked in `.planning/todos/pending/2026-10-20-openai-responses-api-for-pro-tier.md`);
+`deepseek-chat` and `deepseek-coder` (answered 200 but are undocumented aliases);
 `kimi-k2.7-code` and `kimi-k2.7-code-highspeed` (every probe was rejected); `qwen-turbo` (rate-limited on every probe, nothing measured) and `qwen3-max` (HTTP 404
 on the International endpoint); the other Grok chat ids (not probed).
 

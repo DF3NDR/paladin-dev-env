@@ -412,15 +412,41 @@ mod openai_table {
     use crate::registry::SeededProfile;
     use paladin_ports::output::model_profile::{ModelProfile, ParamSupport, StopSupport};
 
-    /// OpenAI. The two candidates probed. Common to both:
+    /// OpenAI. `gpt-5.4-nano` and `gpt-4o-mini` were measured on 2026-10-15
+    /// (`50-SEED-PROBE.md`); 17 further ids were measured end to end on 2026-10-20
+    /// (`50.1-SEED-PROBE.md`; run 1 except `gpt-6-sol` and `gpt-5`, taken from run 2, which
+    /// supersedes run 1 for those two): `gpt-6.1-sol`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6-astra`,
+    /// `gpt-5.6-sol`, `gpt-5.6-luna`, `gpt-5.6-terra`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
+    /// `gpt-5.2`, `gpt-5.1`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`, `chat-latest` and `o3`. The
+    /// four pro-tier ids (`gpt-5.5-pro`, `gpt-5.4-pro`, `gpt-5.2-pro`, `gpt-5-pro`) answered the
+    /// default call 404 on `/v1/chat/completions` (they need the Responses API, a pending todo),
+    /// so nothing was measured for them and they are not seeded. `chat-latest` is a moving alias:
+    /// its row is true on its `verified_on` date only.
     ///
-    /// - temperature `0.00`, `0.50`, `1.00` and `1.01` were all accepted, so the upper bound is
-    ///   not located by the transcript (OpenAI accepted the value beyond the declared end). It
-    ///   is seeded at the highest probed endpoint, `1.0`, which the probe accepted.
-    /// - `top_p` 0.5 was accepted: `0..=1` is contract-derived.
-    /// - both penalties were accepted at 0.5, but this adapter's request type has no penalty
-    ///   field, so the profile says `NotSent`: admitting a value the wire cannot carry would
-    ///   drop it silently.
+    /// Two sampling shapes were measured. The *fixed* group (`gpt-6.1-sol`, `gpt-6-sol`,
+    /// `gpt-6-luna`, `gpt-6-astra`, `gpt-5.6-*`, `gpt-5.5`, `gpt-5`, `gpt-5-mini`, `gpt-5-nano`,
+    /// `chat-latest`, `o3`) accepts `temperature` 1.00 only and refuses `top_p`; the *span* group
+    /// (`gpt-5.4`, `gpt-5.4-mini`, `gpt-5.2`, `gpt-5.1`, and the earlier `gpt-5.4-nano` and
+    /// `gpt-4o-mini`) accepts the whole probed span. Common to all:
+    ///
+    /// - temperature `0.00`, `0.50`, `1.00` and `1.01` were all accepted by the span group, so
+    ///   the upper bound is not located by the transcript (OpenAI accepted the value beyond the
+    ///   declared end). It is seeded at the highest probed endpoint, `1.0`, which the probe
+    ///   accepted. The fixed group accepted `1.00` only ("Only the default (1) value is
+    ///   supported"), so it is `Fixed(1.0)`.
+    /// - `top_p` 0.5 was accepted by the span group: `0..=1` is contract-derived. The fixed
+    ///   group refused it.
+    /// - both penalties were accepted at 0.5 by the span group, but this adapter's request type
+    ///   has no penalty field, so the profile says `NotSent`: admitting a value the wire cannot
+    ///   carry would drop it silently. The fixed group refused them.
+    /// - `stop` was refused for one and for five sequences by every id, so it is `NotSent`; the
+    ///   documented maximum of 4 (operator evidence (c)) is only used for a model that rejected
+    ///   five but took one, as `gpt-4o-mini` did.
+    /// - the live listing exposes no window and no maximum output, so every window and maximum
+    ///   output comes from the operator's docs evidence (b), URL and access date in a comment.
+    /// - no default call returned reasoning text (Chat Completions never does), so `reasoning`
+    ///   is `false` for every OpenAI row; a model that hides its reasoning can still return an
+    ///   empty answer under a small output cap (MIGRATION section 9.8).
     pub(crate) static OPENAI: &[SeededProfile] = &[
         SeededProfile {
             model: "gpt-5.4-nano",
@@ -431,6 +457,91 @@ mod openai_table {
             model: "gpt-4o-mini",
             verified_on: "2026-10-15",
             build: gpt_4o_mini,
+        },
+        SeededProfile {
+            model: "gpt-6.1-sol",
+            verified_on: "2026-10-20",
+            build: gpt_6_1_sol,
+        },
+        SeededProfile {
+            model: "gpt-6-sol",
+            verified_on: "2026-10-20",
+            build: gpt_6_sol,
+        },
+        SeededProfile {
+            model: "gpt-6-luna",
+            verified_on: "2026-10-20",
+            build: gpt_6_luna,
+        },
+        SeededProfile {
+            model: "gpt-6-astra",
+            verified_on: "2026-10-20",
+            build: gpt_6_astra,
+        },
+        SeededProfile {
+            model: "gpt-5.6-sol",
+            verified_on: "2026-10-20",
+            build: gpt_5_6_sol,
+        },
+        SeededProfile {
+            model: "gpt-5.6-luna",
+            verified_on: "2026-10-20",
+            build: gpt_5_6_luna,
+        },
+        SeededProfile {
+            model: "gpt-5.6-terra",
+            verified_on: "2026-10-20",
+            build: gpt_5_6_terra,
+        },
+        SeededProfile {
+            model: "gpt-5.5",
+            verified_on: "2026-10-20",
+            build: gpt_5_5,
+        },
+        SeededProfile {
+            model: "gpt-5.4",
+            verified_on: "2026-10-20",
+            build: gpt_5_4,
+        },
+        SeededProfile {
+            model: "gpt-5.4-mini",
+            verified_on: "2026-10-20",
+            build: gpt_5_4_mini,
+        },
+        SeededProfile {
+            model: "gpt-5.2",
+            verified_on: "2026-10-20",
+            build: gpt_5_2,
+        },
+        SeededProfile {
+            model: "gpt-5.1",
+            verified_on: "2026-10-20",
+            build: gpt_5_1,
+        },
+        SeededProfile {
+            model: "gpt-5",
+            verified_on: "2026-10-20",
+            build: gpt_5,
+        },
+        SeededProfile {
+            model: "gpt-5-mini",
+            verified_on: "2026-10-20",
+            build: gpt_5_mini,
+        },
+        SeededProfile {
+            model: "gpt-5-nano",
+            verified_on: "2026-10-20",
+            build: gpt_5_nano,
+        },
+        SeededProfile {
+            model: "chat-latest",
+            verified_on: "2026-10-20",
+            build: chat_latest,
+        },
+        SeededProfile {
+            model: "o3",
+            verified_on: "2026-10-20",
+            build: o3,
         },
     ];
 
@@ -468,6 +579,545 @@ mod openai_table {
             .with_context_window(128_000)
             .with_max_output_tokens(16_384)
             .with_reasoning(false)
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-6.1-sol``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_6_1_sol() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-6.1-sol (accessed
+            // 2026-10-20): 1,050,000 context window, 128,000 max output tokens.
+            .with_context_window(1_050_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 2 (2026-10-20), `### Probes:
+    // `gpt-6-sol``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_6_sol() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-6-sol (accessed
+            // 2026-10-20): 1,050,000 context window, 128,000 max output tokens.
+            .with_context_window(1_050_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-6-luna``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_6_luna() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-6-luna (accessed
+            // 2026-10-20): 1,050,000 context window, 128,000 max output tokens.
+            .with_context_window(1_050_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-6-astra``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_6_astra() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-6-astra (accessed
+            // 2026-10-20): 1,050,000 context window, 128,000 max output tokens.
+            .with_context_window(1_050_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-5.6-sol``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_5_6_sol() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5.6-sol (accessed
+            // 2026-10-20): 1,050,000 context window, 128,000 max output tokens.
+            .with_context_window(1_050_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-5.6-luna``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_5_6_luna() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5.6-luna (accessed
+            // 2026-10-20): 1,050,000 context window, 128,000 max output tokens.
+            .with_context_window(1_050_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-5.6-terra``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_5_6_terra() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5.6-terra (accessed
+            // 2026-10-20): 1,050,000 context window, 128,000 max output tokens.
+            .with_context_window(1_050_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-5.5``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_5_5() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5.5 (accessed
+            // 2026-10-20): 1,050,000 context window, 128,000 max output tokens.
+            .with_context_window(1_050_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-5.4``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_5_4() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2-5: 0.00, 1.00, 0.50 and 1.01 all ACCEPTED, so the transcript does not locate
+            // the upper bound; seeded at the highest probed endpoint, 1.0 (module docs).
+            .with_temperature(ParamSupport::Range(0.0, 1.0))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: 0.5 ACCEPTED, but this adapter's request type has no penalty field,
+            // so both are `NotSent`: admitting a value the wire cannot carry would drop it.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5.4 (accessed
+            // 2026-10-20): 1,050,000 context window, 128,000 max output tokens.
+            .with_context_window(1_050_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-5.4-mini``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_5_4_mini() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2-5: 0.00, 1.00, 0.50 and 1.01 all ACCEPTED, so the transcript does not locate
+            // the upper bound; seeded at the highest probed endpoint, 1.0 (module docs).
+            .with_temperature(ParamSupport::Range(0.0, 1.0))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: 0.5 ACCEPTED, but this adapter's request type has no penalty field,
+            // so both are `NotSent`: admitting a value the wire cannot carry would drop it.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5.4-mini (accessed
+            // 2026-10-20): 400,000 context window, 128,000 max output tokens.
+            .with_context_window(400_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-5.2``, probe numbers as in that table, and operator evidence (b) for the limits.
+    fn gpt_5_2() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2-5: 0.00, 1.00, 0.50 and 1.01 all ACCEPTED, so the transcript does not locate
+            // the upper bound; seeded at the highest probed endpoint, 1.0 (module docs).
+            .with_temperature(ParamSupport::Range(0.0, 1.0))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: 0.5 ACCEPTED, but this adapter's request type has no penalty field,
+            // so both are `NotSent`: admitting a value the wire cannot carry would drop it.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5.2 (accessed
+            // 2026-10-20): 400,000 context window, 128,000 max output tokens.
+            .with_context_window(400_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-5.1``, probe numbers as in that table, and operator evidence (b) for the limits.
+    // Docs badge "Deprecated"; the live listing shows `shutdown_date=2027-04-01`, after the
+    // D-15 cutoff, and the owner decided on 2026-10-20 that a measured deprecated id is seeded
+    // (`50.1-PROBE-CANDIDATES.md`, "Owner decision for plan 50.1-09").
+    fn gpt_5_1() -> ModelProfile {
+        ModelProfile::new()
+            // Probes 2-5: 0.00, 1.00, 0.50 and 1.01 all ACCEPTED, so the transcript does not locate
+            // the upper bound; seeded at the highest probed endpoint, 1.0 (module docs).
+            .with_temperature(ParamSupport::Range(0.0, 1.0))
+            // Probe 6: top_p 0.5 ACCEPTED: `0..=1` is contract-derived.
+            .with_top_p(ParamSupport::Range(0.0, 1.0))
+            // Probes 7 and 8: 0.5 ACCEPTED, but this adapter's request type has no penalty field,
+            // so both are `NotSent`: admitting a value the wire cannot carry would drop it.
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5.1 (accessed
+            // 2026-10-20): 400,000 context window, 128,000 max output tokens.
+            .with_context_window(400_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 2 (2026-10-20), `### Probes:
+    // `gpt-5``, probe numbers as in that table, and operator evidence (b) for the limits.
+    // Docs badge "Deprecated"; the live listing shows `shutdown_date=null`, and the owner decided
+    // on 2026-10-20 that a measured deprecated id is seeded (`50.1-PROBE-CANDIDATES.md`).
+    // Probes 12 and 14 were ACCEPTED but finished `length` with EMPTY content: hidden reasoning
+    // consumed the whole small output budget (MIGRATION section 9.8 names this).
+    fn gpt_5() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5 (accessed
+            // 2026-10-20): 400,000 context window, 128,000 max output tokens.
+            .with_context_window(400_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-5-mini``, probe numbers as in that table, and operator evidence (b) for the limits.
+    // Docs badge "Deprecated"; the live listing shows `shutdown_date=null`, and the owner decided
+    // on 2026-10-20 that a measured deprecated id is seeded (`50.1-PROBE-CANDIDATES.md`).
+    // Probe 12 answered 400 "Could not finish the message because max_tokens or model output
+    // limit was reached": the `max_completion_tokens` key itself was understood (probe 11
+    // names it as the replacement), the budget was spent before any text.
+    fn gpt_5_mini() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5-mini (accessed
+            // 2026-10-20): 400,000 context window, 128,000 max output tokens.
+            .with_context_window(400_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `gpt-5-nano``, probe numbers as in that table, and operator evidence (b) for the limits.
+    // Docs badge "Deprecated"; the live listing shows `shutdown_date=null`, and the owner decided
+    // on 2026-10-20 that a measured deprecated id is seeded (`50.1-PROBE-CANDIDATES.md`).
+    // Probes 12 and 14 were ACCEPTED but finished `length` with EMPTY content: hidden reasoning
+    // consumed the whole small output budget (MIGRATION section 9.8 names this).
+    fn gpt_5_nano() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/gpt-5-nano (accessed
+            // 2026-10-20): 400,000 context window, 128,000 max output tokens.
+            .with_context_window(400_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `chat-latest``, probe numbers as in that table, and operator evidence (b) for the limits.
+    // A moving alias ("points to the latest Instant model currently used in ChatGPT", docs): the
+    // row is true on its `verified_on` date only.
+    fn chat_latest() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/chat-latest (accessed
+            // 2026-10-20): 400,000 context window, 128,000 max output tokens.
+            .with_context_window(400_000)
+            .with_max_output_tokens(128_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
+            .with_json_object(true)
+            .with_json_schema(true)
+    }
+
+    // Source for the row below: `50.1-SEED-PROBE.md`, run 1 (2026-10-20), `### Probes:
+    // `o3``, probe numbers as in that table, and operator evidence (b) for the limits.
+    // Docs badge "Deprecated"; the live listing shows `shutdown_date=null`, and the owner decided
+    // on 2026-10-20 that a measured deprecated id is seeded (`50.1-PROBE-CANDIDATES.md`).
+    fn o3() -> ModelProfile {
+        ModelProfile::new()
+            // Probe 3: temperature 1.00 ACCEPTED; probes 2, 4 and 5 (0.00, 0.50, 1.01) answered
+            // "Unsupported value: 'temperature' does not support <v> with this model. Only the
+            // default (1) value is supported." Only 1.00 was accepted.
+            .with_temperature(ParamSupport::Fixed(1.0))
+            // Probe 6: top_p 0.5 answered "Unsupported parameter: 'top_p' is not supported with
+            // this model."
+            .with_top_p(ParamSupport::NotSent)
+            // Probes 7 and 8: both penalties answered "Unsupported parameter: ... is not
+            // supported with this model." (This adapter's request type has no penalty field.)
+            .with_frequency_penalty(ParamSupport::NotSent)
+            .with_presence_penalty(ParamSupport::NotSent)
+            // Probes 9 and 10: "Unsupported parameter: 'stop' is not supported with this model."
+            // for one and for five sequences. The documented maximum of 4 (operator evidence (c))
+            // does not apply: a model that rejects one sequence takes none.
+            .with_stop_sequences(StopSupport::NotSent)
+            // docs https://developers.openai.com/api/docs/models/o3 (accessed
+            // 2026-10-20): 200,000 context window, 100,000 max output tokens.
+            .with_context_window(200_000)
+            .with_max_output_tokens(100_000)
+            // Probe 1 (the default call) carried no reasoning text; the `reasoning_tokens`
+            // usage key is present on every OpenAI model, so it is not evidence.
+            .with_reasoning(false)
+            // Probes 13 and 14: json_object and json_schema ACCEPTED.
             .with_json_object(true)
             .with_json_schema(true)
     }

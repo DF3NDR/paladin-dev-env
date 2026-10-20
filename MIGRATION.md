@@ -1118,5 +1118,20 @@ plus `with_reasoning(..)` takes any field a later phase adds to `LlmResponse`.
 check-consumer-surface` runs it), including the Phase 50 surfaces the consumer adopts at v0.11.0:
 `LlmProviderFactory::create_from_config`, `LlmConfig`, `LlmProviderConfig`, `ModelOverride`,
 `ModelProfile`, a `LlmError::Refusal { .. }` match arm, `FallbackStep` and
-`FallbackLlmAdapter::from_steps`, `LlmResponse::new` and the `AnthropicConfig` knob builders. A red
-muster means the next bump needs a row here and its section 9.2 row in the same commit.
+`FallbackLlmAdapter::from_steps`, `LlmResponse::new` and the `AnthropicConfig` knob builders. Phase
+50.1 (D-09, D-10, D-11) adds the surfaces a downstream consumer builds and matches, each pinned
+through `paladin::` paths alone: a Battalion configured with `with_aegis` (the `Aegis` family) and
+a result's `node_errors` read back; `DeepSeekConfig::new` and `AnthropicConfig::new` in the
+SURFACE-02 shape (`fn(String, String) -> ..Config`) with `with_timeout_seconds` and
+`with_base_url` in the builder chain and no field assignment; `LlmError::rate_limited`, the
+`RateLimitExceeded { .. }`, `UsageLimitExceeded { provider, regain_hint }` and `ProcessingError(..)`
+arms; `Commissary::for_model`, `dispense` and `verify_fits` with the `Stockpile` fields;
+`MockLlmAdapter::with_response`, `with_responses`, `with_error` and `with_delay`;
+`PaladinBuilder::new(..).name(..).system_prompt(..).build().await`; `MCPClient::connect_streamable_http`
+and `invoke_tool`; `PromptItem::parameters` and `set_parameters`; the four-field `Armament` literal.
+`FinishReason` and `ArsenalError` stay exhaustively matchable on purpose (neither is
+`#[non_exhaustive]`): the muster matches both without a wildcard arm, so a new variant on either
+is a registered break, with a section 9.2 row in the same commit, and not a silent addition (D-11).
+The muster runs in CI as the `consumer-surface` job (`Consumer-Surface Muster`), which executes
+`make check-consumer-surface` and fails if it ran no test (D-10). A red muster means the next
+bump needs a row here and its section 9.2 row in the same commit.

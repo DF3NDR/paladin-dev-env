@@ -1355,43 +1355,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking Changes
 
-- **BREAKING (`paladin-llm`): `new(api_key, base_url, model)` becomes `new(api_key, model)` on
-  `DeepSeekConfig`, `GeminiConfig`, `QwenConfig`, `GrokConfig` and `KimiConfig`** (SURFACE-02,
-  D-05; Phase 50.1 plans 02 and 04). Each endpoint defaults to the type's `*_DEFAULT_BASE_URL`
-  constant (`DEEPSEEK_DEFAULT_BASE_URL`, `GEMINI_DEFAULT_BASE_URL`, `QWEN_DEFAULT_BASE_URL`,
-  `GROK_DEFAULT_BASE_URL`, `KIMI_DEFAULT_BASE_URL`, in the type's `adapter` module); replace it
-  with the new `with_base_url`, and the timeout with the new `with_timeout_seconds`. There is no
-  alias: `new(k, url, m)` becomes `new(k, m).with_base_url(url)`. `from_env()` is unchanged. Both
-  builders exist on all nine `*Config` types (see *Added*). The first argument is the API key,
-  never a URL; `OllamaConfig::new` keeps the endpoint as its first argument (D-08). Registered in
-  `MIGRATION.md` section 9.2 and section 9.8 (DR-19; DR-12 amended) and the allowlist entries
-  `paladin-llm | <Type>Config` (`method_parameter_count_changed`, measured with
+- **BREAKING (`paladin-llm`): seven `*Config::new(..)` constructors take `(api_key, model)`**
+  (SURFACE-02, D-05, D-06, D-07, D-09; Phase 50.1 plans 02, 04, 05 and 06). `DeepSeekConfig`,
+  `GeminiConfig`, `QwenConfig`, `GrokConfig` and `KimiConfig` go from `new(api_key, base_url,
+  model)` to `new(api_key, model)`; `OpenAIConfig::new(api_key)` becomes `new(api_key, model)`;
+  `AnthropicConfig::new(api_key, base_url, model, max_tokens)` becomes `new(api_key, model)`. There
+  is no alias: `new(k, url, m)` becomes `new(k, m).with_base_url(url)`, and an Anthropic caller that
+  passed a fourth argument adds `.with_max_tokens(n)`. The first argument is always the API key,
+  never a URL. Each endpoint defaults to its constant in the type's `adapter` module
+  (`DEEPSEEK_DEFAULT_BASE_URL`, `GEMINI_DEFAULT_BASE_URL`, `QWEN_DEFAULT_BASE_URL`,
+  `GROK_DEFAULT_BASE_URL`, `KIMI_DEFAULT_BASE_URL`, `OPENAI_DEFAULT_BASE_URL`,
+  `ANTHROPIC_DEFAULT_BASE_URL`); replace it with `with_base_url`, and the timeout with
+  `with_timeout_seconds`. Both builders exist on all nine `*Config` types (see *Added*).
+  `OllamaConfig::new(base_url, model)` and `OpenAiCompatibleConfig::new(api_key, base_url, model,
+  capabilities)` are the two endpoint-only exceptions and are unchanged (D-08). `from_env()` is
+  unchanged on every type. Two defaults worth knowing: `OpenAIConfig` gains the public field
+  `model` (set by `new`, by `from_env()` to `OPENAI_DEFAULT_MODEL` = `"gpt-5.4-nano"`, and by the
+  layered path), a stored label that changes no adapter-wide limit (the window stays
+  `context_window` or 128,000), and `OpenAIConfig::with_organization` is new;
+  `AnthropicConfig::new` sets `max_tokens` to 4,096 for every model, the value `from_env()` and the
+  layered path already used (owner decision `compiled-default`, 2026-10-20), so a model's larger
+  seeded maximum output is reachable only through `with_max_tokens`. Registered in `MIGRATION.md`
+  section 9.2 (one SURFACE-02 row per type) and section 9.8 (DR-19; DR-12 amended) and the seven
+  `paladin-llm | <Type>Config` allowlist entries (`method_parameter_count_changed`, measured with
   cargo-semver-checks 0.50.0 against 0.10.1).
-- **BREAKING (`paladin-llm`): `OpenAIConfig::new(api_key)` becomes `new(api_key, model)`**
-  (SURFACE-02, D-05, D-06; Phase 50.1 plan 05). The second argument is the adapter's default
-  model, stored in the new public field `OpenAIConfig.model` (additive on the `#[non_exhaustive]`
-  struct); `from_env()` sets it to the new `OPENAI_DEFAULT_MODEL` (`"gpt-5.4-nano"`) and still
-  reads exactly the variables it read before, and the layered path puts the agent's or block's
-  resolved model on it. The field changes no adapter-wide limit: the context window stays
-  `context_window` or 128,000 whatever `model` says, and each request's own model still decides
-  what is sent. The endpoint defaults to the new `OPENAI_DEFAULT_BASE_URL`; replace it with
-  `with_base_url`, the timeout with `with_timeout_seconds`, the organisation with the new
-  `with_organization`. There is no alias: `new(k)` becomes `new(k, OPENAI_DEFAULT_MODEL.to_string())`.
-  `Debug` prints the model and still redacts the key; `validate()` rejects an empty model.
-  Registered in `MIGRATION.md` section 9.2 (`paladin-llm | OpenAIConfig`, SURFACE-02) and section
-  9.8 (DR-19) and the allowlist entry (`method_parameter_count_changed`, measured with
-  cargo-semver-checks 0.50.0 against 0.10.1; no lint named the new field).
-- **BREAKING (`paladin-llm`): `AnthropicConfig::new(api_key, base_url, model, max_tokens)` becomes
-  `new(api_key, model)`** (SURFACE-02, D-05, D-07; Phase 50.1 plan 06). The endpoint defaults to the
-  new `ANTHROPIC_DEFAULT_BASE_URL` (`paladin_llm::anthropic::adapter`, now the one copy, also used
-  by `from_env()` and the `llm.anthropic` block); replace it with `with_base_url`, the timeout with
-  `with_timeout_seconds`. `max_tokens` is 4,096 for every model, the same value `from_env()` and the
-  layered path use (owner decision `compiled-default`, 2026-10-20): the model's larger seeded
-  maximum output is reachable only through `with_max_tokens`, and the wire field stays mandatory.
-  There is no alias: `new(k, url, m, n)` becomes `new(k, m).with_base_url(url).with_max_tokens(n)`.
-  `from_env()` is unchanged. Registered in `MIGRATION.md` section 9.2 (`paladin-llm |
-  AnthropicConfig`, SURFACE-02) and section 9.8 (DR-19) and the allowlist entry
-  (`method_parameter_count_changed`, measured with cargo-semver-checks 0.50.0 against 0.10.1).
 - **BREAKING (`paladin-web`): `Principal` gains the required `tenant_id: TenantId` field and is
   marked `#[non_exhaustive]`** — build it with `Principal::new(id, role, tenant_id)`; a struct
   literal outside the crate no longer compiles (TENANT-01; Phase 40 plan 40-01; `MIGRATION.md`

@@ -198,32 +198,19 @@ and this project follows lockstep workspace versioning.
 
 ### Breaking Changes
 
-- Phase 50.1 (SURFACE-02, D-05; plans 50.1-02, 50.1-04): `new(api_key, base_url, model)` becomes
-  `new(api_key, model)` on `DeepSeekConfig`, `GeminiConfig`, `QwenConfig`, `GrokConfig` and
-  `KimiConfig`, with no alias. Each endpoint defaults to the type's `*_DEFAULT_BASE_URL` constant
-  (`DEEPSEEK_DEFAULT_BASE_URL`, `GEMINI_DEFAULT_BASE_URL`, `QWEN_DEFAULT_BASE_URL`,
-  `GROK_DEFAULT_BASE_URL`, `KIMI_DEFAULT_BASE_URL`; `with_base_url` replaces it) and the timeout
-  to 300 s for a seeded reasoning model and 60 s otherwise (`with_timeout_seconds` replaces it);
-  `from_env()` is unchanged. `new(k, url, m)` becomes `new(k, m).with_base_url(url)`. Registered
-  in `MIGRATION.md` section 9.2 and 9.8 (DR-19) and the crate's `cargo-semver-checks` lints table
-  (`method_parameter_count_changed`).
-- Phase 50.1 (SURFACE-02, D-05, D-06; plan 50.1-05): `OpenAIConfig::new(api_key)` becomes
-  `new(api_key, model)`, with no alias, and `OpenAIConfig` gains the public field `model` (the
-  adapter's default model, additive on the `#[non_exhaustive]` struct) set by `new`, by
-  `from_env()` (`OPENAI_DEFAULT_MODEL`, `"gpt-5.4-nano"`; no new variable) and by the layered
-  path. The field changes no adapter-wide limit (the window stays `context_window` or 128,000).
-  The endpoint defaults to `OPENAI_DEFAULT_BASE_URL` (`with_base_url` replaces it) and the timeout
-  stays 300 s. `new(k)` becomes `new(k, OPENAI_DEFAULT_MODEL.to_string())`. Registered in
+- Phase 50.1 (SURFACE-02, D-05, D-06, D-07; plans 50.1-02, -04, -05, -06): seven `*Config::new(..)`
+  constructors take `(api_key, model)`, with no alias. `DeepSeekConfig`, `GeminiConfig`,
+  `QwenConfig`, `GrokConfig` and `KimiConfig` drop `base_url`; `OpenAIConfig::new(api_key)` gains
+  `model` (and `OpenAIConfig` the public field `model`, a label that changes no adapter-wide
+  limit); `AnthropicConfig::new(api_key, base_url, model, max_tokens)` drops `base_url` and
+  `max_tokens`. Each endpoint defaults to the type's `*_DEFAULT_BASE_URL` constant
+  (`with_base_url` replaces it) and the timeout to 300 s for a seeded reasoning model and 60 s
+  otherwise (`with_timeout_seconds` replaces it). `AnthropicConfig::new` sets `max_tokens` to 4,096
+  for every model, as `from_env()` and the layered path already did (owner decision
+  `compiled-default`, 2026-10-20); `with_max_tokens` is the override. `new(k, url, m)` becomes
+  `new(k, m).with_base_url(url)`. `OllamaConfig::new` and `OpenAiCompatibleConfig::new` are the two
+  endpoint-only exceptions and are unchanged; `from_env()` is unchanged on every type. Registered in
   `MIGRATION.md` section 9.2 and 9.8 (DR-19) and the crate's `cargo-semver-checks` lints table
-  (`method_parameter_count_changed`).
-- Phase 50.1 (SURFACE-02, D-05, D-07; plan 50.1-06): `AnthropicConfig::new(api_key, base_url, model,
-  max_tokens)` becomes `new(api_key, model)`, with no alias. The endpoint defaults to the new
-  `anthropic::adapter::ANTHROPIC_DEFAULT_BASE_URL` (`with_base_url` replaces it) and the timeout to
-  300 s for a seeded reasoning model and 60 s otherwise (`with_timeout_seconds` replaces it);
-  `max_tokens` is 4,096 for every model, as `from_env()` and the layered path already had it (owner
-  decision `compiled-default`, 2026-10-20), and `with_max_tokens` is the override. `new(k, url, m,
-  n)` becomes `new(k, m).with_base_url(url).with_max_tokens(n)`. Registered in `MIGRATION.md`
-  section 9.2 and 9.8 (DR-19) and the crate's `cargo-semver-checks` lints table
   (`method_parameter_count_changed`).
 - Phase 50 (PARITY-03, PARITY-06; owner decision option-a): the nine `*Config` types and
   `LlmProviderConfig` are `#[non_exhaustive]`, so a struct literal outside the crate no longer

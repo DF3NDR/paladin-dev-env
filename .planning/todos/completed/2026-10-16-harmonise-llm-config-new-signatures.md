@@ -1,7 +1,9 @@
+completed: 2026-10-20
 ---
 created: 2026-10-16T01:40:00Z
 title: Harmonise the drifted `new(..)` signatures across the nine paladin-llm *Config types
 area: api-surface
+resolves_phase: 50.1
 severity: minor
 files:
   - crates/paladin-llm/src/openai/adapter.rs:141
@@ -65,3 +67,15 @@ shape drops `base_url` from `new`) to `config_knob_builders!`, and amends MIGRAT
 "not part of v0.11.0" sentence. The shape itself is decision D-B at `/gsd-discuss-phase 50.1`;
 web3sec's and this todo's shared preference is `new(api_key, model)` + builders. The todo stays
 pending until SURFACE-02 seals, then moves to `completed/` with `resolves_phase: 50.1`.
+
+## Resolution (Phase 50.1)
+
+Resolved by SURFACE-02 (plans 50.1-02, -04, -05, -06): seven of the nine config types now construct
+with `new(api_key, model)` (`DeepSeekConfig`, `GeminiConfig`, `QwenConfig`, `GrokConfig`,
+`KimiConfig`, `OpenAIConfig`, `AnthropicConfig`); `OllamaConfig::new(base_url, model)` and
+`OpenAiCompatibleConfig::new(api_key, base_url, model, capabilities)` keep their endpoint argument
+because a key is not their first input (D-08). Every other knob, including `with_base_url` and
+`with_timeout_seconds`, is a `with_*` builder from `config_knob_builders!`. The break is registered
+as one SURFACE-02 row and one allowlist entry per type and as MIGRATION.md section 9.8 DR-19 (DR-12
+amended), and the new shapes are pinned in `tests/consumer_surface_muster.rs`. See
+`.planning/phases/50.1-consumer-surface-readiness/50.1-06-SUMMARY.md`.

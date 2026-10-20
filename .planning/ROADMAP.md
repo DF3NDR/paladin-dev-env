@@ -1634,7 +1634,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 50.1-03-PLAN.md — Exhaustive `FinishReason`/`ArsenalError` pins (D-11) with a scripted-mutation red proof, the named `consumer-surface` CI job (D-10), the remaining Appendix B pins 3, 4, 6-12
+- [x] 50.1-03-PLAN.md — Exhaustive `FinishReason`/`ArsenalError` pins (D-11) with a scripted-mutation red proof, the named `consumer-surface` CI job (D-10), the remaining Appendix B pins 3, 4, 6-12
 - [ ] 50.1-04-PLAN.md — Gemini (tracer), then Qwen + Grok, then Kimi move to `new(api_key, model)`; each commit carries its type's code, call sites, measured register entry and §9.2 row
 
 **Wave 4** *(blocked on Wave 3 completion)*

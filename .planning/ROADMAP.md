@@ -1652,7 +1652,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 50.1-09-PLAN.md — OpenAI, then Grok/Kimi/Qwen seeds; the §9.8 "Models seeded in Phase 50.1" bullet naming every behaviour a new seed brings; the conditional `model_overrides` recipe if a web3sec model failed the probe (success criterion 6 closes one way); the phase seal gates run once as plan-level verification
+- [x] 50.1-09-PLAN.md — OpenAI, then Grok/Kimi/Qwen seeds; the §9.8 "Models seeded in Phase 50.1" bullet naming every behaviour a new seed brings; the conditional `model_overrides` recipe if a web3sec model failed the probe (success criterion 6 closes one way); the phase seal gates run once as plan-level verification
 
 ### Phase 51: Adjustable Reasoning Effort
 
